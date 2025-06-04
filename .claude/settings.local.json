@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(tree-sitter generate:*)",
+      "Bash(tree-sitter test:*)"
     ],
     "deny": []
   }

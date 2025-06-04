@@ -26,7 +26,7 @@ expression: ast
         end: 50,
         context: (),
       )),
-      (String("\"Hello, world!\""), SimpleSpan(
+      (String("Hello, world!"), SimpleSpan(
         start: 51,
         end: 66,
         context: (),
