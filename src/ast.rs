@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SimpleSpan {
@@ -9,7 +9,11 @@ pub struct SimpleSpan {
 
 impl SimpleSpan {
     pub fn new(start: usize, end: usize) -> Self {
-        Self { start, end, context: () }
+        Self {
+            start,
+            end,
+            context: (),
+        }
     }
 }
 
@@ -66,4 +70,3 @@ impl std::fmt::Display for Expr {
         }
     }
 }
-

@@ -3,13 +3,15 @@ use std::collections::HashMap;
 
 type Error = Box<dyn std::error::Error + 'static>;
 
+type BuiltinFn = for<'a> fn(&'a [Value]) -> Result<Value, Error>;
+
 #[derive(Clone)]
 pub enum Value {
     Unit,
     Number(i64),
     String(String),
     Fn(Identifier, Vec<Identifier>, Vec<Spanned<Expr>>),
-    BuiltinFn(&'static str, for<'a> fn(&'a [Self]) -> Result<Self, Error>),
+    BuiltinFn(&'static str, BuiltinFn),
 }
 
 impl std::fmt::Display for Value {
@@ -31,13 +33,9 @@ pub struct Environment<'parent> {
 
 impl Environment<'_> {
     pub fn toplevel() -> Self {
-        let bindings = builtins::BUILTINS
-            .into_iter()
-            .map(|&(k, v)| (k.to_owned(), Value::BuiltinFn(k, v)))
-            .collect();
         Environment {
             parent: None,
-            bindings,
+            bindings: builtins::BUILTINS.clone(),
         }
     }
 
@@ -127,11 +125,11 @@ fn handle_let(env: &mut Environment<'_>, rest: &[Spanned<Expr>]) -> Result<Value
     Ok(Value::Unit)
 }
 
-fn handle_fn(env: &mut Environment<'_>, rest: &[Spanned<Expr>]) -> Result<Value, Error> {
-    let Some(((Expr::List(sig), _), body)) = rest.split_first() else {
+fn handle_fn(_env: &mut Environment<'_>, rest: &[Spanned<Expr>]) -> Result<Value, Error> {
+    let Some(((Expr::List(sig), _), _body)) = rest.split_first() else {
         return Err("expected signature and body".into());
     };
-    let Some(((Expr::Identifier(name), _), params)) = sig.split_first() else {
+    let Some(((Expr::Identifier(_name), _), _params)) = sig.split_first() else {
         return Err("expected name and parameters".into());
     };
 
@@ -139,22 +137,27 @@ fn handle_fn(env: &mut Environment<'_>, rest: &[Spanned<Expr>]) -> Result<Value,
 }
 
 mod builtins {
+    use std::sync::LazyLock;
+
     use super::*;
 
-    pub const BUILTINS: &[(&str, for<'a> fn(&'a [Value]) -> Result<Value, Error>)] =
-        &[("print", print_line), ("input", input_line)];
-
-    fn print_line(args: &[Value]) -> Result<Value, Error> {
-        for arg in args {
-            print!("{}", arg);
-        }
-        println!();
-        Ok(Value::Unit)
-    }
-
-    fn input_line(_: &[Value]) -> Result<Value, Error> {
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        Ok(Value::String(input))
-    }
+    pub static BUILTINS: LazyLock<HashMap<String, Value>> = LazyLock::new(|| {
+        let temp: &[(&str, BuiltinFn)] = &[
+            ("print", |args| {
+                for arg in args {
+                    print!("{}", arg);
+                }
+                println!();
+                Ok(Value::Unit)
+            }),
+            ("input", |_| {
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                Ok(Value::String(input))
+            }),
+        ];
+        temp.iter()
+            .map(|(name, f)| (name.to_string(), Value::BuiltinFn(name, *f)))
+            .collect()
+    });
 }
