@@ -22,27 +22,6 @@ pub type Spanned<T> = (T, Span);
 
 pub type Identifier = String;
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum Token<'src> {
-    Number(i64),
-    String(&'src str),
-    Ident(&'src str),
-    ParenOpen,
-    ParenClose,
-}
-
-impl std::fmt::Display for Token<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Token::Number(n) => write!(f, "{}", n),
-            Token::String(s) => write!(f, "\"{}\"", s),
-            Token::Ident(s) => f.write_str(s),
-            Token::ParenOpen => f.write_str("("),
-            Token::ParenClose => f.write_str(")"),
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Expr {
     Number(i64),
