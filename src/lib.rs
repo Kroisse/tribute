@@ -1,20 +1,14 @@
-pub mod ast;
 pub mod builtins;
-pub mod database;
 pub mod eval;
-pub mod parser;
 
 use salsa::Database as _;
 use std::path::Path;
 
-pub use crate::{
-    database::{
-        diagnostics, parse_source_file, Diagnostic, DiagnosticSeverity, Program, SourceFile,
-        TrackedExpression, TributeDatabaseImpl,
-    },
-    eval::{eval_expr, Environment, Value},
-    parser::TributeParser,
+pub use tribute_ast::{
+    diagnostics, parse_source_file, Diagnostic, DiagnosticSeverity, Program, SourceFile,
+    TrackedExpression, TributeDatabaseImpl, TributeParser, ast,
 };
+pub use crate::eval::{eval_expr, Environment, Value};
 
 // Legacy parse function using parse_with_database (kept for compatibility)
 pub fn parse(path: &Path, source: &str) -> Vec<(ast::Expr, ast::SimpleSpan)> {

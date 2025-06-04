@@ -1,4 +1,4 @@
-use crate::ast::{Expr, Identifier, Spanned};
+use tribute_ast::ast::{Expr, Identifier, Spanned};
 use crate::builtins;
 use std::collections::HashMap;
 

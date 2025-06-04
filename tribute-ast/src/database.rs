@@ -40,6 +40,7 @@ pub struct Diagnostic {
     pub message: String,
     pub span: SimpleSpan,
     pub severity: DiagnosticSeverity,
+    pub phase: CompilationPhase,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -47,6 +48,14 @@ pub enum DiagnosticSeverity {
     Error,
     Warning,
     Info,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CompilationPhase {
+    Parsing,
+    HirLowering,
+    TypeChecking,
+    Optimization,
 }
 
 impl std::fmt::Display for DiagnosticSeverity {
@@ -68,6 +77,7 @@ pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: SourceFile) 
                 message: format!("Failed to create parser: {}", e),
                 span: SimpleSpan::new(0, 0),
                 severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Parsing,
             }
             .accumulate(db);
 
@@ -85,6 +95,7 @@ pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: SourceFile) 
                 message: format!("Parse error: {}", e),
                 span: SimpleSpan::new(0, source.text(db).len()),
                 severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Parsing,
             }
             .accumulate(db);
 

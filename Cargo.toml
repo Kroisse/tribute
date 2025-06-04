@@ -1,5 +1,9 @@
 [workspace]
-members = [".", "tree-sitter-tribute"]
+members = [
+    ".",
+    "tree-sitter-tribute",
+    "tribute-ast",
+]
 
 [package]
 name = "tribute"
@@ -11,6 +15,4 @@ edition = "2021"
 [dependencies]
 insta = { version = "1.43.1", features = ["ron"] }
 salsa = "0.22.0"
-serde = { version = "1.0", features = ["derive"] }
-tree-sitter = "0.25"
-tree-sitter-tribute = { path = "tree-sitter-tribute" }
+tribute-ast = { path = "tribute-ast" }

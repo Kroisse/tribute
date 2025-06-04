@@ -209,9 +209,9 @@ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 
 [[package]]
 name = "libc"
-version = "0.2.153"
+version = "0.2.172"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c198f91728a82281a64e1f4f9eeb25d82cb32a5de251c6bd1b5154d63a8e7bd"
+checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
 
 [[package]]
 name = "lock_api"
@@ -554,6 +554,14 @@ name = "tribute"
 version = "0.1.0"
 dependencies = [
  "insta",
+ "salsa",
+ "tribute-ast",
+]
+
+[[package]]
+name = "tribute-ast"
+version = "0.1.0"
+dependencies = [
  "salsa",
  "serde",
  "tree-sitter",

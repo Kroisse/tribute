@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SimpleSpan {
     pub start: usize,
     pub end: usize,
