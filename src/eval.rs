@@ -1,9 +1,10 @@
 use crate::ast::{Expr, Identifier, Spanned};
+use crate::builtins;
 use std::collections::HashMap;
 
 type Error = Box<dyn std::error::Error + 'static>;
 
-type BuiltinFn = for<'a> fn(&'a [Value]) -> Result<Value, Error>;
+pub type BuiltinFn = for<'a> fn(&'a [Value]) -> Result<Value, Error>;
 
 #[derive(Clone)]
 pub enum Value {
@@ -211,123 +212,3 @@ fn values_match(a: &Value, b: &Value) -> bool {
     }
 }
 
-mod builtins {
-    use std::sync::LazyLock;
-
-    use super::*;
-
-    pub static BUILTINS: LazyLock<HashMap<String, Value>> = LazyLock::new(|| {
-        let temp: &[(&str, BuiltinFn)] = &[
-            ("print_line", |args| {
-                for arg in args {
-                    print!("{}", arg);
-                }
-                println!();
-                Ok(Value::Unit)
-            }),
-            ("input_line", |_| {
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input)?;
-                Ok(Value::String(input))
-            }),
-            ("+", |args| {
-                if args.len() != 2 {
-                    return Err("+ requires exactly 2 arguments".into());
-                }
-                match (&args[0], &args[1]) {
-                    (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
-                    _ => Err("+ requires two numbers".into()),
-                }
-            }),
-            ("-", |args| {
-                if args.len() != 2 {
-                    return Err("- requires exactly 2 arguments".into());
-                }
-                match (&args[0], &args[1]) {
-                    (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a - b)),
-                    _ => Err("- requires two numbers".into()),
-                }
-            }),
-            ("*", |args| {
-                if args.len() != 2 {
-                    return Err("* requires exactly 2 arguments".into());
-                }
-                match (&args[0], &args[1]) {
-                    (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * b)),
-                    _ => Err("* requires two numbers".into()),
-                }
-            }),
-            ("/", |args| {
-                if args.len() != 2 {
-                    return Err("/ requires exactly 2 arguments".into());
-                }
-                match (&args[0], &args[1]) {
-                    (Value::Number(a), Value::Number(b)) => {
-                        if *b == 0 {
-                            Err("division by zero".into())
-                        } else {
-                            Ok(Value::Number(a / b))
-                        }
-                    },
-                    _ => Err("/ requires two numbers".into()),
-                }
-            }),
-            ("split", |args| {
-                if args.len() != 2 {
-                    return Err("split requires exactly 2 arguments".into());
-                }
-                match (&args[0], &args[1]) {
-                    (Value::String(delimiter), Value::String(text)) => {
-                        let parts: Vec<Value> = text
-                            .split(delimiter)
-                            .map(|s| Value::String(s.to_string()))
-                            .collect();
-                        Ok(Value::List(parts))
-                    },
-                    _ => Err("split requires two strings".into()),
-                }
-            }),
-            ("trim_right", |args| {
-                if args.len() != 1 {
-                    return Err("trim_right requires exactly 1 argument".into());
-                }
-                match &args[0] {
-                    Value::String(s) => Ok(Value::String(s.trim_end().to_string())),
-                    _ => Err("trim_right requires a string".into()),
-                }
-            }),
-            ("to_number", |args| {
-                if args.len() != 1 {
-                    return Err("to_number requires exactly 1 argument".into());
-                }
-                match &args[0] {
-                    Value::String(s) => {
-                        s.parse::<i64>()
-                            .map(Value::Number)
-                            .map_err(|_| "failed to parse string as number".into())
-                    },
-                    _ => Err("to_number requires a string".into()),
-                }
-            }),
-            ("get", |args| {
-                if args.len() != 2 {
-                    return Err("get requires exactly 2 arguments".into());
-                }
-                match (&args[0], &args[1]) {
-                    (Value::Number(index), Value::List(items)) => {
-                        let idx = *index as usize;
-                        if idx < items.len() {
-                            Ok(items[idx].clone())
-                        } else {
-                            Err("index out of bounds".into())
-                        }
-                    },
-                    _ => Err("get requires a number and a list".into()),
-                }
-            }),
-        ];
-        temp.iter()
-            .map(|(name, f)| (name.to_string(), Value::BuiltinFn(name, *f)))
-            .collect()
-    });
-}

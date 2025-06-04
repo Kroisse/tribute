@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod builtins;
 pub mod database;
 pub mod eval;
 pub mod parser;
