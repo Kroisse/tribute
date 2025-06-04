@@ -1,4 +1,5 @@
 use chumsky::prelude::*;
+use serde::{Serialize, Deserialize};
 
 pub type Span = SimpleSpan<usize>;
 pub type Spanned<T> = (T, Span);
@@ -26,7 +27,7 @@ impl std::fmt::Display for Token<'_> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Expr {
     Number(i64),
     String(String),

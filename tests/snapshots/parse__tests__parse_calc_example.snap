@@ -1,0 +1,407 @@
+---
+source: tests/parse.rs
+expression: ast
+---
+[
+  (List([
+    (Identifier("fn"), SimpleSpan(
+      start: 1,
+      end: 3,
+      context: (),
+    )),
+    (List([
+      (Identifier("main"), SimpleSpan(
+        start: 5,
+        end: 9,
+        context: (),
+      )),
+    ]), SimpleSpan(
+      start: 4,
+      end: 10,
+      context: (),
+    )),
+    (List([
+      (Identifier("let"), SimpleSpan(
+        start: 16,
+        end: 19,
+        context: (),
+      )),
+      (Identifier("line"), SimpleSpan(
+        start: 20,
+        end: 24,
+        context: (),
+      )),
+      (List([
+        (Identifier("split"), SimpleSpan(
+          start: 26,
+          end: 31,
+          context: (),
+        )),
+        (String("\" \""), SimpleSpan(
+          start: 32,
+          end: 35,
+          context: (),
+        )),
+        (List([
+          (Identifier("trim"), SimpleSpan(
+            start: 37,
+            end: 41,
+            context: (),
+          )),
+          (Identifier("right"), SimpleSpan(
+            start: 42,
+            end: 47,
+            context: (),
+          )),
+          (List([
+            (Identifier("input_line"), SimpleSpan(
+              start: 49,
+              end: 59,
+              context: (),
+            )),
+          ]), SimpleSpan(
+            start: 48,
+            end: 60,
+            context: (),
+          )),
+        ]), SimpleSpan(
+          start: 36,
+          end: 61,
+          context: (),
+        )),
+      ]), SimpleSpan(
+        start: 25,
+        end: 62,
+        context: (),
+      )),
+    ]), SimpleSpan(
+      start: 15,
+      end: 63,
+      context: (),
+    )),
+    (List([
+      (Identifier("let"), SimpleSpan(
+        start: 69,
+        end: 72,
+        context: (),
+      )),
+      (Identifier("a"), SimpleSpan(
+        start: 73,
+        end: 74,
+        context: (),
+      )),
+      (List([
+        (Identifier("to_string"), SimpleSpan(
+          start: 76,
+          end: 85,
+          context: (),
+        )),
+        (List([
+          (Identifier("get"), SimpleSpan(
+            start: 87,
+            end: 90,
+            context: (),
+          )),
+          (Number(0), SimpleSpan(
+            start: 91,
+            end: 92,
+            context: (),
+          )),
+          (Identifier("line"), SimpleSpan(
+            start: 93,
+            end: 97,
+            context: (),
+          )),
+        ]), SimpleSpan(
+          start: 86,
+          end: 98,
+          context: (),
+        )),
+      ]), SimpleSpan(
+        start: 75,
+        end: 99,
+        context: (),
+      )),
+    ]), SimpleSpan(
+      start: 68,
+      end: 100,
+      context: (),
+    )),
+    (List([
+      (Identifier("let"), SimpleSpan(
+        start: 106,
+        end: 109,
+        context: (),
+      )),
+      (Identifier("op"), SimpleSpan(
+        start: 110,
+        end: 112,
+        context: (),
+      )),
+      (List([
+        (Identifier("to_string"), SimpleSpan(
+          start: 114,
+          end: 123,
+          context: (),
+        )),
+        (List([
+          (Identifier("get"), SimpleSpan(
+            start: 125,
+            end: 128,
+            context: (),
+          )),
+          (Number(1), SimpleSpan(
+            start: 129,
+            end: 130,
+            context: (),
+          )),
+          (Identifier("line"), SimpleSpan(
+            start: 131,
+            end: 135,
+            context: (),
+          )),
+        ]), SimpleSpan(
+          start: 124,
+          end: 136,
+          context: (),
+        )),
+      ]), SimpleSpan(
+        start: 113,
+        end: 137,
+        context: (),
+      )),
+    ]), SimpleSpan(
+      start: 105,
+      end: 138,
+      context: (),
+    )),
+    (List([
+      (Identifier("let"), SimpleSpan(
+        start: 144,
+        end: 147,
+        context: (),
+      )),
+      (Identifier("b"), SimpleSpan(
+        start: 148,
+        end: 149,
+        context: (),
+      )),
+      (List([
+        (Identifier("to_string"), SimpleSpan(
+          start: 151,
+          end: 160,
+          context: (),
+        )),
+        (List([
+          (Identifier("get"), SimpleSpan(
+            start: 162,
+            end: 165,
+            context: (),
+          )),
+          (Number(2), SimpleSpan(
+            start: 166,
+            end: 167,
+            context: (),
+          )),
+          (Identifier("line"), SimpleSpan(
+            start: 168,
+            end: 172,
+            context: (),
+          )),
+        ]), SimpleSpan(
+          start: 161,
+          end: 173,
+          context: (),
+        )),
+      ]), SimpleSpan(
+        start: 150,
+        end: 174,
+        context: (),
+      )),
+    ]), SimpleSpan(
+      start: 143,
+      end: 175,
+      context: (),
+    )),
+    (List([
+      (Identifier("let"), SimpleSpan(
+        start: 181,
+        end: 184,
+        context: (),
+      )),
+      (Identifier("result"), SimpleSpan(
+        start: 185,
+        end: 191,
+        context: (),
+      )),
+      (List([
+        (Identifier("match"), SimpleSpan(
+          start: 193,
+          end: 198,
+          context: (),
+        )),
+        (Identifier("op"), SimpleSpan(
+          start: 199,
+          end: 201,
+          context: (),
+        )),
+        (List([
+          (Identifier("case"), SimpleSpan(
+            start: 211,
+            end: 215,
+            context: (),
+          )),
+          (String("\"+\""), SimpleSpan(
+            start: 216,
+            end: 219,
+            context: (),
+          )),
+          (List([
+            (Identifier("a"), SimpleSpan(
+              start: 223,
+              end: 224,
+              context: (),
+            )),
+            (Identifier("b"), SimpleSpan(
+              start: 225,
+              end: 226,
+              context: (),
+            )),
+          ]), SimpleSpan(
+            start: 220,
+            end: 227,
+            context: (),
+          )),
+        ]), SimpleSpan(
+          start: 210,
+          end: 228,
+          context: (),
+        )),
+        (List([
+          (Identifier("case"), SimpleSpan(
+            start: 238,
+            end: 242,
+            context: (),
+          )),
+          (String("\"-\""), SimpleSpan(
+            start: 243,
+            end: 246,
+            context: (),
+          )),
+          (List([
+            (Identifier("a"), SimpleSpan(
+              start: 250,
+              end: 251,
+              context: (),
+            )),
+            (Identifier("b"), SimpleSpan(
+              start: 252,
+              end: 253,
+              context: (),
+            )),
+          ]), SimpleSpan(
+            start: 247,
+            end: 254,
+            context: (),
+          )),
+        ]), SimpleSpan(
+          start: 237,
+          end: 255,
+          context: (),
+        )),
+        (List([
+          (Identifier("case"), SimpleSpan(
+            start: 265,
+            end: 269,
+            context: (),
+          )),
+          (String("\"*\""), SimpleSpan(
+            start: 270,
+            end: 273,
+            context: (),
+          )),
+          (List([
+            (Identifier("a"), SimpleSpan(
+              start: 277,
+              end: 278,
+              context: (),
+            )),
+            (Identifier("b"), SimpleSpan(
+              start: 279,
+              end: 280,
+              context: (),
+            )),
+          ]), SimpleSpan(
+            start: 274,
+            end: 281,
+            context: (),
+          )),
+        ]), SimpleSpan(
+          start: 264,
+          end: 282,
+          context: (),
+        )),
+        (List([
+          (Identifier("case"), SimpleSpan(
+            start: 292,
+            end: 296,
+            context: (),
+          )),
+          (String("\"/\""), SimpleSpan(
+            start: 297,
+            end: 300,
+            context: (),
+          )),
+          (List([
+            (Identifier("a"), SimpleSpan(
+              start: 304,
+              end: 305,
+              context: (),
+            )),
+            (Identifier("b"), SimpleSpan(
+              start: 306,
+              end: 307,
+              context: (),
+            )),
+          ]), SimpleSpan(
+            start: 301,
+            end: 308,
+            context: (),
+          )),
+        ]), SimpleSpan(
+          start: 291,
+          end: 309,
+          context: (),
+        )),
+      ]), SimpleSpan(
+        start: 192,
+        end: 310,
+        context: (),
+      )),
+    ]), SimpleSpan(
+      start: 180,
+      end: 311,
+      context: (),
+    )),
+    (List([
+      (Identifier("print_line"), SimpleSpan(
+        start: 317,
+        end: 327,
+        context: (),
+      )),
+      (Identifier("result"), SimpleSpan(
+        start: 328,
+        end: 334,
+        context: (),
+      )),
+    ]), SimpleSpan(
+      start: 316,
+      end: 335,
+      context: (),
+    )),
+  ]), SimpleSpan(
+    start: 0,
+    end: 336,
+    context: (),
+  )),
+]
