@@ -1,14 +1,42 @@
 extern crate tribute;
 
 use std::{ffi::OsString, path::PathBuf};
+use tribute::{parse_with_database, TributeDatabaseImpl};
 
 type Error = std::io::Error;
 
 fn main() -> Result<(), Error> {
     let path = parse_args(std::env::args_os())?;
-    let source = std::fs::read_to_string(path)?;
-    let ast = tribute::parse(&source);
-    println!("{:#?}", ast);
+    let source = std::fs::read_to_string(&path)?;
+
+    // Create Salsa database and parse using parse_with_database
+    let db = TributeDatabaseImpl::default();
+    let (program, diags) = parse_with_database(&db, &path, &source);
+
+    // Display diagnostics if any
+    if !diags.is_empty() {
+        eprintln!("Diagnostics:");
+        for diagnostic in &diags {
+            eprintln!(
+                "  [{}] {} (span: {}..{})",
+                diagnostic.severity, diagnostic.message, diagnostic.span.start, diagnostic.span.end
+            );
+        }
+    }
+
+    // Display parsed AST
+    println!("Parsed {} expressions:", program.expressions(&db).len());
+    for (i, tracked_expr) in program.expressions(&db).iter().enumerate() {
+        println!("Expression {}: {}", i + 1, tracked_expr.expr(&db));
+        println!(
+            "  Span: {}..{}",
+            tracked_expr.span(&db).start,
+            tracked_expr.span(&db).end
+        );
+        println!("  Debug: {:#?}", tracked_expr.expr(&db));
+        println!();
+    }
+
     Ok(())
 }
 

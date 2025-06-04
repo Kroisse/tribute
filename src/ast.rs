@@ -1,6 +1,6 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SimpleSpan {
     pub start: usize,
     pub end: usize,
@@ -9,7 +9,11 @@ pub struct SimpleSpan {
 
 impl SimpleSpan {
     pub fn new(start: usize, end: usize) -> Self {
-        Self { start, end, context: () }
+        Self {
+            start,
+            end,
+            context: (),
+        }
     }
 }
 
@@ -39,7 +43,7 @@ impl std::fmt::Display for Token<'_> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Expr {
     Number(i64),
     String(String),
@@ -66,4 +70,3 @@ impl std::fmt::Display for Expr {
         }
     }
 }
-
