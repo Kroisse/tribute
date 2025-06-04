@@ -1,0 +1,2 @@
+(fn (main)  // explicit entrypoint
+    (print_line "Hello, world!"))

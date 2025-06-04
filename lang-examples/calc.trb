@@ -1,0 +1,11 @@
+(fn (main)
+    (let line (split " " (trim-right (input_line))))
+    (let a (to_string (get 0 line)))
+    (let op (to_string (get 1 line)))
+    (let b (to_string (get 2 line)))
+    (let result (match op
+        (case "+" (+ a b))
+        (case "-" (- a b))
+        (case "*" (* a b))
+        (case "/" (/ a b))))
+    (print_line result))

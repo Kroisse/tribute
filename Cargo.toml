@@ -1,0 +1,10 @@
+[package]
+name = "tribute"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+chumsky = "1.0.0-alpha.6"
+salsa = "0.16"
