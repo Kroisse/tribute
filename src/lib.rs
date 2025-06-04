@@ -11,6 +11,7 @@ pub use crate::{
         diagnostics, parse_source_file, Diagnostic, DiagnosticSeverity, Program, SourceFile,
         TrackedExpression, TributeDatabaseImpl,
     },
+    eval::{eval_expr, Environment, Value},
     parser::TributeParser,
 };
 

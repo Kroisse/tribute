@@ -39,7 +39,7 @@ impl Environment<'_> {
         }
     }
 
-    fn lookup(&self, ident: &Identifier) -> Result<&Value, Error> {
+    pub fn lookup(&self, ident: &Identifier) -> Result<&Value, Error> {
         for (id, value) in &self.bindings {
             if id == ident {
                 return Ok(value);
@@ -56,7 +56,7 @@ impl Environment<'_> {
         self.bindings.insert(ident, value);
     }
 
-    fn child(&self, bindings: impl IntoIterator<Item = (Identifier, Value)>) -> Environment<'_> {
+    pub fn child(&self, bindings: impl IntoIterator<Item = (Identifier, Value)>) -> Environment<'_> {
         Environment {
             parent: Some(self),
             bindings: bindings.into_iter().collect(),
@@ -125,13 +125,31 @@ fn handle_let(env: &mut Environment<'_>, rest: &[Spanned<Expr>]) -> Result<Value
     Ok(Value::Unit)
 }
 
-fn handle_fn(_env: &mut Environment<'_>, rest: &[Spanned<Expr>]) -> Result<Value, Error> {
-    let Some(((Expr::List(sig), _), _body)) = rest.split_first() else {
-        return Err("expected signature and body".into());
+fn handle_fn(env: &mut Environment<'_>, rest: &[Spanned<Expr>]) -> Result<Value, Error> {
+    if rest.len() < 2 {
+        return Err("fn requires signature and body".into());
+    }
+    
+    let (sig, body_exprs) = rest.split_first().unwrap();
+    let Expr::List(sig_parts) = &sig.0 else {
+        return Err("expected signature list".into());
     };
-    let Some(((Expr::Identifier(_name), _), _params)) = sig.split_first() else {
+    
+    let Some(((Expr::Identifier(name), _), params)) = sig_parts.split_first() else {
         return Err("expected name and parameters".into());
     };
+
+    let param_names: Result<Vec<Identifier>, Error> = params
+        .iter()
+        .map(|(expr, _)| match expr {
+            Expr::Identifier(id) => Ok(id.clone()),
+            _ => Err("function parameter must be an identifier".into()),
+        })
+        .collect();
+
+    let param_names = param_names?;
+    let function_value = Value::Fn(name.clone(), param_names, body_exprs.to_vec());
+    env.bind(name.clone(), function_value);
 
     Ok(Value::Unit)
 }
@@ -143,14 +161,14 @@ mod builtins {
 
     pub static BUILTINS: LazyLock<HashMap<String, Value>> = LazyLock::new(|| {
         let temp: &[(&str, BuiltinFn)] = &[
-            ("print", |args| {
+            ("print_line", |args| {
                 for arg in args {
                     print!("{}", arg);
                 }
                 println!();
                 Ok(Value::Unit)
             }),
-            ("input", |_| {
+            ("input_line", |_| {
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input)?;
                 Ok(Value::String(input))

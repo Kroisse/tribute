@@ -1,7 +1,7 @@
 extern crate tribute;
 
 use std::{ffi::OsString, path::PathBuf};
-use tribute::{parse_with_database, TributeDatabaseImpl};
+use tribute::{parse_with_database, TributeDatabaseImpl, eval_expr, Environment, Value};
 
 type Error = std::io::Error;
 
@@ -24,17 +24,39 @@ fn main() -> Result<(), Error> {
         }
     }
 
-    // Display parsed AST
-    println!("Parsed {} expressions:", program.expressions(&db).len());
-    for (i, tracked_expr) in program.expressions(&db).iter().enumerate() {
-        println!("Expression {}: {}", i + 1, tracked_expr.expr(&db));
-        println!(
-            "  Span: {}..{}",
-            tracked_expr.span(&db).start,
-            tracked_expr.span(&db).end
-        );
-        println!("  Debug: {:#?}", tracked_expr.expr(&db));
-        println!();
+    // Execute the program
+    let mut env = Environment::toplevel();
+    
+    // Evaluate all expressions to register functions
+    for tracked_expr in program.expressions(&db).iter() {
+        if let Err(e) = eval_expr(&mut env, &tracked_expr.expr(&db)) {
+            eprintln!("Evaluation error: {}", e);
+            return Ok(());
+        }
+    }
+    
+    // Try to call main function if it exists
+    if let Ok(main_fn) = env.lookup(&"main".to_string()) {
+        match main_fn {
+            Value::Fn(_, params, body) => {
+                if params.is_empty() {
+                    let mut child_env = env.child(vec![]);
+                    for expr in body {
+                        if let Err(e) = eval_expr(&mut child_env, &expr.0) {
+                            eprintln!("Runtime error in main: {}", e);
+                            return Ok(());
+                        }
+                    }
+                } else {
+                    eprintln!("main function should not have parameters");
+                }
+            }
+            _ => {
+                eprintln!("main is not a function");
+            }
+        }
+    } else {
+        eprintln!("No main function found");
     }
 
     Ok(())
