@@ -1,8 +1,8 @@
 (fn (main)
-    (let line (split " " (trim-right (input_line))))
-    (let a (to_string (get 0 line)))
-    (let op (to_string (get 1 line)))
-    (let b (to_string (get 2 line)))
+    (let line (split " " (trim_right (input_line))))
+    (let a (to_number (get 0 line)))
+    (let op (get 1 line))
+    (let b (to_number (get 2 line)))
     (let result (match op
         (case "+" (+ a b))
         (case "-" (- a b))

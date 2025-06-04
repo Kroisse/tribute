@@ -8,7 +8,7 @@ pub struct SimpleSpan {
 }
 
 impl SimpleSpan {
-    pub fn new(start: usize, end: usize) -> Self {
+    pub const fn new(start: usize, end: usize) -> Self {
         Self {
             start,
             end,
