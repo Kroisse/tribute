@@ -1,43 +1,74 @@
-use crate::ast::{lexer, Expr, Span, Spanned, Token};
-use chumsky::prelude::*;
+use tree_sitter::{Parser, Node};
+use crate::ast::{Expr, SimpleSpan};
 
-type ParserInput<'tokens, 'src> =
-    chumsky::input::SpannedInput<Token<'src>, Span, &'tokens [Spanned<Token<'src>>]>;
-
-fn parser<'tokens, 'src: 'tokens>() -> impl Parser<
-    'tokens,
-    ParserInput<'tokens, 'src>,
-    Spanned<Expr>,
-    extra::Err<Rich<'tokens, Token<'src>, Span>>,
-> {
-    recursive(|expr| {
-        let value = select! {
-            Token::Number(n) => Expr::Number(n),
-            Token::String(s) => Expr::String(s.to_owned()),
-            Token::Ident(s) => Expr::Identifier(s.to_owned()),
-        }
-        .map_with(|expr, e| (expr, e.span()));
-
-        let block = expr
-            .repeated()
-            .collect()
-            .delimited_by(just(Token::ParenOpen), just(Token::ParenClose))
-            .map_with(|exprs, e| (Expr::List(exprs), e.span()));
-
-        block.or(value)
-    })
+pub struct TributeParser {
+    parser: Parser,
 }
 
-pub fn parse<'a>(input: &'a str) -> Vec<Spanned<Expr>> {
-    let (tokens, _) = lexer().parse(input).into_output_errors();
-    let ast = if let Some(tokens) = tokens {
-        let result = parser()
-            .repeated()
-            .collect()
-            .parse(tokens.as_slice().spanned((input.len()..input.len()).into()));
-        result.into_output_errors().0
-    } else {
-        None
-    };
-    ast.unwrap_or_default()
+impl TributeParser {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let mut parser = Parser::new();
+        let language = tree_sitter_tribute::language();
+        parser.set_language(&language)?;
+        Ok(TributeParser { parser })
+    }
+
+    pub fn parse(&mut self, source: &str) -> Result<Vec<(Expr, SimpleSpan)>, Box<dyn std::error::Error>> {
+        let tree = self.parser.parse(source, None)
+            .ok_or("Failed to parse")?;
+        
+        let root_node = tree.root_node();
+        let mut expressions = Vec::new();
+        
+        for i in 0..root_node.child_count() {
+            if let Some(child) = root_node.child(i) {
+                if let Some((expr, span)) = self.node_to_expr_with_span(child, source) {
+                    expressions.push((expr, span));
+                }
+            }
+        }
+        
+        Ok(expressions)
+    }
+
+    fn node_to_expr_with_span(&self, node: Node, source: &str) -> Option<(Expr, SimpleSpan)> {
+        let span = SimpleSpan::new(node.start_byte(), node.end_byte());
+        let expr = self.node_to_expr(node, source)?;
+        Some((expr, span))
+    }
+
+    fn node_to_expr(&self, node: Node, source: &str) -> Option<Expr> {
+        match node.kind() {
+            "number" => {
+                let text = node.utf8_text(source.as_bytes()).ok()?;
+                let num = text.parse::<i64>().ok()?;
+                Some(Expr::Number(num))
+            }
+            "string" => {
+                let text = node.utf8_text(source.as_bytes()).ok()?;
+                // Remove quotes
+                let content = &text[1..text.len()-1];
+                Some(Expr::String(content.to_string()))
+            }
+            "identifier" => {
+                let text = node.utf8_text(source.as_bytes()).ok()?;
+                Some(Expr::Identifier(text.to_string()))
+            }
+            "list" => {
+                let mut children = Vec::new();
+                for i in 0..node.child_count() {
+                    if let Some(child) = node.child(i) {
+                        if child.kind() == "(" || child.kind() == ")" {
+                            continue;
+                        }
+                        if let Some((expr, span)) = self.node_to_expr_with_span(child, source) {
+                            children.push((expr, span));
+                        }
+                    }
+                }
+                Some(Expr::List(children))
+            }
+            _ => None
+        }
+    }
 }

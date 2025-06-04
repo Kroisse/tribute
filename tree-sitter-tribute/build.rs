@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 fn main() {
-    let dir: PathBuf = ["tree-sitter-tribute", "src"].iter().collect();
+    let dir: PathBuf = ["src"].iter().collect();
+    
+    println!("cargo:rerun-if-changed=src/parser.c");
+    println!("cargo:rerun-if-changed=build.rs");
 
     cc::Build::new()
         .include(&dir)
