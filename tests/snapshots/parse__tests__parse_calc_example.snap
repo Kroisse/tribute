@@ -37,19 +37,14 @@ expression: ast
           end: 31,
           context: (),
         )),
-        (String("\" \""), SimpleSpan(
+        (String(" "), SimpleSpan(
           start: 32,
           end: 35,
           context: (),
         )),
         (List([
-          (Identifier("trim"), SimpleSpan(
+          (Identifier("trim-right"), SimpleSpan(
             start: 37,
-            end: 41,
-            context: (),
-          )),
-          (Identifier("right"), SimpleSpan(
-            start: 42,
             end: 47,
             context: (),
           )),
@@ -251,12 +246,17 @@ expression: ast
             end: 215,
             context: (),
           )),
-          (String("\"+\""), SimpleSpan(
+          (String("+"), SimpleSpan(
             start: 216,
             end: 219,
             context: (),
           )),
           (List([
+            (Identifier("+"), SimpleSpan(
+              start: 221,
+              end: 222,
+              context: (),
+            )),
             (Identifier("a"), SimpleSpan(
               start: 223,
               end: 224,
@@ -283,12 +283,17 @@ expression: ast
             end: 242,
             context: (),
           )),
-          (String("\"-\""), SimpleSpan(
+          (String("-"), SimpleSpan(
             start: 243,
             end: 246,
             context: (),
           )),
           (List([
+            (Identifier("-"), SimpleSpan(
+              start: 248,
+              end: 249,
+              context: (),
+            )),
             (Identifier("a"), SimpleSpan(
               start: 250,
               end: 251,
@@ -315,12 +320,17 @@ expression: ast
             end: 269,
             context: (),
           )),
-          (String("\"*\""), SimpleSpan(
+          (String("*"), SimpleSpan(
             start: 270,
             end: 273,
             context: (),
           )),
           (List([
+            (Identifier("*"), SimpleSpan(
+              start: 275,
+              end: 276,
+              context: (),
+            )),
             (Identifier("a"), SimpleSpan(
               start: 277,
               end: 278,
@@ -347,12 +357,17 @@ expression: ast
             end: 296,
             context: (),
           )),
-          (String("\"/\""), SimpleSpan(
+          (String("/"), SimpleSpan(
             start: 297,
             end: 300,
             context: (),
           )),
           (List([
+            (Identifier("/"), SimpleSpan(
+              start: 302,
+              end: 303,
+              context: (),
+            )),
             (Identifier("a"), SimpleSpan(
               start: 304,
               end: 305,

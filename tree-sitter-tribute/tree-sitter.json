@@ -1,0 +1,23 @@
+{
+  "grammars": [
+    {
+      "name": "tribute",
+      "camelCase": "Tribute",
+      "scope": "source.tribute",
+      "file-types": ["trb"],
+      "folds": [
+        {
+          "type": "list",
+          "start": {"type": "("},
+          "end": {"type": ")"}
+        }
+      ],
+      "highlights": [
+        "queries/highlights.scm"
+      ]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0"
+  }
+}

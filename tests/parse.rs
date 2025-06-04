@@ -2,7 +2,7 @@ use std::path::Path;
 use tribute::parse;
 use insta::assert_ron_snapshot;
 
-pub fn parse_file(path: &Path) -> Vec<(tribute::ast::Expr, chumsky::span::SimpleSpan)> {
+pub fn parse_file(path: &Path) -> Vec<(tribute::ast::Expr, tribute::ast::SimpleSpan)> {
     let source = std::fs::read_to_string(path)
         .expect("Failed to read file");
     
