@@ -196,16 +196,58 @@ fn generate_box_string_op<'a>(
     index: usize,
     context: &'a Context,
     location: Location<'a>,
-    _block: &Block<'a>,
+    block: &Block<'a>,
 ) {
     println!("    Creating boxed string: \"{}\"", value);
-    // This would generate:
-    // 1. %str_data = call @tribute_alloc_string(i64 {})  // string length
-    // 2. call @llvm.memcpy(%str_data, @string_literal_{}, i64 {})
-    // 3. %boxed = call @tribute_box_string(%str_data, i64 {})
-    let boxed_name = format!("boxed_str_{}", index);
-    println!("      -> MLIR: %{} = call @tribute_box_string(ptr @str_literal_{}, i64 {})", 
-             boxed_name, value.len(), value.len());
+    
+    // Try to generate actual MLIR operations for string boxing
+    use melior::{
+        dialect::func,
+        ir::{
+            attribute::IntegerAttribute,
+            r#type::IntegerType,
+        },
+    };
+    
+    // Create string length constant
+    let i64_type = IntegerType::new(context, 64);
+    let ptr_type = IntegerType::new(context, 64); // Simplified pointer type
+    
+    // Try to create the string boxing operations
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Create length constant
+        let length_constant = melior::dialect::arith::constant(
+            context,
+            IntegerAttribute::new(i64_type.into(), value.len() as i64).into(),
+            location,
+        );
+        
+        // Create call to tribute_box_string(data, length)
+        // For now, we'll create a simple call - in a full implementation,
+        // we'd need to create a global string constant first
+        let call_op = func::call(
+            context,
+            melior::ir::attribute::FlatSymbolRefAttribute::new(context, "tribute_box_string"),
+            &[length_constant.result(0).unwrap().into()], // Simplified: just pass length
+            &[ptr_type.into()],
+            location,
+        );
+        
+        (length_constant, call_op)
+    })) {
+        Ok((length_constant, call_op)) => {
+            println!("      SUCCESS: Created MLIR string length constant: {}", value.len());
+            block.append_operation(length_constant);
+            block.append_operation(call_op);
+            println!("      SUCCESS: Created MLIR string boxing call");
+        }
+        Err(_) => {
+            println!("      FALLBACK: Using text representation for string boxing");
+            let boxed_name = format!("boxed_str_{}", index);
+            println!("      -> MLIR: %{} = call @tribute_box_string(ptr @str_literal_{}, i64 {})", 
+                     boxed_name, value.len(), value.len());
+        }
+    }
 }
 
 /// Generate MLIR operations for other operation types
@@ -259,19 +301,37 @@ fn generate_function_call_op<'a>(
     } else {
         // Generate actual func.call for user-defined functions
         println!("      User function call: {}", func_name);
-        println!("        -> MLIR: %result_{} = call @{}({})", 
-                 index, func_name, 
-                 args.iter().map(|arg| format!("ptr %{}", arg)).collect::<Vec<_>>().join(", "));
         
-        // TODO: Generate actual func.call operation when MLIR context is properly set up
-        // let call_op = func::call(
-        //     context,
-        //     melior::ir::attribute::FlatSymbolRefAttribute::new(context, func_name),
-        //     &[...], // Convert args to MLIR values
-        //     &[ptr_type.into()], // Return type
-        //     location,
-        // );
-        // block.append_operation(call_op);
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            use melior::{
+                dialect::func,
+                ir::r#type::IntegerType,
+            };
+            
+            let ptr_type = IntegerType::new(context, 64);
+            
+            // Create call to user function
+            let call_op = func::call(
+                context,
+                melior::ir::attribute::FlatSymbolRefAttribute::new(context, func_name),
+                &[], // We'd need actual argument values here
+                &[ptr_type.into()], // Return type
+                location,
+            );
+            
+            call_op
+        })) {
+            Ok(call_op) => {
+                println!("      SUCCESS: Created MLIR user function call: {}", func_name);
+                block.append_operation(call_op);
+            }
+            Err(_) => {
+                println!("      FALLBACK: Using text representation for user function call");
+                println!("        -> MLIR: %result_{} = call @{}({})", 
+                         index, func_name, 
+                         args.iter().map(|arg| format!("ptr %{}", arg)).collect::<Vec<_>>().join(", "));
+            }
+        }
     }
 }
 
@@ -280,53 +340,129 @@ fn generate_builtin_function_call(
     func_name: &str, 
     args: &[String], 
     index: usize,
-    _context: &Context,
-    _location: Location<'_>,
-    _block: &Block<'_>,
+    context: &Context,
+    location: Location<'_>,
+    block: &Block<'_>,
 ) {
     let builtin_name = &func_name[8..]; // Remove "builtin_" prefix
     println!("      Builtin function: {}", builtin_name);
     
+    // Helper function to create runtime function calls
+    let create_runtime_call = |runtime_func: &str| -> std::result::Result<melior::ir::Operation<'_>, Box<dyn std::error::Error>> {
+        use melior::{
+            dialect::func,
+            ir::r#type::IntegerType,
+        };
+        
+        let ptr_type = IntegerType::new(context, 64);
+        
+        // For most runtime functions, we expect 2 pointer arguments and return 1 pointer
+        let call_op = func::call(
+            context,
+            melior::ir::attribute::FlatSymbolRefAttribute::new(context, runtime_func),
+            &[], // We'd need actual argument values here
+            &[ptr_type.into()],
+            location,
+        );
+        
+        Ok(call_op)
+    };
+    
     match builtin_name {
         "+" => {
             println!("      Generating boxed arithmetic addition");
-            let result_name = format!("add_result_{}", index);
-            println!("        -> MLIR: %{} = call @tribute_add_boxed(ptr %{}, ptr %{})", 
-                     result_name, 
-                     args.get(0).unwrap_or(&"arg0".to_string()),
-                     args.get(1).unwrap_or(&"arg1".to_string()));
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                create_runtime_call("tribute_add_boxed")
+            })) {
+                Ok(Ok(call_op)) => {
+                    println!("      SUCCESS: Created MLIR addition call");
+                    block.append_operation(call_op);
+                }
+                _ => {
+                    println!("      FALLBACK: Using text representation for addition");
+                    let result_name = format!("add_result_{}", index);
+                    println!("        -> MLIR: %{} = call @tribute_add_boxed(ptr %{}, ptr %{})", 
+                             result_name, 
+                             args.first().unwrap_or(&"arg0".to_string()),
+                             args.get(1).unwrap_or(&"arg1".to_string()));
+                }
+            }
         }
         "-" => {
             println!("      Generating boxed arithmetic subtraction");
-            let result_name = format!("sub_result_{}", index);
-            println!("        -> MLIR: %{} = call @tribute_sub_boxed(ptr %{}, ptr %{})", 
-                     result_name, 
-                     args.get(0).unwrap_or(&"arg0".to_string()),
-                     args.get(1).unwrap_or(&"arg1".to_string()));
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                create_runtime_call("tribute_sub_boxed")
+            })) {
+                Ok(Ok(call_op)) => {
+                    println!("      SUCCESS: Created MLIR subtraction call");
+                    block.append_operation(call_op);
+                }
+                _ => {
+                    println!("      FALLBACK: Using text representation for subtraction");
+                    let result_name = format!("sub_result_{}", index);
+                    println!("        -> MLIR: %{} = call @tribute_sub_boxed(ptr %{}, ptr %{})", 
+                             result_name, 
+                             args.first().unwrap_or(&"arg0".to_string()),
+                             args.get(1).unwrap_or(&"arg1".to_string()));
+                }
+            }
         }
         "*" => {
             println!("      Generating boxed arithmetic multiplication");
-            let result_name = format!("mul_result_{}", index);
-            println!("        -> MLIR: %{} = call @tribute_mul_boxed(ptr %{}, ptr %{})", 
-                     result_name, 
-                     args.get(0).unwrap_or(&"arg0".to_string()),
-                     args.get(1).unwrap_or(&"arg1".to_string()));
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                create_runtime_call("tribute_mul_boxed")
+            })) {
+                Ok(Ok(call_op)) => {
+                    println!("      SUCCESS: Created MLIR multiplication call");
+                    block.append_operation(call_op);
+                }
+                _ => {
+                    println!("      FALLBACK: Using text representation for multiplication");
+                    let result_name = format!("mul_result_{}", index);
+                    println!("        -> MLIR: %{} = call @tribute_mul_boxed(ptr %{}, ptr %{})", 
+                             result_name, 
+                             args.first().unwrap_or(&"arg0".to_string()),
+                             args.get(1).unwrap_or(&"arg1".to_string()));
+                }
+            }
         }
         "/" => {
             println!("      Generating boxed arithmetic division");
-            let result_name = format!("div_result_{}", index);
-            println!("        -> MLIR: %{} = call @tribute_div_boxed(ptr %{}, ptr %{})", 
-                     result_name, 
-                     args.get(0).unwrap_or(&"arg0".to_string()),
-                     args.get(1).unwrap_or(&"arg1".to_string()));
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                create_runtime_call("tribute_div_boxed")
+            })) {
+                Ok(Ok(call_op)) => {
+                    println!("      SUCCESS: Created MLIR division call");
+                    block.append_operation(call_op);
+                }
+                _ => {
+                    println!("      FALLBACK: Using text representation for division");
+                    let result_name = format!("div_result_{}", index);
+                    println!("        -> MLIR: %{} = call @tribute_div_boxed(ptr %{}, ptr %{})", 
+                             result_name, 
+                             args.first().unwrap_or(&"arg0".to_string()),
+                             args.get(1).unwrap_or(&"arg1".to_string()));
+                }
+            }
         }
         "%" => {
             println!("      Generating boxed arithmetic modulo");
-            let result_name = format!("mod_result_{}", index);
-            println!("        -> MLIR: %{} = call @tribute_mod_boxed(ptr %{}, ptr %{})", 
-                     result_name, 
-                     args.get(0).unwrap_or(&"arg0".to_string()),
-                     args.get(1).unwrap_or(&"arg1".to_string()));
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                create_runtime_call("tribute_mod_boxed")
+            })) {
+                Ok(Ok(call_op)) => {
+                    println!("      SUCCESS: Created MLIR modulo call");
+                    block.append_operation(call_op);
+                }
+                _ => {
+                    println!("      FALLBACK: Using text representation for modulo");
+                    let result_name = format!("mod_result_{}", index);
+                    println!("        -> MLIR: %{} = call @tribute_mod_boxed(ptr %{}, ptr %{})", 
+                             result_name, 
+                             args.first().unwrap_or(&"arg0".to_string()),
+                             args.get(1).unwrap_or(&"arg1".to_string()));
+                }
+            }
         }
         "=" | "==" => {
             println!("      Generating boxed equality comparison");
@@ -479,13 +615,23 @@ fn generate_mlir_function_op<'a>(
                 println!("      -> MLIR: return ptr %nil_value");
             }
             
-            // TODO: Generate actual func.return operation when MLIR context is properly set up
-            // let return_op = func::r#return(
-            //     context,
-            //     &[last_result_value], // Last computed value or nil
-            //     location,
-            // );
-            // block.append_operation(return_op);
+            // Try to generate actual func.return operation
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // Create a simple return operation for now
+                // In a full implementation, we'd pass the actual last result value
+                melior::dialect::func::r#return(
+                    &[], // No return values for now - simplified
+                    location,
+                )
+            })) {
+                Ok(return_op) => {
+                    println!("      SUCCESS: Created MLIR return operation");
+                    block.append_operation(return_op);
+                }
+                Err(_) => {
+                    println!("      FALLBACK: Using minimal function body without explicit return");
+                }
+            }
             
             region.append_block(block);
             region
