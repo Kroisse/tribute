@@ -7,4 +7,4 @@ edition = "2024"
 
 [lib]
 name = "tribute_runtime"
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]

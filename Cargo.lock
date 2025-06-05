@@ -946,6 +946,7 @@ dependencies = [
  "salsa",
  "tribute-ast",
  "tribute-hir",
+ "tribute-runtime",
 ]
 
 [[package]]

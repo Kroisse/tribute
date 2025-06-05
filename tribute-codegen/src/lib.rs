@@ -123,9 +123,12 @@ mod tests {
         let output_path = Path::new("/tmp/test_output");
 
         let result = codegen.compile_string(source, output_path);
-        // This will succeed in parsing but fail in code generation (MLIR stub)
-        // For now, we just test that it doesn't panic
-        let _ = result;
+        
+        // Should succeed in compilation
+        assert!(result.is_ok(), "Compilation should succeed: {:?}", result);
+        
+        // Output file should be created
+        assert!(output_path.exists(), "Output file should be created");
     }
     
     #[test]
@@ -148,12 +151,15 @@ mod tests {
     fn test_compile_arithmetic_function() {
         let mut codegen = TributeCodegen::new().unwrap();
         let source = r#"(fn (calc x y) (+ x y))"#;
-        let output_path = Path::new("/tmp/test_output");
+        let output_path = Path::new("/tmp/test_arithmetic_output");
 
         let result = codegen.compile_string(source, output_path);
-        // This will succeed in parsing but fail in code generation (MLIR stub)
-        // For now, we just test that it doesn't panic
-        let _ = result;
+        
+        // Should succeed in compilation
+        assert!(result.is_ok(), "Arithmetic compilation should succeed: {:?}", result);
+        
+        // Output file should be created
+        assert!(output_path.exists(), "Arithmetic output file should be created");
     }
     
     #[test]
@@ -226,8 +232,150 @@ mod tests {
         let result = codegen.compile_string(source, output_path);
         println!("Result: {:?}", result);
         
-        // This test shows all operations working together
-        let _ = result;
+        // Should succeed in compilation
+        assert!(result.is_ok(), "All operations compilation should succeed: {:?}", result);
+    }
+
+    #[test]
+    fn test_mlir_module_generation() {
+        use tribute_ast::{SourceFile, TributeDatabaseImpl};
+        use tribute_hir::lower_source_to_hir;
+        use super::hir_to_mlir::{generate_mlir_module, MlirOperation};
+
+        let source = r#"(fn (add x y) (+ x y))"#;
+        let db = TributeDatabaseImpl::default();
+        let source_file = SourceFile::new(&db, "test.trb".into(), source.to_string());
+        
+        let hir_program = lower_source_to_hir(&db, source_file)
+            .expect("Should parse and lower to HIR");
+
+        // Generate MLIR module using Salsa query
+        let mlir_module = generate_mlir_module(&db, hir_program);
+        let functions = mlir_module.functions(&db);
+        
+        // Verify function was generated
+        assert_eq!(functions.len(), 1, "Should generate exactly one function");
+        
+        let (func_name, mlir_func) = &functions[0];
+        assert_eq!(func_name, "add", "Function name should be 'add'");
+        
+        let params = mlir_func.params(&db);
+        assert_eq!(params.len(), 2, "Function should have 2 parameters");
+        assert_eq!(params[0], "x", "First parameter should be 'x'");
+        assert_eq!(params[1], "y", "Second parameter should be 'y'");
+        
+        let body_ops = mlir_func.body(&db);
+        assert!(!body_ops.is_empty(), "Function body should not be empty");
+        
+        // Check for addition operation
+        let has_addition = body_ops.iter().any(|op| {
+            matches!(op, MlirOperation::Call { func, .. } if func == "builtin_+")
+        });
+        assert!(has_addition, "Should contain addition operation");
+        
+        // Check for return operation
+        let has_return = body_ops.iter().any(|op| {
+            matches!(op, MlirOperation::Return { .. })
+        });
+        assert!(has_return, "Should contain return operation");
+    }
+
+    #[test]
+    fn test_mlir_number_boxing() {
+        use tribute_ast::{SourceFile, TributeDatabaseImpl};
+        use tribute_hir::lower_source_to_hir;
+        use super::hir_to_mlir::{generate_mlir_module, MlirOperation};
+
+        let source = r#"(fn (const_func) 42)"#;
+        let db = TributeDatabaseImpl::default();
+        let source_file = SourceFile::new(&db, "test.trb".into(), source.to_string());
+        
+        let hir_program = lower_source_to_hir(&db, source_file)
+            .expect("Should parse and lower to HIR");
+
+        let mlir_module = generate_mlir_module(&db, hir_program);
+        let functions = mlir_module.functions(&db);
+        
+        assert_eq!(functions.len(), 1, "Should generate exactly one function");
+        
+        let (_, mlir_func) = &functions[0];
+        let body_ops = mlir_func.body(&db);
+        
+        // Check for number boxing operation
+        let has_number_boxing = body_ops.iter().any(|op| {
+            matches!(op, MlirOperation::BoxNumber { value: 42 })
+        });
+        assert!(has_number_boxing, "Should contain number boxing for 42");
+    }
+
+    #[test] 
+    fn test_end_to_end_runtime_integration() {
+        // This test verifies that the codegen properly integrates with runtime functions
+        use tribute_runtime::{tribute_box_number, tribute_add_boxed, tribute_unbox_number, tribute_release};
+        
+        unsafe {
+            // Test that our runtime functions work as expected
+            let a = tribute_box_number(10);
+            let b = tribute_box_number(20);
+            
+            // Test addition
+            let result = tribute_add_boxed(a, b);
+            let unboxed_result = tribute_unbox_number(result);
+            
+            assert_eq!(unboxed_result, 30, "10 + 20 should equal 30");
+            
+            // Clean up
+            tribute_release(result);
+        }
+        
+        // Now test that our MLIR generation produces the correct calls
+        let mut codegen = TributeCodegen::new().unwrap();
+        let source = r#"(fn (test_add x y) (+ x y))"#;
+        let output_path = Path::new("/tmp/test_integration_output");
+
+        let result = codegen.compile_string(source, output_path);
+        assert!(result.is_ok(), "Integration test compilation should succeed: {:?}", result);
+        assert!(output_path.exists(), "Integration test output should be created");
+    }
+
+    #[test]
+    fn test_compilation_empty_input() {
+        let mut codegen = TributeCodegen::new().unwrap();
+        
+        // Test with empty input - this should succeed but generate an empty module
+        let empty_source = "";
+        let output_path = Path::new("/tmp/test_empty_output");
+
+        let result = codegen.compile_string(empty_source, output_path);
+        
+        // Empty source should succeed (generates empty module)
+        assert!(result.is_ok(), "Empty source should compile successfully: {:?}", result);
+        
+        // Output file should be created even for empty input
+        assert!(output_path.exists(), "Empty compilation should still create output file");
+    }
+
+    #[test]
+    fn test_compile_complex_program() {
+        let mut codegen = TributeCodegen::new().unwrap();
+        
+        // Test a more complex program to ensure robustness
+        let complex_source = r#"
+            (fn (fibonacci n)
+                (if (< n 2)
+                    n
+                    (+ (fibonacci (- n 1)) (fibonacci (- n 2)))))
+            
+            (fn (main)
+                (print_line (fibonacci 10)))
+        "#;
+        let output_path = Path::new("/tmp/test_complex_output");
+
+        let result = codegen.compile_string(complex_source, output_path);
+        
+        // Complex program should compile successfully
+        assert!(result.is_ok(), "Complex program should compile successfully: {:?}", result);
+        assert!(output_path.exists(), "Complex program output should be created");
     }
     
     #[test]

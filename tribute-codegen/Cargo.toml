@@ -20,6 +20,10 @@ salsa = "0.22"
 anyhow = "1.0"
 derive_more = { version = "2.0", features = ["error", "display", "from"] }
 
+[dev-dependencies]
+# Runtime for testing integration
+tribute_runtime = { path = "../tribute-runtime", package = "tribute-runtime" }
+
 [lib]
 name = "tribute_codegen"
 path = "src/lib.rs"
