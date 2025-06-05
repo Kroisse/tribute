@@ -96,14 +96,281 @@ pub enum MlirListOperation {
     Length { list: String },
 }
 
-/// Convenience function to convert MlirModule to actual MLIR Module
-/// This bridges between Salsa-tracked data and MLIR API
-pub fn mlir_module_to_melior<'a>(
-    db: &dyn salsa::Database,
-    mlir_module: MlirModule<'_>,
+/// Generate MLIR operations for function body
+fn generate_function_body<'a>(
+    body_ops: &[MlirOperation],
     context: &'a Context,
     location: Location<'a>,
-) -> Result<Module<'a>> {
+    block: &Block<'a>,
+) {
+    let mut last_boxed_value = None;
+    for (i, op) in body_ops.iter().enumerate() {
+        match op {
+            MlirOperation::BoxNumber { value } => {
+                generate_box_number_op(*value, i, context, location, block);
+                last_boxed_value = Some(format!("boxed_num_{}", i));
+            }
+            MlirOperation::BoxString { value } => {
+                generate_box_string_op(value, i, context, location, block);
+                last_boxed_value = Some(format!("boxed_str_{}", i));
+            }
+            _ => {
+                generate_other_mlir_operation(op, i, context, location, block);
+            }
+        }
+    }
+}
+
+/// Generate MLIR operation for boxing a number
+fn generate_box_number_op<'a>(
+    value: i64,
+    index: usize,
+    context: &'a Context,
+    location: Location<'a>,
+    _block: &Block<'a>,
+) {
+    println!("    Creating boxed number: {}", value);
+    // This would generate:
+    // 1. %ptr = call @tribute_alloc(i64 24) // sizeof(tribute_boxed_t)
+    // 2. %typed_ptr = bitcast %ptr to %tribute_boxed_t*
+    // 3. store i32 TYPE_NUMBER, %typed_ptr.type
+    // 4. store i32 1, %typed_ptr.ref_count  
+    // 5. store i64 %value, %typed_ptr.value.number
+    let boxed_name = format!("boxed_num_{}", index);
+    println!("      -> MLIR: %{} = call @tribute_box_number(i64 {})", boxed_name, value);
+}
+
+/// Generate MLIR operation for boxing a string
+fn generate_box_string_op<'a>(
+    value: &str,
+    index: usize,
+    context: &'a Context,
+    location: Location<'a>,
+    _block: &Block<'a>,
+) {
+    println!("    Creating boxed string: \"{}\"", value);
+    // This would generate:
+    // 1. %str_data = call @tribute_alloc_string(i64 {})  // string length
+    // 2. call @llvm.memcpy(%str_data, @string_literal_{}, i64 {})
+    // 3. %boxed = call @tribute_box_string(%str_data, i64 {})
+    let boxed_name = format!("boxed_str_{}", index);
+    println!("      -> MLIR: %{} = call @tribute_box_string(ptr @str_literal_{}, i64 {})", 
+             boxed_name, value.len(), value.len());
+}
+
+/// Generate MLIR operations for other operation types
+fn generate_other_mlir_operation<'a>(
+    op: &MlirOperation,
+    index: usize,
+    context: &'a Context,
+    location: Location<'a>,
+    _block: &Block<'a>,
+) {
+    match op {
+        MlirOperation::Unbox { boxed_value, expected_type } => {
+            println!("    Unboxing {} as {:?}", boxed_value, expected_type);
+            let unboxed_name = format!("unboxed_{}_{}", expected_type_name(expected_type), index);
+            println!("      -> MLIR: %{} = call @tribute_unbox_{}(ptr %{})", 
+                     unboxed_name, expected_type_name(expected_type), boxed_value);
+        }
+        MlirOperation::GcRetain { boxed_value } => {
+            println!("    GC Retain: {}", boxed_value);
+            println!("      -> MLIR: call @tribute_retain(ptr %{})", boxed_value);
+        }
+        MlirOperation::GcRelease { boxed_value } => {
+            println!("    GC Release: {}", boxed_value);
+            println!("      -> MLIR: call @tribute_release(ptr %{})", boxed_value);
+        }
+        MlirOperation::Call { func, args } => {
+            generate_function_call_op(func, args, index, context, location);
+        }
+        MlirOperation::ListOp { operation } => {
+            generate_list_operation_op(operation, index, context, location);
+        }
+        _ => {
+            println!("    Operation: {:?} (not yet implemented)", op);
+        }
+    }
+}
+
+/// Generate MLIR operation for function calls
+fn generate_function_call_op<'a>(
+    func_name: &str,
+    args: &[String],
+    index: usize,
+    context: &'a Context,
+    location: Location<'a>,
+) {
+    println!("    Creating function call: {} with {} arguments", func_name, args.len());
+    
+    if func_name.starts_with("builtin_") {
+        generate_builtin_function_call(func_name, args, index);
+    } else {
+        println!("      User function call: {}", func_name);
+        for (i, arg) in args.iter().enumerate() {
+            println!("        Arg {}: {}", i, arg);
+        }
+    }
+}
+
+/// Generate MLIR operations for builtin function calls
+fn generate_builtin_function_call(func_name: &str, args: &[String], index: usize) {
+    let builtin_name = &func_name[8..]; // Remove "builtin_" prefix
+    println!("      Builtin function: {}", builtin_name);
+    
+    match builtin_name {
+        "+" => {
+            println!("      Generating boxed arithmetic addition");
+            let result_name = format!("add_result_{}", index);
+            println!("        -> MLIR: %{} = call @tribute_add_boxed(ptr %{}, ptr %{})", 
+                     result_name, 
+                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.get(1).unwrap_or(&"arg1".to_string()));
+        }
+        "-" => {
+            println!("      Generating boxed arithmetic subtraction");
+            let result_name = format!("sub_result_{}", index);
+            println!("        -> MLIR: %{} = call @tribute_sub_boxed(ptr %{}, ptr %{})", 
+                     result_name, 
+                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.get(1).unwrap_or(&"arg1".to_string()));
+        }
+        "*" => {
+            println!("      Generating boxed arithmetic multiplication");
+            let result_name = format!("mul_result_{}", index);
+            println!("        -> MLIR: %{} = call @tribute_mul_boxed(ptr %{}, ptr %{})", 
+                     result_name, 
+                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.get(1).unwrap_or(&"arg1".to_string()));
+        }
+        "/" => {
+            println!("      Generating boxed arithmetic division");
+            let result_name = format!("div_result_{}", index);
+            println!("        -> MLIR: %{} = call @tribute_div_boxed(ptr %{}, ptr %{})", 
+                     result_name, 
+                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.get(1).unwrap_or(&"arg1".to_string()));
+        }
+        "%" => {
+            println!("      Generating boxed arithmetic modulo");
+            let result_name = format!("mod_result_{}", index);
+            println!("        -> MLIR: %{} = call @tribute_mod_boxed(ptr %{}, ptr %{})", 
+                     result_name, 
+                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.get(1).unwrap_or(&"arg1".to_string()));
+        }
+        "=" | "==" => {
+            println!("      Generating boxed equality comparison");
+            let result_name = format!("eq_result_{}", index);
+            println!("        -> MLIR: %{} = call @tribute_eq_boxed(ptr %{}, ptr %{})", 
+                     result_name, 
+                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.get(1).unwrap_or(&"arg1".to_string()));
+        }
+        "<" => {
+            println!("      Generating boxed less than comparison");
+            let result_name = format!("lt_result_{}", index);
+            println!("        -> MLIR: %{} = call @tribute_lt_boxed(ptr %{}, ptr %{})", 
+                     result_name, 
+                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.get(1).unwrap_or(&"arg1".to_string()));
+        }
+        ">" => {
+            println!("      Generating boxed greater than comparison");
+            let result_name = format!("gt_result_{}", index);
+            println!("        -> MLIR: %{} = call @tribute_gt_boxed(ptr %{}, ptr %{})", 
+                     result_name, 
+                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.get(1).unwrap_or(&"arg1".to_string()));
+        }
+        "<=" => {
+            println!("      Generating boxed less than or equal comparison");
+            let result_name = format!("le_result_{}", index);
+            println!("        -> MLIR: %{} = call @tribute_le_boxed(ptr %{}, ptr %{})", 
+                     result_name, 
+                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.get(1).unwrap_or(&"arg1".to_string()));
+        }
+        ">=" => {
+            println!("      Generating boxed greater than or equal comparison");
+            let result_name = format!("ge_result_{}", index);
+            println!("        -> MLIR: %{} = call @tribute_ge_boxed(ptr %{}, ptr %{})", 
+                     result_name, 
+                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.get(1).unwrap_or(&"arg1".to_string()));
+        }
+        "print_line" => {
+            println!("      Would generate call to print_line builtin");
+        }
+        "input_line" => {
+            println!("      Would generate call to input_line builtin");
+        }
+        _ => {
+            println!("      Unknown builtin: {}", builtin_name);
+        }
+    }
+}
+
+/// Generate MLIR operations for list operations
+fn generate_list_operation_op<'a>(
+    operation: &MlirListOperation,
+    index: usize,
+    context: &'a Context,
+    location: Location<'a>,
+) {
+    match operation {
+        MlirListOperation::CreateEmpty { capacity } => {
+            println!("    Creating empty list with capacity: {}", capacity);
+            let list_name = format!("empty_list_{}", index);
+            println!("      -> MLIR: %{} = call @tribute_box_list_empty(i64 {})", list_name, capacity);
+        }
+        MlirListOperation::CreateFromArray { elements } => {
+            println!("    Creating list from {} elements", elements.len());
+            let list_name = format!("array_list_{}", index);
+            println!("      -> MLIR: %{} = call @tribute_box_list_from_array(ptr %elements, i64 {})", 
+                     list_name, elements.len());
+        }
+        MlirListOperation::Get { list, index: list_index } => {
+            println!("    List get: {}[{}]", list, list_index);
+            let result_name = format!("list_get_{}", index);
+            println!("      -> MLIR: %{} = call @tribute_list_get(ptr %{}, i64 %{})", 
+                     result_name, list, list_index);
+            println!("      -> O(1) random access");
+        }
+        MlirListOperation::Set { list, index: list_index, value } => {
+            println!("    List set: {}[{}] = {}", list, list_index, value);
+            println!("      -> MLIR: call @tribute_list_set(ptr %{}, i64 %{}, ptr %{})", 
+                     list, list_index, value);
+            println!("      -> O(1) random access modification");
+        }
+        MlirListOperation::Push { list, value } => {
+            println!("    List push: {}.push({})", list, value);
+            println!("      -> MLIR: call @tribute_list_push(ptr %{}, ptr %{})", list, value);
+            println!("      -> Amortized O(1) append with automatic resize");
+        }
+        MlirListOperation::Pop { list } => {
+            println!("    List pop: {}.pop()", list);
+            let result_name = format!("list_pop_{}", index);
+            println!("      -> MLIR: %{} = call @tribute_list_pop(ptr %{})", result_name, list);
+            println!("      -> O(1) removal from end");
+        }
+        MlirListOperation::Length { list } => {
+            println!("    List length: {}.length", list);
+            let result_name = format!("list_len_{}", index);
+            println!("      -> MLIR: %{} = call @tribute_list_length(ptr %{})", result_name, list);
+            println!("      -> O(1) length access");
+        }
+    }
+}
+
+/// Generate a single MLIR function operation
+fn generate_mlir_function_op<'a>(
+    name: &str,
+    params: &[tribute_ast::Identifier],
+    body_ops: &[MlirOperation],
+    context: &'a Context,
+    location: Location<'a>,
+) -> melior::ir::Operation<'a> {
     use melior::{
         dialect::func,
         ir::{
@@ -113,6 +380,48 @@ pub fn mlir_module_to_melior<'a>(
         },
     };
 
+    println!("  Function: {} with {} params, {} operations", 
+             name, params.len(), body_ops.len());
+    
+    // Create function type: all functions work with boxed values
+    let boxed_ptr_type = IntegerType::new(context, 64); // Pointer to boxed value
+    let param_types: Vec<_> = params.iter().map(|_| boxed_ptr_type.into()).collect();
+    let function_type = FunctionType::new(context, &param_types, &[boxed_ptr_type.into()]);
+    
+    // Create function operation
+    func::func(
+        context,
+        StringAttribute::new(context, name),
+        TypeAttribute::new(function_type.into()),
+        {
+            let region = Region::new();
+            let block = Block::new(&[]);
+            
+            // Generate operations for function body
+            generate_function_body(body_ops, context, location, &block);
+            
+            // Add return operation for boxed values
+            println!("    Function would return default boxed value: nil");
+            println!("    Creating minimal function body");
+            
+            region.append_block(block);
+            region
+        },
+        &[],
+        location,
+    )
+}
+
+/// Convenience function to convert MlirModule to actual MLIR Module
+/// This bridges between Salsa-tracked data and MLIR API
+pub fn mlir_module_to_melior<'a>(
+    db: &dyn salsa::Database,
+    mlir_module: MlirModule<'_>,
+    context: &'a Context,
+    location: Location<'a>,
+) -> Result<Module<'a>> {
+    use melior::ir::{Module, BlockLike};
+
     let module = Module::new(location);
     let functions = mlir_module.functions(db);
     
@@ -121,305 +430,11 @@ pub fn mlir_module_to_melior<'a>(
     for (name, mlir_func) in functions.iter() {
         let params = mlir_func.params(db);
         let body_ops = mlir_func.body(db);
-        println!("  Function: {} with {} params, {} operations", 
-                 name, params.len(), body_ops.len());
         
-        // Create function type: all functions work with boxed values
-        // For now: () -> !tribute.boxed or (params...) -> !tribute.boxed
-        // In actual implementation, we'd define a custom dialect for boxed values
-        // For demonstration, we'll use i64 as a placeholder for boxed pointer
-        let boxed_ptr_type = IntegerType::new(context, 64); // Pointer to boxed value
-        let param_types: Vec<_> = params.iter().map(|_| boxed_ptr_type.into()).collect();
-        let function_type = FunctionType::new(context, &param_types, &[boxed_ptr_type.into()]);
+        // Generate MLIR function operation
+        let function_op = generate_mlir_function_op(name, &params, &body_ops, context, location);
         
-        // Create function operation
-        let function_op = func::func(
-            context,
-            StringAttribute::new(context, &name),
-            TypeAttribute::new(function_type.into()),
-            {
-                let region = Region::new();
-                let block = Block::new(&[]);
-                
-                // Generate operations for function body
-                let mut last_boxed_value = None;
-                for (i, op) in body_ops.iter().enumerate() {
-                    match op {
-                        MlirOperation::BoxNumber { value } => {
-                            println!("    Creating boxed number: {}", value);
-                            // This would generate:
-                            // 1. %ptr = call @tribute_alloc(i64 24) // sizeof(tribute_boxed_t)
-                            // 2. %typed_ptr = bitcast %ptr to %tribute_boxed_t*
-                            // 3. store i32 TYPE_NUMBER, %typed_ptr.type
-                            // 4. store i32 1, %typed_ptr.ref_count  
-                            // 5. store i64 %value, %typed_ptr.value.number
-                            let boxed_name = format!("boxed_num_{}", i);
-                            println!("      -> MLIR: %{} = call @tribute_box_number(i64 {})", boxed_name, value);
-                            last_boxed_value = Some(boxed_name);
-                        }
-                        MlirOperation::BoxString { value } => {
-                            println!("    Creating boxed string: \"{}\"", value);
-                            // This would generate:
-                            // 1. %str_data = call @tribute_alloc_string(i64 {})  // string length
-                            // 2. call @llvm.memcpy(%str_data, @string_literal_{}, i64 {})
-                            // 3. %boxed = call @tribute_box_string(%str_data, i64 {})
-                            let boxed_name = format!("boxed_str_{}", i);
-                            println!("      -> MLIR: %{} = call @tribute_box_string(ptr @str_literal_{}, i64 {})", 
-                                     boxed_name, value.len(), value.len());
-                            last_boxed_value = Some(boxed_name);
-                        }
-                        MlirOperation::Unbox { boxed_value, expected_type } => {
-                            println!("    Unboxing {} as {:?}", boxed_value, expected_type);
-                            // This would generate runtime type checking and extraction:
-                            // 1. %type = load i32, %boxed_value.type
-                            // 2. %ok = icmp eq i32 %type, TYPE_{}
-                            // 3. br i1 %ok, label %extract, label %type_error
-                            // 4. extract: %value = load {}, %boxed_value.value.{}
-                            let unboxed_name = format!("unboxed_{}_{}", expected_type_name(expected_type), i);
-                            println!("      -> MLIR: %{} = call @tribute_unbox_{}(ptr %{})", 
-                                     unboxed_name, expected_type_name(expected_type), boxed_value);
-                        }
-                        MlirOperation::GcRetain { boxed_value } => {
-                            println!("    GC Retain: {}", boxed_value);
-                            // This would generate:
-                            // %old_count = atomicrmw add i32* %boxed_value.ref_count, i32 1 acq_rel
-                            println!("      -> MLIR: call @tribute_retain(ptr %{})", boxed_value);
-                        }
-                        MlirOperation::GcRelease { boxed_value } => {
-                            println!("    GC Release: {}", boxed_value);
-                            // This would generate:
-                            // %old_count = atomicrmw sub i32* %boxed_value.ref_count, i32 1 acq_rel  
-                            // %is_zero = icmp eq i32 %old_count, 1
-                            // br i1 %is_zero, label %deallocate, label %continue
-                            println!("      -> MLIR: call @tribute_release(ptr %{})", boxed_value);
-                        }
-                        MlirOperation::GcCollect => {
-                            println!("    GC Collect triggered");
-                            // This would generate a call to the mark-and-sweep collector
-                            println!("      -> MLIR: call @tribute_gc_collect()");
-                        }
-                        MlirOperation::ListOp { operation } => {
-                            match operation {
-                                MlirListOperation::CreateEmpty { capacity } => {
-                                    println!("    Creating empty list with capacity: {}", capacity);
-                                    let list_name = format!("empty_list_{}", i);
-                                    println!("      -> MLIR: %{} = call @tribute_box_list_empty(i64 {})", list_name, capacity);
-                                    last_boxed_value = Some(list_name);
-                                }
-                                MlirListOperation::CreateFromArray { elements } => {
-                                    println!("    Creating list from {} elements", elements.len());
-                                    let list_name = format!("array_list_{}", i);
-                                    println!("      -> MLIR: %{} = call @tribute_box_list_from_array(ptr %elements, i64 {})", 
-                                             list_name, elements.len());
-                                    last_boxed_value = Some(list_name);
-                                }
-                                MlirListOperation::Get { list, index } => {
-                                    println!("    List get: {}[{}]", list, index);
-                                    let result_name = format!("list_get_{}", i);
-                                    println!("      -> MLIR: %{} = call @tribute_list_get(ptr %{}, i64 %{})", 
-                                             result_name, list, index);
-                                    println!("      -> O(1) random access");
-                                    last_boxed_value = Some(result_name);
-                                }
-                                MlirListOperation::Set { list, index, value } => {
-                                    println!("    List set: {}[{}] = {}", list, index, value);
-                                    println!("      -> MLIR: call @tribute_list_set(ptr %{}, i64 %{}, ptr %{})", 
-                                             list, index, value);
-                                    println!("      -> O(1) random access modification");
-                                }
-                                MlirListOperation::Push { list, value } => {
-                                    println!("    List push: {}.push({})", list, value);
-                                    println!("      -> MLIR: call @tribute_list_push(ptr %{}, ptr %{})", list, value);
-                                    println!("      -> Amortized O(1) append with automatic resize");
-                                }
-                                MlirListOperation::Pop { list } => {
-                                    println!("    List pop: {}.pop()", list);
-                                    let result_name = format!("list_pop_{}", i);
-                                    println!("      -> MLIR: %{} = call @tribute_list_pop(ptr %{})", result_name, list);
-                                    println!("      -> O(1) removal from end");
-                                    last_boxed_value = Some(result_name);
-                                }
-                                MlirListOperation::Length { list } => {
-                                    println!("    List length: {}.length", list);
-                                    let result_name = format!("list_len_{}", i);
-                                    println!("      -> MLIR: %{} = call @tribute_list_length(ptr %{})", result_name, list);
-                                    println!("      -> O(1) length access");
-                                    last_boxed_value = Some(result_name);
-                                }
-                            }
-                        }
-                        MlirOperation::Call { func: func_name, args } => {
-                            println!("    Creating function call: {} with {} arguments", func_name, args.len());
-                            
-                            // For builtin functions, we need special handling
-                            if func_name.starts_with("builtin_") {
-                                let builtin_name = &func_name[8..]; // Remove "builtin_" prefix
-                                println!("      Builtin function: {}", builtin_name);
-                                
-                                match builtin_name {
-                                    "print_line" => {
-                                        println!("      Would generate call to print_line builtin");
-                                        // In actual implementation, this would generate appropriate LLVM/MLIR calls
-                                        // to printf or similar system functions
-                                    }
-                                    "input_line" => {
-                                        println!("      Would generate call to input_line builtin");
-                                        // Would generate calls to scanf or similar input functions
-                                    }
-                                    // Arithmetic operations - now work with boxed values
-                                    "+" => {
-                                        println!("      Generating boxed arithmetic addition");
-                                        // Direct call to runtime function that handles:
-                                        // - Type checking and unboxing
-                                        // - Arithmetic operation  
-                                        // - Result boxing
-                                        // - Reference counting (releases inputs, returns new value with ref_count=1)
-                                        let result_name = format!("add_result_{}", i);
-                                        println!("        -> MLIR: %{} = call @tribute_add_boxed(ptr %{}, ptr %{})", 
-                                                 result_name, 
-                                                 args.get(0).unwrap_or(&"arg0".to_string()),
-                                                 args.get(1).unwrap_or(&"arg1".to_string()));
-                                        println!("        -> Runtime handles: unbox → add → box → ref_count management");
-                                        last_boxed_value = Some(result_name);
-                                    }
-                                    "-" => {
-                                        println!("      Generating boxed arithmetic subtraction");
-                                        let result_name = format!("sub_result_{}", i);
-                                        println!("        -> MLIR: %{} = call @tribute_sub_boxed(ptr %{}, ptr %{})", 
-                                                 result_name, 
-                                                 args.get(0).unwrap_or(&"arg0".to_string()),
-                                                 args.get(1).unwrap_or(&"arg1".to_string()));
-                                        last_boxed_value = Some(result_name);
-                                    }
-                                    "*" => {
-                                        println!("      Generating boxed arithmetic multiplication");
-                                        let result_name = format!("mul_result_{}", i);
-                                        println!("        -> MLIR: %{} = call @tribute_mul_boxed(ptr %{}, ptr %{})", 
-                                                 result_name, 
-                                                 args.get(0).unwrap_or(&"arg0".to_string()),
-                                                 args.get(1).unwrap_or(&"arg1".to_string()));
-                                        last_boxed_value = Some(result_name);
-                                    }
-                                    "/" => {
-                                        println!("      Generating boxed arithmetic division");
-                                        let result_name = format!("div_result_{}", i);
-                                        println!("        -> MLIR: %{} = call @tribute_div_boxed(ptr %{}, ptr %{})", 
-                                                 result_name, 
-                                                 args.get(0).unwrap_or(&"arg0".to_string()),
-                                                 args.get(1).unwrap_or(&"arg1".to_string()));
-                                        last_boxed_value = Some(result_name);
-                                    }
-                                    "%" => {
-                                        println!("      Generating boxed arithmetic modulo");
-                                        let result_name = format!("mod_result_{}", i);
-                                        println!("        -> MLIR: %{} = call @tribute_mod_boxed(ptr %{}, ptr %{})", 
-                                                 result_name, 
-                                                 args.get(0).unwrap_or(&"arg0".to_string()),
-                                                 args.get(1).unwrap_or(&"arg1".to_string()));
-                                        last_boxed_value = Some(result_name);
-                                    }
-                                    // Comparison operations - return boxed boolean values
-                                    "=" | "==" => {
-                                        println!("      Generating boxed equality comparison");
-                                        let result_name = format!("eq_result_{}", i);
-                                        println!("        -> MLIR: %{} = call @tribute_eq_boxed(ptr %{}, ptr %{})", 
-                                                 result_name, 
-                                                 args.get(0).unwrap_or(&"arg0".to_string()),
-                                                 args.get(1).unwrap_or(&"arg1".to_string()));
-                                        last_boxed_value = Some(result_name);
-                                    }
-                                    "<" => {
-                                        println!("      Generating boxed less than comparison");
-                                        let result_name = format!("lt_result_{}", i);
-                                        println!("        -> MLIR: %{} = call @tribute_lt_boxed(ptr %{}, ptr %{})", 
-                                                 result_name, 
-                                                 args.get(0).unwrap_or(&"arg0".to_string()),
-                                                 args.get(1).unwrap_or(&"arg1".to_string()));
-                                        last_boxed_value = Some(result_name);
-                                    }
-                                    ">" => {
-                                        println!("      Generating boxed greater than comparison");
-                                        let result_name = format!("gt_result_{}", i);
-                                        println!("        -> MLIR: %{} = call @tribute_gt_boxed(ptr %{}, ptr %{})", 
-                                                 result_name, 
-                                                 args.get(0).unwrap_or(&"arg0".to_string()),
-                                                 args.get(1).unwrap_or(&"arg1".to_string()));
-                                        last_boxed_value = Some(result_name);
-                                    }
-                                    "<=" => {
-                                        println!("      Generating boxed less than or equal comparison");
-                                        let result_name = format!("le_result_{}", i);
-                                        println!("        -> MLIR: %{} = call @tribute_le_boxed(ptr %{}, ptr %{})", 
-                                                 result_name, 
-                                                 args.get(0).unwrap_or(&"arg0".to_string()),
-                                                 args.get(1).unwrap_or(&"arg1".to_string()));
-                                        last_boxed_value = Some(result_name);
-                                    }
-                                    ">=" => {
-                                        println!("      Generating boxed greater than or equal comparison");
-                                        let result_name = format!("ge_result_{}", i);
-                                        println!("        -> MLIR: %{} = call @tribute_ge_boxed(ptr %{}, ptr %{})", 
-                                                 result_name, 
-                                                 args.get(0).unwrap_or(&"arg0".to_string()),
-                                                 args.get(1).unwrap_or(&"arg1".to_string()));
-                                        last_boxed_value = Some(result_name);
-                                    }
-                                    _ => {
-                                        println!("      Unknown builtin: {}", builtin_name);
-                                    }
-                                }
-                            } else {
-                                // User-defined function call
-                                println!("      User function call: {}", func_name);
-                                // Would generate func.call operation in MLIR
-                            }
-                            
-                            // Track arguments
-                            for (i, arg) in args.iter().enumerate() {
-                                println!("        Arg {}: {}", i, arg);
-                            }
-                        }
-                        MlirOperation::Variable { name } => {
-                            println!("    Variable reference: {}", name);
-                            // Variables are always boxed values in our system
-                            // This would generate a load of the boxed value pointer
-                            println!("      -> {}: loaded boxed value", name);
-                            last_boxed_value = Some(name.clone());
-                        }
-                        MlirOperation::Return { value } => {
-                            println!("    Return operation with boxed value: {:?}", value);
-                            // This would generate the func.return operation with a boxed value
-                            if let Some(val) = value {
-                                println!("      -> returning boxed value: {}", val);
-                                last_boxed_value = Some(val.clone());
-                            }
-                        }
-                        MlirOperation::Placeholder { description } => {
-                            println!("    Placeholder: {}", description);
-                        }
-                    }
-                }
-                
-                // Add return operation for boxed values
-                let return_boxed_value = if let Some(boxed_val) = last_boxed_value {
-                    println!("    Function would return boxed value: {}", boxed_val);
-                    boxed_val
-                } else {
-                    println!("    Function would return default boxed value: nil");
-                    "boxed_nil".to_string()
-                };
-                
-                // Create minimal function body for demonstration
-                // All functions return boxed values in our system
-                println!("    Creating minimal function body (return boxed: {})", return_boxed_value);
-                
-                region.append_block(block);
-                region
-            },
-            &[],
-            location,
-        );
-        
+        // Add function to module
         module.body().append_operation(function_op);
         println!("    Successfully generated MLIR function: {}", name);
     }
