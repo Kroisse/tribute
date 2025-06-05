@@ -1,5 +1,5 @@
 use std::ptr;
-use crate::{array::TributeArray, TributeBoxed, TributeValue};
+use crate::{array::TributeArray, value::{TributeBoxed, TributeValue}};
 
 pub type TributeList = TributeArray<*mut TributeBoxed>;
 

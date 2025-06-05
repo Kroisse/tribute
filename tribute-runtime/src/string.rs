@@ -1,4 +1,4 @@
-use crate::{array::TributeArray, TributeBoxed, TributeValue};
+use crate::{array::TributeArray, value::{TributeBoxed, TributeValue}};
 use std::{alloc::{alloc, Layout}, ptr};
 
 pub type TributeString = TributeArray<u8>;
