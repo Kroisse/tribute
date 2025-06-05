@@ -1,0 +1,25 @@
+[package]
+name = "tribute-codegen"
+version = "0.1.0"
+edition = "2021"
+description = "Code generation backend for the Tribute programming language"
+authors = ["Tribute Language Team"]
+
+[dependencies]
+# Core tribute language support
+tribute-ast = { path = "../tribute-ast" }
+tribute-hir = { path = "../tribute-hir" }
+
+# MLIR/LLVM bindings using melior (high-level safe wrapper)
+melior = "0.25"
+
+# Salsa for incremental computation
+salsa = "0.22"
+
+# Additional utilities
+anyhow = "1.0"
+derive_more = { version = "2.0", features = ["error", "display", "from"] }
+
+[lib]
+name = "tribute_codegen"
+path = "src/lib.rs"

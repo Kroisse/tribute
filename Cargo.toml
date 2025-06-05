@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tree-sitter-tribute", "tribute-ast", "tribute-hir"]
+members = [".", "tree-sitter-tribute", "tribute-ast", "tribute-hir", "tribute-codegen"]
 
 [package]
 name = "tribute"
