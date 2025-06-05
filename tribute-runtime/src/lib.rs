@@ -3,12 +3,18 @@
 //! This library provides the runtime support for Tribute programs,
 //! including garbage collection, boxing/unboxing, and builtin functions.
 
+pub mod array;
+pub mod string;
+pub mod list;
+
 use std::{
     alloc::{Layout, alloc, dealloc},
-    mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicU32, Ordering},
 };
+
+use string::TributeString;
+use list::TributeList;
 
 /// Boxed value structure with reference counting
 #[repr(C)]
@@ -40,173 +46,6 @@ impl TributeValue {
     pub const TYPE_NIL: u32 = 5;
 }
 
-/// Generic array type for both strings and lists
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct TributeArray<T> {
-    pub data: *mut T,
-    pub length: usize,
-    pub capacity: usize,
-}
-
-pub type TributeString = TributeArray<u8>;
-pub type TributeList = TributeArray<*mut TributeBoxed>;
-
-impl<T> TributeArray<T> {
-    /// Create a new empty array with given capacity
-    pub unsafe fn new_with_capacity(capacity: usize) -> Self {
-        let capacity = if capacity == 0 { 4 } else { capacity };
-
-        let data_layout =
-            Layout::from_size_align(capacity * mem::size_of::<T>(), mem::align_of::<T>()).unwrap();
-        let data = unsafe { alloc(data_layout) as *mut T };
-
-        if data.is_null() {
-            panic!("Failed to allocate memory for array data");
-        }
-
-        Self {
-            data,
-            length: 0,
-            capacity,
-        }
-    }
-
-    /// Get the current length
-    pub fn len(&self) -> usize {
-        self.length
-    }
-
-    /// Check if the array is empty
-    pub fn is_empty(&self) -> bool {
-        self.length == 0
-    }
-
-    /// Get the current capacity
-    pub fn capacity(&self) -> usize {
-        self.capacity
-    }
-
-    /// Deallocate the array data
-    pub unsafe fn deallocate(&self) {
-        if !self.data.is_null() {
-            unsafe {
-                let layout = Layout::from_size_align_unchecked(
-                    self.capacity * mem::size_of::<T>(),
-                    mem::align_of::<T>(),
-                );
-                dealloc(self.data as *mut u8, layout);
-            }
-        }
-    }
-
-    /// Get element at index (unsafe)
-    pub unsafe fn get_unchecked(&self, index: usize) -> T
-    where
-        T: Copy,
-    {
-        unsafe { *self.data.add(index) }
-    }
-
-    /// Set element at index (unsafe)
-    pub unsafe fn set_unchecked(&mut self, index: usize, value: T) {
-        unsafe {
-            *self.data.add(index) = value;
-        }
-    }
-
-    /// Resize the array to new capacity
-    pub unsafe fn resize(&mut self, new_capacity: usize) {
-        let new_layout =
-            Layout::from_size_align(new_capacity * mem::size_of::<T>(), mem::align_of::<T>())
-                .unwrap();
-        let new_data = unsafe { alloc(new_layout) as *mut T };
-
-        if new_data.is_null() {
-            panic!("Failed to allocate memory for array resize");
-        }
-
-        // Copy existing elements
-        if !self.data.is_null() {
-            unsafe {
-                ptr::copy_nonoverlapping(self.data, new_data, self.length);
-            }
-
-            // Deallocate old data
-            unsafe {
-                let old_layout = Layout::from_size_align_unchecked(
-                    self.capacity * mem::size_of::<T>(),
-                    mem::align_of::<T>(),
-                );
-                dealloc(self.data as *mut u8, old_layout);
-            }
-        }
-
-        self.data = new_data;
-        self.capacity = new_capacity;
-    }
-}
-
-impl TributeList {
-    /// Initialize all pointers to null (for list arrays)
-    pub unsafe fn init_null_pointers(&mut self) {
-        for i in 0..self.capacity {
-            unsafe {
-                *self.data.add(i) = ptr::null_mut();
-            }
-        }
-    }
-
-    /// Push an element to the list with automatic resizing
-    pub unsafe fn push(&mut self, value: *mut TributeBoxed) {
-        // Check if we need to resize
-        if self.length >= self.capacity {
-            let new_capacity = self.capacity * 2;
-            unsafe {
-                self.resize(new_capacity);
-            }
-
-            // Initialize new slots to null
-            for i in self.length..self.capacity {
-                unsafe {
-                    *self.data.add(i) = ptr::null_mut();
-                }
-            }
-        }
-
-        // Add the new element
-        unsafe {
-            *self.data.add(self.length) = value;
-        }
-        self.length += 1;
-    }
-
-    /// Pop the last element from the list
-    pub unsafe fn pop(&mut self) -> *mut TributeBoxed {
-        if self.length == 0 {
-            return ptr::null_mut();
-        }
-
-        self.length -= 1;
-        let element = unsafe { *self.data.add(self.length) };
-        unsafe {
-            *self.data.add(self.length) = ptr::null_mut();
-        }
-        element
-    }
-
-    /// Release all elements in the list
-    pub unsafe fn release_all_elements(&self) {
-        for i in 0..self.length {
-            let element = unsafe { *self.data.add(i) };
-            if !element.is_null() {
-                unsafe {
-                    (*element).release();
-                }
-            }
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -294,18 +133,6 @@ pub extern "C" fn tribute_box_number(value: i64) -> *mut TributeBoxed {
     boxed.as_ptr()
 }
 
-/// Box a string value (takes ownership of the string data)
-#[unsafe(no_mangle)]
-pub extern "C" fn tribute_box_string(data: *mut u8, length: usize) -> *mut TributeBoxed {
-    let string = TributeString {
-        data,
-        length,
-        capacity: length,
-    };
-
-    let boxed = TributeBoxed::new(TributeValue::String(string));
-    boxed.as_ptr()
-}
 
 /// Box a boolean value
 #[unsafe(no_mangle)]
@@ -340,53 +167,6 @@ pub unsafe extern "C" fn tribute_box_function(
     boxed.as_ptr()
 }
 
-/// Create an empty list with initial capacity
-#[unsafe(no_mangle)]
-pub extern "C" fn tribute_box_list_empty(initial_capacity: usize) -> *mut TributeBoxed {
-    let mut list = unsafe { TributeList::new_with_capacity(initial_capacity) };
-    unsafe {
-        list.init_null_pointers();
-    }
-
-    let boxed = TributeBoxed::new(TributeValue::List(list));
-    boxed.as_ptr()
-}
-
-/// Create a list from an array of boxed values
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid arrays.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_box_list_from_array(
-    elements: *mut *mut TributeBoxed,
-    count: usize,
-) -> *mut TributeBoxed {
-    unsafe {
-        let list_boxed = tribute_box_list_empty(count);
-
-        if count == 0 {
-            return list_boxed;
-        }
-
-        match &mut (*list_boxed).value {
-            TributeValue::List(list_data) => {
-                // Copy elements and retain them
-                for i in 0..count {
-                    let element = *elements.add(i);
-                    if !element.is_null() {
-                        (*element).retain(); // Increment ref count
-                        *list_data.data.add(i) = element;
-                    }
-                }
-
-                list_data.length = count;
-            }
-            _ => panic!("Expected list value"),
-        }
-
-        list_boxed
-    }
-}
 
 /// Unbox a number (with type checking)
 ///
@@ -406,31 +186,6 @@ pub unsafe extern "C" fn tribute_unbox_number(boxed: *mut TributeBoxed) -> i64 {
     }
 }
 
-/// Unbox a string (returns pointer to string data and length)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_unbox_string(
-    boxed: *mut TributeBoxed,
-    length_out: *mut usize,
-) -> *mut u8 {
-    unsafe {
-        if boxed.is_null() {
-            panic!("Attempted to unbox null pointer");
-        }
-
-        match &(*boxed).value {
-            TributeValue::String(string) => {
-                if !length_out.is_null() {
-                    *length_out = string.length;
-                }
-                string.data
-            }
-            _ => panic!("Type error: expected String, got different type"),
-        }
-    }
-}
 
 /// Unbox a boolean
 ///
@@ -655,154 +410,6 @@ pub unsafe extern "C" fn tribute_eq_boxed(
     }
 }
 
-/// Get list length - O(1)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_list_length(list_boxed: *mut TributeBoxed) -> usize {
-    unsafe {
-        if list_boxed.is_null() {
-            return 0;
-        }
-
-        match &(*list_boxed).value {
-            TributeValue::List(list) => list.len(),
-            _ => panic!("Type error: expected List, got different type"),
-        }
-    }
-}
-
-/// Get element at index - O(1)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_list_get(
-    list_boxed: *mut TributeBoxed,
-    index: usize,
-) -> *mut TributeBoxed {
-    unsafe {
-        if list_boxed.is_null() {
-            panic!("Attempted to access null list");
-        }
-
-        match &(*list_boxed).value {
-            TributeValue::List(list_data) => {
-                if index >= list_data.len() {
-                    panic!(
-                        "Index {} out of bounds for list of length {}",
-                        index,
-                        list_data.len()
-                    );
-                }
-        
-                if list_data.data.is_null() {
-                    panic!("List data is null");
-                }
-        
-                let element = list_data.get_unchecked(index);
-                if !element.is_null() {
-                    (*element).retain(); // Caller owns a reference
-                }
-                element
-            }
-            _ => panic!("Type error: expected List, got different type"),
-        }
-    }
-}
-
-/// Set element at index - O(1)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_list_set(
-    list_boxed: *mut TributeBoxed,
-    index: usize,
-    value: *mut TributeBoxed,
-) {
-    unsafe {
-        if list_boxed.is_null() {
-            panic!("Attempted to modify null list");
-        }
-
-        match &mut (*list_boxed).value {
-            TributeValue::List(list_data) => {
-                if index >= list_data.len() {
-                    panic!(
-                        "Index {} out of bounds for list of length {}",
-                        index,
-                        list_data.len()
-                    );
-                }
-        
-                if list_data.data.is_null() {
-                    panic!("List data is null");
-                }
-        
-                // Release old value
-                let old_element = list_data.get_unchecked(index);
-                if !old_element.is_null() {
-                    (*old_element).release();
-                }
-        
-                // Set new value and retain it
-                if !value.is_null() {
-                    (*value).retain();
-                }
-                list_data.set_unchecked(index, value);
-            }
-            _ => panic!("Type error: expected List, got different type"),
-        }
-    }
-}
-
-/// Append element to list - Amortized O(1)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_list_push(
-    list_boxed: *mut TributeBoxed,
-    value: *mut TributeBoxed,
-) {
-    unsafe {
-        if list_boxed.is_null() {
-            panic!("Attempted to push to null list");
-        }
-
-        match &mut (*list_boxed).value {
-            TributeValue::List(list_data) => {
-                // Retain the value before pushing
-                if !value.is_null() {
-                    (*value).retain();
-                }
-        
-                list_data.push(value);
-            }
-            _ => panic!("Type error: expected List, got different type"),
-        }
-    }
-}
-
-/// Pop last element from list - O(1)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_list_pop(list_boxed: *mut TributeBoxed) -> *mut TributeBoxed {
-    unsafe {
-        if list_boxed.is_null() {
-            panic!("Attempted to pop from null list");
-        }
-
-        match &mut (*list_boxed).value {
-            TributeValue::List(list_data) => list_data.pop(),
-            _ => panic!("Type error: expected List, got different type"),
-        }
-    }
-}
 
 /// Print a boxed value (for debugging)
 ///
@@ -876,6 +483,8 @@ pub unsafe extern "C" fn tribute_print_boxed(boxed: *mut TributeBoxed) {
 #[cfg(test)]
 mod tests {
     use crate::*;
+    use crate::string::*;
+    use crate::list::*;
 
     #[test]
     fn test_box_unbox_string() {
