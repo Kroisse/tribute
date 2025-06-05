@@ -1,5 +1,7 @@
-use crate::{array::TributeArray, value::{TributeBoxed, TributeValue}};
-use std::{alloc::{alloc, Layout}, ptr};
+use crate::{
+    array::TributeArray,
+    value::{TributeBoxed, TributeValue},
+};
 
 pub type TributeString = TributeArray<u8>;
 
@@ -46,6 +48,10 @@ pub unsafe extern "C" fn tribute_unbox_string(
 mod tests {
     use super::*;
     use crate::{tribute_get_type, tribute_release};
+    use std::{
+        alloc::{Layout, alloc},
+        ptr,
+    };
 
     #[test]
     fn test_box_unbox_string() {
@@ -53,7 +59,7 @@ mod tests {
             // Create a test string
             let test_str = "Hello, World!";
             let length = test_str.len();
-            
+
             // Allocate memory and copy the string data
             let layout = Layout::from_size_align(length, 1).unwrap();
             let data = alloc(layout);

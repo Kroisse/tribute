@@ -2,7 +2,7 @@
 
 use crate::error::Result;
 use melior::{
-    ir::{Location, Module},
+    ir::{Block, BlockLike, Location, Module, operation::OperationLike},
     Context,
 };
 use tribute_hir::{HirProgram, HirFunction, HirExpr, Expr};
@@ -102,7 +102,7 @@ fn generate_function_body<'a>(
     context: &'a Context,
     location: Location<'a>,
     block: &Block<'a>,
-) {
+) -> Option<String> {
     let mut last_boxed_value = None;
     for (i, op) in body_ops.iter().enumerate() {
         match op {
@@ -114,11 +114,25 @@ fn generate_function_body<'a>(
                 generate_box_string_op(value, i, context, location, block);
                 last_boxed_value = Some(format!("boxed_str_{}", i));
             }
+            MlirOperation::Call { func, args } => {
+                generate_function_call_op(func, args, i, context, location, block);
+                last_boxed_value = Some(format!("call_result_{}", i));
+            }
             _ => {
                 generate_other_mlir_operation(op, i, context, location, block);
+                // Most operations produce a result value
+                last_boxed_value = Some(format!("result_{}", i));
             }
         }
     }
+    
+    if let Some(ref last_value) = last_boxed_value {
+        println!("    Function body last result: {}", last_value);
+    } else {
+        println!("    Function body returns nil (no operations)");
+    }
+    
+    last_boxed_value
 }
 
 /// Generate MLIR operation for boxing a number
@@ -127,17 +141,53 @@ fn generate_box_number_op<'a>(
     index: usize,
     context: &'a Context,
     location: Location<'a>,
-    _block: &Block<'a>,
+    block: &Block<'a>,
 ) {
     println!("    Creating boxed number: {}", value);
-    // This would generate:
-    // 1. %ptr = call @tribute_alloc(i64 24) // sizeof(tribute_boxed_t)
-    // 2. %typed_ptr = bitcast %ptr to %tribute_boxed_t*
-    // 3. store i32 TYPE_NUMBER, %typed_ptr.type
-    // 4. store i32 1, %typed_ptr.ref_count  
-    // 5. store i64 %value, %typed_ptr.value.number
-    let boxed_name = format!("boxed_num_{}", index);
-    println!("      -> MLIR: %{} = call @tribute_box_number(i64 {})", boxed_name, value);
+    
+    // Try to generate actual MLIR operations
+    use melior::{
+        dialect::{arith, func},
+        ir::{
+            attribute::IntegerAttribute,
+            r#type::IntegerType,
+        },
+    };
+    
+    // Create i64 constant for the number value
+    let i64_type = IntegerType::new(context, 64);
+    
+    // Try to create the constant - this will test if dialect is properly registered
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let number_constant = arith::constant(
+            context,
+            IntegerAttribute::new(i64_type.into(), value).into(),
+            location,
+        );
+        
+        // Try to create function call in same catch block to avoid partial state
+        let call_op = func::call(
+            context,
+            melior::ir::attribute::FlatSymbolRefAttribute::new(context, "tribute_box_number"),
+            &[number_constant.result(0).unwrap().into()],
+            &[i64_type.into()],
+            location,
+        );
+        
+        (number_constant, call_op)
+    })) {
+        Ok((number_constant, call_op)) => {
+            println!("      SUCCESS: Created MLIR constant for {}", value);
+            block.append_operation(number_constant);
+            block.append_operation(call_op);
+            println!("      SUCCESS: Created MLIR function call");
+        }
+        Err(_) => {
+            println!("      FALLBACK: Using text representation due to MLIR issue");
+            let boxed_name = format!("boxed_num_{}", index);
+            println!("      -> MLIR: %{} = call @tribute_box_number(i64 {})", boxed_name, value);
+        }
+    }
 }
 
 /// Generate MLIR operation for boxing a string
@@ -182,10 +232,10 @@ fn generate_other_mlir_operation<'a>(
             println!("      -> MLIR: call @tribute_release(ptr %{})", boxed_value);
         }
         MlirOperation::Call { func, args } => {
-            generate_function_call_op(func, args, index, context, location);
+            generate_function_call_op(func, args, index, context, location, _block);
         }
         MlirOperation::ListOp { operation } => {
-            generate_list_operation_op(operation, index, context, location);
+            generate_list_operation_op(operation, index, context, location, _block);
         }
         _ => {
             println!("    Operation: {:?} (not yet implemented)", op);
@@ -200,21 +250,40 @@ fn generate_function_call_op<'a>(
     index: usize,
     context: &'a Context,
     location: Location<'a>,
+    block: &Block<'a>,
 ) {
     println!("    Creating function call: {} with {} arguments", func_name, args.len());
     
     if func_name.starts_with("builtin_") {
-        generate_builtin_function_call(func_name, args, index);
+        generate_builtin_function_call(func_name, args, index, context, location, block);
     } else {
+        // Generate actual func.call for user-defined functions
         println!("      User function call: {}", func_name);
-        for (i, arg) in args.iter().enumerate() {
-            println!("        Arg {}: {}", i, arg);
-        }
+        println!("        -> MLIR: %result_{} = call @{}({})", 
+                 index, func_name, 
+                 args.iter().map(|arg| format!("ptr %{}", arg)).collect::<Vec<_>>().join(", "));
+        
+        // TODO: Generate actual func.call operation when MLIR context is properly set up
+        // let call_op = func::call(
+        //     context,
+        //     melior::ir::attribute::FlatSymbolRefAttribute::new(context, func_name),
+        //     &[...], // Convert args to MLIR values
+        //     &[ptr_type.into()], // Return type
+        //     location,
+        // );
+        // block.append_operation(call_op);
     }
 }
 
 /// Generate MLIR operations for builtin function calls
-fn generate_builtin_function_call(func_name: &str, args: &[String], index: usize) {
+fn generate_builtin_function_call(
+    func_name: &str, 
+    args: &[String], 
+    index: usize,
+    _context: &Context,
+    _location: Location<'_>,
+    _block: &Block<'_>,
+) {
     let builtin_name = &func_name[8..]; // Remove "builtin_" prefix
     println!("      Builtin function: {}", builtin_name);
     
@@ -315,8 +384,9 @@ fn generate_builtin_function_call(func_name: &str, args: &[String], index: usize
 fn generate_list_operation_op<'a>(
     operation: &MlirListOperation,
     index: usize,
-    context: &'a Context,
-    location: Location<'a>,
+    _context: &'a Context,
+    _location: Location<'a>,
+    _block: &Block<'a>,
 ) {
     match operation {
         MlirListOperation::CreateEmpty { capacity } => {
@@ -398,11 +468,24 @@ fn generate_mlir_function_op<'a>(
             let block = Block::new(&[]);
             
             // Generate operations for function body
-            generate_function_body(body_ops, context, location, &block);
+            let last_result = generate_function_body(body_ops, context, location, &block);
             
             // Add return operation for boxed values
-            println!("    Function would return default boxed value: nil");
-            println!("    Creating minimal function body");
+            if let Some(ref result_value) = last_result {
+                println!("    Adding return statement to function: {}", result_value);
+                println!("      -> MLIR: return ptr %{}", result_value);
+            } else {
+                println!("    Adding return statement to function: nil");
+                println!("      -> MLIR: return ptr %nil_value");
+            }
+            
+            // TODO: Generate actual func.return operation when MLIR context is properly set up
+            // let return_op = func::r#return(
+            //     context,
+            //     &[last_result_value], // Last computed value or nil
+            //     location,
+            // );
+            // block.append_operation(return_op);
             
             region.append_block(block);
             region
