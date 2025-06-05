@@ -137,6 +137,116 @@ pub unsafe extern "C" fn tribute_eq_boxed(
     }
 }
 
+/// Compare two boxed numbers for less than
+///
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_lt_boxed(
+    lhs: *mut TributeBoxed,
+    rhs: *mut TributeBoxed,
+) -> *mut TributeBoxed {
+    unsafe {
+        let left_val = tribute_unbox_number(lhs);
+        let right_val = tribute_unbox_number(rhs);
+        let result = left_val < right_val;
+
+        crate::tribute_release(lhs);
+        crate::tribute_release(rhs);
+
+        crate::boolean::tribute_box_boolean(result)
+    }
+}
+
+/// Compare two boxed numbers for greater than
+///
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_gt_boxed(
+    lhs: *mut TributeBoxed,
+    rhs: *mut TributeBoxed,
+) -> *mut TributeBoxed {
+    unsafe {
+        let left_val = tribute_unbox_number(lhs);
+        let right_val = tribute_unbox_number(rhs);
+        let result = left_val > right_val;
+
+        crate::tribute_release(lhs);
+        crate::tribute_release(rhs);
+
+        crate::boolean::tribute_box_boolean(result)
+    }
+}
+
+/// Compare two boxed numbers for less than or equal
+///
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_le_boxed(
+    lhs: *mut TributeBoxed,
+    rhs: *mut TributeBoxed,
+) -> *mut TributeBoxed {
+    unsafe {
+        let left_val = tribute_unbox_number(lhs);
+        let right_val = tribute_unbox_number(rhs);
+        let result = left_val <= right_val;
+
+        crate::tribute_release(lhs);
+        crate::tribute_release(rhs);
+
+        crate::boolean::tribute_box_boolean(result)
+    }
+}
+
+/// Compare two boxed numbers for greater than or equal
+///
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_ge_boxed(
+    lhs: *mut TributeBoxed,
+    rhs: *mut TributeBoxed,
+) -> *mut TributeBoxed {
+    unsafe {
+        let left_val = tribute_unbox_number(lhs);
+        let right_val = tribute_unbox_number(rhs);
+        let result = left_val >= right_val;
+
+        crate::tribute_release(lhs);
+        crate::tribute_release(rhs);
+
+        crate::boolean::tribute_box_boolean(result)
+    }
+}
+
+/// Modulo operation on two boxed numbers
+///
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_mod_boxed(
+    lhs: *mut TributeBoxed,
+    rhs: *mut TributeBoxed,
+) -> *mut TributeBoxed {
+    unsafe {
+        let left_val = tribute_unbox_number(lhs);
+        let right_val = tribute_unbox_number(rhs);
+
+        if right_val == 0 {
+            panic!("Modulo by zero");
+        }
+
+        let result = left_val % right_val;
+
+        crate::tribute_release(lhs);
+        crate::tribute_release(rhs);
+
+        tribute_box_number(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +302,53 @@ mod tests {
             let b = tribute_box_number(4);
             let result = tribute_div_boxed(a, b);
             assert_eq!(tribute_unbox_number(result), 5);
+            tribute_release(result);
+
+            // Test modulo
+            let a = tribute_box_number(17);
+            let b = tribute_box_number(5);
+            let result = tribute_mod_boxed(a, b);
+            assert_eq!(tribute_unbox_number(result), 2);
+            tribute_release(result);
+        }
+    }
+
+    #[test]
+    fn test_comparison_operations() {
+        unsafe {
+            // Test equality
+            let a = tribute_box_number(10);
+            let b = tribute_box_number(10);
+            let result = tribute_eq_boxed(a, b);
+            assert_eq!(crate::boolean::tribute_unbox_boolean(result), true);
+            tribute_release(result);
+
+            // Test less than
+            let a = tribute_box_number(5);
+            let b = tribute_box_number(10);
+            let result = tribute_lt_boxed(a, b);
+            assert_eq!(crate::boolean::tribute_unbox_boolean(result), true);
+            tribute_release(result);
+
+            // Test greater than
+            let a = tribute_box_number(15);
+            let b = tribute_box_number(10);
+            let result = tribute_gt_boxed(a, b);
+            assert_eq!(crate::boolean::tribute_unbox_boolean(result), true);
+            tribute_release(result);
+
+            // Test less than or equal
+            let a = tribute_box_number(10);
+            let b = tribute_box_number(10);
+            let result = tribute_le_boxed(a, b);
+            assert_eq!(crate::boolean::tribute_unbox_boolean(result), true);
+            tribute_release(result);
+
+            // Test greater than or equal
+            let a = tribute_box_number(15);
+            let b = tribute_box_number(10);
+            let result = tribute_ge_boxed(a, b);
+            assert_eq!(crate::boolean::tribute_unbox_boolean(result), true);
             tribute_release(result);
         }
     }

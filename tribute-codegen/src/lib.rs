@@ -207,6 +207,28 @@ mod tests {
         // This test shows GC integration with boxed values
         let _ = result;
     }
+
+    #[test]
+    fn test_debug_all_operations() {
+        let mut codegen = TributeCodegen::new().unwrap();
+        let source = r#"(fn (all_ops x y) (+ (- x y) (* (/ x 2) (% y 3))))"#;
+        let output_path = Path::new("/tmp/test_all_ops_output");
+
+        println!("\n=== Debug All Operations ===");
+        println!("Source: {}", source);
+        println!("This demonstrates all arithmetic operations:");
+        println!("- Addition (+)");
+        println!("- Subtraction (-)");
+        println!("- Multiplication (*)");
+        println!("- Division (/)");
+        println!("- Modulo (%)");
+        
+        let result = codegen.compile_string(source, output_path);
+        println!("Result: {:?}", result);
+        
+        // This test shows all operations working together
+        let _ = result;
+    }
     
     #[test]
     fn test_debug_list_operations() {

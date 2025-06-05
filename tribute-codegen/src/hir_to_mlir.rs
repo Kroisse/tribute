@@ -310,13 +310,12 @@ pub fn mlir_module_to_melior<'a>(
                                         last_boxed_value = Some(result_name);
                                     }
                                     "%" => {
-                                        println!("      Generating boxed arithmetic modulo (using division)");
+                                        println!("      Generating boxed arithmetic modulo");
                                         let result_name = format!("mod_result_{}", i);
                                         println!("        -> MLIR: %{} = call @tribute_mod_boxed(ptr %{}, ptr %{})", 
                                                  result_name, 
                                                  args.get(0).unwrap_or(&"arg0".to_string()),
                                                  args.get(1).unwrap_or(&"arg1".to_string()));
-                                        println!("        -> Note: modulo needs to be added to runtime");
                                         last_boxed_value = Some(result_name);
                                     }
                                     // Comparison operations - return boxed boolean values
@@ -330,27 +329,39 @@ pub fn mlir_module_to_melior<'a>(
                                         last_boxed_value = Some(result_name);
                                     }
                                     "<" => {
-                                        println!("      Would generate boxed less than comparison");
+                                        println!("      Generating boxed less than comparison");
                                         let result_name = format!("lt_result_{}", i);
-                                        println!("        -> {}: boxed boolean result of less than", result_name);
+                                        println!("        -> MLIR: %{} = call @tribute_lt_boxed(ptr %{}, ptr %{})", 
+                                                 result_name, 
+                                                 args.get(0).unwrap_or(&"arg0".to_string()),
+                                                 args.get(1).unwrap_or(&"arg1".to_string()));
                                         last_boxed_value = Some(result_name);
                                     }
                                     ">" => {
-                                        println!("      Would generate boxed greater than comparison");
+                                        println!("      Generating boxed greater than comparison");
                                         let result_name = format!("gt_result_{}", i);
-                                        println!("        -> {}: boxed boolean result of greater than", result_name);
+                                        println!("        -> MLIR: %{} = call @tribute_gt_boxed(ptr %{}, ptr %{})", 
+                                                 result_name, 
+                                                 args.get(0).unwrap_or(&"arg0".to_string()),
+                                                 args.get(1).unwrap_or(&"arg1".to_string()));
                                         last_boxed_value = Some(result_name);
                                     }
                                     "<=" => {
-                                        println!("      Would generate boxed less than or equal comparison");
+                                        println!("      Generating boxed less than or equal comparison");
                                         let result_name = format!("le_result_{}", i);
-                                        println!("        -> {}: boxed boolean result of less than or equal", result_name);
+                                        println!("        -> MLIR: %{} = call @tribute_le_boxed(ptr %{}, ptr %{})", 
+                                                 result_name, 
+                                                 args.get(0).unwrap_or(&"arg0".to_string()),
+                                                 args.get(1).unwrap_or(&"arg1".to_string()));
                                         last_boxed_value = Some(result_name);
                                     }
                                     ">=" => {
-                                        println!("      Would generate boxed greater than or equal comparison");
+                                        println!("      Generating boxed greater than or equal comparison");
                                         let result_name = format!("ge_result_{}", i);
-                                        println!("        -> {}: boxed boolean result of greater than or equal", result_name);
+                                        println!("        -> MLIR: %{} = call @tribute_ge_boxed(ptr %{}, ptr %{})", 
+                                                 result_name, 
+                                                 args.get(0).unwrap_or(&"arg0".to_string()),
+                                                 args.get(1).unwrap_or(&"arg1".to_string()));
                                         last_boxed_value = Some(result_name);
                                     }
                                     _ => {
