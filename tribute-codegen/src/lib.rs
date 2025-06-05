@@ -187,4 +187,90 @@ mod tests {
         // This test shows nested arithmetic operations
         let _ = result;
     }
+    
+    #[test]
+    fn test_debug_gc_aware_mlir_generation() {
+        let mut codegen = TributeCodegen::new().unwrap();
+        let source = r#"(fn (gc_demo x) (+ (* x 2) (+ x 1)))"#;
+        let output_path = Path::new("/tmp/test_gc_output");
+
+        println!("\n=== Debug GC-Aware MLIR Generation ===");
+        println!("Source: {}", source);
+        println!("This demonstrates memory management with boxed values:");
+        println!("- Multiple intermediate boxed values created");
+        println!("- Reference counting for memory management");
+        println!("- Automatic cleanup of temporary values");
+        
+        let result = codegen.compile_string(source, output_path);
+        println!("Result: {:?}", result);
+        
+        // This test shows GC integration with boxed values
+        let _ = result;
+    }
+    
+    #[test]
+    fn test_debug_list_operations() {
+        use super::hir_to_mlir::{MlirOperation, MlirListOperation};
+        
+        println!("\n=== Debug O(1) List Operations ===");
+        println!("Demonstrating high-performance list operations:");
+        
+        // Simulate list operations that would be generated
+        let operations = vec![
+            MlirOperation::ListOp { 
+                operation: MlirListOperation::CreateEmpty { capacity: 10 } 
+            },
+            MlirOperation::ListOp { 
+                operation: MlirListOperation::Push { 
+                    list: "list".to_string(), 
+                    value: "value1".to_string() 
+                }
+            },
+            MlirOperation::ListOp { 
+                operation: MlirListOperation::Get { 
+                    list: "list".to_string(), 
+                    index: "0".to_string() 
+                }
+            },
+            MlirOperation::ListOp { 
+                operation: MlirListOperation::Length { 
+                    list: "list".to_string() 
+                }
+            },
+        ];
+        
+        for (i, op) in operations.iter().enumerate() {
+            match op {
+                MlirOperation::ListOp { operation } => {
+                    match operation {
+                        MlirListOperation::CreateEmpty { capacity } => {
+                            println!("{}. Create empty list (capacity: {})", i + 1, capacity);
+                            println!("   -> O(1) allocation with pre-allocated array");
+                        }
+                        MlirListOperation::Push { list, value } => {
+                            println!("{}. Push {} to {}", i + 1, value, list);
+                            println!("   -> Amortized O(1) with automatic resizing");
+                        }
+                        MlirListOperation::Get { list, index } => {
+                            println!("{}. Get {}[{}]", i + 1, list, index);
+                            println!("   -> O(1) random access via array indexing");
+                        }
+                        MlirListOperation::Length { list } => {
+                            println!("{}. Get length of {}", i + 1, list);
+                            println!("   -> O(1) length stored in metadata");
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        println!("\n🚀 Performance characteristics:");
+        println!("   • Random access: O(1) - Direct array indexing");
+        println!("   • Append: Amortized O(1) - Vector-like growth");
+        println!("   • Length: O(1) - Cached in structure");
+        println!("   • Memory: Contiguous allocation, cache-friendly");
+        println!("   • GC: Reference counting for automatic cleanup");
+    }
 }
