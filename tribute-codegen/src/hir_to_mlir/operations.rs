@@ -547,38 +547,134 @@ pub fn generate_builtin_function_call(
 pub fn generate_list_operation_op<'a>(
     operation: &MlirListOperation,
     index: usize,
-    _context: &'a Context,
-    _location: Location<'a>,
-    _block: &Block<'a>,
+    context: &'a Context,
+    location: Location<'a>,
+    block: &Block<'a>,
 ) {
     match operation {
         MlirListOperation::CreateEmpty { capacity } => {
             println!("    Creating empty list with capacity: {}", capacity);
-            let list_name = format!("empty_list_{}", index);
-            println!(
-                "      -> MLIR: %{} = call @tribute_box_list_empty(i64 {})",
-                list_name, capacity
-            );
+
+            // Try to generate actual MLIR operation
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use melior::{dialect::{arith, func}, ir::{attribute::IntegerAttribute, r#type::IntegerType}};
+
+                let i64_type = IntegerType::new(context, 64);
+                let ptr_type = IntegerType::new(context, 64); // Simplified pointer type
+
+                // Create capacity constant
+                let capacity_constant = arith::constant(
+                    context,
+                    IntegerAttribute::new(i64_type.into(), *capacity as i64).into(),
+                    location,
+                );
+
+                // Create call to tribute_box_list_empty
+                let call_op = func::call(
+                    context,
+                    melior::ir::attribute::FlatSymbolRefAttribute::new(context, "tribute_box_list_empty"),
+                    &[capacity_constant.result(0).unwrap().into()],
+                    &[ptr_type.into()],
+                    location,
+                );
+
+                (capacity_constant, call_op)
+            })) {
+                Ok((capacity_constant, call_op)) => {
+                    println!("      SUCCESS: Created MLIR list creation with capacity {}", capacity);
+                    block.append_operation(capacity_constant);
+                    block.append_operation(call_op);
+                }
+                Err(_) => {
+                    println!("      FALLBACK: Using text representation for list creation");
+                    let list_name = format!("empty_list_{}", index);
+                    println!(
+                        "      -> MLIR: %{} = call @tribute_box_list_empty(i64 {})",
+                        list_name, capacity
+                    );
+                }
+            }
         }
         MlirListOperation::CreateFromArray { elements } => {
             println!("    Creating list from {} elements", elements.len());
-            let list_name = format!("array_list_{}", index);
-            println!(
-                "      -> MLIR: %{} = call @tribute_box_list_from_array(ptr %elements, i64 {})",
-                list_name,
-                elements.len()
-            );
+
+            // Try to generate actual MLIR operation
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use melior::{dialect::{arith, func}, ir::{attribute::IntegerAttribute, r#type::IntegerType}};
+
+                let i64_type = IntegerType::new(context, 64);
+                let ptr_type = IntegerType::new(context, 64);
+
+                // Create length constant
+                let length_constant = arith::constant(
+                    context,
+                    IntegerAttribute::new(i64_type.into(), elements.len() as i64).into(),
+                    location,
+                );
+
+                // Create call to tribute_box_list_from_array
+                let call_op = func::call(
+                    context,
+                    melior::ir::attribute::FlatSymbolRefAttribute::new(context, "tribute_box_list_from_array"),
+                    &[length_constant.result(0).unwrap().into()], // Simplified: just pass length for now
+                    &[ptr_type.into()],
+                    location,
+                );
+
+                (length_constant, call_op)
+            })) {
+                Ok((length_constant, call_op)) => {
+                    println!("      SUCCESS: Created MLIR list from array with {} elements", elements.len());
+                    block.append_operation(length_constant);
+                    block.append_operation(call_op);
+                }
+                Err(_) => {
+                    println!("      FALLBACK: Using text representation for array list creation");
+                    let list_name = format!("array_list_{}", index);
+                    println!(
+                        "      -> MLIR: %{} = call @tribute_box_list_from_array(ptr %elements, i64 {})",
+                        list_name,
+                        elements.len()
+                    );
+                }
+            }
         }
         MlirListOperation::Get {
             list,
             index: list_index,
         } => {
             println!("    List get: {}[{}]", list, list_index);
-            let result_name = format!("list_get_{}", index);
-            println!(
-                "      -> MLIR: %{} = call @tribute_list_get(ptr %{}, i64 %{})",
-                result_name, list, list_index
-            );
+
+            // Try to generate actual MLIR operation
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use melior::{dialect::func, ir::r#type::IntegerType};
+
+                let ptr_type = IntegerType::new(context, 64);
+
+                // Create call to tribute_list_get
+                let call_op = func::call(
+                    context,
+                    melior::ir::attribute::FlatSymbolRefAttribute::new(context, "tribute_list_get"),
+                    &[], // TODO: Pass actual list and index SSA values
+                    &[ptr_type.into()],
+                    location,
+                );
+
+                call_op
+            })) {
+                Ok(call_op) => {
+                    println!("      SUCCESS: Created MLIR list get operation");
+                    block.append_operation(call_op);
+                }
+                Err(_) => {
+                    println!("      FALLBACK: Using text representation for list get");
+                    let result_name = format!("list_get_{}", index);
+                    println!(
+                        "      -> MLIR: %{} = call @tribute_list_get(ptr %{}, i64 %{})",
+                        result_name, list, list_index
+                    );
+                }
+            }
             println!("      -> O(1) random access");
         }
         MlirListOperation::Set {
@@ -587,36 +683,140 @@ pub fn generate_list_operation_op<'a>(
             value,
         } => {
             println!("    List set: {}[{}] = {}", list, list_index, value);
-            println!(
-                "      -> MLIR: call @tribute_list_set(ptr %{}, i64 %{}, ptr %{})",
-                list, list_index, value
-            );
+
+            // Try to generate actual MLIR operation
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use melior::{dialect::func, ir::r#type::IntegerType};
+
+                let _ptr_type = IntegerType::new(context, 64);
+
+                // Create call to tribute_list_set (void return)
+                let call_op = func::call(
+                    context,
+                    melior::ir::attribute::FlatSymbolRefAttribute::new(context, "tribute_list_set"),
+                    &[], // TODO: Pass actual list, index, and value SSA values
+                    &[], // void return
+                    location,
+                );
+
+                call_op
+            })) {
+                Ok(call_op) => {
+                    println!("      SUCCESS: Created MLIR list set operation");
+                    block.append_operation(call_op);
+                }
+                Err(_) => {
+                    println!("      FALLBACK: Using text representation for list set");
+                    println!(
+                        "      -> MLIR: call @tribute_list_set(ptr %{}, i64 %{}, ptr %{})",
+                        list, list_index, value
+                    );
+                }
+            }
             println!("      -> O(1) random access modification");
         }
         MlirListOperation::Push { list, value } => {
             println!("    List push: {}.push({})", list, value);
-            println!(
-                "      -> MLIR: call @tribute_list_push(ptr %{}, ptr %{})",
-                list, value
-            );
+
+            // Try to generate actual MLIR operation
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use melior::{dialect::func, ir::r#type::IntegerType};
+
+                let _ptr_type = IntegerType::new(context, 64);
+
+                // Create call to tribute_list_push (void return)
+                let call_op = func::call(
+                    context,
+                    melior::ir::attribute::FlatSymbolRefAttribute::new(context, "tribute_list_push"),
+                    &[], // TODO: Pass actual list and value SSA values
+                    &[], // void return
+                    location,
+                );
+
+                call_op
+            })) {
+                Ok(call_op) => {
+                    println!("      SUCCESS: Created MLIR list push operation");
+                    block.append_operation(call_op);
+                }
+                Err(_) => {
+                    println!("      FALLBACK: Using text representation for list push");
+                    println!(
+                        "      -> MLIR: call @tribute_list_push(ptr %{}, ptr %{})",
+                        list, value
+                    );
+                }
+            }
             println!("      -> Amortized O(1) append with automatic resize");
         }
         MlirListOperation::Pop { list } => {
             println!("    List pop: {}.pop()", list);
-            let result_name = format!("list_pop_{}", index);
-            println!(
-                "      -> MLIR: %{} = call @tribute_list_pop(ptr %{})",
-                result_name, list
-            );
+
+            // Try to generate actual MLIR operation
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use melior::{dialect::func, ir::r#type::IntegerType};
+
+                let ptr_type = IntegerType::new(context, 64);
+
+                // Create call to tribute_list_pop
+                let call_op = func::call(
+                    context,
+                    melior::ir::attribute::FlatSymbolRefAttribute::new(context, "tribute_list_pop"),
+                    &[], // TODO: Pass actual list SSA value
+                    &[ptr_type.into()], // Returns popped element
+                    location,
+                );
+
+                call_op
+            })) {
+                Ok(call_op) => {
+                    println!("      SUCCESS: Created MLIR list pop operation");
+                    block.append_operation(call_op);
+                }
+                Err(_) => {
+                    println!("      FALLBACK: Using text representation for list pop");
+                    let result_name = format!("list_pop_{}", index);
+                    println!(
+                        "      -> MLIR: %{} = call @tribute_list_pop(ptr %{})",
+                        result_name, list
+                    );
+                }
+            }
             println!("      -> O(1) removal from end");
         }
         MlirListOperation::Length { list } => {
             println!("    List length: {}.length", list);
-            let result_name = format!("list_len_{}", index);
-            println!(
-                "      -> MLIR: %{} = call @tribute_list_length(ptr %{})",
-                result_name, list
-            );
+
+            // Try to generate actual MLIR operation
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use melior::{dialect::func, ir::r#type::IntegerType};
+
+                let i64_type = IntegerType::new(context, 64);
+
+                // Create call to tribute_list_length
+                let call_op = func::call(
+                    context,
+                    melior::ir::attribute::FlatSymbolRefAttribute::new(context, "tribute_list_length"),
+                    &[], // TODO: Pass actual list SSA value
+                    &[i64_type.into()], // Returns length as i64
+                    location,
+                );
+
+                call_op
+            })) {
+                Ok(call_op) => {
+                    println!("      SUCCESS: Created MLIR list length operation");
+                    block.append_operation(call_op);
+                }
+                Err(_) => {
+                    println!("      FALLBACK: Using text representation for list length");
+                    let result_name = format!("list_len_{}", index);
+                    println!(
+                        "      -> MLIR: %{} = call @tribute_list_length(ptr %{})",
+                        result_name, list
+                    );
+                }
+            }
             println!("      -> O(1) length access");
         }
     }
@@ -831,35 +1031,46 @@ mod tests {
         let location = Location::unknown(&context);
         let block = Block::new(&[]);
 
-        // Test list creation
+        // Test list creation with capacity
         let create_op = MlirListOperation::CreateEmpty { capacity: 10 };
         generate_list_operation_op(&create_op, 0, &context, location, &block);
 
-        // Test list push
-        let push_op = MlirListOperation::Push {
-            list: "my_list".to_string(),
-            value: "new_value".to_string(),
+        // Verify operations were generated for CreateEmpty
+        let first_op = block
+            .first_operation()
+            .expect("Block should have operations after CreateEmpty");
+        let second_op = first_op
+            .next_in_block()
+            .expect("Block should have a second operation for function call");
+
+        // Check that we have constant and function call operations for list creation
+        assert!(first_op.to_string().contains("arith.constant"));
+        assert!(second_op.to_string().contains("func.call @tribute_box_list_empty"));
+
+        // Test CreateFromArray
+        let array_op = MlirListOperation::CreateFromArray { 
+            elements: vec!["elem1".to_string(), "elem2".to_string()] 
         };
-        generate_list_operation_op(&push_op, 1, &context, location, &block);
+        generate_list_operation_op(&array_op, 1, &context, location, &block);
 
-        // Test list get
-        let get_op = MlirListOperation::Get {
-            list: "my_list".to_string(),
-            index: "0".to_string(),
-        };
-        generate_list_operation_op(&get_op, 2, &context, location, &block);
+        // Should now have 4 operations total (2 from CreateEmpty + 2 from CreateFromArray)
+        let mut current_op = block.first_operation();
+        let mut op_count = 0;
+        while let Some(op) = current_op {
+            op_count += 1;
+            current_op = op.next_in_block();
+        }
+        assert_eq!(op_count, 4, "Should have 4 operations after 2 list creations");
 
-        // List operations currently only print debug info and don't generate actual MLIR
-        // So we verify that no operations were added to the block (as expected)
-        assert!(
-            block.first_operation().is_none(),
-            "List operations should not add MLIR operations to block yet (not implemented)"
-        );
-
-        // Test that all operation types can be processed without panicking
+        // Test other list operations that generate single operations
         let test_ops = vec![
-            MlirListOperation::CreateFromArray { 
-                elements: vec!["elem1".to_string(), "elem2".to_string()] 
+            MlirListOperation::Push {
+                list: "my_list".to_string(),
+                value: "new_value".to_string(),
+            },
+            MlirListOperation::Get {
+                list: "my_list".to_string(),
+                index: "0".to_string(),
             },
             MlirListOperation::Set {
                 list: "test_list".to_string(),
@@ -874,16 +1085,42 @@ mod tests {
             },
         ];
 
-        // All these should complete without panicking
+        // All these should complete without panicking and add operations
         for (i, op) in test_ops.iter().enumerate() {
-            generate_list_operation_op(op, i + 3, &context, location, &block);
+            generate_list_operation_op(op, i + 2, &context, location, &block);
         }
 
-        // Still no operations should be in the block
-        assert!(
-            block.first_operation().is_none(),
-            "List operations should still not add MLIR operations to block"
-        );
+        // Count total operations - should be 4 (from creation ops) + 5 (from other ops) = 9
+        current_op = block.first_operation();
+        op_count = 0;
+        let expected_functions = [
+            "tribute_box_list_empty",     // CreateEmpty
+            "tribute_box_list_from_array", // CreateFromArray  
+            "tribute_list_push",          // Push
+            "tribute_list_get",           // Get
+            "tribute_list_set",           // Set
+            "tribute_list_pop",           // Pop
+            "tribute_list_length",        // Length
+        ];
+        let mut func_count = 0;
+
+        while let Some(op) = current_op {
+            let op_str = op.to_string();
+            if op_str.contains("func.call") {
+                // Check that this function call is one we expect
+                assert!(
+                    expected_functions.iter().any(|&func| op_str.contains(func)),
+                    "Operation should contain one of the expected list functions: {}",
+                    op_str
+                );
+                func_count += 1;
+            }
+            op_count += 1;
+            current_op = op.next_in_block();
+        }
+
+        assert_eq!(op_count, 9, "Should have 9 total operations");
+        assert_eq!(func_count, 7, "Should have 7 function call operations");
     }
 
     #[test]
