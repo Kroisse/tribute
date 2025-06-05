@@ -482,44 +482,7 @@ pub unsafe extern "C" fn tribute_print_boxed(boxed: *mut TributeBoxed) {
 
 #[cfg(test)]
 mod tests {
-    use crate::*;
-    use crate::string::*;
-    use crate::list::*;
-
-    #[test]
-    fn test_box_unbox_string() {
-        unsafe {
-            // Create a test string
-            let test_str = "Hello, World!";
-            let length = test_str.len();
-            
-            // Allocate memory and copy the string data
-            let layout = Layout::from_size_align(length, 1).unwrap();
-            let data = alloc(layout);
-            ptr::copy_nonoverlapping(test_str.as_ptr(), data, length);
-
-            // Box the string
-            let boxed = tribute_box_string(data, length);
-            assert!(!boxed.is_null());
-
-            // Check type
-            assert_eq!(tribute_get_type(boxed), TributeValue::TYPE_STRING);
-
-            // Unbox the string
-            let mut out_length = 0;
-            let unboxed_data = tribute_unbox_string(boxed, &mut out_length);
-            assert_eq!(out_length, length);
-            assert!(!unboxed_data.is_null());
-
-            // Verify content
-            let slice = std::slice::from_raw_parts(unboxed_data, out_length);
-            let unboxed_str = std::str::from_utf8(slice).unwrap();
-            assert_eq!(unboxed_str, test_str);
-
-            // Clean up
-            tribute_release(boxed);
-        }
-    }
+    use super::*;
 
     #[test]
     fn test_box_unbox_number() {
@@ -543,43 +506,23 @@ mod tests {
     }
 
     #[test]
-    fn test_list_operations() {
+    fn test_reference_counting() {
         unsafe {
-            // Create an empty list
-            let list = tribute_box_list_empty(10);
-            assert!(!list.is_null());
-
-            // Check type
-            assert_eq!(tribute_get_type(list), TributeValue::TYPE_LIST);
-
-            // Check initial length
-            assert_eq!(tribute_list_length(list), 0);
-
-            // Push some numbers
-            let num1 = tribute_box_number(10);
-            let num2 = tribute_box_number(20);
-            let num3 = tribute_box_number(30);
-
-            tribute_list_push(list, num1);
-            tribute_list_push(list, num2);
-            tribute_list_push(list, num3);
-
-            assert_eq!(tribute_list_length(list), 3);
-
-            // Get elements
-            let elem0 = tribute_list_get(list, 0);
-            let elem1 = tribute_list_get(list, 1);
-            let elem2 = tribute_list_get(list, 2);
-
-            assert_eq!(tribute_unbox_number(elem0), 10);
-            assert_eq!(tribute_unbox_number(elem1), 20);
-            assert_eq!(tribute_unbox_number(elem2), 30);
-
-            // Clean up
-            tribute_release(elem0);
-            tribute_release(elem1);
-            tribute_release(elem2);
-            tribute_release(list);
+            let boxed = tribute_box_number(42);
+            
+            // Initial ref count should be 1
+            assert_eq!(tribute_get_ref_count(boxed), 1);
+            
+            // Retain should increment
+            tribute_retain(boxed);
+            assert_eq!(tribute_get_ref_count(boxed), 2);
+            
+            // Release should decrement
+            tribute_release(boxed);
+            assert_eq!(tribute_get_ref_count(boxed), 1);
+            
+            // Final release
+            tribute_release(boxed);
         }
     }
 }

@@ -1,4 +1,5 @@
 use crate::{array::TributeArray, TributeBoxed, TributeValue};
+use std::{alloc::{alloc, Layout}, ptr};
 
 pub type TributeString = TributeArray<u8>;
 
@@ -37,6 +38,47 @@ pub unsafe extern "C" fn tribute_unbox_string(
                 string.data
             }
             _ => panic!("Type error: expected String, got different type"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{tribute_get_type, tribute_release};
+
+    #[test]
+    fn test_box_unbox_string() {
+        unsafe {
+            // Create a test string
+            let test_str = "Hello, World!";
+            let length = test_str.len();
+            
+            // Allocate memory and copy the string data
+            let layout = Layout::from_size_align(length, 1).unwrap();
+            let data = alloc(layout);
+            ptr::copy_nonoverlapping(test_str.as_ptr(), data, length);
+
+            // Box the string
+            let boxed = tribute_box_string(data, length);
+            assert!(!boxed.is_null());
+
+            // Check type
+            assert_eq!(tribute_get_type(boxed), TributeValue::TYPE_STRING);
+
+            // Unbox the string
+            let mut out_length = 0;
+            let unboxed_data = tribute_unbox_string(boxed, &mut out_length);
+            assert_eq!(out_length, length);
+            assert!(!unboxed_data.is_null());
+
+            // Verify content
+            let slice = std::slice::from_raw_parts(unboxed_data, out_length);
+            let unboxed_str = std::str::from_utf8(slice).unwrap();
+            assert_eq!(unboxed_str, test_str);
+
+            // Clean up
+            tribute_release(boxed);
         }
     }
 }

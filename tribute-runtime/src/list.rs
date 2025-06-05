@@ -268,3 +268,50 @@ pub unsafe extern "C" fn tribute_list_pop(list_boxed: *mut TributeBoxed) -> *mut
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{tribute_box_number, tribute_unbox_number, tribute_get_type, tribute_release};
+
+    #[test]
+    fn test_list_operations() {
+        unsafe {
+            // Create an empty list
+            let list = tribute_box_list_empty(10);
+            assert!(!list.is_null());
+
+            // Check type
+            assert_eq!(tribute_get_type(list), TributeValue::TYPE_LIST);
+
+            // Check initial length
+            assert_eq!(tribute_list_length(list), 0);
+
+            // Push some numbers
+            let num1 = tribute_box_number(10);
+            let num2 = tribute_box_number(20);
+            let num3 = tribute_box_number(30);
+
+            tribute_list_push(list, num1);
+            tribute_list_push(list, num2);
+            tribute_list_push(list, num3);
+
+            assert_eq!(tribute_list_length(list), 3);
+
+            // Get elements
+            let elem0 = tribute_list_get(list, 0);
+            let elem1 = tribute_list_get(list, 1);
+            let elem2 = tribute_list_get(list, 2);
+
+            assert_eq!(tribute_unbox_number(elem0), 10);
+            assert_eq!(tribute_unbox_number(elem1), 20);
+            assert_eq!(tribute_unbox_number(elem2), 30);
+
+            // Clean up
+            tribute_release(elem0);
+            tribute_release(elem1);
+            tribute_release(elem2);
+            tribute_release(list);
+        }
+    }
+}
