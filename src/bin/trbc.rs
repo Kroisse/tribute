@@ -53,24 +53,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if compile_mode {
         // Compilation mode
-        #[cfg(feature = "compiler")]
-        {
-            let output_path = matches.get_one::<String>("output")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    let mut path = input_path.clone();
-                    path.set_extension("");
-                    path
-                });
+        let output_path = matches.get_one::<String>("output")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let mut path = input_path.clone();
+                path.set_extension("");
+                path
+            });
 
-            compile_program(&input_path, &output_path)?;
-        }
-        
-        #[cfg(not(feature = "compiler"))]
-        {
-            eprintln!("Error: Compilation support not enabled. Rebuild with --features compiler");
-            std::process::exit(1);
-        }
+        compile_program(&input_path, &output_path)?;
     } else {
         // Interpreter mode (default)
         interpret_program(&input_path)?;
@@ -138,13 +129,12 @@ fn interpret_program(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Compiles a Tribute program to a native binary.
-#[cfg(feature = "compiler")]
 fn compile_program(input_path: &PathBuf, output_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    use tribute_compiler::TributeCompiler;
+    use tribute_codegen::TributeCodegen;
     
     println!("Compiling {} to {}...", input_path.display(), output_path.display());
     
-    let mut compiler = TributeCompiler::new()?;
+    let mut compiler = TributeCodegen::new()?;
     compiler.compile_file(input_path, output_path)?;
     
     println!("Compilation completed successfully!");

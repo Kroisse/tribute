@@ -1,142 +1,13 @@
-//! HIR to MLIR lowering for Tribute programs.
+//! MLIR operation generation functions for individual operations.
 
-use crate::error::Result;
+use crate::hir_to_mlir::types::{MlirListOperation, MlirOperation, expected_type_name};
 use melior::{
-    ir::{Block, BlockLike, Location, Module, operation::OperationLike},
+    ir::{Block, BlockLike, Location, operation::OperationLike},
     Context,
 };
-use tribute_hir::{HirProgram, HirFunction, HirExpr, Expr};
-
-/// Salsa query to generate MLIR module from HIR program.
-#[salsa::tracked]
-pub fn generate_mlir_module<'db>(db: &'db dyn salsa::Database, hir_program: HirProgram<'db>) -> MlirModule<'db> {
-    let mut function_results = Vec::new();
-    
-    // Generate MLIR for all functions in the HIR program
-    let functions = hir_program.functions(db);
-    
-    for (name, hir_function) in functions {
-        let mlir_func = generate_mlir_function(db, hir_function);
-        function_results.push((name.clone(), mlir_func));
-    }
-    
-    MlirModule::new(db, function_results)
-}
-
-/// Tracked MLIR module representation
-#[salsa::tracked]
-pub struct MlirModule<'db> {
-    #[return_ref]
-    pub functions: Vec<(tribute_ast::Identifier, MlirFunction<'db>)>,
-}
-
-/// Tracked MLIR function representation
-#[salsa::tracked]
-pub struct MlirFunction<'db> {
-    pub name: tribute_ast::Identifier,
-    #[return_ref]
-    pub params: Vec<tribute_ast::Identifier>,
-    #[return_ref]
-    pub body: Vec<MlirOperation>,
-    pub span: tribute_ast::SimpleSpan,
-}
-
-/// MLIR operation representation
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum MlirOperation {
-    /// Create a boxed number value
-    BoxNumber { value: i64 },
-    /// Create a boxed string value  
-    BoxString { value: String },
-    /// Unbox a value to get its content
-    Unbox { boxed_value: String, expected_type: BoxedType },
-    /// Function call (func.call) - all functions work with boxed values
-    Call { func: String, args: Vec<String> },
-    /// Variable reference - always returns a boxed value
-    Variable { name: String },
-    /// Return operation - always returns a boxed value
-    Return { value: Option<String> },
-    /// GC operations
-    GcRetain { boxed_value: String },
-    GcRelease { boxed_value: String },
-    GcCollect,
-    /// List operations
-    ListOp { operation: MlirListOperation },
-    /// Placeholder for unimplemented operations
-    Placeholder { description: String },
-}
-
-/// Types that can be stored in boxed values
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum BoxedType {
-    Number,
-    String,
-    Boolean,
-    Function,
-    List,
-    Nil,
-}
-
-/// List operation representation
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum MlirListOperation {
-    /// Create empty list: tribute_box_list_empty(capacity)
-    CreateEmpty { capacity: usize },
-    /// Create from array: tribute_box_list_from_array(elements, count) 
-    CreateFromArray { elements: Vec<String> },
-    /// Get element: tribute_list_get(list, index) - O(1)
-    Get { list: String, index: String },
-    /// Set element: tribute_list_set(list, index, value) - O(1)
-    Set { list: String, index: String, value: String },
-    /// Push element: tribute_list_push(list, value) - Amortized O(1)
-    Push { list: String, value: String },
-    /// Pop element: tribute_list_pop(list) - O(1)
-    Pop { list: String },
-    /// Get length: tribute_list_length(list) - O(1)
-    Length { list: String },
-}
-
-/// Generate MLIR operations for function body
-fn generate_function_body<'a>(
-    body_ops: &[MlirOperation],
-    context: &'a Context,
-    location: Location<'a>,
-    block: &Block<'a>,
-) -> Option<String> {
-    let mut last_boxed_value = None;
-    for (i, op) in body_ops.iter().enumerate() {
-        match op {
-            MlirOperation::BoxNumber { value } => {
-                generate_box_number_op(*value, i, context, location, block);
-                last_boxed_value = Some(format!("boxed_num_{}", i));
-            }
-            MlirOperation::BoxString { value } => {
-                generate_box_string_op(value, i, context, location, block);
-                last_boxed_value = Some(format!("boxed_str_{}", i));
-            }
-            MlirOperation::Call { func, args } => {
-                generate_function_call_op(func, args, i, context, location, block);
-                last_boxed_value = Some(format!("call_result_{}", i));
-            }
-            _ => {
-                generate_other_mlir_operation(op, i, context, location, block);
-                // Most operations produce a result value
-                last_boxed_value = Some(format!("result_{}", i));
-            }
-        }
-    }
-    
-    if let Some(ref last_value) = last_boxed_value {
-        println!("    Function body last result: {}", last_value);
-    } else {
-        println!("    Function body returns nil (no operations)");
-    }
-    
-    last_boxed_value
-}
 
 /// Generate MLIR operation for boxing a number
-fn generate_box_number_op<'a>(
+pub fn generate_box_number_op<'a>(
     value: i64,
     index: usize,
     context: &'a Context,
@@ -191,7 +62,7 @@ fn generate_box_number_op<'a>(
 }
 
 /// Generate MLIR operation for boxing a string
-fn generate_box_string_op<'a>(
+pub fn generate_box_string_op<'a>(
     value: &str,
     index: usize,
     context: &'a Context,
@@ -251,7 +122,7 @@ fn generate_box_string_op<'a>(
 }
 
 /// Generate MLIR operations for other operation types
-fn generate_other_mlir_operation<'a>(
+pub fn generate_other_mlir_operation<'a>(
     op: &MlirOperation,
     index: usize,
     context: &'a Context,
@@ -286,7 +157,7 @@ fn generate_other_mlir_operation<'a>(
 }
 
 /// Generate MLIR operation for function calls
-fn generate_function_call_op<'a>(
+pub fn generate_function_call_op<'a>(
     func_name: &str,
     args: &[String],
     index: usize,
@@ -336,7 +207,7 @@ fn generate_function_call_op<'a>(
 }
 
 /// Generate MLIR operations for builtin function calls
-fn generate_builtin_function_call(
+pub fn generate_builtin_function_call(
     func_name: &str, 
     args: &[String], 
     index: usize,
@@ -517,7 +388,7 @@ fn generate_builtin_function_call(
 }
 
 /// Generate MLIR operations for list operations
-fn generate_list_operation_op<'a>(
+pub fn generate_list_operation_op<'a>(
     operation: &MlirListOperation,
     index: usize,
     _context: &'a Context,
@@ -568,265 +439,3 @@ fn generate_list_operation_op<'a>(
         }
     }
 }
-
-/// Generate a single MLIR function operation
-fn generate_mlir_function_op<'a>(
-    name: &str,
-    params: &[tribute_ast::Identifier],
-    body_ops: &[MlirOperation],
-    context: &'a Context,
-    location: Location<'a>,
-) -> melior::ir::Operation<'a> {
-    use melior::{
-        dialect::func,
-        ir::{
-            attribute::{StringAttribute, TypeAttribute},
-            r#type::{FunctionType, IntegerType},
-            Block, BlockLike, Region, RegionLike,
-        },
-    };
-
-    println!("  Function: {} with {} params, {} operations", 
-             name, params.len(), body_ops.len());
-    
-    // Create function type: all functions work with boxed values
-    let boxed_ptr_type = IntegerType::new(context, 64); // Pointer to boxed value
-    let param_types: Vec<_> = params.iter().map(|_| boxed_ptr_type.into()).collect();
-    let function_type = FunctionType::new(context, &param_types, &[boxed_ptr_type.into()]);
-    
-    // Create function operation
-    func::func(
-        context,
-        StringAttribute::new(context, name),
-        TypeAttribute::new(function_type.into()),
-        {
-            let region = Region::new();
-            let block = Block::new(&[]);
-            
-            // Generate operations for function body
-            let last_result = generate_function_body(body_ops, context, location, &block);
-            
-            // Add return operation for boxed values
-            if let Some(ref result_value) = last_result {
-                println!("    Adding return statement to function: {}", result_value);
-                println!("      -> MLIR: return ptr %{}", result_value);
-            } else {
-                println!("    Adding return statement to function: nil");
-                println!("      -> MLIR: return ptr %nil_value");
-            }
-            
-            // Try to generate actual func.return operation
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                // Create a simple return operation for now
-                // In a full implementation, we'd pass the actual last result value
-                melior::dialect::func::r#return(
-                    &[], // No return values for now - simplified
-                    location,
-                )
-            })) {
-                Ok(return_op) => {
-                    println!("      SUCCESS: Created MLIR return operation");
-                    block.append_operation(return_op);
-                }
-                Err(_) => {
-                    println!("      FALLBACK: Using minimal function body without explicit return");
-                }
-            }
-            
-            region.append_block(block);
-            region
-        },
-        &[],
-        location,
-    )
-}
-
-/// Convenience function to convert MlirModule to actual MLIR Module
-/// This bridges between Salsa-tracked data and MLIR API
-pub fn mlir_module_to_melior<'a>(
-    db: &dyn salsa::Database,
-    mlir_module: MlirModule<'_>,
-    context: &'a Context,
-    location: Location<'a>,
-) -> Result<Module<'a>> {
-    use melior::ir::{Module, BlockLike};
-
-    let module = Module::new(location);
-    let functions = mlir_module.functions(db);
-    
-    println!("Generating MLIR for {} functions", functions.len());
-    
-    for (name, mlir_func) in functions.iter() {
-        let params = mlir_func.params(db);
-        let body_ops = mlir_func.body(db);
-        
-        // Generate MLIR function operation
-        let function_op = generate_mlir_function_op(name, &params, &body_ops, context, location);
-        
-        // Add function to module
-        module.body().append_operation(function_op);
-        println!("    Successfully generated MLIR function: {}", name);
-    }
-    
-    println!("Successfully generated MLIR module with {} functions", functions.len());
-    Ok(module)
-}
-
-/// Salsa query to generate MLIR function from HIR function.
-#[salsa::tracked]
-pub fn generate_mlir_function<'db>(db: &'db dyn salsa::Database, hir_function: HirFunction<'db>) -> MlirFunction<'db> {
-    let name = hir_function.name(db).clone();
-    let params = hir_function.params(db).clone();
-    let span = hir_function.span(db);
-    let hir_body = hir_function.body(db);
-    
-    // Generate MLIR operations for function body
-    let mut mlir_operations = Vec::new();
-    
-    for hir_expr in hir_body {
-        let operations = generate_mlir_expression(db, hir_expr);
-        mlir_operations.extend(operations.operations(db).clone());
-    }
-    
-    // Add return operation if function doesn't end with one
-    if mlir_operations.is_empty() || !matches!(mlir_operations.last(), Some(MlirOperation::Return { .. })) {
-        mlir_operations.push(MlirOperation::Return { value: None });
-    }
-    
-    MlirFunction::new(db, name, params, mlir_operations, span)
-}
-
-/// Tracked MLIR expression result
-#[salsa::tracked]
-pub struct MlirExpressionResult<'db> {
-    #[return_ref]
-    pub operations: Vec<MlirOperation>,
-    pub result_value: Option<String>,
-}
-
-/// Salsa query to generate MLIR operations from HIR expression.
-#[salsa::tracked]
-pub fn generate_mlir_expression<'db>(db: &'db dyn salsa::Database, hir_expr: HirExpr<'db>) -> MlirExpressionResult<'db> {
-    let expr = hir_expr.expr(db);
-    let _span = hir_expr.span(db);
-    
-    let mut operations = Vec::new();
-    let result_value = match expr {
-        Expr::Number(n) => {
-            operations.push(MlirOperation::BoxNumber { value: n });
-            Some(format!("boxed_num_{}", n))
-        }
-        Expr::String(s) => {
-            operations.push(MlirOperation::BoxString { value: s.clone() });
-            Some(format!("boxed_str_{}", s.len()))
-        }
-        Expr::Variable(var) => {
-            operations.push(MlirOperation::Variable { name: var.clone() });
-            Some(var.clone())
-        }
-        Expr::Call { func, args } => {
-            // Generate MLIR for function call
-            let func_name = match &func.0 {
-                Expr::Variable(name) => name.clone(),
-                _ => "<complex_func>".to_string(),
-            };
-            
-            let mut arg_names = Vec::new();
-            for arg in args {
-                let arg_result = generate_mlir_expression(db, HirExpr::new(db, arg.0.clone(), arg.1));
-                operations.extend(arg_result.operations(db).clone());
-                if let Some(arg_value) = arg_result.result_value(db) {
-                    arg_names.push(arg_value.clone());
-                }
-            }
-            
-            operations.push(MlirOperation::Call { func: func_name.clone(), args: arg_names });
-            Some(format!("call_{}", func_name))
-        }
-        Expr::Let { var: _, value: _, body: _ } => {
-            operations.push(MlirOperation::Placeholder { 
-                description: "let binding".to_string() 
-            });
-            Some("let_result".to_string())
-        }
-        Expr::Match { expr: _, cases: _ } => {
-            operations.push(MlirOperation::Placeholder { 
-                description: "pattern matching".to_string() 
-            });
-            Some("match_result".to_string())
-        }
-        Expr::Builtin { name, args } => {
-            // Handle builtin functions
-            let mut arg_names = Vec::new();
-            for arg in args {
-                let arg_result = generate_mlir_expression(db, HirExpr::new(db, arg.0.clone(), arg.1));
-                operations.extend(arg_result.operations(db).clone());
-                if let Some(arg_value) = arg_result.result_value(db) {
-                    arg_names.push(arg_value.clone());
-                }
-            }
-            
-            // For now, treat builtins as function calls
-            operations.push(MlirOperation::Call { 
-                func: format!("builtin_{}", name),
-                args: arg_names
-            });
-            Some(format!("builtin_{}", name))
-        }
-        Expr::Block(exprs) => {
-            let mut last_result = None;
-            for expr in exprs {
-                let expr_result = generate_mlir_expression(db, HirExpr::new(db, expr.0.clone(), expr.1));
-                operations.extend(expr_result.operations(db).clone());
-                last_result = expr_result.result_value(db).clone();
-            }
-            last_result
-        }
-    };
-    
-    MlirExpressionResult::new(db, operations, result_value)
-}
-
-/// Helper function to get string representation of BoxedType
-fn expected_type_name(boxed_type: &BoxedType) -> &'static str {
-    match boxed_type {
-        BoxedType::Number => "number",
-        BoxedType::String => "string", 
-        BoxedType::Boolean => "boolean",
-        BoxedType::Function => "function",
-        BoxedType::List => "list",
-        BoxedType::Nil => "nil",
-    }
-}
-
-#[allow(dead_code)]
-struct MlirContext {
-    // Symbol table for tracking variables and functions
-    // Type information
-    // Scope management
-}
-
-// TODO: Implement actual melior MLIR generation
-//
-// This implementation currently generates comprehensive logging and MLIR textual representation
-// but doesn't create actual melior Operations. The next step would be to:
-//
-// 1. **Function Generation**:
-//    - Use func::func() to create actual function operations
-//    - Handle function types properly
-//    - Create function body blocks
-//
-// 2. **Operation Generation**:
-//    - Use arith::constant() for MlirOperation::Constant
-//    - Use func::call() for MlirOperation::Call
-//    - Handle variables and SSA values
-//
-// 3. **Block and Region Management**:
-//    - Create proper basic blocks
-//    - Handle control flow
-//    - Manage SSA value lifetimes
-//
-// 4. **Error Handling**:
-//    - Proper error types for MLIR generation failures
-//    - Source location tracking
-//    - Diagnostic integration

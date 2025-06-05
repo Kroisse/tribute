@@ -924,6 +924,9 @@ dependencies = [
  "insta",
  "salsa",
  "tribute-ast",
+ "tribute-codegen",
+ "tribute-hir",
+ "tribute-runtime",
 ]
 
 [[package]]

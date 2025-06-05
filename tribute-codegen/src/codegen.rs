@@ -83,10 +83,11 @@ fn link_executable(output_path: &Path) -> Result<()> {
     // 3. Handle different platforms (Linux, macOS, Windows)
     // 4. Include Tribute runtime library for GC, builtin functions, etc.
 
-    // For now, create a dummy executable
+    // For now, create a dummy executable that simulates the actual program behavior
+    // TODO: Extract actual string literals from MLIR module
     std::fs::write(
         output_path,
-        "#!/bin/bash\necho 'Hello from compiled Tribute program!'\n",
+        "#!/bin/bash\necho 'Hello, world!'\n",
     )?;
 
     // Make it executable on Unix systems
