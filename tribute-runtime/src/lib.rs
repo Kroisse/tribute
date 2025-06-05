@@ -10,37 +10,34 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-/// Type tags for boxed values
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TributeType {
-    Number = 0,
-    String = 1,
-    Boolean = 2,
-    Function = 3,
-    List = 4,
-    Nil = 5,
-}
-
 /// Boxed value structure with reference counting
 #[repr(C)]
 pub struct TributeBoxed {
-    /// Type tag
-    pub type_tag: TributeType,
     /// Reference count (atomic for thread safety)
     pub ref_count: AtomicU32,
     /// Value payload
     pub value: TributeValue,
 }
 
-/// Value union for different types
+/// Value enum for different types
 #[repr(C)]
-pub union TributeValue {
-    pub number: i64,
-    pub boolean: bool,
-    pub string: TributeString,
-    pub function: TributeFunction,
-    pub list: TributeList,
+pub enum TributeValue {
+    Number(i64),
+    Boolean(bool),
+    String(TributeString),
+    Function(TributeFunction),
+    List(TributeList),
+    Nil,
+}
+
+// Type code constants for C FFI compatibility
+impl TributeValue {
+    pub const TYPE_NUMBER: u32 = 0;
+    pub const TYPE_BOOLEAN: u32 = 1;
+    pub const TYPE_STRING: u32 = 2;
+    pub const TYPE_FUNCTION: u32 = 3;
+    pub const TYPE_LIST: u32 = 4;
+    pub const TYPE_NIL: u32 = 5;
 }
 
 /// Generic array type for both strings and lists
@@ -220,7 +217,7 @@ pub struct TributeFunction {
 
 impl TributeBoxed {
     /// Create a new boxed value with ref_count = 1
-    pub fn new(type_tag: TributeType, value: TributeValue) -> NonNull<Self> {
+    pub fn new(value: TributeValue) -> NonNull<Self> {
         let layout = Layout::new::<Self>();
         let ptr = unsafe { alloc(layout) as *mut Self };
 
@@ -232,7 +229,6 @@ impl TributeBoxed {
             ptr::write(
                 ptr,
                 Self {
-                    type_tag,
                     ref_count: AtomicU32::new(1),
                     value,
                 },
@@ -264,23 +260,21 @@ impl TributeBoxed {
     unsafe fn deallocate(&self) {
         unsafe {
             // First, deallocate the contents based on type
-            match self.type_tag {
-                TributeType::String => {
-                    self.value.string.deallocate();
+            match &self.value {
+                TributeValue::String(string_data) => {
+                    string_data.deallocate();
                 }
-                TributeType::Function => {
-                    let func = self.value.function;
+                TributeValue::Function(func) => {
                     // Release environment if it exists
                     if !func.env_ptr.is_null() {
                         (*func.env_ptr).release();
                     }
                 }
-                TributeType::List => {
-                    let list_data = self.value.list;
+                TributeValue::List(list_data) => {
                     list_data.release_all_elements();
                     list_data.deallocate();
                 }
-                _ => {
+                TributeValue::Number(_) | TributeValue::Boolean(_) | TributeValue::Nil => {
                     // Number, Boolean, Nil don't need special cleanup
                 }
             }
@@ -296,7 +290,7 @@ impl TributeBoxed {
 /// Box a number value
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_box_number(value: i64) -> *mut TributeBoxed {
-    let boxed = TributeBoxed::new(TributeType::Number, TributeValue { number: value });
+    let boxed = TributeBoxed::new(TributeValue::Number(value));
     boxed.as_ptr()
 }
 
@@ -309,30 +303,27 @@ pub extern "C" fn tribute_box_string(data: *mut u8, length: usize) -> *mut Tribu
         capacity: length,
     };
 
-    let boxed = TributeBoxed::new(TributeType::String, TributeValue { string });
+    let boxed = TributeBoxed::new(TributeValue::String(string));
     boxed.as_ptr()
 }
 
 /// Box a boolean value
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_box_boolean(value: bool) -> *mut TributeBoxed {
-    let boxed = TributeBoxed::new(TributeType::Boolean, TributeValue { boolean: value });
+    let boxed = TributeBoxed::new(TributeValue::Boolean(value));
     boxed.as_ptr()
 }
 
 /// Box a nil value
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_box_nil() -> *mut TributeBoxed {
-    let boxed = TributeBoxed::new(
-        TributeType::Nil,
-        TributeValue { number: 0 }, // Nil doesn't use the value
-    );
+    let boxed = TributeBoxed::new(TributeValue::Nil);
     boxed.as_ptr()
 }
 
 /// Box a function value
 #[unsafe(no_mangle)]
-pub extern "C" fn tribute_box_function(
+pub unsafe extern "C" fn tribute_box_function(
     code_ptr: *mut u8,
     env_ptr: *mut TributeBoxed,
 ) -> *mut TributeBoxed {
@@ -345,7 +336,7 @@ pub extern "C" fn tribute_box_function(
         }
     }
 
-    let boxed = TributeBoxed::new(TributeType::Function, TributeValue { function });
+    let boxed = TributeBoxed::new(TributeValue::Function(function));
     boxed.as_ptr()
 }
 
@@ -357,7 +348,7 @@ pub extern "C" fn tribute_box_list_empty(initial_capacity: usize) -> *mut Tribut
         list.init_null_pointers();
     }
 
-    let boxed = TributeBoxed::new(TributeType::List, TributeValue { list });
+    let boxed = TributeBoxed::new(TributeValue::List(list));
     boxed.as_ptr()
 }
 
@@ -377,18 +368,21 @@ pub unsafe extern "C" fn tribute_box_list_from_array(
             return list_boxed;
         }
 
-        let list_data = &mut (*list_boxed).value.list;
+        match &mut (*list_boxed).value {
+            TributeValue::List(list_data) => {
+                // Copy elements and retain them
+                for i in 0..count {
+                    let element = *elements.add(i);
+                    if !element.is_null() {
+                        (*element).retain(); // Increment ref count
+                        *list_data.data.add(i) = element;
+                    }
+                }
 
-        // Copy elements and retain them
-        for i in 0..count {
-            let element = *elements.add(i);
-            if !element.is_null() {
-                (*element).retain(); // Increment ref count
-                *list_data.data.add(i) = element;
+                list_data.length = count;
             }
+            _ => panic!("Expected list value"),
         }
-
-        list_data.length = count;
 
         list_boxed
     }
@@ -405,10 +399,10 @@ pub unsafe extern "C" fn tribute_unbox_number(boxed: *mut TributeBoxed) -> i64 {
             panic!("Attempted to unbox null pointer");
         }
 
-        if (*boxed).type_tag != TributeType::Number {
-            panic!("Type error: expected Number, got {:?}", (*boxed).type_tag);
+        match &(*boxed).value {
+            TributeValue::Number(value) => *value,
+            _ => panic!("Type error: expected Number, got different type"),
         }
-        (*boxed).value.number
     }
 }
 
@@ -426,14 +420,15 @@ pub unsafe extern "C" fn tribute_unbox_string(
             panic!("Attempted to unbox null pointer");
         }
 
-        if (*boxed).type_tag != TributeType::String {
-            panic!("Type error: expected String, got {:?}", (*boxed).type_tag);
+        match &(*boxed).value {
+            TributeValue::String(string) => {
+                if !length_out.is_null() {
+                    *length_out = string.length;
+                }
+                string.data
+            }
+            _ => panic!("Type error: expected String, got different type"),
         }
-        let string = (*boxed).value.string;
-        if !length_out.is_null() {
-            *length_out = string.length;
-        }
-        string.data
     }
 }
 
@@ -448,10 +443,10 @@ pub unsafe extern "C" fn tribute_unbox_boolean(boxed: *mut TributeBoxed) -> bool
             panic!("Attempted to unbox null pointer");
         }
 
-        if (*boxed).type_tag != TributeType::Boolean {
-            panic!("Type error: expected Boolean, got {:?}", (*boxed).type_tag);
+        match &(*boxed).value {
+            TributeValue::Boolean(value) => *value,
+            _ => panic!("Type error: expected Boolean, got different type"),
         }
-        (*boxed).value.boolean
     }
 }
 
@@ -469,21 +464,19 @@ pub unsafe extern "C" fn tribute_unbox_function(
             panic!("Attempted to unbox null pointer");
         }
 
-        if (*boxed).type_tag != TributeType::Function {
-            panic!("Type error: expected Function, got {:?}", (*boxed).type_tag);
-        }
-
-        let function = (*boxed).value.function;
-
-        if !env_out.is_null() {
-            *env_out = function.env_ptr;
-            // Retain the environment for the caller
-            if !function.env_ptr.is_null() {
-                (*function.env_ptr).retain();
+        match &(*boxed).value {
+            TributeValue::Function(function) => {
+                if !env_out.is_null() {
+                    *env_out = function.env_ptr;
+                    // Retain the environment for the caller
+                    if !function.env_ptr.is_null() {
+                        (*function.env_ptr).retain();
+                    }
+                }
+                function.code_ptr
             }
+            _ => panic!("Type error: expected Function, got different type"),
         }
-
-        function.code_ptr
     }
 }
 
@@ -536,9 +529,17 @@ pub unsafe extern "C" fn tribute_get_ref_count(boxed: *mut TributeBoxed) -> u32 
 pub unsafe extern "C" fn tribute_get_type(boxed: *mut TributeBoxed) -> u32 {
     unsafe {
         if boxed.is_null() {
-            return TributeType::Nil as u32;
+            return TributeValue::TYPE_NIL;
         }
-        (*boxed).type_tag as u32
+        
+        match &(*boxed).value {
+            TributeValue::Number(_) => TributeValue::TYPE_NUMBER,
+            TributeValue::Boolean(_) => TributeValue::TYPE_BOOLEAN,
+            TributeValue::String(_) => TributeValue::TYPE_STRING,
+            TributeValue::Function(_) => TributeValue::TYPE_FUNCTION,
+            TributeValue::List(_) => TributeValue::TYPE_LIST,
+            TributeValue::Nil => TributeValue::TYPE_NIL,
+        }
     }
 }
 
@@ -665,14 +666,10 @@ pub unsafe extern "C" fn tribute_list_length(list_boxed: *mut TributeBoxed) -> u
             return 0;
         }
 
-        if (*list_boxed).type_tag != TributeType::List {
-            panic!(
-                "Type error: expected List, got {:?}",
-                (*list_boxed).type_tag
-            );
+        match &(*list_boxed).value {
+            TributeValue::List(list) => list.len(),
+            _ => panic!("Type error: expected List, got different type"),
         }
-
-        (*list_boxed).value.list.len()
     }
 }
 
@@ -690,31 +687,28 @@ pub unsafe extern "C" fn tribute_list_get(
             panic!("Attempted to access null list");
         }
 
-        if (*list_boxed).type_tag != TributeType::List {
-            panic!(
-                "Type error: expected List, got {:?}",
-                (*list_boxed).type_tag
-            );
+        match &(*list_boxed).value {
+            TributeValue::List(list_data) => {
+                if index >= list_data.len() {
+                    panic!(
+                        "Index {} out of bounds for list of length {}",
+                        index,
+                        list_data.len()
+                    );
+                }
+        
+                if list_data.data.is_null() {
+                    panic!("List data is null");
+                }
+        
+                let element = list_data.get_unchecked(index);
+                if !element.is_null() {
+                    (*element).retain(); // Caller owns a reference
+                }
+                element
+            }
+            _ => panic!("Type error: expected List, got different type"),
         }
-
-        let list_data = &(*list_boxed).value.list;
-        if index >= list_data.len() {
-            panic!(
-                "Index {} out of bounds for list of length {}",
-                index,
-                list_data.len()
-            );
-        }
-
-        if list_data.data.is_null() {
-            panic!("List data is null");
-        }
-
-        let element = list_data.get_unchecked(index);
-        if !element.is_null() {
-            (*element).retain(); // Caller owns a reference
-        }
-        element
     }
 }
 
@@ -733,37 +727,34 @@ pub unsafe extern "C" fn tribute_list_set(
             panic!("Attempted to modify null list");
         }
 
-        if (*list_boxed).type_tag != TributeType::List {
-            panic!(
-                "Type error: expected List, got {:?}",
-                (*list_boxed).type_tag
-            );
+        match &mut (*list_boxed).value {
+            TributeValue::List(list_data) => {
+                if index >= list_data.len() {
+                    panic!(
+                        "Index {} out of bounds for list of length {}",
+                        index,
+                        list_data.len()
+                    );
+                }
+        
+                if list_data.data.is_null() {
+                    panic!("List data is null");
+                }
+        
+                // Release old value
+                let old_element = list_data.get_unchecked(index);
+                if !old_element.is_null() {
+                    (*old_element).release();
+                }
+        
+                // Set new value and retain it
+                if !value.is_null() {
+                    (*value).retain();
+                }
+                list_data.set_unchecked(index, value);
+            }
+            _ => panic!("Type error: expected List, got different type"),
         }
-
-        let list_data = &mut (*list_boxed).value.list;
-        if index >= list_data.len() {
-            panic!(
-                "Index {} out of bounds for list of length {}",
-                index,
-                list_data.len()
-            );
-        }
-
-        if list_data.data.is_null() {
-            panic!("List data is null");
-        }
-
-        // Release old value
-        let old_element = list_data.get_unchecked(index);
-        if !old_element.is_null() {
-            (*old_element).release();
-        }
-
-        // Set new value and retain it
-        if !value.is_null() {
-            (*value).retain();
-        }
-        list_data.set_unchecked(index, value);
     }
 }
 
@@ -781,21 +772,17 @@ pub unsafe extern "C" fn tribute_list_push(
             panic!("Attempted to push to null list");
         }
 
-        if (*list_boxed).type_tag != TributeType::List {
-            panic!(
-                "Type error: expected List, got {:?}",
-                (*list_boxed).type_tag
-            );
+        match &mut (*list_boxed).value {
+            TributeValue::List(list_data) => {
+                // Retain the value before pushing
+                if !value.is_null() {
+                    (*value).retain();
+                }
+        
+                list_data.push(value);
+            }
+            _ => panic!("Type error: expected List, got different type"),
         }
-
-        let list_data = &mut (*list_boxed).value.list;
-
-        // Retain the value before pushing
-        if !value.is_null() {
-            (*value).retain();
-        }
-
-        list_data.push(value);
     }
 }
 
@@ -810,15 +797,10 @@ pub unsafe extern "C" fn tribute_list_pop(list_boxed: *mut TributeBoxed) -> *mut
             panic!("Attempted to pop from null list");
         }
 
-        if (*list_boxed).type_tag != TributeType::List {
-            panic!(
-                "Type error: expected List, got {:?}",
-                (*list_boxed).type_tag
-            );
+        match &mut (*list_boxed).value {
+            TributeValue::List(list_data) => list_data.pop(),
+            _ => panic!("Type error: expected List, got different type"),
         }
-
-        let list_data = &mut (*list_boxed).value.list;
-        list_data.pop()
     }
 }
 
@@ -834,15 +816,14 @@ pub unsafe extern "C" fn tribute_print_boxed(boxed: *mut TributeBoxed) {
             return;
         }
 
-        match (*boxed).type_tag {
-            TributeType::Number => {
-                println!("{}", (*boxed).value.number);
+        match &(*boxed).value {
+            TributeValue::Number(n) => {
+                println!("{}", n);
             }
-            TributeType::Boolean => {
-                println!("{}", (*boxed).value.boolean);
+            TributeValue::Boolean(b) => {
+                println!("{}", b);
             }
-            TributeType::String => {
-                let string = (*boxed).value.string;
+            TributeValue::String(string) => {
                 if !string.data.is_null() {
                     let slice = core::slice::from_raw_parts(string.data, string.length);
                     if let Ok(_s) = core::str::from_utf8(slice) {
@@ -854,8 +835,7 @@ pub unsafe extern "C" fn tribute_print_boxed(boxed: *mut TributeBoxed) {
                     println!("[null string]");
                 }
             }
-            TributeType::List => {
-                let list_data = &(*boxed).value.list;
+            TributeValue::List(list_data) => {
                 if list_data.data.is_null() {
                     println!("[]");
                 } else {
@@ -869,11 +849,11 @@ pub unsafe extern "C" fn tribute_print_boxed(boxed: *mut TributeBoxed) {
                             print!("nil");
                         } else {
                             // Recursively print element (without releasing it)
-                            match (*element).type_tag {
-                                TributeType::Number => print!("{}", (*element).value.number),
-                                TributeType::Boolean => print!("{}", (*element).value.boolean),
-                                TributeType::String => print!("[string]"),
-                                TributeType::Nil => print!("nil"),
+                            match &(*element).value {
+                                TributeValue::Number(n) => print!("{}", n),
+                                TributeValue::Boolean(b) => print!("{}", b),
+                                TributeValue::String(_) => print!("[string]"),
+                                TributeValue::Nil => print!("nil"),
                                 _ => print!("[nested]"),
                             }
                         }
@@ -881,10 +861,10 @@ pub unsafe extern "C" fn tribute_print_boxed(boxed: *mut TributeBoxed) {
                     println!("]");
                 }
             }
-            TributeType::Nil => {
+            TributeValue::Nil => {
                 println!("nil");
             }
-            TributeType::Function => {
+            TributeValue::Function(_) => {
                 println!("[function]");
             }
         }
@@ -902,15 +882,19 @@ mod tests {
         unsafe {
             // Create a test string
             let test_str = "Hello, World!";
-            let data = test_str.as_bytes().as_ptr() as *mut u8;
             let length = test_str.len();
+            
+            // Allocate memory and copy the string data
+            let layout = Layout::from_size_align(length, 1).unwrap();
+            let data = alloc(layout);
+            ptr::copy_nonoverlapping(test_str.as_ptr(), data, length);
 
             // Box the string
             let boxed = tribute_box_string(data, length);
             assert!(!boxed.is_null());
 
             // Check type
-            assert_eq!(tribute_get_type(boxed), TributeType::String as u32);
+            assert_eq!(tribute_get_type(boxed), TributeValue::TYPE_STRING);
 
             // Unbox the string
             let mut out_length = 0;
@@ -938,7 +922,7 @@ mod tests {
             assert!(!boxed.is_null());
 
             // Check type
-            assert_eq!(tribute_get_type(boxed), TributeType::Number as u32);
+            assert_eq!(tribute_get_type(boxed), TributeValue::TYPE_NUMBER);
 
             // Unbox the number
             let unboxed = tribute_unbox_number(boxed);
@@ -957,7 +941,7 @@ mod tests {
             assert!(!list.is_null());
 
             // Check type
-            assert_eq!(tribute_get_type(list), TributeType::List as u32);
+            assert_eq!(tribute_get_type(list), TributeValue::TYPE_LIST);
 
             // Check initial length
             assert_eq!(tribute_list_length(list), 0);
