@@ -119,3 +119,106 @@ pub fn generate_mlir_function_op<'a>(
         location,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hir_to_mlir::types::MlirOperation;
+    use melior::{
+        Context,
+        dialect::DialectRegistry,
+        utility::register_all_dialects,
+        ir::{BlockLike, Location, operation::OperationLike, RegionLike},
+    };
+    use tribute_ast::Identifier;
+
+    fn setup_test_context() -> Context {
+        let registry = DialectRegistry::new();
+        register_all_dialects(&registry);
+        
+        let context = Context::new();
+        context.append_dialect_registry(&registry);
+        context.load_all_available_dialects();
+        
+        context
+    }
+
+    #[test]
+    fn test_generate_function_body_with_operations() {
+        let context = setup_test_context();
+        let location = Location::unknown(&context);
+        let block = Block::new(&[]);
+        
+        let operations = vec![
+            MlirOperation::BoxNumber { value: 42 },
+            MlirOperation::BoxString { value: "test".to_string() },
+            MlirOperation::Return { value: Some("result".to_string()) },
+        ];
+        
+        let result = generate_function_body(&operations, &context, location, &block);
+        
+        // Should return the last boxed value name
+        assert_eq!(result, Some("result_2".to_string()));
+        
+        // Block should have operations
+        assert!(block.first_operation().is_some());
+    }
+
+    #[test]
+    fn test_generate_function_body_empty() {
+        let context = setup_test_context();
+        let location = Location::unknown(&context);
+        let block = Block::new(&[]);
+        
+        let operations = vec![];
+        
+        let result = generate_function_body(&operations, &context, location, &block);
+        
+        // Should return None for empty body
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_generate_mlir_function_op_simple() {
+        let context = setup_test_context();
+        let location = Location::unknown(&context);
+        
+        let name = "test_function";
+        let params: Vec<Identifier> = vec!["x".to_string(), "y".to_string()];
+        let operations = vec![
+            MlirOperation::BoxNumber { value: 10 },
+            MlirOperation::Return { value: Some("result".to_string()) },
+        ];
+        
+        let func_op = generate_mlir_function_op(name, &params, &operations, &context, location);
+        
+        // Verify function has a region with a block
+        let region = func_op.region(0);
+        assert!(region.is_ok(), "Function should have a region");
+        
+        let region = region.unwrap();
+        assert!(region.first_block().is_some(), "Region should have a block");
+    }
+
+    #[test]
+    fn test_generate_mlir_function_op_no_params() {
+        let context = setup_test_context();
+        let location = Location::unknown(&context);
+        
+        let name = "main";
+        let params: Vec<Identifier> = vec![];
+        let operations = vec![
+            MlirOperation::BoxString { value: "Hello!".to_string() },
+            MlirOperation::Call { 
+                func: "print_line".to_string(), 
+                args: vec!["string_arg".to_string()] 
+            },
+        ];
+        
+        let func_op = generate_mlir_function_op(name, &params, &operations, &context, location);
+        
+        // Verify the function operation was created successfully
+        let num_regions = func_op.regions().count();
+        assert_eq!(num_regions, 1, "Function should have exactly one region");
+    }
+}
