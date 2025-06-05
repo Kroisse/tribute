@@ -1,3 +1,5 @@
+#![warn(clippy::all)]
+
 //! Tribute Runtime Library
 //!
 //! This library provides the runtime support for Tribute programs,

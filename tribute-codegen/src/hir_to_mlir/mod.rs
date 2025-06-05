@@ -7,7 +7,7 @@ pub mod expression;
 
 use crate::error::Result;
 use melior::{
-    ir::{BlockLike, Location, Module},
+    ir::{Location, Module},
     Context,
 };
 use tribute_hir::HirProgram;

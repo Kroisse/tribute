@@ -1,3 +1,5 @@
+#![warn(clippy::all)]
+
 extern "C" {
     fn tree_sitter_tribute() -> tree_sitter::Language;
 }

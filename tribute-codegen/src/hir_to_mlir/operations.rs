@@ -340,7 +340,7 @@ pub fn generate_builtin_function_call(
             let result_name = format!("eq_result_{}", index);
             println!("        -> MLIR: %{} = call @tribute_eq_boxed(ptr %{}, ptr %{})", 
                      result_name, 
-                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.first().unwrap_or(&"arg0".to_string()),
                      args.get(1).unwrap_or(&"arg1".to_string()));
         }
         "<" => {
@@ -348,7 +348,7 @@ pub fn generate_builtin_function_call(
             let result_name = format!("lt_result_{}", index);
             println!("        -> MLIR: %{} = call @tribute_lt_boxed(ptr %{}, ptr %{})", 
                      result_name, 
-                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.first().unwrap_or(&"arg0".to_string()),
                      args.get(1).unwrap_or(&"arg1".to_string()));
         }
         ">" => {
@@ -356,7 +356,7 @@ pub fn generate_builtin_function_call(
             let result_name = format!("gt_result_{}", index);
             println!("        -> MLIR: %{} = call @tribute_gt_boxed(ptr %{}, ptr %{})", 
                      result_name, 
-                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.first().unwrap_or(&"arg0".to_string()),
                      args.get(1).unwrap_or(&"arg1".to_string()));
         }
         "<=" => {
@@ -364,7 +364,7 @@ pub fn generate_builtin_function_call(
             let result_name = format!("le_result_{}", index);
             println!("        -> MLIR: %{} = call @tribute_le_boxed(ptr %{}, ptr %{})", 
                      result_name, 
-                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.first().unwrap_or(&"arg0".to_string()),
                      args.get(1).unwrap_or(&"arg1".to_string()));
         }
         ">=" => {
@@ -372,7 +372,7 @@ pub fn generate_builtin_function_call(
             let result_name = format!("ge_result_{}", index);
             println!("        -> MLIR: %{} = call @tribute_ge_boxed(ptr %{}, ptr %{})", 
                      result_name, 
-                     args.get(0).unwrap_or(&"arg0".to_string()),
+                     args.first().unwrap_or(&"arg0".to_string()),
                      args.get(1).unwrap_or(&"arg1".to_string()));
         }
         "print_line" => {

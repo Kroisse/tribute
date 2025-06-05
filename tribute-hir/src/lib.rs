@@ -1,3 +1,5 @@
+#![warn(clippy::all)]
+
 //! Tribute High-level Intermediate Representation (HIR)
 //!
 //! This crate provides a more structured intermediate representation for Tribute

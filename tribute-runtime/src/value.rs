@@ -120,6 +120,11 @@ pub extern "C" fn tribute_box_nil() -> *mut TributeBoxed {
 }
 
 /// Box a function value
+///
+/// # Safety
+/// - `code_ptr` must be a valid pointer to executable code
+/// - `env_ptr` must be null or a valid pointer to a boxed environment
+/// - The caller must ensure proper memory management of the returned pointer
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_box_function(
     code_ptr: *mut u8,

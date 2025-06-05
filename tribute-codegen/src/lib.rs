@@ -1,3 +1,5 @@
+#![warn(clippy::all)]
+
 //! Tribute Programming Language Code Generator
 //!
 //! This crate provides code generation functionality for the Tribute programming language,

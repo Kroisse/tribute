@@ -17,7 +17,7 @@
 extern crate tribute;
 
 use clap::{Arg, ArgAction, Command};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tribute::{parse_with_database, TributeDatabaseImpl, eval_expr, Environment, Value};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -129,7 +129,7 @@ fn interpret_program(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Compiles a Tribute program to a native binary.
-fn compile_program(input_path: &PathBuf, output_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn compile_program(input_path: &Path, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     use tribute_codegen::TributeCodegen;
     
     println!("Compiling {} to {}...", input_path.display(), output_path.display());

@@ -1,7 +1,8 @@
+#![warn(clippy::all)]
+
 pub mod builtins;
 pub mod eval;
 
-use salsa::Database as _;
 use std::path::Path;
 
 pub use tribute_ast::{
