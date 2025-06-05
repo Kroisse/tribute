@@ -22,7 +22,19 @@ pub type Spanned<T> = (T, Span);
 
 pub type Identifier = String;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[salsa::tracked]
+pub struct Program<'db> {
+    #[tracked]
+    #[return_ref]
+    pub items: Vec<Item<'db>>,
+}
+
+#[salsa::tracked]
+pub struct Item<'db> {
+    pub expr: Spanned<Expr>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Expr {
     Number(i64),
     String(String),
@@ -38,11 +50,12 @@ impl std::fmt::Display for Expr {
             Expr::Identifier(s) => f.write_str(s),
             Expr::List(exprs) => {
                 f.write_str("(")?;
-                for (i, expr) in exprs.iter().enumerate() {
+                for (i, (expr, _span)) in exprs.iter().enumerate() {
                     if i > 0 {
                         f.write_str(" ")?;
                     }
-                    write!(f, "{}", expr.0)?;
+                    // This would require database access, so we'll implement it differently
+                    write!(f, "{}", expr)?;
                 }
                 f.write_str(")")
             }

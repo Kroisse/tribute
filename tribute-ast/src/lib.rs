@@ -3,9 +3,11 @@
 //! This crate provides the core data structures and parsing logic for the Tribute language.
 
 pub mod ast;
-pub mod parser;
 pub mod database;
+pub mod parser;
 
 pub use ast::*;
-pub use parser::*;
 pub use database::*;
+pub use parser::*;
+
+pub use salsa::Database as Db;

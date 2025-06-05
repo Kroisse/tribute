@@ -1,6 +1,6 @@
 use crate::{
-    ast::{Expr, SimpleSpan},
-    parser::TributeParser,
+    ast::SimpleSpan,
+    parser::TributeParser, Item, Program,
 };
 use salsa::Accumulator;
 use std::path::{Path, PathBuf};
@@ -14,24 +14,12 @@ pub struct TributeDatabaseImpl {
 #[salsa::db]
 impl salsa::Database for TributeDatabaseImpl {}
 
-#[salsa::input]
+#[salsa::input(debug)]
 pub struct SourceFile {
     #[return_ref]
     pub path: PathBuf,
     #[return_ref]
     pub text: String,
-}
-
-#[salsa::tracked]
-pub struct Program<'db> {
-    #[return_ref]
-    pub expressions: Vec<TrackedExpression<'db>>,
-}
-
-#[salsa::tracked]
-pub struct TrackedExpression<'db> {
-    pub expr: Expr,
-    pub span: SimpleSpan,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -88,7 +76,7 @@ pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: SourceFile) 
     let expressions = match parser.parse(&source.text(db)) {
         Ok(exprs) => exprs
             .into_iter()
-            .map(|(expr, span)| TrackedExpression::new(db, expr, span))
+            .map(|(expr, span)| Item::new(db, (expr, span)))
             .collect(),
         Err(e) => {
             Diagnostic {
@@ -115,7 +103,7 @@ pub fn diagnostics<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Vec
         .collect()
 }
 
-pub fn parse_with_database(path: &Path, text: &str) -> (Vec<(Expr, SimpleSpan)>, Vec<Diagnostic>) {
+pub fn parse_with_database(path: &Path, text: &str) -> (Vec<(crate::ast::Expr, SimpleSpan)>, Vec<Diagnostic>) {
     let db = TributeDatabaseImpl::default();
     let source = SourceFile::new(&db, path.to_path_buf(), text.to_string());
 
@@ -123,10 +111,24 @@ pub fn parse_with_database(path: &Path, text: &str) -> (Vec<(Expr, SimpleSpan)>,
     let diagnostics = diagnostics(&db, source);
 
     let expressions = program
-        .expressions(&db)
+        .items(&db)
         .iter()
-        .map(|tracked| (tracked.expr(&db).clone(), tracked.span(&db)))
+        .map(|item| item.expr(&db).clone())
         .collect();
 
     (expressions, diagnostics)
+}
+
+// Note: This function cannot return Salsa tracked structs directly
+// Use TributeDatabaseImpl::default().attach(|db| { ... }) pattern instead
+pub fn parse_with_database_attachment<T>(
+    path: &Path,
+    text: &str,
+    f: impl for<'db> FnOnce(&'db TributeDatabaseImpl, Program<'db>, Vec<Diagnostic>) -> T,
+) -> T {
+    let db = TributeDatabaseImpl::default();
+    let source = SourceFile::new(&db, path.to_path_buf(), text.to_string());
+    let program = parse_source_file(&db, source);
+    let diagnostics = diagnostics(&db, source);
+    f(&db, program, diagnostics)
 }

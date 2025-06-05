@@ -1,4 +1,4 @@
-use insta::assert_ron_snapshot;
+use insta::assert_debug_snapshot;
 use salsa::Setter;
 use std::path::Path;
 use tribute::{diagnostics, parse, parse_source_file, SourceFile, TributeDatabaseImpl};
@@ -18,7 +18,7 @@ mod tests {
         let path = Path::new("lang-examples/hello.trb");
         let ast = parse_file(path);
 
-        assert_ron_snapshot!(ast);
+        assert_debug_snapshot!(ast);
     }
 
     #[test]
@@ -26,7 +26,7 @@ mod tests {
         let path = Path::new("lang-examples/calc.trb");
         let ast = parse_file(path);
 
-        assert_ron_snapshot!(ast);
+        assert_debug_snapshot!(ast);
     }
 
     #[test]
@@ -42,9 +42,9 @@ mod tests {
 
         // Convert to the same format for comparison
         let expressions: Vec<(tribute::ast::Expr, tribute::ast::SimpleSpan)> = program
-            .expressions(&db)
+            .items(&db)
             .iter()
-            .map(|tracked| (tracked.expr(&db).clone(), tracked.span(&db)))
+            .map(|item| item.expr(&db).clone())
             .collect();
 
         // Should have no diagnostics for valid file
@@ -54,7 +54,7 @@ mod tests {
         let legacy_ast = parse_file(path);
         assert_eq!(expressions, legacy_ast);
 
-        assert_ron_snapshot!("salsa_hello", expressions);
+        assert_debug_snapshot!("salsa_hello", expressions);
     }
 
     #[test]
@@ -64,16 +64,16 @@ mod tests {
 
         // First parse
         let program1 = parse_source_file(&db, source_file);
-        assert_eq!(program1.expressions(&db).len(), 1);
-        let expr1_str = format!("{}", program1.expressions(&db)[0].expr(&db));
+        assert_eq!(program1.items(&db).len(), 1);
+        let expr1_str = format!("{}", program1.items(&db)[0].expr(&db).0);
 
         // Modify source (simulating incremental computation)
         source_file.set_text(&mut db).to("(+ 1 2 3)".to_string());
 
         // Parse again - should recompute
         let program2 = parse_source_file(&db, source_file);
-        assert_eq!(program2.expressions(&db).len(), 1);
-        let expr2_str = format!("{}", program2.expressions(&db)[0].expr(&db));
+        assert_eq!(program2.items(&db).len(), 1);
+        let expr2_str = format!("{}", program2.items(&db)[0].expr(&db).0);
 
         // Verify content changed
         assert_ne!(expr1_str, expr2_str);

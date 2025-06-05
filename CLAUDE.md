@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Tribute is a Lisp-like programming language interpreter written in Rust. The project uses Tree-sitter for parsing and is organized as a Cargo workspace with two main packages: the core interpreter and the Tree-sitter grammar definition.
 
+## Commit Guidelines
+
+- Please follow the Conventional Commit format for commit messages.
+
 ## Common Commands
 
 ### Building and Testing
@@ -47,7 +51,7 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 
 ### Core Modules
 - **`src/ast.rs`**: AST definitions (`Expr` enum, `SimpleSpan` for source locations)
-- **`src/parser.rs`**: `TributeParser` wrapper around Tree-sitter 
+- **`src/parser.rs`**: `TributeParser` wrapper around Tree-sitter
 - **`src/eval.rs`**: Environment-based evaluator with lexical scoping
 - **`src/lib.rs`**: Main API exposing `parse()` function
 
@@ -76,7 +80,7 @@ The project recently migrated from Chumsky to Tree-sitter. The `TributeParser` i
 
 ### Dependencies
 - **`tree-sitter`**: Core parsing infrastructure
-- **`insta`**: Snapshot testing framework  
+- **`insta`**: Snapshot testing framework
 - **`salsa`**: Incremental computation (likely for future IDE features)
 - **`serde`**: Serialization support
 

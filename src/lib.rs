@@ -6,21 +6,13 @@ use std::path::Path;
 
 pub use tribute_ast::{
     diagnostics, parse_source_file, Diagnostic, DiagnosticSeverity, Program, SourceFile,
-    TrackedExpression, TributeDatabaseImpl, TributeParser, ast,
+    Item, TributeDatabaseImpl, TributeParser, ast,
 };
 pub use crate::eval::{eval_expr, Environment, Value};
 
 // Legacy parse function using parse_with_database (kept for compatibility)
 pub fn parse(path: &Path, source: &str) -> Vec<(ast::Expr, ast::SimpleSpan)> {
-    TributeDatabaseImpl::default().attach(|db| {
-        let (program, _diagnostics) = parse_with_database(db, path, source);
-
-        program
-            .expressions(db)
-            .iter()
-            .map(|tracked| (tracked.expr(db).clone(), tracked.span(db)))
-            .collect()
-    })
+    tribute_ast::parse_with_database(path, source).0
 }
 
 // New Salsa-based parse function

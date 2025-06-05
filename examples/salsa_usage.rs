@@ -32,12 +32,12 @@ fn basic_database_usage() {
     // Method 1: Using the convenience function
     let (program, diagnostics) = parse_with_database(&db, "example.trb", source_code);
 
-    println!("Parsed {} expressions", program.expressions(&db).len());
+    println!("Parsed {} expressions", program.items(&db).len());
     println!("Found {} diagnostics", diagnostics.len());
 
     // Display the parsed expressions
-    for (i, expr) in program.expressions(&db).iter().enumerate() {
-        println!("  Expression {}: {}", i + 1, expr.expr(&db));
+    for (i, expr) in program.items(&db).iter().enumerate() {
+        println!("  Expression {}: {}", i + 1, expr.expr(&db).0);
     }
 
     println!();
@@ -54,7 +54,7 @@ fn incremental_compilation_demo() {
     // Parse it
     println!("Initial parsing...");
     let program1 = parse_source_file(&db, source_file);
-    println!("Parsed {} expressions", program1.expressions(&db).len());
+    println!("Parsed {} expressions", program1.items(&db).len());
 
     // Modify the source file
     println!("Modifying source...");
@@ -66,7 +66,7 @@ fn incremental_compilation_demo() {
     let program2 = parse_source_file(&db, source_file);
     println!(
         "Parsed {} expressions after modification",
-        program2.expressions(&db).len()
+        program2.items(&db).len()
     );
 
     // Parse again without changes - this should use the cached result
@@ -90,7 +90,7 @@ fn error_handling_demo() {
 
     println!(
         "Parsed {} expressions from invalid code",
-        program.expressions(&db).len()
+        program.items(&db).len()
     );
 
     if !diagnostics.is_empty() {
