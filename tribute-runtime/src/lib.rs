@@ -109,72 +109,73 @@ impl TributeBoxed {
 
     /// Deallocate the boxed value and its contents
     unsafe fn deallocate(&self) {
-        // First, deallocate the contents based on type
-        match self.type_tag {
-            TributeType::String => {
-                let string_data = self.value.string;
-                if !string_data.data.is_null() {
-                    let layout = Layout::from_size_align_unchecked(
-                        string_data.capacity, 
-                        mem::align_of::<u8>()
-                    );
-                    dealloc(string_data.data, layout);
-                }
-            }
-            TributeType::Function => {
-                let func = self.value.function;
-                if !func.is_null() {
-                    // Release environment if it exists
-                    if !(*func).env_ptr.is_null() {
-                        (*(*func).env_ptr).release();
+        unsafe {
+            // First, deallocate the contents based on type
+            match self.type_tag {
+                TributeType::String => {
+                    let string_data = self.value.string;
+                    if !string_data.data.is_null() {
+                        let layout = Layout::from_size_align_unchecked(
+                            string_data.capacity, 
+                            mem::align_of::<u8>()
+                        );
+                        dealloc(string_data.data, layout);
                     }
-                    // Deallocate function struct
-                    let layout = Layout::new::<TributeFunction>();
-                    dealloc(func as *mut u8, layout);
                 }
-            }
-            TributeType::List => {
-                let list = self.value.list;
-                if !list.is_null() {
-                    let list_data = *list;
-                    
-                    // Release all elements in the array
-                    if !list_data.data.is_null() {
-                        for i in 0..list_data.length {
-                            let element = *list_data.data.add(i);
-                            if !element.is_null() {
-                                (*element).release();
+                TributeType::Function => {
+                    let func = self.value.function;
+                    if !func.is_null() {
+                        // Release environment if it exists
+                        if !(*func).env_ptr.is_null() {
+                            (*(*func).env_ptr).release();
+                        }
+                        // Deallocate function struct
+                        let layout = Layout::new::<TributeFunction>();
+                        dealloc(func as *mut u8, layout);
+                    }
+                }
+                TributeType::List => {
+                    let list = self.value.list;
+                    if !list.is_null() {
+                        let list_data = *list;
+                        
+                        // Release all elements in the array
+                        if !list_data.data.is_null() {
+                            for i in 0..list_data.length {
+                                let element = *list_data.data.add(i);
+                                if !element.is_null() {
+                                    (*element).release();
+                                }
                             }
+                            
+                            // Deallocate the data array
+                            let data_layout = Layout::from_size_align_unchecked(
+                                list_data.capacity * mem::size_of::<*mut TributeBoxed>(),
+                                mem::align_of::<*mut TributeBoxed>()
+                            );
+                            dealloc(list_data.data as *mut u8, data_layout);
                         }
                         
-                        // Deallocate the data array
-                        let data_layout = Layout::from_size_align_unchecked(
-                            list_data.capacity * mem::size_of::<*mut TributeBoxed>(),
-                            mem::align_of::<*mut TributeBoxed>()
-                        );
-                        dealloc(list_data.data as *mut u8, data_layout);
+                        // Deallocate the list structure itself
+                        let layout = Layout::new::<TributeList>();
+                        dealloc(list as *mut u8, layout);
                     }
-                    
-                    // Deallocate the list structure itself
-                    let layout = Layout::new::<TributeList>();
-                    dealloc(list as *mut u8, layout);
+                }
+                _ => {
+                    // Number, Boolean, Nil don't need special cleanup
                 }
             }
-            _ => {
-                // Number, Boolean, Nil don't need special cleanup
-            }
-        }
 
-        // Finally, deallocate the boxed value itself
-        let layout = Layout::new::<Self>();
-        dealloc(self as *const Self as *mut u8, layout);
+            // Finally, deallocate the boxed value itself
+            let layout = Layout::new::<Self>();
+            dealloc(self as *const Self as *mut u8, layout);
+        }
     }
 }
 
 /// C-compatible functions for MLIR integration
-
 /// Box a number value
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tribute_box_number(value: i64) -> *mut TributeBoxed {
     let boxed = TributeBoxed::new(
         TributeType::Number,
@@ -184,7 +185,7 @@ pub extern "C" fn tribute_box_number(value: i64) -> *mut TributeBoxed {
 }
 
 /// Box a string value (takes ownership of the string data)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tribute_box_string(data: *mut u8, length: usize) -> *mut TributeBoxed {
     let string = TributeString {
         data,
@@ -200,7 +201,7 @@ pub extern "C" fn tribute_box_string(data: *mut u8, length: usize) -> *mut Tribu
 }
 
 /// Box a boolean value
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tribute_box_boolean(value: bool) -> *mut TributeBoxed {
     let boxed = TributeBoxed::new(
         TributeType::Boolean,
@@ -210,7 +211,7 @@ pub extern "C" fn tribute_box_boolean(value: bool) -> *mut TributeBoxed {
 }
 
 /// Box a nil value
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tribute_box_nil() -> *mut TributeBoxed {
     let boxed = TributeBoxed::new(
         TributeType::Nil,
@@ -220,7 +221,7 @@ pub extern "C" fn tribute_box_nil() -> *mut TributeBoxed {
 }
 
 /// Create an empty list with initial capacity
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tribute_box_list_empty(initial_capacity: usize) -> *mut TributeBoxed {
     let capacity = if initial_capacity == 0 { 4 } else { initial_capacity };
     
@@ -267,18 +268,21 @@ pub extern "C" fn tribute_box_list_empty(initial_capacity: usize) -> *mut Tribut
 }
 
 /// Create a list from an array of boxed values
-#[no_mangle]
-pub extern "C" fn tribute_box_list_from_array(
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid arrays.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_box_list_from_array(
     elements: *mut *mut TributeBoxed, 
     count: usize
 ) -> *mut TributeBoxed {
-    let list_boxed = tribute_box_list_empty(count);
-    
-    if count == 0 {
-        return list_boxed;
-    }
-    
     unsafe {
+        let list_boxed = tribute_box_list_empty(count);
+        
+        if count == 0 {
+            return list_boxed;
+        }
+        
         let list = (*list_boxed).value.list;
         let list_data = &mut *list;
         
@@ -292,19 +296,22 @@ pub extern "C" fn tribute_box_list_from_array(
         }
         
         list_data.length = count;
+        
+        list_boxed
     }
-    
-    list_boxed
 }
 
 /// Unbox a number (with type checking)
-#[no_mangle]
-pub extern "C" fn tribute_unbox_number(boxed: *mut TributeBoxed) -> i64 {
-    if boxed.is_null() {
-        panic!("Attempted to unbox null pointer");
-    }
-    
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_unbox_number(boxed: *mut TributeBoxed) -> i64 {
     unsafe {
+        if boxed.is_null() {
+            panic!("Attempted to unbox null pointer");
+        }
+        
         if (*boxed).type_tag != TributeType::Number {
             panic!("Type error: expected Number, got {:?}", (*boxed).type_tag);
         }
@@ -313,13 +320,16 @@ pub extern "C" fn tribute_unbox_number(boxed: *mut TributeBoxed) -> i64 {
 }
 
 /// Unbox a string (returns pointer to string data and length)
-#[no_mangle]
-pub extern "C" fn tribute_unbox_string(boxed: *mut TributeBoxed, length_out: *mut usize) -> *mut u8 {
-    if boxed.is_null() {
-        panic!("Attempted to unbox null pointer");
-    }
-    
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_unbox_string(boxed: *mut TributeBoxed, length_out: *mut usize) -> *mut u8 {
     unsafe {
+        if boxed.is_null() {
+            panic!("Attempted to unbox null pointer");
+        }
+        
         if (*boxed).type_tag != TributeType::String {
             panic!("Type error: expected String, got {:?}", (*boxed).type_tag);
         }
@@ -332,13 +342,16 @@ pub extern "C" fn tribute_unbox_string(boxed: *mut TributeBoxed, length_out: *mu
 }
 
 /// Unbox a boolean
-#[no_mangle]
-pub extern "C" fn tribute_unbox_boolean(boxed: *mut TributeBoxed) -> bool {
-    if boxed.is_null() {
-        panic!("Attempted to unbox null pointer");
-    }
-    
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_unbox_boolean(boxed: *mut TributeBoxed) -> bool {
     unsafe {
+        if boxed.is_null() {
+            panic!("Attempted to unbox null pointer");
+        }
+        
         if (*boxed).type_tag != TributeType::Boolean {
             panic!("Type error: expected Boolean, got {:?}", (*boxed).type_tag);
         }
@@ -347,121 +360,168 @@ pub extern "C" fn tribute_unbox_boolean(boxed: *mut TributeBoxed) -> bool {
 }
 
 /// Increment reference count
-#[no_mangle]
-pub extern "C" fn tribute_retain(boxed: *mut TributeBoxed) -> *mut TributeBoxed {
-    if !boxed.is_null() {
-        unsafe { (*boxed).retain(); }
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_retain(boxed: *mut TributeBoxed) -> *mut TributeBoxed {
+    unsafe {
+        if !boxed.is_null() {
+            (*boxed).retain();
+        }
+        boxed
     }
-    boxed
 }
 
 /// Decrement reference count
-#[no_mangle]
-pub extern "C" fn tribute_release(boxed: *mut TributeBoxed) {
-    if !boxed.is_null() {
-        unsafe { (*boxed).release(); }
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_release(boxed: *mut TributeBoxed) {
+    unsafe {
+        if !boxed.is_null() {
+            (*boxed).release();
+        }
     }
 }
 
 /// Get current reference count (for debugging)
-#[no_mangle]
-pub extern "C" fn tribute_get_ref_count(boxed: *mut TributeBoxed) -> u32 {
-    if boxed.is_null() {
-        return 0;
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_get_ref_count(boxed: *mut TributeBoxed) -> u32 {
+    unsafe {
+        if boxed.is_null() {
+            return 0;
+        }
+        (*boxed).ref_count.load(Ordering::Acquire)
     }
-    unsafe { (*boxed).ref_count.load(Ordering::Acquire) }
 }
 
 /// Check type of boxed value
-#[no_mangle]
-pub extern "C" fn tribute_get_type(boxed: *mut TributeBoxed) -> u32 {
-    if boxed.is_null() {
-        return TributeType::Nil as u32;
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_get_type(boxed: *mut TributeBoxed) -> u32 {
+    unsafe {
+        if boxed.is_null() {
+            return TributeType::Nil as u32;
+        }
+        (*boxed).type_tag as u32
     }
-    unsafe { (*boxed).type_tag as u32 }
 }
 
 /// Arithmetic operations on boxed values
-
 /// Add two boxed numbers
-#[no_mangle]
-pub extern "C" fn tribute_add_boxed(lhs: *mut TributeBoxed, rhs: *mut TributeBoxed) -> *mut TributeBoxed {
-    let left_val = tribute_unbox_number(lhs);
-    let right_val = tribute_unbox_number(rhs);
-    let result = left_val + right_val;
-    
-    // Release input arguments (consumed by the operation)
-    tribute_release(lhs);
-    tribute_release(rhs);
-    
-    tribute_box_number(result)
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_add_boxed(lhs: *mut TributeBoxed, rhs: *mut TributeBoxed) -> *mut TributeBoxed {
+    unsafe {
+        let left_val = tribute_unbox_number(lhs);
+        let right_val = tribute_unbox_number(rhs);
+        let result = left_val + right_val;
+        
+        // Release input arguments (consumed by the operation)
+        tribute_release(lhs);
+        tribute_release(rhs);
+        
+        tribute_box_number(result)
+    }
 }
 
 /// Subtract two boxed numbers
-#[no_mangle]
-pub extern "C" fn tribute_sub_boxed(lhs: *mut TributeBoxed, rhs: *mut TributeBoxed) -> *mut TributeBoxed {
-    let left_val = tribute_unbox_number(lhs);
-    let right_val = tribute_unbox_number(rhs);
-    let result = left_val - right_val;
-    
-    tribute_release(lhs);
-    tribute_release(rhs);
-    
-    tribute_box_number(result)
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_sub_boxed(lhs: *mut TributeBoxed, rhs: *mut TributeBoxed) -> *mut TributeBoxed {
+    unsafe {
+        let left_val = tribute_unbox_number(lhs);
+        let right_val = tribute_unbox_number(rhs);
+        let result = left_val - right_val;
+        
+        tribute_release(lhs);
+        tribute_release(rhs);
+        
+        tribute_box_number(result)
+    }
 }
 
 /// Multiply two boxed numbers
-#[no_mangle]
-pub extern "C" fn tribute_mul_boxed(lhs: *mut TributeBoxed, rhs: *mut TributeBoxed) -> *mut TributeBoxed {
-    let left_val = tribute_unbox_number(lhs);
-    let right_val = tribute_unbox_number(rhs);
-    let result = left_val * right_val;
-    
-    tribute_release(lhs);
-    tribute_release(rhs);
-    
-    tribute_box_number(result)
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_mul_boxed(lhs: *mut TributeBoxed, rhs: *mut TributeBoxed) -> *mut TributeBoxed {
+    unsafe {
+        let left_val = tribute_unbox_number(lhs);
+        let right_val = tribute_unbox_number(rhs);
+        let result = left_val * right_val;
+        
+        tribute_release(lhs);
+        tribute_release(rhs);
+        
+        tribute_box_number(result)
+    }
 }
 
 /// Divide two boxed numbers
-#[no_mangle]
-pub extern "C" fn tribute_div_boxed(lhs: *mut TributeBoxed, rhs: *mut TributeBoxed) -> *mut TributeBoxed {
-    let left_val = tribute_unbox_number(lhs);
-    let right_val = tribute_unbox_number(rhs);
-    
-    if right_val == 0 {
-        panic!("Division by zero");
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_div_boxed(lhs: *mut TributeBoxed, rhs: *mut TributeBoxed) -> *mut TributeBoxed {
+    unsafe {
+        let left_val = tribute_unbox_number(lhs);
+        let right_val = tribute_unbox_number(rhs);
+        
+        if right_val == 0 {
+            panic!("Division by zero");
+        }
+        
+        let result = left_val / right_val;
+        
+        tribute_release(lhs);
+        tribute_release(rhs);
+        
+        tribute_box_number(result)
     }
-    
-    let result = left_val / right_val;
-    
-    tribute_release(lhs);
-    tribute_release(rhs);
-    
-    tribute_box_number(result)
 }
 
 /// Compare two boxed numbers for equality
-#[no_mangle]
-pub extern "C" fn tribute_eq_boxed(lhs: *mut TributeBoxed, rhs: *mut TributeBoxed) -> *mut TributeBoxed {
-    let left_val = tribute_unbox_number(lhs);
-    let right_val = tribute_unbox_number(rhs);
-    let result = left_val == right_val;
-    
-    tribute_release(lhs);
-    tribute_release(rhs);
-    
-    tribute_box_boolean(result)
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_eq_boxed(lhs: *mut TributeBoxed, rhs: *mut TributeBoxed) -> *mut TributeBoxed {
+    unsafe {
+        let left_val = tribute_unbox_number(lhs);
+        let right_val = tribute_unbox_number(rhs);
+        let result = left_val == right_val;
+        
+        tribute_release(lhs);
+        tribute_release(rhs);
+        
+        tribute_box_boolean(result)
+    }
 }
 
 /// Get list length - O(1)
-#[no_mangle]
-pub extern "C" fn tribute_list_length(list_boxed: *mut TributeBoxed) -> usize {
-    if list_boxed.is_null() {
-        return 0;
-    }
-    
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_list_length(list_boxed: *mut TributeBoxed) -> usize {
     unsafe {
+        if list_boxed.is_null() {
+            return 0;
+        }
+        
         if (*list_boxed).type_tag != TributeType::List {
             panic!("Type error: expected List, got {:?}", (*list_boxed).type_tag);
         }
@@ -476,13 +536,16 @@ pub extern "C" fn tribute_list_length(list_boxed: *mut TributeBoxed) -> usize {
 }
 
 /// Get element at index - O(1)
-#[no_mangle]
-pub extern "C" fn tribute_list_get(list_boxed: *mut TributeBoxed, index: usize) -> *mut TributeBoxed {
-    if list_boxed.is_null() {
-        panic!("Attempted to access null list");
-    }
-    
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_list_get(list_boxed: *mut TributeBoxed, index: usize) -> *mut TributeBoxed {
     unsafe {
+        if list_boxed.is_null() {
+            panic!("Attempted to access null list");
+        }
+        
         if (*list_boxed).type_tag != TributeType::List {
             panic!("Type error: expected List, got {:?}", (*list_boxed).type_tag);
         }
@@ -506,17 +569,20 @@ pub extern "C" fn tribute_list_get(list_boxed: *mut TributeBoxed, index: usize) 
 }
 
 /// Set element at index - O(1)
-#[no_mangle]
-pub extern "C" fn tribute_list_set(
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_list_set(
     list_boxed: *mut TributeBoxed, 
     index: usize, 
     value: *mut TributeBoxed
 ) {
-    if list_boxed.is_null() {
-        panic!("Attempted to modify null list");
-    }
-    
     unsafe {
+        if list_boxed.is_null() {
+            panic!("Attempted to modify null list");
+        }
+        
         if (*list_boxed).type_tag != TributeType::List {
             panic!("Type error: expected List, got {:?}", (*list_boxed).type_tag);
         }
@@ -546,13 +612,16 @@ pub extern "C" fn tribute_list_set(
 }
 
 /// Append element to list - Amortized O(1)
-#[no_mangle]
-pub extern "C" fn tribute_list_push(list_boxed: *mut TributeBoxed, value: *mut TributeBoxed) {
-    if list_boxed.is_null() {
-        panic!("Attempted to push to null list");
-    }
-    
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_list_push(list_boxed: *mut TributeBoxed, value: *mut TributeBoxed) {
     unsafe {
+        if list_boxed.is_null() {
+            panic!("Attempted to push to null list");
+        }
+        
         if (*list_boxed).type_tag != TributeType::List {
             panic!("Type error: expected List, got {:?}", (*list_boxed).type_tag);
         }
@@ -610,13 +679,16 @@ pub extern "C" fn tribute_list_push(list_boxed: *mut TributeBoxed, value: *mut T
 }
 
 /// Pop last element from list - O(1)
-#[no_mangle]
-pub extern "C" fn tribute_list_pop(list_boxed: *mut TributeBoxed) -> *mut TributeBoxed {
-    if list_boxed.is_null() {
-        panic!("Attempted to pop from null list");
-    }
-    
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_list_pop(list_boxed: *mut TributeBoxed) -> *mut TributeBoxed {
     unsafe {
+        if list_boxed.is_null() {
+            panic!("Attempted to pop from null list");
+        }
+        
         if (*list_boxed).type_tag != TributeType::List {
             panic!("Type error: expected List, got {:?}", (*list_boxed).type_tag);
         }
@@ -641,67 +713,70 @@ pub extern "C" fn tribute_list_pop(list_boxed: *mut TributeBoxed) -> *mut Tribut
 }
 
 /// Print a boxed value (for debugging)
-#[no_mangle]
-pub extern "C" fn tribute_print_boxed(boxed: *mut TributeBoxed) {
-    if boxed.is_null() {
-        println!("nil");
-        return;
-    }
-    
+/// 
+/// # Safety
+/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tribute_print_boxed(boxed: *mut TributeBoxed) {
     unsafe {
+        if boxed.is_null() {
+            println!("nil");
+            return;
+        }
+        
         match (*boxed).type_tag {
-            TributeType::Number => {
-                println!("{}", (*boxed).value.number);
-            }
-            TributeType::Boolean => {
-                println!("{}", (*boxed).value.boolean);
-            }
-            TributeType::String => {
-                let string = (*boxed).value.string;
-                if !string.data.is_null() {
-                    let slice = core::slice::from_raw_parts(string.data, string.length);
-                    if let Ok(_s) = core::str::from_utf8(slice) {
-                        println!("[string content]");
-                    } else {
-                        println!("[invalid UTF-8 string]");
-                    }
-                } else {
-                    println!("[null string]");
+                TributeType::Number => {
+                    println!("{}", (*boxed).value.number);
                 }
-            }
-            TributeType::List => {
-                let list = (*boxed).value.list;
-                if list.is_null() {
-                    println!("[]");
-                } else {
-                    let list_data = &*list;
-                    print!("[");
-                    for i in 0..list_data.length {
-                        if i > 0 { print!(", "); }
-                        let element = *list_data.data.add(i);
-                        if element.is_null() {
-                            print!("nil");
+                TributeType::Boolean => {
+                    println!("{}", (*boxed).value.boolean);
+                }
+                TributeType::String => {
+                    let string = (*boxed).value.string;
+                    if !string.data.is_null() {
+                        let slice = core::slice::from_raw_parts(string.data, string.length);
+                        if let Ok(_s) = core::str::from_utf8(slice) {
+                            println!("[string content]");
                         } else {
-                            // Recursively print element (without releasing it)
-                            match (*element).type_tag {
-                                TributeType::Number => print!("{}", (*element).value.number),
-                                TributeType::Boolean => print!("{}", (*element).value.boolean),
-                                TributeType::String => print!("[string]"),
-                                TributeType::Nil => print!("nil"),
-                                _ => print!("[nested]"),
+                            println!("[invalid UTF-8 string]");
+                        }
+                    } else {
+                        println!("[null string]");
+                    }
+                }
+                TributeType::List => {
+                    let list = (*boxed).value.list;
+                    if list.is_null() {
+                        println!("[]");
+                    } else {
+                        let list_data = &*list;
+                        print!("[");
+                        for i in 0..list_data.length {
+                            if i > 0 { print!(", "); }
+                            let element = *list_data.data.add(i);
+                            if element.is_null() {
+                                print!("nil");
+                            } else {
+                                // Recursively print element (without releasing it)
+                                match (*element).type_tag {
+                                    TributeType::Number => print!("{}", (*element).value.number),
+                                    TributeType::Boolean => print!("{}", (*element).value.boolean),
+                                    TributeType::String => print!("[string]"),
+                                    TributeType::Nil => print!("nil"),
+                                    _ => print!("[nested]"),
+                                }
                             }
                         }
+                        println!("]");
                     }
-                    println!("]");
+                }
+                TributeType::Nil => {
+                    println!("nil");
+                }
+                TributeType::Function => {
+                    println!("[function]");
                 }
             }
-            TributeType::Nil => {
-                println!("nil");
-            }
-            TributeType::Function => {
-                println!("[function]");
-            }
-        }
     }
 }
 
