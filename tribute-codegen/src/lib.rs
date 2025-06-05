@@ -127,6 +127,22 @@ mod tests {
         // For now, we just test that it doesn't panic
         let _ = result;
     }
+    
+    #[test]
+    fn test_debug_mlir_generation() {
+        let mut codegen = TributeCodegen::new().unwrap();
+        let source = r#"(fn (main) (print_line "Hello, world!"))"#;
+        let output_path = Path::new("/tmp/test_debug_output");
+
+        println!("\n=== Debug MLIR Generation ===");
+        println!("Source: {}", source);
+        
+        let result = codegen.compile_string(source, output_path);
+        println!("Result: {:?}", result);
+        
+        // This test is specifically for debugging output
+        let _ = result;
+    }
 
     #[test]
     fn test_compile_arithmetic_function() {
@@ -137,6 +153,38 @@ mod tests {
         let result = codegen.compile_string(source, output_path);
         // This will succeed in parsing but fail in code generation (MLIR stub)
         // For now, we just test that it doesn't panic
+        let _ = result;
+    }
+    
+    #[test]
+    fn test_debug_arithmetic_mlir_generation() {
+        let mut codegen = TributeCodegen::new().unwrap();
+        let source = r#"(fn (add_numbers x y) (+ x y))"#;
+        let output_path = Path::new("/tmp/test_arithmetic_output");
+
+        println!("\n=== Debug Arithmetic MLIR Generation ===");
+        println!("Source: {}", source);
+        
+        let result = codegen.compile_string(source, output_path);
+        println!("Result: {:?}", result);
+        
+        // This test is specifically for debugging arithmetic operations
+        let _ = result;
+    }
+    
+    #[test]
+    fn test_debug_complex_arithmetic_mlir_generation() {
+        let mut codegen = TributeCodegen::new().unwrap();
+        let source = r#"(fn (complex_calc a b c) (* (+ a b) (- c 5)))"#;
+        let output_path = Path::new("/tmp/test_complex_arithmetic_output");
+
+        println!("\n=== Debug Complex Arithmetic MLIR Generation ===");
+        println!("Source: {}", source);
+        
+        let result = codegen.compile_string(source, output_path);
+        println!("Result: {:?}", result);
+        
+        // This test shows nested arithmetic operations
         let _ = result;
     }
 }
