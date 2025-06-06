@@ -1,7 +1,5 @@
-use crate::{
-    ast::SimpleSpan,
-    parser::TributeParser, Item, Program,
-};
+use crate::{ast::SimpleSpan, parser::TributeParser, Item, Program};
+use derive_builder::Builder;
 use salsa::Accumulator;
 use std::path::{Path, PathBuf};
 
@@ -22,13 +20,49 @@ pub struct SourceFile {
     pub text: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Builder, Clone, Debug, PartialEq, Eq, Hash)]
 #[salsa::accumulator]
 pub struct Diagnostic {
+    #[builder(setter(into))]
     pub message: String,
+    #[builder(default = "SimpleSpan::new(0, 0)")]
     pub span: SimpleSpan,
     pub severity: DiagnosticSeverity,
     pub phase: CompilationPhase,
+}
+
+impl Diagnostic {
+    pub fn error() -> DiagnosticBuilder {
+        let mut builder = DiagnosticBuilder::default();
+        builder.severity(DiagnosticSeverity::Error);
+        builder
+    }
+
+    pub fn warning() -> DiagnosticBuilder {
+        let mut builder = DiagnosticBuilder::default();
+        builder.severity(DiagnosticSeverity::Warning);
+        builder
+    }
+
+    pub fn info() -> DiagnosticBuilder {
+        let mut builder = DiagnosticBuilder::default();
+        builder.severity(DiagnosticSeverity::Info);
+        builder
+    }
+
+    pub fn debug() -> DiagnosticBuilder {
+        let mut builder = DiagnosticBuilder::default();
+        builder.severity(DiagnosticSeverity::Debug);
+        builder
+    }
+}
+
+impl DiagnosticBuilder {
+    pub fn accumulate(&mut self, db: &dyn crate::Db) {
+        self.build()
+            .expect("Insufficient fields to build Diagnostic")
+            .accumulate(db);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -36,6 +70,7 @@ pub enum DiagnosticSeverity {
     Error,
     Warning,
     Info,
+    Debug,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -52,6 +87,7 @@ impl std::fmt::Display for DiagnosticSeverity {
             DiagnosticSeverity::Error => write!(f, "ERROR"),
             DiagnosticSeverity::Warning => write!(f, "WARNING"),
             DiagnosticSeverity::Info => write!(f, "INFO"),
+            DiagnosticSeverity::Debug => write!(f, "DEBUG"),
         }
     }
 }
@@ -103,7 +139,10 @@ pub fn diagnostics<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Vec
         .collect()
 }
 
-pub fn parse_with_database(path: &Path, text: &str) -> (Vec<(crate::ast::Expr, SimpleSpan)>, Vec<Diagnostic>) {
+pub fn parse_with_database(
+    path: &Path,
+    text: &str,
+) -> (Vec<(crate::ast::Expr, SimpleSpan)>, Vec<Diagnostic>) {
     let db = TributeDatabaseImpl::default();
     let source = SourceFile::new(&db, path.to_path_buf(), text.to_string());
 

@@ -8,9 +8,11 @@ use melior::{
     ir::{Block, Location},
     Context,
 };
+use tribute_ast::{CompilationPhase, Db, Diagnostic};
 
 /// Generate MLIR operations for function body
 pub fn generate_function_body<'a>(
+    db: &dyn Db,
     body_ops: &[MlirOperation],
     context: &'a Context,
     location: Location<'a>,
@@ -20,19 +22,19 @@ pub fn generate_function_body<'a>(
     for (i, op) in body_ops.iter().enumerate() {
         match op {
             MlirOperation::BoxNumber { value } => {
-                generate_box_number_op(*value, i, context, location, block);
+                generate_box_number_op(db, *value, i, context, location, block);
                 last_boxed_value = Some(format!("boxed_num_{}", i));
             }
             MlirOperation::BoxString { value } => {
-                generate_box_string_op(value, i, context, location, block);
+                generate_box_string_op(db, value, i, context, location, block);
                 last_boxed_value = Some(format!("boxed_str_{}", i));
             }
             MlirOperation::Call { func, args } => {
-                generate_function_call_op(func, args, i, context, location, block);
+                generate_function_call_op(db, func, args, i, context, location, block);
                 last_boxed_value = Some(format!("call_result_{}", i));
             }
             _ => {
-                generate_other_mlir_operation(op, i, context, location, block);
+                generate_other_mlir_operation(db, op, i, context, location, block);
                 // Most operations produce a result value
                 last_boxed_value = Some(format!("result_{}", i));
             }
@@ -40,9 +42,15 @@ pub fn generate_function_body<'a>(
     }
     
     if let Some(ref last_value) = last_boxed_value {
-        println!("    Function body last result: {}", last_value);
+        Diagnostic::debug()
+            .message(format!("Function body last result: {}", last_value))
+            .phase(CompilationPhase::HirLowering)
+            .accumulate(db);
     } else {
-        println!("    Function body returns nil (no operations)");
+        Diagnostic::debug()
+            .message("Function body returns nil (no operations)")
+            .phase(CompilationPhase::HirLowering)
+            .accumulate(db);
     }
     
     last_boxed_value
@@ -50,6 +58,7 @@ pub fn generate_function_body<'a>(
 
 /// Generate a single MLIR function operation
 pub fn generate_mlir_function_op<'a>(
+    db: &dyn Db,
     name: &str,
     params: &[tribute_ast::Identifier],
     body_ops: &[MlirOperation],
@@ -65,8 +74,11 @@ pub fn generate_mlir_function_op<'a>(
         },
     };
 
-    println!("  Function: {} with {} params, {} operations", 
-             name, params.len(), body_ops.len());
+    Diagnostic::debug()
+        .message(format!("Function: {} with {} params, {} operations", 
+                         name, params.len(), body_ops.len()))
+        .phase(CompilationPhase::HirLowering)
+        .accumulate(db);
     
     // Create function type: all functions work with boxed values
     let boxed_ptr_type = IntegerType::new(context, 64); // Pointer to boxed value
@@ -83,15 +95,27 @@ pub fn generate_mlir_function_op<'a>(
             let block = Block::new(&[]);
             
             // Generate operations for function body
-            let last_result = generate_function_body(body_ops, context, location, &block);
+            let last_result = generate_function_body(db, body_ops, context, location, &block);
             
             // Add return operation for boxed values
             if let Some(ref result_value) = last_result {
-                println!("    Adding return statement to function: {}", result_value);
-                println!("      -> MLIR: return ptr %{}", result_value);
+                Diagnostic::debug()
+                    .message(format!("Adding return statement to function: {}", result_value))
+                    .phase(CompilationPhase::HirLowering)
+                    .accumulate(db);
+                Diagnostic::debug()
+                    .message(format!("MLIR: return ptr %{}", result_value))
+                    .phase(CompilationPhase::HirLowering)
+                    .accumulate(db);
             } else {
-                println!("    Adding return statement to function: nil");
-                println!("      -> MLIR: return ptr %nil_value");
+                Diagnostic::debug()
+                    .message("Adding return statement to function: nil")
+                    .phase(CompilationPhase::HirLowering)
+                    .accumulate(db);
+                Diagnostic::debug()
+                    .message("MLIR: return ptr %nil_value")
+                    .phase(CompilationPhase::HirLowering)
+                    .accumulate(db);
             }
             
             // Try to generate actual func.return operation
@@ -104,11 +128,17 @@ pub fn generate_mlir_function_op<'a>(
                 )
             })) {
                 Ok(return_op) => {
-                    println!("      SUCCESS: Created MLIR return operation");
+                    Diagnostic::debug()
+                        .message("Created MLIR return operation")
+                        .phase(CompilationPhase::HirLowering)
+                        .accumulate(db);
                     block.append_operation(return_op);
                 }
                 Err(_) => {
-                    println!("      FALLBACK: Using minimal function body without explicit return");
+                    Diagnostic::warning()
+                        .message("Using minimal function body without explicit return")
+                        .phase(CompilationPhase::HirLowering)
+                        .accumulate(db);
                 }
             }
             
@@ -130,7 +160,7 @@ mod tests {
         utility::register_all_dialects,
         ir::{BlockLike, Location, operation::OperationLike, RegionLike},
     };
-    use tribute_ast::Identifier;
+    use tribute_ast::{Identifier, TributeDatabaseImpl};
 
     fn setup_test_context() -> Context {
         let registry = DialectRegistry::new();
@@ -155,13 +185,15 @@ mod tests {
             MlirOperation::Return { value: Some("result".to_string()) },
         ];
         
-        let result = generate_function_body(&operations, &context, location, &block);
-        
-        // Should return the last boxed value name
-        assert_eq!(result, Some("result_2".to_string()));
-        
-        // Block should have operations
-        assert!(block.first_operation().is_some());
+        TributeDatabaseImpl::default().attach(|db| {
+            let result = generate_function_body(db, &operations, &context, location, &block);
+            
+            // Should return the last boxed value name
+            assert_eq!(result, Some("result_2".to_string()));
+            
+            // Block should have operations
+            assert!(block.first_operation().is_some());
+        });
     }
 
     #[test]
@@ -172,10 +204,12 @@ mod tests {
         
         let operations = vec![];
         
-        let result = generate_function_body(&operations, &context, location, &block);
-        
-        // Should return None for empty body
-        assert_eq!(result, None);
+        TributeDatabaseImpl::default().attach(|db| {
+            let result = generate_function_body(db, &operations, &context, location, &block);
+            
+            // Should return None for empty body
+            assert_eq!(result, None);
+        });
     }
 
     #[test]
@@ -190,14 +224,16 @@ mod tests {
             MlirOperation::Return { value: Some("result".to_string()) },
         ];
         
-        let func_op = generate_mlir_function_op(name, &params, &operations, &context, location);
-        
-        // Verify function has a region with a block
-        let region = func_op.region(0);
-        assert!(region.is_ok(), "Function should have a region");
-        
-        let region = region.unwrap();
-        assert!(region.first_block().is_some(), "Region should have a block");
+        TributeDatabaseImpl::default().attach(|db| {
+            let func_op = generate_mlir_function_op(db, name, &params, &operations, &context, location);
+            
+            // Verify function has a region with a block
+            let region = func_op.region(0);
+            assert!(region.is_ok(), "Function should have a region");
+            
+            let region = region.unwrap();
+            assert!(region.first_block().is_some(), "Region should have a block");
+        });
     }
 
     #[test]
@@ -215,10 +251,12 @@ mod tests {
             },
         ];
         
-        let func_op = generate_mlir_function_op(name, &params, &operations, &context, location);
-        
-        // Verify the function operation was created successfully
-        let num_regions = func_op.regions().count();
-        assert_eq!(num_regions, 1, "Function should have exactly one region");
+        TributeDatabaseImpl::default().attach(|db| {
+            let func_op = generate_mlir_function_op(db, name, &params, &operations, &context, location);
+            
+            // Verify the function operation was created successfully
+            let num_regions = func_op.regions().count();
+            assert_eq!(num_regions, 1, "Function should have exactly one region");
+        });
     }
 }

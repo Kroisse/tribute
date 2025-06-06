@@ -11,6 +11,7 @@ use melior::{
     Context,
 };
 use tribute_hir::HirProgram;
+use tribute_ast::{CompilationPhase, Db, Diagnostic};
 
 // Re-export commonly used types and functions
 pub use types::{
@@ -39,7 +40,7 @@ pub fn generate_mlir_module<'db>(db: &'db dyn salsa::Database, hir_program: HirP
 /// Convenience function to convert MlirModule to actual MLIR Module
 /// This bridges between Salsa-tracked data and MLIR API
 pub fn mlir_module_to_melior<'a>(
-    db: &dyn salsa::Database,
+    db: &dyn Db,
     mlir_module: MlirModule<'_>,
     context: &'a Context,
     location: Location<'a>,
@@ -49,20 +50,29 @@ pub fn mlir_module_to_melior<'a>(
     let module = Module::new(location);
     let functions = mlir_module.functions(db);
     
-    println!("Generating MLIR for {} functions", functions.len());
+    Diagnostic::debug()
+        .message(format!("Generating MLIR for {} functions", functions.len()))
+        .phase(CompilationPhase::HirLowering)
+        .accumulate(db);
     
     for (name, mlir_func) in functions.iter() {
         let params = mlir_func.params(db);
         let body_ops = mlir_func.body(db);
         
         // Generate MLIR function operation
-        let function_op = generate_mlir_function_op(name, &params, &body_ops, context, location);
+        let function_op = generate_mlir_function_op(db, name, &params, &body_ops, context, location);
         
         // Add function to module
         module.body().append_operation(function_op);
-        println!("    Successfully generated MLIR function: {}", name);
+        Diagnostic::debug()
+            .message(format!("Successfully generated MLIR function: {}", name))
+            .phase(CompilationPhase::HirLowering)
+            .accumulate(db);
     }
     
-    println!("Successfully generated MLIR module with {} functions", functions.len());
+    Diagnostic::debug()
+        .message(format!("Successfully generated MLIR module with {} functions", functions.len()))
+        .phase(CompilationPhase::HirLowering)
+        .accumulate(db);
     Ok(module)
 }
