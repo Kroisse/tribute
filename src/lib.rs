@@ -1,7 +1,6 @@
 pub mod builtins;
 pub mod eval;
 
-use salsa::Database as _;
 use std::path::Path;
 
 pub use tribute_ast::{
@@ -10,9 +9,16 @@ pub use tribute_ast::{
 };
 pub use crate::eval::{eval_expr, Environment, Value};
 
-// Legacy parse function using parse_with_database (kept for compatibility)
+// Legacy parse function (kept for compatibility)
 pub fn parse(path: &Path, source: &str) -> Vec<(ast::Expr, ast::SimpleSpan)> {
-    tribute_ast::parse_with_database(path, source).0
+    let db = TributeDatabaseImpl::default();
+    let (program, _) = parse_with_database(&db, path, source);
+    
+    program
+        .items(&db)
+        .iter()
+        .map(|item| item.expr(&db).clone())
+        .collect()
 }
 
 // New Salsa-based parse function
