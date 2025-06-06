@@ -9,19 +9,17 @@ use tribute_ast::{CompilationPhase, Db, Diagnostic};
 
 /// Generate MLIR operation for boxing a number
 pub fn generate_box_number_op<'a>(
-    db: Option<&dyn Db>,
+    db: &dyn Db,
     value: i64,
     _index: usize,
     context: &'a Context,
     location: Location<'a>,
     block: &Block<'a>,
 ) {
-    if let Some(db) = db {
-        Diagnostic::debug()
-            .message(format!("Creating boxed number: {}", value))
-            .phase(CompilationPhase::HirLowering)
-            .accumulate(db);
-    }
+    Diagnostic::debug()
+        .message(format!("Creating boxed number: {}", value))
+        .phase(CompilationPhase::HirLowering)
+        .accumulate(db);
 
     // Try to generate actual MLIR operations
     use melior::{
@@ -74,19 +72,17 @@ pub fn generate_box_number_op<'a>(
 
 /// Generate MLIR operation for boxing a string
 pub fn generate_box_string_op<'a>(
-    db: Option<&dyn Db>,
+    db: &dyn Db,
     value: &str,
     index: usize,
     context: &'a Context,
     location: Location<'a>,
     block: &Block<'a>,
 ) {
-    if let Some(db) = db {
-        Diagnostic::debug()
-            .message(format!("Creating boxed string: \"{}\"", value))
-            .phase(CompilationPhase::HirLowering)
-            .accumulate(db);
-    }
+    Diagnostic::debug()
+        .message(format!("Creating boxed string: \"{}\"", value))
+        .phase(CompilationPhase::HirLowering)
+        .accumulate(db);
 
     // Try to generate actual MLIR operations for string boxing
     use melior::{
@@ -121,50 +117,42 @@ pub fn generate_box_string_op<'a>(
         (length_constant, call_op)
     })) {
         Ok((length_constant, call_op)) => {
-            if let Some(db) = db {
-                Diagnostic::debug()
-                    .message(format!(
-                        "Created MLIR string length constant: {}",
-                        value.len()
-                    ))
-                    .phase(CompilationPhase::HirLowering)
-                    .accumulate(db);
-            }
+            Diagnostic::debug()
+                .message(format!(
+                    "Created MLIR string length constant: {}",
+                    value.len()
+                ))
+                .phase(CompilationPhase::HirLowering)
+                .accumulate(db);
             block.append_operation(length_constant);
             block.append_operation(call_op);
-            if let Some(db) = db {
-                Diagnostic::debug()
-                    .message("Created MLIR string boxing call")
-                    .phase(CompilationPhase::HirLowering)
-                    .accumulate(db);
-            }
+            Diagnostic::debug()
+                .message("Created MLIR string boxing call")
+                .phase(CompilationPhase::HirLowering)
+                .accumulate(db);
         }
         Err(_) => {
-            if let Some(db) = db {
-                Diagnostic::warning()
-                    .message("Using text representation for string boxing")
-                    .phase(CompilationPhase::HirLowering)
-                    .accumulate(db);
-            }
+            Diagnostic::warning()
+                .message("Using text representation for string boxing")
+                .phase(CompilationPhase::HirLowering)
+                .accumulate(db);
             let boxed_name = format!("boxed_str_{}", index);
-            if let Some(db) = db {
-                Diagnostic::debug()
-                    .message(format!(
-                        "MLIR: %{} = call @tribute_box_string(ptr @str_literal_{}, i64 {})",
-                        boxed_name,
-                        value.len(),
-                        value.len()
-                    ))
-                    .phase(CompilationPhase::HirLowering)
-                    .accumulate(db);
-            }
+            Diagnostic::debug()
+                .message(format!(
+                    "MLIR: %{} = call @tribute_box_string(ptr @str_literal_{}, i64 {})",
+                    boxed_name,
+                    value.len(),
+                    value.len()
+                ))
+                .phase(CompilationPhase::HirLowering)
+                .accumulate(db);
         }
     }
 }
 
 /// Generate MLIR operations for other operation types
 pub fn generate_other_mlir_operation<'a>(
-    db: Option<&dyn Db>,
+    db: &dyn Db,
     op: &MlirOperation,
     index: usize,
     context: &'a Context,
@@ -292,7 +280,7 @@ pub fn generate_other_mlir_operation<'a>(
 
 /// Generate MLIR operation for function calls
 pub fn generate_function_call_op<'a>(
-    db: Option<&dyn Db>,
+    db: &dyn Db,
     func_name: &str,
     args: &[String],
     index: usize,
@@ -365,7 +353,7 @@ pub fn generate_function_call_op<'a>(
 
 /// Generate MLIR operations for builtin function calls
 pub fn generate_builtin_function_call(
-    db: Option<&dyn Db>,
+    db: &dyn Db,
     func_name: &str,
     args: &[String],
     index: usize,
@@ -750,7 +738,7 @@ pub fn generate_builtin_function_call(
 
 /// Generate MLIR operations for list operations
 pub fn generate_list_operation_op<'a>(
-    db: Option<&dyn Db>,
+    db: &dyn Db,
     operation: &MlirListOperation,
     index: usize,
     context: &'a Context,
