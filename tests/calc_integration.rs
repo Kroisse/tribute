@@ -1,4 +1,4 @@
-use tribute::{eval_with_hir, Value};
+use tribute::{eval_str, Value};
 use tribute_ast::TributeDatabaseImpl;
 
 // Helper function to evaluate a calculator expression: (op a b)
@@ -6,7 +6,7 @@ fn eval_calc_expr(op: &str, a: i64, b: i64) -> i64 {
     let db = TributeDatabaseImpl::default();
     let source = format!("(fn (main) ({} {} {}))", op, a, b);
 
-    let result = eval_with_hir(&db, "test.trb", &source).unwrap();
+    let result = eval_str(&db, "test.trb", &source).unwrap();
     match result {
         Value::Number(n) => n,
         _ => panic!("Expected number result"),
@@ -46,7 +46,7 @@ fn test_division_by_zero() {
     let db = TributeDatabaseImpl::default();
     let source = "(fn (main) (/ 10 0))";
 
-    let result = eval_with_hir(&db, "test.trb", source);
+    let result = eval_str(&db, "test.trb", source);
     assert!(result.is_err(), "Division by zero should return an error");
 }
 
@@ -55,7 +55,7 @@ fn test_string_operations() {
     let db = TributeDatabaseImpl::default();
     let source = r#"(fn (main) (split " " "5 + 3"))"#;
 
-    let result = eval_with_hir(&db, "test.trb", source).unwrap();
+    let result = eval_str(&db, "test.trb", source).unwrap();
     if let Value::List(items) = result {
         assert_eq!(items.len(), 3);
         assert!(matches!(items[0], Value::String(ref s) if s == "5"));
@@ -72,17 +72,17 @@ fn test_get_function() {
 
     // Test getting first element (index 0)
     let source0 = r#"(fn (main) (get 0 (split " " "10 - 4")))"#;
-    let result = eval_with_hir(&db, "test.trb", source0).unwrap();
+    let result = eval_str(&db, "test.trb", source0).unwrap();
     assert!(matches!(result, Value::String(ref s) if s == "10"));
 
     // Test getting second element (index 1)
     let source1 = r#"(fn (main) (get 1 (split " " "10 - 4")))"#;
-    let result = eval_with_hir(&db, "test.trb", source1).unwrap();
+    let result = eval_str(&db, "test.trb", source1).unwrap();
     assert!(matches!(result, Value::String(ref s) if s == "-"));
 
     // Test getting third element (index 2)
     let source2 = r#"(fn (main) (get 2 (split " " "10 - 4")))"#;
-    let result = eval_with_hir(&db, "test.trb", source2).unwrap();
+    let result = eval_str(&db, "test.trb", source2).unwrap();
     assert!(matches!(result, Value::String(ref s) if s == "4"));
 }
 
@@ -91,7 +91,7 @@ fn test_to_number_function() {
     let db = TributeDatabaseImpl::default();
     let source = r#"(fn (main) (to_number "42"))"#;
 
-    let result = eval_with_hir(&db, "test.trb", source).unwrap();
+    let result = eval_str(&db, "test.trb", source).unwrap();
     assert!(matches!(result, Value::Number(42)));
 }
 
@@ -105,6 +105,6 @@ fn test_match_case_with_operators() {
             (case "-" (- 5 3))))
     "#;
 
-    let result = eval_with_hir(&db, "test.trb", source).unwrap();
+    let result = eval_str(&db, "test.trb", source).unwrap();
     assert!(matches!(result, Value::Number(8)));
 }

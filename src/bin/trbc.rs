@@ -1,14 +1,14 @@
 //! Tribute compiler and interpreter
 //!
 //! This is a command-line tool that can both interpret and compile Tribute programs.
-//! 
+//!
 //! # Usage
-//! 
+//!
 //! ## Interpreter mode (default)
 //! ```bash
 //! trbc program.trb
 //! ```
-//! 
+//!
 //! ## Compiler mode
 //! ```bash
 //! trbc --compile program.trb -o output_binary
@@ -18,7 +18,7 @@ extern crate tribute;
 
 use clap::{Arg, ArgAction, Command};
 use std::path::PathBuf;
-use tribute::{eval_with_hir, TributeDatabaseImpl};
+use tribute::{eval_str, TributeDatabaseImpl};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("trbc")
@@ -29,14 +29,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("Input Tribute source file")
                 .required(true)
                 .value_name("FILE")
-                .index(1)
+                .index(1),
         )
         .arg(
             Arg::new("compile")
                 .long("compile")
                 .short('c')
                 .help("Compile to native binary instead of interpreting")
-                .action(ArgAction::SetTrue)
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("output")
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .short('o')
                 .help("Output file path (required when compiling)")
                 .value_name("OUTPUT")
-                .requires("compile")
+                .requires("compile"),
         )
         .get_matches();
 
@@ -62,26 +62,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Interprets a Tribute program using HIR-based evaluation.
+/// Interprets a Tribute program
 fn interpret_program(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(path)?;
     let db = TributeDatabaseImpl::default();
-    
-    // Use HIR-based evaluation directly
-    match eval_with_hir(&db, path, &source) {
+
+    match eval_str(&db, path, &source) {
         Ok(result) => {
             // Only print non-unit results
             match result {
-                tribute::Value::Unit => {}, // Don't print unit values
+                tribute::Value::Unit => {} // Don't print unit values
                 _ => println!("{}", result),
             }
-        },
+        }
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     }
-    
+
     Ok(())
 }
-

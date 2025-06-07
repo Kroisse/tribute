@@ -1,9 +1,7 @@
 // Example showing how to use the Salsa database for the Tribute language
 
 use salsa::Setter;
-use tribute::{
-    parse_source_file, parse_with_database, SourceFile, TributeDatabaseImpl,
-};
+use tribute::{parse_source_file, parse_str, SourceFile, TributeDatabaseImpl};
 
 fn main() {
     // Example 1: Basic database usage
@@ -30,7 +28,7 @@ fn basic_database_usage() {
     "#;
 
     // Method 1: Using the convenience function
-    let (program, diagnostics) = parse_with_database(&db, "example.trb", source_code);
+    let (program, diagnostics) = parse_str(&db, "example.trb", source_code);
 
     println!("Parsed {} expressions", program.items(&db).len());
     println!("Found {} diagnostics", diagnostics.len());
@@ -85,7 +83,7 @@ fn error_handling_demo() {
     let invalid_code = "this is not valid ( syntax";
     let _source_file = SourceFile::new(&db, "invalid.trb".into(), invalid_code.to_string());
 
-    let (program, diagnostics) = parse_with_database(&db, "invalid.trb", invalid_code);
+    let (program, diagnostics) = parse_str(&db, "invalid.trb", invalid_code);
 
     println!(
         "Parsed {} expressions from invalid code",

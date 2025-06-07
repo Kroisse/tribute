@@ -60,7 +60,7 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 #### Main Crate (`tribute`)
 - **`src/eval.rs`**: HIR-based evaluator with complete function call support and lexical scoping
 - **`src/builtins.rs`**: Built-in functions (print_line, input_line)
-- **`src/lib.rs`**: Main API exposing `parse()`, `parse_with_database()`, and `eval_with_hir()` functions
+- **`src/lib.rs`**: Main API exposing `parse_str()` and `eval_str()` functions for HIR-based operations
 - **`src/bin/trbi.rs`**: Interpreter binary (uses HIR-based evaluation)
 - **`src/bin/trbc.rs`**: Compiler binary (planned)
 
@@ -110,22 +110,19 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 
 ### API Usage
 ```rust
-// Legacy API (still supported)
-let ast = tribute::parse("(print_line \"Hello\")")?;
-
-// Salsa-based API (recommended)
+// Primary API (HIR-based)
 use tribute::TributeDatabaseImpl;
 
-// For parsing and HIR lowering
-let mut db = TributeDatabaseImpl::default();
-let program = tribute::parse_with_database(&db, "program.trb", source)?;
+// For parsing
+let db = TributeDatabaseImpl::default();
+let (program, diagnostics) = tribute::parse_str(&db, "program.trb", source);
 for item in program.items(&db) {
     // Process items
 }
 
-// For HIR evaluation
+// For evaluation
 let db = TributeDatabaseImpl::default();
-match tribute::eval_with_hir(&db, "program.trb", source) {
+match tribute::eval_str(&db, "program.trb", source) {
     Ok(result) => println!("Result: {:?}", result),
     Err(e) => eprintln!("Error: {}", e),
 }
@@ -133,8 +130,8 @@ match tribute::eval_with_hir(&db, "program.trb", source) {
 // For tests (using attach pattern)
 use salsa::Database;
 TributeDatabaseImpl::default().attach(|db| {
-    let hir = parse_file_to_hir(db, path);
-    assert_debug_snapshot!(hir);
+    let result = tribute::eval_str(db, "test.trb", source);
+    assert_debug_snapshot!(result);
 });
 ```
 
@@ -147,4 +144,4 @@ When working on this codebase, pay attention to:
 - HIR evaluation is the primary and only execution path (AST evaluation has been fully replaced)
 - Use `TributeDatabaseImpl::default().attach()` pattern only for tests and snapshot testing
 - For production code, create database instances normally: `TributeDatabaseImpl::default()`
-- Maintaining compatibility with the legacy `parse()` API while preferring the database-based approach
+- Use the simplified `eval_str()` and `parse_str()` API for all HIR-based operations

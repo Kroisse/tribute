@@ -10,8 +10,8 @@ pub use tribute_ast::{
 };
 pub use tribute_hir::{compile_to_hir, lower_source_to_hir};
 
-// Parse a source file and return the program along with diagnostics
-pub fn parse_with_database<'db>(
+/// Parse a Tribute source string and return the program along with diagnostics
+pub fn parse_str<'db>(
     db: &'db dyn salsa::Database,
     path: &(impl AsRef<Path> + ?Sized),
     source: &str,
@@ -22,8 +22,8 @@ pub fn parse_with_database<'db>(
     (program, diags)
 }
 
-// HIR-based evaluation function
-pub fn eval_with_hir<'db>(
+/// Evaluate a Tribute program from a source string
+pub fn eval_str<'db>(
     db: &'db dyn salsa::Database,
     path: &(impl AsRef<Path> + ?Sized),
     source: &str,

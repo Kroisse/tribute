@@ -418,7 +418,7 @@ mod tests {
         TributeDatabaseImpl::default().attach(|db| {
             // Test simple arithmetic expression wrapped in a main function
             let source = r#"(fn (main) (+ 1 2))"#;
-            match crate::eval_with_hir(db, "test.trb", source) {
+            match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(3)) => {}
                 Ok(other) => panic!("Expected Number(3), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
@@ -431,7 +431,7 @@ mod tests {
         TributeDatabaseImpl::default().attach(|db| {
             // Test print_line builtin wrapped in a main function
             let source = r#"(fn (main) (print_line "Hello HIR"))"#;
-            match crate::eval_with_hir(db, "test.trb", source) {
+            match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Unit) => {}
                 Ok(other) => panic!("Expected Unit, got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
@@ -444,7 +444,7 @@ mod tests {
         TributeDatabaseImpl::default().attach(|db| {
             // Test nested arithmetic wrapped in a main function
             let source = r#"(fn (main) (+ (* 2 3) (/ 8 2)))"#;
-            match crate::eval_with_hir(db, "test.trb", source) {
+            match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(10)) => {}
                 Ok(other) => panic!("Expected Number(10), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
@@ -457,7 +457,7 @@ mod tests {
         TributeDatabaseImpl::default().attach(|db| {
             // Test let binding without body
             let source = r#"(fn (main) (let x 42) x)"#;
-            match crate::eval_with_hir(db, "test.trb", source) {
+            match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(42)) => {}
                 Ok(other) => panic!("Expected Number(42), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
@@ -477,7 +477,7 @@ mod tests {
                     (case _ "other")))
                 (fn (main) (test_number 0))
             "#;
-            match crate::eval_with_hir(db, "test.trb", source) {
+            match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::String(s)) if s == "zero" => {}
                 Ok(other) => panic!("Expected String(\"zero\"), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
@@ -493,7 +493,7 @@ mod tests {
                 (fn (add x y) (+ x y))
                 (fn (main) (add 10 20))
             "#;
-            match crate::eval_with_hir(db, "test.trb", source) {
+            match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(30)) => {}
                 Ok(other) => panic!("Expected Number(30), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
@@ -510,7 +510,7 @@ mod tests {
                 (fn (add_and_double x y) (double (+ x y)))
                 (fn (main) (add_and_double 5 10))
             "#;
-            match crate::eval_with_hir(db, "test.trb", source) {
+            match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(30)) => {}
                 Ok(other) => panic!("Expected Number(30), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
@@ -529,7 +529,7 @@ mod tests {
                     (case _ (* n (factorial (- n 1))))))
                 (fn (main) (factorial 5))
             "#;
-            match crate::eval_with_hir(db, "test.trb", source) {
+            match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(120)) => {}
                 Ok(other) => panic!("Expected Number(120), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),

@@ -4,7 +4,7 @@
 extern crate tribute;
 
 use std::{ffi::OsString, path::PathBuf};
-use tribute::{eval_with_hir, parse_with_database, TributeDatabaseImpl, Value};
+use tribute::{eval_str, parse_str, TributeDatabaseImpl, Value};
 
 type Error = std::io::Error;
 
@@ -14,7 +14,7 @@ fn main() -> Result<(), Error> {
 
     // Create Salsa database and parse using parse_with_database
     let db = TributeDatabaseImpl::default();
-    let (_program, diags) = parse_with_database(&db, &path, &source);
+    let (_program, diags) = parse_str(&db, &path, &source);
 
     // Display diagnostics if any
     if !diags.is_empty() {
@@ -27,8 +27,7 @@ fn main() -> Result<(), Error> {
         }
     }
 
-    // Use HIR-based evaluation
-    match eval_with_hir(&db, &path, &source) {
+    match eval_str(&db, &path, &source) {
         Ok(result) => {
             if !matches!(result, Value::Unit) {
                 println!("Result: {}", result);
