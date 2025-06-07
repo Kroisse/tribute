@@ -1,8 +1,8 @@
-use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Pattern, Literal};
-use tribute_ast::{Spanned};
 use crate::builtins;
 use crate::eval::Value;
 use std::collections::HashMap;
+use tribute_ast::Spanned;
+use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, Pattern};
 
 type Error = Box<dyn std::error::Error + 'static>;
 
@@ -55,12 +55,12 @@ pub fn eval_hir_program<'db>(
 ) -> Result<Value, Error> {
     let context = HirEvalContext { db, program };
     let functions = program.functions(db);
-    
+
     // Bind all functions to environment first
     for (name, func) in &functions {
         let func_value = Value::Fn(
             name.clone(),
-            func.params(db).iter().cloned().collect(),
+            func.params(db).to_vec(),
             vec![], // HIR functions store their body differently
         );
         env.bind(name.clone(), func_value);
@@ -92,25 +92,26 @@ pub fn eval_hir_function_body<'db>(
             func.name(db),
             params.len(),
             args.len()
-        ).into());
+        )
+        .into());
     }
 
     // Create bindings for function parameters
     let bindings: Vec<(std::string::String, Value)> = params
         .iter()
-        .zip(args.into_iter())
+        .zip(args)
         .map(|(param, value)| (param.clone(), value))
         .collect();
-    
+
     let mut child_env = env.child(bindings);
-    
+
     // Evaluate all expressions in the function body
     let body = func.body(db);
     let mut result = Value::Unit;
     for expr in body {
         result = eval_hir_expr(db, &mut child_env, expr)?;
     }
-    
+
     Ok(result)
 }
 
@@ -127,25 +128,26 @@ pub fn eval_hir_function_body_with_context<'db>(
             func.name(context.db),
             params.len(),
             args.len()
-        ).into());
+        )
+        .into());
     }
 
     // Create bindings for function parameters
     let bindings: Vec<(std::string::String, Value)> = params
         .iter()
-        .zip(args.into_iter())
+        .zip(args)
         .map(|(param, value)| (param.clone(), value))
         .collect();
-    
+
     let mut child_env = env.child(bindings);
-    
+
     // Evaluate all expressions in the function body
     let body = func.body(context.db);
     let mut result = Value::Unit;
     for expr in body {
         result = eval_hir_expr(context.db, &mut child_env, expr)?;
     }
-    
+
     Ok(result)
 }
 
@@ -157,17 +159,17 @@ pub fn eval_hir_expr<'db>(
     eval_spanned_expr(db, env, (expr.expr(db).clone(), expr.span(db)))
 }
 
-fn eval_spanned_expr<'db>(
-    db: &'db dyn salsa::Database,
+fn eval_spanned_expr(
+    db: &dyn salsa::Database,
     env: &mut HirEnvironment<'_>,
     (expr, _span): Spanned<Expr>,
 ) -> Result<Value, Error> {
     use Expr::*;
-    
+
     match expr {
         Number(n) => Ok(Value::Number(n)),
         String(s) => Ok(Value::String(s)),
-        Variable(name) => env.lookup(&name).map(|v| v.clone()),
+        Variable(name) => env.lookup(&name).cloned(),
         Call { func, args } => {
             let func_expr = eval_spanned_expr(db, env, *func)?;
             match func_expr {
@@ -177,26 +179,27 @@ fn eval_spanned_expr<'db>(
                         .map(|arg| eval_spanned_expr(db, env, arg))
                         .collect();
                     let arg_values = arg_values?;
-                    
+
                     // Create child environment with parameter bindings
                     if params.len() != arg_values.len() {
                         return Err(format!(
                             "function {} expects {} arguments, got {}",
-                            name, params.len(), arg_values.len()
-                        ).into());
+                            name,
+                            params.len(),
+                            arg_values.len()
+                        )
+                        .into());
                     }
-                    
+
                     // Check function name before consuming params
                     let is_add_function = name == "add" && params.len() == 2;
                     let is_test_number_function = name == "test_number" && params.len() == 1;
-                    
-                    let bindings: Vec<(std::string::String, Value)> = params
-                        .into_iter()
-                        .zip(arg_values.iter().cloned())
-                        .collect();
-                    
+
+                    let bindings: Vec<(std::string::String, Value)> =
+                        params.into_iter().zip(arg_values.iter().cloned()).collect();
+
                     let child_env = env.child(bindings);
-                    
+
                     // We need to find the function in the current environment and evaluate its body
                     // For now, we'll use a workaround to look up user-defined functions
                     if is_add_function {
@@ -231,10 +234,10 @@ fn eval_spanned_expr<'db>(
                 _ => Err(format!("not a function: {:?}", func_expr).into()),
             }
         }
-        Let { var, value, body } => {
+        Let { var, value } => {
             let val = eval_spanned_expr(db, env, *value)?;
-            let mut child_env = env.child(vec![(var, val)]);
-            eval_spanned_expr(db, &mut child_env, *body)
+            env.bind(var, val.clone());
+            Ok(val)
         }
         Match { expr, cases } => {
             let value = eval_spanned_expr(db, env, *expr)?;
@@ -246,9 +249,7 @@ fn eval_spanned_expr<'db>(
             }
             Err("no matching case found".into())
         }
-        Builtin { name, args } => {
-            eval_builtin_by_name(db, env, &name, args)
-        }
+        Builtin { name, args } => eval_builtin_by_name(db, env, &name, args),
         Block(exprs) => {
             let mut result = Value::Unit;
             for expr in exprs {
@@ -259,8 +260,8 @@ fn eval_spanned_expr<'db>(
     }
 }
 
-fn eval_builtin_by_name<'db>(
-    db: &'db dyn salsa::Database,
+fn eval_builtin_by_name(
+    db: &dyn salsa::Database,
     env: &mut HirEnvironment<'_>,
     name: &str,
     args: Vec<Spanned<Expr>>,
@@ -368,12 +369,12 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
                             return match_list_with_rest(values, patterns);
                         }
                     }
-                    
+
                     // Exact length matching
                     if values.len() != patterns.len() {
                         return None;
                     }
-                    
+
                     let mut bindings = Vec::new();
                     for (value, pattern) in values.iter().zip(patterns.iter()) {
                         if let Some(mut pattern_bindings) = match_pattern(value, pattern) {
@@ -394,34 +395,41 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
     }
 }
 
-fn match_list_with_rest(values: &[Value], patterns: &[Pattern]) -> Option<Vec<(std::string::String, Value)>> {
+fn match_list_with_rest(
+    values: &[Value],
+    patterns: &[Pattern],
+) -> Option<Vec<(std::string::String, Value)>> {
     if patterns.is_empty() {
         return None;
     }
-    
+
     let (rest_pattern, head_patterns) = patterns.split_last().unwrap();
-    
+
     if let Pattern::Rest(rest_name) = rest_pattern {
         // Must have at least as many values as head patterns
         if values.len() < head_patterns.len() {
             return None;
         }
-        
+
         let mut bindings = Vec::new();
-        
+
         // Match head patterns
-        for (value, pattern) in values.iter().take(head_patterns.len()).zip(head_patterns.iter()) {
+        for (value, pattern) in values
+            .iter()
+            .take(head_patterns.len())
+            .zip(head_patterns.iter())
+        {
             if let Some(mut pattern_bindings) = match_pattern(value, pattern) {
                 bindings.append(&mut pattern_bindings);
             } else {
                 return None;
             }
         }
-        
+
         // Bind rest values
         let rest_values = values[head_patterns.len()..].to_vec();
         bindings.push((rest_name.clone(), Value::List(rest_values)));
-        
+
         Some(bindings)
     } else {
         None
@@ -436,11 +444,11 @@ mod tests {
     #[test]
     fn test_hir_arithmetic() {
         let mut db = TributeDatabaseImpl::default();
-        
+
         // Test simple arithmetic expression wrapped in a main function
         let source = r#"(fn (main) (+ 1 2))"#;
         match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Number(3)) => {},
+            Ok(Value::Number(3)) => {}
             Ok(other) => panic!("Expected Number(3), got {:?}", other),
             Err(e) => panic!("HIR evaluation failed: {}", e),
         }
@@ -449,11 +457,11 @@ mod tests {
     #[test]
     fn test_hir_print_line() {
         let mut db = TributeDatabaseImpl::default();
-        
+
         // Test print_line builtin wrapped in a main function
         let source = r#"(fn (main) (print_line "Hello HIR"))"#;
         match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Unit) => {},
+            Ok(Value::Unit) => {}
             Ok(other) => panic!("Expected Unit, got {:?}", other),
             Err(e) => panic!("HIR evaluation failed: {}", e),
         }
@@ -462,11 +470,11 @@ mod tests {
     #[test]
     fn test_hir_nested_arithmetic() {
         let mut db = TributeDatabaseImpl::default();
-        
+
         // Test nested arithmetic wrapped in a main function
         let source = r#"(fn (main) (+ (* 2 3) (/ 8 2)))"#;
         match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Number(10)) => {},
+            Ok(Value::Number(10)) => {}
             Ok(other) => panic!("Expected Number(10), got {:?}", other),
             Err(e) => panic!("HIR evaluation failed: {}", e),
         }
@@ -475,11 +483,11 @@ mod tests {
     #[test]
     fn test_hir_let_binding() {
         let mut db = TributeDatabaseImpl::default();
-        
-        // Test let binding with explicit body
-        let source = r#"(fn (main) (let x 42 x))"#;
+
+        // Test let binding without body
+        let source = r#"(fn (main) (let x 42) x)"#;
         match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Number(42)) => {},
+            Ok(Value::Number(42)) => {}
             Ok(other) => panic!("Expected Number(42), got {:?}", other),
             Err(e) => panic!("HIR evaluation failed: {}", e),
         }
@@ -488,7 +496,7 @@ mod tests {
     #[test]
     fn test_hir_pattern_matching() {
         let mut db = TributeDatabaseImpl::default();
-        
+
         // Test pattern matching
         let source = r#"
             (fn (test_number n)
@@ -499,7 +507,7 @@ mod tests {
             (fn (main) (test_number 0))
         "#;
         match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::String(s)) if s == "zero" => {},
+            Ok(Value::String(s)) if s == "zero" => {}
             Ok(other) => panic!("Expected String(\"zero\"), got {:?}", other),
             Err(e) => panic!("HIR evaluation failed: {}", e),
         }
@@ -508,14 +516,14 @@ mod tests {
     #[test]
     fn test_hir_user_defined_function() {
         let mut db = TributeDatabaseImpl::default();
-        
+
         // Test user-defined function call
         let source = r#"
             (fn (add x y) (+ x y))
             (fn (main) (add 10 20))
         "#;
         match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Number(30)) => {},
+            Ok(Value::Number(30)) => {}
             Ok(other) => panic!("Expected Number(30), got {:?}", other),
             Err(e) => panic!("HIR evaluation failed: {}", e),
         }

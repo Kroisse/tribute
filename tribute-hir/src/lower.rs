@@ -183,9 +183,9 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
 }
 
 fn lower_let_binding(list: &[Spanned<AstExpr>]) -> LowerResult<Expr> {
-    if list.len() < 3 || list.len() > 4 {
+    if list.len() != 3 {
         return Err(LowerError::InvalidLetBinding(
-            "Let binding requires variable, value, and optionally body: (let var value [body])".to_string(),
+            "Let binding requires exactly variable and value: (let var value)".to_string(),
         ));
     }
 
@@ -200,15 +200,7 @@ fn lower_let_binding(list: &[Spanned<AstExpr>]) -> LowerResult<Expr> {
 
     let value = Box::new(lower_expr(&list[2])?);
 
-    let body = if list.len() == 4 {
-        // Explicit body: (let var value body)
-        Box::new(lower_expr(&list[3])?)
-    } else {
-        // No explicit body: (let var value) - return the value
-        value.clone()
-    };
-
-    Ok(Expr::Let { var, value, body })
+    Ok(Expr::Let { var, value })
 }
 
 fn lower_match_expr(list: &[Spanned<AstExpr>]) -> LowerResult<Expr> {

@@ -1,7 +1,8 @@
 // Let with Function Call Example - demonstrates let with function calls
 // - Let binding with variable access
 // - Function call using bound variable
-// - Side effects in let body
+// - Sequential statements
 
 (fn (main)
-  (let x 10 (print_line x)))
+  (let x 10)
+  (print_line x))

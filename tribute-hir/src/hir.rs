@@ -51,7 +51,6 @@ pub enum Expr {
     Let {
         var: Identifier,
         value: Box<Spanned<Expr>>,
-        body: Box<Spanned<Expr>>,
     },
 
     /// Pattern matching
@@ -112,8 +111,8 @@ impl std::fmt::Display for Expr {
                 }
                 write!(f, ")")
             }
-            Expr::Let { var, value, body } => {
-                write!(f, "(let {var} {} {})", value.0, body.0)
+            Expr::Let { var, value } => {
+                write!(f, "(let {var} {})", value.0)
             }
             Expr::Match { expr, cases } => {
                 write!(f, "(match {}", expr.0)?;
