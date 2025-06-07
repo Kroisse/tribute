@@ -1,0 +1,397 @@
+---
+source: tests/parse.rs
+expression: hir
+---
+HirProgram {
+    [salsa id]: Id(1400),
+    functions: {
+        "add": HirFunction {
+            [salsa id]: Id(1000),
+            name: "add",
+            params: [
+                "x",
+                "y",
+            ],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(c00),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "+",
+                            ),
+                            SimpleSpan {
+                                start: 262,
+                                end: 263,
+                                context: (),
+                            },
+                        ),
+                        args: [
+                            (
+                                Variable(
+                                    "x",
+                                ),
+                                SimpleSpan {
+                                    start: 264,
+                                    end: 265,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                Variable(
+                                    "y",
+                                ),
+                                SimpleSpan {
+                                    start: 266,
+                                    end: 267,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 261,
+                        end: 268,
+                        context: (),
+                    },
+                },
+            ],
+            span: SimpleSpan {
+                start: 247,
+                end: 269,
+                context: (),
+            },
+        },
+        "main": HirFunction {
+            [salsa id]: Id(1001),
+            name: "main",
+            params: [],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(c01),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 286,
+                                end: 296,
+                                context: (),
+                            },
+                        ),
+                        args: [
+                            (
+                                String(
+                                    "Testing user-defined functions:",
+                                ),
+                                SimpleSpan {
+                                    start: 297,
+                                    end: 330,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 285,
+                        end: 331,
+                        context: (),
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(c02),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 335,
+                                end: 345,
+                                context: (),
+                            },
+                        ),
+                        args: [
+                            (
+                                Call {
+                                    func: (
+                                        Variable(
+                                            "add",
+                                        ),
+                                        SimpleSpan {
+                                            start: 347,
+                                            end: 350,
+                                            context: (),
+                                        },
+                                    ),
+                                    args: [
+                                        (
+                                            Number(
+                                                10,
+                                            ),
+                                            SimpleSpan {
+                                                start: 351,
+                                                end: 353,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Number(
+                                                20,
+                                            ),
+                                            SimpleSpan {
+                                                start: 354,
+                                                end: 356,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                },
+                                SimpleSpan {
+                                    start: 346,
+                                    end: 357,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 334,
+                        end: 358,
+                        context: (),
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(c03),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 362,
+                                end: 372,
+                                context: (),
+                            },
+                        ),
+                        args: [
+                            (
+                                String(
+                                    "Testing nested arithmetic:",
+                                ),
+                                SimpleSpan {
+                                    start: 373,
+                                    end: 401,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 361,
+                        end: 402,
+                        context: (),
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(c04),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 406,
+                                end: 416,
+                                context: (),
+                            },
+                        ),
+                        args: [
+                            (
+                                Call {
+                                    func: (
+                                        Variable(
+                                            "+",
+                                        ),
+                                        SimpleSpan {
+                                            start: 418,
+                                            end: 419,
+                                            context: (),
+                                        },
+                                    ),
+                                    args: [
+                                        (
+                                            Call {
+                                                func: (
+                                                    Variable(
+                                                        "*",
+                                                    ),
+                                                    SimpleSpan {
+                                                        start: 421,
+                                                        end: 422,
+                                                        context: (),
+                                                    },
+                                                ),
+                                                args: [
+                                                    (
+                                                        Number(
+                                                            3,
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 423,
+                                                            end: 424,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                    (
+                                                        Number(
+                                                            4,
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 425,
+                                                            end: 426,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                ],
+                                            },
+                                            SimpleSpan {
+                                                start: 420,
+                                                end: 427,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Call {
+                                                func: (
+                                                    Variable(
+                                                        "/",
+                                                    ),
+                                                    SimpleSpan {
+                                                        start: 429,
+                                                        end: 430,
+                                                        context: (),
+                                                    },
+                                                ),
+                                                args: [
+                                                    (
+                                                        Number(
+                                                            15,
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 431,
+                                                            end: 433,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                    (
+                                                        Number(
+                                                            3,
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 434,
+                                                            end: 435,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                ],
+                                            },
+                                            SimpleSpan {
+                                                start: 428,
+                                                end: 436,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                },
+                                SimpleSpan {
+                                    start: 417,
+                                    end: 437,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 405,
+                        end: 438,
+                        context: (),
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(c05),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 442,
+                                end: 452,
+                                context: (),
+                            },
+                        ),
+                        args: [
+                            (
+                                String(
+                                    "Testing string operations:",
+                                ),
+                                SimpleSpan {
+                                    start: 453,
+                                    end: 481,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 441,
+                        end: 482,
+                        context: (),
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(c06),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 486,
+                                end: 496,
+                                context: (),
+                            },
+                        ),
+                        args: [
+                            (
+                                String(
+                                    "Hello, Tribute World!",
+                                ),
+                                SimpleSpan {
+                                    start: 497,
+                                    end: 520,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 485,
+                        end: 521,
+                        context: (),
+                    },
+                },
+            ],
+            span: SimpleSpan {
+                start: 271,
+                end: 522,
+                context: (),
+            },
+        },
+    },
+    main: Some(
+        "main",
+    ),
+}

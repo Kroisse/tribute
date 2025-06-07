@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use salsa::{Database as _, Setter as _};
-use tribute::{diagnostics, parse_source_file, SourceFile, TributeDatabaseImpl};
+use tribute::{parse_source_file, Diagnostic, SourceFile, TributeDatabaseImpl};
 
 #[test]
 fn test_salsa_database_examples() {
@@ -28,10 +28,10 @@ fn test_salsa_database_examples() {
         let (expr_count, diag_count) = TributeDatabaseImpl::default().attach(|db| {
             let source_file = SourceFile::new(db, filename.to_path_buf(), source_code.to_string());
             let program = parse_source_file(db, source_file);
-            let diagnostics = diagnostics(db, source_file);
+            let diagnostics = parse_source_file::accumulated::<Diagnostic>(db, source_file);
 
             // Extract data that doesn't depend on database lifetime
-            (program.expressions(db).len(), diagnostics.len())
+            (program.items(db).len(), diagnostics.len())
         });
 
         // Verify parsing results
@@ -70,16 +70,16 @@ fn test_salsa_incremental_computation_detailed() {
 
     // Initial parse
     let program1 = parse_source_file(&db, source_file);
-    assert_eq!(program1.expressions(&db).len(), 1);
-    let expr1_str = format!("{}", program1.expressions(&db)[0].expr(&db));
+    assert_eq!(program1.items(&db).len(), 1);
+    let expr1_str = format!("{}", program1.items(&db)[0].expr(&db).0);
 
     // Modify the source file
     source_file.set_text(&mut db).to("(+ 1 2 3 4)".to_string());
 
     // Parse again - should recompute
     let program2 = parse_source_file(&db, source_file);
-    assert_eq!(program2.expressions(&db).len(), 1);
-    let expr2_str = format!("{}", program2.expressions(&db)[0].expr(&db));
+    assert_eq!(program2.items(&db).len(), 1);
+    let expr2_str = format!("{}", program2.items(&db)[0].expr(&db).0);
 
     // Parse again without changes - should use cached result
     let program3 = parse_source_file(&db, source_file);
@@ -99,7 +99,7 @@ fn test_salsa_incremental_computation_detailed() {
     );
 
     // Check that cached results are the same by comparing their content
-    let expr3_str = format!("{}", program3.expressions(&db)[0].expr(&db));
+    let expr3_str = format!("{}", program3.items(&db)[0].expr(&db).0);
     assert_eq!(
         expr2_str, expr3_str,
         "Programs should be identical (cached result)"
@@ -112,9 +112,9 @@ fn test_salsa_diagnostics_collection() {
     let (valid_expr_count, valid_diag_count) = TributeDatabaseImpl::default().attach(|db| {
         let valid_source = SourceFile::new(db, "valid.trb".into(), "(+ 1 2)".to_string());
         let valid_program = parse_source_file(db, valid_source);
-        let valid_diagnostics = diagnostics(db, valid_source);
+        let valid_diagnostics = parse_source_file::accumulated::<Diagnostic>(db, valid_source);
 
-        (valid_program.expressions(db).len(), valid_diagnostics.len())
+        (valid_program.items(db).len(), valid_diagnostics.len())
     });
 
     assert_eq!(valid_expr_count, 1);
@@ -131,9 +131,9 @@ fn test_salsa_diagnostics_collection() {
             "(+ 1 2) (* 3 4) (println \"test\")".to_string(),
         );
         let multi_program = parse_source_file(db, multi_source);
-        let multi_diagnostics = diagnostics(db, multi_source);
+        let multi_diagnostics = parse_source_file::accumulated::<Diagnostic>(db, multi_source);
 
-        (multi_program.expressions(db).len(), multi_diagnostics.len())
+        (multi_program.items(db).len(), multi_diagnostics.len())
     });
 
     assert_eq!(multi_expr_count, 3);
@@ -150,16 +150,16 @@ fn test_salsa_database_isolation() {
         let source1 = SourceFile::new(db, "test1.trb".into(), "(+ 1 2)".to_string());
         let program1 = parse_source_file(db, source1);
 
-        assert_eq!(program1.expressions(db).len(), 1);
-        format!("{}", program1.expressions(db)[0].expr(db))
+        assert_eq!(program1.items(db).len(), 1);
+        format!("{}", program1.items(db)[0].expr(db).0)
     });
 
     let expr2_str = TributeDatabaseImpl::default().attach(|db| {
         let source2 = SourceFile::new(db, "test2.trb".into(), "(* 3 4)".to_string());
         let program2 = parse_source_file(db, source2);
 
-        assert_eq!(program2.expressions(db).len(), 1);
-        format!("{}", program2.expressions(db)[0].expr(db))
+        assert_eq!(program2.items(db).len(), 1);
+        format!("{}", program2.items(db)[0].expr(db).0)
     });
 
     assert_eq!(expr1_str, "(+ 1 2)");
@@ -178,15 +178,15 @@ fn test_salsa_expression_span_tracking() {
             let source_file = SourceFile::new(db, "span_test.trb".into(), source.to_string());
             let program = parse_source_file(db, source_file);
 
-            assert_eq!(program.expressions(db).len(), 1);
-            let tracked_expr = &program.expressions(db)[0];
-            let span = tracked_expr.span(db);
+            assert_eq!(program.items(db).len(), 1);
+            let tracked_expr = &program.items(db)[0];
+            let span = tracked_expr.expr(db).1;
 
             (
-                program.expressions(db).len(),
+                program.items(db).len(),
                 span.start,
                 span.end,
-                format!("{}", tracked_expr.expr(db)),
+                format!("{}", tracked_expr.expr(db).0),
             )
         });
 

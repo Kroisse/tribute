@@ -1,37 +1,12 @@
-use tribute::{eval_expr, Environment, Value};
-use tribute::ast::{Expr, SimpleSpan};
-
-type Spanned<T> = (T, SimpleSpan);
-
-const SPAN: SimpleSpan = SimpleSpan::new(0, 0);
-
-fn expr_number(n: i64) -> Spanned<Expr> {
-    (Expr::Number(n), SPAN)
-}
-
-fn expr_string(s: &str) -> Spanned<Expr> {
-    (Expr::String(s.to_string()), SPAN)
-}
-
-fn expr_ident(s: &str) -> Spanned<Expr> {
-    (Expr::Identifier(s.to_string()), SPAN)
-}
-
-fn expr_list(exprs: Vec<Spanned<Expr>>) -> Spanned<Expr> {
-    (Expr::List(exprs), SPAN)
-}
+use tribute::{eval_str, Value};
+use tribute_ast::TributeDatabaseImpl;
 
 // Helper function to evaluate a calculator expression: (op a b)
 fn eval_calc_expr(op: &str, a: i64, b: i64) -> i64 {
-    let mut env = Environment::toplevel();
+    let db = TributeDatabaseImpl::default();
+    let source = format!("(fn (main) ({} {} {}))", op, a, b);
 
-    let calc_expr = expr_list(vec![
-        expr_ident(op),
-        expr_number(a),
-        expr_number(b),
-    ]);
-
-    let result = eval_expr(&mut env, &calc_expr.0).unwrap();
+    let result = eval_str(&db, "test.trb", &source).unwrap();
     match result {
         Value::Number(n) => n,
         _ => panic!("Expected number result"),
@@ -68,30 +43,19 @@ fn test_direct_division() {
 
 #[test]
 fn test_division_by_zero() {
-    let mut env = Environment::toplevel();
+    let db = TributeDatabaseImpl::default();
+    let source = "(fn (main) (/ 10 0))";
 
-    let div_zero_expr = expr_list(vec![
-        expr_ident("/"),
-        expr_number(10),
-        expr_number(0),
-    ]);
-
-    let result = eval_expr(&mut env, &div_zero_expr.0);
+    let result = eval_str(&db, "test.trb", source);
     assert!(result.is_err(), "Division by zero should return an error");
 }
 
 #[test]
 fn test_string_operations() {
-    let mut env = Environment::toplevel();
+    let db = TributeDatabaseImpl::default();
+    let source = r#"(fn (main) (split " " "5 + 3"))"#;
 
-    // Test split function
-    let split_expr = expr_list(vec![
-        expr_ident("split"),
-        expr_string(" "),
-        expr_string("5 + 3"),
-    ]);
-
-    let result = eval_expr(&mut env, &split_expr.0).unwrap();
+    let result = eval_str(&db, "test.trb", source).unwrap();
     if let Value::List(items) = result {
         assert_eq!(items.len(), 3);
         assert!(matches!(items[0], Value::String(ref s) if s == "5"));
@@ -104,71 +68,43 @@ fn test_string_operations() {
 
 #[test]
 fn test_get_function() {
-    let mut env = Environment::toplevel();
+    let db = TributeDatabaseImpl::default();
 
-    // First create a list
-    let split_expr = expr_list(vec![
-        expr_ident("split"),
-        expr_string(" "),
-        expr_string("10 - 4"),
-    ]);
-    let list_result = eval_expr(&mut env, &split_expr.0).unwrap();
-    env.bind("test_list".to_string(), list_result);
+    // Test getting first element (index 0)
+    let source0 = r#"(fn (main) (get 0 (split " " "10 - 4")))"#;
+    let result = eval_str(&db, "test.trb", source0).unwrap();
+    assert!(matches!(result, Value::String(ref s) if s == "10"));
 
-    // Test getting each element
-    for (i, expected) in ["10", "-", "4"].iter().enumerate() {
-        let get_expr = expr_list(vec![
-            expr_ident("get"),
-            expr_number(i as i64),
-            expr_ident("test_list"),
-        ]);
+    // Test getting second element (index 1)
+    let source1 = r#"(fn (main) (get 1 (split " " "10 - 4")))"#;
+    let result = eval_str(&db, "test.trb", source1).unwrap();
+    assert!(matches!(result, Value::String(ref s) if s == "-"));
 
-        let result = eval_expr(&mut env, &get_expr.0).unwrap();
-        assert!(matches!(result, Value::String(ref s) if s == expected));
-    }
+    // Test getting third element (index 2)
+    let source2 = r#"(fn (main) (get 2 (split " " "10 - 4")))"#;
+    let result = eval_str(&db, "test.trb", source2).unwrap();
+    assert!(matches!(result, Value::String(ref s) if s == "4"));
 }
 
 #[test]
 fn test_to_number_function() {
-    let mut env = Environment::toplevel();
+    let db = TributeDatabaseImpl::default();
+    let source = r#"(fn (main) (to_number "42"))"#;
 
-    let to_num_expr = expr_list(vec![
-        expr_ident("to_number"),
-        expr_string("42"),
-    ]);
-
-    let result = eval_expr(&mut env, &to_num_expr.0).unwrap();
+    let result = eval_str(&db, "test.trb", source).unwrap();
     assert!(matches!(result, Value::Number(42)));
 }
 
 #[test]
 fn test_match_case_with_operators() {
-    let mut env = Environment::toplevel();
+    let db = TributeDatabaseImpl::default();
+    let source = r#"
+        (fn (main)
+          (match "+"
+            (case "+" (+ 5 3))
+            (case "-" (- 5 3))))
+    "#;
 
-    // Test match with "+" operator
-    let match_expr = expr_list(vec![
-        expr_ident("match"),
-        expr_string("+"),
-        expr_list(vec![
-            expr_ident("case"),
-            expr_string("+"),
-            expr_list(vec![
-                expr_ident("+"),
-                expr_number(5),
-                expr_number(3),
-            ]),
-        ]),
-        expr_list(vec![
-            expr_ident("case"),
-            expr_string("-"),
-            expr_list(vec![
-                expr_ident("-"),
-                expr_number(5),
-                expr_number(3),
-            ]),
-        ]),
-    ]);
-
-    let result = eval_expr(&mut env, &match_expr.0).unwrap();
+    let result = eval_str(&db, "test.trb", source).unwrap();
     assert!(matches!(result, Value::Number(8)));
 }

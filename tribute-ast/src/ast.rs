@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SimpleSpan {
     pub start: usize,
     pub end: usize,
@@ -22,28 +22,19 @@ pub type Spanned<T> = (T, Span);
 
 pub type Identifier = String;
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum Token<'src> {
-    Number(i64),
-    String(&'src str),
-    Ident(&'src str),
-    ParenOpen,
-    ParenClose,
+#[salsa::tracked]
+pub struct Program<'db> {
+    #[tracked]
+    #[return_ref]
+    pub items: Vec<Item<'db>>,
 }
 
-impl std::fmt::Display for Token<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Token::Number(n) => write!(f, "{}", n),
-            Token::String(s) => write!(f, "\"{}\"", s),
-            Token::Ident(s) => f.write_str(s),
-            Token::ParenOpen => f.write_str("("),
-            Token::ParenClose => f.write_str(")"),
-        }
-    }
+#[salsa::tracked]
+pub struct Item<'db> {
+    pub expr: Spanned<Expr>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Expr {
     Number(i64),
     String(String),
@@ -59,11 +50,12 @@ impl std::fmt::Display for Expr {
             Expr::Identifier(s) => f.write_str(s),
             Expr::List(exprs) => {
                 f.write_str("(")?;
-                for (i, expr) in exprs.iter().enumerate() {
+                for (i, (expr, _span)) in exprs.iter().enumerate() {
                     if i > 0 {
                         f.write_str(" ")?;
                     }
-                    write!(f, "{}", expr.0)?;
+                    // This would require database access, so we'll implement it differently
+                    write!(f, "{}", expr)?;
                 }
                 f.write_str(")")
             }

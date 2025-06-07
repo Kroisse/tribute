@@ -1,0 +1,19 @@
+// Pattern Matching Example - demonstrates advanced pattern matching
+// - Literal patterns for exact matching
+// - Variable patterns for binding
+// - Wildcard patterns
+// - List patterns (when Value::List is supported)
+// - Rest patterns for variable-length matching
+
+(fn (test_number n)
+  (match n
+    (case 0 "zero")
+    (case 1 "one") 
+    (case 2 "two")
+    (case _ "other number")))
+
+(fn (main)
+  (print_line "Testing pattern matching:")
+  (print_line (test_number 0))
+  (print_line (test_number 1))
+  (print_line (test_number 42)))

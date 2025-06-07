@@ -1,81 +1,85 @@
+//! Tribute compiler and interpreter
+//!
+//! This is a command-line tool that can both interpret and compile Tribute programs.
+//!
+//! # Usage
+//!
+//! ## Interpreter mode (default)
+//! ```bash
+//! trbc program.trb
+//! ```
+//!
+//! ## Compiler mode
+//! ```bash
+//! trbc --compile program.trb -o output_binary
+//! ```
+
 extern crate tribute;
 
-use std::{ffi::OsString, path::PathBuf};
-use tribute::{parse_with_database, TributeDatabaseImpl, eval_expr, Environment, Value};
+use clap::{Arg, ArgAction, Command};
+use std::path::PathBuf;
+use tribute::{eval_str, TributeDatabaseImpl};
 
-type Error = std::io::Error;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let matches = Command::new("trbc")
+        .version("0.1.0")
+        .about("Tribute compiler and interpreter")
+        .arg(
+            Arg::new("input")
+                .help("Input Tribute source file")
+                .required(true)
+                .value_name("FILE")
+                .index(1),
+        )
+        .arg(
+            Arg::new("compile")
+                .long("compile")
+                .short('c')
+                .help("Compile to native binary instead of interpreting")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("output")
+                .long("output")
+                .short('o')
+                .help("Output file path (required when compiling)")
+                .value_name("OUTPUT")
+                .requires("compile"),
+        )
+        .get_matches();
 
-fn main() -> Result<(), Error> {
-    let path = parse_args(std::env::args_os())?;
-    let source = std::fs::read_to_string(&path)?;
+    let input_path = PathBuf::from(matches.get_one::<String>("input").unwrap());
+    let compile_mode = matches.get_flag("compile");
 
-    // Create Salsa database and parse using parse_with_database
-    let db = TributeDatabaseImpl::default();
-    let (program, diags) = parse_with_database(&db, &path, &source);
-
-    // Display diagnostics if any
-    if !diags.is_empty() {
-        eprintln!("Diagnostics:");
-        for diagnostic in &diags {
-            eprintln!(
-                "  [{}] {} (span: {}..{})",
-                diagnostic.severity, diagnostic.message, diagnostic.span.start, diagnostic.span.end
-            );
-        }
-    }
-
-    // Execute the program
-    let mut env = Environment::toplevel();
-    
-    // Evaluate all expressions to register functions
-    for tracked_expr in program.expressions(&db).iter() {
-        if let Err(e) = eval_expr(&mut env, &tracked_expr.expr(&db)) {
-            eprintln!("Evaluation error: {}", e);
-            return Ok(());
-        }
-    }
-    
-    // Try to call main function if it exists
-    if let Ok(main_fn) = env.lookup(&"main".to_string()) {
-        match main_fn {
-            Value::Fn(_, params, body) => {
-                if params.is_empty() {
-                    let mut child_env = env.child(vec![]);
-                    for expr in body {
-                        if let Err(e) = eval_expr(&mut child_env, &expr.0) {
-                            eprintln!("Runtime error in main: {}", e);
-                            return Ok(());
-                        }
-                    }
-                } else {
-                    eprintln!("main function should not have parameters");
-                }
-            }
-            _ => {
-                eprintln!("main is not a function");
-            }
-        }
+    if compile_mode {
+        eprintln!("Error: Compilation support is not yet implemented");
+        std::process::exit(1);
     } else {
-        eprintln!("No main function found");
+        // Interpreter mode (default)
+        interpret_program(&input_path)?;
     }
 
     Ok(())
 }
 
-fn parse_args(args: impl Iterator<Item = OsString>) -> Result<PathBuf, Error> {
-    let mut args = args.skip(1);
-    let path = args.next().ok_or_else(|| {
-        Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "expected path to file to compile",
-        )
-    })?;
-    if args.next().is_some() {
-        return Err(Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "expected only one argument",
-        ));
+/// Interprets a Tribute program
+fn interpret_program(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let source = std::fs::read_to_string(path)?;
+    let db = TributeDatabaseImpl::default();
+
+    match eval_str(&db, path, &source) {
+        Ok(result) => {
+            // Only print non-unit results
+            match result {
+                tribute::Value::Unit => {} // Don't print unit values
+                _ => println!("{}", result),
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
     }
-    // convert path to PathBuf
-    Ok(PathBuf::from(path))
+
+    Ok(())
 }

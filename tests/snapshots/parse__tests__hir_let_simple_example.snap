@@ -1,0 +1,56 @@
+---
+source: tests/parse.rs
+expression: hir
+---
+HirProgram {
+    [salsa id]: Id(1400),
+    functions: {
+        "main": HirFunction {
+            [salsa id]: Id(1000),
+            name: "main",
+            params: [],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(c00),
+                    expr: Let {
+                        var: "x",
+                        value: (
+                            Number(
+                                42,
+                            ),
+                            SimpleSpan {
+                                start: 146,
+                                end: 148,
+                                context: (),
+                            },
+                        ),
+                    },
+                    span: SimpleSpan {
+                        start: 139,
+                        end: 149,
+                        context: (),
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(c01),
+                    expr: Variable(
+                        "x",
+                    ),
+                    span: SimpleSpan {
+                        start: 152,
+                        end: 153,
+                        context: (),
+                    },
+                },
+            ],
+            span: SimpleSpan {
+                start: 126,
+                end: 154,
+                context: (),
+            },
+        },
+    },
+    main: Some(
+        "main",
+    ),
+}

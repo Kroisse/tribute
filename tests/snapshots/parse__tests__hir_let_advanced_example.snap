@@ -1,0 +1,161 @@
+---
+source: tests/parse.rs
+expression: hir
+---
+HirProgram {
+    [salsa id]: Id(1400),
+    functions: {
+        "main": HirFunction {
+            [salsa id]: Id(1000),
+            name: "main",
+            params: [],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(c00),
+                    expr: Let {
+                        var: "x",
+                        value: (
+                            Number(
+                                10,
+                            ),
+                            SimpleSpan {
+                                start: 206,
+                                end: 208,
+                                context: (),
+                            },
+                        ),
+                    },
+                    span: SimpleSpan {
+                        start: 199,
+                        end: 209,
+                        context: (),
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(c01),
+                    expr: Let {
+                        var: "y",
+                        value: (
+                            Number(
+                                20,
+                            ),
+                            SimpleSpan {
+                                start: 219,
+                                end: 221,
+                                context: (),
+                            },
+                        ),
+                    },
+                    span: SimpleSpan {
+                        start: 212,
+                        end: 222,
+                        context: (),
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(c02),
+                    expr: Let {
+                        var: "sum",
+                        value: (
+                            Call {
+                                func: (
+                                    Variable(
+                                        "+",
+                                    ),
+                                    SimpleSpan {
+                                        start: 235,
+                                        end: 236,
+                                        context: (),
+                                    },
+                                ),
+                                args: [
+                                    (
+                                        Variable(
+                                            "x",
+                                        ),
+                                        SimpleSpan {
+                                            start: 237,
+                                            end: 238,
+                                            context: (),
+                                        },
+                                    ),
+                                    (
+                                        Variable(
+                                            "y",
+                                        ),
+                                        SimpleSpan {
+                                            start: 239,
+                                            end: 240,
+                                            context: (),
+                                        },
+                                    ),
+                                ],
+                            },
+                            SimpleSpan {
+                                start: 234,
+                                end: 241,
+                                context: (),
+                            },
+                        ),
+                    },
+                    span: SimpleSpan {
+                        start: 225,
+                        end: 242,
+                        context: (),
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(c03),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 246,
+                                end: 256,
+                                context: (),
+                            },
+                        ),
+                        args: [
+                            (
+                                String(
+                                    "Testing advanced let bindings:",
+                                ),
+                                SimpleSpan {
+                                    start: 257,
+                                    end: 289,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 245,
+                        end: 290,
+                        context: (),
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(c04),
+                    expr: Variable(
+                        "sum",
+                    ),
+                    span: SimpleSpan {
+                        start: 293,
+                        end: 296,
+                        context: (),
+                    },
+                },
+            ],
+            span: SimpleSpan {
+                start: 186,
+                end: 297,
+                context: (),
+            },
+        },
+    },
+    main: Some(
+        "main",
+    ),
+}

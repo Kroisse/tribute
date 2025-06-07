@@ -1,9 +1,7 @@
 // Example showing how to use the Salsa database for the Tribute language
 
 use salsa::Setter;
-use tribute::{
-    diagnostics, parse_source_file, parse_with_database, SourceFile, TributeDatabaseImpl,
-};
+use tribute::{parse_source_file, parse_str, SourceFile, TributeDatabaseImpl};
 
 fn main() {
     // Example 1: Basic database usage
@@ -30,14 +28,14 @@ fn basic_database_usage() {
     "#;
 
     // Method 1: Using the convenience function
-    let (program, diagnostics) = parse_with_database(&db, "example.trb", source_code);
+    let (program, diagnostics) = parse_str(&db, "example.trb", source_code);
 
-    println!("Parsed {} expressions", program.expressions(&db).len());
+    println!("Parsed {} expressions", program.items(&db).len());
     println!("Found {} diagnostics", diagnostics.len());
 
     // Display the parsed expressions
-    for (i, expr) in program.expressions(&db).iter().enumerate() {
-        println!("  Expression {}: {}", i + 1, expr.expr(&db));
+    for (i, expr) in program.items(&db).iter().enumerate() {
+        println!("  Expression {}: {}", i + 1, expr.expr(&db).0);
     }
 
     println!();
@@ -54,7 +52,7 @@ fn incremental_compilation_demo() {
     // Parse it
     println!("Initial parsing...");
     let program1 = parse_source_file(&db, source_file);
-    println!("Parsed {} expressions", program1.expressions(&db).len());
+    println!("Parsed {} expressions", program1.items(&db).len());
 
     // Modify the source file
     println!("Modifying source...");
@@ -66,7 +64,7 @@ fn incremental_compilation_demo() {
     let program2 = parse_source_file(&db, source_file);
     println!(
         "Parsed {} expressions after modification",
-        program2.expressions(&db).len()
+        program2.items(&db).len()
     );
 
     // Parse again without changes - this should use the cached result
@@ -83,14 +81,13 @@ fn error_handling_demo() {
 
     // Try to parse some invalid syntax
     let invalid_code = "this is not valid ( syntax";
-    let source_file = SourceFile::new(&db, "invalid.trb".into(), invalid_code.to_string());
+    let _source_file = SourceFile::new(&db, "invalid.trb".into(), invalid_code.to_string());
 
-    let program = parse_source_file(&db, source_file);
-    let diagnostics = diagnostics(&db, source_file);
+    let (program, diagnostics) = parse_str(&db, "invalid.trb", invalid_code);
 
     println!(
         "Parsed {} expressions from invalid code",
-        program.expressions(&db).len()
+        program.items(&db).len()
     );
 
     if !diagnostics.is_empty() {

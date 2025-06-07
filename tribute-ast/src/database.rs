@@ -1,9 +1,6 @@
-use crate::{
-    ast::{Expr, SimpleSpan},
-    parser::TributeParser,
-};
+use crate::{ast::SimpleSpan, parser::TributeParser, Item, Program};
 use salsa::Accumulator;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Default, Clone)]
 #[salsa::db]
@@ -14,24 +11,12 @@ pub struct TributeDatabaseImpl {
 #[salsa::db]
 impl salsa::Database for TributeDatabaseImpl {}
 
-#[salsa::input]
+#[salsa::input(debug)]
 pub struct SourceFile {
     #[return_ref]
     pub path: PathBuf,
     #[return_ref]
     pub text: String,
-}
-
-#[salsa::tracked]
-pub struct Program<'db> {
-    #[return_ref]
-    pub expressions: Vec<TrackedExpression<'db>>,
-}
-
-#[salsa::tracked]
-pub struct TrackedExpression<'db> {
-    pub expr: Expr,
-    pub span: SimpleSpan,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -40,6 +25,7 @@ pub struct Diagnostic {
     pub message: String,
     pub span: SimpleSpan,
     pub severity: DiagnosticSeverity,
+    pub phase: CompilationPhase,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -47,6 +33,14 @@ pub enum DiagnosticSeverity {
     Error,
     Warning,
     Info,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CompilationPhase {
+    Parsing,
+    HirLowering,
+    TypeChecking,
+    Optimization,
 }
 
 impl std::fmt::Display for DiagnosticSeverity {
@@ -68,6 +62,7 @@ pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: SourceFile) 
                 message: format!("Failed to create parser: {}", e),
                 span: SimpleSpan::new(0, 0),
                 severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Parsing,
             }
             .accumulate(db);
 
@@ -78,13 +73,14 @@ pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: SourceFile) 
     let expressions = match parser.parse(&source.text(db)) {
         Ok(exprs) => exprs
             .into_iter()
-            .map(|(expr, span)| TrackedExpression::new(db, expr, span))
+            .map(|(expr, span)| Item::new(db, (expr, span)))
             .collect(),
         Err(e) => {
             Diagnostic {
                 message: format!("Parse error: {}", e),
                 span: SimpleSpan::new(0, source.text(db).len()),
                 severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Parsing,
             }
             .accumulate(db);
 
@@ -93,29 +89,4 @@ pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: SourceFile) 
     };
 
     Program::new(db, expressions)
-}
-
-#[salsa::tracked]
-pub fn diagnostics<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Vec<Diagnostic> {
-    let _ = parse_source_file(db, source);
-    parse_source_file::accumulated::<Diagnostic>(db, source)
-        .into_iter()
-        .cloned()
-        .collect()
-}
-
-pub fn parse_with_database(path: &Path, text: &str) -> (Vec<(Expr, SimpleSpan)>, Vec<Diagnostic>) {
-    let db = TributeDatabaseImpl::default();
-    let source = SourceFile::new(&db, path.to_path_buf(), text.to_string());
-
-    let program = parse_source_file(&db, source);
-    let diagnostics = diagnostics(&db, source);
-
-    let expressions = program
-        .expressions(&db)
-        .iter()
-        .map(|tracked| (tracked.expr(&db).clone(), tracked.span(&db)))
-        .collect();
-
-    (expressions, diagnostics)
 }
