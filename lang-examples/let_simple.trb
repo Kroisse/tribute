@@ -1,0 +1,7 @@
+// Simple Let Binding Example - demonstrates basic let syntax
+// - Let binding with explicit body: (let var value body)
+// - Variable reference in body
+// - Returns the bound value
+
+(fn (main)
+  (let x 42 x))

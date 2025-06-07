@@ -1,0 +1,482 @@
+---
+source: tests/parse.rs
+expression: ast
+---
+[
+    (
+        List(
+            [
+                (
+                    Identifier(
+                        "fn",
+                    ),
+                    SimpleSpan {
+                        start: 269,
+                        end: 271,
+                        context: (),
+                    },
+                ),
+                (
+                    List(
+                        [
+                            (
+                                Identifier(
+                                    "test_number",
+                                ),
+                                SimpleSpan {
+                                    start: 273,
+                                    end: 284,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                Identifier(
+                                    "n",
+                                ),
+                                SimpleSpan {
+                                    start: 285,
+                                    end: 286,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    ),
+                    SimpleSpan {
+                        start: 272,
+                        end: 287,
+                        context: (),
+                    },
+                ),
+                (
+                    List(
+                        [
+                            (
+                                Identifier(
+                                    "match",
+                                ),
+                                SimpleSpan {
+                                    start: 291,
+                                    end: 296,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                Identifier(
+                                    "n",
+                                ),
+                                SimpleSpan {
+                                    start: 297,
+                                    end: 298,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                List(
+                                    [
+                                        (
+                                            Identifier(
+                                                "case",
+                                            ),
+                                            SimpleSpan {
+                                                start: 304,
+                                                end: 308,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Number(
+                                                0,
+                                            ),
+                                            SimpleSpan {
+                                                start: 309,
+                                                end: 310,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            String(
+                                                "zero",
+                                            ),
+                                            SimpleSpan {
+                                                start: 311,
+                                                end: 317,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                ),
+                                SimpleSpan {
+                                    start: 303,
+                                    end: 318,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                List(
+                                    [
+                                        (
+                                            Identifier(
+                                                "case",
+                                            ),
+                                            SimpleSpan {
+                                                start: 324,
+                                                end: 328,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Number(
+                                                1,
+                                            ),
+                                            SimpleSpan {
+                                                start: 329,
+                                                end: 330,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            String(
+                                                "one",
+                                            ),
+                                            SimpleSpan {
+                                                start: 331,
+                                                end: 336,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                ),
+                                SimpleSpan {
+                                    start: 323,
+                                    end: 337,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                List(
+                                    [
+                                        (
+                                            Identifier(
+                                                "case",
+                                            ),
+                                            SimpleSpan {
+                                                start: 344,
+                                                end: 348,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Number(
+                                                2,
+                                            ),
+                                            SimpleSpan {
+                                                start: 349,
+                                                end: 350,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            String(
+                                                "two",
+                                            ),
+                                            SimpleSpan {
+                                                start: 351,
+                                                end: 356,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                ),
+                                SimpleSpan {
+                                    start: 343,
+                                    end: 357,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                List(
+                                    [
+                                        (
+                                            Identifier(
+                                                "case",
+                                            ),
+                                            SimpleSpan {
+                                                start: 363,
+                                                end: 367,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Identifier(
+                                                "_",
+                                            ),
+                                            SimpleSpan {
+                                                start: 368,
+                                                end: 369,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            String(
+                                                "other number",
+                                            ),
+                                            SimpleSpan {
+                                                start: 370,
+                                                end: 384,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                ),
+                                SimpleSpan {
+                                    start: 362,
+                                    end: 385,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    ),
+                    SimpleSpan {
+                        start: 290,
+                        end: 386,
+                        context: (),
+                    },
+                ),
+            ],
+        ),
+        SimpleSpan {
+            start: 268,
+            end: 387,
+            context: (),
+        },
+    ),
+    (
+        List(
+            [
+                (
+                    Identifier(
+                        "fn",
+                    ),
+                    SimpleSpan {
+                        start: 390,
+                        end: 392,
+                        context: (),
+                    },
+                ),
+                (
+                    List(
+                        [
+                            (
+                                Identifier(
+                                    "main",
+                                ),
+                                SimpleSpan {
+                                    start: 394,
+                                    end: 398,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    ),
+                    SimpleSpan {
+                        start: 393,
+                        end: 399,
+                        context: (),
+                    },
+                ),
+                (
+                    List(
+                        [
+                            (
+                                Identifier(
+                                    "print_line",
+                                ),
+                                SimpleSpan {
+                                    start: 403,
+                                    end: 413,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                String(
+                                    "Testing pattern matching:",
+                                ),
+                                SimpleSpan {
+                                    start: 414,
+                                    end: 441,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    ),
+                    SimpleSpan {
+                        start: 402,
+                        end: 442,
+                        context: (),
+                    },
+                ),
+                (
+                    List(
+                        [
+                            (
+                                Identifier(
+                                    "print_line",
+                                ),
+                                SimpleSpan {
+                                    start: 446,
+                                    end: 456,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                List(
+                                    [
+                                        (
+                                            Identifier(
+                                                "test_number",
+                                            ),
+                                            SimpleSpan {
+                                                start: 458,
+                                                end: 469,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Number(
+                                                0,
+                                            ),
+                                            SimpleSpan {
+                                                start: 470,
+                                                end: 471,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                ),
+                                SimpleSpan {
+                                    start: 457,
+                                    end: 472,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    ),
+                    SimpleSpan {
+                        start: 445,
+                        end: 473,
+                        context: (),
+                    },
+                ),
+                (
+                    List(
+                        [
+                            (
+                                Identifier(
+                                    "print_line",
+                                ),
+                                SimpleSpan {
+                                    start: 477,
+                                    end: 487,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                List(
+                                    [
+                                        (
+                                            Identifier(
+                                                "test_number",
+                                            ),
+                                            SimpleSpan {
+                                                start: 489,
+                                                end: 500,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Number(
+                                                1,
+                                            ),
+                                            SimpleSpan {
+                                                start: 501,
+                                                end: 502,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                ),
+                                SimpleSpan {
+                                    start: 488,
+                                    end: 503,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    ),
+                    SimpleSpan {
+                        start: 476,
+                        end: 504,
+                        context: (),
+                    },
+                ),
+                (
+                    List(
+                        [
+                            (
+                                Identifier(
+                                    "print_line",
+                                ),
+                                SimpleSpan {
+                                    start: 508,
+                                    end: 518,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                List(
+                                    [
+                                        (
+                                            Identifier(
+                                                "test_number",
+                                            ),
+                                            SimpleSpan {
+                                                start: 520,
+                                                end: 531,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Number(
+                                                42,
+                                            ),
+                                            SimpleSpan {
+                                                start: 532,
+                                                end: 534,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                ),
+                                SimpleSpan {
+                                    start: 519,
+                                    end: 535,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    ),
+                    SimpleSpan {
+                        start: 507,
+                        end: 536,
+                        context: (),
+                    },
+                ),
+            ],
+        ),
+        SimpleSpan {
+            start: 389,
+            end: 537,
+            context: (),
+        },
+    ),
+]

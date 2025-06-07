@@ -1,0 +1,120 @@
+---
+source: tests/parse.rs
+expression: ast
+---
+[
+    (
+        List(
+            [
+                (
+                    Identifier(
+                        "fn",
+                    ),
+                    SimpleSpan {
+                        start: 183,
+                        end: 185,
+                        context: (),
+                    },
+                ),
+                (
+                    List(
+                        [
+                            (
+                                Identifier(
+                                    "main",
+                                ),
+                                SimpleSpan {
+                                    start: 187,
+                                    end: 191,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    ),
+                    SimpleSpan {
+                        start: 186,
+                        end: 192,
+                        context: (),
+                    },
+                ),
+                (
+                    List(
+                        [
+                            (
+                                Identifier(
+                                    "let",
+                                ),
+                                SimpleSpan {
+                                    start: 196,
+                                    end: 199,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                Identifier(
+                                    "x",
+                                ),
+                                SimpleSpan {
+                                    start: 200,
+                                    end: 201,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                Number(
+                                    10,
+                                ),
+                                SimpleSpan {
+                                    start: 202,
+                                    end: 204,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                List(
+                                    [
+                                        (
+                                            Identifier(
+                                                "print_line",
+                                            ),
+                                            SimpleSpan {
+                                                start: 206,
+                                                end: 216,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Identifier(
+                                                "x",
+                                            ),
+                                            SimpleSpan {
+                                                start: 217,
+                                                end: 218,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                ),
+                                SimpleSpan {
+                                    start: 205,
+                                    end: 219,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    ),
+                    SimpleSpan {
+                        start: 195,
+                        end: 220,
+                        context: (),
+                    },
+                ),
+            ],
+        ),
+        SimpleSpan {
+            start: 182,
+            end: 221,
+            context: (),
+        },
+    ),
+]

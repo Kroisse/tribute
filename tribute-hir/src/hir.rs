@@ -86,6 +86,10 @@ pub enum Pattern {
     Variable(Identifier),
     /// Wildcard pattern (matches anything)
     Wildcard,
+    /// List pattern (matches list structure)
+    List(Vec<Pattern>),
+    /// Rest pattern for matching remaining elements
+    Rest(Identifier),
 }
 
 /// Literal values for patterns

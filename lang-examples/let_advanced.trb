@@ -1,0 +1,11 @@
+// Advanced Let Bindings Example - demonstrates improved let syntax
+// - Let bindings with explicit body: (let var value body)
+// - Nested let expressions with proper scoping
+// - Variable shadowing and lexical scope
+
+(fn (main)
+  (let x 10 
+    (let y 20
+      (let sum (+ x y)
+        (print_line "Testing advanced let bindings:")
+        sum))))

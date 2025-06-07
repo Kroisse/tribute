@@ -54,6 +54,38 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_let_advanced_example() {
+        let path = Path::new("lang-examples/let_advanced.trb");
+        let ast = parse_file(path);
+
+        assert_debug_snapshot!(ast);
+    }
+
+    #[test]
+    fn test_parse_let_simple_example() {
+        let path = Path::new("lang-examples/let_simple.trb");
+        let ast = parse_file(path);
+
+        assert_debug_snapshot!(ast);
+    }
+
+    #[test]
+    fn test_parse_let_with_function_example() {
+        let path = Path::new("lang-examples/let_with_function.trb");
+        let ast = parse_file(path);
+
+        assert_debug_snapshot!(ast);
+    }
+
+    #[test]
+    fn test_parse_pattern_matching_example() {
+        let path = Path::new("lang-examples/pattern_matching.trb");
+        let ast = parse_file(path);
+
+        assert_debug_snapshot!(ast);
+    }
+
+    #[test]
     fn test_salsa_parse_hello_example() {
         let path = Path::new("lang-examples/hello.trb");
         let source = std::fs::read_to_string(path).expect("Failed to read file");

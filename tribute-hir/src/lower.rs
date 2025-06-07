@@ -183,9 +183,9 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
 }
 
 fn lower_let_binding(list: &[Spanned<AstExpr>]) -> LowerResult<Expr> {
-    if list.len() != 3 {
+    if list.len() < 3 || list.len() > 4 {
         return Err(LowerError::InvalidLetBinding(
-            "Let binding requires exactly variable, value, and body".to_string(),
+            "Let binding requires variable, value, and optionally body: (let var value [body])".to_string(),
         ));
     }
 
@@ -200,9 +200,13 @@ fn lower_let_binding(list: &[Spanned<AstExpr>]) -> LowerResult<Expr> {
 
     let value = Box::new(lower_expr(&list[2])?);
 
-    // For now, let bindings without explicit body return the value
-    // This will be improved when we have proper let-in syntax
-    let body = value.clone();
+    let body = if list.len() == 4 {
+        // Explicit body: (let var value body)
+        Box::new(lower_expr(&list[3])?)
+    } else {
+        // No explicit body: (let var value) - return the value
+        value.clone()
+    };
 
     Ok(Expr::Let { var, value, body })
 }
@@ -252,10 +256,17 @@ fn lower_pattern(expr: &Spanned<AstExpr>) -> LowerResult<Pattern> {
         AstExpr::Number(n) => Ok(Pattern::Literal(Literal::Number(*n))),
         AstExpr::String(s) => Ok(Pattern::Literal(Literal::String(s.clone()))),
         AstExpr::Identifier(id) if id == "_" => Ok(Pattern::Wildcard),
+        AstExpr::Identifier(id) if id.starts_with("...") => {
+            // Rest pattern: ...rest
+            let rest_name = id.strip_prefix("...").unwrap_or(id);
+            Ok(Pattern::Rest(rest_name.to_string()))
+        }
         AstExpr::Identifier(id) => Ok(Pattern::Variable(id.clone())),
-        _ => Err(LowerError::InvalidPattern(
-            "Unsupported pattern type".to_string(),
-        )),
+        AstExpr::List(list) => {
+            // List pattern: [pattern1 pattern2 ...]
+            let patterns: LowerResult<Vec<_>> = list.iter().map(lower_pattern).collect();
+            Ok(Pattern::List(patterns?))
+        }
     }
 }
 
