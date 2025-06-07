@@ -1,6 +1,16 @@
 [workspace]
 members = [".", "tree-sitter-tribute", "tribute-ast", "tribute-hir"]
 
+[workspace.dependencies]
+clap = { version = "4.0", features = ["derive"] }
+insta = "1.43.1"
+salsa = "0.22.0"
+serde = { version = "1.0", features = ["derive"] }
+tree-sitter = "0.25"
+tree-sitter-tribute = { path = "tree-sitter-tribute" }
+tribute-ast = { path = "tribute-ast" }
+tribute-hir = { path = "tribute-hir" }
+
 [package]
 name = "tribute"
 version = "0.1.0"
@@ -9,8 +19,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4.0", features = ["derive"] }
-insta = "1.43.1"
-salsa = "0.22.0"
-tribute-ast = { path = "tribute-ast" }
-tribute-hir = { path = "tribute-hir" }
+clap.workspace = true
+insta.workspace = true
+salsa.workspace = true
+tribute-ast.workspace = true
+tribute-hir.workspace = true

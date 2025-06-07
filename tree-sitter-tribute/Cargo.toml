@@ -13,7 +13,7 @@ categories = ["parsing"]
 path = "src-rs/lib.rs"
 
 [dependencies]
-tree-sitter = "0.25"
+tree-sitter.workspace = true
 
 [build-dependencies]
 cc = "1.0"

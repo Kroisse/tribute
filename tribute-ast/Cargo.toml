@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-salsa = "0.22.0"
-serde = { version = "1.0", features = ["derive"] }
-tree-sitter = "0.25"
-tree-sitter-tribute = { path = "../tree-sitter-tribute" }
+salsa.workspace = true
+serde.workspace = true
+tree-sitter.workspace = true
+tree-sitter-tribute.workspace = true
