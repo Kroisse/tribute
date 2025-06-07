@@ -12,10 +12,10 @@ fn test_salsa_database_examples() {
         (
             Path::new("complex.trb"),
             r#"
-(define factorial (n)
-  (if (= n 0)
-      1
-      (* n (factorial (- n 1)))))
+(fn (factorial n)
+  (match n
+    (case 0 1)
+    (case _ (* n (factorial (- n 1))))))
 
 (factorial 5)
 "#,
