@@ -357,15 +357,6 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
     }
 }
 
-// Helper function to check if two values match (for simple pattern matching)
-#[allow(dead_code)]
-fn values_match(value1: &Value, value2: &Value) -> bool {
-    match (value1, value2) {
-        (Value::Number(a), Value::Number(b)) => a == b,
-        (Value::String(a), Value::String(b)) => a == b,
-        _ => false,
-    }
-}
 
 fn match_list_with_rest(
     values: &[Value],
