@@ -1,6 +1,5 @@
 pub mod builtins;
 pub mod eval;
-pub mod hir_eval;
 
 use std::path::Path;
 
@@ -9,8 +8,7 @@ pub use tribute_ast::{
     Item, TributeDatabaseImpl, TributeParser, ast,
 };
 pub use tribute_hir::{lower_source_to_hir, compile_to_hir};
-pub use crate::eval::{eval_expr, Environment, Value};
-pub use crate::hir_eval::{eval_hir_program, eval_hir_expr};
+pub use crate::eval::{eval_expr, Environment, Value, eval_hir_program, eval_hir_expr};
 
 // Legacy parse function (kept for compatibility)
 pub fn parse(path: &Path, source: &str) -> Vec<(ast::Expr, ast::SimpleSpan)> {
