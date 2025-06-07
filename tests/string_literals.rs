@@ -106,14 +106,11 @@ fn test_edge_cases() {
             Err(e) => panic!("Failed to evaluate escape-only string: {}", e),
         }
 
-        // Test unknown escape sequences (should be preserved)
-        let source = r#"(fn (main) "Unknown \\x escape")"#;
+        // Test that unknown escape sequences now cause parse errors
+        let source = r#"(fn (main) "Unknown \z escape")"#;
         match tribute::eval_str(db, "test.trb", source) {
-            Ok(tribute::eval::Value::String(s)) => {
-                assert_eq!(s, "Unknown \\x escape");
-            }
-            Ok(other) => panic!("Expected unknown escape String, got {:?}", other),
-            Err(e) => panic!("Failed to evaluate unknown escape string: {}", e),
+            Ok(_) => panic!("Expected parse error for unknown escape sequence"),
+            Err(_) => {} // Expected error
         }
     });
 }

@@ -50,8 +50,10 @@ impl TributeParser {
                 let text = node.utf8_text(source.as_bytes()).ok()?;
                 // Remove quotes and process escape sequences
                 let content = &text[1..text.len() - 1];
-                let processed = process_escape_sequences(content).ok()?;
-                Some(Expr::String(processed))
+                match process_escape_sequences(content) {
+                    Ok(processed) => Some(Expr::String(processed)),
+                    Err(_) => None, // Parsing fails for invalid escape sequences
+                }
             }
             "identifier" => {
                 let text = node.utf8_text(source.as_bytes()).ok()?;
@@ -85,6 +87,10 @@ pub enum StringLiteralError {
     IncompleteHexEscape,
     #[display("Invalid hex digits in escape sequence: {hex_str}")]
     InvalidHexDigits { hex_str: String },
+    #[display("Unknown escape sequence: \\{char}")]
+    UnknownEscapeSequence { char: char },
+    #[display("Trailing backslash in string literal")]
+    TrailingBackslash,
 }
 
 /// Process escape sequences in a string literal
@@ -121,13 +127,12 @@ fn process_escape_sequences(input: &str) -> Result<String, StringLiteralError> {
                     result.push(byte_value);
                 }
                 Some(other) => {
-                    // For unknown escape sequences, preserve the backslash and character
-                    result.extend_from_slice("\\".as_bytes());
-                    result.extend_from_slice(other.to_string().as_bytes());
+                    // Unknown escape sequences are now errors
+                    return Err(StringLiteralError::UnknownEscapeSequence { char: other });
                 }
                 None => {
-                    // Trailing backslash - preserve it
-                    result.extend_from_slice("\\".as_bytes());
+                    // Trailing backslash is now an error
+                    return Err(StringLiteralError::TrailingBackslash);
                 }
             }
         } else {
@@ -219,19 +224,22 @@ mod tests {
 
     #[test]
     fn test_process_escape_sequences_unknown() {
-        // Unknown escape sequences should be preserved as-is
+        // Unknown escape sequences should now be errors
         assert_eq!(
             process_escape_sequences(r"Unknown\z escape"),
-            Ok(r"Unknown\z escape".to_string())
+            Err(StringLiteralError::UnknownEscapeSequence { char: 'z' })
         );
-        assert_eq!(process_escape_sequences(r"\z"), Ok(r"\z".to_string()));
+        assert_eq!(
+            process_escape_sequences(r"\z"),
+            Err(StringLiteralError::UnknownEscapeSequence { char: 'z' })
+        );
     }
 
     #[test]
     fn test_process_escape_sequences_trailing_backslash() {
         assert_eq!(
             process_escape_sequences(r"trailing\"),
-            Ok(r"trailing\".to_string())
+            Err(StringLiteralError::TrailingBackslash)
         );
     }
 
