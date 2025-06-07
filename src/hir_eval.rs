@@ -1,46 +1,9 @@
-use crate::builtins;
-use crate::eval::Value;
-use std::collections::HashMap;
-use tribute_ast::Spanned;
+use crate::{builtins, eval::{Environment, Value}};
+use tribute_ast::{ast::Identifier, Spanned};
 use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, Pattern};
 
 type Error = Box<dyn std::error::Error + 'static>;
 
-pub struct HirEnvironment<'parent> {
-    parent: Option<&'parent Self>,
-    bindings: HashMap<String, Value>,
-}
-
-impl HirEnvironment<'_> {
-    pub fn toplevel() -> Self {
-        HirEnvironment {
-            parent: None,
-            bindings: builtins::BUILTINS.clone(),
-        }
-    }
-
-    pub fn lookup(&self, name: &str) -> Result<&Value, Error> {
-        if let Some(value) = self.bindings.get(name) {
-            return Ok(value);
-        }
-        if let Some(parent) = &self.parent {
-            parent.lookup(name)
-        } else {
-            Err(format!("identifier not found: {}", name).into())
-        }
-    }
-
-    pub fn bind(&mut self, name: String, value: Value) {
-        self.bindings.insert(name, value);
-    }
-
-    pub fn child(&self, bindings: impl IntoIterator<Item = (String, Value)>) -> HirEnvironment<'_> {
-        HirEnvironment {
-            parent: Some(self),
-            bindings: bindings.into_iter().collect(),
-        }
-    }
-}
 
 // Context for HIR evaluation with access to the program
 pub struct HirEvalContext<'db> {
@@ -50,10 +13,9 @@ pub struct HirEvalContext<'db> {
 
 pub fn eval_hir_program<'db>(
     db: &'db dyn salsa::Database,
-    env: &mut HirEnvironment<'_>,
+    env: &mut Environment<'_>,
     program: HirProgram<'db>,
 ) -> Result<Value, Error> {
-    let context = HirEvalContext { db, program };
     let functions = program.functions(db);
 
     // Bind all functions to environment first
@@ -66,10 +28,12 @@ pub fn eval_hir_program<'db>(
         env.bind(name.clone(), func_value);
     }
 
+    let context = HirEvalContext { db, program };
+
     // If there's a main function, call it
     if let Some(main_name) = program.main(db) {
         if let Some(main_func) = functions.get(&main_name) {
-            eval_hir_function_body_with_context(&context, env, *main_func, vec![])
+            eval_hir_function_body_with_context(&context, *main_func, vec![])
         } else {
             Err(format!("main function '{}' not found", main_name).into())
         }
@@ -81,7 +45,8 @@ pub fn eval_hir_program<'db>(
 
 pub fn eval_hir_function_body<'db>(
     db: &'db dyn salsa::Database,
-    env: &mut HirEnvironment<'_>,
+    program: HirProgram<'db>,
+    env: &mut Environment<'_>,
     func: HirFunction<'db>,
     args: Vec<Value>,
 ) -> Result<Value, Error> {
@@ -105,11 +70,14 @@ pub fn eval_hir_function_body<'db>(
 
     let mut child_env = env.child(bindings);
 
+    // Create context for evaluation
+    let context = HirEvalContext { db, program };
+    
     // Evaluate all expressions in the function body
     let body = func.body(db);
     let mut result = Value::Unit;
     for expr in body {
-        result = eval_hir_expr(db, &mut child_env, expr)?;
+        result = eval_hir_expr(&context, &mut child_env, expr)?;
     }
 
     Ok(result)
@@ -117,7 +85,6 @@ pub fn eval_hir_function_body<'db>(
 
 pub fn eval_hir_function_body_with_context<'db>(
     context: &HirEvalContext<'db>,
-    env: &mut HirEnvironment<'_>,
     func: HirFunction<'db>,
     args: Vec<Value>,
 ) -> Result<Value, Error> {
@@ -133,35 +100,49 @@ pub fn eval_hir_function_body_with_context<'db>(
     }
 
     // Create bindings for function parameters
-    let bindings: Vec<(std::string::String, Value)> = params
+    let bindings: Vec<(Identifier, Value)> = params
         .iter()
         .zip(args)
         .map(|(param, value)| (param.clone(), value))
         .collect();
 
+    // Create new environment with all functions bound
+    let mut env = Environment::toplevel();
+    
+    // Bind all functions in the program
+    let functions = context.program.functions(context.db);
+    for (name, hir_func) in &functions {
+        let func_value = Value::Fn(
+            name.clone(),
+            hir_func.params(context.db),
+            vec![], // HIR doesn't store the original AST body
+        );
+        env.bind(name.clone(), func_value);
+    }
+    
     let mut child_env = env.child(bindings);
 
     // Evaluate all expressions in the function body
     let body = func.body(context.db);
     let mut result = Value::Unit;
     for expr in body {
-        result = eval_hir_expr(context.db, &mut child_env, expr)?;
+        result = eval_hir_expr(context, &mut child_env, expr)?;
     }
 
     Ok(result)
 }
 
 pub fn eval_hir_expr<'db>(
-    db: &'db dyn salsa::Database,
-    env: &mut HirEnvironment<'_>,
+    context: &HirEvalContext<'db>,
+    env: &mut Environment<'_>,
     expr: HirExpr<'db>,
 ) -> Result<Value, Error> {
-    eval_spanned_expr(db, env, (expr.expr(db).clone(), expr.span(db)))
+    eval_spanned_expr(context, env, (expr.expr(context.db).clone(), expr.span(context.db)))
 }
 
-fn eval_spanned_expr(
-    db: &dyn salsa::Database,
-    env: &mut HirEnvironment<'_>,
+fn eval_spanned_expr<'db>(
+    context: &HirEvalContext<'db>,
+    env: &mut Environment<'_>,
     (expr, _span): Spanned<Expr>,
 ) -> Result<Value, Error> {
     use Expr::*;
@@ -171,12 +152,12 @@ fn eval_spanned_expr(
         String(s) => Ok(Value::String(s)),
         Variable(name) => env.lookup(&name).cloned(),
         Call { func, args } => {
-            let func_expr = eval_spanned_expr(db, env, *func)?;
+            let func_expr = eval_spanned_expr(context, env, *func)?;
             match func_expr {
                 Value::Fn(name, params, _) => {
                     let arg_values: Result<Vec<Value>, Error> = args
                         .into_iter()
-                        .map(|arg| eval_spanned_expr(db, env, arg))
+                        .map(|arg| eval_spanned_expr(context, env, arg))
                         .collect();
                     let arg_values = arg_values?;
 
@@ -191,43 +172,23 @@ fn eval_spanned_expr(
                         .into());
                     }
 
-                    // Check function name before consuming params
-                    let is_add_function = name == "add" && params.len() == 2;
-                    let is_test_number_function = name == "test_number" && params.len() == 1;
-
-                    let bindings: Vec<(std::string::String, Value)> =
+                    let bindings: Vec<(Identifier, Value)> =
                         params.into_iter().zip(arg_values.iter().cloned()).collect();
 
-                    let child_env = env.child(bindings);
+                    let _child_env = env.child(bindings);
 
-                    // We need to find the function in the current environment and evaluate its body
-                    // For now, we'll use a workaround to look up user-defined functions
-                    if is_add_function {
-                        // Simple hardcoded add function for testing
-                        let x = child_env.lookup("x")?;
-                        let y = child_env.lookup("y")?;
-                        match (x, y) {
-                            (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
-                            _ => Err("add requires numbers".into()),
-                        }
-                    } else if is_test_number_function {
-                        // Simple hardcoded test_number function for pattern matching demo
-                        let n = child_env.lookup("n")?;
-                        match n {
-                            Value::Number(0) => Ok(Value::String("zero".to_string())),
-                            Value::Number(1) => Ok(Value::String("one".to_string())),
-                            Value::Number(2) => Ok(Value::String("two".to_string())),
-                            _ => Ok(Value::String("other number".to_string())),
-                        }
+                    // Find the function in the program and evaluate its body
+                    let functions = context.program.functions(context.db);
+                    if let Some((_, func)) = functions.iter().find(|(fname, _)| **fname == name) {
+                        eval_hir_function_body_with_context(context, *func, arg_values)
                     } else {
-                        // For other functions, return unit for now
-                        Ok(Value::Unit)
+                        Err(format!("Function '{}' not found", name).into())
                     }
                 }
                 Value::BuiltinFn(_, f) => {
                     let arg_values: Result<Vec<Value>, Error> = args
                         .into_iter()
-                        .map(|arg| eval_spanned_expr(db, env, arg))
+                        .map(|arg| eval_spanned_expr(context, env, arg))
                         .collect();
                     f(&arg_values?)
                 }
@@ -235,40 +196,40 @@ fn eval_spanned_expr(
             }
         }
         Let { var, value } => {
-            let val = eval_spanned_expr(db, env, *value)?;
+            let val = eval_spanned_expr(context, env, *value)?;
             env.bind(var, val.clone());
             Ok(val)
         }
         Match { expr, cases } => {
-            let value = eval_spanned_expr(db, env, *expr)?;
+            let value = eval_spanned_expr(context, env, *expr)?;
             for case in cases {
                 if let Some(bindings) = match_pattern(&value, &case.pattern) {
                     let mut child_env = env.child(bindings);
-                    return eval_spanned_expr(db, &mut child_env, case.body);
+                    return eval_spanned_expr(context, &mut child_env, case.body);
                 }
             }
             Err("no matching case found".into())
         }
-        Builtin { name, args } => eval_builtin_by_name(db, env, &name, args),
+        Builtin { name, args } => eval_builtin_by_name(context, env, &name, args),
         Block(exprs) => {
             let mut result = Value::Unit;
             for expr in exprs {
-                result = eval_spanned_expr(db, env, expr)?;
+                result = eval_spanned_expr(context, env, expr)?;
             }
             Ok(result)
         }
     }
 }
 
-fn eval_builtin_by_name(
-    db: &dyn salsa::Database,
-    env: &mut HirEnvironment<'_>,
+fn eval_builtin_by_name<'db>(
+    context: &HirEvalContext<'db>,
+    env: &mut Environment<'_>,
     name: &str,
     args: Vec<Spanned<Expr>>,
 ) -> Result<Value, Error> {
     let arg_values: Result<Vec<Value>, Error> = args
         .into_iter()
-        .map(|arg| eval_spanned_expr(db, env, arg))
+        .map(|arg| eval_spanned_expr(context, env, arg))
         .collect();
     let arg_values = arg_values?;
 
@@ -525,6 +486,42 @@ mod tests {
         match crate::eval_with_hir(&mut db, "test.trb", source) {
             Ok(Value::Number(30)) => {}
             Ok(other) => panic!("Expected Number(30), got {:?}", other),
+            Err(e) => panic!("HIR evaluation failed: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_hir_functions_calling_each_other() {
+        let mut db = TributeDatabaseImpl::default();
+
+        // Test functions calling each other
+        let source = r#"
+            (fn (double x) (* x 2))
+            (fn (add_and_double x y) (double (+ x y)))
+            (fn (main) (add_and_double 5 10))
+        "#;
+        match crate::eval_with_hir(&mut db, "test.trb", source) {
+            Ok(Value::Number(30)) => {}
+            Ok(other) => panic!("Expected Number(30), got {:?}", other),
+            Err(e) => panic!("HIR evaluation failed: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_hir_recursive_function() {
+        let mut db = TributeDatabaseImpl::default();
+
+        // Test recursive function (factorial)
+        let source = r#"
+            (fn (factorial n)
+              (match n
+                (case 0 1)
+                (case _ (* n (factorial (- n 1))))))
+            (fn (main) (factorial 5))
+        "#;
+        match crate::eval_with_hir(&mut db, "test.trb", source) {
+            Ok(Value::Number(120)) => {}
+            Ok(other) => panic!("Expected Number(120), got {:?}", other),
             Err(e) => panic!("HIR evaluation failed: {}", e),
         }
     }
