@@ -57,8 +57,17 @@ HirProgram {
                     expr: Let {
                         var: "sum",
                         value: (
-                            Builtin {
-                                name: "+",
+                            Call {
+                                func: (
+                                    Variable(
+                                        "+",
+                                    ),
+                                    SimpleSpan {
+                                        start: 235,
+                                        end: 236,
+                                        context: (),
+                                    },
+                                ),
                                 args: [
                                     (
                                         Variable(
@@ -97,8 +106,17 @@ HirProgram {
                 },
                 HirExpr {
                     [salsa id]: Id(c03),
-                    expr: Builtin {
-                        name: "print_line",
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 246,
+                                end: 256,
+                                context: (),
+                            },
+                        ),
                         args: [
                             (
                                 String(

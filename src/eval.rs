@@ -83,7 +83,10 @@ pub struct HirEvalContext<'db> {
     pub program: HirProgram<'db>,
 }
 
-// Main evaluation function that uses HIR-based evaluation
+// Legacy AST-based evaluation function (DEPRECATED)
+// This function violates the HIR-first evaluation principle and should not be used.
+// Use eval_with_hir() or eval_hir_expr() instead.
+#[deprecated(since = "0.1.0", note = "Use eval_with_hir() for HIR-based evaluation instead")]
 pub fn eval_expr<'db>(db: &'db dyn salsa::Database, env: &mut Environment<'_>, expr: &tribute_ast::ast::Expr) -> Result<Value, Error> {
     // For compatibility with existing AST-based code, we need to parse and lower to HIR
     // This is a transitional function and should be phased out in favor of direct HIR evaluation
@@ -225,21 +228,6 @@ pub fn eval_expr<'db>(db: &'db dyn salsa::Database, env: &mut Environment<'_>, e
     }
 }
 
-// Helper function to format an AST expression back to source code
-fn format_expr_as_source(expr: &tribute_ast::ast::Expr) -> String {
-    use tribute_ast::ast::Expr;
-    match expr {
-        Expr::Number(n) => n.to_string(),
-        Expr::String(s) => format!("\"{}\"", s),
-        Expr::Identifier(id) => id.clone(),
-        Expr::List(exprs) => {
-            let formatted_exprs: Vec<String> = exprs.iter()
-                .map(|(expr, _)| format_expr_as_source(expr))
-                .collect();
-            format!("({})", formatted_exprs.join(" "))
-        }
-    }
-}
 
 pub fn eval_hir_program<'db>(
     db: &'db dyn salsa::Database,

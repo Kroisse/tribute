@@ -28,8 +28,17 @@ HirProgram {
                         ),
                         args: [
                             (
-                                Builtin {
-                                    name: "+",
+                                Call {
+                                    func: (
+                                        Variable(
+                                            "+",
+                                        ),
+                                        SimpleSpan {
+                                            start: 58,
+                                            end: 59,
+                                            context: (),
+                                        },
+                                    ),
                                     args: [
                                         (
                                             Variable(
@@ -83,8 +92,17 @@ HirProgram {
             body: [
                 HirExpr {
                     [salsa id]: Id(c01),
-                    expr: Builtin {
-                        name: "*",
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "*",
+                            ),
+                            SimpleSpan {
+                                start: 16,
+                                end: 17,
+                                context: (),
+                            },
+                        ),
                         args: [
                             (
                                 Variable(

@@ -18,7 +18,7 @@ extern crate tribute;
 
 use clap::{Arg, ArgAction, Command};
 use std::path::PathBuf;
-use tribute::{parse_with_database, TributeDatabaseImpl, eval_expr, Environment, Value};
+use tribute::{eval_with_hir, TributeDatabaseImpl};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("trbc")
@@ -62,61 +62,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Interprets a Tribute program.
+/// Interprets a Tribute program using HIR-based evaluation.
 fn interpret_program(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(path)?;
-
-    // Create Salsa database and parse using parse_with_database
     let db = TributeDatabaseImpl::default();
-    let (program, diags) = parse_with_database(&db, path, &source);
-
-    // Display diagnostics if any
-    if !diags.is_empty() {
-        eprintln!("Diagnostics:");
-        for diagnostic in &diags {
-            eprintln!(
-                "  [{}] {} (span: {}..{})",
-                diagnostic.severity, diagnostic.message, diagnostic.span.start, diagnostic.span.end
-            );
-        }
-    }
-
-    // Execute the program
-    let mut env = Environment::toplevel();
     
-    // Evaluate all expressions to register functions
-    for item in program.items(&db).iter() {
-        let (expr, _span) = item.expr(&db);
-        if let Err(e) = eval_expr(&db, &mut env, &expr) {
-            eprintln!("Evaluation error: {}", e);
-            return Ok(());
+    // Use HIR-based evaluation directly
+    match eval_with_hir(&db, path, &source) {
+        Ok(result) => {
+            // Only print non-unit results
+            match result {
+                tribute::Value::Unit => {}, // Don't print unit values
+                _ => println!("{}", result),
+            }
+        },
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
         }
     }
     
-    // Try to call main function if it exists
-    if let Ok(main_fn) = env.lookup(&"main".to_string()) {
-        match main_fn {
-            Value::Fn(_, params, body) => {
-                if params.is_empty() {
-                    let mut child_env = env.child(vec![]);
-                    for expr in body {
-                        if let Err(e) = eval_expr(&db, &mut child_env, &expr.0) {
-                            eprintln!("Runtime error in main: {}", e);
-                            return Ok(());
-                        }
-                    }
-                } else {
-                    eprintln!("main function should not have parameters");
-                }
-            }
-            _ => {
-                eprintln!("main is not a function");
-            }
-        }
-    } else {
-        eprintln!("No main function found");
-    }
-
     Ok(())
 }
 

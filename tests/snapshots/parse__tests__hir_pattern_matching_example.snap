@@ -12,8 +12,17 @@ HirProgram {
             body: [
                 HirExpr {
                     [salsa id]: Id(c00),
-                    expr: Builtin {
-                        name: "print_line",
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 403,
+                                end: 413,
+                                context: (),
+                            },
+                        ),
                         args: [
                             (
                                 String(
@@ -35,8 +44,17 @@ HirProgram {
                 },
                 HirExpr {
                     [salsa id]: Id(c01),
-                    expr: Builtin {
-                        name: "print_line",
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 446,
+                                end: 456,
+                                context: (),
+                            },
+                        ),
                         args: [
                             (
                                 Call {
@@ -79,8 +97,17 @@ HirProgram {
                 },
                 HirExpr {
                     [salsa id]: Id(c02),
-                    expr: Builtin {
-                        name: "print_line",
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 477,
+                                end: 487,
+                                context: (),
+                            },
+                        ),
                         args: [
                             (
                                 Call {
@@ -123,8 +150,17 @@ HirProgram {
                 },
                 HirExpr {
                     [salsa id]: Id(c03),
-                    expr: Builtin {
-                        name: "print_line",
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 508,
+                                end: 518,
+                                context: (),
+                            },
+                        ),
                         args: [
                             (
                                 Call {

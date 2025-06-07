@@ -36,8 +36,17 @@ HirProgram {
                     expr: Let {
                         var: "y",
                         value: (
-                            Builtin {
-                                name: "+",
+                            Call {
+                                func: (
+                                    Variable(
+                                        "+",
+                                    ),
+                                    SimpleSpan {
+                                        start: 223,
+                                        end: 224,
+                                        context: (),
+                                    },
+                                ),
                                 args: [
                                     (
                                         Variable(
@@ -76,8 +85,17 @@ HirProgram {
                 },
                 HirExpr {
                     [salsa id]: Id(c02),
-                    expr: Builtin {
-                        name: "print_line",
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 234,
+                                end: 244,
+                                context: (),
+                            },
+                        ),
                         args: [
                             (
                                 String(
@@ -99,8 +117,17 @@ HirProgram {
                 },
                 HirExpr {
                     [salsa id]: Id(c03),
-                    expr: Builtin {
-                        name: "print_line",
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 273,
+                                end: 283,
+                                context: (),
+                            },
+                        ),
                         args: [
                             (
                                 Variable(
@@ -122,8 +149,17 @@ HirProgram {
                 },
                 HirExpr {
                     [salsa id]: Id(c04),
-                    expr: Builtin {
-                        name: "print_line",
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 290,
+                                end: 300,
+                                context: (),
+                            },
+                        ),
                         args: [
                             (
                                 Variable(
@@ -145,12 +181,30 @@ HirProgram {
                 },
                 HirExpr {
                     [salsa id]: Id(c05),
-                    expr: Builtin {
-                        name: "print_line",
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 307,
+                                end: 317,
+                                context: (),
+                            },
+                        ),
                         args: [
                             (
-                                Builtin {
-                                    name: "+",
+                                Call {
+                                    func: (
+                                        Variable(
+                                            "+",
+                                        ),
+                                        SimpleSpan {
+                                            start: 319,
+                                            end: 320,
+                                            context: (),
+                                        },
+                                    ),
                                     args: [
                                         (
                                             Variable(

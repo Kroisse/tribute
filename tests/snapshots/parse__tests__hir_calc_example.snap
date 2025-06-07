@@ -15,8 +15,17 @@ HirProgram {
                     expr: Let {
                         var: "line",
                         value: (
-                            Builtin {
-                                name: "split",
+                            Call {
+                                func: (
+                                    Variable(
+                                        "split",
+                                    ),
+                                    SimpleSpan {
+                                        start: 26,
+                                        end: 31,
+                                        context: (),
+                                    },
+                                ),
                                 args: [
                                     (
                                         String(
@@ -29,12 +38,30 @@ HirProgram {
                                         },
                                     ),
                                     (
-                                        Builtin {
-                                            name: "trim_right",
+                                        Call {
+                                            func: (
+                                                Variable(
+                                                    "trim_right",
+                                                ),
+                                                SimpleSpan {
+                                                    start: 37,
+                                                    end: 47,
+                                                    context: (),
+                                                },
+                                            ),
                                             args: [
                                                 (
-                                                    Builtin {
-                                                        name: "input_line",
+                                                    Call {
+                                                        func: (
+                                                            Variable(
+                                                                "input_line",
+                                                            ),
+                                                            SimpleSpan {
+                                                                start: 49,
+                                                                end: 59,
+                                                                context: (),
+                                                            },
+                                                        ),
                                                         args: [],
                                                     },
                                                     SimpleSpan {
@@ -71,12 +98,30 @@ HirProgram {
                     expr: Let {
                         var: "a",
                         value: (
-                            Builtin {
-                                name: "to_number",
+                            Call {
+                                func: (
+                                    Variable(
+                                        "to_number",
+                                    ),
+                                    SimpleSpan {
+                                        start: 76,
+                                        end: 85,
+                                        context: (),
+                                    },
+                                ),
                                 args: [
                                     (
-                                        Builtin {
-                                            name: "get",
+                                        Call {
+                                            func: (
+                                                Variable(
+                                                    "get",
+                                                ),
+                                                SimpleSpan {
+                                                    start: 87,
+                                                    end: 90,
+                                                    context: (),
+                                                },
+                                            ),
                                             args: [
                                                 (
                                                     Number(
@@ -126,8 +171,17 @@ HirProgram {
                     expr: Let {
                         var: "op",
                         value: (
-                            Builtin {
-                                name: "get",
+                            Call {
+                                func: (
+                                    Variable(
+                                        "get",
+                                    ),
+                                    SimpleSpan {
+                                        start: 114,
+                                        end: 117,
+                                        context: (),
+                                    },
+                                ),
                                 args: [
                                     (
                                         Number(
@@ -169,12 +223,30 @@ HirProgram {
                     expr: Let {
                         var: "b",
                         value: (
-                            Builtin {
-                                name: "to_number",
+                            Call {
+                                func: (
+                                    Variable(
+                                        "to_number",
+                                    ),
+                                    SimpleSpan {
+                                        start: 139,
+                                        end: 148,
+                                        context: (),
+                                    },
+                                ),
                                 args: [
                                     (
-                                        Builtin {
-                                            name: "get",
+                                        Call {
+                                            func: (
+                                                Variable(
+                                                    "get",
+                                                ),
+                                                SimpleSpan {
+                                                    start: 150,
+                                                    end: 153,
+                                                    context: (),
+                                                },
+                                            ),
                                             args: [
                                                 (
                                                     Number(
@@ -243,8 +315,17 @@ HirProgram {
                                             ),
                                         ),
                                         body: (
-                                            Builtin {
-                                                name: "+",
+                                            Call {
+                                                func: (
+                                                    Variable(
+                                                        "+",
+                                                    ),
+                                                    SimpleSpan {
+                                                        start: 209,
+                                                        end: 210,
+                                                        context: (),
+                                                    },
+                                                ),
                                                 args: [
                                                     (
                                                         Variable(
@@ -282,8 +363,17 @@ HirProgram {
                                             ),
                                         ),
                                         body: (
-                                            Builtin {
-                                                name: "-",
+                                            Call {
+                                                func: (
+                                                    Variable(
+                                                        "-",
+                                                    ),
+                                                    SimpleSpan {
+                                                        start: 236,
+                                                        end: 237,
+                                                        context: (),
+                                                    },
+                                                ),
                                                 args: [
                                                     (
                                                         Variable(
@@ -321,8 +411,17 @@ HirProgram {
                                             ),
                                         ),
                                         body: (
-                                            Builtin {
-                                                name: "*",
+                                            Call {
+                                                func: (
+                                                    Variable(
+                                                        "*",
+                                                    ),
+                                                    SimpleSpan {
+                                                        start: 263,
+                                                        end: 264,
+                                                        context: (),
+                                                    },
+                                                ),
                                                 args: [
                                                     (
                                                         Variable(
@@ -360,8 +459,17 @@ HirProgram {
                                             ),
                                         ),
                                         body: (
-                                            Builtin {
-                                                name: "/",
+                                            Call {
+                                                func: (
+                                                    Variable(
+                                                        "/",
+                                                    ),
+                                                    SimpleSpan {
+                                                        start: 290,
+                                                        end: 291,
+                                                        context: (),
+                                                    },
+                                                ),
                                                 args: [
                                                     (
                                                         Variable(
@@ -409,8 +517,17 @@ HirProgram {
                 },
                 HirExpr {
                     [salsa id]: Id(c05),
-                    expr: Builtin {
-                        name: "print_line",
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            SimpleSpan {
+                                start: 305,
+                                end: 315,
+                                context: (),
+                            },
+                        ),
                         args: [
                             (
                                 Variable(
