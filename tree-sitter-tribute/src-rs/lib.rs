@@ -1,4 +1,4 @@
-extern "C" {
+unsafe extern "C" {
     fn tree_sitter_tribute() -> tree_sitter::Language;
 }
 
