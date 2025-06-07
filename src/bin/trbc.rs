@@ -87,7 +87,7 @@ fn interpret_program(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     // Evaluate all expressions to register functions
     for item in program.items(&db).iter() {
         let (expr, _span) = item.expr(&db);
-        if let Err(e) = eval_expr(&mut env, &expr) {
+        if let Err(e) = eval_expr(&db, &mut env, &expr) {
             eprintln!("Evaluation error: {}", e);
             return Ok(());
         }
@@ -100,7 +100,7 @@ fn interpret_program(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 if params.is_empty() {
                     let mut child_env = env.child(vec![]);
                     for expr in body {
-                        if let Err(e) = eval_expr(&mut child_env, &expr.0) {
+                        if let Err(e) = eval_expr(&db, &mut child_env, &expr.0) {
                             eprintln!("Runtime error in main: {}", e);
                             return Ok(());
                         }

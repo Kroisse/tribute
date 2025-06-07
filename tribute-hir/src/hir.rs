@@ -59,11 +59,6 @@ pub enum Expr {
         cases: Vec<MatchCase>,
     },
 
-    /// Built-in operations
-    Builtin {
-        name: Identifier,
-        args: Vec<Spanned<Expr>>,
-    },
 
     /// Block expression (sequence of expressions)
     Block(Vec<Spanned<Expr>>),
@@ -118,13 +113,6 @@ impl std::fmt::Display for Expr {
                 write!(f, "(match {}", expr.0)?;
                 for case in cases {
                     write!(f, " (case {:?} {})", case.pattern, case.body.0)?;
-                }
-                write!(f, ")")
-            }
-            Expr::Builtin { name, args } => {
-                write!(f, "({name}")?;
-                for arg in args {
-                    write!(f, " {}", arg.0)?;
                 }
                 write!(f, ")")
             }

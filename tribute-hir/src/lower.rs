@@ -152,14 +152,6 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
                                 "'case' can only appear inside 'match'".to_string(),
                             ));
                         }
-                        builtin if is_builtin(builtin) => {
-                            let args: LowerResult<Vec<_>> =
-                                list[1..].iter().map(lower_expr).collect();
-                            Expr::Builtin {
-                                name: name.clone(),
-                                args: args?,
-                            }
-                        }
                         _ => {
                             // Function call
                             let func = Box::new(lower_expr(&list[0])?);
@@ -262,21 +254,6 @@ fn lower_pattern(expr: &Spanned<AstExpr>) -> LowerResult<Pattern> {
     }
 }
 
-fn is_builtin(name: &str) -> bool {
-    matches!(
-        name,
-        "print_line"
-            | "input_line"
-            | "+"
-            | "-"
-            | "*"
-            | "/"
-            | "trim_right"
-            | "split"
-            | "get"
-            | "to_number"
-    )
-}
 
 #[cfg(test)]
 mod tests {

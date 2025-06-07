@@ -11,7 +11,7 @@ module.exports = grammar({
       $.list
     ),
 
-    number: $ => /\d+/,
+    number: $ => /-?\d+/,
 
     string: $ => /"([^"\\]|\\.)*"/,
 

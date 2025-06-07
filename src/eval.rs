@@ -84,12 +84,10 @@ pub struct HirEvalContext<'db> {
 }
 
 // Main evaluation function that uses HIR-based evaluation
-pub fn eval_expr(env: &mut Environment<'_>, expr: &tribute_ast::ast::Expr) -> Result<Value, Error> {
+pub fn eval_expr<'db>(db: &'db dyn salsa::Database, env: &mut Environment<'_>, expr: &tribute_ast::ast::Expr) -> Result<Value, Error> {
     // For compatibility with existing AST-based code, we need to parse and lower to HIR
     // This is a transitional function and should be phased out in favor of direct HIR evaluation
-    use tribute_ast::TributeDatabaseImpl;
     use tribute_ast::ast::Expr;
-    use salsa::Database;
     
     match expr {
         // Handle function definitions by storing them in the environment
@@ -122,7 +120,7 @@ pub fn eval_expr(env: &mut Environment<'_>, expr: &tribute_ast::ast::Expr) -> Re
                 // Handle let bindings
                 if fn_name == "let" && exprs.len() == 3 {
                     if let (Expr::Identifier(ident), _) = &exprs[1] {
-                        let value = eval_expr(env, &exprs[2].0)?;
+                        let value = eval_expr(db, env, &exprs[2].0)?;
                         env.bind(ident.clone(), value.clone());
                         return Ok(value);
                     }
@@ -132,16 +130,99 @@ pub fn eval_expr(env: &mut Environment<'_>, expr: &tribute_ast::ast::Expr) -> Re
         _ => {}
     }
     
-    // For other expressions, try HIR evaluation
-    TributeDatabaseImpl::default().attach(|db| {
-        // Create a temporary source for the single expression
-        let source = format!("(fn (main) {})", format_expr_as_source(expr));
-        
-        match crate::eval_with_hir(db, "temp.trb", &source) {
-            Ok(result) => Ok(result),
-            Err(e) => Err(format!("HIR evaluation failed: {}", e).into())
+    // For other expressions, try direct evaluation based on expression type
+    match expr {
+        Expr::Number(n) => Ok(Value::Number(*n)),
+        Expr::String(s) => Ok(Value::String(s.clone())),
+        Expr::Identifier(id) => env.lookup(id).cloned(),
+        Expr::List(exprs) if !exprs.is_empty() => {
+            // Function call or special form
+            let func_name = match &exprs[0].0 {
+                Expr::Identifier(name) => name,
+                _ => return Err("First element of list must be an identifier".into()),
+            };
+            
+            // Handle special forms first
+            match func_name.as_str() {
+                "match" => {
+                    if exprs.len() < 3 {
+                        return Err("match requires at least expression and one case".into());
+                    }
+                    
+                    let value = eval_expr(db, env, &exprs[1].0)?;
+                    
+                    // Try each case
+                    for case_expr in &exprs[2..] {
+                        if let Expr::List(case_parts) = &case_expr.0 {
+                            if case_parts.len() == 3 {
+                                if let Expr::Identifier(case_kw) = &case_parts[0].0 {
+                                    if case_kw == "case" {
+                                        // Check if pattern matches
+                                        if let Ok(pattern_value) = eval_expr(db, env, &case_parts[1].0) {
+                                            if values_match(&value, &pattern_value) {
+                                                return eval_expr(db, env, &case_parts[2].0);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return Err("no matching case found".into());
+                }
+                _ => {}
+            }
+            
+            // Look up the function in the environment
+            let func_value = env.lookup(func_name)?.clone();
+            
+            match func_value {
+                Value::BuiltinFn(_, f) => {
+                    // Evaluate arguments for builtin functions
+                    let arg_values: Result<Vec<Value>, _> = exprs[1..]
+                        .iter()
+                        .map(|(arg_expr, _)| eval_expr(db, env, arg_expr))
+                        .collect();
+                    f(&arg_values?)
+                }
+                Value::Fn(name, params, body) => {
+                    // User-defined function call
+                    let arg_values: Result<Vec<Value>, _> = exprs[1..]
+                        .iter()
+                        .map(|(arg_expr, _)| eval_expr(db, env, arg_expr))
+                        .collect();
+                    let arg_values = arg_values?;
+                    
+                    if params.len() != arg_values.len() {
+                        return Err(format!(
+                            "function {} expects {} arguments, got {}",
+                            name,
+                            params.len(),
+                            arg_values.len()
+                        ).into());
+                    }
+                    
+                    // Create bindings for function parameters
+                    let bindings: Vec<(String, Value)> = params
+                        .iter()
+                        .zip(arg_values)
+                        .map(|(param, value)| (param.clone(), value))
+                        .collect();
+                    
+                    let mut child_env = env.child(bindings);
+                    
+                    // Evaluate function body
+                    let mut result = Value::Unit;
+                    for (body_expr, _) in body {
+                        result = eval_expr(db, &mut child_env, &body_expr)?;
+                    }
+                    Ok(result)
+                }
+                _ => Err(format!("'{}' is not a function", func_name).into()),
+            }
         }
-    })
+        _ => Err("Unsupported expression type".into()),
+    }
 }
 
 // Helper function to format an AST expression back to source code
@@ -363,7 +444,6 @@ fn eval_spanned_expr<'db>(
             }
             Err("no matching case found".into())
         }
-        Builtin { name, args } => eval_builtin_by_name(context, env, &name, args),
         Block(exprs) => {
             let mut result = Value::Unit;
             for expr in exprs {
@@ -374,86 +454,6 @@ fn eval_spanned_expr<'db>(
     }
 }
 
-fn eval_builtin_by_name<'db>(
-    context: &HirEvalContext<'db>,
-    env: &mut Environment<'_>,
-    name: &str,
-    args: Vec<Spanned<Expr>>,
-) -> Result<Value, Error> {
-    let arg_values: Result<Vec<Value>, Error> = args
-        .into_iter()
-        .map(|arg| eval_spanned_expr(context, env, arg))
-        .collect();
-    let arg_values = arg_values?;
-
-    match name {
-        "+" => {
-            if arg_values.len() != 2 {
-                return Err("+ requires exactly 2 arguments".into());
-            }
-            match (&arg_values[0], &arg_values[1]) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
-                _ => Err("+ requires numbers".into()),
-            }
-        }
-        "-" => {
-            if arg_values.len() != 2 {
-                return Err("- requires exactly 2 arguments".into());
-            }
-            match (&arg_values[0], &arg_values[1]) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a - b)),
-                _ => Err("- requires numbers".into()),
-            }
-        }
-        "*" => {
-            if arg_values.len() != 2 {
-                return Err("* requires exactly 2 arguments".into());
-            }
-            match (&arg_values[0], &arg_values[1]) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * b)),
-                _ => Err("* requires numbers".into()),
-            }
-        }
-        "/" => {
-            if arg_values.len() != 2 {
-                return Err("/ requires exactly 2 arguments".into());
-            }
-            match (&arg_values[0], &arg_values[1]) {
-                (Value::Number(a), Value::Number(b)) => {
-                    if *b == 0 {
-                        Err("division by zero".into())
-                    } else {
-                        Ok(Value::Number(a / b))
-                    }
-                }
-                _ => Err("/ requires numbers".into()),
-            }
-        }
-        "print_line" => {
-            if let Some(builtin_fn) = builtins::BUILTINS.get("print_line") {
-                if let Value::BuiltinFn(_, f) = builtin_fn {
-                    f(&arg_values)
-                } else {
-                    Err("print_line is not a builtin function".into())
-                }
-            } else {
-                Err("print_line not found".into())
-            }
-        }
-        "input_line" => {
-            if let Some(builtin_fn) = builtins::BUILTINS.get("input_line") {
-                if let Value::BuiltinFn(_, f) = builtin_fn {
-                    f(&arg_values)
-                } else {
-                    Err("input_line is not a builtin function".into())
-                }
-            } else {
-                Err("input_line not found".into())
-            }
-        }
-        _ => Err(format!("unknown builtin function: {}", name).into()),
-    }
-}
 
 fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::String, Value)>> {
     match pattern {
@@ -506,6 +506,15 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
             // Rest patterns should only appear in list contexts
             None
         }
+    }
+}
+
+// Helper function to check if two values match (for simple pattern matching)
+fn values_match(value1: &Value, value2: &Value) -> bool {
+    match (value1, value2) {
+        (Value::Number(a), Value::Number(b)) => a == b,
+        (Value::String(a), Value::String(b)) => a == b,
+        _ => false,
     }
 }
 
