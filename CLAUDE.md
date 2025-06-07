@@ -59,6 +59,7 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 
 #### Main Crate (`tribute`)
 - **`src/eval.rs`**: Environment-based evaluator with lexical scoping
+- **`src/hir_eval.rs`**: HIR-based evaluator with complete function call support
 - **`src/builtins.rs`**: Built-in functions (print_line, input_line)
 - **`src/lib.rs`**: Main API exposing `parse()` and `parse_with_database()` functions
 - **`src/bin/trbi.rs`**: Interpreter binary
@@ -90,13 +91,15 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 ## Development Notes
 
 ### Testing Strategy
-- **Snapshot testing**: Uses `insta` crate for regression testing of parsed ASTs
+- **HIR Snapshot testing**: Uses `insta` crate for regression testing of HIR structures (preferred)
+- **HIR Evaluation tests**: Unit tests in `src/hir_eval.rs` using `TributeDatabaseImpl::default().attach()`
 - **Tree-sitter corpus**: Tests in `tree-sitter-tribute/test/corpus/` for grammar validation
-- **Language examples**: `hello.trb` and `calc.trb` serve as integration test cases
+- **Language examples**: All `.trb` files in `lang-examples/` are tested via HIR snapshot tests
 
 ### Recent Architecture Changes
 - **Salsa Integration**: The project now uses Salsa for incremental computation with tracked AST/HIR types
 - **Multi-level IR**: Implemented AST → HIR transformation pipeline for future optimizations
+- **HIR-based Evaluation**: Complete HIR evaluation system with proper user-defined function calls
 - **Unified Diagnostics**: All compilation phases report errors through a centralized `Diagnostic` system
 - **Automatic Parser Generation**: Tree-sitter parser is now generated automatically during build
 
@@ -113,11 +116,27 @@ let ast = tribute::parse("(print_line \"Hello\")")?;
 
 // Salsa-based API (recommended)
 use tribute::TributeDatabaseImpl;
+
+// For parsing and HIR lowering
 let mut db = TributeDatabaseImpl::default();
-let program = tribute::parse_with_database(&mut db, "program.trb", source)?;
+let program = tribute::parse_with_database(&db, "program.trb", source)?;
 for item in program.items(&db) {
     // Process items
 }
+
+// For HIR evaluation
+let db = TributeDatabaseImpl::default();
+match tribute::eval_with_hir(&db, "program.trb", source) {
+    Ok(result) => println!("Result: {:?}", result),
+    Err(e) => eprintln!("Error: {}", e),
+}
+
+// For tests (using attach pattern)
+use salsa::Database;
+TributeDatabaseImpl::default().attach(|db| {
+    let hir = parse_file_to_hir(db, path);
+    assert_debug_snapshot!(hir);
+});
 ```
 
 ### Additional Documentation
@@ -126,4 +145,7 @@ for item in program.items(&db) {
 When working on this codebase, pay attention to:
 - The separation between parsing (Tree-sitter), AST, HIR, and evaluation phases
 - Using the Salsa database for any new compiler features
+- HIR evaluation is the preferred execution path over direct AST evaluation
+- Use `TributeDatabaseImpl::default().attach()` pattern only for tests and snapshot testing
+- For production code, create database instances normally: `TributeDatabaseImpl::default()`
 - Maintaining compatibility with the legacy `parse()` API while preferring the database-based approach

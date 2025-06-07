@@ -1,9 +1,11 @@
-use crate::{builtins, eval::{Environment, Value}};
+use crate::{
+    builtins,
+    eval::{Environment, Value},
+};
 use tribute_ast::{ast::Identifier, Spanned};
 use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, Pattern};
 
 type Error = Box<dyn std::error::Error + 'static>;
-
 
 // Context for HIR evaluation with access to the program
 pub struct HirEvalContext<'db> {
@@ -72,7 +74,7 @@ pub fn eval_hir_function_body<'db>(
 
     // Create context for evaluation
     let context = HirEvalContext { db, program };
-    
+
     // Evaluate all expressions in the function body
     let body = func.body(db);
     let mut result = Value::Unit;
@@ -108,7 +110,7 @@ pub fn eval_hir_function_body_with_context<'db>(
 
     // Create new environment with all functions bound
     let mut env = Environment::toplevel();
-    
+
     // Bind all functions in the program
     let functions = context.program.functions(context.db);
     for (name, hir_func) in &functions {
@@ -119,7 +121,7 @@ pub fn eval_hir_function_body_with_context<'db>(
         );
         env.bind(name.clone(), func_value);
     }
-    
+
     let mut child_env = env.child(bindings);
 
     // Evaluate all expressions in the function body
@@ -137,7 +139,11 @@ pub fn eval_hir_expr<'db>(
     env: &mut Environment<'_>,
     expr: HirExpr<'db>,
 ) -> Result<Value, Error> {
-    eval_spanned_expr(context, env, (expr.expr(context.db).clone(), expr.span(context.db)))
+    eval_spanned_expr(
+        context,
+        env,
+        (expr.expr(context.db).clone(), expr.span(context.db)),
+    )
 }
 
 fn eval_spanned_expr<'db>(
@@ -401,128 +407,129 @@ fn match_list_with_rest(
 mod tests {
     use super::*;
     use tribute_ast::TributeDatabaseImpl;
+    use salsa::Database;
 
     #[test]
     fn test_hir_arithmetic() {
-        let mut db = TributeDatabaseImpl::default();
-
-        // Test simple arithmetic expression wrapped in a main function
-        let source = r#"(fn (main) (+ 1 2))"#;
-        match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Number(3)) => {}
-            Ok(other) => panic!("Expected Number(3), got {:?}", other),
-            Err(e) => panic!("HIR evaluation failed: {}", e),
-        }
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test simple arithmetic expression wrapped in a main function
+            let source = r#"(fn (main) (+ 1 2))"#;
+            match crate::eval_with_hir(db, "test.trb", source) {
+                Ok(Value::Number(3)) => {}
+                Ok(other) => panic!("Expected Number(3), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
     }
 
     #[test]
     fn test_hir_print_line() {
-        let mut db = TributeDatabaseImpl::default();
-
-        // Test print_line builtin wrapped in a main function
-        let source = r#"(fn (main) (print_line "Hello HIR"))"#;
-        match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Unit) => {}
-            Ok(other) => panic!("Expected Unit, got {:?}", other),
-            Err(e) => panic!("HIR evaluation failed: {}", e),
-        }
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test print_line builtin wrapped in a main function
+            let source = r#"(fn (main) (print_line "Hello HIR"))"#;
+            match crate::eval_with_hir(db, "test.trb", source) {
+                Ok(Value::Unit) => {}
+                Ok(other) => panic!("Expected Unit, got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
     }
 
     #[test]
     fn test_hir_nested_arithmetic() {
-        let mut db = TributeDatabaseImpl::default();
-
-        // Test nested arithmetic wrapped in a main function
-        let source = r#"(fn (main) (+ (* 2 3) (/ 8 2)))"#;
-        match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Number(10)) => {}
-            Ok(other) => panic!("Expected Number(10), got {:?}", other),
-            Err(e) => panic!("HIR evaluation failed: {}", e),
-        }
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test nested arithmetic wrapped in a main function
+            let source = r#"(fn (main) (+ (* 2 3) (/ 8 2)))"#;
+            match crate::eval_with_hir(db, "test.trb", source) {
+                Ok(Value::Number(10)) => {}
+                Ok(other) => panic!("Expected Number(10), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
     }
 
     #[test]
     fn test_hir_let_binding() {
-        let mut db = TributeDatabaseImpl::default();
-
-        // Test let binding without body
-        let source = r#"(fn (main) (let x 42) x)"#;
-        match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Number(42)) => {}
-            Ok(other) => panic!("Expected Number(42), got {:?}", other),
-            Err(e) => panic!("HIR evaluation failed: {}", e),
-        }
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test let binding without body
+            let source = r#"(fn (main) (let x 42) x)"#;
+            match crate::eval_with_hir(db, "test.trb", source) {
+                Ok(Value::Number(42)) => {}
+                Ok(other) => panic!("Expected Number(42), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
     }
 
     #[test]
     fn test_hir_pattern_matching() {
-        let mut db = TributeDatabaseImpl::default();
-
-        // Test pattern matching
-        let source = r#"
-            (fn (test_number n)
-              (match n
-                (case 0 "zero")
-                (case 1 "one")
-                (case _ "other")))
-            (fn (main) (test_number 0))
-        "#;
-        match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::String(s)) if s == "zero" => {}
-            Ok(other) => panic!("Expected String(\"zero\"), got {:?}", other),
-            Err(e) => panic!("HIR evaluation failed: {}", e),
-        }
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test pattern matching
+            let source = r#"
+                (fn (test_number n)
+                  (match n
+                    (case 0 "zero")
+                    (case 1 "one")
+                    (case _ "other")))
+                (fn (main) (test_number 0))
+            "#;
+            match crate::eval_with_hir(db, "test.trb", source) {
+                Ok(Value::String(s)) if s == "zero" => {}
+                Ok(other) => panic!("Expected String(\"zero\"), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
     }
 
     #[test]
     fn test_hir_user_defined_function() {
-        let mut db = TributeDatabaseImpl::default();
-
-        // Test user-defined function call
-        let source = r#"
-            (fn (add x y) (+ x y))
-            (fn (main) (add 10 20))
-        "#;
-        match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Number(30)) => {}
-            Ok(other) => panic!("Expected Number(30), got {:?}", other),
-            Err(e) => panic!("HIR evaluation failed: {}", e),
-        }
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test user-defined function call
+            let source = r#"
+                (fn (add x y) (+ x y))
+                (fn (main) (add 10 20))
+            "#;
+            match crate::eval_with_hir(db, "test.trb", source) {
+                Ok(Value::Number(30)) => {}
+                Ok(other) => panic!("Expected Number(30), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
     }
 
     #[test]
     fn test_hir_functions_calling_each_other() {
-        let mut db = TributeDatabaseImpl::default();
-
-        // Test functions calling each other
-        let source = r#"
-            (fn (double x) (* x 2))
-            (fn (add_and_double x y) (double (+ x y)))
-            (fn (main) (add_and_double 5 10))
-        "#;
-        match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Number(30)) => {}
-            Ok(other) => panic!("Expected Number(30), got {:?}", other),
-            Err(e) => panic!("HIR evaluation failed: {}", e),
-        }
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test functions calling each other
+            let source = r#"
+                (fn (double x) (* x 2))
+                (fn (add_and_double x y) (double (+ x y)))
+                (fn (main) (add_and_double 5 10))
+            "#;
+            match crate::eval_with_hir(db, "test.trb", source) {
+                Ok(Value::Number(30)) => {}
+                Ok(other) => panic!("Expected Number(30), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
     }
 
     #[test]
     fn test_hir_recursive_function() {
-        let mut db = TributeDatabaseImpl::default();
-
-        // Test recursive function (factorial)
-        let source = r#"
-            (fn (factorial n)
-              (match n
-                (case 0 1)
-                (case _ (* n (factorial (- n 1))))))
-            (fn (main) (factorial 5))
-        "#;
-        match crate::eval_with_hir(&mut db, "test.trb", source) {
-            Ok(Value::Number(120)) => {}
-            Ok(other) => panic!("Expected Number(120), got {:?}", other),
-            Err(e) => panic!("HIR evaluation failed: {}", e),
-        }
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test recursive function (factorial)
+            let source = r#"
+                (fn (factorial n)
+                  (match n
+                    (case 0 1)
+                    (case _ (* n (factorial (- n 1))))))
+                (fn (main) (factorial 5))
+            "#;
+            match crate::eval_with_hir(db, "test.trb", source) {
+                Ok(Value::Number(120)) => {}
+                Ok(other) => panic!("Expected Number(120), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
     }
 }
