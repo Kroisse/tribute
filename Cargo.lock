@@ -646,6 +646,7 @@ dependencies = [
  "insta",
  "salsa",
  "tribute-ast",
+ "tribute-hir",
 ]
 
 [[package]]

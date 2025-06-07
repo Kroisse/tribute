@@ -30,6 +30,30 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_basic_example() {
+        let path = Path::new("lang-examples/basic.trb");
+        let ast = parse_file(path);
+
+        assert_debug_snapshot!(ast);
+    }
+
+    #[test]
+    fn test_parse_functions_example() {
+        let path = Path::new("lang-examples/functions.trb");
+        let ast = parse_file(path);
+
+        assert_debug_snapshot!(ast);
+    }
+
+    #[test]
+    fn test_parse_let_bindings_example() {
+        let path = Path::new("lang-examples/let_bindings.trb");
+        let ast = parse_file(path);
+
+        assert_debug_snapshot!(ast);
+    }
+
+    #[test]
     fn test_salsa_parse_hello_example() {
         let path = Path::new("lang-examples/hello.trb");
         let source = std::fs::read_to_string(path).expect("Failed to read file");

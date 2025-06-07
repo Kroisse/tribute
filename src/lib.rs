@@ -1,5 +1,6 @@
 pub mod builtins;
 pub mod eval;
+pub mod hir_eval;
 
 use std::path::Path;
 
@@ -7,7 +8,9 @@ pub use tribute_ast::{
     diagnostics, parse_source_file, Diagnostic, DiagnosticSeverity, Program, SourceFile,
     Item, TributeDatabaseImpl, TributeParser, ast,
 };
+pub use tribute_hir::{lower_source_to_hir, compile_to_hir};
 pub use crate::eval::{eval_expr, Environment, Value};
+pub use crate::hir_eval::{eval_hir_program, eval_hir_expr, HirEnvironment};
 
 // Legacy parse function (kept for compatibility)
 pub fn parse(path: &Path, source: &str) -> Vec<(ast::Expr, ast::SimpleSpan)> {
@@ -31,4 +34,19 @@ pub fn parse_with_database<'db>(
     let program = parse_source_file(db, source_file);
     let diags = diagnostics(db, source_file);
     (program, diags)
+}
+
+// HIR-based evaluation function
+pub fn eval_with_hir<'db>(
+    db: &'db dyn salsa::Database,
+    path: &(impl AsRef<Path> + ?Sized),
+    source: &str,
+) -> Result<Value, Box<dyn std::error::Error + 'static>> {
+    use crate::hir_eval::HirEnvironment;
+    
+    let source_file = SourceFile::new(db, path.as_ref().to_path_buf(), source.to_string());
+    let hir_program = lower_source_to_hir(db, source_file)
+        .ok_or("Failed to lower AST to HIR")?;
+    let mut env = HirEnvironment::toplevel();
+    eval_hir_program(db, &mut env, hir_program)
 }

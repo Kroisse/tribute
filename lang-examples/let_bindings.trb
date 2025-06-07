@@ -1,0 +1,13 @@
+// Let Bindings Example - demonstrates variable scoping (WIP)
+// - Nested let bindings with lexical scoping
+// - Variable references within let scope
+// - NOTE: This example shows intended let syntax, but full support is still in development
+// - Currently falls back to AST evaluation
+
+(fn (main)
+  (let x 42 
+    (let y (+ x 8)
+      (print_line "Testing nested let bindings:")
+      (print_line x)
+      (print_line y)
+      (print_line (+ x y)))))

@@ -4,7 +4,7 @@
 extern crate tribute;
 
 use std::{ffi::OsString, path::PathBuf};
-use tribute::{eval_expr, parse_with_database, Environment, TributeDatabaseImpl, Value};
+use tribute::{eval_expr, eval_with_hir, parse_with_database, Environment, TributeDatabaseImpl, Value};
 
 type Error = std::io::Error;
 
@@ -27,7 +27,23 @@ fn main() -> Result<(), Error> {
         }
     }
 
-    // Execute the program
+    // Try HIR-based evaluation first
+    eprintln!("Attempting HIR-based evaluation...");
+    match eval_with_hir(&db, &path, &source) {
+        Ok(result) => {
+            eprintln!("HIR evaluation successful!");
+            if !matches!(result, Value::Unit) {
+                println!("Result: {}", result);
+            }
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!("HIR evaluation failed: {}", e);
+            eprintln!("Falling back to AST-based evaluation...");
+        }
+    }
+
+    // Fallback to AST-based evaluation
     let mut env = Environment::toplevel();
 
     // Evaluate all expressions to register functions

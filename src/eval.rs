@@ -6,7 +6,7 @@ type Error = Box<dyn std::error::Error + 'static>;
 
 pub type BuiltinFn = for<'a> fn(&'a [Value]) -> Result<Value, Error>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Value {
     Unit,
     Number(i64),

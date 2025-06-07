@@ -1,0 +1,316 @@
+---
+source: tests/parse.rs
+expression: ast
+---
+[
+    (
+        List(
+            [
+                (
+                    Identifier(
+                        "fn",
+                    ),
+                    SimpleSpan {
+                        start: 288,
+                        end: 290,
+                        context: (),
+                    },
+                ),
+                (
+                    List(
+                        [
+                            (
+                                Identifier(
+                                    "main",
+                                ),
+                                SimpleSpan {
+                                    start: 292,
+                                    end: 296,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    ),
+                    SimpleSpan {
+                        start: 291,
+                        end: 297,
+                        context: (),
+                    },
+                ),
+                (
+                    List(
+                        [
+                            (
+                                Identifier(
+                                    "let",
+                                ),
+                                SimpleSpan {
+                                    start: 301,
+                                    end: 304,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                Identifier(
+                                    "x",
+                                ),
+                                SimpleSpan {
+                                    start: 305,
+                                    end: 306,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                Number(
+                                    42,
+                                ),
+                                SimpleSpan {
+                                    start: 307,
+                                    end: 309,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                List(
+                                    [
+                                        (
+                                            Identifier(
+                                                "let",
+                                            ),
+                                            SimpleSpan {
+                                                start: 316,
+                                                end: 319,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Identifier(
+                                                "y",
+                                            ),
+                                            SimpleSpan {
+                                                start: 320,
+                                                end: 321,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            List(
+                                                [
+                                                    (
+                                                        Identifier(
+                                                            "+",
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 323,
+                                                            end: 324,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                    (
+                                                        Identifier(
+                                                            "x",
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 325,
+                                                            end: 326,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                    (
+                                                        Number(
+                                                            8,
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 327,
+                                                            end: 328,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                ],
+                                            ),
+                                            SimpleSpan {
+                                                start: 322,
+                                                end: 329,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            List(
+                                                [
+                                                    (
+                                                        Identifier(
+                                                            "print_line",
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 337,
+                                                            end: 347,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                    (
+                                                        String(
+                                                            "Testing nested let bindings:",
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 348,
+                                                            end: 378,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                ],
+                                            ),
+                                            SimpleSpan {
+                                                start: 336,
+                                                end: 379,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            List(
+                                                [
+                                                    (
+                                                        Identifier(
+                                                            "print_line",
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 387,
+                                                            end: 397,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                    (
+                                                        Identifier(
+                                                            "x",
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 398,
+                                                            end: 399,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                ],
+                                            ),
+                                            SimpleSpan {
+                                                start: 386,
+                                                end: 400,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            List(
+                                                [
+                                                    (
+                                                        Identifier(
+                                                            "print_line",
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 408,
+                                                            end: 418,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                    (
+                                                        Identifier(
+                                                            "y",
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 419,
+                                                            end: 420,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                ],
+                                            ),
+                                            SimpleSpan {
+                                                start: 407,
+                                                end: 421,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            List(
+                                                [
+                                                    (
+                                                        Identifier(
+                                                            "print_line",
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 429,
+                                                            end: 439,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                    (
+                                                        List(
+                                                            [
+                                                                (
+                                                                    Identifier(
+                                                                        "+",
+                                                                    ),
+                                                                    SimpleSpan {
+                                                                        start: 441,
+                                                                        end: 442,
+                                                                        context: (),
+                                                                    },
+                                                                ),
+                                                                (
+                                                                    Identifier(
+                                                                        "x",
+                                                                    ),
+                                                                    SimpleSpan {
+                                                                        start: 443,
+                                                                        end: 444,
+                                                                        context: (),
+                                                                    },
+                                                                ),
+                                                                (
+                                                                    Identifier(
+                                                                        "y",
+                                                                    ),
+                                                                    SimpleSpan {
+                                                                        start: 445,
+                                                                        end: 446,
+                                                                        context: (),
+                                                                    },
+                                                                ),
+                                                            ],
+                                                        ),
+                                                        SimpleSpan {
+                                                            start: 440,
+                                                            end: 447,
+                                                            context: (),
+                                                        },
+                                                    ),
+                                                ],
+                                            ),
+                                            SimpleSpan {
+                                                start: 428,
+                                                end: 448,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                ),
+                                SimpleSpan {
+                                    start: 315,
+                                    end: 449,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    ),
+                    SimpleSpan {
+                        start: 300,
+                        end: 450,
+                        context: (),
+                    },
+                ),
+            ],
+        ),
+        SimpleSpan {
+            start: 287,
+            end: 451,
+            context: (),
+        },
+    ),
+]

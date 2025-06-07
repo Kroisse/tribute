@@ -1,0 +1,15 @@
+// Functions Example - demonstrates user-defined function calls
+// - User-defined function definitions with parameters
+// - Function calls with argument passing
+// - Nested arithmetic expressions
+// - Multiple function definitions in one program
+
+(fn (add x y) (+ x y))
+
+(fn (main) 
+  (print_line "Testing user-defined functions:")
+  (print_line (add 10 20))
+  (print_line "Testing nested arithmetic:")
+  (print_line (+ (* 3 4) (/ 15 3)))
+  (print_line "Testing string operations:")
+  (print_line "Hello, Tribute World!"))
