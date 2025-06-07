@@ -1,0 +1,68 @@
+---
+source: tests/parse.rs
+expression: hir
+---
+HirProgram {
+    [salsa id]: Id(1400),
+    functions: {
+        "main": HirFunction {
+            [salsa id]: Id(1000),
+            name: "main",
+            params: [],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(c00),
+                    expr: Let {
+                        var: "x",
+                        value: (
+                            Number(
+                                10,
+                            ),
+                            SimpleSpan {
+                                start: 199,
+                                end: 201,
+                                context: (),
+                            },
+                        ),
+                    },
+                    span: SimpleSpan {
+                        start: 192,
+                        end: 202,
+                        context: (),
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(c01),
+                    expr: Builtin {
+                        name: "print_line",
+                        args: [
+                            (
+                                Variable(
+                                    "x",
+                                ),
+                                SimpleSpan {
+                                    start: 217,
+                                    end: 218,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 205,
+                        end: 219,
+                        context: (),
+                    },
+                },
+            ],
+            span: SimpleSpan {
+                start: 179,
+                end: 220,
+                context: (),
+            },
+        },
+    },
+    main: Some(
+        "main",
+    ),
+}

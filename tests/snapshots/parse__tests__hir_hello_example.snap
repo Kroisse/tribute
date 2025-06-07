@@ -1,0 +1,47 @@
+---
+source: tests/parse.rs
+expression: hir
+---
+HirProgram {
+    [salsa id]: Id(1400),
+    functions: {
+        "main": HirFunction {
+            [salsa id]: Id(1000),
+            name: "main",
+            params: [],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(c00),
+                    expr: Builtin {
+                        name: "print_line",
+                        args: [
+                            (
+                                String(
+                                    "Hello, world!",
+                                ),
+                                SimpleSpan {
+                                    start: 51,
+                                    end: 66,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 39,
+                        end: 67,
+                        context: (),
+                    },
+                },
+            ],
+            span: SimpleSpan {
+                start: 0,
+                end: 68,
+                context: (),
+            },
+        },
+    },
+    main: Some(
+        "main",
+    ),
+}

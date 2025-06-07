@@ -1,0 +1,182 @@
+---
+source: tests/parse.rs
+expression: hir
+---
+HirProgram {
+    [salsa id]: Id(1400),
+    functions: {
+        "add_and_double": HirFunction {
+            [salsa id]: Id(1000),
+            name: "add_and_double",
+            params: [
+                "x",
+                "y",
+            ],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(c00),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "double",
+                            ),
+                            SimpleSpan {
+                                start: 50,
+                                end: 56,
+                                context: (),
+                            },
+                        ),
+                        args: [
+                            (
+                                Builtin {
+                                    name: "+",
+                                    args: [
+                                        (
+                                            Variable(
+                                                "x",
+                                            ),
+                                            SimpleSpan {
+                                                start: 60,
+                                                end: 61,
+                                                context: (),
+                                            },
+                                        ),
+                                        (
+                                            Variable(
+                                                "y",
+                                            ),
+                                            SimpleSpan {
+                                                start: 62,
+                                                end: 63,
+                                                context: (),
+                                            },
+                                        ),
+                                    ],
+                                },
+                                SimpleSpan {
+                                    start: 57,
+                                    end: 64,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 49,
+                        end: 65,
+                        context: (),
+                    },
+                },
+            ],
+            span: SimpleSpan {
+                start: 24,
+                end: 66,
+                context: (),
+            },
+        },
+        "double": HirFunction {
+            [salsa id]: Id(1001),
+            name: "double",
+            params: [
+                "x",
+            ],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(c01),
+                    expr: Builtin {
+                        name: "*",
+                        args: [
+                            (
+                                Variable(
+                                    "x",
+                                ),
+                                SimpleSpan {
+                                    start: 18,
+                                    end: 19,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                Number(
+                                    2,
+                                ),
+                                SimpleSpan {
+                                    start: 20,
+                                    end: 21,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 15,
+                        end: 22,
+                        context: (),
+                    },
+                },
+            ],
+            span: SimpleSpan {
+                start: 0,
+                end: 23,
+                context: (),
+            },
+        },
+        "main": HirFunction {
+            [salsa id]: Id(1002),
+            name: "main",
+            params: [],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(c02),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "add_and_double",
+                            ),
+                            SimpleSpan {
+                                start: 79,
+                                end: 93,
+                                context: (),
+                            },
+                        ),
+                        args: [
+                            (
+                                Number(
+                                    5,
+                                ),
+                                SimpleSpan {
+                                    start: 94,
+                                    end: 95,
+                                    context: (),
+                                },
+                            ),
+                            (
+                                Number(
+                                    10,
+                                ),
+                                SimpleSpan {
+                                    start: 96,
+                                    end: 98,
+                                    context: (),
+                                },
+                            ),
+                        ],
+                    },
+                    span: SimpleSpan {
+                        start: 78,
+                        end: 99,
+                        context: (),
+                    },
+                },
+            ],
+            span: SimpleSpan {
+                start: 67,
+                end: 100,
+                context: (),
+            },
+        },
+    },
+    main: Some(
+        "main",
+    ),
+}

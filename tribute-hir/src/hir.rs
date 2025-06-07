@@ -5,7 +5,7 @@ use tribute_ast::{Identifier, SimpleSpan, Spanned};
 pub type Span = SimpleSpan;
 
 /// High-level intermediate representation for Tribute programs (tracked by Salsa)
-#[salsa::tracked]
+#[salsa::tracked(debug)]
 pub struct HirProgram<'db> {
     #[return_ref]
     pub functions: BTreeMap<Identifier, HirFunction<'db>>,
@@ -13,7 +13,7 @@ pub struct HirProgram<'db> {
 }
 
 /// Function definition in HIR (tracked by Salsa)
-#[salsa::tracked]
+#[salsa::tracked(debug)]
 pub struct HirFunction<'db> {
     #[return_ref]
     pub name: Identifier,
@@ -25,7 +25,7 @@ pub struct HirFunction<'db> {
 }
 
 /// HIR Expression (tracked by Salsa)
-#[salsa::tracked]
+#[salsa::tracked(debug)]
 pub struct HirExpr<'db> {
     pub expr: Expr,
     pub span: Span,
