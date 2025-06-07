@@ -1,5 +1,5 @@
-use tree_sitter::{Parser, Node};
 use crate::ast::{Expr, SimpleSpan};
+use tree_sitter::{Node, Parser};
 
 pub struct TributeParser {
     parser: Parser,
@@ -13,13 +13,15 @@ impl TributeParser {
         Ok(TributeParser { parser })
     }
 
-    pub fn parse(&mut self, source: &str) -> Result<Vec<(Expr, SimpleSpan)>, Box<dyn std::error::Error>> {
-        let tree = self.parser.parse(source, None)
-            .ok_or("Failed to parse")?;
-        
+    pub fn parse(
+        &mut self,
+        source: &str,
+    ) -> Result<Vec<(Expr, SimpleSpan)>, Box<dyn std::error::Error>> {
+        let tree = self.parser.parse(source, None).ok_or("Failed to parse")?;
+
         let root_node = tree.root_node();
         let mut expressions = Vec::new();
-        
+
         for i in 0..root_node.child_count() {
             if let Some(child) = root_node.child(i) {
                 if let Some((expr, span)) = self.node_to_expr_with_span(child, source) {
@@ -27,7 +29,7 @@ impl TributeParser {
                 }
             }
         }
-        
+
         Ok(expressions)
     }
 
@@ -47,8 +49,8 @@ impl TributeParser {
             "string" => {
                 let text = node.utf8_text(source.as_bytes()).ok()?;
                 // Remove quotes and process escape sequences
-                let content = &text[1..text.len()-1];
-                let processed = process_escape_sequences(content)?;
+                let content = &text[1..text.len() - 1];
+                let processed = process_escape_sequences(content).ok()?;
                 Some(Expr::String(processed))
             }
             "identifier" => {
@@ -69,41 +71,75 @@ impl TributeParser {
                 }
                 Some(Expr::List(children))
             }
-            _ => None
+            _ => None,
         }
     }
 }
 
+/// Error type for string literal processing
+#[derive(Debug, Clone, PartialEq, derive_more::Display, derive_more::Error)]
+pub enum StringLiteralError {
+    #[display("Invalid UTF-8 sequence in processed string")]
+    InvalidUtf8Sequence,
+    #[display("Incomplete hex escape sequence")]
+    IncompleteHexEscape,
+    #[display("Invalid hex digits in escape sequence: {hex_str}")]
+    InvalidHexDigits { hex_str: String },
+}
+
 /// Process escape sequences in a string literal
-fn process_escape_sequences(input: &str) -> Option<String> {
-    let mut result = String::new();
+fn process_escape_sequences(input: &str) -> Result<String, StringLiteralError> {
+    let mut result = Vec::<u8>::new();
     let mut chars = input.chars();
-    
+
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             match chars.next() {
-                Some('"') => result.push('"'),
-                Some('\\') => result.push('\\'),
-                Some('n') | Some('N') => result.push('\n'),
-                Some('t') | Some('T') => result.push('\t'),
-                Some('r') | Some('R') => result.push('\r'),
-                Some('0') => result.push('\0'),
+                Some('"') => result.extend_from_slice("\"".as_bytes()),
+                Some('\\') => result.extend_from_slice("\\".as_bytes()),
+                Some('n') | Some('N') => result.extend_from_slice("\n".as_bytes()),
+                Some('t') | Some('T') => result.extend_from_slice("\t".as_bytes()),
+                Some('r') | Some('R') => result.extend_from_slice("\r".as_bytes()),
+                Some('0') => result.push(0),
+                Some('x') | Some('X') => {
+                    // Hex escape sequence: \xHH
+                    let hex1 = chars
+                        .next()
+                        .ok_or(StringLiteralError::IncompleteHexEscape)?;
+                    let hex2 = chars
+                        .next()
+                        .ok_or(StringLiteralError::IncompleteHexEscape)?;
+
+                    let hex_str = format!("{}{}", hex1, hex2);
+                    let byte_value = u8::from_str_radix(&hex_str, 16).map_err(|_| {
+                        StringLiteralError::InvalidHexDigits {
+                            hex_str: hex_str.clone(),
+                        }
+                    })?;
+
+                    // Push the raw byte - this might create invalid UTF-8
+                    result.push(byte_value);
+                }
                 Some(other) => {
                     // For unknown escape sequences, preserve the backslash and character
-                    result.push('\\');
-                    result.push(other);
+                    result.extend_from_slice("\\".as_bytes());
+                    result.extend_from_slice(other.to_string().as_bytes());
                 }
                 None => {
                     // Trailing backslash - preserve it
-                    result.push('\\');
+                    result.extend_from_slice("\\".as_bytes());
                 }
             }
         } else {
-            result.push(ch);
+            result.extend_from_slice(ch.to_string().as_bytes());
         }
     }
-    
-    Some(result)
+
+    // Validate that the final result is valid UTF-8
+    match String::from_utf8(result) {
+        Ok(valid_string) => Ok(valid_string),
+        Err(_) => Err(StringLiteralError::InvalidUtf8Sequence),
+    }
 }
 
 #[cfg(test)]
@@ -112,47 +148,41 @@ mod tests {
 
     #[test]
     fn test_process_escape_sequences_basic() {
-        assert_eq!(process_escape_sequences("hello"), Some("hello".to_string()));
-        assert_eq!(process_escape_sequences(""), Some("".to_string()));
+        assert_eq!(process_escape_sequences("hello"), Ok("hello".to_string()));
+        assert_eq!(process_escape_sequences(""), Ok("".to_string()));
     }
 
     #[test]
     fn test_process_escape_sequences_quotes() {
         assert_eq!(
             process_escape_sequences(r#"Hello \"World\""#),
-            Some(r#"Hello "World""#.to_string())
+            Ok(r#"Hello "World""#.to_string())
         );
-        assert_eq!(
-            process_escape_sequences(r#"\""#),
-            Some(r#"""#.to_string())
-        );
+        assert_eq!(process_escape_sequences(r#"\""#), Ok(r#"""#.to_string()));
     }
 
     #[test]
     fn test_process_escape_sequences_backslash() {
         assert_eq!(
             process_escape_sequences(r"C:\\Users\\name"),
-            Some(r"C:\Users\name".to_string())
+            Ok(r"C:\Users\name".to_string())
         );
-        assert_eq!(
-            process_escape_sequences(r"\\"),
-            Some(r"\".to_string())
-        );
+        assert_eq!(process_escape_sequences(r"\\"), Ok(r"\".to_string()));
     }
 
     #[test]
     fn test_process_escape_sequences_whitespace() {
         assert_eq!(
             process_escape_sequences(r"Line 1\nLine 2"),
-            Some("Line 1\nLine 2".to_string())
+            Ok("Line 1\nLine 2".to_string())
         );
         assert_eq!(
             process_escape_sequences(r"Tab\there"),
-            Some("Tab\there".to_string())
+            Ok("Tab\there".to_string())
         );
         assert_eq!(
             process_escape_sequences(r"Carriage\rReturn"),
-            Some("Carriage\rReturn".to_string())
+            Ok("Carriage\rReturn".to_string())
         );
     }
 
@@ -161,21 +191,21 @@ mod tests {
         // Test uppercase escape sequences
         assert_eq!(
             process_escape_sequences(r"Line 1\NLine 2"),
-            Some("Line 1\nLine 2".to_string())
+            Ok("Line 1\nLine 2".to_string())
         );
         assert_eq!(
             process_escape_sequences(r"Tab\There"),
-            Some("Tab\there".to_string())
+            Ok("Tab\there".to_string())
         );
         assert_eq!(
             process_escape_sequences(r"Carriage\RReturn"),
-            Some("Carriage\rReturn".to_string())
+            Ok("Carriage\rReturn".to_string())
         );
-        
+
         // Test mixed case
         assert_eq!(
             process_escape_sequences(r"Mixed\n\T\r\N"),
-            Some("Mixed\n\t\r\n".to_string())
+            Ok("Mixed\n\t\r\n".to_string())
         );
     }
 
@@ -183,7 +213,7 @@ mod tests {
     fn test_process_escape_sequences_null() {
         assert_eq!(
             process_escape_sequences(r"Null\0char"),
-            Some("Null\0char".to_string())
+            Ok("Null\0char".to_string())
         );
     }
 
@@ -191,20 +221,17 @@ mod tests {
     fn test_process_escape_sequences_unknown() {
         // Unknown escape sequences should be preserved as-is
         assert_eq!(
-            process_escape_sequences(r"Unknown\x escape"),
-            Some(r"Unknown\x escape".to_string())
+            process_escape_sequences(r"Unknown\z escape"),
+            Ok(r"Unknown\z escape".to_string())
         );
-        assert_eq!(
-            process_escape_sequences(r"\z"),
-            Some(r"\z".to_string())
-        );
+        assert_eq!(process_escape_sequences(r"\z"), Ok(r"\z".to_string()));
     }
 
     #[test]
     fn test_process_escape_sequences_trailing_backslash() {
         assert_eq!(
             process_escape_sequences(r"trailing\"),
-            Some(r"trailing\".to_string())
+            Ok(r"trailing\".to_string())
         );
     }
 
@@ -212,14 +239,62 @@ mod tests {
     fn test_process_escape_sequences_mixed() {
         assert_eq!(
             process_escape_sequences(r#"Mixed: \"quote\" and \\backslash\n"#),
-            Some("Mixed: \"quote\" and \\backslash\n".to_string())
+            Ok("Mixed: \"quote\" and \\backslash\n".to_string())
+        );
+    }
+
+    #[test]
+    fn test_process_escape_sequences_hex() {
+        // Valid hex escapes
+        assert_eq!(process_escape_sequences(r"\x41"), Ok("A".to_string()));
+        assert_eq!(
+            process_escape_sequences(r"Hello\x20World"),
+            Ok("Hello World".to_string())
+        );
+
+        // Invalid hex escapes should return errors
+        assert_eq!(
+            process_escape_sequences(r"\x4"),
+            Err(StringLiteralError::IncompleteHexEscape)
+        );
+        assert_eq!(
+            process_escape_sequences(r"\xGG"),
+            Err(StringLiteralError::InvalidHexDigits {
+                hex_str: "GG".to_string()
+            })
+        );
+        assert_eq!(
+            process_escape_sequences(r"\x"),
+            Err(StringLiteralError::IncompleteHexEscape)
+        );
+    }
+
+    #[test]
+    fn test_process_escape_sequences_invalid_utf8() {
+        // Create invalid UTF-8 sequences using hex escapes
+        // 0xFF is not valid UTF-8
+        assert_eq!(
+            process_escape_sequences(r"\xFF"),
+            Err(StringLiteralError::InvalidUtf8Sequence)
+        );
+
+        // 0x80 without proper leading byte is invalid UTF-8
+        assert_eq!(
+            process_escape_sequences(r"\x80"),
+            Err(StringLiteralError::InvalidUtf8Sequence)
+        );
+
+        // Valid UTF-8 should work
+        assert_eq!(
+            process_escape_sequences(r"\x41\x42\x43"),
+            Ok("ABC".to_string())
         );
     }
 
     #[test]
     fn test_string_parsing_with_escape_sequences() {
         let mut parser = TributeParser::new().unwrap();
-        
+
         // Test basic quote escaping
         let result = parser.parse(r#""Hello \"World\"""#).unwrap();
         assert_eq!(result.len(), 1);

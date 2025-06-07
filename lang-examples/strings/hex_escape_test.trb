@@ -1,0 +1,3 @@
+(fn (main)
+  (print_line "Hex escape: \x41\x42\x43")
+  (print_line "Space: Hello\x20World"))

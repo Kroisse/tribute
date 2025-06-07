@@ -6,21 +6,21 @@ fn test_escape_sequences_in_evaluation() {
     TributeDatabaseImpl::default().attach(|db| {
         // Test quote escaping
         let source = r#"(fn (main) (print_line "Hello \"World\""))"#;
-        match tribute::eval_with_hir(db, "test.trb", source) {
+        match tribute::eval_str(db, "test.trb", source) {
             Ok(_) => {} // print_line returns Unit
             Err(e) => panic!("Failed to evaluate quote escape: {}", e),
         }
 
         // Test backslash escaping  
         let source = r#"(fn (main) (print_line "Path: C:\\Users\\name"))"#;
-        match tribute::eval_with_hir(db, "test.trb", source) {
+        match tribute::eval_str(db, "test.trb", source) {
             Ok(_) => {} // print_line returns Unit
             Err(e) => panic!("Failed to evaluate backslash escape: {}", e),
         }
 
         // Test whitespace escaping
         let source = r#"(fn (main) (print_line "Line1\nLine2\tTabbed"))"#;
-        match tribute::eval_with_hir(db, "test.trb", source) {
+        match tribute::eval_str(db, "test.trb", source) {
             Ok(_) => {} // print_line returns Unit
             Err(e) => panic!("Failed to evaluate whitespace escape: {}", e),
         }
@@ -34,7 +34,7 @@ fn test_string_literals_in_function_arguments() {
             (fn (echo s) s)
             (fn (main) (echo "Test \"quotes\" and \\backslash"))
         "#;
-        match tribute::eval_with_hir(db, "test.trb", source) {
+        match tribute::eval_str(db, "test.trb", source) {
             Ok(tribute::eval::Value::String(s)) => {
                 assert_eq!(s, "Test \"quotes\" and \\backslash");
             }
@@ -52,7 +52,7 @@ fn test_string_literals_with_let_binding() {
                 (let message "Hello\n\"Escaped\" World")
                 message)
         "#;
-        match tribute::eval_with_hir(db, "test.trb", source) {
+        match tribute::eval_str(db, "test.trb", source) {
             Ok(tribute::eval::Value::String(s)) => {
                 assert_eq!(s, "Hello\n\"Escaped\" World");
             }
@@ -73,7 +73,7 @@ fn test_string_literals_in_pattern_matching() {
                     (case _ "other")))
             (fn (main) (test_string "hello\tworld"))
         "#;
-        match tribute::eval_with_hir(db, "test.trb", source) {
+        match tribute::eval_str(db, "test.trb", source) {
             Ok(tribute::eval::Value::String(s)) => {
                 assert_eq!(s, "tab found");
             }
@@ -88,7 +88,7 @@ fn test_edge_cases() {
     TributeDatabaseImpl::default().attach(|db| {
         // Test empty string
         let source = r#"(fn (main) "")"#;
-        match tribute::eval_with_hir(db, "test.trb", source) {
+        match tribute::eval_str(db, "test.trb", source) {
             Ok(tribute::eval::Value::String(s)) => {
                 assert_eq!(s, "");
             }
@@ -98,7 +98,7 @@ fn test_edge_cases() {
 
         // Test string with only escape sequences
         let source = r#"(fn (main) "\"\\\n\t")"#;
-        match tribute::eval_with_hir(db, "test.trb", source) {
+        match tribute::eval_str(db, "test.trb", source) {
             Ok(tribute::eval::Value::String(s)) => {
                 assert_eq!(s, "\"\\\n\t");
             }
@@ -108,7 +108,7 @@ fn test_edge_cases() {
 
         // Test unknown escape sequences (should be preserved)
         let source = r#"(fn (main) "Unknown \\x escape")"#;
-        match tribute::eval_with_hir(db, "test.trb", source) {
+        match tribute::eval_str(db, "test.trb", source) {
             Ok(tribute::eval::Value::String(s)) => {
                 assert_eq!(s, "Unknown \\x escape");
             }

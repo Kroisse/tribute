@@ -3,6 +3,7 @@ members = [".", "tree-sitter-tribute", "tribute-ast", "tribute-hir"]
 
 [workspace.dependencies]
 clap = { version = "4.0", features = ["derive"] }
+derive_more = { version = "2.0", features = ["error", "display"] }
 insta = "1.43.1"
 salsa = "0.22.0"
 serde = { version = "1.0", features = ["derive"] }
