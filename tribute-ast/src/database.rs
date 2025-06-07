@@ -1,7 +1,4 @@
-use crate::{
-    ast::SimpleSpan,
-    parser::TributeParser, Item, Program,
-};
+use crate::{ast::SimpleSpan, parser::TributeParser, Item, Program};
 use salsa::Accumulator;
 use std::path::PathBuf;
 
@@ -93,14 +90,3 @@ pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: SourceFile) 
 
     Program::new(db, expressions)
 }
-
-#[salsa::tracked]
-pub fn diagnostics<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Vec<Diagnostic> {
-    let _ = parse_source_file(db, source);
-    parse_source_file::accumulated::<Diagnostic>(db, source)
-        .into_iter()
-        .cloned()
-        .collect()
-}
-
-

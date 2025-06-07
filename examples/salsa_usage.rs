@@ -2,7 +2,7 @@
 
 use salsa::Setter;
 use tribute::{
-    diagnostics, parse_source_file, parse_with_database, SourceFile, TributeDatabaseImpl,
+    parse_source_file, parse_with_database, SourceFile, TributeDatabaseImpl,
 };
 
 fn main() {
@@ -83,10 +83,9 @@ fn error_handling_demo() {
 
     // Try to parse some invalid syntax
     let invalid_code = "this is not valid ( syntax";
-    let source_file = SourceFile::new(&db, "invalid.trb".into(), invalid_code.to_string());
+    let _source_file = SourceFile::new(&db, "invalid.trb".into(), invalid_code.to_string());
 
-    let program = parse_source_file(&db, source_file);
-    let diagnostics = diagnostics(&db, source_file);
+    let (program, diagnostics) = parse_with_database(&db, "invalid.trb", invalid_code);
 
     println!(
         "Parsed {} expressions from invalid code",

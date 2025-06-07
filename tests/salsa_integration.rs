@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use salsa::{Database as _, Setter as _};
-use tribute::{diagnostics, parse_source_file, SourceFile, TributeDatabaseImpl};
+use tribute::{parse_source_file, Diagnostic, SourceFile, TributeDatabaseImpl};
 
 #[test]
 fn test_salsa_database_examples() {
@@ -28,7 +28,7 @@ fn test_salsa_database_examples() {
         let (expr_count, diag_count) = TributeDatabaseImpl::default().attach(|db| {
             let source_file = SourceFile::new(db, filename.to_path_buf(), source_code.to_string());
             let program = parse_source_file(db, source_file);
-            let diagnostics = diagnostics(db, source_file);
+            let diagnostics = parse_source_file::accumulated::<Diagnostic>(db, source_file);
 
             // Extract data that doesn't depend on database lifetime
             (program.items(db).len(), diagnostics.len())
@@ -112,7 +112,7 @@ fn test_salsa_diagnostics_collection() {
     let (valid_expr_count, valid_diag_count) = TributeDatabaseImpl::default().attach(|db| {
         let valid_source = SourceFile::new(db, "valid.trb".into(), "(+ 1 2)".to_string());
         let valid_program = parse_source_file(db, valid_source);
-        let valid_diagnostics = diagnostics(db, valid_source);
+        let valid_diagnostics = parse_source_file::accumulated::<Diagnostic>(db, valid_source);
 
         (valid_program.items(db).len(), valid_diagnostics.len())
     });
@@ -131,7 +131,7 @@ fn test_salsa_diagnostics_collection() {
             "(+ 1 2) (* 3 4) (println \"test\")".to_string(),
         );
         let multi_program = parse_source_file(db, multi_source);
-        let multi_diagnostics = diagnostics(db, multi_source);
+        let multi_diagnostics = parse_source_file::accumulated::<Diagnostic>(db, multi_source);
 
         (multi_program.items(db).len(), multi_diagnostics.len())
     });

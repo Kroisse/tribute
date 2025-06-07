@@ -1,7 +1,7 @@
 use crate::builtins;
+use std::collections::HashMap;
 use tribute_ast::{ast::Identifier, Spanned};
 use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, Pattern};
-use std::collections::HashMap;
 
 type Error = Box<dyn std::error::Error + 'static>;
 
@@ -13,7 +13,11 @@ pub enum Value {
     Number(i64),
     String(String),
     List(Vec<Value>),
-    Fn(Identifier, Vec<Identifier>, Vec<Spanned<tribute_ast::ast::Expr>>),
+    Fn(
+        Identifier,
+        Vec<Identifier>,
+        Vec<Spanned<tribute_ast::ast::Expr>>,
+    ),
     BuiltinFn(&'static str, BuiltinFn),
 }
 
@@ -32,7 +36,7 @@ impl std::fmt::Display for Value {
                     write!(f, "{}", item)?;
                 }
                 f.write_str("]")
-            },
+            }
             Value::Fn(name, _, _) => write!(f, "<fn '{}'>", name),
             Value::BuiltinFn(name, _) => write!(f, "<builtin fn '{}'>", name),
         }
@@ -69,7 +73,10 @@ impl Environment<'_> {
         self.bindings.insert(ident, value);
     }
 
-    pub fn child(&self, bindings: impl IntoIterator<Item = (Identifier, Value)>) -> Environment<'_> {
+    pub fn child(
+        &self,
+        bindings: impl IntoIterator<Item = (Identifier, Value)>,
+    ) -> Environment<'_> {
         Environment {
             parent: Some(self),
             bindings: bindings.into_iter().collect(),
@@ -86,12 +93,19 @@ pub struct HirEvalContext<'db> {
 // Legacy AST-based evaluation function (DEPRECATED)
 // This function violates the HIR-first evaluation principle and should not be used.
 // Use eval_with_hir() or eval_hir_expr() instead.
-#[deprecated(since = "0.1.0", note = "Use eval_with_hir() for HIR-based evaluation instead")]
-pub fn eval_expr<'db>(db: &'db dyn salsa::Database, env: &mut Environment<'_>, expr: &tribute_ast::ast::Expr) -> Result<Value, Error> {
+#[deprecated(
+    since = "0.1.0",
+    note = "Use eval_with_hir() for HIR-based evaluation instead"
+)]
+pub fn eval_expr<'db>(
+    db: &'db dyn salsa::Database,
+    env: &mut Environment<'_>,
+    expr: &tribute_ast::ast::Expr,
+) -> Result<Value, Error> {
     // For compatibility with existing AST-based code, we need to parse and lower to HIR
     // This is a transitional function and should be phased out in favor of direct HIR evaluation
     use tribute_ast::ast::Expr;
-    
+
     match expr {
         // Handle function definitions by storing them in the environment
         Expr::List(exprs) if !exprs.is_empty() => {
@@ -109,17 +123,18 @@ pub fn eval_expr<'db>(db: &'db dyn salsa::Database, env: &mut Environment<'_>, e
                                         _ => Err("function parameter must be an identifier".into()),
                                     })
                                     .collect();
-                                
+
                                 let param_names = param_names?;
                                 let body_exprs = exprs[2..].to_vec();
-                                let function_value = Value::Fn(name.clone(), param_names, body_exprs);
+                                let function_value =
+                                    Value::Fn(name.clone(), param_names, body_exprs);
                                 env.bind(name.clone(), function_value);
                                 return Ok(Value::Unit);
                             }
                         }
                     }
                 }
-                
+
                 // Handle let bindings
                 if fn_name == "let" && exprs.len() == 3 {
                     if let (Expr::Identifier(ident), _) = &exprs[1] {
@@ -132,7 +147,7 @@ pub fn eval_expr<'db>(db: &'db dyn salsa::Database, env: &mut Environment<'_>, e
         }
         _ => {}
     }
-    
+
     // For other expressions, try direct evaluation based on expression type
     match expr {
         Expr::Number(n) => Ok(Value::Number(*n)),
@@ -144,16 +159,16 @@ pub fn eval_expr<'db>(db: &'db dyn salsa::Database, env: &mut Environment<'_>, e
                 Expr::Identifier(name) => name,
                 _ => return Err("First element of list must be an identifier".into()),
             };
-            
+
             // Handle special forms first
             match func_name.as_str() {
                 "match" => {
                     if exprs.len() < 3 {
                         return Err("match requires at least expression and one case".into());
                     }
-                    
+
                     let value = eval_expr(db, env, &exprs[1].0)?;
-                    
+
                     // Try each case
                     for case_expr in &exprs[2..] {
                         if let Expr::List(case_parts) = &case_expr.0 {
@@ -161,7 +176,9 @@ pub fn eval_expr<'db>(db: &'db dyn salsa::Database, env: &mut Environment<'_>, e
                                 if let Expr::Identifier(case_kw) = &case_parts[0].0 {
                                     if case_kw == "case" {
                                         // Check if pattern matches
-                                        if let Ok(pattern_value) = eval_expr(db, env, &case_parts[1].0) {
+                                        if let Ok(pattern_value) =
+                                            eval_expr(db, env, &case_parts[1].0)
+                                        {
                                             if values_match(&value, &pattern_value) {
                                                 return eval_expr(db, env, &case_parts[2].0);
                                             }
@@ -175,10 +192,10 @@ pub fn eval_expr<'db>(db: &'db dyn salsa::Database, env: &mut Environment<'_>, e
                 }
                 _ => {}
             }
-            
+
             // Look up the function in the environment
             let func_value = env.lookup(func_name)?.clone();
-            
+
             match func_value {
                 Value::BuiltinFn(_, f) => {
                     // Evaluate arguments for builtin functions
@@ -195,25 +212,26 @@ pub fn eval_expr<'db>(db: &'db dyn salsa::Database, env: &mut Environment<'_>, e
                         .map(|(arg_expr, _)| eval_expr(db, env, arg_expr))
                         .collect();
                     let arg_values = arg_values?;
-                    
+
                     if params.len() != arg_values.len() {
                         return Err(format!(
                             "function {} expects {} arguments, got {}",
                             name,
                             params.len(),
                             arg_values.len()
-                        ).into());
+                        )
+                        .into());
                     }
-                    
+
                     // Create bindings for function parameters
                     let bindings: Vec<(String, Value)> = params
                         .iter()
                         .zip(arg_values)
                         .map(|(param, value)| (param.clone(), value))
                         .collect();
-                    
+
                     let mut child_env = env.child(bindings);
-                    
+
                     // Evaluate function body
                     let mut result = Value::Unit;
                     for (body_expr, _) in body {
@@ -227,7 +245,6 @@ pub fn eval_expr<'db>(db: &'db dyn salsa::Database, env: &mut Environment<'_>, e
         _ => Err("Unsupported expression type".into()),
     }
 }
-
 
 pub fn eval_hir_program<'db>(
     db: &'db dyn salsa::Database,
@@ -442,7 +459,6 @@ fn eval_spanned_expr<'db>(
     }
 }
 
-
 fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::String, Value)>> {
     match pattern {
         Pattern::Literal(lit) => {
@@ -550,8 +566,8 @@ fn match_list_with_rest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tribute_ast::TributeDatabaseImpl;
     use salsa::Database;
+    use tribute_ast::TributeDatabaseImpl;
 
     #[test]
     fn test_hir_arithmetic() {
