@@ -136,7 +136,9 @@ fn process_escape_sequences(input: &str) -> Result<String, StringLiteralError> {
                 }
             }
         } else {
-            result.extend_from_slice(ch.to_string().as_bytes());
+            let mut buffer = [0; 4];
+            let encoded = ch.encode_utf8(&mut buffer);
+            result.extend_from_slice(encoded.as_bytes());
         }
     }
 
