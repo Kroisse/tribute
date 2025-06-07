@@ -84,9 +84,9 @@ fn process_escape_sequences(input: &str) -> Option<String> {
             match chars.next() {
                 Some('"') => result.push('"'),
                 Some('\\') => result.push('\\'),
-                Some('n') => result.push('\n'),
-                Some('t') => result.push('\t'),
-                Some('r') => result.push('\r'),
+                Some('n') | Some('N') => result.push('\n'),
+                Some('t') | Some('T') => result.push('\t'),
+                Some('r') | Some('R') => result.push('\r'),
                 Some('0') => result.push('\0'),
                 Some(other) => {
                     // For unknown escape sequences, preserve the backslash and character
@@ -153,6 +153,29 @@ mod tests {
         assert_eq!(
             process_escape_sequences(r"Carriage\rReturn"),
             Some("Carriage\rReturn".to_string())
+        );
+    }
+
+    #[test]
+    fn test_process_escape_sequences_case_insensitive() {
+        // Test uppercase escape sequences
+        assert_eq!(
+            process_escape_sequences(r"Line 1\NLine 2"),
+            Some("Line 1\nLine 2".to_string())
+        );
+        assert_eq!(
+            process_escape_sequences(r"Tab\There"),
+            Some("Tab\there".to_string())
+        );
+        assert_eq!(
+            process_escape_sequences(r"Carriage\RReturn"),
+            Some("Carriage\rReturn".to_string())
+        );
+        
+        // Test mixed case
+        assert_eq!(
+            process_escape_sequences(r"Mixed\n\T\r\N"),
+            Some("Mixed\n\t\r\n".to_string())
         );
     }
 
