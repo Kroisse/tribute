@@ -24,8 +24,13 @@ impl TributeParser {
 
         for i in 0..root_node.child_count() {
             if let Some(child) = root_node.child(i) {
-                if let Some((expr, span)) = self.node_to_expr_with_span(child, source) {
-                    expressions.push((expr, span));
+                // Skip comments and whitespace
+                if child.kind() == "comment" || child.kind() == "ERROR" {
+                    continue;
+                }
+                match self.node_to_expr_with_span(child, source) {
+                    Ok((expr, span)) => expressions.push((expr, span)),
+                    Err(e) => return Err(e),
                 }
             }
         }
@@ -33,47 +38,48 @@ impl TributeParser {
         Ok(expressions)
     }
 
-    fn node_to_expr_with_span(&self, node: Node, source: &str) -> Option<(Expr, SimpleSpan)> {
+    fn node_to_expr_with_span(&self, node: Node, source: &str) -> Result<(Expr, SimpleSpan), Box<dyn std::error::Error>> {
         let span = SimpleSpan::new(node.start_byte(), node.end_byte());
         let expr = self.node_to_expr(node, source)?;
-        Some((expr, span))
+        Ok((expr, span))
     }
 
-    fn node_to_expr(&self, node: Node, source: &str) -> Option<Expr> {
+    fn node_to_expr(&self, node: Node, source: &str) -> Result<Expr, Box<dyn std::error::Error>> {
         match node.kind() {
             "number" => {
-                let text = node.utf8_text(source.as_bytes()).ok()?;
-                let num = text.parse::<i64>().ok()?;
-                Some(Expr::Number(num))
+                let text = node.utf8_text(source.as_bytes()).map_err(|e| format!("Failed to get text: {}", e))?;
+                let num = text.parse::<i64>().map_err(|e| format!("Failed to parse number: {}", e))?;
+                Ok(Expr::Number(num))
             }
             "string" => {
-                let text = node.utf8_text(source.as_bytes()).ok()?;
+                let text = node.utf8_text(source.as_bytes()).map_err(|e| format!("Failed to get text: {}", e))?;
                 // Remove quotes and process escape sequences
                 let content = &text[1..text.len() - 1];
-                match process_escape_sequences(content) {
-                    Ok(processed) => Some(Expr::String(processed)),
-                    Err(_) => None, // Parsing fails for invalid escape sequences
-                }
+                let processed = process_escape_sequences(content)?;
+                Ok(Expr::String(processed))
             }
             "identifier" => {
-                let text = node.utf8_text(source.as_bytes()).ok()?;
-                Some(Expr::Identifier(text.to_string()))
+                let text = node.utf8_text(source.as_bytes()).map_err(|e| format!("Failed to get text: {}", e))?;
+                Ok(Expr::Identifier(text.to_string()))
             }
             "list" => {
                 let mut children = Vec::new();
                 for i in 0..node.child_count() {
                     if let Some(child) = node.child(i) {
-                        if child.kind() == "(" || child.kind() == ")" {
+                        if child.kind() == "(" || child.kind() == ")" || child.kind() == "comment" {
                             continue;
                         }
-                        if let Some((expr, span)) = self.node_to_expr_with_span(child, source) {
-                            children.push((expr, span));
-                        }
+                        let (expr, span) = self.node_to_expr_with_span(child, source)?;
+                        children.push((expr, span));
                     }
                 }
-                Some(Expr::List(children))
+                Ok(Expr::List(children))
             }
-            _ => None,
+            "comment" => {
+                // Skip comments by returning a placeholder expression that will be filtered out
+                Err("Comment node should be skipped".into())
+            }
+            _ => Err(format!("Unknown node kind: {}", node.kind()).into()),
         }
     }
 }
@@ -93,6 +99,23 @@ pub enum StringLiteralError {
     TrailingBackslash,
 }
 
+/// Process a hex escape sequence (\xHH) and return the byte value
+fn process_hex_escape(chars: &mut std::str::Chars) -> Result<u8, StringLiteralError> {
+    let hex1 = chars
+        .next()
+        .ok_or(StringLiteralError::IncompleteHexEscape)?;
+    let hex2 = chars
+        .next()
+        .ok_or(StringLiteralError::IncompleteHexEscape)?;
+
+    let hex_str = format!("{}{}", hex1, hex2);
+    u8::from_str_radix(&hex_str, 16).map_err(|_| {
+        StringLiteralError::InvalidHexDigits {
+            hex_str: hex_str.clone(),
+        }
+    })
+}
+
 /// Process escape sequences in a string literal
 fn process_escape_sequences(input: &str) -> Result<String, StringLiteralError> {
     let mut result = Vec::<u8>::new();
@@ -109,20 +132,7 @@ fn process_escape_sequences(input: &str) -> Result<String, StringLiteralError> {
                 Some('0') => result.push(0),
                 Some('x') | Some('X') => {
                     // Hex escape sequence: \xHH
-                    let hex1 = chars
-                        .next()
-                        .ok_or(StringLiteralError::IncompleteHexEscape)?;
-                    let hex2 = chars
-                        .next()
-                        .ok_or(StringLiteralError::IncompleteHexEscape)?;
-
-                    let hex_str = format!("{}{}", hex1, hex2);
-                    let byte_value = u8::from_str_radix(&hex_str, 16).map_err(|_| {
-                        StringLiteralError::InvalidHexDigits {
-                            hex_str: hex_str.clone(),
-                        }
-                    })?;
-
+                    let byte_value = process_hex_escape(&mut chars)?;
                     // Push the raw byte - this might create invalid UTF-8
                     result.push(byte_value);
                 }

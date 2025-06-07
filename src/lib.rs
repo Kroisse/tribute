@@ -31,6 +31,17 @@ pub fn eval_str<'db>(
     use crate::eval::Environment;
 
     let source_file = SourceFile::new(db, path.as_ref().to_path_buf(), source.to_string());
+    
+    // Check for parse errors first
+    let _program = parse_source_file(db, source_file);
+    let diagnostics = parse_source_file::accumulated::<Diagnostic>(db, source_file);
+    
+    if !diagnostics.is_empty() {
+        // Return the first error
+        let first_error = &diagnostics[0];
+        return Err(format!("{}: {}", first_error.severity, first_error.message).into());
+    }
+    
     let hir_program = lower_source_to_hir(db, source_file).ok_or("Failed to lower AST to HIR")?;
     let mut env = Environment::toplevel();
     eval_hir_program(db, &mut env, hir_program)
