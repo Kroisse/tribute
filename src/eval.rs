@@ -232,7 +232,24 @@ fn eval_spanned_expr<'db>(
 
     match expr {
         Number(n) => Ok(Value::Number(n)),
-        String(s) => Ok(Value::String(s)),
+        StringInterpolation(interp) => {
+            if interp.segments.is_empty() {
+                // Simple string without interpolation
+                Ok(Value::String(interp.leading_text.clone()))
+            } else {
+                // String with interpolation
+                let mut result = std::string::String::new();
+                result.push_str(&interp.leading_text);
+                for segment in &interp.segments {
+                    // Evaluate the interpolation expression
+                    let value = eval_spanned_expr(context, env, (*segment.interpolation).clone())?;
+                    let value_str = value_to_string(&value)?;
+                    result.push_str(&value_str);
+                    result.push_str(&segment.trailing_text);
+                }
+                Ok(Value::String(result))
+            }
+        }
         Variable(name) => env.lookup(&name).cloned(),
         Call { func, args } => {
             let func_expr = eval_spanned_expr(context, env, *func)?;
@@ -303,13 +320,42 @@ fn eval_spanned_expr<'db>(
     }
 }
 
+/// Convert a Value to its string representation for interpolation
+fn value_to_string(value: &Value) -> Result<String, Error> {
+    match value {
+        Value::Unit => Ok("()".to_string()),
+        Value::Number(n) => Ok(n.to_string()),
+        Value::String(s) => Ok(s.clone()),
+        Value::List(items) => {
+            let item_strings: Result<Vec<String>, Error> = items.iter().map(value_to_string).collect();
+            let item_strings = item_strings?;
+            Ok(format!("[{}]", item_strings.join(", ")))
+        }
+        Value::Fn(name, _, _) => Ok(format!("<fn '{}'>", name)),
+        Value::BuiltinFn(name, _) => Ok(format!("<builtin fn '{}'>", name)),
+    }
+}
+
 fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::String, Value)>> {
     match pattern {
         Pattern::Literal(lit) => {
             // Compare literal values
             match (lit, value) {
                 (Literal::Number(a), Value::Number(b)) if a == b => Some(vec![]),
-                (Literal::String(a), Value::String(b)) if a == b => Some(vec![]),
+                (Literal::StringInterpolation(interp), Value::String(s)) => {
+                    if interp.segments.is_empty() {
+                        // Simple string pattern
+                        if &interp.leading_text == s {
+                            Some(vec![])
+                        } else {
+                            None
+                        }
+                    } else {
+                        // For now, string interpolation in patterns is not supported
+                        // This would require complex pattern matching logic
+                        None
+                    }
+                }
                 _ => None,
             }
         }

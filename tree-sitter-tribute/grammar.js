@@ -110,7 +110,24 @@ module.exports = grammar({
 
     number: $ => /-?\d+(\.\d+)?/,
 
-    string: $ => /"([^"\\]|\\.)*"/,
+    string: $ => seq(
+      '"',
+      $.string_segment,
+      optional(repeat1(seq(
+        $.interpolation,
+        $.string_segment
+      ))),
+      '"'
+    ),
+
+    string_segment: $ => prec(-1, /([^"\\]|\\[nrtN0"\\]|\\x[0-9a-fA-F]{2})*/),
+
+    interpolation: $ => seq(
+      '\\',
+      '{',
+      field('expression', $._expression),
+      '}'
+    ),
 
     identifier: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
 

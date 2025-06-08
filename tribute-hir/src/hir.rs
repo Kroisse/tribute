@@ -31,11 +31,11 @@ pub struct HirExpr<'db> {
 }
 
 /// HIR expressions with structured language constructs
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Expr {
     /// Literal values
     Number(i64),
-    String(String),
+    StringInterpolation(StringInterpolation),
 
     /// Variable reference
     Variable(Identifier),
@@ -64,7 +64,7 @@ pub enum Expr {
 }
 
 /// Pattern matching case
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MatchCase {
     pub pattern: Pattern,
     pub body: Spanned<Expr>,
@@ -85,43 +85,24 @@ pub enum Pattern {
     Rest(Identifier),
 }
 
+/// String interpolation in HIR
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StringInterpolation {
+    pub leading_text: String,
+    pub segments: Vec<StringSegment>,
+}
+
+/// String segment for interpolation
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StringSegment {
+    pub interpolation: Box<Spanned<Expr>>,
+    pub trailing_text: String,
+}
+
 /// Literal values for patterns
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Literal {
     Number(i64),
-    String(String),
+    StringInterpolation(StringInterpolation),
 }
 
-impl std::fmt::Display for Expr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Expr::Number(n) => write!(f, "{n}"),
-            Expr::String(s) => write!(f, "\"{s}\""),
-            Expr::Variable(v) => write!(f, "{v}"),
-            Expr::Call { func, args } => {
-                write!(f, "({}", func.0)?;
-                for arg in args {
-                    write!(f, " {}", arg.0)?;
-                }
-                write!(f, ")")
-            }
-            Expr::Let { var, value } => {
-                write!(f, "(let {var} {})", value.0)
-            }
-            Expr::Match { expr, cases } => {
-                write!(f, "(match {}", expr.0)?;
-                for case in cases {
-                    write!(f, " (case {:?} {})", case.pattern, case.body.0)?;
-                }
-                write!(f, ")")
-            }
-            Expr::Block(exprs) => {
-                write!(f, "(block")?;
-                for expr in exprs {
-                    write!(f, " {}", expr.0)?;
-                }
-                write!(f, ")")
-            }
-        }
-    }
-}

@@ -76,8 +76,11 @@ HirProgram {
                         ),
                         args: [
                             (
-                                String(
-                                    "Testing user-defined functions:",
+                                StringInterpolation(
+                                    StringInterpolation {
+                                        leading_text: "Testing user-defined functions:",
+                                        segments: [],
+                                    },
                                 ),
                                 Span {
                                     start: 302,
@@ -162,8 +165,11 @@ HirProgram {
                         ),
                         args: [
                             (
-                                String(
-                                    "Testing nested arithmetic:",
+                                StringInterpolation(
+                                    StringInterpolation {
+                                        leading_text: "Testing nested arithmetic:",
+                                        segments: [],
+                                    },
                                 ),
                                 Span {
                                     start: 380,
@@ -304,8 +310,11 @@ HirProgram {
                         ),
                         args: [
                             (
-                                String(
-                                    "Testing string operations:",
+                                StringInterpolation(
+                                    StringInterpolation {
+                                        leading_text: "Testing string operations:",
+                                        segments: [],
+                                    },
                                 ),
                                 Span {
                                     start: 456,
@@ -333,8 +342,11 @@ HirProgram {
                         ),
                         args: [
                             (
-                                String(
-                                    "Hello, Tribute World!",
+                                StringInterpolation(
+                                    StringInterpolation {
+                                        leading_text: "Hello, Tribute World!",
+                                        segments: [],
+                                    },
                                 ),
                                 Span {
                                     start: 501,

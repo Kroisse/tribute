@@ -8,10 +8,7 @@ pub struct Span {
 
 impl Span {
     pub const fn new(start: usize, end: usize) -> Self {
-        Self {
-            start,
-            end,
-        }
+        Self { start, end }
     }
 }
 pub type Spanned<T> = (T, Span);
@@ -67,7 +64,7 @@ pub struct LetStatement {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Expr {
     Number(i64),
-    String(String),
+    StringInterpolation(StringInterpolation),
     Identifier(Identifier),
     Binary(BinaryExpression),
     Call(CallExpression),
@@ -87,6 +84,18 @@ pub enum BinaryOperator {
     Subtract,
     Multiply,
     Divide,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct StringInterpolation {
+    pub leading_text: String,
+    pub segments: Vec<StringSegment>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct StringSegment {
+    pub interpolation: Box<Spanned<Expr>>,
+    pub trailing_text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -118,62 +127,6 @@ pub enum Pattern {
 pub enum LiteralPattern {
     Number(i64),
     String(String),
+    StringInterpolation(StringInterpolation),
 }
 
-impl std::fmt::Display for Expr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Expr::Number(n) => write!(f, "{}", n),
-            Expr::String(s) => write!(f, "\"{}\"", s),
-            Expr::Identifier(s) => f.write_str(s),
-            Expr::Binary(bin) => write!(f, "({} {} {})", bin.left.0, bin.operator, bin.right.0),
-            Expr::Call(call) => {
-                write!(f, "{}(", call.function)?;
-                for (i, (arg, _)) in call.arguments.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", arg)?;
-                }
-                write!(f, ")")
-            }
-            Expr::Match(match_expr) => {
-                write!(f, "match {} {{ ", match_expr.value.0)?;
-                for arm in &match_expr.arms {
-                    write!(f, "{} => {}, ", arm.pattern, arm.value.0)?;
-                }
-                write!(f, "}}")
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for BinaryOperator {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            BinaryOperator::Add => write!(f, "+"),
-            BinaryOperator::Subtract => write!(f, "-"),
-            BinaryOperator::Multiply => write!(f, "*"),
-            BinaryOperator::Divide => write!(f, "/"),
-        }
-    }
-}
-
-impl std::fmt::Display for Pattern {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Pattern::Literal(lit) => write!(f, "{}", lit),
-            Pattern::Wildcard => write!(f, "_"),
-            Pattern::Identifier(id) => write!(f, "{}", id),
-        }
-    }
-}
-
-impl std::fmt::Display for LiteralPattern {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            LiteralPattern::Number(n) => write!(f, "{}", n),
-            LiteralPattern::String(s) => write!(f, "\"{}\"", s),
-        }
-    }
-}

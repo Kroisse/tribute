@@ -24,8 +24,11 @@ HirProgram {
                         ),
                         args: [
                             (
-                                String(
-                                    "Testing pattern matching:",
+                                StringInterpolation(
+                                    StringInterpolation {
+                                        leading_text: "Testing pattern matching:",
+                                        segments: [],
+                                    },
                                 ),
                                 Span {
                                     start: 371,
@@ -216,8 +219,11 @@ HirProgram {
                                     ),
                                 ),
                                 body: (
-                                    String(
-                                        "zero",
+                                    StringInterpolation(
+                                        StringInterpolation {
+                                            leading_text: "zero",
+                                            segments: [],
+                                        },
                                     ),
                                     Span {
                                         start: 258,
@@ -232,8 +238,11 @@ HirProgram {
                                     ),
                                 ),
                                 body: (
-                                    String(
-                                        "one",
+                                    StringInterpolation(
+                                        StringInterpolation {
+                                            leading_text: "one",
+                                            segments: [],
+                                        },
                                     ),
                                     Span {
                                         start: 279,
@@ -248,8 +257,11 @@ HirProgram {
                                     ),
                                 ),
                                 body: (
-                                    String(
-                                        "two",
+                                    StringInterpolation(
+                                        StringInterpolation {
+                                            leading_text: "two",
+                                            segments: [],
+                                        },
                                     ),
                                     Span {
                                         start: 300,
@@ -260,8 +272,11 @@ HirProgram {
                             MatchCase {
                                 pattern: Wildcard,
                                 body: (
-                                    String(
-                                        "other number",
+                                    StringInterpolation(
+                                        StringInterpolation {
+                                            leading_text: "other number",
+                                            segments: [],
+                                        },
                                     ),
                                     Span {
                                         start: 320,
