@@ -7,7 +7,7 @@ fn test_basic_string_interpolation() {
         let source = r#"
             fn main() {
                 let name = "Alice"
-                "Hello, {name}!"
+                "Hello, \{name}!"
             }
         "#;
         match tribute::eval_str(db, "test.trb", source) {
@@ -27,7 +27,7 @@ fn test_multiple_interpolations() {
             fn main() {
                 let x = 10
                 let y = 20
-                "{x} + {y} = {x + y}"
+                "\{x} + \{y} = \{x + y}"
             }
         "#;
         match tribute::eval_str(db, "test.trb", source) {
@@ -47,7 +47,7 @@ fn test_mixed_text_and_interpolation() {
             fn main() {
                 let items = 3
                 let price = 5
-                "You have {items} items costing {items * price} dollars."
+                "You have \{items} items costing \{items * price} dollars."
             }
         "#;
         match tribute::eval_str(db, "test.trb", source) {
@@ -66,7 +66,7 @@ fn test_empty_interpolation() {
         let source = r#"
             fn main() {
                 let empty = ""
-                "Start{empty}End"
+                "Start\{empty}End"
             }
         "#;
         match tribute::eval_str(db, "test.trb", source) {
@@ -86,7 +86,7 @@ fn test_function_call_in_interpolation() {
             fn double(x) { x * 2 }
             fn main() {
                 let n = 5
-                "Double of {n} is {double(n)}"
+                "Double of \{n} is \{double(n)}"
             }
         "#;
         match tribute::eval_str(db, "test.trb", source) {

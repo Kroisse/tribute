@@ -466,10 +466,10 @@ impl TributeParser {
                         pending_text.push_str(&processed);
                     }
                     "interpolation" => {
-                        // Find the expression inside the interpolation
+                        // Find the expression inside the interpolation (\{expr})
                         for j in 0..child.child_count() {
                             if let Some(expr_node) = child.child(j) {
-                                if expr_node.kind() != "{" && expr_node.kind() != "}" {
+                                if expr_node.kind() != "\\" && expr_node.kind() != "{" && expr_node.kind() != "}" {
                                     let expr = self.node_to_expr_with_span(expr_node, source)?;
                                     // Create segment with preceding text and the interpolation
                                     segments.push(StringSegment {

@@ -110,23 +110,19 @@ module.exports = grammar({
 
     number: $ => /-?\d+(\.\d+)?/,
 
-    string: $ => choice(
-      // Simple string without interpolation
-      /"([^"\\{]|\\.)*"/,
-      // String with interpolation
-      seq(
-        '"',
-        repeat1(choice(
-          $.string_segment,
-          $.interpolation
-        )),
-        '"'
-      )
+    string: $ => seq(
+      '"',
+      repeat(choice(
+        $.string_segment,
+        $.interpolation
+      )),
+      '"'
     ),
 
-    string_segment: $ => /([^"\\{]|\\.)+/,
+    string_segment: $ => prec(-1, /([^"\\]|\\[nrtN0"\\])+/),
 
     interpolation: $ => seq(
+      '\\',
       '{',
       $._expression,
       '}'

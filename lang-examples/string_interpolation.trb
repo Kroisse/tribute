@@ -1,18 +1,18 @@
 fn greet(name, age) {
-    print_line("Hello, {name}! You are {age} years old.")
+    print_line("Hello, \{name}! You are \{age} years old.")
 }
 
 fn calculate() {
     let x = 10
     let y = 20
-    print_line("{x} + {y} = {x + y}")
+    print_line("\{x} + \{y} = \{x + y}")
 }
 
 fn complex_interpolation() {
     let items = 3
     let item_type = "books"
     let price = 15
-    print_line("You have {items} {item_type} worth {items * price} dollars total.")
+    print_line("You have \{items} \{item_type} worth \{items * price} dollars total.")
 }
 
 fn main() {
