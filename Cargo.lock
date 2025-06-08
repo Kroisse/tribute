@@ -674,6 +674,7 @@ dependencies = [
 name = "tribute-ast"
 version = "0.1.0"
 dependencies = [
+ "dashmap",
  "derive_more",
  "salsa",
  "serde",

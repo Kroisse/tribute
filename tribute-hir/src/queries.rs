@@ -1,19 +1,23 @@
+use crate::{HirExpr, HirFunction, HirProgram};
 use salsa::Accumulator;
 use std::collections::BTreeMap;
-use crate::{HirProgram, HirFunction, HirExpr};
-use tribute_ast::{SourceFile, Program, Diagnostic, DiagnosticSeverity, CompilationPhase};
-
+use tribute_ast::{CompilationPhase, Diagnostic, DiagnosticSeverity, Program, SourceFile};
 
 /// Query to lower Program to HIR
 #[salsa::tracked]
-pub fn lower_program_to_hir<'db>(db: &'db dyn salsa::Database, program: Program<'db>) -> Option<HirProgram<'db>> {
+pub fn lower_program_to_hir<'db>(
+    db: &'db dyn salsa::Database,
+    program: Program<'db>,
+) -> Option<HirProgram<'db>> {
     match crate::lower::lower_program_to_hir(db, program) {
         Ok((functions, main)) => {
             // Convert function definitions to tracked HIR types
             let mut hir_functions = BTreeMap::new();
 
             for (name, func_def) in functions {
-                let body_exprs: Vec<_> = func_def.body.into_iter()
+                let body_exprs: Vec<_> = func_def
+                    .body
+                    .into_iter()
                     .map(|(expr, span)| HirExpr::new(db, expr, span))
                     .collect();
 
@@ -51,7 +55,10 @@ pub fn lower_source_to_hir<'db>(db: &'db dyn salsa::Database, source: SourceFile
 
 /// Query to get all HIR diagnostics for a program
 #[salsa::tracked]
-pub fn hir_diagnostics_for_program<'db>(db: &'db dyn salsa::Database, program: Program<'db>) -> Vec<Diagnostic> {
+pub fn hir_diagnostics_for_program<'db>(
+    db: &'db dyn salsa::Database,
+    program: Program<'db>,
+) -> Vec<Diagnostic> {
     let _ = lower_program_to_hir(db, program);
     lower_program_to_hir::accumulated::<Diagnostic>(db, program)
         .into_iter()
@@ -67,9 +74,12 @@ pub fn hir_diagnostics<'db>(db: &'db dyn salsa::Database, source: SourceFile) ->
 }
 
 /// Helper function to compile source to HIR using tribute-ast's database
-pub fn compile_to_hir(path: &std::path::Path, source: &str) -> (Option<HirProgram<'static>>, Vec<Diagnostic>) {
+pub fn compile_to_hir(
+    path: &std::path::Path,
+    source: &str,
+) -> (Option<HirProgram<'static>>, Vec<Diagnostic>) {
     use salsa::Database;
-    
+
     let db = tribute_ast::TributeDatabaseImpl::default();
     let file = SourceFile::new(&db, path.to_path_buf(), source.to_string());
 
@@ -77,7 +87,7 @@ pub fn compile_to_hir(path: &std::path::Path, source: &str) -> (Option<HirProgra
     db.attach(|db| {
         let _hir_program = lower_source_to_hir(db, file);
         let diagnostics = hir_diagnostics(db, file);
-        
+
         // We can't return the HIR program directly due to lifetime issues
         // This function is mainly for testing/demonstration purposes
         (None, diagnostics)

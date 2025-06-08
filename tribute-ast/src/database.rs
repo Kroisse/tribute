@@ -1,14 +1,37 @@
-use crate::{Program, ast::Span};
+use dashmap::{DashMap, Entry};
+
+use crate::ast::Span;
 use std::path::PathBuf;
+
+#[salsa::db]
+pub trait Db: salsa::Database {
+    fn input(&self, path: PathBuf) -> Result<SourceFile, Box<dyn std::error::Error + Send + Sync>>;
+}
 
 #[derive(Default, Clone)]
 #[salsa::db]
 pub struct TributeDatabaseImpl {
     storage: salsa::Storage<Self>,
+    files: DashMap<PathBuf, SourceFile>,
 }
 
 #[salsa::db]
 impl salsa::Database for TributeDatabaseImpl {}
+
+#[salsa::db]
+impl Db for TributeDatabaseImpl {
+    fn input(&self, path: PathBuf) -> Result<SourceFile, Box<dyn std::error::Error + Send + Sync>> {
+        let path = path.canonicalize()?;
+        match self.files.entry(path.clone()) {
+            Entry::Occupied(entry) => Ok(*entry.get()),
+            Entry::Vacant(entry) => {
+                let contents = std::fs::read_to_string(&path)?;
+                let source_file = SourceFile::new(self, path, contents);
+                Ok(*entry.insert(source_file))
+            }
+        }
+    }
+}
 
 #[salsa::input(debug)]
 pub struct SourceFile {
@@ -50,9 +73,4 @@ impl std::fmt::Display for DiagnosticSeverity {
             DiagnosticSeverity::Info => write!(f, "INFO"),
         }
     }
-}
-
-#[salsa::tracked]
-pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Program<'db> {
-    crate::parser::parse_source(db, source)
 }

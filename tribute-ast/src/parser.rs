@@ -15,7 +15,7 @@ impl TributeParser {
 
     pub fn parse_internal<'db>(
         &mut self,
-        db: &'db dyn crate::Db,
+        db: &'db dyn salsa::Database,
         source: &'db str,
     ) -> Result<Program<'db>, Box<dyn std::error::Error>> {
         let tree = self.parser.parse(source, None).ok_or("Failed to parse")?;
@@ -44,7 +44,7 @@ impl TributeParser {
 }
 
 #[salsa::tracked]
-pub fn parse_source<'db>(db: &'db dyn crate::Db, source: crate::SourceFile) -> Program<'db> {
+pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: crate::SourceFile) -> Program<'db> {
     let mut parser = match TributeParser::new() {
         Ok(p) => p,
         Err(_) => return Program::new(db, Vec::new()),
@@ -58,7 +58,7 @@ pub fn parse_source<'db>(db: &'db dyn crate::Db, source: crate::SourceFile) -> P
 impl TributeParser {
     fn node_to_item<'db>(
         &self,
-        db: &'db dyn crate::Db,
+        db: &'db dyn salsa::Database,
         node: Node,
         source: &'db str,
     ) -> Result<Item<'db>, Box<dyn std::error::Error>> {
@@ -557,7 +557,7 @@ fn main() {
 "#
                 .to_string(),
             );
-            let result = parse_source(db, source_file);
+            let result = parse_source_file(db, source_file);
 
             assert_eq!(result.items(db).len(), 1);
             let ItemKind::Function(func) = result.items(db)[0].kind(db);
@@ -583,7 +583,7 @@ fn add(a, b) {
 "#
                 .to_string(),
             );
-            let result = parse_source(db, source_file);
+            let result = parse_source_file(db, source_file);
 
             assert_eq!(result.items(db).len(), 1);
             let ItemKind::Function(func) = result.items(db)[0].kind(db);
@@ -612,7 +612,7 @@ fn test(n) {
 "#
                 .to_string(),
             );
-            let result = parse_source(db, source_file);
+            let result = parse_source_file(db, source_file);
 
             assert_eq!(result.items(db).len(), 1);
             let ItemKind::Function(func) = result.items(db)[0].kind(db);
@@ -789,7 +789,7 @@ fn test() {
 "#
                 .to_string(),
             );
-            let result = parse_source(db, source_file);
+            let result = parse_source_file(db, source_file);
             assert_eq!(result.items(db).len(), 1);
             let ItemKind::Function(func) = result.items(db)[0].kind(db);
             if let Statement::Expression((Expr::String(s), _)) = &func.body(db).statements[0] {
@@ -809,7 +809,7 @@ fn test() {
 "#
                 .to_string(),
             );
-            let result = parse_source(db, source_file2);
+            let result = parse_source_file(db, source_file2);
             assert_eq!(result.items(db).len(), 1);
             let ItemKind::Function(func) = result.items(db)[0].kind(db);
             if let Statement::Expression((Expr::String(s), _)) = &func.body(db).statements[0] {
