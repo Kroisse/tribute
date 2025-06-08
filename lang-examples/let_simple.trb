@@ -1,7 +1,8 @@
 // Simple Let Binding Example - demonstrates basic let syntax
-// - Let binding: (let var value)
+// - Let binding: let var = value
 // - Returns the bound value
 
-(fn (main)
-  (let x 42)
-  x)
+fn main() {
+    let x = 42
+    x
+}

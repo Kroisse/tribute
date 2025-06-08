@@ -1,3 +1,11 @@
-(fn (double x) (* x 2))
-(fn (add_and_double x y) (double (+ x y)))
-(fn (main) (add_and_double 5 10))
+fn double(x) {
+    x * 2
+}
+
+fn add_and_double(x, y) {
+    double(x + y)
+}
+
+fn main() {
+    add_and_double(5, 10)
+}

@@ -3,10 +3,11 @@
 // - Variable references within function scope
 // - Sequential variable definitions
 
-(fn (main)
-  (let x 42)
-  (let y (+ x 8))
-  (print_line "Testing let bindings:")
-  (print_line x)
-  (print_line y)
-  (print_line (+ x y)))
+fn main() {
+    let x = 42
+    let y = x + 8
+    print_line("Testing let bindings:")
+    print_line(x)
+    print_line(y)
+    print_line(x + y)
+}
