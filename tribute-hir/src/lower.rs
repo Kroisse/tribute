@@ -103,21 +103,19 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
 
     let hir_expr = match ast_expr {
         AstExpr::Number(n) => Expr::Number(*n),
-        AstExpr::String(s) => Expr::String(s.clone()),
         AstExpr::StringInterpolation(interp) => {
             let segments: LowerResult<Vec<_>> = interp.segments.iter()
                 .map(|segment| {
-                    match segment {
-                        tribute_ast::StringSegment::Text(text) => {
-                            Ok(crate::hir::StringSegment::Text(text.clone()))
-                        }
-                        tribute_ast::StringSegment::Interpolation(expr) => {
-                            Ok(crate::hir::StringSegment::Interpolation(Box::new(lower_expr(expr)?)))
-                        }
-                    }
+                    Ok(crate::hir::StringSegment {
+                        interpolation: Box::new(lower_expr(&segment.interpolation)?),
+                        text: segment.text.clone(),
+                    })
                 })
                 .collect();
-            Expr::StringInterpolation(crate::hir::StringInterpolation { segments: segments? })
+            Expr::StringInterpolation(crate::hir::StringInterpolation { 
+                text: interp.text.clone(),
+                segments: segments? 
+            })
         }
         AstExpr::Identifier(id) => Expr::Variable(id.clone()),
         AstExpr::Binary(bin_expr) => {
@@ -160,21 +158,26 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
         AstPattern::Literal(lit) => {
             match lit {
                 LiteralPattern::Number(n) => Ok(Pattern::Literal(Literal::Number(*n))),
-                LiteralPattern::String(s) => Ok(Pattern::Literal(Literal::String(s.clone()))),
+                LiteralPattern::String(s) => {
+                    // Convert simple string to StringInterpolation without segments
+                    Ok(Pattern::Literal(Literal::StringInterpolation(crate::hir::StringInterpolation {
+                        text: s.clone(),
+                        segments: Vec::new(),
+                    })))
+                }
                 LiteralPattern::StringInterpolation(interp) => {
                     let segments: LowerResult<Vec<_>> = interp.segments.iter()
                         .map(|segment| {
-                            match segment {
-                                tribute_ast::StringSegment::Text(text) => {
-                                    Ok(crate::hir::StringSegment::Text(text.clone()))
-                                }
-                                tribute_ast::StringSegment::Interpolation(expr) => {
-                                    Ok(crate::hir::StringSegment::Interpolation(Box::new(lower_expr(expr)?)))
-                                }
-                            }
+                            Ok(crate::hir::StringSegment {
+                                interpolation: Box::new(lower_expr(&segment.interpolation)?),
+                                text: segment.text.clone(),
+                            })
                         })
                         .collect();
-                    Ok(Pattern::Literal(Literal::StringInterpolation(crate::hir::StringInterpolation { segments: segments? })))
+                    Ok(Pattern::Literal(Literal::StringInterpolation(crate::hir::StringInterpolation { 
+                        text: interp.text.clone(),
+                        segments: segments? 
+                    })))
                 }
             }
         }
@@ -196,9 +199,6 @@ mod tests {
         AstExpr::Identifier(name.to_string())
     }
 
-    fn test_string(s: &str) -> AstExpr {
-        AstExpr::String(s.to_string())
-    }
 
     // TODO: Update tests to work with new AST structure
     #[test]

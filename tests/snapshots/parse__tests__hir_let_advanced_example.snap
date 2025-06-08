@@ -109,8 +109,11 @@ HirProgram {
                         ),
                         args: [
                             (
-                                String(
-                                    "Testing advanced let bindings:",
+                                StringInterpolation(
+                                    StringInterpolation {
+                                        text: "Testing advanced let bindings:",
+                                        segments: [],
+                                    },
                                 ),
                                 Span {
                                     start: 263,

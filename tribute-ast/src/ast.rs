@@ -8,10 +8,7 @@ pub struct Span {
 
 impl Span {
     pub const fn new(start: usize, end: usize) -> Self {
-        Self {
-            start,
-            end,
-        }
+        Self { start, end }
     }
 }
 pub type Spanned<T> = (T, Span);
@@ -67,7 +64,6 @@ pub struct LetStatement {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Expr {
     Number(i64),
-    String(String),
     StringInterpolation(StringInterpolation),
     Identifier(Identifier),
     Binary(BinaryExpression),
@@ -92,13 +88,14 @@ pub enum BinaryOperator {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StringInterpolation {
+    pub text: String,
     pub segments: Vec<StringSegment>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum StringSegment {
-    Text(String),
-    Interpolation(Box<Spanned<Expr>>),
+pub struct StringSegment {
+    pub interpolation: Box<Spanned<Expr>>,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -137,16 +134,19 @@ impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Expr::Number(n) => write!(f, "{}", n),
-            Expr::String(s) => write!(f, "\"{}\"", s),
             Expr::StringInterpolation(interp) => {
-                write!(f, "\"")?;
-                for segment in &interp.segments {
-                    match segment {
-                        StringSegment::Text(text) => write!(f, "{}", text)?,
-                        StringSegment::Interpolation(expr) => write!(f, "{{{}}}", expr.0)?,
+                if interp.segments.is_empty() {
+                    // Simple string without interpolation
+                    write!(f, "\"{}\"", interp.text)
+                } else {
+                    // String with interpolation
+                    write!(f, "\"")?;
+                    for segment in &interp.segments {
+                        write!(f, "{}", segment.text)?;
+                        write!(f, "{{{}}}", segment.interpolation.0)?;
                     }
+                    write!(f, "\"")
                 }
-                write!(f, "\"")
             }
             Expr::Identifier(s) => f.write_str(s),
             Expr::Binary(bin) => write!(f, "({} {} {})", bin.left.0, bin.operator, bin.right.0),
@@ -198,14 +198,18 @@ impl std::fmt::Display for LiteralPattern {
             LiteralPattern::Number(n) => write!(f, "{}", n),
             LiteralPattern::String(s) => write!(f, "\"{}\"", s),
             LiteralPattern::StringInterpolation(interp) => {
-                write!(f, "\"")?;
-                for segment in &interp.segments {
-                    match segment {
-                        StringSegment::Text(text) => write!(f, "{}", text)?,
-                        StringSegment::Interpolation(expr) => write!(f, "{{{}}}", expr.0)?,
+                if interp.segments.is_empty() {
+                    // Simple string without interpolation
+                    write!(f, "\"{}\"", interp.text)
+                } else {
+                    // String with interpolation
+                    write!(f, "\"")?;
+                    for segment in &interp.segments {
+                        write!(f, "{}", segment.text)?;
+                        write!(f, "{{{}}}", segment.interpolation.0)?;
                     }
+                    write!(f, "\"")
                 }
-                write!(f, "\"")
             }
         }
     }

@@ -90,8 +90,11 @@ HirProgram {
                         ),
                         args: [
                             (
-                                String(
-                                    "Testing let bindings:",
+                                StringInterpolation(
+                                    StringInterpolation {
+                                        text: "Testing let bindings:",
+                                        segments: [],
+                                    },
                                 ),
                                 Span {
                                     start: 249,

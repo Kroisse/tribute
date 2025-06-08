@@ -212,19 +212,8 @@ impl TributeParser {
                 Ok(Expr::Number(num))
             }
             "string" => {
-                // Check if this is an interpolated string by looking for child nodes
-                let has_interpolation = (0..node.child_count())
-                    .any(|i| node.child(i).is_some_and(|child| child.kind() == "interpolation"));
-                
-                if has_interpolation {
-                    self.parse_interpolated_string(node, source)
-                } else {
-                    let text = node.utf8_text(source.as_bytes())?;
-                    // Remove quotes and process escape sequences
-                    let content = &text[1..text.len() - 1];
-                    let processed = process_escape_sequences(content)?;
-                    Ok(Expr::String(processed))
-                }
+                // All strings are now StringInterpolation, even simple ones
+                self.parse_interpolated_string(node, source)
             }
             "identifier" => {
                 let text = node.utf8_text(source.as_bytes())?;
@@ -450,7 +439,23 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let node_text = node.utf8_text(source.as_bytes())?;
+        let has_interpolation = (0..node.child_count())
+            .any(|i| node.child(i).is_some_and(|child| child.kind() == "interpolation"));
+        
+        if !has_interpolation {
+            // Simple string without interpolation
+            let content = &node_text[1..node_text.len() - 1];
+            let processed = process_escape_sequences(content)?;
+            return Ok(Expr::StringInterpolation(StringInterpolation {
+                text: processed,
+                segments: Vec::new(),
+            }));
+        }
+
+        // String with interpolation - collect segments in order
         let mut segments = Vec::new();
+        let mut pending_text = String::new();
 
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
@@ -458,7 +463,7 @@ impl TributeParser {
                     "string_segment" => {
                         let text = child.utf8_text(source.as_bytes())?;
                         let processed = process_escape_sequences(text)?;
-                        segments.push(StringSegment::Text(processed));
+                        pending_text.push_str(&processed);
                     }
                     "interpolation" => {
                         // Find the expression inside the interpolation
@@ -466,7 +471,12 @@ impl TributeParser {
                             if let Some(expr_node) = child.child(j) {
                                 if expr_node.kind() != "{" && expr_node.kind() != "}" {
                                     let expr = self.node_to_expr_with_span(expr_node, source)?;
-                                    segments.push(StringSegment::Interpolation(Box::new(expr)));
+                                    // Create segment with preceding text and the interpolation
+                                    segments.push(StringSegment {
+                                        text: pending_text.clone(),
+                                        interpolation: Box::new(expr),
+                                    });
+                                    pending_text.clear();
                                     break;
                                 }
                             }
@@ -480,7 +490,23 @@ impl TributeParser {
             }
         }
 
-        Ok(Expr::StringInterpolation(StringInterpolation { segments }))
+        // If there's remaining text after the last interpolation, create a dummy segment
+        if !pending_text.is_empty() && !segments.is_empty() {
+            // Add to the last segment's text (this represents text after the interpolation)
+            let dummy_expr = (Expr::StringInterpolation(StringInterpolation {
+                text: String::new(),
+                segments: Vec::new(),
+            }), Span::new(0, 0));
+            segments.push(StringSegment {
+                text: pending_text,
+                interpolation: Box::new(dummy_expr),
+            });
+        }
+
+        Ok(Expr::StringInterpolation(StringInterpolation {
+            text: node_text.to_string(),
+            segments,
+        }))
     }
 
     fn parse_literal_pattern(
@@ -497,20 +523,15 @@ impl TributeParser {
                         return Ok(LiteralPattern::Number(num));
                     }
                     "string" => {
-                        // Check if this is an interpolated string by looking for child nodes
-                        let has_interpolation = (0..child.child_count())
-                            .any(|i| child.child(i).is_some_and(|grandchild| grandchild.kind() == "interpolation"));
-                        
-                        if has_interpolation {
-                            // Parse as Expr first, then extract StringInterpolation
-                            if let Ok(Expr::StringInterpolation(interp)) = self.parse_interpolated_string(child, source) {
+                        // Parse as StringInterpolation and convert to appropriate pattern
+                        if let Ok(Expr::StringInterpolation(interp)) = self.parse_interpolated_string(child, source) {
+                            if interp.segments.is_empty() {
+                                // Simple string without interpolation
+                                return Ok(LiteralPattern::String(interp.text));
+                            } else {
+                                // String with interpolation
                                 return Ok(LiteralPattern::StringInterpolation(interp));
                             }
-                        } else {
-                            let text = child.utf8_text(source.as_bytes())?;
-                            let content = &text[1..text.len() - 1];
-                            let processed = process_escape_sequences(content)?;
-                            return Ok(LiteralPattern::String(processed));
                         }
                     }
                     _ => {}
@@ -849,8 +870,8 @@ fn test() {
             let result = parse_source_file(db, source_file);
             assert_eq!(result.items(db).len(), 1);
             let ItemKind::Function(func) = result.items(db)[0].kind(db);
-            if let Statement::Expression((Expr::String(s), _)) = &func.body(db).statements[0] {
-                assert_eq!(s, "Hello \"World\"");
+            if let Statement::Expression((Expr::StringInterpolation(interp), _)) = &func.body(db).statements[0] {
+                assert_eq!(interp.text, "Hello \"World\"");
             } else {
                 panic!("Expected string expression");
             }
@@ -869,8 +890,8 @@ fn test() {
             let result = parse_source_file(db, source_file2);
             assert_eq!(result.items(db).len(), 1);
             let ItemKind::Function(func) = result.items(db)[0].kind(db);
-            if let Statement::Expression((Expr::String(s), _)) = &func.body(db).statements[0] {
-                assert_eq!(s, "Line1\nTab\tQuote\"");
+            if let Statement::Expression((Expr::StringInterpolation(interp), _)) = &func.body(db).statements[0] {
+                assert_eq!(interp.text, "Line1\nTab\tQuote\"");
             } else {
                 panic!("Expected string expression");
             }

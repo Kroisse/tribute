@@ -35,7 +35,6 @@ pub struct HirExpr<'db> {
 pub enum Expr {
     /// Literal values
     Number(i64),
-    String(String),
     StringInterpolation(StringInterpolation),
 
     /// Variable reference
@@ -89,21 +88,21 @@ pub enum Pattern {
 /// String interpolation in HIR
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StringInterpolation {
+    pub text: String,
     pub segments: Vec<StringSegment>,
 }
 
 /// String segment for interpolation
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum StringSegment {
-    Text(String),
-    Interpolation(Box<Spanned<Expr>>),
+pub struct StringSegment {
+    pub interpolation: Box<Spanned<Expr>>,
+    pub text: String,
 }
 
 /// Literal values for patterns
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Literal {
     Number(i64),
-    String(String),
     StringInterpolation(StringInterpolation),
 }
 
@@ -111,16 +110,19 @@ impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Expr::Number(n) => write!(f, "{n}"),
-            Expr::String(s) => write!(f, "\"{s}\""),
             Expr::StringInterpolation(interp) => {
-                write!(f, "\"")?;
-                for segment in &interp.segments {
-                    match segment {
-                        StringSegment::Text(text) => write!(f, "{}", text)?,
-                        StringSegment::Interpolation(expr) => write!(f, "{{{}}}", expr.0)?,
+                if interp.segments.is_empty() {
+                    // Simple string without interpolation
+                    write!(f, "\"{}\"", interp.text)
+                } else {
+                    // String with interpolation
+                    write!(f, "\"")?;
+                    for segment in &interp.segments {
+                        write!(f, "{}", segment.text)?;
+                        write!(f, "{{{}}}", segment.interpolation.0)?;
                     }
+                    write!(f, "\"")
                 }
-                write!(f, "\"")
             }
             Expr::Variable(v) => write!(f, "{v}"),
             Expr::Call { func, args } => {

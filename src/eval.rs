@@ -232,22 +232,24 @@ fn eval_spanned_expr<'db>(
 
     match expr {
         Number(n) => Ok(Value::Number(n)),
-        String(s) => Ok(Value::String(s)),
         StringInterpolation(interp) => {
-            let mut result = std::string::String::new();
-            for segment in &interp.segments {
-                match segment {
-                    tribute_hir::hir::StringSegment::Text(text) => {
-                        result.push_str(text);
-                    }
-                    tribute_hir::hir::StringSegment::Interpolation(expr) => {
-                        let value = eval_spanned_expr(context, env, (**expr).clone())?;
+            if interp.segments.is_empty() {
+                // Simple string without interpolation
+                Ok(Value::String(interp.text.clone()))
+            } else {
+                // String with interpolation
+                let mut result = std::string::String::new();
+                for segment in &interp.segments {
+                    result.push_str(&segment.text);
+                    // Only evaluate real interpolations (not dummy ones)
+                    if !matches!(segment.interpolation.0, Expr::StringInterpolation(ref dummy) if dummy.text.is_empty() && dummy.segments.is_empty()) {
+                        let value = eval_spanned_expr(context, env, (*segment.interpolation).clone())?;
                         let value_str = value_to_string(&value)?;
                         result.push_str(&value_str);
                     }
                 }
+                Ok(Value::String(result))
             }
-            Ok(Value::String(result))
         }
         Variable(name) => env.lookup(&name).cloned(),
         Call { func, args } => {
@@ -341,11 +343,19 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
             // Compare literal values
             match (lit, value) {
                 (Literal::Number(a), Value::Number(b)) if a == b => Some(vec![]),
-                (Literal::String(a), Value::String(b)) if a == b => Some(vec![]),
-                (Literal::StringInterpolation(_), _) => {
-                    // For now, string interpolation in patterns is not supported
-                    // This would require complex pattern matching logic
-                    None
+                (Literal::StringInterpolation(interp), Value::String(s)) => {
+                    if interp.segments.is_empty() {
+                        // Simple string pattern
+                        if &interp.text == s {
+                            Some(vec![])
+                        } else {
+                            None
+                        }
+                    } else {
+                        // For now, string interpolation in patterns is not supported
+                        // This would require complex pattern matching logic
+                        None
+                    }
                 }
                 _ => None,
             }
