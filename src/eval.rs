@@ -235,18 +235,17 @@ fn eval_spanned_expr<'db>(
         StringInterpolation(interp) => {
             if interp.segments.is_empty() {
                 // Simple string without interpolation
-                Ok(Value::String(interp.text.clone()))
+                Ok(Value::String(interp.leading_text.clone()))
             } else {
                 // String with interpolation
                 let mut result = std::string::String::new();
+                result.push_str(&interp.leading_text);
                 for segment in &interp.segments {
-                    result.push_str(&segment.text);
-                    // Only evaluate real interpolations (not dummy ones)
-                    if !matches!(segment.interpolation.0, Expr::StringInterpolation(ref dummy) if dummy.text.is_empty() && dummy.segments.is_empty()) {
-                        let value = eval_spanned_expr(context, env, (*segment.interpolation).clone())?;
-                        let value_str = value_to_string(&value)?;
-                        result.push_str(&value_str);
-                    }
+                    // Evaluate the interpolation expression
+                    let value = eval_spanned_expr(context, env, (*segment.interpolation).clone())?;
+                    let value_str = value_to_string(&value)?;
+                    result.push_str(&value_str);
+                    result.push_str(&segment.trailing_text);
                 }
                 Ok(Value::String(result))
             }
@@ -346,7 +345,7 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
                 (Literal::StringInterpolation(interp), Value::String(s)) => {
                     if interp.segments.is_empty() {
                         // Simple string pattern
-                        if &interp.text == s {
+                        if &interp.leading_text == s {
                             Some(vec![])
                         } else {
                             None

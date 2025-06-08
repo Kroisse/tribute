@@ -92,7 +92,7 @@ HirProgram {
                             (
                                 StringInterpolation(
                                     StringInterpolation {
-                                        text: "Testing let bindings:",
+                                        leading_text: "Testing let bindings:",
                                         segments: [],
                                     },
                                 ),

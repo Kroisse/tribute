@@ -78,7 +78,7 @@ HirProgram {
                             (
                                 StringInterpolation(
                                     StringInterpolation {
-                                        text: "Testing user-defined functions:",
+                                        leading_text: "Testing user-defined functions:",
                                         segments: [],
                                     },
                                 ),
@@ -167,7 +167,7 @@ HirProgram {
                             (
                                 StringInterpolation(
                                     StringInterpolation {
-                                        text: "Testing nested arithmetic:",
+                                        leading_text: "Testing nested arithmetic:",
                                         segments: [],
                                     },
                                 ),
@@ -312,7 +312,7 @@ HirProgram {
                             (
                                 StringInterpolation(
                                     StringInterpolation {
-                                        text: "Testing string operations:",
+                                        leading_text: "Testing string operations:",
                                         segments: [],
                                     },
                                 ),
@@ -344,7 +344,7 @@ HirProgram {
                             (
                                 StringInterpolation(
                                     StringInterpolation {
-                                        text: "Hello, Tribute World!",
+                                        leading_text: "Hello, Tribute World!",
                                         segments: [],
                                     },
                                 ),

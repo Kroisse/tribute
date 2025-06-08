@@ -108,12 +108,12 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
                 .map(|segment| {
                     Ok(crate::hir::StringSegment {
                         interpolation: Box::new(lower_expr(&segment.interpolation)?),
-                        text: segment.text.clone(),
+                        trailing_text: segment.trailing_text.clone(),
                     })
                 })
                 .collect();
             Expr::StringInterpolation(crate::hir::StringInterpolation { 
-                text: interp.text.clone(),
+                leading_text: interp.leading_text.clone(),
                 segments: segments? 
             })
         }
@@ -161,7 +161,7 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
                 LiteralPattern::String(s) => {
                     // Convert simple string to StringInterpolation without segments
                     Ok(Pattern::Literal(Literal::StringInterpolation(crate::hir::StringInterpolation {
-                        text: s.clone(),
+                        leading_text: s.clone(),
                         segments: Vec::new(),
                     })))
                 }
@@ -170,12 +170,12 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
                         .map(|segment| {
                             Ok(crate::hir::StringSegment {
                                 interpolation: Box::new(lower_expr(&segment.interpolation)?),
-                                text: segment.text.clone(),
+                                trailing_text: segment.trailing_text.clone(),
                             })
                         })
                         .collect();
                     Ok(Pattern::Literal(Literal::StringInterpolation(crate::hir::StringInterpolation { 
-                        text: interp.text.clone(),
+                        leading_text: interp.leading_text.clone(),
                         segments: segments? 
                     })))
                 }

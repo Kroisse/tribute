@@ -23,7 +23,7 @@ fn main() {
           (string
             (string_segment)
             (interpolation
-              (primary_expression
+              expression: (primary_expression
                 (identifier)))
             (string_segment)))))))
 
@@ -56,15 +56,15 @@ fn test() {
           (string
             (string_segment)
             (interpolation
-              (primary_expression
+              expression: (primary_expression
                 (identifier)))
             (string_segment)
             (interpolation
-              (primary_expression
+              expression: (primary_expression
                 (identifier)))
             (string_segment)
             (interpolation
-              (binary_expression
+              expression: (binary_expression
                 (primary_expression
                   (identifier))
                 (primary_expression
@@ -100,11 +100,11 @@ fn greet() {
           (string
             (string_segment)
             (interpolation
-              (primary_expression
+              expression: (primary_expression
                 (identifier)))
             (string_segment)
             (interpolation
-              (binary_expression
+              expression: (binary_expression
                 (primary_expression
                   (identifier))
                 (primary_expression
@@ -155,6 +155,6 @@ fn test() {
           (string
             (string_segment)
             (interpolation
-              (primary_expression
+              expression: (primary_expression
                 (identifier)))
             (string_segment)))))))

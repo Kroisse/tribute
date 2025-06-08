@@ -111,7 +111,7 @@ HirProgram {
                             (
                                 StringInterpolation(
                                     StringInterpolation {
-                                        text: "Testing advanced let bindings:",
+                                        leading_text: "Testing advanced let bindings:",
                                         segments: [],
                                     },
                                 ),

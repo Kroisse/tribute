@@ -125,7 +125,7 @@ module.exports = grammar({
     interpolation: $ => seq(
       '\\',
       '{',
-      $._expression,
+      field('expression', $._expression),
       '}'
     ),
 

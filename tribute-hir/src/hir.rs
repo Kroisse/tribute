@@ -88,7 +88,7 @@ pub enum Pattern {
 /// String interpolation in HIR
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StringInterpolation {
-    pub text: String,
+    pub leading_text: String,
     pub segments: Vec<StringSegment>,
 }
 
@@ -96,7 +96,7 @@ pub struct StringInterpolation {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct StringSegment {
     pub interpolation: Box<Spanned<Expr>>,
-    pub text: String,
+    pub trailing_text: String,
 }
 
 /// Literal values for patterns

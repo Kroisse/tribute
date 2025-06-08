@@ -26,7 +26,7 @@ HirProgram {
                             (
                                 StringInterpolation(
                                     StringInterpolation {
-                                        text: "Testing pattern matching:",
+                                        leading_text: "Testing pattern matching:",
                                         segments: [],
                                     },
                                 ),
@@ -221,7 +221,7 @@ HirProgram {
                                 body: (
                                     StringInterpolation(
                                         StringInterpolation {
-                                            text: "zero",
+                                            leading_text: "zero",
                                             segments: [],
                                         },
                                     ),
@@ -240,7 +240,7 @@ HirProgram {
                                 body: (
                                     StringInterpolation(
                                         StringInterpolation {
-                                            text: "one",
+                                            leading_text: "one",
                                             segments: [],
                                         },
                                     ),
@@ -259,7 +259,7 @@ HirProgram {
                                 body: (
                                     StringInterpolation(
                                         StringInterpolation {
-                                            text: "two",
+                                            leading_text: "two",
                                             segments: [],
                                         },
                                     ),
@@ -274,7 +274,7 @@ HirProgram {
                                 body: (
                                     StringInterpolation(
                                         StringInterpolation {
-                                            text: "other number",
+                                            leading_text: "other number",
                                             segments: [],
                                         },
                                     ),

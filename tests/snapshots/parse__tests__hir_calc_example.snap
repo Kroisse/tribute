@@ -26,7 +26,7 @@ HirProgram {
                             (
                                 StringInterpolation(
                                     StringInterpolation {
-                                        text: "Calculator example - to be implemented",
+                                        leading_text: "Calculator example - to be implemented",
                                         segments: [],
                                     },
                                 ),
@@ -58,7 +58,7 @@ HirProgram {
                             (
                                 StringInterpolation(
                                     StringInterpolation {
-                                        text: "Requires pattern matching and string operations",
+                                        leading_text: "Requires pattern matching and string operations",
                                         segments: [],
                                     },
                                 ),

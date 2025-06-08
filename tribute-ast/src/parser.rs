@@ -44,7 +44,10 @@ impl TributeParser {
 }
 
 #[salsa::tracked]
-pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: crate::SourceFile) -> Program<'db> {
+pub fn parse_source_file<'db>(
+    db: &'db dyn salsa::Database,
+    source: crate::SourceFile,
+) -> Program<'db> {
     let mut parser = match TributeParser::new() {
         Ok(p) => p,
         Err(_) => return Program::new(db, Vec::new()),
@@ -439,33 +442,10 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
-        let node_text = node.utf8_text(source.as_bytes())?;
-        
-        // Check if there are any interpolation nodes
-        let has_interpolation = (0..node.child_count())
-            .any(|i| node.child(i).is_some_and(|child| child.kind() == "interpolation"));
-        
-        if !has_interpolation {
-            // Simple string without interpolation - extract content from the first string_segment
-            let mut content = String::new();
-            for i in 0..node.child_count() {
-                if let Some(child) = node.child(i) {
-                    if child.kind() == "string_segment" {
-                        let text = child.utf8_text(source.as_bytes())?;
-                        content.push_str(text);
-                    }
-                }
-            }
-            let processed = process_escape_sequences(&content)?;
-            return Ok(Expr::StringInterpolation(StringInterpolation {
-                text: processed,
-                segments: Vec::new(),
-            }));
-        }
-
-        // String with interpolation - new grammar structure: string_segment (interpolation string_segment)*
-        let mut segments = Vec::new();
+        let mut segments: Vec<StringSegment> = Vec::new();
+        let mut leading_text = String::new();
         let mut current_text = String::new();
+        let mut expecting_text = true; // Start expecting text (leading_text)
 
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
@@ -476,26 +456,27 @@ impl TributeParser {
                         current_text.push_str(&processed);
                     }
                     "interpolation" => {
-                        // Find the expression inside the interpolation
-                        let mut expr_found = false;
-                        for j in 0..child.child_count() {
-                            if let Some(expr_node) = child.child(j) {
-                                // Skip the \, {, and } tokens, look for the actual expression
-                                if expr_node.kind() != "\\" && expr_node.kind() != "{" && expr_node.kind() != "}" {
-                                    let expr = self.node_to_expr_with_span(expr_node, source)?;
-                                    // Create segment with current text and the interpolation
-                                    segments.push(StringSegment {
-                                        text: current_text.clone(),
-                                        interpolation: Box::new(expr),
-                                    });
-                                    current_text.clear();
-                                    expr_found = true;
-                                    break;
+                        if let Some(expr_node) = child.child_by_field_name("expression") {
+                            let expr = self.node_to_expr_with_span(expr_node, source)?;
+
+                            if expecting_text {
+                                // This is the first interpolation, current_text is leading_text
+                                leading_text = std::mem::take(&mut current_text);
+                                expecting_text = false;
+                            } else {
+                                // Update the trailing_text of the previous segment
+                                if let Some(last_segment) = segments.last_mut() {
+                                    last_segment.trailing_text = std::mem::take(&mut current_text);
                                 }
                             }
-                        }
-                        if !expr_found {
-                            return Err("Invalid interpolation: no expression found".into());
+
+                            // Create new segment with empty trailing_text (will be filled later)
+                            segments.push(StringSegment {
+                                interpolation: Box::new(expr),
+                                trailing_text: String::new(),
+                            });
+                        } else {
+                            return Err("Interpolation missing expression".into());
                         }
                     }
                     "\"" => {
@@ -506,22 +487,23 @@ impl TributeParser {
             }
         }
 
-        // If there's remaining text after the last interpolation, add it as a dummy segment
-        if !current_text.is_empty() && !segments.is_empty() {
-            let dummy_expr = (Expr::StringInterpolation(StringInterpolation {
-                text: String::new(),
+        if segments.is_empty() {
+            // Simple string without interpolation
+            Ok(Expr::StringInterpolation(StringInterpolation {
+                leading_text: current_text,
                 segments: Vec::new(),
-            }), Span::new(0, 0));
-            segments.push(StringSegment {
-                text: current_text,
-                interpolation: Box::new(dummy_expr),
-            });
-        }
+            }))
+        } else {
+            // Set trailing text for the last segment
+            if let Some(last_segment) = segments.last_mut() {
+                last_segment.trailing_text = current_text;
+            }
 
-        Ok(Expr::StringInterpolation(StringInterpolation {
-            text: node_text.to_string(),
-            segments,
-        }))
+            Ok(Expr::StringInterpolation(StringInterpolation {
+                leading_text,
+                segments,
+            }))
+        }
     }
 
     fn parse_literal_pattern(
@@ -539,10 +521,12 @@ impl TributeParser {
                     }
                     "string" => {
                         // Parse as StringInterpolation and convert to appropriate pattern
-                        if let Ok(Expr::StringInterpolation(interp)) = self.parse_interpolated_string(child, source) {
+                        if let Ok(Expr::StringInterpolation(interp)) =
+                            self.parse_interpolated_string(child, source)
+                        {
                             if interp.segments.is_empty() {
                                 // Simple string without interpolation
-                                return Ok(LiteralPattern::String(interp.text));
+                                return Ok(LiteralPattern::String(interp.leading_text));
                             } else {
                                 // String with interpolation
                                 return Ok(LiteralPattern::StringInterpolation(interp));
@@ -885,8 +869,10 @@ fn test() {
             let result = parse_source_file(db, source_file);
             assert_eq!(result.items(db).len(), 1);
             let ItemKind::Function(func) = result.items(db)[0].kind(db);
-            if let Statement::Expression((Expr::StringInterpolation(interp), _)) = &func.body(db).statements[0] {
-                assert_eq!(interp.text, "Hello \"World\"");
+            if let Statement::Expression((Expr::StringInterpolation(interp), _)) =
+                &func.body(db).statements[0]
+            {
+                assert_eq!(interp.leading_text, "Hello \"World\"");
             } else {
                 panic!("Expected string expression");
             }
@@ -905,8 +891,10 @@ fn test() {
             let result = parse_source_file(db, source_file2);
             assert_eq!(result.items(db).len(), 1);
             let ItemKind::Function(func) = result.items(db)[0].kind(db);
-            if let Statement::Expression((Expr::StringInterpolation(interp), _)) = &func.body(db).statements[0] {
-                assert_eq!(interp.text, "Line1\nTab\tQuote\"");
+            if let Statement::Expression((Expr::StringInterpolation(interp), _)) =
+                &func.body(db).statements[0]
+            {
+                assert_eq!(interp.leading_text, "Line1\nTab\tQuote\"");
             } else {
                 panic!("Expected string expression");
             }

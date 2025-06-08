@@ -88,14 +88,14 @@ pub enum BinaryOperator {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StringInterpolation {
-    pub text: String,
+    pub leading_text: String,
     pub segments: Vec<StringSegment>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StringSegment {
     pub interpolation: Box<Spanned<Expr>>,
-    pub text: String,
+    pub trailing_text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

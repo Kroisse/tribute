@@ -26,7 +26,7 @@ HirProgram {
                             (
                                 StringInterpolation(
                                     StringInterpolation {
-                                        text: "Hello, world!",
+                                        leading_text: "Hello, world!",
                                         segments: [],
                                     },
                                 ),
