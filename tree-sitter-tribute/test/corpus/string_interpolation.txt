@@ -16,7 +16,8 @@ fn main() {
       (let_statement
         name: (identifier)
         value: (primary_expression
-          (string)))
+          (string
+            (string_segment))))
       (expression_statement
         (primary_expression
           (string
@@ -53,6 +54,7 @@ fn test() {
       (expression_statement
         (primary_expression
           (string
+            (string_segment)
             (interpolation
               (primary_expression
                 (identifier)))
@@ -66,7 +68,8 @@ fn test() {
                 (primary_expression
                   (identifier))
                 (primary_expression
-                  (identifier))))))))))
+                  (identifier))))
+            (string_segment)))))))
 
 ================================================================================
 Mixed text and interpolation
@@ -124,7 +127,8 @@ fn test() {
     body: (block
       (expression_statement
         (primary_expression
-          (string))))))
+          (string
+            (string_segment)))))))
 
 ================================================================================
 Empty interpolation content
@@ -144,7 +148,8 @@ fn test() {
       (let_statement
         name: (identifier)
         value: (primary_expression
-          (string)))
+          (string
+            (string_segment))))
       (expression_statement
         (primary_expression
           (string

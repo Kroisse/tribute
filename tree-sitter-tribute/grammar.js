@@ -112,14 +112,15 @@ module.exports = grammar({
 
     string: $ => seq(
       '"',
-      repeat(choice(
-        $.string_segment,
-        $.interpolation
-      )),
+      $.string_segment,
+      optional(repeat1(seq(
+        $.interpolation,
+        $.string_segment
+      ))),
       '"'
     ),
 
-    string_segment: $ => prec(-1, /([^"\\]|\\[nrtN0"\\]|\\x[0-9a-fA-F]{2})+/),
+    string_segment: $ => prec(-1, /([^"\\]|\\[nrtN0"\\]|\\x[0-9a-fA-F]{2})*/),
 
     interpolation: $ => seq(
       '\\',

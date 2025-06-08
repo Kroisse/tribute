@@ -17,7 +17,8 @@ fn main() {
           function: (identifier)
           (argument_list
             (primary_expression
-              (string))))))))
+              (string
+                (string_segment)))))))))
 
 ================================================================================
 Function with arithmetic expression
@@ -59,7 +60,8 @@ fn test() {
           function: (identifier)
           (argument_list
             (primary_expression
-              (string))))))))
+              (string
+                (string_segment)))))))))
 
 ================================================================================
 Function with parameters
@@ -269,21 +271,25 @@ fn test_number(n) {
               (literal_pattern
                 (number)))
             value: (primary_expression
-              (string)))
+              (string
+                (string_segment))))
           (match_arm
             pattern: (pattern
               (literal_pattern
                 (number)))
             value: (primary_expression
-              (string)))
+              (string
+                (string_segment))))
           (match_arm
             pattern: (pattern
               (literal_pattern
                 (number)))
             value: (primary_expression
-              (string)))
+              (string
+                (string_segment))))
           (match_arm
             pattern: (pattern
               (wildcard_pattern))
             value: (primary_expression
-              (string))))))))
+              (string
+                (string_segment)))))))))

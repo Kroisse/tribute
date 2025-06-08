@@ -440,22 +440,32 @@ impl TributeParser {
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
         let node_text = node.utf8_text(source.as_bytes())?;
+        
+        // Check if there are any interpolation nodes
         let has_interpolation = (0..node.child_count())
             .any(|i| node.child(i).is_some_and(|child| child.kind() == "interpolation"));
         
         if !has_interpolation {
-            // Simple string without interpolation
-            let content = &node_text[1..node_text.len() - 1];
-            let processed = process_escape_sequences(content)?;
+            // Simple string without interpolation - extract content from the first string_segment
+            let mut content = String::new();
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    if child.kind() == "string_segment" {
+                        let text = child.utf8_text(source.as_bytes())?;
+                        content.push_str(text);
+                    }
+                }
+            }
+            let processed = process_escape_sequences(&content)?;
             return Ok(Expr::StringInterpolation(StringInterpolation {
                 text: processed,
                 segments: Vec::new(),
             }));
         }
 
-        // String with interpolation - collect segments in order
+        // String with interpolation - new grammar structure: string_segment (interpolation string_segment)*
         let mut segments = Vec::new();
-        let mut pending_text = String::new();
+        let mut current_text = String::new();
 
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
@@ -463,23 +473,29 @@ impl TributeParser {
                     "string_segment" => {
                         let text = child.utf8_text(source.as_bytes())?;
                         let processed = process_escape_sequences(text)?;
-                        pending_text.push_str(&processed);
+                        current_text.push_str(&processed);
                     }
                     "interpolation" => {
-                        // Find the expression inside the interpolation (\{expr})
+                        // Find the expression inside the interpolation
+                        let mut expr_found = false;
                         for j in 0..child.child_count() {
                             if let Some(expr_node) = child.child(j) {
+                                // Skip the \, {, and } tokens, look for the actual expression
                                 if expr_node.kind() != "\\" && expr_node.kind() != "{" && expr_node.kind() != "}" {
                                     let expr = self.node_to_expr_with_span(expr_node, source)?;
-                                    // Create segment with preceding text and the interpolation
+                                    // Create segment with current text and the interpolation
                                     segments.push(StringSegment {
-                                        text: pending_text.clone(),
+                                        text: current_text.clone(),
                                         interpolation: Box::new(expr),
                                     });
-                                    pending_text.clear();
+                                    current_text.clear();
+                                    expr_found = true;
                                     break;
                                 }
                             }
+                        }
+                        if !expr_found {
+                            return Err("Invalid interpolation: no expression found".into());
                         }
                     }
                     "\"" => {
@@ -490,15 +506,14 @@ impl TributeParser {
             }
         }
 
-        // If there's remaining text after the last interpolation, create a dummy segment
-        if !pending_text.is_empty() && !segments.is_empty() {
-            // Add to the last segment's text (this represents text after the interpolation)
+        // If there's remaining text after the last interpolation, add it as a dummy segment
+        if !current_text.is_empty() && !segments.is_empty() {
             let dummy_expr = (Expr::StringInterpolation(StringInterpolation {
                 text: String::new(),
                 segments: Vec::new(),
             }), Span::new(0, 0));
             segments.push(StringSegment {
-                text: pending_text,
+                text: current_text,
                 interpolation: Box::new(dummy_expr),
             });
         }
