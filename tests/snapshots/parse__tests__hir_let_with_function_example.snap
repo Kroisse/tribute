@@ -18,17 +18,15 @@ HirProgram {
                             Number(
                                 10,
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 203,
                                 end: 205,
-                                context: (),
                             },
                         ),
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 203,
                         end: 205,
-                        context: (),
                     },
                 },
                 HirExpr {
@@ -38,10 +36,9 @@ HirProgram {
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 210,
                                 end: 223,
-                                context: (),
                             },
                         ),
                         args: [
@@ -49,25 +46,22 @@ HirProgram {
                                 Variable(
                                     "x",
                                 ),
-                                SimpleSpan {
+                                Span {
                                     start: 221,
                                     end: 222,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 210,
                         end: 223,
-                        context: (),
                     },
                 },
             ],
-            span: SimpleSpan {
+            span: Span {
                 start: 179,
                 end: 225,
-                context: (),
             },
         },
     },

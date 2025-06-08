@@ -80,7 +80,7 @@ pub struct Program<'db> {
 #[salsa::tracked]
 pub struct TrackedExpression<'db> {
     pub expr: Expression,
-    pub span: SimpleSpan,
+    pub span: Span,
 }
 ```
 
@@ -92,7 +92,7 @@ Accumulators collect side effects (errors, warnings, etc.) during query executio
 #[salsa::accumulator]
 pub struct Diagnostic {
     pub message: String,
-    pub span: SimpleSpan,
+    pub span: Span,
     pub severity: DiagnosticSeverity,
     pub phase: CompilationPhase, // Optional: track which phase generated this
 }

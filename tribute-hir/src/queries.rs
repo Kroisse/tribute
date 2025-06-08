@@ -33,7 +33,7 @@ pub fn lower_program_to_hir<'db>(db: &'db dyn salsa::Database, program: Program<
             Diagnostic {
                 message: format!("HIR lowering error: {}", e),
                 severity: DiagnosticSeverity::Error,
-                span: tribute_ast::SimpleSpan::new(0, 0), // Default span
+                span: tribute_ast::Span::new(0, 0), // Default span
                 phase: CompilationPhase::HirLowering,
             }
             .accumulate(db);

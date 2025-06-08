@@ -17,10 +17,9 @@ HirProgram {
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 201,
                                 end: 253,
-                                context: (),
                             },
                         ),
                         args: [
@@ -28,18 +27,16 @@ HirProgram {
                                 String(
                                     "Calculator example - to be implemented",
                                 ),
-                                SimpleSpan {
+                                Span {
                                     start: 212,
                                     end: 252,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 201,
                         end: 253,
-                        context: (),
                     },
                 },
                 HirExpr {
@@ -49,10 +46,9 @@ HirProgram {
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 258,
                                 end: 319,
-                                context: (),
                             },
                         ),
                         args: [
@@ -60,25 +56,22 @@ HirProgram {
                                 String(
                                     "Requires pattern matching and string operations",
                                 ),
-                                SimpleSpan {
+                                Span {
                                     start: 269,
                                     end: 318,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 258,
                         end: 319,
-                        context: (),
                     },
                 },
             ],
-            span: SimpleSpan {
+            span: Span {
                 start: 185,
                 end: 321,
-                context: (),
             },
         },
     },

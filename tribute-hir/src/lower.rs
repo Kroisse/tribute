@@ -1,6 +1,6 @@
 use crate::hir::*;
 use std::collections::BTreeMap;
-use tribute_ast::{Program, ItemKind, FunctionDefinition, Statement, Expr as AstExpr, SimpleSpan, Spanned, Pattern as AstPattern, LiteralPattern};
+use tribute_ast::{Program, ItemKind, FunctionDefinition, Statement, Expr as AstExpr, Span, Spanned, Pattern as AstPattern, LiteralPattern};
 
 /// Error type for HIR lowering
 #[derive(Debug, Clone, PartialEq)]
@@ -38,7 +38,7 @@ pub struct FunctionDef {
     pub name: tribute_ast::Identifier,
     pub params: Vec<tribute_ast::Identifier>,
     pub body: Vec<Spanned<Expr>>,
-    pub span: SimpleSpan,
+    pub span: Span,
 }
 
 /// Convert AST Program to HIR function definitions
@@ -157,10 +157,10 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tribute_ast::{Expr as AstExpr, SimpleSpan};
+    use tribute_ast::{Expr as AstExpr, Span};
 
-    fn make_span() -> SimpleSpan {
-        SimpleSpan::new(0, 0)
+    fn make_span() -> Span {
+        Span::new(0, 0)
     }
 
     fn test_identifier(name: &str) -> AstExpr {

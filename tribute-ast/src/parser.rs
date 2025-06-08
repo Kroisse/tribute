@@ -89,7 +89,7 @@ impl TributeParser {
 
                 let name = name.ok_or("Missing function name")?;
                 let body = body.ok_or("Missing function body")?;
-                let span = SimpleSpan::new(node.start_byte(), node.end_byte());
+                let span = Span::new(node.start_byte(), node.end_byte());
 
                 Ok(Item::new(
                     db,
@@ -199,7 +199,7 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Spanned<Expr>, Box<dyn std::error::Error>> {
-        let span = SimpleSpan::new(node.start_byte(), node.end_byte());
+        let span = Span::new(node.start_byte(), node.end_byte());
         let expr = self.node_to_expr(node, source)?;
         Ok((expr, span))
     }

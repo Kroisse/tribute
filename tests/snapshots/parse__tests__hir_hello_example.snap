@@ -17,10 +17,9 @@ HirProgram {
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 40,
                                 end: 67,
-                                context: (),
                             },
                         ),
                         args: [
@@ -28,25 +27,22 @@ HirProgram {
                                 String(
                                     "Hello, world!",
                                 ),
-                                SimpleSpan {
+                                Span {
                                     start: 51,
                                     end: 66,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 40,
                         end: 67,
-                        context: (),
                     },
                 },
             ],
-            span: SimpleSpan {
+            span: Span {
                 start: 0,
                 end: 69,
-                context: (),
             },
         },
     },

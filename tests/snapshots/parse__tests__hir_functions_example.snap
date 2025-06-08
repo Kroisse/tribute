@@ -20,10 +20,9 @@ HirProgram {
                             Variable(
                                 "+",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 266,
                                 end: 271,
-                                context: (),
                             },
                         ),
                         args: [
@@ -31,35 +30,31 @@ HirProgram {
                                 Variable(
                                     "x",
                                 ),
-                                SimpleSpan {
+                                Span {
                                     start: 266,
                                     end: 267,
-                                    context: (),
                                 },
                             ),
                             (
                                 Variable(
                                     "y",
                                 ),
-                                SimpleSpan {
+                                Span {
                                     start: 270,
                                     end: 271,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 266,
                         end: 271,
-                        context: (),
                     },
                 },
             ],
-            span: SimpleSpan {
+            span: Span {
                 start: 247,
                 end: 273,
-                context: (),
             },
         },
         "main": HirFunction {
@@ -74,10 +69,9 @@ HirProgram {
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 291,
                                 end: 336,
-                                context: (),
                             },
                         ),
                         args: [
@@ -85,18 +79,16 @@ HirProgram {
                                 String(
                                     "Testing user-defined functions:",
                                 ),
-                                SimpleSpan {
+                                Span {
                                     start: 302,
                                     end: 335,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 291,
                         end: 336,
-                        context: (),
                     },
                 },
                 HirExpr {
@@ -106,10 +98,9 @@ HirProgram {
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 341,
                                 end: 364,
-                                context: (),
                             },
                         ),
                         args: [
@@ -119,10 +110,9 @@ HirProgram {
                                         Variable(
                                             "add",
                                         ),
-                                        SimpleSpan {
+                                        Span {
                                             start: 352,
                                             end: 363,
-                                            context: (),
                                         },
                                     ),
                                     args: [
@@ -130,36 +120,32 @@ HirProgram {
                                             Number(
                                                 10,
                                             ),
-                                            SimpleSpan {
+                                            Span {
                                                 start: 356,
                                                 end: 358,
-                                                context: (),
                                             },
                                         ),
                                         (
                                             Number(
                                                 20,
                                             ),
-                                            SimpleSpan {
+                                            Span {
                                                 start: 360,
                                                 end: 362,
-                                                context: (),
                                             },
                                         ),
                                     ],
                                 },
-                                SimpleSpan {
+                                Span {
                                     start: 352,
                                     end: 363,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 341,
                         end: 364,
-                        context: (),
                     },
                 },
                 HirExpr {
@@ -169,10 +155,9 @@ HirProgram {
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 369,
                                 end: 409,
-                                context: (),
                             },
                         ),
                         args: [
@@ -180,18 +165,16 @@ HirProgram {
                                 String(
                                     "Testing nested arithmetic:",
                                 ),
-                                SimpleSpan {
+                                Span {
                                     start: 380,
                                     end: 408,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 369,
                         end: 409,
-                        context: (),
                     },
                 },
                 HirExpr {
@@ -201,10 +184,9 @@ HirProgram {
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 414,
                                 end: 440,
-                                context: (),
                             },
                         ),
                         args: [
@@ -214,10 +196,9 @@ HirProgram {
                                         Variable(
                                             "+",
                                         ),
-                                        SimpleSpan {
+                                        Span {
                                             start: 425,
                                             end: 439,
-                                            context: (),
                                         },
                                     ),
                                     args: [
@@ -227,10 +208,9 @@ HirProgram {
                                                     Variable(
                                                         "*",
                                                     ),
-                                                    SimpleSpan {
+                                                    Span {
                                                         start: 425,
                                                         end: 430,
-                                                        context: (),
                                                     },
                                                 ),
                                                 args: [
@@ -238,28 +218,25 @@ HirProgram {
                                                         Number(
                                                             3,
                                                         ),
-                                                        SimpleSpan {
+                                                        Span {
                                                             start: 425,
                                                             end: 426,
-                                                            context: (),
                                                         },
                                                     ),
                                                     (
                                                         Number(
                                                             4,
                                                         ),
-                                                        SimpleSpan {
+                                                        Span {
                                                             start: 429,
                                                             end: 430,
-                                                            context: (),
                                                         },
                                                     ),
                                                 ],
                                             },
-                                            SimpleSpan {
+                                            Span {
                                                 start: 425,
                                                 end: 430,
-                                                context: (),
                                             },
                                         ),
                                         (
@@ -268,10 +245,9 @@ HirProgram {
                                                     Variable(
                                                         "/",
                                                     ),
-                                                    SimpleSpan {
+                                                    Span {
                                                         start: 433,
                                                         end: 439,
-                                                        context: (),
                                                     },
                                                 ),
                                                 args: [
@@ -279,44 +255,39 @@ HirProgram {
                                                         Number(
                                                             15,
                                                         ),
-                                                        SimpleSpan {
+                                                        Span {
                                                             start: 433,
                                                             end: 435,
-                                                            context: (),
                                                         },
                                                     ),
                                                     (
                                                         Number(
                                                             3,
                                                         ),
-                                                        SimpleSpan {
+                                                        Span {
                                                             start: 438,
                                                             end: 439,
-                                                            context: (),
                                                         },
                                                     ),
                                                 ],
                                             },
-                                            SimpleSpan {
+                                            Span {
                                                 start: 433,
                                                 end: 439,
-                                                context: (),
                                             },
                                         ),
                                     ],
                                 },
-                                SimpleSpan {
+                                Span {
                                     start: 425,
                                     end: 439,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 414,
                         end: 440,
-                        context: (),
                     },
                 },
                 HirExpr {
@@ -326,10 +297,9 @@ HirProgram {
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 445,
                                 end: 485,
-                                context: (),
                             },
                         ),
                         args: [
@@ -337,18 +307,16 @@ HirProgram {
                                 String(
                                     "Testing string operations:",
                                 ),
-                                SimpleSpan {
+                                Span {
                                     start: 456,
                                     end: 484,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 445,
                         end: 485,
-                        context: (),
                     },
                 },
                 HirExpr {
@@ -358,10 +326,9 @@ HirProgram {
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 490,
                                 end: 525,
-                                context: (),
                             },
                         ),
                         args: [
@@ -369,25 +336,22 @@ HirProgram {
                                 String(
                                     "Hello, Tribute World!",
                                 ),
-                                SimpleSpan {
+                                Span {
                                     start: 501,
                                     end: 524,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 490,
                         end: 525,
-                        context: (),
                     },
                 },
             ],
-            span: SimpleSpan {
+            span: Span {
                 start: 275,
                 end: 527,
-                context: (),
             },
         },
     },

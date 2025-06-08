@@ -18,17 +18,15 @@ HirProgram {
                             Number(
                                 42,
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 150,
                                 end: 152,
-                                context: (),
                             },
                         ),
                     },
-                    span: SimpleSpan {
+                    span: Span {
                         start: 150,
                         end: 152,
-                        context: (),
                     },
                 },
                 HirExpr {
@@ -36,17 +34,15 @@ HirProgram {
                     expr: Variable(
                         "x",
                     ),
-                    span: SimpleSpan {
+                    span: Span {
                         start: 157,
                         end: 158,
-                        context: (),
                     },
                 },
             ],
-            span: SimpleSpan {
+            span: Span {
                 start: 126,
                 end: 160,
-                context: (),
             },
         },
     },

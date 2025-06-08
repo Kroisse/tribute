@@ -1,4 +1,4 @@
-use crate::{Program, ast::SimpleSpan};
+use crate::{Program, ast::Span};
 use std::path::PathBuf;
 
 #[derive(Default, Clone)]
@@ -22,7 +22,7 @@ pub struct SourceFile {
 #[salsa::accumulator]
 pub struct Diagnostic {
     pub message: String,
-    pub span: SimpleSpan,
+    pub span: Span,
     pub severity: DiagnosticSeverity,
     pub phase: CompilationPhase,
 }

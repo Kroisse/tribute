@@ -1,23 +1,19 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SimpleSpan {
+pub struct Span {
     pub start: usize,
     pub end: usize,
-    pub context: (),
 }
 
-impl SimpleSpan {
+impl Span {
     pub const fn new(start: usize, end: usize) -> Self {
         Self {
             start,
             end,
-            context: (),
         }
     }
 }
-
-pub type Span = SimpleSpan;
 pub type Spanned<T> = (T, Span);
 
 pub type Identifier = String;
@@ -34,7 +30,7 @@ pub struct Item<'db> {
     #[tracked]
     #[returns(ref)]
     pub kind: ItemKind<'db>,
-    pub span: SimpleSpan,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
@@ -48,7 +44,7 @@ pub struct FunctionDefinition<'db> {
     pub name: Identifier,
     pub parameters: Vec<Identifier>,
     pub body: Block,
-    pub span: SimpleSpan,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
