@@ -137,6 +137,11 @@ TributeDatabaseImpl::default().attach(|db| {
 
 ### Additional Documentation
 - **`SALSA_INTEGRATION.md`**: Detailed guide on Salsa integration with architecture diagrams and examples
+- **`plans/`**: Development plans for major features:
+  - `01-syntax-modernization.md`: Modernizing syntax from S-expressions
+  - `02-compiler-implementation.md`: MLIR-based native compilation
+  - `03-lsp-implementation.md`: Language Server Protocol for IDE support
+  - `04-static-type-system.md`: Gradual static typing system
 
 When working on this codebase, pay attention to:
 - The separation between parsing (Tree-sitter), AST, HIR, and evaluation phases
