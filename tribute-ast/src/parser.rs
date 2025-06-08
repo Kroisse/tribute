@@ -212,11 +212,19 @@ impl TributeParser {
                 Ok(Expr::Number(num))
             }
             "string" => {
-                let text = node.utf8_text(source.as_bytes())?;
-                // Remove quotes and process escape sequences
-                let content = &text[1..text.len() - 1];
-                let processed = process_escape_sequences(content)?;
-                Ok(Expr::String(processed))
+                // Check if this is an interpolated string by looking for child nodes
+                let has_interpolation = (0..node.child_count())
+                    .any(|i| node.child(i).is_some_and(|child| child.kind() == "interpolation"));
+                
+                if has_interpolation {
+                    self.parse_interpolated_string(node, source)
+                } else {
+                    let text = node.utf8_text(source.as_bytes())?;
+                    // Remove quotes and process escape sequences
+                    let content = &text[1..text.len() - 1];
+                    let processed = process_escape_sequences(content)?;
+                    Ok(Expr::String(processed))
+                }
             }
             "identifier" => {
                 let text = node.utf8_text(source.as_bytes())?;
@@ -437,6 +445,44 @@ impl TributeParser {
         Err("Invalid pattern".into())
     }
 
+    fn parse_interpolated_string(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut segments = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "string_segment" => {
+                        let text = child.utf8_text(source.as_bytes())?;
+                        let processed = process_escape_sequences(text)?;
+                        segments.push(StringSegment::Text(processed));
+                    }
+                    "interpolation" => {
+                        // Find the expression inside the interpolation
+                        for j in 0..child.child_count() {
+                            if let Some(expr_node) = child.child(j) {
+                                if expr_node.kind() != "{" && expr_node.kind() != "}" {
+                                    let expr = self.node_to_expr_with_span(expr_node, source)?;
+                                    segments.push(StringSegment::Interpolation(Box::new(expr)));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    "\"" => {
+                        // Skip quote delimiters
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(Expr::StringInterpolation(StringInterpolation { segments }))
+    }
+
     fn parse_literal_pattern(
         &self,
         node: Node,
@@ -451,10 +497,21 @@ impl TributeParser {
                         return Ok(LiteralPattern::Number(num));
                     }
                     "string" => {
-                        let text = child.utf8_text(source.as_bytes())?;
-                        let content = &text[1..text.len() - 1];
-                        let processed = process_escape_sequences(content)?;
-                        return Ok(LiteralPattern::String(processed));
+                        // Check if this is an interpolated string by looking for child nodes
+                        let has_interpolation = (0..child.child_count())
+                            .any(|i| child.child(i).is_some_and(|grandchild| grandchild.kind() == "interpolation"));
+                        
+                        if has_interpolation {
+                            // Parse as Expr first, then extract StringInterpolation
+                            if let Ok(Expr::StringInterpolation(interp)) = self.parse_interpolated_string(child, source) {
+                                return Ok(LiteralPattern::StringInterpolation(interp));
+                            }
+                        } else {
+                            let text = child.utf8_text(source.as_bytes())?;
+                            let content = &text[1..text.len() - 1];
+                            let processed = process_escape_sequences(content)?;
+                            return Ok(LiteralPattern::String(processed));
+                        }
                     }
                     _ => {}
                 }

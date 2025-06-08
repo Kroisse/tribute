@@ -31,11 +31,12 @@ pub struct HirExpr<'db> {
 }
 
 /// HIR expressions with structured language constructs
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Expr {
     /// Literal values
     Number(i64),
     String(String),
+    StringInterpolation(StringInterpolation),
 
     /// Variable reference
     Variable(Identifier),
@@ -64,7 +65,7 @@ pub enum Expr {
 }
 
 /// Pattern matching case
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MatchCase {
     pub pattern: Pattern,
     pub body: Spanned<Expr>,
@@ -85,11 +86,25 @@ pub enum Pattern {
     Rest(Identifier),
 }
 
+/// String interpolation in HIR
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StringInterpolation {
+    pub segments: Vec<StringSegment>,
+}
+
+/// String segment for interpolation
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StringSegment {
+    Text(String),
+    Interpolation(Box<Spanned<Expr>>),
+}
+
 /// Literal values for patterns
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Literal {
     Number(i64),
     String(String),
+    StringInterpolation(StringInterpolation),
 }
 
 impl std::fmt::Display for Expr {
@@ -97,6 +112,16 @@ impl std::fmt::Display for Expr {
         match self {
             Expr::Number(n) => write!(f, "{n}"),
             Expr::String(s) => write!(f, "\"{s}\""),
+            Expr::StringInterpolation(interp) => {
+                write!(f, "\"")?;
+                for segment in &interp.segments {
+                    match segment {
+                        StringSegment::Text(text) => write!(f, "{}", text)?,
+                        StringSegment::Interpolation(expr) => write!(f, "{{{}}}", expr.0)?,
+                    }
+                }
+                write!(f, "\"")
+            }
             Expr::Variable(v) => write!(f, "{v}"),
             Expr::Call { func, args } => {
                 write!(f, "({}", func.0)?;

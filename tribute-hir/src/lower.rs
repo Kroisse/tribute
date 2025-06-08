@@ -104,6 +104,21 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
     let hir_expr = match ast_expr {
         AstExpr::Number(n) => Expr::Number(*n),
         AstExpr::String(s) => Expr::String(s.clone()),
+        AstExpr::StringInterpolation(interp) => {
+            let segments: LowerResult<Vec<_>> = interp.segments.iter()
+                .map(|segment| {
+                    match segment {
+                        tribute_ast::StringSegment::Text(text) => {
+                            Ok(crate::hir::StringSegment::Text(text.clone()))
+                        }
+                        tribute_ast::StringSegment::Interpolation(expr) => {
+                            Ok(crate::hir::StringSegment::Interpolation(Box::new(lower_expr(expr)?)))
+                        }
+                    }
+                })
+                .collect();
+            Expr::StringInterpolation(crate::hir::StringInterpolation { segments: segments? })
+        }
         AstExpr::Identifier(id) => Expr::Variable(id.clone()),
         AstExpr::Binary(bin_expr) => {
             let left = Box::new(lower_expr(&bin_expr.left)?);
@@ -146,6 +161,21 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
             match lit {
                 LiteralPattern::Number(n) => Ok(Pattern::Literal(Literal::Number(*n))),
                 LiteralPattern::String(s) => Ok(Pattern::Literal(Literal::String(s.clone()))),
+                LiteralPattern::StringInterpolation(interp) => {
+                    let segments: LowerResult<Vec<_>> = interp.segments.iter()
+                        .map(|segment| {
+                            match segment {
+                                tribute_ast::StringSegment::Text(text) => {
+                                    Ok(crate::hir::StringSegment::Text(text.clone()))
+                                }
+                                tribute_ast::StringSegment::Interpolation(expr) => {
+                                    Ok(crate::hir::StringSegment::Interpolation(Box::new(lower_expr(expr)?)))
+                                }
+                            }
+                        })
+                        .collect();
+                    Ok(Pattern::Literal(Literal::StringInterpolation(crate::hir::StringInterpolation { segments: segments? })))
+                }
             }
         }
         AstPattern::Wildcard => Ok(Pattern::Wildcard),
@@ -156,7 +186,6 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tribute_ast::{Expr as AstExpr, Span};
 
     fn make_span() -> Span {

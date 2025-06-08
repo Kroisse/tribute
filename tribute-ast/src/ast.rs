@@ -68,6 +68,7 @@ pub struct LetStatement {
 pub enum Expr {
     Number(i64),
     String(String),
+    StringInterpolation(StringInterpolation),
     Identifier(Identifier),
     Binary(BinaryExpression),
     Call(CallExpression),
@@ -87,6 +88,17 @@ pub enum BinaryOperator {
     Subtract,
     Multiply,
     Divide,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct StringInterpolation {
+    pub segments: Vec<StringSegment>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum StringSegment {
+    Text(String),
+    Interpolation(Box<Spanned<Expr>>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -118,6 +130,7 @@ pub enum Pattern {
 pub enum LiteralPattern {
     Number(i64),
     String(String),
+    StringInterpolation(StringInterpolation),
 }
 
 impl std::fmt::Display for Expr {
@@ -125,6 +138,16 @@ impl std::fmt::Display for Expr {
         match self {
             Expr::Number(n) => write!(f, "{}", n),
             Expr::String(s) => write!(f, "\"{}\"", s),
+            Expr::StringInterpolation(interp) => {
+                write!(f, "\"")?;
+                for segment in &interp.segments {
+                    match segment {
+                        StringSegment::Text(text) => write!(f, "{}", text)?,
+                        StringSegment::Interpolation(expr) => write!(f, "{{{}}}", expr.0)?,
+                    }
+                }
+                write!(f, "\"")
+            }
             Expr::Identifier(s) => f.write_str(s),
             Expr::Binary(bin) => write!(f, "({} {} {})", bin.left.0, bin.operator, bin.right.0),
             Expr::Call(call) => {
@@ -174,6 +197,16 @@ impl std::fmt::Display for LiteralPattern {
         match self {
             LiteralPattern::Number(n) => write!(f, "{}", n),
             LiteralPattern::String(s) => write!(f, "\"{}\"", s),
+            LiteralPattern::StringInterpolation(interp) => {
+                write!(f, "\"")?;
+                for segment in &interp.segments {
+                    match segment {
+                        StringSegment::Text(text) => write!(f, "{}", text)?,
+                        StringSegment::Interpolation(expr) => write!(f, "{{{}}}", expr.0)?,
+                    }
+                }
+                write!(f, "\"")
+            }
         }
     }
 }
