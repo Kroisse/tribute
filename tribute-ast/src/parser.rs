@@ -1,4 +1,4 @@
-use crate::ast::{Expr, SimpleSpan};
+use crate::ast::*;
 use tree_sitter::{Node, Parser};
 
 pub struct TributeParser {
@@ -13,32 +13,192 @@ impl TributeParser {
         Ok(TributeParser { parser })
     }
 
-    pub fn parse(
+    pub fn parse_internal<'db>(
         &mut self,
-        source: &str,
-    ) -> Result<Vec<(Expr, SimpleSpan)>, Box<dyn std::error::Error>> {
+        db: &'db dyn crate::Db,
+        source: &'db str,
+    ) -> Result<Program<'db>, Box<dyn std::error::Error>> {
         let tree = self.parser.parse(source, None).ok_or("Failed to parse")?;
 
         let root_node = tree.root_node();
-        let mut expressions = Vec::new();
+        let mut items = Vec::new();
 
         for i in 0..root_node.child_count() {
             if let Some(child) = root_node.child(i) {
                 // Skip comments and whitespace
-                if child.kind() == "comment" || child.kind() == "ERROR" {
+                if child.kind() == "line_comment"
+                    || child.kind() == "block_comment"
+                    || child.kind() == "ERROR"
+                {
                     continue;
                 }
-                match self.node_to_expr_with_span(child, source) {
-                    Ok((expr, span)) => expressions.push((expr, span)),
+                match self.node_to_item(db, child, source) {
+                    Ok(item) => items.push(item),
                     Err(e) => return Err(e),
                 }
             }
         }
 
-        Ok(expressions)
+        Ok(Program::new(db, items))
+    }
+}
+
+#[salsa::tracked]
+pub fn parse_source<'db>(db: &'db dyn crate::Db, source: crate::SourceFile) -> Program<'db> {
+    let mut parser = match TributeParser::new() {
+        Ok(p) => p,
+        Err(_) => return Program::new(db, Vec::new()),
+    };
+
+    parser
+        .parse_internal(db, source.text(db))
+        .unwrap_or_else(|_| Program::new(db, Vec::new()))
+}
+
+impl TributeParser {
+    fn node_to_item<'db>(
+        &self,
+        db: &'db dyn crate::Db,
+        node: Node,
+        source: &'db str,
+    ) -> Result<Item<'db>, Box<dyn std::error::Error>> {
+        match node.kind() {
+            "function_definition" => {
+                let mut name = None;
+                let mut parameters = Vec::new();
+                let mut body = None;
+
+                for i in 0..node.child_count() {
+                    if let Some(child) = node.child(i) {
+                        match child.kind() {
+                            "identifier" => {
+                                if name.is_none() {
+                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                                }
+                            }
+                            "parameter_list" => {
+                                parameters = self.parse_parameter_list(child, source)?;
+                            }
+                            "block" => {
+                                body = Some(self.parse_block(child, source)?);
+                            }
+                            _ => {} // Skip other tokens like 'fn', '(', ')'
+                        }
+                    }
+                }
+
+                let name = name.ok_or("Missing function name")?;
+                let body = body.ok_or("Missing function body")?;
+                let span = SimpleSpan::new(node.start_byte(), node.end_byte());
+
+                Ok(Item::new(
+                    db,
+                    ItemKind::Function(FunctionDefinition::new(db, name, parameters, body, span)),
+                    span,
+                ))
+            }
+            _ => Err(format!("Unknown item kind: {}", node.kind()).into()),
+        }
     }
 
-    fn node_to_expr_with_span(&self, node: Node, source: &str) -> Result<(Expr, SimpleSpan), Box<dyn std::error::Error>> {
+    fn parse_parameter_list(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Vec<Identifier>, Box<dyn std::error::Error>> {
+        let mut parameters = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                if child.kind() == "identifier" {
+                    parameters.push(child.utf8_text(source.as_bytes())?.to_string());
+                }
+            }
+        }
+
+        Ok(parameters)
+    }
+
+    fn parse_block(&self, node: Node, source: &str) -> Result<Block, Box<dyn std::error::Error>> {
+        let mut statements = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "let_statement" => {
+                        statements.push(Statement::Let(self.parse_let_statement(child, source)?));
+                    }
+                    "expression_statement" => {
+                        statements.push(Statement::Expression(
+                            self.parse_expression_statement(child, source)?,
+                        ));
+                    }
+                    "line_comment" | "block_comment" | "{" | "}" => {
+                        // Skip comments and block delimiters
+                    }
+                    _ => {
+                        // Try to parse as expression statement
+                        if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                            statements.push(Statement::Expression(expr));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Block { statements })
+    }
+
+    fn parse_let_statement(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<LetStatement, Box<dyn std::error::Error>> {
+        let mut name = None;
+        let mut value = None;
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "identifier" => {
+                        if name.is_none() {
+                            name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                        }
+                    }
+                    _ => {
+                        // Try to parse as expression
+                        if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                            value = Some(expr);
+                        }
+                    }
+                }
+            }
+        }
+
+        let name = name.ok_or("Missing let variable name")?;
+        let value = value.ok_or("Missing let value")?;
+
+        Ok(LetStatement { name, value })
+    }
+
+    fn parse_expression_statement(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Spanned<Expr>, Box<dyn std::error::Error>> {
+        // expression_statement should have one child which is the expression
+        if let Some(child) = node.child(0) {
+            self.node_to_expr_with_span(child, source)
+        } else {
+            Err("Empty expression statement".into())
+        }
+    }
+
+    fn node_to_expr_with_span(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Spanned<Expr>, Box<dyn std::error::Error>> {
         let span = SimpleSpan::new(node.start_byte(), node.end_byte());
         let expr = self.node_to_expr(node, source)?;
         Ok((expr, span))
@@ -47,40 +207,260 @@ impl TributeParser {
     fn node_to_expr(&self, node: Node, source: &str) -> Result<Expr, Box<dyn std::error::Error>> {
         match node.kind() {
             "number" => {
-                let text = node.utf8_text(source.as_bytes()).map_err(|e| format!("Failed to get text: {}", e))?;
-                let num = text.parse::<i64>().map_err(|e| format!("Failed to parse number: {}", e))?;
+                let text = node.utf8_text(source.as_bytes())?;
+                let num = text.parse::<i64>()?;
                 Ok(Expr::Number(num))
             }
             "string" => {
-                let text = node.utf8_text(source.as_bytes()).map_err(|e| format!("Failed to get text: {}", e))?;
+                let text = node.utf8_text(source.as_bytes())?;
                 // Remove quotes and process escape sequences
                 let content = &text[1..text.len() - 1];
                 let processed = process_escape_sequences(content)?;
                 Ok(Expr::String(processed))
             }
             "identifier" => {
-                let text = node.utf8_text(source.as_bytes()).map_err(|e| format!("Failed to get text: {}", e))?;
+                let text = node.utf8_text(source.as_bytes())?;
                 Ok(Expr::Identifier(text.to_string()))
             }
-            "list" => {
-                let mut children = Vec::new();
+            "binary_expression" => self.parse_binary_expression(node, source),
+            "call_expression" => self.parse_call_expression(node, source),
+            "match_expression" => self.parse_match_expression(node, source),
+            "primary_expression" => {
+                // primary_expression should have one child
+                if let Some(child) = node.child(0) {
+                    self.node_to_expr(child, source)
+                } else {
+                    Err("Empty primary expression".into())
+                }
+            }
+            "parenthesized_expression" => {
+                // Find the expression inside parentheses
                 for i in 0..node.child_count() {
                     if let Some(child) = node.child(i) {
-                        if child.kind() == "(" || child.kind() == ")" || child.kind() == "comment" {
-                            continue;
+                        if child.kind() != "(" && child.kind() != ")" {
+                            return self.node_to_expr(child, source);
                         }
-                        let (expr, span) = self.node_to_expr_with_span(child, source)?;
-                        children.push((expr, span));
                     }
                 }
-                Ok(Expr::List(children))
+                Err("Empty parenthesized expression".into())
             }
-            "comment" => {
-                // Skip comments by returning a placeholder expression that will be filtered out
-                Err("Comment node should be skipped".into())
-            }
-            _ => Err(format!("Unknown node kind: {}", node.kind()).into()),
+            _ => Err(format!("Unknown expression kind: {}", node.kind()).into()),
         }
+    }
+
+    fn parse_binary_expression(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut left = None;
+        let mut operator = None;
+        let mut right = None;
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "+" => operator = Some(BinaryOperator::Add),
+                    "-" => operator = Some(BinaryOperator::Subtract),
+                    "*" => operator = Some(BinaryOperator::Multiply),
+                    "/" => operator = Some(BinaryOperator::Divide),
+                    _ => {
+                        // Try to parse as expression
+                        if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                            if left.is_none() {
+                                left = Some(Box::new(expr));
+                            } else if right.is_none() {
+                                right = Some(Box::new(expr));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let left = left.ok_or("Missing left operand")?;
+        let operator = operator.ok_or("Missing operator")?;
+        let right = right.ok_or("Missing right operand")?;
+
+        Ok(Expr::Binary(BinaryExpression {
+            left,
+            operator,
+            right,
+        }))
+    }
+
+    fn parse_call_expression(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut function = None;
+        let mut arguments = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "identifier" => {
+                        if function.is_none() {
+                            function = Some(child.utf8_text(source.as_bytes())?.to_string());
+                        }
+                    }
+                    "argument_list" => {
+                        arguments = self.parse_argument_list(child, source)?;
+                    }
+                    _ => {} // Skip other tokens like '(', ')'
+                }
+            }
+        }
+
+        let function = function.ok_or("Missing function name")?;
+
+        Ok(Expr::Call(CallExpression {
+            function,
+            arguments,
+        }))
+    }
+
+    fn parse_argument_list(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Vec<Spanned<Expr>>, Box<dyn std::error::Error>> {
+        let mut arguments = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                if child.kind() != "," {
+                    if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                        arguments.push(expr);
+                    }
+                }
+            }
+        }
+
+        Ok(arguments)
+    }
+
+    fn parse_match_expression(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut value = None;
+        let mut arms = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "match_arm" => {
+                        arms.push(self.parse_match_arm(child, source)?);
+                    }
+                    "match" | "{" | "}" => {
+                        // Skip keywords and delimiters
+                    }
+                    _ => {
+                        // Try to parse as the value expression
+                        if value.is_none() {
+                            if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                                value = Some(Box::new(expr));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let value = value.ok_or("Missing match value")?;
+
+        Ok(Expr::Match(MatchExpression { value, arms }))
+    }
+
+    fn parse_match_arm(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<MatchArm, Box<dyn std::error::Error>> {
+        let mut pattern = None;
+        let mut value = None;
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "pattern" => {
+                        pattern = Some(self.parse_pattern(child, source)?);
+                    }
+                    "=>" | "," => {
+                        // Skip tokens
+                    }
+                    _ => {
+                        // Try to parse as value expression
+                        if value.is_none() {
+                            if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                                value = Some(expr);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let pattern = pattern.ok_or("Missing pattern")?;
+        let value = value.ok_or("Missing match arm value")?;
+
+        Ok(MatchArm { pattern, value })
+    }
+
+    fn parse_pattern(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Pattern, Box<dyn std::error::Error>> {
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "literal_pattern" => {
+                        return Ok(Pattern::Literal(self.parse_literal_pattern(child, source)?));
+                    }
+                    "wildcard_pattern" => {
+                        return Ok(Pattern::Wildcard);
+                    }
+                    "identifier_pattern" => {
+                        if let Some(id_child) = child.child(0) {
+                            let text = id_child.utf8_text(source.as_bytes())?;
+                            return Ok(Pattern::Identifier(text.to_string()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Err("Invalid pattern".into())
+    }
+
+    fn parse_literal_pattern(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<LiteralPattern, Box<dyn std::error::Error>> {
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "number" => {
+                        let text = child.utf8_text(source.as_bytes())?;
+                        let num = text.parse::<i64>()?;
+                        return Ok(LiteralPattern::Number(num));
+                    }
+                    "string" => {
+                        let text = child.utf8_text(source.as_bytes())?;
+                        let content = &text[1..text.len() - 1];
+                        let processed = process_escape_sequences(content)?;
+                        return Ok(LiteralPattern::String(processed));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Err("Invalid literal pattern".into())
     }
 }
 
@@ -109,10 +489,8 @@ fn process_hex_escape(chars: &mut std::str::Chars) -> Result<u8, StringLiteralEr
         .ok_or(StringLiteralError::IncompleteHexEscape)?;
 
     let hex_str = format!("{}{}", hex1, hex2);
-    u8::from_str_radix(&hex_str, 16).map_err(|_| {
-        StringLiteralError::InvalidHexDigits {
-            hex_str: hex_str.clone(),
-        }
+    u8::from_str_radix(&hex_str, 16).map_err(|_| StringLiteralError::InvalidHexDigits {
+        hex_str: hex_str.clone(),
     })
 }
 
@@ -162,6 +540,89 @@ fn process_escape_sequences(input: &str) -> Result<String, StringLiteralError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_simple_function() {
+        use crate::TributeDatabaseImpl;
+        use salsa::Database;
+
+        TributeDatabaseImpl::default().attach(|db| {
+            let source_file = crate::SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.trb"),
+                r#"
+fn main() {
+    print_line("Hello, world!")
+}
+"#
+                .to_string(),
+            );
+            let result = parse_source(db, source_file);
+
+            assert_eq!(result.items(db).len(), 1);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db);
+            assert_eq!(func.name(db), "main");
+            assert_eq!(func.parameters(db).len(), 0);
+            assert_eq!(func.body(db).statements.len(), 1);
+        });
+    }
+
+    #[test]
+    fn test_function_with_parameters() {
+        use crate::TributeDatabaseImpl;
+        use salsa::Database;
+
+        TributeDatabaseImpl::default().attach(|db| {
+            let source_file = crate::SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.trb"),
+                r#"
+fn add(a, b) {
+    a + b
+}
+"#
+                .to_string(),
+            );
+            let result = parse_source(db, source_file);
+
+            assert_eq!(result.items(db).len(), 1);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db);
+            assert_eq!(func.name(db), "add");
+            assert_eq!(func.parameters(db), vec!["a".to_string(), "b".to_string()]);
+        });
+    }
+
+    #[test]
+    fn test_match_expression() {
+        use crate::TributeDatabaseImpl;
+        use salsa::Database;
+
+        TributeDatabaseImpl::default().attach(|db| {
+            let source_file = crate::SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.trb"),
+                r#"
+fn test(n) {
+    match n {
+        0 => "zero",
+        1 => "one",
+        _ => "other"
+    }
+}
+"#
+                .to_string(),
+            );
+            let result = parse_source(db, source_file);
+
+            assert_eq!(result.items(db).len(), 1);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db);
+            if let Statement::Expression((Expr::Match(_), _)) = &func.body(db).statements[0] {
+                // Match expression parsed successfully
+            } else {
+                panic!("Expected match expression");
+            }
+        });
+    }
 
     #[test]
     fn test_process_escape_sequences_basic() {
@@ -313,24 +774,49 @@ mod tests {
 
     #[test]
     fn test_string_parsing_with_escape_sequences() {
-        let mut parser = TributeParser::new().unwrap();
+        use crate::TributeDatabaseImpl;
+        use salsa::Database;
 
-        // Test basic quote escaping
-        let result = parser.parse(r#""Hello \"World\"""#).unwrap();
-        assert_eq!(result.len(), 1);
-        if let Expr::String(s) = &result[0].0 {
-            assert_eq!(s, "Hello \"World\"");
-        } else {
-            panic!("Expected string expression");
-        }
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test basic quote escaping
+            let source_file = crate::SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.trb"),
+                r#"
+fn test() {
+    "Hello \"World\""
+}
+"#
+                .to_string(),
+            );
+            let result = parse_source(db, source_file);
+            assert_eq!(result.items(db).len(), 1);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db);
+            if let Statement::Expression((Expr::String(s), _)) = &func.body(db).statements[0] {
+                assert_eq!(s, "Hello \"World\"");
+            } else {
+                panic!("Expected string expression");
+            }
 
-        // Test mixed escape sequences
-        let result = parser.parse(r#""Line1\nTab\tQuote\"""#).unwrap();
-        assert_eq!(result.len(), 1);
-        if let Expr::String(s) = &result[0].0 {
-            assert_eq!(s, "Line1\nTab\tQuote\"");
-        } else {
-            panic!("Expected string expression");
-        }
+            // Test mixed escape sequences
+            let source_file2 = crate::SourceFile::new(
+                db,
+                std::path::PathBuf::from("test2.trb"),
+                r#"
+fn test() {
+    "Line1\nTab\tQuote\""
+}
+"#
+                .to_string(),
+            );
+            let result = parse_source(db, source_file2);
+            assert_eq!(result.items(db).len(), 1);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db);
+            if let Statement::Expression((Expr::String(s), _)) = &func.body(db).statements[0] {
+                assert_eq!(s, "Line1\nTab\tQuote\"");
+            } else {
+                panic!("Expected string expression");
+            }
+        });
     }
 }

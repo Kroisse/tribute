@@ -7,18 +7,7 @@ use tribute_ast::{SourceFile, Program, Diagnostic, DiagnosticSeverity, Compilati
 /// Query to lower Program to HIR
 #[salsa::tracked]
 pub fn lower_program_to_hir<'db>(db: &'db dyn salsa::Database, program: Program<'db>) -> Option<HirProgram<'db>> {
-    let items = program.items(db);
-
-    // Convert Item to (Expr, SimpleSpan) for lower_to_hir
-    let ast_expressions: Vec<_> = items
-        .iter()
-        .map(|item| {
-            let (expr, span) = item.expr(db);
-            (expr.clone(), span)
-        })
-        .collect();
-
-    match crate::lower::lower_to_hir(ast_expressions) {
+    match crate::lower::lower_program_to_hir(db, program) {
         Ok((functions, main)) => {
             // Convert function definitions to tracked HIR types
             let mut hir_functions = BTreeMap::new();

@@ -3,10 +3,10 @@ source: tests/parse.rs
 expression: hir
 ---
 HirProgram {
-    [salsa id]: Id(1400),
+    [salsa id]: Id(1800),
     functions: {
         "add": HirFunction {
-            [salsa id]: Id(1000),
+            [salsa id]: Id(1400),
             name: "add",
             params: [
                 "x",
@@ -14,15 +14,15 @@ HirProgram {
             ],
             body: [
                 HirExpr {
-                    [salsa id]: Id(c00),
+                    [salsa id]: Id(1000),
                     expr: Call {
                         func: (
                             Variable(
                                 "+",
                             ),
                             SimpleSpan {
-                                start: 262,
-                                end: 263,
+                                start: 266,
+                                end: 271,
                                 context: (),
                             },
                         ),
@@ -32,8 +32,8 @@ HirProgram {
                                     "x",
                                 ),
                                 SimpleSpan {
-                                    start: 264,
-                                    end: 265,
+                                    start: 266,
+                                    end: 267,
                                     context: (),
                                 },
                             ),
@@ -42,41 +42,41 @@ HirProgram {
                                     "y",
                                 ),
                                 SimpleSpan {
-                                    start: 266,
-                                    end: 267,
+                                    start: 270,
+                                    end: 271,
                                     context: (),
                                 },
                             ),
                         ],
                     },
                     span: SimpleSpan {
-                        start: 261,
-                        end: 268,
+                        start: 266,
+                        end: 271,
                         context: (),
                     },
                 },
             ],
             span: SimpleSpan {
                 start: 247,
-                end: 269,
+                end: 273,
                 context: (),
             },
         },
         "main": HirFunction {
-            [salsa id]: Id(1001),
+            [salsa id]: Id(1401),
             name: "main",
             params: [],
             body: [
                 HirExpr {
-                    [salsa id]: Id(c01),
+                    [salsa id]: Id(1001),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
                             SimpleSpan {
-                                start: 286,
-                                end: 296,
+                                start: 291,
+                                end: 336,
                                 context: (),
                             },
                         ),
@@ -86,29 +86,29 @@ HirProgram {
                                     "Testing user-defined functions:",
                                 ),
                                 SimpleSpan {
-                                    start: 297,
-                                    end: 330,
+                                    start: 302,
+                                    end: 335,
                                     context: (),
                                 },
                             ),
                         ],
                     },
                     span: SimpleSpan {
-                        start: 285,
-                        end: 331,
+                        start: 291,
+                        end: 336,
                         context: (),
                     },
                 },
                 HirExpr {
-                    [salsa id]: Id(c02),
+                    [salsa id]: Id(1002),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
                             SimpleSpan {
-                                start: 335,
-                                end: 345,
+                                start: 341,
+                                end: 364,
                                 context: (),
                             },
                         ),
@@ -120,8 +120,8 @@ HirProgram {
                                             "add",
                                         ),
                                         SimpleSpan {
-                                            start: 347,
-                                            end: 350,
+                                            start: 352,
+                                            end: 363,
                                             context: (),
                                         },
                                     ),
@@ -131,8 +131,8 @@ HirProgram {
                                                 10,
                                             ),
                                             SimpleSpan {
-                                                start: 351,
-                                                end: 353,
+                                                start: 356,
+                                                end: 358,
                                                 context: (),
                                             },
                                         ),
@@ -141,37 +141,37 @@ HirProgram {
                                                 20,
                                             ),
                                             SimpleSpan {
-                                                start: 354,
-                                                end: 356,
+                                                start: 360,
+                                                end: 362,
                                                 context: (),
                                             },
                                         ),
                                     ],
                                 },
                                 SimpleSpan {
-                                    start: 346,
-                                    end: 357,
+                                    start: 352,
+                                    end: 363,
                                     context: (),
                                 },
                             ),
                         ],
                     },
                     span: SimpleSpan {
-                        start: 334,
-                        end: 358,
+                        start: 341,
+                        end: 364,
                         context: (),
                     },
                 },
                 HirExpr {
-                    [salsa id]: Id(c03),
+                    [salsa id]: Id(1003),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
                             SimpleSpan {
-                                start: 362,
-                                end: 372,
+                                start: 369,
+                                end: 409,
                                 context: (),
                             },
                         ),
@@ -181,29 +181,29 @@ HirProgram {
                                     "Testing nested arithmetic:",
                                 ),
                                 SimpleSpan {
-                                    start: 373,
-                                    end: 401,
+                                    start: 380,
+                                    end: 408,
                                     context: (),
                                 },
                             ),
                         ],
                     },
                     span: SimpleSpan {
-                        start: 361,
-                        end: 402,
+                        start: 369,
+                        end: 409,
                         context: (),
                     },
                 },
                 HirExpr {
-                    [salsa id]: Id(c04),
+                    [salsa id]: Id(1004),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
                             SimpleSpan {
-                                start: 406,
-                                end: 416,
+                                start: 414,
+                                end: 440,
                                 context: (),
                             },
                         ),
@@ -215,8 +215,8 @@ HirProgram {
                                             "+",
                                         ),
                                         SimpleSpan {
-                                            start: 418,
-                                            end: 419,
+                                            start: 425,
+                                            end: 439,
                                             context: (),
                                         },
                                     ),
@@ -228,8 +228,8 @@ HirProgram {
                                                         "*",
                                                     ),
                                                     SimpleSpan {
-                                                        start: 421,
-                                                        end: 422,
+                                                        start: 425,
+                                                        end: 430,
                                                         context: (),
                                                     },
                                                 ),
@@ -239,8 +239,8 @@ HirProgram {
                                                             3,
                                                         ),
                                                         SimpleSpan {
-                                                            start: 423,
-                                                            end: 424,
+                                                            start: 425,
+                                                            end: 426,
                                                             context: (),
                                                         },
                                                     ),
@@ -249,16 +249,16 @@ HirProgram {
                                                             4,
                                                         ),
                                                         SimpleSpan {
-                                                            start: 425,
-                                                            end: 426,
+                                                            start: 429,
+                                                            end: 430,
                                                             context: (),
                                                         },
                                                     ),
                                                 ],
                                             },
                                             SimpleSpan {
-                                                start: 420,
-                                                end: 427,
+                                                start: 425,
+                                                end: 430,
                                                 context: (),
                                             },
                                         ),
@@ -269,8 +269,8 @@ HirProgram {
                                                         "/",
                                                     ),
                                                     SimpleSpan {
-                                                        start: 429,
-                                                        end: 430,
+                                                        start: 433,
+                                                        end: 439,
                                                         context: (),
                                                     },
                                                 ),
@@ -280,8 +280,8 @@ HirProgram {
                                                             15,
                                                         ),
                                                         SimpleSpan {
-                                                            start: 431,
-                                                            end: 433,
+                                                            start: 433,
+                                                            end: 435,
                                                             context: (),
                                                         },
                                                     ),
@@ -290,45 +290,45 @@ HirProgram {
                                                             3,
                                                         ),
                                                         SimpleSpan {
-                                                            start: 434,
-                                                            end: 435,
+                                                            start: 438,
+                                                            end: 439,
                                                             context: (),
                                                         },
                                                     ),
                                                 ],
                                             },
                                             SimpleSpan {
-                                                start: 428,
-                                                end: 436,
+                                                start: 433,
+                                                end: 439,
                                                 context: (),
                                             },
                                         ),
                                     ],
                                 },
                                 SimpleSpan {
-                                    start: 417,
-                                    end: 437,
+                                    start: 425,
+                                    end: 439,
                                     context: (),
                                 },
                             ),
                         ],
                     },
                     span: SimpleSpan {
-                        start: 405,
-                        end: 438,
+                        start: 414,
+                        end: 440,
                         context: (),
                     },
                 },
                 HirExpr {
-                    [salsa id]: Id(c05),
+                    [salsa id]: Id(1005),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
                             SimpleSpan {
-                                start: 442,
-                                end: 452,
+                                start: 445,
+                                end: 485,
                                 context: (),
                             },
                         ),
@@ -338,29 +338,29 @@ HirProgram {
                                     "Testing string operations:",
                                 ),
                                 SimpleSpan {
-                                    start: 453,
-                                    end: 481,
+                                    start: 456,
+                                    end: 484,
                                     context: (),
                                 },
                             ),
                         ],
                     },
                     span: SimpleSpan {
-                        start: 441,
-                        end: 482,
+                        start: 445,
+                        end: 485,
                         context: (),
                     },
                 },
                 HirExpr {
-                    [salsa id]: Id(c06),
+                    [salsa id]: Id(1006),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
                             SimpleSpan {
-                                start: 486,
-                                end: 496,
+                                start: 490,
+                                end: 525,
                                 context: (),
                             },
                         ),
@@ -370,23 +370,23 @@ HirProgram {
                                     "Hello, Tribute World!",
                                 ),
                                 SimpleSpan {
-                                    start: 497,
-                                    end: 520,
+                                    start: 501,
+                                    end: 524,
                                     context: (),
                                 },
                             ),
                         ],
                     },
                     span: SimpleSpan {
-                        start: 485,
-                        end: 521,
+                        start: 490,
+                        end: 525,
                         context: (),
                     },
                 },
             ],
             span: SimpleSpan {
-                start: 271,
-                end: 522,
+                start: 275,
+                end: 527,
                 context: (),
             },
         },

@@ -3,15 +3,15 @@ source: tests/parse.rs
 expression: hir
 ---
 HirProgram {
-    [salsa id]: Id(1400),
+    [salsa id]: Id(1800),
     functions: {
         "main": HirFunction {
-            [salsa id]: Id(1000),
+            [salsa id]: Id(1400),
             name: "main",
             params: [],
             body: [
                 HirExpr {
-                    [salsa id]: Id(c00),
+                    [salsa id]: Id(1000),
                     expr: Call {
                         func: (
                             Variable(
@@ -19,7 +19,7 @@ HirProgram {
                             ),
                             SimpleSpan {
                                 start: 40,
-                                end: 50,
+                                end: 67,
                                 context: (),
                             },
                         ),
@@ -37,7 +37,7 @@ HirProgram {
                         ],
                     },
                     span: SimpleSpan {
-                        start: 39,
+                        start: 40,
                         end: 67,
                         context: (),
                     },
@@ -45,7 +45,7 @@ HirProgram {
             ],
             span: SimpleSpan {
                 start: 0,
-                end: 68,
+                end: 69,
                 context: (),
             },
         },
