@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use tribute_ast::{Identifier, SimpleSpan, Spanned};
+use tribute_ast::{Identifier, Span, Spanned};
 
-pub type Span = SimpleSpan;
 
 /// High-level intermediate representation for Tribute programs (tracked by Salsa)
 #[salsa::tracked(debug)]

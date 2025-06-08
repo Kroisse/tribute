@@ -1,2 +1,3 @@
-(fn (main)  // explicit entrypoint
-    (print_line "Hello, world!"))
+fn main() {  // explicit entrypoint
+    print_line("Hello, world!")
+}

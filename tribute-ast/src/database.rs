@@ -1,21 +1,43 @@
-use crate::{ast::SimpleSpan, parser::TributeParser, Item, Program};
-use salsa::Accumulator;
+use dashmap::{DashMap, Entry};
+
+use crate::ast::Span;
 use std::path::PathBuf;
+
+#[salsa::db]
+pub trait Db: salsa::Database {
+    fn input(&self, path: PathBuf) -> Result<SourceFile, Box<dyn std::error::Error + Send + Sync>>;
+}
 
 #[derive(Default, Clone)]
 #[salsa::db]
 pub struct TributeDatabaseImpl {
     storage: salsa::Storage<Self>,
+    files: DashMap<PathBuf, SourceFile>,
 }
 
 #[salsa::db]
 impl salsa::Database for TributeDatabaseImpl {}
 
+#[salsa::db]
+impl Db for TributeDatabaseImpl {
+    fn input(&self, path: PathBuf) -> Result<SourceFile, Box<dyn std::error::Error + Send + Sync>> {
+        let path = path.canonicalize()?;
+        match self.files.entry(path.clone()) {
+            Entry::Occupied(entry) => Ok(*entry.get()),
+            Entry::Vacant(entry) => {
+                let contents = std::fs::read_to_string(&path)?;
+                let source_file = SourceFile::new(self, path, contents);
+                Ok(*entry.insert(source_file))
+            }
+        }
+    }
+}
+
 #[salsa::input(debug)]
 pub struct SourceFile {
-    #[return_ref]
+    #[returns(ref)]
     pub path: PathBuf,
-    #[return_ref]
+    #[returns(ref)]
     pub text: String,
 }
 
@@ -23,7 +45,7 @@ pub struct SourceFile {
 #[salsa::accumulator]
 pub struct Diagnostic {
     pub message: String,
-    pub span: SimpleSpan,
+    pub span: Span,
     pub severity: DiagnosticSeverity,
     pub phase: CompilationPhase,
 }
@@ -51,42 +73,4 @@ impl std::fmt::Display for DiagnosticSeverity {
             DiagnosticSeverity::Info => write!(f, "INFO"),
         }
     }
-}
-
-#[salsa::tracked]
-pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Program<'db> {
-    let mut parser = match TributeParser::new() {
-        Ok(parser) => parser,
-        Err(e) => {
-            Diagnostic {
-                message: format!("Failed to create parser: {}", e),
-                span: SimpleSpan::new(0, 0),
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::Parsing,
-            }
-            .accumulate(db);
-
-            return Program::new(db, Vec::new());
-        }
-    };
-
-    let expressions = match parser.parse(&source.text(db)) {
-        Ok(exprs) => exprs
-            .into_iter()
-            .map(|(expr, span)| Item::new(db, (expr, span)))
-            .collect(),
-        Err(e) => {
-            Diagnostic {
-                message: format!("Parse error: {}", e),
-                span: SimpleSpan::new(0, source.text(db).len()),
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::Parsing,
-            }
-            .accumulate(db);
-
-            Vec::new()
-        }
-    };
-
-    Program::new(db, expressions)
 }

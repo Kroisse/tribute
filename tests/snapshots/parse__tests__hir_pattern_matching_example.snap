@@ -3,24 +3,23 @@ source: tests/parse.rs
 expression: hir
 ---
 HirProgram {
-    [salsa id]: Id(1400),
+    [salsa id]: Id(1800),
     functions: {
         "main": HirFunction {
-            [salsa id]: Id(1000),
+            [salsa id]: Id(1400),
             name: "main",
             params: [],
             body: [
                 HirExpr {
-                    [salsa id]: Id(c00),
+                    [salsa id]: Id(1000),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
-                                start: 403,
-                                end: 413,
-                                context: (),
+                            Span {
+                                start: 360,
+                                end: 399,
                             },
                         ),
                         args: [
@@ -28,31 +27,28 @@ HirProgram {
                                 String(
                                     "Testing pattern matching:",
                                 ),
-                                SimpleSpan {
-                                    start: 414,
-                                    end: 441,
-                                    context: (),
+                                Span {
+                                    start: 371,
+                                    end: 398,
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
-                        start: 402,
-                        end: 442,
-                        context: (),
+                    span: Span {
+                        start: 360,
+                        end: 399,
                     },
                 },
                 HirExpr {
-                    [salsa id]: Id(c01),
+                    [salsa id]: Id(1001),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
-                                start: 446,
-                                end: 456,
-                                context: (),
+                            Span {
+                                start: 404,
+                                end: 430,
                             },
                         ),
                         args: [
@@ -62,10 +58,9 @@ HirProgram {
                                         Variable(
                                             "test_number",
                                         ),
-                                        SimpleSpan {
-                                            start: 458,
-                                            end: 469,
-                                            context: (),
+                                        Span {
+                                            start: 415,
+                                            end: 429,
                                         },
                                     ),
                                     args: [
@@ -73,39 +68,35 @@ HirProgram {
                                             Number(
                                                 0,
                                             ),
-                                            SimpleSpan {
-                                                start: 470,
-                                                end: 471,
-                                                context: (),
+                                            Span {
+                                                start: 427,
+                                                end: 428,
                                             },
                                         ),
                                     ],
                                 },
-                                SimpleSpan {
-                                    start: 457,
-                                    end: 472,
-                                    context: (),
+                                Span {
+                                    start: 415,
+                                    end: 429,
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
-                        start: 445,
-                        end: 473,
-                        context: (),
+                    span: Span {
+                        start: 404,
+                        end: 430,
                     },
                 },
                 HirExpr {
-                    [salsa id]: Id(c02),
+                    [salsa id]: Id(1002),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
-                                start: 477,
-                                end: 487,
-                                context: (),
+                            Span {
+                                start: 435,
+                                end: 461,
                             },
                         ),
                         args: [
@@ -115,10 +106,9 @@ HirProgram {
                                         Variable(
                                             "test_number",
                                         ),
-                                        SimpleSpan {
-                                            start: 489,
-                                            end: 500,
-                                            context: (),
+                                        Span {
+                                            start: 446,
+                                            end: 460,
                                         },
                                     ),
                                     args: [
@@ -126,39 +116,35 @@ HirProgram {
                                             Number(
                                                 1,
                                             ),
-                                            SimpleSpan {
-                                                start: 501,
-                                                end: 502,
-                                                context: (),
+                                            Span {
+                                                start: 458,
+                                                end: 459,
                                             },
                                         ),
                                     ],
                                 },
-                                SimpleSpan {
-                                    start: 488,
-                                    end: 503,
-                                    context: (),
+                                Span {
+                                    start: 446,
+                                    end: 460,
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
-                        start: 476,
-                        end: 504,
-                        context: (),
+                    span: Span {
+                        start: 435,
+                        end: 461,
                     },
                 },
                 HirExpr {
-                    [salsa id]: Id(c03),
+                    [salsa id]: Id(1003),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
-                                start: 508,
-                                end: 518,
-                                context: (),
+                            Span {
+                                start: 466,
+                                end: 493,
                             },
                         ),
                         args: [
@@ -168,10 +154,9 @@ HirProgram {
                                         Variable(
                                             "test_number",
                                         ),
-                                        SimpleSpan {
-                                            start: 520,
-                                            end: 531,
-                                            context: (),
+                                        Span {
+                                            start: 477,
+                                            end: 492,
                                         },
                                     ),
                                     args: [
@@ -179,53 +164,48 @@ HirProgram {
                                             Number(
                                                 42,
                                             ),
-                                            SimpleSpan {
-                                                start: 532,
-                                                end: 534,
-                                                context: (),
+                                            Span {
+                                                start: 489,
+                                                end: 491,
                                             },
                                         ),
                                     ],
                                 },
-                                SimpleSpan {
-                                    start: 519,
-                                    end: 535,
-                                    context: (),
+                                Span {
+                                    start: 477,
+                                    end: 492,
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
-                        start: 507,
-                        end: 536,
-                        context: (),
+                    span: Span {
+                        start: 466,
+                        end: 493,
                     },
                 },
             ],
-            span: SimpleSpan {
-                start: 389,
-                end: 537,
-                context: (),
+            span: Span {
+                start: 344,
+                end: 495,
             },
         },
         "test_number": HirFunction {
-            [salsa id]: Id(1001),
+            [salsa id]: Id(1401),
             name: "test_number",
             params: [
                 "n",
             ],
             body: [
                 HirExpr {
-                    [salsa id]: Id(c04),
+                    [salsa id]: Id(1004),
                     expr: Match {
                         expr: (
                             Variable(
                                 "n",
                             ),
-                            SimpleSpan {
-                                start: 297,
-                                end: 298,
-                                context: (),
+                            Span {
+                                start: 241,
+                                end: 242,
                             },
                         ),
                         cases: [
@@ -239,10 +219,9 @@ HirProgram {
                                     String(
                                         "zero",
                                     ),
-                                    SimpleSpan {
-                                        start: 311,
-                                        end: 317,
-                                        context: (),
+                                    Span {
+                                        start: 258,
+                                        end: 264,
                                     },
                                 ),
                             },
@@ -256,10 +235,9 @@ HirProgram {
                                     String(
                                         "one",
                                     ),
-                                    SimpleSpan {
-                                        start: 331,
-                                        end: 336,
-                                        context: (),
+                                    Span {
+                                        start: 279,
+                                        end: 284,
                                     },
                                 ),
                             },
@@ -273,10 +251,9 @@ HirProgram {
                                     String(
                                         "two",
                                     ),
-                                    SimpleSpan {
-                                        start: 351,
-                                        end: 356,
-                                        context: (),
+                                    Span {
+                                        start: 300,
+                                        end: 305,
                                     },
                                 ),
                             },
@@ -286,26 +263,23 @@ HirProgram {
                                     String(
                                         "other number",
                                     ),
-                                    SimpleSpan {
-                                        start: 370,
-                                        end: 384,
-                                        context: (),
+                                    Span {
+                                        start: 320,
+                                        end: 334,
                                     },
                                 ),
                             },
                         ],
                     },
-                    span: SimpleSpan {
-                        start: 290,
-                        end: 386,
-                        context: (),
+                    span: Span {
+                        start: 235,
+                        end: 340,
                     },
                 },
             ],
-            span: SimpleSpan {
-                start: 268,
-                end: 387,
-                context: (),
+            span: Span {
+                start: 211,
+                end: 342,
             },
         },
     },

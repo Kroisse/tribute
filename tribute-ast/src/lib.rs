@@ -9,5 +9,3 @@ pub mod parser;
 pub use ast::*;
 pub use database::*;
 pub use parser::*;
-
-pub use salsa::Database as Db;

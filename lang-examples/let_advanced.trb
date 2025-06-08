@@ -1,11 +1,12 @@
 // Advanced Let Bindings Example - demonstrates improved let syntax
-// - Multiple let bindings: (let var value)
+// - Multiple let bindings: let var = value
 // - Variable scoping and shadowing
 // - Sequential variable definitions
 
-(fn (main)
-  (let x 10)
-  (let y 20)
-  (let sum (+ x y))
-  (print_line "Testing advanced let bindings:")
-  sum)
+fn main() {
+    let x = 10
+    let y = 20
+    let sum = x + y
+    print_line("Testing advanced let bindings:")
+    sum
+}

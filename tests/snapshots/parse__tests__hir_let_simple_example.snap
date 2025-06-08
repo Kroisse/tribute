@@ -3,50 +3,46 @@ source: tests/parse.rs
 expression: hir
 ---
 HirProgram {
-    [salsa id]: Id(1400),
+    [salsa id]: Id(1800),
     functions: {
         "main": HirFunction {
-            [salsa id]: Id(1000),
+            [salsa id]: Id(1400),
             name: "main",
             params: [],
             body: [
                 HirExpr {
-                    [salsa id]: Id(c00),
+                    [salsa id]: Id(1000),
                     expr: Let {
                         var: "x",
                         value: (
                             Number(
                                 42,
                             ),
-                            SimpleSpan {
-                                start: 146,
-                                end: 148,
-                                context: (),
+                            Span {
+                                start: 150,
+                                end: 152,
                             },
                         ),
                     },
-                    span: SimpleSpan {
-                        start: 139,
-                        end: 149,
-                        context: (),
+                    span: Span {
+                        start: 150,
+                        end: 152,
                     },
                 },
                 HirExpr {
-                    [salsa id]: Id(c01),
+                    [salsa id]: Id(1001),
                     expr: Variable(
                         "x",
                     ),
-                    span: SimpleSpan {
-                        start: 152,
-                        end: 153,
-                        context: (),
+                    span: Span {
+                        start: 157,
+                        end: 158,
                     },
                 },
             ],
-            span: SimpleSpan {
+            span: Span {
                 start: 126,
-                end: 154,
-                context: (),
+                end: 160,
             },
         },
     },

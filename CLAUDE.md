@@ -139,6 +139,7 @@ TributeDatabaseImpl::default().attach(|db| {
 - **`SALSA_INTEGRATION.md`**: Detailed guide on Salsa integration with architecture diagrams and examples
 - **`plans/`**: Development plans for major features:
   - `01-syntax-modernization.md`: Modernizing syntax from S-expressions
+    - `01.01-string-interpolation.md`: String interpolation feature with `"{expr}"` syntax
   - `02-compiler-implementation.md`: MLIR-based native compilation
   - `03-lsp-implementation.md`: Language Server Protocol for IDE support
   - `04-static-type-system.md`: Gradual static typing system

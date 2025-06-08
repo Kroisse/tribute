@@ -3,45 +3,42 @@ source: tests/parse.rs
 expression: hir
 ---
 HirProgram {
-    [salsa id]: Id(1400),
+    [salsa id]: Id(1800),
     functions: {
         "main": HirFunction {
-            [salsa id]: Id(1000),
+            [salsa id]: Id(1400),
             name: "main",
             params: [],
             body: [
                 HirExpr {
-                    [salsa id]: Id(c00),
+                    [salsa id]: Id(1000),
                     expr: Let {
                         var: "x",
                         value: (
                             Number(
                                 10,
                             ),
-                            SimpleSpan {
-                                start: 199,
-                                end: 201,
-                                context: (),
+                            Span {
+                                start: 203,
+                                end: 205,
                             },
                         ),
                     },
-                    span: SimpleSpan {
-                        start: 192,
-                        end: 202,
-                        context: (),
+                    span: Span {
+                        start: 203,
+                        end: 205,
                     },
                 },
                 HirExpr {
-                    [salsa id]: Id(c01),
+                    [salsa id]: Id(1001),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
-                                start: 206,
-                                end: 216,
-                                context: (),
+                            Span {
+                                start: 210,
+                                end: 223,
                             },
                         ),
                         args: [
@@ -49,25 +46,22 @@ HirProgram {
                                 Variable(
                                     "x",
                                 ),
-                                SimpleSpan {
-                                    start: 217,
-                                    end: 218,
-                                    context: (),
+                                Span {
+                                    start: 221,
+                                    end: 222,
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
-                        start: 205,
-                        end: 219,
-                        context: (),
+                    span: Span {
+                        start: 210,
+                        end: 223,
                     },
                 },
             ],
-            span: SimpleSpan {
+            span: Span {
                 start: 179,
-                end: 220,
-                context: (),
+                end: 225,
             },
         },
     },

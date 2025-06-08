@@ -409,7 +409,7 @@ mod tests {
     fn test_hir_arithmetic() {
         TributeDatabaseImpl::default().attach(|db| {
             // Test simple arithmetic expression wrapped in a main function
-            let source = r#"(fn (main) (+ 1 2))"#;
+            let source = r#"fn main() { 1 + 2 }"#;
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(3)) => {}
                 Ok(other) => panic!("Expected Number(3), got {:?}", other),
@@ -422,7 +422,7 @@ mod tests {
     fn test_hir_print_line() {
         TributeDatabaseImpl::default().attach(|db| {
             // Test print_line builtin wrapped in a main function
-            let source = r#"(fn (main) (print_line "Hello HIR"))"#;
+            let source = r#"fn main() { print_line("Hello HIR") }"#;
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Unit) => {}
                 Ok(other) => panic!("Expected Unit, got {:?}", other),
@@ -435,7 +435,7 @@ mod tests {
     fn test_hir_nested_arithmetic() {
         TributeDatabaseImpl::default().attach(|db| {
             // Test nested arithmetic wrapped in a main function
-            let source = r#"(fn (main) (+ (* 2 3) (/ 8 2)))"#;
+            let source = r#"fn main() { (2 * 3) + (8 / 2) }"#;
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(10)) => {}
                 Ok(other) => panic!("Expected Number(10), got {:?}", other),
@@ -448,7 +448,7 @@ mod tests {
     fn test_hir_let_binding() {
         TributeDatabaseImpl::default().attach(|db| {
             // Test let binding without body
-            let source = r#"(fn (main) (let x 42) x)"#;
+            let source = r#"fn main() { let x = 42; x }"#;
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(42)) => {}
                 Ok(other) => panic!("Expected Number(42), got {:?}", other),
@@ -462,12 +462,14 @@ mod tests {
         TributeDatabaseImpl::default().attach(|db| {
             // Test pattern matching
             let source = r#"
-                (fn (test_number n)
-                  (match n
-                    (case 0 "zero")
-                    (case 1 "one")
-                    (case _ "other")))
-                (fn (main) (test_number 0))
+                fn test_number(n) {
+                  match n {
+                    0 => "zero",
+                    1 => "one",
+                    _ => "other"
+                  }
+                }
+                fn main() { test_number(0) }
             "#;
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::String(s)) if s == "zero" => {}
@@ -482,8 +484,8 @@ mod tests {
         TributeDatabaseImpl::default().attach(|db| {
             // Test user-defined function call
             let source = r#"
-                (fn (add x y) (+ x y))
-                (fn (main) (add 10 20))
+                fn add(x, y) { x + y }
+                fn main() { add(10, 20) }
             "#;
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(30)) => {}
@@ -498,9 +500,9 @@ mod tests {
         TributeDatabaseImpl::default().attach(|db| {
             // Test functions calling each other
             let source = r#"
-                (fn (double x) (* x 2))
-                (fn (add_and_double x y) (double (+ x y)))
-                (fn (main) (add_and_double 5 10))
+                fn double(x) { x * 2 }
+                fn add_and_double(x, y) { double(x + y) }
+                fn main() { add_and_double(5, 10) }
             "#;
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(30)) => {}
@@ -515,11 +517,13 @@ mod tests {
         TributeDatabaseImpl::default().attach(|db| {
             // Test recursive function (factorial)
             let source = r#"
-                (fn (factorial n)
-                  (match n
-                    (case 0 1)
-                    (case _ (* n (factorial (- n 1))))))
-                (fn (main) (factorial 5))
+                fn factorial(n) {
+                  match n {
+                    0 => 1,
+                    _ => n * factorial(n - 1)
+                  }
+                }
+                fn main() { factorial(5) }
             "#;
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(120)) => {}

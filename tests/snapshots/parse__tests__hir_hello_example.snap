@@ -3,24 +3,23 @@ source: tests/parse.rs
 expression: hir
 ---
 HirProgram {
-    [salsa id]: Id(1400),
+    [salsa id]: Id(1800),
     functions: {
         "main": HirFunction {
-            [salsa id]: Id(1000),
+            [salsa id]: Id(1400),
             name: "main",
             params: [],
             body: [
                 HirExpr {
-                    [salsa id]: Id(c00),
+                    [salsa id]: Id(1000),
                     expr: Call {
                         func: (
                             Variable(
                                 "print_line",
                             ),
-                            SimpleSpan {
+                            Span {
                                 start: 40,
-                                end: 50,
-                                context: (),
+                                end: 67,
                             },
                         ),
                         args: [
@@ -28,25 +27,22 @@ HirProgram {
                                 String(
                                     "Hello, world!",
                                 ),
-                                SimpleSpan {
+                                Span {
                                     start: 51,
                                     end: 66,
-                                    context: (),
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
-                        start: 39,
+                    span: Span {
+                        start: 40,
                         end: 67,
-                        context: (),
                     },
                 },
             ],
-            span: SimpleSpan {
+            span: Span {
                 start: 0,
-                end: 68,
-                context: (),
+                end: 69,
             },
         },
     },

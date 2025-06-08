@@ -3,10 +3,10 @@ source: tests/parse.rs
 expression: hir
 ---
 HirProgram {
-    [salsa id]: Id(1400),
+    [salsa id]: Id(1800),
     functions: {
         "add_and_double": HirFunction {
-            [salsa id]: Id(1000),
+            [salsa id]: Id(1400),
             name: "add_and_double",
             params: [
                 "x",
@@ -14,16 +14,15 @@ HirProgram {
             ],
             body: [
                 HirExpr {
-                    [salsa id]: Id(c00),
+                    [salsa id]: Id(1000),
                     expr: Call {
                         func: (
                             Variable(
                                 "double",
                             ),
-                            SimpleSpan {
-                                start: 50,
-                                end: 56,
-                                context: (),
+                            Span {
+                                start: 58,
+                                end: 71,
                             },
                         ),
                         args: [
@@ -33,10 +32,9 @@ HirProgram {
                                         Variable(
                                             "+",
                                         ),
-                                        SimpleSpan {
-                                            start: 58,
-                                            end: 59,
-                                            context: (),
+                                        Span {
+                                            start: 65,
+                                            end: 70,
                                         },
                                     ),
                                     args: [
@@ -44,63 +42,57 @@ HirProgram {
                                             Variable(
                                                 "x",
                                             ),
-                                            SimpleSpan {
-                                                start: 60,
-                                                end: 61,
-                                                context: (),
+                                            Span {
+                                                start: 65,
+                                                end: 66,
                                             },
                                         ),
                                         (
                                             Variable(
                                                 "y",
                                             ),
-                                            SimpleSpan {
-                                                start: 62,
-                                                end: 63,
-                                                context: (),
+                                            Span {
+                                                start: 69,
+                                                end: 70,
                                             },
                                         ),
                                     ],
                                 },
-                                SimpleSpan {
-                                    start: 57,
-                                    end: 64,
-                                    context: (),
+                                Span {
+                                    start: 65,
+                                    end: 70,
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
-                        start: 49,
-                        end: 65,
-                        context: (),
+                    span: Span {
+                        start: 58,
+                        end: 71,
                     },
                 },
             ],
-            span: SimpleSpan {
-                start: 24,
-                end: 66,
-                context: (),
+            span: Span {
+                start: 28,
+                end: 73,
             },
         },
         "double": HirFunction {
-            [salsa id]: Id(1001),
+            [salsa id]: Id(1401),
             name: "double",
             params: [
                 "x",
             ],
             body: [
                 HirExpr {
-                    [salsa id]: Id(c01),
+                    [salsa id]: Id(1001),
                     expr: Call {
                         func: (
                             Variable(
                                 "*",
                             ),
-                            SimpleSpan {
-                                start: 16,
-                                end: 17,
-                                context: (),
+                            Span {
+                                start: 19,
+                                end: 24,
                             },
                         ),
                         args: [
@@ -108,53 +100,48 @@ HirProgram {
                                 Variable(
                                     "x",
                                 ),
-                                SimpleSpan {
-                                    start: 18,
-                                    end: 19,
-                                    context: (),
+                                Span {
+                                    start: 19,
+                                    end: 20,
                                 },
                             ),
                             (
                                 Number(
                                     2,
                                 ),
-                                SimpleSpan {
-                                    start: 20,
-                                    end: 21,
-                                    context: (),
+                                Span {
+                                    start: 23,
+                                    end: 24,
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
-                        start: 15,
-                        end: 22,
-                        context: (),
+                    span: Span {
+                        start: 19,
+                        end: 24,
                     },
                 },
             ],
-            span: SimpleSpan {
+            span: Span {
                 start: 0,
-                end: 23,
-                context: (),
+                end: 26,
             },
         },
         "main": HirFunction {
-            [salsa id]: Id(1002),
+            [salsa id]: Id(1402),
             name: "main",
             params: [],
             body: [
                 HirExpr {
-                    [salsa id]: Id(c02),
+                    [salsa id]: Id(1002),
                     expr: Call {
                         func: (
                             Variable(
                                 "add_and_double",
                             ),
-                            SimpleSpan {
-                                start: 79,
-                                end: 93,
-                                context: (),
+                            Span {
+                                start: 91,
+                                end: 112,
                             },
                         ),
                         args: [
@@ -162,35 +149,31 @@ HirProgram {
                                 Number(
                                     5,
                                 ),
-                                SimpleSpan {
-                                    start: 94,
-                                    end: 95,
-                                    context: (),
+                                Span {
+                                    start: 106,
+                                    end: 107,
                                 },
                             ),
                             (
                                 Number(
                                     10,
                                 ),
-                                SimpleSpan {
-                                    start: 96,
-                                    end: 98,
-                                    context: (),
+                                Span {
+                                    start: 109,
+                                    end: 111,
                                 },
                             ),
                         ],
                     },
-                    span: SimpleSpan {
-                        start: 78,
-                        end: 99,
-                        context: (),
+                    span: Span {
+                        start: 91,
+                        end: 112,
                     },
                 },
             ],
-            span: SimpleSpan {
-                start: 67,
-                end: 100,
-                context: (),
+            span: Span {
+                start: 75,
+                end: 114,
             },
         },
     },
