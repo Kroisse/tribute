@@ -176,7 +176,6 @@ Comments
 
 // Line comment
 fn test() {
-    /* Block comment */
     let x = 42  // End of line comment
     x
 }
@@ -188,7 +187,6 @@ fn test() {
   (function_definition
     name: (identifier)
     body: (block
-      (block_comment)
       (let_statement
         name: (identifier)
         value: (primary_expression

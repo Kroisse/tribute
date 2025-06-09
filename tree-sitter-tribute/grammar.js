@@ -102,10 +102,10 @@ module.exports = grammar({
       $.number,
       $.string,
       $.identifier,
-      $.parenthesized_expression
+      $._parenthesized_expression
     ),
 
-    parenthesized_expression: $ => seq(
+    _parenthesized_expression: $ => seq(
       '(',
       $._expression,
       ')'
@@ -139,17 +139,16 @@ module.exports = grammar({
       '//',
       /.*/
     )),
-
-    block_comment: $ => token(seq(
-      '/*',
-      /[^*]*\*+([^/*][^*]*\*+)*/,
-      '/'
-    ))
   },
 
   extras: $ => [
     /\s/,
     $.line_comment,
-    $.block_comment
-  ]
+  ],
+
+  // word: $ => $.identifier,
+
+  inline: $ => [
+    $._parenthesized_expression,
+  ],
 });
