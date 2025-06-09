@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tree-sitter-tribute", "tribute-ast", "tribute-hir"]
+members = [".", "crates/*"]
 
 [workspace.dependencies]
 clap = { version = "4.0", features = ["derive"] }
@@ -8,9 +8,9 @@ insta = "1.43.1"
 salsa = "0.22.0"
 serde = { version = "1.0", features = ["derive"] }
 tree-sitter = "0.25"
-tree-sitter-tribute = { path = "tree-sitter-tribute" }
-tribute-ast = { path = "tribute-ast" }
-tribute-hir = { path = "tribute-hir" }
+tree-sitter-tribute = { path = "crates/tree-sitter-tribute" }
+tribute-ast = { path = "crates/tribute-ast" }
+tribute-hir = { path = "crates/tribute-hir" }
 
 [package]
 name = "tribute"

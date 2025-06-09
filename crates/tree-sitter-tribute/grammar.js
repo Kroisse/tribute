@@ -10,7 +10,7 @@ module.exports = grammar({
     _item: $ => $.function_definition,
 
     function_definition: $ => seq(
-      'fn',
+      $.keyword_fn,
       field('name', $.identifier),
       '(',
       optional($.parameter_list),
@@ -33,7 +33,7 @@ module.exports = grammar({
     ),
 
     let_statement: $ => seq(
-      'let',
+      $.keyword_let,
       field('name', $.identifier),
       '=',
       field('value', $._expression)
@@ -64,7 +64,7 @@ module.exports = grammar({
     )),
 
     match_expression: $ => seq(
-      'match',
+      $.keyword_match,
       field('value', $._expression),
       '{',
       repeat($.match_arm),
@@ -133,6 +133,11 @@ module.exports = grammar({
     ),
 
     identifier: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
+
+    // Keywords
+    keyword_fn: $ => 'fn',
+    keyword_let: $ => 'let',
+    keyword_match: $ => 'match',
 
     // Comments
     line_comment: $ => token(seq(

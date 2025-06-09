@@ -11,9 +11,11 @@ fn main() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (let_statement
+        (keyword_let)
         name: (identifier)
         value: (primary_expression
           (string
@@ -41,13 +43,16 @@ fn test() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (let_statement
+        (keyword_let)
         name: (identifier)
         value: (primary_expression
           (number)))
       (let_statement
+        (keyword_let)
         name: (identifier)
         value: (primary_expression
           (number)))
@@ -85,13 +90,16 @@ fn greet() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (let_statement
+        (keyword_let)
         name: (identifier)
         value: (primary_expression
           (number)))
       (let_statement
+        (keyword_let)
         name: (identifier)
         value: (primary_expression
           (number)))
@@ -123,6 +131,7 @@ fn test() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (expression_statement
@@ -143,9 +152,11 @@ fn test() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (let_statement
+        (keyword_let)
         name: (identifier)
         value: (primary_expression
           (string

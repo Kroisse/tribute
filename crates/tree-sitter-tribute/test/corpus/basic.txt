@@ -10,6 +10,7 @@ fn main() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (expression_statement
@@ -32,6 +33,7 @@ fn test() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (expression_statement
@@ -53,6 +55,7 @@ fn test() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (expression_statement
@@ -75,6 +78,7 @@ fn add(a, b) {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     (parameter_list
       (identifier)
@@ -100,9 +104,11 @@ fn test() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (let_statement
+        (keyword_let)
         name: (identifier)
         value: (call_expression
           function: (identifier)
@@ -127,6 +133,7 @@ fn test() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (expression_statement
@@ -151,6 +158,7 @@ fn test() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (expression_statement
@@ -185,9 +193,11 @@ fn test() {
 (source_file
   (line_comment)
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (let_statement
+        (keyword_let)
         name: (identifier)
         value: (primary_expression
           (number)))
@@ -212,17 +222,21 @@ fn test() {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     body: (block
       (let_statement
+        (keyword_let)
         name: (identifier)
         value: (primary_expression
           (number)))
       (let_statement
+        (keyword_let)
         name: (identifier)
         value: (primary_expression
           (number)))
       (let_statement
+        (keyword_let)
         name: (identifier)
         value: (binary_expression
           (primary_expression
@@ -256,12 +270,14 @@ fn test_number(n) {
 
 (source_file
   (function_definition
+    (keyword_fn)
     name: (identifier)
     (parameter_list
       (identifier))
     body: (block
       (expression_statement
         (match_expression
+          (keyword_match)
           value: (primary_expression
             (identifier))
           (match_arm
