@@ -101,9 +101,9 @@ mod tests {
     use super::*;
     use crate::handle::{
         tribute_runtime_new, tribute_runtime_destroy,
-        tribute_handle_new_number, tribute_handle_new_boolean,
-        tribute_handle_get_type, tribute_handle_get_ref_count,
-        tribute_handle_retain, tribute_handle_release,
+        tribute_new_number, tribute_new_boolean,
+        tribute_get_type, tribute_get_ref_count,
+        tribute_retain, tribute_release,
     };
 
     #[test]
@@ -122,17 +122,17 @@ mod tests {
             let runtime = tribute_runtime_new();
             
             // Use a non-interned value (numbers > 4 are not interned)
-            let handle = tribute_handle_new_number(runtime, 100);
-            assert_eq!(tribute_handle_get_ref_count(runtime, handle), 1);
+            let handle = tribute_new_number(runtime, 100);
+            assert_eq!(tribute_get_ref_count(runtime, handle), 1);
 
-            let retained_handle = tribute_handle_retain(runtime, handle);
-            assert_eq!(tribute_handle_get_ref_count(runtime, handle), 2);
+            let retained_handle = tribute_retain(runtime, handle);
+            assert_eq!(tribute_get_ref_count(runtime, handle), 2);
             assert_eq!(retained_handle, handle);
 
-            tribute_handle_release(runtime, handle);
-            assert_eq!(tribute_handle_get_ref_count(runtime, handle), 1);
+            tribute_release(runtime, handle);
+            assert_eq!(tribute_get_ref_count(runtime, handle), 1);
 
-            tribute_handle_release(runtime, retained_handle);
+            tribute_release(runtime, retained_handle);
             
             tribute_runtime_destroy(runtime);
         }
@@ -143,14 +143,14 @@ mod tests {
         unsafe {
             let runtime = tribute_runtime_new();
             
-            let num_handle = tribute_handle_new_number(runtime, 123);
-            let bool_handle = tribute_handle_new_boolean(runtime, false);
+            let num_handle = tribute_new_number(runtime, 123);
+            let bool_handle = tribute_new_boolean(runtime, false);
 
-            assert_eq!(tribute_handle_get_type(runtime, num_handle), TributeValue::TYPE_NUMBER);
-            assert_eq!(tribute_handle_get_type(runtime, bool_handle), TributeValue::TYPE_BOOLEAN);
+            assert_eq!(tribute_get_type(runtime, num_handle), TributeValue::TYPE_NUMBER);
+            assert_eq!(tribute_get_type(runtime, bool_handle), TributeValue::TYPE_BOOLEAN);
 
-            tribute_handle_release(runtime, num_handle);
-            tribute_handle_release(runtime, bool_handle);
+            tribute_release(runtime, num_handle);
+            tribute_release(runtime, bool_handle);
             
             tribute_runtime_destroy(runtime);
         }

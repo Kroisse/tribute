@@ -14,7 +14,7 @@
 //! Interned values have special properties:
 //! - They are allocated once at first use and never deallocated
 //! - Reference counting is bypassed (always reports ref count of 1)
-//! - They survive `tribute_handle_clear_all()` operations
+//! - They survive `tribute_clear_all()` operations
 //! - Multiple requests for the same value return the same handle
 
 use crate::value::{TributeBoxed, TributeValue};
@@ -272,7 +272,7 @@ pub unsafe extern "C" fn tribute_runtime_destroy(runtime: *mut TributeRuntime) {
 
 /// Create a new handle for a number value
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_new_number(
+pub unsafe extern "C" fn tribute_new_number(
     runtime: *mut TributeRuntime,
     value: i64,
 ) -> TributeHandle {
@@ -289,7 +289,7 @@ pub unsafe extern "C" fn tribute_handle_new_number(
 
 /// Create a new handle for a boolean value
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_new_boolean(
+pub unsafe extern "C" fn tribute_new_boolean(
     runtime: *mut TributeRuntime,
     value: bool,
 ) -> TributeHandle {
@@ -307,7 +307,7 @@ pub unsafe extern "C" fn tribute_handle_new_boolean(
 
 /// Create a new handle for a nil value
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_new_nil(
+pub unsafe extern "C" fn tribute_new_nil(
     _runtime: *mut TributeRuntime,
 ) -> TributeHandle {
     // Use interned handle for nil
@@ -316,7 +316,7 @@ pub unsafe extern "C" fn tribute_handle_new_nil(
 
 /// Create a new handle for a string value
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_new_string(
+pub unsafe extern "C" fn tribute_new_string(
     runtime: *mut TributeRuntime,
     data: *const u8,
     length: usize,
@@ -356,7 +356,7 @@ pub unsafe extern "C" fn tribute_handle_new_string(
 
 /// Check if a handle is valid
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_is_valid(
+pub unsafe extern "C" fn tribute_is_valid(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
 ) -> bool {
@@ -372,7 +372,7 @@ pub unsafe extern "C" fn tribute_handle_is_valid(
 
 /// Get the type of the value referenced by a handle
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_get_type(
+pub unsafe extern "C" fn tribute_get_type(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
 ) -> u8 {
@@ -390,7 +390,7 @@ pub unsafe extern "C" fn tribute_handle_get_type(
 
 /// Unbox a number value from a handle
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_unbox_number(
+pub unsafe extern "C" fn tribute_unbox_number(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
 ) -> i64 {
@@ -413,7 +413,7 @@ pub unsafe extern "C" fn tribute_handle_unbox_number(
 
 /// Unbox a boolean value from a handle
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_unbox_boolean(
+pub unsafe extern "C" fn tribute_unbox_boolean(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
 ) -> bool {
@@ -436,7 +436,7 @@ pub unsafe extern "C" fn tribute_handle_unbox_boolean(
 
 /// Get string data from a handle (returns length, caller must copy data)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_get_string_length(
+pub unsafe extern "C" fn tribute_get_string_length(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
 ) -> usize {
@@ -459,7 +459,7 @@ pub unsafe extern "C" fn tribute_handle_get_string_length(
 
 /// Copy string data from a handle to a buffer
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_copy_string_data(
+pub unsafe extern "C" fn tribute_copy_string_data(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
     buffer: *mut u8,
@@ -497,7 +497,7 @@ pub unsafe extern "C" fn tribute_handle_copy_string_data(
 
 /// Add two number handles
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_add_numbers(
+pub unsafe extern "C" fn tribute_add_numbers(
     runtime: *mut TributeRuntime,
     lhs: TributeHandle,
     rhs: TributeHandle,
@@ -538,7 +538,7 @@ pub unsafe extern "C" fn tribute_handle_add_numbers(
 
 /// Retain a handle (increment reference count)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_retain(
+pub unsafe extern "C" fn tribute_retain(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
 ) -> TributeHandle {
@@ -562,7 +562,7 @@ pub unsafe extern "C" fn tribute_handle_retain(
 
 /// Release a handle (decrement reference count and potentially deallocate)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_release(
+pub unsafe extern "C" fn tribute_release(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
 ) {
@@ -591,7 +591,7 @@ pub unsafe extern "C" fn tribute_handle_release(
 
 /// Get the reference count for a handle
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_get_ref_count(
+pub unsafe extern "C" fn tribute_get_ref_count(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
 ) -> usize {
@@ -612,7 +612,7 @@ pub unsafe extern "C" fn tribute_handle_get_ref_count(
 
 /// Get handle management statistics
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_get_stats(
+pub unsafe extern "C" fn tribute_get_stats(
     runtime: *mut TributeRuntime,
     allocated: *mut u64,
     deallocated: *mut u64,
@@ -633,7 +633,7 @@ pub unsafe extern "C" fn tribute_handle_get_stats(
 
 /// Clear all handles (for testing/cleanup)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_handle_clear_all(runtime: *mut TributeRuntime) {
+pub unsafe extern "C" fn tribute_clear_all(runtime: *mut TributeRuntime) {
     if runtime.is_null() {
         return;
     }
@@ -654,21 +654,21 @@ mod tests {
     static TEST_RUNTIME: LazyLock<ThreadLocal<TributeRuntime>> = LazyLock::new(ThreadLocal::new);
 
     // Test wrapper functions using test runtime
-    fn tribute_handle_new_number(value: i64) -> TributeHandle {
+    fn tribute_new_number(value: i64) -> TributeHandle {
         let runtime = TEST_RUNTIME.get_or_default();
         let boxed = TributeBoxed::new(TributeValue::Number(value));
         runtime.handle_table.create_handle(boxed)
     }
 
-    fn tribute_handle_new_boolean(value: bool) -> TributeHandle {
+    fn tribute_new_boolean(value: bool) -> TributeHandle {
         if value { INTERNED_TRUE } else { INTERNED_FALSE }
     }
 
-    fn tribute_handle_new_nil() -> TributeHandle {
+    fn tribute_new_nil() -> TributeHandle {
         INTERNED_NIL
     }
 
-    fn tribute_handle_new_string(data: *const u8, length: usize) -> TributeHandle {
+    fn tribute_new_string(data: *const u8, length: usize) -> TributeHandle {
         use crate::interned_string::TributeString;
 
         if length == 0 {
@@ -692,7 +692,7 @@ mod tests {
         runtime.handle_table.create_handle(boxed)
     }
 
-    fn tribute_handle_new_string_from_str(s: &str) -> TributeHandle {
+    fn tribute_new_string_from_str(s: &str) -> TributeHandle {
         use crate::interned_string::TributeString;
 
         if s.is_empty() {
@@ -705,19 +705,19 @@ mod tests {
         runtime.handle_table.create_handle(boxed)
     }
 
-    fn tribute_handle_is_valid(handle: TributeHandle) -> bool {
+    fn tribute_is_valid(handle: TributeHandle) -> bool {
         let runtime = TEST_RUNTIME.get_or_default();
         runtime.handle_table.is_valid(handle)
     }
 
-    fn tribute_handle_get_type(handle: TributeHandle) -> u8 {
+    fn tribute_get_type(handle: TributeHandle) -> u8 {
         let runtime = TEST_RUNTIME.get_or_default();
         runtime.handle_table
             .with_value(handle, |boxed| boxed.value.type_id())
             .unwrap_or(TributeValue::TYPE_NIL)
     }
 
-    fn tribute_handle_unbox_number(handle: TributeHandle) -> i64 {
+    fn tribute_unbox_number(handle: TributeHandle) -> i64 {
         let runtime = TEST_RUNTIME.get_or_default();
         runtime.handle_table
             .with_value(handle, |boxed| {
@@ -729,7 +729,7 @@ mod tests {
             .unwrap_or(0)
     }
 
-    fn tribute_handle_unbox_boolean(handle: TributeHandle) -> bool {
+    fn tribute_unbox_boolean(handle: TributeHandle) -> bool {
         let runtime = TEST_RUNTIME.get_or_default();
         runtime.handle_table
             .with_value(handle, |boxed| {
@@ -741,7 +741,7 @@ mod tests {
             .unwrap_or(false)
     }
 
-    fn tribute_handle_get_string_length(handle: TributeHandle) -> usize {
+    fn tribute_get_string_length(handle: TributeHandle) -> usize {
         let runtime = TEST_RUNTIME.get_or_default();
         runtime.handle_table
             .with_value(handle, |boxed| {
@@ -753,7 +753,7 @@ mod tests {
             .unwrap_or(0)
     }
 
-    fn tribute_handle_copy_string_data(
+    fn tribute_copy_string_data(
         handle: TributeHandle,
         buffer: *mut u8,
         buffer_size: usize,
@@ -784,7 +784,7 @@ mod tests {
             .unwrap_or(0)
     }
 
-    fn tribute_handle_add_numbers(
+    fn tribute_add_numbers(
         lhs: TributeHandle,
         rhs: TributeHandle,
     ) -> TributeHandle {
@@ -816,7 +816,7 @@ mod tests {
         }
     }
 
-    fn tribute_handle_retain(handle: TributeHandle) -> TributeHandle {
+    fn tribute_retain(handle: TributeHandle) -> TributeHandle {
         if handle.0 >= 1 && handle.0 <= 4 {
             return handle;
         }
@@ -828,7 +828,7 @@ mod tests {
         handle
     }
 
-    fn tribute_handle_release(handle: TributeHandle) {
+    fn tribute_release(handle: TributeHandle) {
         if handle.0 >= 1 && handle.0 <= 4 {
             return;
         }
@@ -843,7 +843,7 @@ mod tests {
         }
     }
 
-    fn tribute_handle_get_ref_count(handle: TributeHandle) -> usize {
+    fn tribute_get_ref_count(handle: TributeHandle) -> usize {
         if handle.0 >= 1 && handle.0 <= 4 {
             return 1;
         }
@@ -852,127 +852,127 @@ mod tests {
         runtime.handle_table.with_value(handle, |boxed| boxed.ref_count()).unwrap_or(0)
     }
 
-    fn tribute_handle_clear_all() {
+    fn tribute_clear_all() {
         let runtime = TEST_RUNTIME.get_or_default();
         runtime.handle_table.clear_all();
     }
 
     #[test]
     fn test_handle_creation_and_validity() {
-        let handle = tribute_handle_new_number(42);
+        let handle = tribute_new_number(42);
         assert_ne!(handle, TRIBUTE_HANDLE_INVALID);
-        assert!(tribute_handle_is_valid(handle));
+        assert!(tribute_is_valid(handle));
 
-        tribute_handle_release(handle);
+        tribute_release(handle);
     }
 
     #[test]
     fn test_handle_number_operations() {
-        let h1 = tribute_handle_new_number(10);
-        let h2 = tribute_handle_new_number(5);
+        let h1 = tribute_new_number(10);
+        let h2 = tribute_new_number(5);
 
-        assert_eq!(tribute_handle_unbox_number(h1), 10);
-        assert_eq!(tribute_handle_unbox_number(h2), 5);
+        assert_eq!(tribute_unbox_number(h1), 10);
+        assert_eq!(tribute_unbox_number(h2), 5);
 
-        let sum_handle = tribute_handle_add_numbers(h1, h2);
-        assert_eq!(tribute_handle_unbox_number(sum_handle), 15);
+        let sum_handle = tribute_add_numbers(h1, h2);
+        assert_eq!(tribute_unbox_number(sum_handle), 15);
 
-        tribute_handle_release(h1);
-        tribute_handle_release(h2);
-        tribute_handle_release(sum_handle);
+        tribute_release(h1);
+        tribute_release(h2);
+        tribute_release(sum_handle);
     }
 
     #[test]
     fn test_handle_boolean_operations() {
-        let h_true = tribute_handle_new_boolean(true);
-        let h_false = tribute_handle_new_boolean(false);
+        let h_true = tribute_new_boolean(true);
+        let h_false = tribute_new_boolean(false);
 
-        assert!(tribute_handle_unbox_boolean(h_true));
-        assert!(!tribute_handle_unbox_boolean(h_false));
+        assert!(tribute_unbox_boolean(h_true));
+        assert!(!tribute_unbox_boolean(h_false));
 
         // Interned values should be valid after release
-        tribute_handle_release(h_true);
-        tribute_handle_release(h_false);
+        tribute_release(h_true);
+        tribute_release(h_false);
 
-        assert!(tribute_handle_is_valid(h_true));
-        assert!(tribute_handle_is_valid(h_false));
+        assert!(tribute_is_valid(h_true));
+        assert!(tribute_is_valid(h_false));
     }
 
     #[test]
     fn test_handle_type_checking() {
-        let num_handle = tribute_handle_new_number(123);
-        let bool_handle = tribute_handle_new_boolean(true);
-        let nil_handle = tribute_handle_new_nil();
+        let num_handle = tribute_new_number(123);
+        let bool_handle = tribute_new_boolean(true);
+        let nil_handle = tribute_new_nil();
 
         assert_eq!(
-            tribute_handle_get_type(num_handle),
+            tribute_get_type(num_handle),
             TributeValue::TYPE_NUMBER
         );
         assert_eq!(
-            tribute_handle_get_type(bool_handle),
+            tribute_get_type(bool_handle),
             TributeValue::TYPE_BOOLEAN
         );
-        assert_eq!(tribute_handle_get_type(nil_handle), TributeValue::TYPE_NIL);
+        assert_eq!(tribute_get_type(nil_handle), TributeValue::TYPE_NIL);
 
-        tribute_handle_release(num_handle);
-        tribute_handle_release(bool_handle);
-        tribute_handle_release(nil_handle);
+        tribute_release(num_handle);
+        tribute_release(bool_handle);
+        tribute_release(nil_handle);
 
         // Boolean and nil handles should remain valid after release (interned)
-        assert!(tribute_handle_is_valid(bool_handle));
-        assert!(tribute_handle_is_valid(nil_handle));
+        assert!(tribute_is_valid(bool_handle));
+        assert!(tribute_is_valid(nil_handle));
     }
 
     #[test]
     fn test_invalid_handle() {
-        assert!(!tribute_handle_is_valid(TRIBUTE_HANDLE_INVALID));
-        assert_eq!(tribute_handle_unbox_number(TRIBUTE_HANDLE_INVALID), 0);
-        assert!(!tribute_handle_unbox_boolean(TRIBUTE_HANDLE_INVALID));
+        assert!(!tribute_is_valid(TRIBUTE_HANDLE_INVALID));
+        assert_eq!(tribute_unbox_number(TRIBUTE_HANDLE_INVALID), 0);
+        assert!(!tribute_unbox_boolean(TRIBUTE_HANDLE_INVALID));
         assert_eq!(
-            tribute_handle_get_type(TRIBUTE_HANDLE_INVALID),
+            tribute_get_type(TRIBUTE_HANDLE_INVALID),
             TributeValue::TYPE_NIL
         );
     }
 
     #[test]
     fn test_reference_counting() {
-        let handle = tribute_handle_new_number(42);
-        assert_eq!(tribute_handle_get_ref_count(handle), 1);
+        let handle = tribute_new_number(42);
+        assert_eq!(tribute_get_ref_count(handle), 1);
 
-        tribute_handle_retain(handle);
-        assert_eq!(tribute_handle_get_ref_count(handle), 2);
+        tribute_retain(handle);
+        assert_eq!(tribute_get_ref_count(handle), 2);
 
-        tribute_handle_release(handle);
-        assert_eq!(tribute_handle_get_ref_count(handle), 1);
+        tribute_release(handle);
+        assert_eq!(tribute_get_ref_count(handle), 1);
 
-        tribute_handle_release(handle);
-        assert!(!tribute_handle_is_valid(handle));
+        tribute_release(handle);
+        assert!(!tribute_is_valid(handle));
     }
 
     #[test]
     fn test_interned_values() {
         // Test that boolean values return the same handle
-        let h_true1 = tribute_handle_new_boolean(true);
-        let h_true2 = tribute_handle_new_boolean(true);
-        let h_false1 = tribute_handle_new_boolean(false);
-        let h_false2 = tribute_handle_new_boolean(false);
+        let h_true1 = tribute_new_boolean(true);
+        let h_true2 = tribute_new_boolean(true);
+        let h_false1 = tribute_new_boolean(false);
+        let h_false2 = tribute_new_boolean(false);
 
         assert_eq!(h_true1.0, h_true2.0);
         assert_eq!(h_false1.0, h_false2.0);
         assert_ne!(h_true1.0, h_false1.0);
 
         // Test that nil values return the same handle
-        let h_nil1 = tribute_handle_new_nil();
-        let h_nil2 = tribute_handle_new_nil();
+        let h_nil1 = tribute_new_nil();
+        let h_nil2 = tribute_new_nil();
 
         assert_eq!(h_nil1.0, h_nil2.0);
 
         // Test that interned values persist after clear_all
-        tribute_handle_clear_all();
+        tribute_clear_all();
 
-        assert!(tribute_handle_is_valid(h_true1));
-        assert!(tribute_handle_is_valid(h_false1));
-        assert!(tribute_handle_is_valid(h_nil1));
+        assert!(tribute_is_valid(h_true1));
+        assert!(tribute_is_valid(h_false1));
+        assert!(tribute_is_valid(h_nil1));
     }
 
     #[test]
@@ -984,18 +984,18 @@ mod tests {
         TributeString::clear_interned_from_table(&runtime.interned_strings);
 
         // Test empty string interning
-        let empty1 = tribute_handle_new_string(std::ptr::null(), 0);
-        let empty2 = tribute_handle_new_string_from_str("");
-        let empty3 = tribute_handle_new_string("hello".as_ptr(), 0); // Zero length
+        let empty1 = tribute_new_string(std::ptr::null(), 0);
+        let empty2 = tribute_new_string_from_str("");
+        let empty3 = tribute_new_string("hello".as_ptr(), 0); // Zero length
 
         assert_eq!(empty1.0, empty2.0);
         assert_eq!(empty2.0, empty3.0);
         assert_eq!(empty1.0, INTERNED_EMPTY_STRING.0);
 
         // Test inline strings (should create new handles but use efficient storage)
-        let short1 = tribute_handle_new_string_from_str("hello");
-        let short2 = tribute_handle_new_string_from_str("hello");
-        let world = tribute_handle_new_string_from_str("world");
+        let short1 = tribute_new_string_from_str("hello");
+        let short2 = tribute_new_string_from_str("hello");
+        let world = tribute_new_string_from_str("world");
 
         // Each string gets its own handle even if content is the same
         assert_ne!(short1.0, short2.0);
@@ -1003,28 +1003,28 @@ mod tests {
         assert_ne!(short1.0, empty1.0);
 
         // Test longer strings (these get interned based on content)
-        let long1 = tribute_handle_new_string_from_str("this is a very long string that will be interned");
-        let long2 = tribute_handle_new_string_from_str("this is a very long string that will be interned");
+        let long1 = tribute_new_string_from_str("this is a very long string that will be interned");
+        let long2 = tribute_new_string_from_str("this is a very long string that will be interned");
 
         // Longer strings still get separate handles (handle != content equality)
         assert_ne!(long1.0, long2.0);
 
         // Test that empty string persists after clear_all
-        tribute_handle_clear_all();
+        tribute_clear_all();
 
-        assert!(tribute_handle_is_valid(empty1));
-        assert!(!tribute_handle_is_valid(short1)); // Non-interned handles should be cleared
+        assert!(tribute_is_valid(empty1));
+        assert!(!tribute_is_valid(short1)); // Non-interned handles should be cleared
 
         // Test string data retrieval
         let test_str = "Hello, Rust!";
-        let str_handle = tribute_handle_new_string_from_str(test_str);
+        let str_handle = tribute_new_string_from_str(test_str);
 
-        let length = tribute_handle_get_string_length(str_handle);
+        let length = tribute_get_string_length(str_handle);
         assert_eq!(length, test_str.len());
 
         // Test copying string data
         let mut buffer = vec![0u8; length + 10]; // Extra space
-        let copied_len = tribute_handle_copy_string_data(
+        let copied_len = tribute_copy_string_data(
             str_handle,
             buffer.as_mut_ptr(),
             buffer.len()
@@ -1035,7 +1035,7 @@ mod tests {
         let retrieved_str = std::str::from_utf8(&buffer[..length]).unwrap();
         assert_eq!(retrieved_str, test_str);
 
-        tribute_handle_release(str_handle);
+        tribute_release(str_handle);
 
         // Test interned string statistics
         let runtime = TEST_RUNTIME.get_or_default();
@@ -1050,7 +1050,7 @@ mod tests {
             assert!(!runtime.is_null());
 
             // Create handles using runtime-aware API
-            let num_handle = super::tribute_handle_new_number(runtime, 42);
+            let num_handle = super::tribute_new_number(runtime, 42);
             assert_ne!(num_handle, TRIBUTE_HANDLE_INVALID);
 
             // Test that the handle is valid in this runtime context
@@ -1064,18 +1064,18 @@ mod tests {
             assert_eq!(value, 42);
 
             // Test boolean handles (should return interned values)
-            let true_handle = super::tribute_handle_new_boolean(runtime, true);
-            let false_handle = super::tribute_handle_new_boolean(runtime, false);
+            let true_handle = super::tribute_new_boolean(runtime, true);
+            let false_handle = super::tribute_new_boolean(runtime, false);
             assert_eq!(true_handle, INTERNED_TRUE);
             assert_eq!(false_handle, INTERNED_FALSE);
 
             // Test nil handle (should return interned value)
-            let nil_handle = super::tribute_handle_new_nil(runtime);
+            let nil_handle = super::tribute_new_nil(runtime);
             assert_eq!(nil_handle, INTERNED_NIL);
 
             // Test string handle
             let hello = "Hello, Context!";
-            let str_handle = super::tribute_handle_new_string(
+            let str_handle = super::tribute_new_string(
                 runtime,
                 hello.as_ptr(),
                 hello.len()
@@ -1106,8 +1106,8 @@ mod tests {
             assert!(!runtime2.is_null());
 
             // Test that each runtime can create handles
-            let handle1 = super::tribute_handle_new_number(runtime1, 100);
-            let handle2 = super::tribute_handle_new_number(runtime2, 200);
+            let handle1 = super::tribute_new_number(runtime1, 100);
+            let handle2 = super::tribute_new_number(runtime2, 200);
 
             assert_ne!(handle1, TRIBUTE_HANDLE_INVALID);
             assert_ne!(handle2, TRIBUTE_HANDLE_INVALID);
@@ -1141,7 +1141,7 @@ mod tests {
 }
 
 /// Create a new handle for a string value from a Rust string slice
-pub unsafe fn tribute_handle_new_string_from_str(
+pub unsafe fn tribute_new_string_from_str(
     runtime: *mut TributeRuntime,
     s: &str,
 ) -> TributeHandle {
