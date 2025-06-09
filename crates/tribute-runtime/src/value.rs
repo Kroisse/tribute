@@ -2,6 +2,8 @@
 //!
 //! Provides reference-counted boxed values and memory management.
 
+#![allow(deprecated)] // Internal implementation can use deprecated functions
+
 use crate::{array::TributeArray, handle::TributeHandle, interned_string::TributeString};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -95,6 +97,10 @@ impl TributeBoxed {
 }
 
 /// Increment the reference count of a boxed value
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. See tribute_handle_retain() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_retain(boxed: *mut TributeBoxed) -> *mut TributeBoxed {
     if boxed.is_null() {
@@ -109,6 +115,10 @@ pub unsafe extern "C" fn tribute_retain(boxed: *mut TributeBoxed) -> *mut Tribut
 }
 
 /// Decrement the reference count of a boxed value
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. See tribute_handle_release() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_release(boxed: *mut TributeBoxed) {
     if !boxed.is_null() {
@@ -124,6 +134,10 @@ pub unsafe extern "C" fn tribute_release(boxed: *mut TributeBoxed) {
 }
 
 /// Get the reference count of a boxed value
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. See tribute_handle_get_ref_count() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_get_ref_count(boxed: *const TributeBoxed) -> usize {
     if boxed.is_null() {
@@ -137,6 +151,10 @@ pub unsafe extern "C" fn tribute_get_ref_count(boxed: *const TributeBoxed) -> us
 }
 
 /// Get the type of a boxed value
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. See tribute_handle_get_type() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_get_type(boxed: *const TributeBoxed) -> u8 {
     if boxed.is_null() {

@@ -1,9 +1,15 @@
+#![allow(deprecated)] // Internal implementation can use deprecated functions
+
 use crate::{
     interned_string::TributeString,
     value::{TributeBoxed, TributeValue},
 };
 
 /// Box a string value (takes ownership of the string data)
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. See tribute_handle_new_string() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_box_string(data: *mut u8, length: usize) -> *mut TributeBoxed {
     // Convert raw data to TributeString
@@ -23,6 +29,10 @@ pub unsafe extern "C" fn tribute_box_string(data: *mut u8, length: usize) -> *mu
 ///
 /// # Safety
 /// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. See tribute_handle_get_string_length() and tribute_handle_copy_string_data() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_unbox_string(
     boxed: *mut TributeBoxed,
@@ -49,7 +59,7 @@ pub unsafe extern "C" fn tribute_unbox_string(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{tribute_get_type, tribute_release};
+    use crate::value::{tribute_get_type, tribute_release};
     use std::{
         alloc::{Layout, alloc},
         ptr,

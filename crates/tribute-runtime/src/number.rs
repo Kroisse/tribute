@@ -1,11 +1,17 @@
 //! Number value operations for the Tribute runtime
 
+#![allow(deprecated)] // Internal implementation can use deprecated functions
+
 use crate::value::{TributeBoxed, TributeValue};
 
 /// Box a number value
 /// 
 /// # Safety
 /// This function is safe to call with any i64 value.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. See tribute_handle_new_number() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_box_number(value: i64) -> *mut TributeBoxed {
     let boxed = TributeBoxed::new(TributeValue::Number(value));
@@ -16,6 +22,10 @@ pub unsafe extern "C" fn tribute_box_number(value: i64) -> *mut TributeBoxed {
 /// 
 /// # Safety
 /// The caller must ensure that `boxed` is either null or points to a valid TributeBoxed.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. See tribute_handle_unbox_number() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_unbox_number(boxed: *const TributeBoxed) -> i64 {
     if boxed.is_null() {
@@ -32,6 +42,10 @@ pub unsafe extern "C" fn tribute_unbox_number(boxed: *const TributeBoxed) -> i64
 }
 
 /// Add two boxed numbers
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. See tribute_handle_add_numbers() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_add_boxed(lhs: *const TributeBoxed, rhs: *const TributeBoxed) -> *mut TributeBoxed {
     if lhs.is_null() || rhs.is_null() {
@@ -52,6 +66,10 @@ pub unsafe extern "C" fn tribute_add_boxed(lhs: *const TributeBoxed, rhs: *const
 }
 
 /// Subtract two boxed numbers
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. Combine tribute_handle_unbox_number() and tribute_handle_new_number() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_sub_boxed(lhs: *const TributeBoxed, rhs: *const TributeBoxed) -> *mut TributeBoxed {
     if lhs.is_null() || rhs.is_null() {
@@ -72,6 +90,10 @@ pub unsafe extern "C" fn tribute_sub_boxed(lhs: *const TributeBoxed, rhs: *const
 }
 
 /// Multiply two boxed numbers
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. Combine tribute_handle_unbox_number() and tribute_handle_new_number() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_mul_boxed(lhs: *const TributeBoxed, rhs: *const TributeBoxed) -> *mut TributeBoxed {
     if lhs.is_null() || rhs.is_null() {
@@ -92,6 +114,10 @@ pub unsafe extern "C" fn tribute_mul_boxed(lhs: *const TributeBoxed, rhs: *const
 }
 
 /// Divide two boxed numbers
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. Combine tribute_handle_unbox_number() and tribute_handle_new_number() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_div_boxed(lhs: *const TributeBoxed, rhs: *const TributeBoxed) -> *mut TributeBoxed {
     if lhs.is_null() || rhs.is_null() {
@@ -116,6 +142,10 @@ pub unsafe extern "C" fn tribute_div_boxed(lhs: *const TributeBoxed, rhs: *const
 }
 
 /// Modulo two boxed numbers
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. Combine tribute_handle_unbox_number() and tribute_handle_new_number() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_mod_boxed(lhs: *const TributeBoxed, rhs: *const TributeBoxed) -> *mut TributeBoxed {
     if lhs.is_null() || rhs.is_null() {
@@ -143,6 +173,10 @@ pub unsafe extern "C" fn tribute_mod_boxed(lhs: *const TributeBoxed, rhs: *const
 use crate::boolean::tribute_box_boolean;
 
 /// Check equality of two boxed numbers
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. Combine tribute_handle_unbox_number() and tribute_handle_new_boolean() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_eq_boxed(lhs: *const TributeBoxed, rhs: *const TributeBoxed) -> *mut TributeBoxed {
     if lhs.is_null() || rhs.is_null() {
@@ -163,6 +197,10 @@ pub unsafe extern "C" fn tribute_eq_boxed(lhs: *const TributeBoxed, rhs: *const 
 }
 
 /// Check inequality of two boxed numbers
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. Combine tribute_handle_unbox_number() and tribute_handle_new_boolean() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_neq_boxed(lhs: *const TributeBoxed, rhs: *const TributeBoxed) -> *mut TributeBoxed {
     if lhs.is_null() || rhs.is_null() {
@@ -183,6 +221,10 @@ pub unsafe extern "C" fn tribute_neq_boxed(lhs: *const TributeBoxed, rhs: *const
 }
 
 /// Check if left < right for two boxed numbers
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. Combine tribute_handle_unbox_number() and tribute_handle_new_boolean() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_lt_boxed(lhs: *const TributeBoxed, rhs: *const TributeBoxed) -> *mut TributeBoxed {
     if lhs.is_null() || rhs.is_null() {
@@ -203,6 +245,10 @@ pub unsafe extern "C" fn tribute_lt_boxed(lhs: *const TributeBoxed, rhs: *const 
 }
 
 /// Check if left <= right for two boxed numbers
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. Combine tribute_handle_unbox_number() and tribute_handle_new_boolean() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_lte_boxed(lhs: *const TributeBoxed, rhs: *const TributeBoxed) -> *mut TributeBoxed {
     if lhs.is_null() || rhs.is_null() {
@@ -223,6 +269,10 @@ pub unsafe extern "C" fn tribute_lte_boxed(lhs: *const TributeBoxed, rhs: *const
 }
 
 /// Check if left > right for two boxed numbers
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. Combine tribute_handle_unbox_number() and tribute_handle_new_boolean() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_gt_boxed(lhs: *const TributeBoxed, rhs: *const TributeBoxed) -> *mut TributeBoxed {
     if lhs.is_null() || rhs.is_null() {
@@ -243,6 +293,10 @@ pub unsafe extern "C" fn tribute_gt_boxed(lhs: *const TributeBoxed, rhs: *const 
 }
 
 /// Check if left >= right for two boxed numbers
+#[deprecated(
+    since = "0.1.0",
+    note = "Use handle-based API instead. Combine tribute_handle_unbox_number() and tribute_handle_new_boolean() for safer alternatives."
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_gte_boxed(lhs: *const TributeBoxed, rhs: *const TributeBoxed) -> *mut TributeBoxed {
     if lhs.is_null() || rhs.is_null() {
