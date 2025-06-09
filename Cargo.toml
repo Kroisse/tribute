@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/tree-sitter-tribute", "crates/tribute-ast", "crates/tribute-hir"]
-# Note: tribute-codegen and tribute-runtime temporarily excluded until updated for new AST/HIR structure
+members = [".", "crates/tree-sitter-tribute", "crates/tribute-ast", "crates/tribute-hir", "crates/tribute-runtime"]
+# Note: tribute-codegen temporarily excluded until updated for new AST/HIR structure
 
 [workspace.dependencies]
 clap = { version = "4.0", features = ["derive"] }
@@ -12,6 +12,7 @@ tree-sitter = "0.25"
 tree-sitter-tribute = { path = "crates/tree-sitter-tribute" }
 tribute-ast = { path = "crates/tribute-ast" }
 tribute-hir = { path = "crates/tribute-hir" }
+tribute-runtime = { path = "crates/tribute-runtime" }
 
 [package]
 name = "tribute"

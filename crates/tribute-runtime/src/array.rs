@@ -6,7 +6,7 @@ use std::{
 
 /// Generic array type for both strings and lists
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct TributeArray<T> {
     pub data: *mut T,
     pub length: usize,

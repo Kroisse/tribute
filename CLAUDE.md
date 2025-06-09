@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Tribute is a Lisp-like programming language interpreter written in Rust. The project uses Tree-sitter for parsing and Salsa for incremental computation. It is organized as a Cargo workspace with multiple crates implementing a multi-level IR architecture.
 
+## Project Guidelines
+
+- 이 프로젝트 안의 모든 Rust crate는 2024 에디션을 따라야 합니다.
+
 ## Commit Guidelines
 
 - Please follow the Conventional Commit format for commit messages.

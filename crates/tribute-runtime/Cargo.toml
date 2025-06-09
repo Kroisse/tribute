@@ -3,8 +3,9 @@ name = "tribute-runtime"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
 [dependencies]
 
-[lib]
-name = "tribute_runtime"
-crate-type = ["cdylib", "staticlib", "rlib"]
+[dev-dependencies]
