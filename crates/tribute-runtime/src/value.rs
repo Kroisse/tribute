@@ -2,7 +2,7 @@
 //!
 //! Provides reference-counted boxed values and memory management.
 
-use crate::{array::TributeArray, handle::TributeHandle};
+use crate::{array::TributeArray, handle::TributeHandle, interned_string::TributeString};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A reference-counted boxed value in the Tribute runtime
@@ -16,7 +16,7 @@ pub struct TributeBoxed {
 #[derive(Debug)]
 pub enum TributeValue {
     Number(i64),
-    String(TributeArray<u8>),
+    String(TributeString),
     Boolean(bool),
     List(TributeArray<TributeHandle>),
     Nil,
@@ -73,8 +73,8 @@ impl TributeBoxed {
             // This was the last reference, deallocate
             unsafe {
                 match &self.value {
-                    TributeValue::String(string_data) => {
-                        string_data.deallocate();
+                    TributeValue::String(_) => {
+                        // Interned strings manage their own memory
                     }
                     TributeValue::List(list_data) => {
                         list_data.release_all_handles();

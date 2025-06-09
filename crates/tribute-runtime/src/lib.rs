@@ -10,12 +10,14 @@
 mod array;
 mod boolean;
 mod handle;
+mod interned_string;
 mod list;
 mod number;
 mod string;
 mod value;
 
 pub use array::TributeArray;
+pub use interned_string::TributeString;
 pub use boolean::{tribute_box_boolean, tribute_unbox_boolean};
 // Legacy pointer-based list API (deprecated)
 // pub use list::{tribute_box_list_empty, tribute_box_list_from_array, tribute_list_length, tribute_list_get, tribute_list_set, tribute_list_push, tribute_list_pop};
@@ -41,8 +43,9 @@ pub use handle::{
     TRIBUTE_HANDLE_INVALID, TributeHandle, tribute_handle_add_numbers, tribute_handle_clear_all,
     tribute_handle_get_ref_count, tribute_handle_get_stats, tribute_handle_get_type,
     tribute_handle_is_valid, tribute_handle_new_boolean, tribute_handle_new_nil,
-    tribute_handle_new_number, tribute_handle_release, tribute_handle_retain,
-    tribute_handle_unbox_boolean, tribute_handle_unbox_number,
+    tribute_handle_new_number, tribute_handle_new_string, tribute_handle_new_string_from_str,
+    tribute_handle_get_string_length, tribute_handle_copy_string_data, tribute_handle_release, 
+    tribute_handle_retain, tribute_handle_unbox_boolean, tribute_handle_unbox_number,
 };
 
 /// Initialize the Tribute runtime system

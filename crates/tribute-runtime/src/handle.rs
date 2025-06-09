@@ -9,6 +9,7 @@
 //! - `true` → Handle(1)
 //! - `false` → Handle(2)
 //! - `nil` → Handle(3)
+//! - `""` (empty string) → Handle(4)
 //!
 //! Interned values have special properties:
 //! - They are allocated once at first use and never deallocated
@@ -30,23 +31,28 @@ pub struct TributeHandle(u64);
 pub const TRIBUTE_HANDLE_INVALID: TributeHandle = TributeHandle(0);
 
 /// Global handle table that maps handles to TributeBoxed values
-static HANDLE_TABLE: LazyLock<DashMap<u64, Box<TributeBoxed>>> = LazyLock::new(||
+static HANDLE_TABLE: LazyLock<DashMap<u64, Box<TributeBoxed>>> = LazyLock::new(|| {
+    use crate::interned_string::TributeString;
+    
     // Pre-insert interned values
     [
         (INTERNED_TRUE.0, Box::new(TributeBoxed::new(TributeValue::Boolean(true)))),
         (INTERNED_FALSE.0, Box::new(TributeBoxed::new(TributeValue::Boolean(false)))),
         (INTERNED_NIL.0, Box::new(TributeBoxed::new(TributeValue::Nil))),
+        (INTERNED_EMPTY_STRING.0, Box::new(TributeBoxed::new(TributeValue::String(TributeString::from_str(""))))),
     ]
     .into_iter()
-    .collect());
+    .collect()
+});
 
 /// Global handle counter for generating unique handles
-static HANDLE_COUNTER: AtomicU64 = AtomicU64::new(4); // Start at 4 to reserve 1-3 for interned values
+static HANDLE_COUNTER: AtomicU64 = AtomicU64::new(5); // Start at 5 to reserve 1-4 for interned values
 
 /// Interned handle constants
 pub const INTERNED_TRUE: TributeHandle = TributeHandle(1);
 pub const INTERNED_FALSE: TributeHandle = TributeHandle(2);
 pub const INTERNED_NIL: TributeHandle = TributeHandle(3);
+pub const INTERNED_EMPTY_STRING: TributeHandle = TributeHandle(4);
 
 /// Statistics for handle management
 static HANDLE_STATS: LazyLock<Mutex<HandleStats>> = LazyLock::new(Mutex::default);
@@ -141,7 +147,7 @@ impl TributeHandle {
         }
 
         // Never deallocate interned values
-        if self.0 >= 1 && self.0 <= 3 {
+        if self.0 >= 1 && self.0 <= 4 {
             return;
         }
 
@@ -173,6 +179,47 @@ pub extern "C" fn tribute_handle_new_boolean(value: bool) -> TributeHandle {
 pub extern "C" fn tribute_handle_new_nil() -> TributeHandle {
     // Use interned handle for nil
     INTERNED_NIL
+}
+
+/// Create a new handle for a string value from raw data
+#[unsafe(no_mangle)]
+pub extern "C" fn tribute_handle_new_string(data: *const u8, length: usize) -> TributeHandle {
+    use crate::interned_string::TributeString;
+    
+    // Check for empty string
+    if length == 0 {
+        return INTERNED_EMPTY_STRING;
+    }
+    
+    // Create string from byte slice
+    let bytes = if data.is_null() {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(data, length) }
+    };
+    
+    let tribute_string = TributeString::from_bytes(bytes);
+    
+    // Check if this resulted in an empty string (should be rare due to above check)
+    if tribute_string.is_empty() {
+        return INTERNED_EMPTY_STRING;
+    }
+    
+    let boxed = TributeBoxed::new(TributeValue::String(tribute_string));
+    TributeHandle::new(boxed)
+}
+
+/// Create a new handle for a string value from a Rust string slice
+pub fn tribute_handle_new_string_from_str(s: &str) -> TributeHandle {
+    use crate::interned_string::TributeString;
+    
+    if s.is_empty() {
+        return INTERNED_EMPTY_STRING;
+    }
+    
+    let tribute_string = TributeString::from_str(s);
+    let boxed = TributeBoxed::new(TributeValue::String(tribute_string));
+    TributeHandle::new(boxed)
 }
 
 /// Check if a handle is valid
@@ -215,6 +262,51 @@ pub extern "C" fn tribute_handle_unbox_boolean(handle: TributeHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// Get string data from a handle (returns length, caller must copy data)
+#[unsafe(no_mangle)]
+pub extern "C" fn tribute_handle_get_string_length(handle: TributeHandle) -> usize {
+    handle
+        .with_value(|boxed| {
+            match &boxed.value {
+                TributeValue::String(tribute_string) => tribute_string.len(),
+                _ => 0, // Type error
+            }
+        })
+        .unwrap_or(0)
+}
+
+/// Copy string data from a handle to a buffer
+#[unsafe(no_mangle)]
+pub extern "C" fn tribute_handle_copy_string_data(
+    handle: TributeHandle,
+    buffer: *mut u8,
+    buffer_size: usize,
+) -> usize {
+    handle
+        .with_value(|boxed| {
+            match &boxed.value {
+                TributeValue::String(tribute_string) => {
+                    let bytes = tribute_string.as_bytes();
+                    let copy_len = bytes.len().min(buffer_size);
+                    
+                    if !buffer.is_null() && copy_len > 0 {
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                bytes.as_ptr(),
+                                buffer,
+                                copy_len
+                            );
+                        }
+                    }
+                    
+                    bytes.len() // Return actual string length
+                }
+                _ => 0, // Type error
+            }
+        })
+        .unwrap_or(0)
+}
+
 /// Add two number handles
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_handle_add_numbers(
@@ -245,7 +337,7 @@ pub extern "C" fn tribute_handle_add_numbers(
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_handle_retain(handle: TributeHandle) -> TributeHandle {
     // Interned values don't need reference counting
-    if handle.0 >= 1 && handle.0 <= 3 {
+    if handle.0 >= 1 && handle.0 <= 4 {
         return handle;
     }
 
@@ -259,7 +351,7 @@ pub extern "C" fn tribute_handle_retain(handle: TributeHandle) -> TributeHandle 
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_handle_release(handle: TributeHandle) {
     // Never release interned values
-    if handle.0 >= 1 && handle.0 <= 3 {
+    if handle.0 >= 1 && handle.0 <= 4 {
         return;
     }
 
@@ -277,7 +369,7 @@ pub extern "C" fn tribute_handle_release(handle: TributeHandle) {
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_handle_get_ref_count(handle: TributeHandle) -> usize {
     // Interned values have infinite reference count (represented as 1)
-    if handle.0 >= 1 && handle.0 <= 3 {
+    if handle.0 >= 1 && handle.0 <= 4 {
         return 1;
     }
 
@@ -307,11 +399,11 @@ pub unsafe extern "C" fn tribute_handle_get_stats(
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_handle_clear_all() {
     // Remove all handles except interned ones
-    let interned_keys = [1, 2, 3];
+    let interned_keys = [1, 2, 3, 4];
     HANDLE_TABLE.retain(|k, _| interned_keys.contains(k));
 
     let mut stats = HANDLE_STATS.lock().unwrap();
-    stats.deallocated = stats.allocated.saturating_sub(3); // Keep 3 interned values
+    stats.deallocated = stats.allocated.saturating_sub(4); // Keep 4 interned values
 }
 
 #[cfg(test)]
@@ -434,5 +526,70 @@ mod tests {
         assert!(h_true1.is_valid());
         assert!(h_false1.is_valid());
         assert!(h_nil1.is_valid());
+    }
+    
+    #[test]
+    fn test_string_interning() {
+        use crate::interned_string::TributeString;
+        
+        // Clear interned strings for clean test
+        TributeString::clear_interned();
+        
+        // Test empty string interning
+        let empty1 = tribute_handle_new_string(std::ptr::null(), 0);
+        let empty2 = tribute_handle_new_string_from_str("");
+        let empty3 = tribute_handle_new_string("hello".as_ptr(), 0); // Zero length
+        
+        assert_eq!(empty1.0, empty2.0);
+        assert_eq!(empty2.0, empty3.0);
+        assert_eq!(empty1.0, INTERNED_EMPTY_STRING.0);
+        
+        // Test inline strings (should create new handles but use efficient storage)
+        let short1 = tribute_handle_new_string_from_str("hello");
+        let short2 = tribute_handle_new_string_from_str("hello");
+        let world = tribute_handle_new_string_from_str("world");
+        
+        // Each string gets its own handle even if content is the same
+        assert_ne!(short1.0, short2.0);
+        assert_ne!(short1.0, world.0);
+        assert_ne!(short1.0, empty1.0);
+        
+        // Test longer strings (these get interned based on content)
+        let long1 = tribute_handle_new_string_from_str("this is a very long string that will be interned");
+        let long2 = tribute_handle_new_string_from_str("this is a very long string that will be interned");
+        
+        // Longer strings still get separate handles (handle != content equality)
+        assert_ne!(long1.0, long2.0);
+        
+        // Test that empty string persists after clear_all
+        tribute_handle_clear_all();
+        
+        assert!(empty1.is_valid());
+        assert!(!short1.is_valid()); // Non-interned handles should be cleared
+        
+        // Test string data retrieval
+        let test_str = "Hello, Rust!";
+        let str_handle = tribute_handle_new_string_from_str(test_str);
+        
+        let length = tribute_handle_get_string_length(str_handle);
+        assert_eq!(length, test_str.len());
+        
+        // Test copying string data
+        let mut buffer = vec![0u8; length + 10]; // Extra space
+        let copied_len = tribute_handle_copy_string_data(
+            str_handle,
+            buffer.as_mut_ptr(),
+            buffer.len()
+        );
+        
+        assert_eq!(copied_len, test_str.len());
+        
+        let retrieved_str = std::str::from_utf8(&buffer[..length]).unwrap();
+        assert_eq!(retrieved_str, test_str);
+        
+        tribute_handle_release(str_handle);
+        
+        // Test interned string statistics
+        assert!(TributeString::interned_count() > 0);
     }
 }

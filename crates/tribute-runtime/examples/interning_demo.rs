@@ -61,5 +61,24 @@ fn main() {
     println!("  Is num1 still valid? {}", tribute_handle_is_valid(num1));
     println!("  => Only interned values survive clear_all");
     
+    println!("\n7. String interning demo:");
+    let empty_str1 = tribute_handle_new_string(std::ptr::null(), 0);
+    let empty_str2 = tribute_handle_new_string_from_str("");
+    
+    println!("  empty_str1 handle: {:?}", empty_str1);
+    println!("  empty_str2 handle: {:?}", empty_str2);
+    println!("  => Empty strings are interned: empty_str1 == empty_str2: {}", 
+             empty_str1 == empty_str2);
+    
+    let hello1 = tribute_handle_new_string_from_str("hello");
+    let hello2 = tribute_handle_new_string_from_str("hello");
+    
+    println!("  hello1 handle: {:?}", hello1);
+    println!("  hello2 handle: {:?}", hello2);
+    println!("  => Non-empty strings get separate handles: hello1 == hello2: {}", 
+             hello1 == hello2);
+    
+    println!("  hello1 length: {}", tribute_handle_get_string_length(hello1));
+    
     println!("\n=== Demo Complete ===");
 }

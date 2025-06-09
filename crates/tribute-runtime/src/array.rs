@@ -14,6 +14,15 @@ pub struct TributeArray<T> {
 }
 
 impl<T> TributeArray<T> {
+    /// Create a new empty array (no allocation)
+    pub const fn empty() -> Self {
+        Self {
+            data: std::ptr::null_mut(),
+            length: 0,
+            capacity: 0,
+        }
+    }
+
     /// Create a new empty array with given capacity
     /// 
     /// # Safety
