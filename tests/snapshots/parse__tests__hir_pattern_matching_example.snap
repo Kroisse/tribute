@@ -1,0 +1,304 @@
+---
+source: tests/parse.rs
+expression: hir
+---
+HirProgram {
+    [salsa id]: Id(1800),
+    functions: {
+        "main": HirFunction {
+            [salsa id]: Id(1400),
+            name: "main",
+            params: [],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(1000),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            Span {
+                                start: 360,
+                                end: 399,
+                            },
+                        ),
+                        args: [
+                            (
+                                StringInterpolation(
+                                    StringInterpolation {
+                                        leading_text: "Testing pattern matching:",
+                                        segments: [],
+                                    },
+                                ),
+                                Span {
+                                    start: 371,
+                                    end: 398,
+                                },
+                            ),
+                        ],
+                    },
+                    span: Span {
+                        start: 360,
+                        end: 399,
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(1001),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            Span {
+                                start: 404,
+                                end: 430,
+                            },
+                        ),
+                        args: [
+                            (
+                                Call {
+                                    func: (
+                                        Variable(
+                                            "test_number",
+                                        ),
+                                        Span {
+                                            start: 415,
+                                            end: 429,
+                                        },
+                                    ),
+                                    args: [
+                                        (
+                                            Number(
+                                                0,
+                                            ),
+                                            Span {
+                                                start: 427,
+                                                end: 428,
+                                            },
+                                        ),
+                                    ],
+                                },
+                                Span {
+                                    start: 415,
+                                    end: 429,
+                                },
+                            ),
+                        ],
+                    },
+                    span: Span {
+                        start: 404,
+                        end: 430,
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(1002),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            Span {
+                                start: 435,
+                                end: 461,
+                            },
+                        ),
+                        args: [
+                            (
+                                Call {
+                                    func: (
+                                        Variable(
+                                            "test_number",
+                                        ),
+                                        Span {
+                                            start: 446,
+                                            end: 460,
+                                        },
+                                    ),
+                                    args: [
+                                        (
+                                            Number(
+                                                1,
+                                            ),
+                                            Span {
+                                                start: 458,
+                                                end: 459,
+                                            },
+                                        ),
+                                    ],
+                                },
+                                Span {
+                                    start: 446,
+                                    end: 460,
+                                },
+                            ),
+                        ],
+                    },
+                    span: Span {
+                        start: 435,
+                        end: 461,
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(1003),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            Span {
+                                start: 466,
+                                end: 493,
+                            },
+                        ),
+                        args: [
+                            (
+                                Call {
+                                    func: (
+                                        Variable(
+                                            "test_number",
+                                        ),
+                                        Span {
+                                            start: 477,
+                                            end: 492,
+                                        },
+                                    ),
+                                    args: [
+                                        (
+                                            Number(
+                                                42,
+                                            ),
+                                            Span {
+                                                start: 489,
+                                                end: 491,
+                                            },
+                                        ),
+                                    ],
+                                },
+                                Span {
+                                    start: 477,
+                                    end: 492,
+                                },
+                            ),
+                        ],
+                    },
+                    span: Span {
+                        start: 466,
+                        end: 493,
+                    },
+                },
+            ],
+            span: Span {
+                start: 344,
+                end: 495,
+            },
+        },
+        "test_number": HirFunction {
+            [salsa id]: Id(1401),
+            name: "test_number",
+            params: [
+                "n",
+            ],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(1004),
+                    expr: Match {
+                        expr: (
+                            Variable(
+                                "n",
+                            ),
+                            Span {
+                                start: 241,
+                                end: 242,
+                            },
+                        ),
+                        cases: [
+                            MatchCase {
+                                pattern: Literal(
+                                    Number(
+                                        0,
+                                    ),
+                                ),
+                                body: (
+                                    StringInterpolation(
+                                        StringInterpolation {
+                                            leading_text: "zero",
+                                            segments: [],
+                                        },
+                                    ),
+                                    Span {
+                                        start: 258,
+                                        end: 264,
+                                    },
+                                ),
+                            },
+                            MatchCase {
+                                pattern: Literal(
+                                    Number(
+                                        1,
+                                    ),
+                                ),
+                                body: (
+                                    StringInterpolation(
+                                        StringInterpolation {
+                                            leading_text: "one",
+                                            segments: [],
+                                        },
+                                    ),
+                                    Span {
+                                        start: 279,
+                                        end: 284,
+                                    },
+                                ),
+                            },
+                            MatchCase {
+                                pattern: Literal(
+                                    Number(
+                                        2,
+                                    ),
+                                ),
+                                body: (
+                                    StringInterpolation(
+                                        StringInterpolation {
+                                            leading_text: "two",
+                                            segments: [],
+                                        },
+                                    ),
+                                    Span {
+                                        start: 300,
+                                        end: 305,
+                                    },
+                                ),
+                            },
+                            MatchCase {
+                                pattern: Wildcard,
+                                body: (
+                                    StringInterpolation(
+                                        StringInterpolation {
+                                            leading_text: "other number",
+                                            segments: [],
+                                        },
+                                    ),
+                                    Span {
+                                        start: 320,
+                                        end: 334,
+                                    },
+                                ),
+                            },
+                        ],
+                    },
+                    span: Span {
+                        start: 235,
+                        end: 340,
+                    },
+                },
+            ],
+            span: Span {
+                start: 211,
+                end: 342,
+            },
+        },
+    },
+    main: Some(
+        "main",
+    ),
+}

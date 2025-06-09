@@ -1,0 +1,2 @@
+(fn (main)
+  (print_line "This should fail: \xFF"))

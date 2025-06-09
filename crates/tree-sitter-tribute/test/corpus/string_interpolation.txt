@@ -1,0 +1,171 @@
+================================================================================
+Basic string interpolation
+================================================================================
+
+fn main() {
+    let name = "Alice"
+    "Hello, \{name}!"
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (let_statement
+        (keyword_let)
+        name: (identifier)
+        value: (primary_expression
+          (string
+            (string_segment))))
+      (expression_statement
+        (primary_expression
+          (string
+            (string_segment)
+            (interpolation
+              expression: (primary_expression
+                (identifier)))
+            (string_segment)))))))
+
+================================================================================
+Multiple interpolations
+================================================================================
+
+fn test() {
+    let x = 10
+    let y = 20
+    "\{x} + \{y} = \{x + y}"
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (let_statement
+        (keyword_let)
+        name: (identifier)
+        value: (primary_expression
+          (number)))
+      (let_statement
+        (keyword_let)
+        name: (identifier)
+        value: (primary_expression
+          (number)))
+      (expression_statement
+        (primary_expression
+          (string
+            (string_segment)
+            (interpolation
+              expression: (primary_expression
+                (identifier)))
+            (string_segment)
+            (interpolation
+              expression: (primary_expression
+                (identifier)))
+            (string_segment)
+            (interpolation
+              expression: (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (identifier))))
+            (string_segment)))))))
+
+================================================================================
+Mixed text and interpolation
+================================================================================
+
+fn greet() {
+    let items = 5
+    let price = 10
+    "You have \{items} items costing \{items * price} dollars."
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (let_statement
+        (keyword_let)
+        name: (identifier)
+        value: (primary_expression
+          (number)))
+      (let_statement
+        (keyword_let)
+        name: (identifier)
+        value: (primary_expression
+          (number)))
+      (expression_statement
+        (primary_expression
+          (string
+            (string_segment)
+            (interpolation
+              expression: (primary_expression
+                (identifier)))
+            (string_segment)
+            (interpolation
+              expression: (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (identifier))))
+            (string_segment)))))))
+
+================================================================================
+Regular string without interpolation
+================================================================================
+
+fn test() {
+    "Hello, world!"
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (string
+            (string_segment)))))))
+
+================================================================================
+Empty interpolation content
+================================================================================
+
+fn test() {
+    let empty = ""
+    "Start\{empty}End"
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (let_statement
+        (keyword_let)
+        name: (identifier)
+        value: (primary_expression
+          (string
+            (string_segment))))
+      (expression_statement
+        (primary_expression
+          (string
+            (string_segment)
+            (interpolation
+              expression: (primary_expression
+                (identifier)))
+            (string_segment)))))))

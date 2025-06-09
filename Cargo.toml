@@ -1,18 +1,30 @@
 [workspace]
-members = [".", "tree-sitter-tribute", "tribute-ast", "tribute-hir", "tribute-codegen", "tribute-runtime"]
+members = [".", "crates/tree-sitter-tribute", "crates/tribute-ast", "crates/tribute-hir"]
+# Note: tribute-codegen and tribute-runtime temporarily excluded until updated for new AST/HIR structure
+
+[workspace.dependencies]
+clap = { version = "4.0", features = ["derive"] }
+derive_more = { version = "2.0", features = ["error", "display"] }
+insta = "1.43.1"
+salsa = "0.22.0"
+serde = { version = "1.0", features = ["derive"] }
+tree-sitter = "0.25"
+tree-sitter-tribute = { path = "crates/tree-sitter-tribute" }
+tribute-ast = { path = "crates/tribute-ast" }
+tribute-hir = { path = "crates/tribute-hir" }
 
 [package]
 name = "tribute"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4.0", features = ["derive"] }
-insta = "1.43.1"
-salsa = "0.22.0"
-tribute-ast = { path = "tribute-ast" }
-tribute-hir = { path = "tribute-hir" }
-tribute-codegen = { path = "tribute-codegen" }
-tribute-runtime = { path = "tribute-runtime" }
+clap.workspace = true
+insta.workspace = true
+salsa.workspace = true
+tribute-ast.workspace = true
+tribute-hir.workspace = true
+# tribute-codegen temporarily disabled until updated for new AST/HIR structure
+# tribute-runtime temporarily disabled until updated for new AST/HIR structure

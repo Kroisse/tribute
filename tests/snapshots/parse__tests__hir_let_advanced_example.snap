@@ -1,0 +1,150 @@
+---
+source: tests/parse.rs
+expression: hir
+---
+HirProgram {
+    [salsa id]: Id(1800),
+    functions: {
+        "main": HirFunction {
+            [salsa id]: Id(1400),
+            name: "main",
+            params: [],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(1000),
+                    expr: Let {
+                        var: "x",
+                        value: (
+                            Number(
+                                10,
+                            ),
+                            Span {
+                                start: 210,
+                                end: 212,
+                            },
+                        ),
+                    },
+                    span: Span {
+                        start: 210,
+                        end: 212,
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(1001),
+                    expr: Let {
+                        var: "y",
+                        value: (
+                            Number(
+                                20,
+                            ),
+                            Span {
+                                start: 225,
+                                end: 227,
+                            },
+                        ),
+                    },
+                    span: Span {
+                        start: 225,
+                        end: 227,
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(1002),
+                    expr: Let {
+                        var: "sum",
+                        value: (
+                            Call {
+                                func: (
+                                    Variable(
+                                        "+",
+                                    ),
+                                    Span {
+                                        start: 242,
+                                        end: 247,
+                                    },
+                                ),
+                                args: [
+                                    (
+                                        Variable(
+                                            "x",
+                                        ),
+                                        Span {
+                                            start: 242,
+                                            end: 243,
+                                        },
+                                    ),
+                                    (
+                                        Variable(
+                                            "y",
+                                        ),
+                                        Span {
+                                            start: 246,
+                                            end: 247,
+                                        },
+                                    ),
+                                ],
+                            },
+                            Span {
+                                start: 242,
+                                end: 247,
+                            },
+                        ),
+                    },
+                    span: Span {
+                        start: 242,
+                        end: 247,
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(1003),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            Span {
+                                start: 252,
+                                end: 296,
+                            },
+                        ),
+                        args: [
+                            (
+                                StringInterpolation(
+                                    StringInterpolation {
+                                        leading_text: "Testing advanced let bindings:",
+                                        segments: [],
+                                    },
+                                ),
+                                Span {
+                                    start: 263,
+                                    end: 295,
+                                },
+                            ),
+                        ],
+                    },
+                    span: Span {
+                        start: 252,
+                        end: 296,
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(1004),
+                    expr: Variable(
+                        "sum",
+                    ),
+                    span: Span {
+                        start: 301,
+                        end: 304,
+                    },
+                },
+            ],
+            span: Span {
+                start: 186,
+                end: 306,
+            },
+        },
+    },
+    main: Some(
+        "main",
+    ),
+}

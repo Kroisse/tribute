@@ -1,0 +1,9 @@
+// Let with Function Call Example - demonstrates let with function calls
+// - Let binding with variable access
+// - Function call using bound variable
+// - Sequential statements
+
+fn main() {
+    let x = 10
+    print_line(x)
+}

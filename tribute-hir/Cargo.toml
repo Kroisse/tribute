@@ -1,9 +1,0 @@
-[package]
-name = "tribute-hir"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-tribute-ast = { path = "../tribute-ast" }
-serde = { version = "1.0", features = ["derive"] }
-salsa = "0.22.0"

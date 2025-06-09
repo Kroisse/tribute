@@ -1,0 +1,21 @@
+// Pattern Matching Example - demonstrates advanced pattern matching
+// - Literal patterns for exact matching
+// - Variable patterns for binding
+// - Wildcard patterns
+// - Match expressions with modern syntax
+
+fn test_number(n) {
+    match n {
+        0 => "zero",
+        1 => "one", 
+        2 => "two",
+        _ => "other number"
+    }
+}
+
+fn main() {
+    print_line("Testing pattern matching:")
+    print_line(test_number(0))
+    print_line(test_number(1))
+    print_line(test_number(42))
+}

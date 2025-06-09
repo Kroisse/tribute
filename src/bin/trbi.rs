@@ -4,7 +4,7 @@
 extern crate tribute;
 
 use std::{ffi::OsString, path::PathBuf};
-use tribute::{eval_expr, parse_with_database, Environment, TributeDatabaseImpl, Value};
+use tribute::{eval_str, parse_str, TributeDatabaseImpl, Value};
 
 type Error = std::io::Error;
 
@@ -14,7 +14,7 @@ fn main() -> Result<(), Error> {
 
     // Create Salsa database and parse using parse_with_database
     let db = TributeDatabaseImpl::default();
-    let (program, diags) = parse_with_database(&db, &path, &source);
+    let (_program, diags) = parse_str(&db, &path, &source);
 
     // Display diagnostics if any
     if !diags.is_empty() {
@@ -27,40 +27,16 @@ fn main() -> Result<(), Error> {
         }
     }
 
-    // Execute the program
-    let mut env = Environment::toplevel();
-
-    // Evaluate all expressions to register functions
-    for item in program.items(&db).iter() {
-        let (expr, _span) = item.expr(&db);
-        if let Err(e) = eval_expr(&mut env, &expr) {
+    match eval_str(&db, &path, &source) {
+        Ok(result) => {
+            if !matches!(result, Value::Unit) {
+                println!("Result: {}", result);
+            }
+        }
+        Err(e) => {
             eprintln!("Evaluation error: {}", e);
-            return Ok(());
+            std::process::exit(1);
         }
-    }
-
-    // Try to call main function if it exists
-    if let Ok(main_fn) = env.lookup(&"main".to_string()) {
-        match main_fn {
-            Value::Fn(_, params, body) => {
-                if params.is_empty() {
-                    let mut child_env = env.child(vec![]);
-                    for expr in body {
-                        if let Err(e) = eval_expr(&mut child_env, &expr.0) {
-                            eprintln!("Runtime error in main: {}", e);
-                            return Ok(());
-                        }
-                    }
-                } else {
-                    eprintln!("main function should not have parameters");
-                }
-            }
-            _ => {
-                eprintln!("main is not a function");
-            }
-        }
-    } else {
-        eprintln!("No main function found");
     }
 
     Ok(())

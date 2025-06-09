@@ -1,0 +1,11 @@
+// Basic Example - demonstrates fundamental language features
+// - Function definitions with main entry point
+// - Built-in arithmetic operations (+, *, etc.)
+// - Built-in I/O functions (print_line)
+// - Expression evaluation and return values
+
+fn main() {
+    print_line("Hello, Tribute!")
+    print_line(10 + 5)
+    6 * 7
+}

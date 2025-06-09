@@ -1,0 +1,4 @@
+(fn (main)
+  (print_line "Lowercase: Line1\nLine2\tTabbed")
+  (print_line "Uppercase: Line1\NLine2\TTabbed")
+  (print_line "Mixed: Start\n\T\R\NEnd"))

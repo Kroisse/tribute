@@ -1,0 +1,87 @@
+---
+source: tests/parse.rs
+expression: hir
+---
+HirProgram {
+    [salsa id]: Id(1800),
+    functions: {
+        "main": HirFunction {
+            [salsa id]: Id(1400),
+            name: "main",
+            params: [],
+            body: [
+                HirExpr {
+                    [salsa id]: Id(1000),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            Span {
+                                start: 201,
+                                end: 253,
+                            },
+                        ),
+                        args: [
+                            (
+                                StringInterpolation(
+                                    StringInterpolation {
+                                        leading_text: "Calculator example - to be implemented",
+                                        segments: [],
+                                    },
+                                ),
+                                Span {
+                                    start: 212,
+                                    end: 252,
+                                },
+                            ),
+                        ],
+                    },
+                    span: Span {
+                        start: 201,
+                        end: 253,
+                    },
+                },
+                HirExpr {
+                    [salsa id]: Id(1001),
+                    expr: Call {
+                        func: (
+                            Variable(
+                                "print_line",
+                            ),
+                            Span {
+                                start: 258,
+                                end: 319,
+                            },
+                        ),
+                        args: [
+                            (
+                                StringInterpolation(
+                                    StringInterpolation {
+                                        leading_text: "Requires pattern matching and string operations",
+                                        segments: [],
+                                    },
+                                ),
+                                Span {
+                                    start: 269,
+                                    end: 318,
+                                },
+                            ),
+                        ],
+                    },
+                    span: Span {
+                        start: 258,
+                        end: 319,
+                    },
+                },
+            ],
+            span: Span {
+                start: 185,
+                end: 321,
+            },
+        },
+    },
+    main: Some(
+        "main",
+    ),
+}

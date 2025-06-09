@@ -1,0 +1,309 @@
+================================================================================
+Simple function definition
+================================================================================
+
+fn main() {
+    print_line("Hello, world!")
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          (argument_list
+            (primary_expression
+              (string
+                (string_segment)))))))))
+
+================================================================================
+Function with arithmetic expression
+================================================================================
+
+fn test() {
+    1 + 2
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (binary_expression
+          (primary_expression
+            (number))
+          (primary_expression
+            (number)))))))
+
+================================================================================
+Function with string call
+================================================================================
+
+fn test() {
+    print_line("He said \"Hello\" to me")
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          (argument_list
+            (primary_expression
+              (string
+                (string_segment)))))))))
+
+================================================================================
+Function with parameters
+================================================================================
+
+fn add(a, b) {
+    a + b
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    (parameter_list
+      (identifier)
+      (identifier))
+    body: (block
+      (expression_statement
+        (binary_expression
+          (primary_expression
+            (identifier))
+          (primary_expression
+            (identifier)))))))
+
+================================================================================
+Let statement with expression
+================================================================================
+
+fn test() {
+    let result = add(5, 3)
+    result
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (let_statement
+        (keyword_let)
+        name: (identifier)
+        value: (call_expression
+          function: (identifier)
+          (argument_list
+            (primary_expression
+              (number))
+            (primary_expression
+              (number)))))
+      (expression_statement
+        (primary_expression
+          (identifier))))))
+
+================================================================================
+Operator precedence
+================================================================================
+
+fn test() {
+    3 + 4 * 5
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (binary_expression
+          (primary_expression
+            (number))
+          (binary_expression
+            (primary_expression
+              (number))
+            (primary_expression
+              (number))))))))
+
+================================================================================
+Nested function calls
+================================================================================
+
+fn test() {
+    print_line(add(multiply(2, 3), 4))
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          (argument_list
+            (call_expression
+              function: (identifier)
+              (argument_list
+                (call_expression
+                  function: (identifier)
+                  (argument_list
+                    (primary_expression
+                      (number))
+                    (primary_expression
+                      (number))))
+                (primary_expression
+                  (number))))))))))
+
+================================================================================
+Comments
+================================================================================
+
+// Line comment
+fn test() {
+    let x = 42  // End of line comment
+    x
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (line_comment)
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (let_statement
+        (keyword_let)
+        name: (identifier)
+        value: (primary_expression
+          (number)))
+      (line_comment)
+      (expression_statement
+        (primary_expression
+          (identifier))))))
+
+================================================================================
+Multiple statements in block
+================================================================================
+
+fn test() {
+    let x = 10
+    let y = 20
+    let sum = x + y
+    print_line(sum)
+    sum
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (let_statement
+        (keyword_let)
+        name: (identifier)
+        value: (primary_expression
+          (number)))
+      (let_statement
+        (keyword_let)
+        name: (identifier)
+        value: (primary_expression
+          (number)))
+      (let_statement
+        (keyword_let)
+        name: (identifier)
+        value: (binary_expression
+          (primary_expression
+            (identifier))
+          (primary_expression
+            (identifier))))
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          (argument_list
+            (primary_expression
+              (identifier)))))
+      (expression_statement
+        (primary_expression
+          (identifier))))))
+
+================================================================================
+Match expression with literal patterns
+================================================================================
+
+fn test_number(n) {
+    match n {
+        0 => "zero",
+        1 => "one",
+        2 => "two",
+        _ => "other"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    (parameter_list
+      (identifier))
+    body: (block
+      (expression_statement
+        (match_expression
+          (keyword_match)
+          value: (primary_expression
+            (identifier))
+          (match_arm
+            pattern: (pattern
+              (literal_pattern
+                (number)))
+            value: (primary_expression
+              (string
+                (string_segment))))
+          (match_arm
+            pattern: (pattern
+              (literal_pattern
+                (number)))
+            value: (primary_expression
+              (string
+                (string_segment))))
+          (match_arm
+            pattern: (pattern
+              (literal_pattern
+                (number)))
+            value: (primary_expression
+              (string
+                (string_segment))))
+          (match_arm
+            pattern: (pattern
+              (wildcard_pattern))
+            value: (primary_expression
+              (string
+                (string_segment)))))))))

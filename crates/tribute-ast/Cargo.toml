@@ -1,0 +1,12 @@
+[package]
+name = "tribute-ast"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dashmap = "6.1"
+derive_more.workspace = true
+salsa.workspace = true
+serde.workspace = true
+tree-sitter.workspace = true
+tree-sitter-tribute.workspace = true
