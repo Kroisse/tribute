@@ -314,7 +314,8 @@ pub unsafe extern "C" fn tribute_handle_new_nil(
     INTERNED_NIL
 }
 
-/// Create a new handle for a string value#[unsafe(no_mangle)]
+/// Create a new handle for a string value
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_new_string(
     runtime: *mut TributeRuntime,
     data: *const u8,
@@ -353,7 +354,8 @@ pub unsafe extern "C" fn tribute_handle_new_string(
     }
 }
 
-/// Check if a handle is valid#[unsafe(no_mangle)]
+/// Check if a handle is valid
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_is_valid(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
@@ -368,7 +370,8 @@ pub unsafe extern "C" fn tribute_handle_is_valid(
     }
 }
 
-/// Get the type of the value referenced by a handle#[unsafe(no_mangle)]
+/// Get the type of the value referenced by a handle
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_get_type(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
@@ -385,7 +388,8 @@ pub unsafe extern "C" fn tribute_handle_get_type(
     }
 }
 
-/// Unbox a number value from a handle#[unsafe(no_mangle)]
+/// Unbox a number value from a handle
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_unbox_number(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
@@ -407,7 +411,8 @@ pub unsafe extern "C" fn tribute_handle_unbox_number(
     }
 }
 
-/// Unbox a boolean value from a handle#[unsafe(no_mangle)]
+/// Unbox a boolean value from a handle
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_unbox_boolean(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
@@ -429,7 +434,8 @@ pub unsafe extern "C" fn tribute_handle_unbox_boolean(
     }
 }
 
-/// Get string data from a handle (returns length, caller must copy data)#[unsafe(no_mangle)]
+/// Get string data from a handle (returns length, caller must copy data)
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_get_string_length(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
@@ -451,7 +457,8 @@ pub unsafe extern "C" fn tribute_handle_get_string_length(
     }
 }
 
-/// Copy string data from a handle to a buffer#[unsafe(no_mangle)]
+/// Copy string data from a handle to a buffer
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_copy_string_data(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
@@ -468,8 +475,7 @@ pub unsafe extern "C" fn tribute_handle_copy_string_data(
             .with_value(handle, |boxed| {
                 match &boxed.value {
                     TributeValue::String(tribute_string) => {
-                        #[allow(deprecated)]
-                        let bytes = tribute_string.as_bytes();
+                        let bytes = tribute_string.as_bytes_with_table(&runtime_ref.interned_strings);
                         let copy_len = bytes.len().min(buffer_size);
 
                         if !buffer.is_null() && copy_len > 0 {
@@ -489,7 +495,8 @@ pub unsafe extern "C" fn tribute_handle_copy_string_data(
     }
 }
 
-/// Add two number handles#[unsafe(no_mangle)]
+/// Add two number handles
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_add_numbers(
     runtime: *mut TributeRuntime,
     lhs: TributeHandle,
@@ -529,7 +536,8 @@ pub unsafe extern "C" fn tribute_handle_add_numbers(
     }
 }
 
-/// Retain a handle (increment reference count)#[unsafe(no_mangle)]
+/// Retain a handle (increment reference count)
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_retain(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
@@ -552,7 +560,8 @@ pub unsafe extern "C" fn tribute_handle_retain(
     }
 }
 
-/// Release a handle (decrement reference count and potentially deallocate)#[unsafe(no_mangle)]
+/// Release a handle (decrement reference count and potentially deallocate)
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_release(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
@@ -580,7 +589,8 @@ pub unsafe extern "C" fn tribute_handle_release(
     }
 }
 
-/// Get the reference count for a handle#[unsafe(no_mangle)]
+/// Get the reference count for a handle
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_get_ref_count(
     runtime: *mut TributeRuntime,
     handle: TributeHandle,
@@ -600,7 +610,8 @@ pub unsafe extern "C" fn tribute_handle_get_ref_count(
     }
 }
 
-/// Get handle management statistics#[unsafe(no_mangle)]
+/// Get handle management statistics
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_get_stats(
     runtime: *mut TributeRuntime,
     allocated: *mut u64,
@@ -620,7 +631,8 @@ pub unsafe extern "C" fn tribute_handle_get_stats(
     }
 }
 
-/// Clear all handles (for testing/cleanup)#[unsafe(no_mangle)]
+/// Clear all handles (for testing/cleanup)
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn tribute_handle_clear_all(runtime: *mut TributeRuntime) {
     if runtime.is_null() {
         return;
@@ -751,8 +763,7 @@ mod tests {
             .with_value(handle, |boxed| {
                 match &boxed.value {
                     TributeValue::String(tribute_string) => {
-                        #[allow(deprecated)]
-                        let bytes = tribute_string.as_bytes();
+                        let bytes = tribute_string.as_bytes_with_table(&runtime.interned_strings);
                         let copy_len = bytes.len().min(buffer_size);
 
                         if !buffer.is_null() && copy_len > 0 {
