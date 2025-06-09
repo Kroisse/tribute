@@ -1,98 +1,37 @@
-#![allow(deprecated)] // Internal implementation can use deprecated functions
-
-use crate::{
-    interned_string::TributeString,
-    value::{TributeBoxed, TributeValue},
-};
-
-/// Box a string value (takes ownership of the string data)
-#[deprecated(
-    since = "0.1.0",
-    note = "Use handle-based API instead. See tribute_handle_new_string() for safer alternatives."
-)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_box_string(data: *mut u8, length: usize) -> *mut TributeBoxed {
-    // Convert raw data to TributeString
-    let bytes = if data.is_null() || length == 0 {
-        &[]
-    } else {
-        unsafe { std::slice::from_raw_parts(data, length) }
-    };
-
-    #[allow(deprecated)]
-    let tribute_string = TributeString::from_bytes(bytes);
-    let boxed = TributeBoxed::new(TributeValue::String(tribute_string));
-    boxed.as_ptr()
-}
-
-/// Unbox a string (returns pointer to string data and length)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
-#[deprecated(
-    since = "0.1.0",
-    note = "Use handle-based API instead. See tribute_handle_get_string_length() and tribute_handle_copy_string_data() for safer alternatives."
-)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_unbox_string(
-    boxed: *mut TributeBoxed,
-    length_out: *mut usize,
-) -> *mut u8 {
-    unsafe {
-        if boxed.is_null() {
-            panic!("Attempted to unbox null pointer");
-        }
-
-        match &(*boxed).value {
-            TributeValue::String(string) => {
-                if !length_out.is_null() {
-                    *length_out = string.len();
-                }
-                // Return null pointer - caller should use handle-based API instead
-                std::ptr::null_mut()
-            }
-            _ => panic!("Type error: expected String, got different type"),
-        }
-    }
-}
+//! String operations for the Tribute runtime
+//!
+//! This module is now deprecated. Use the handle-based API in the `handle` module instead.
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::value::{tribute_get_type, tribute_release};
-    use std::{
-        alloc::{Layout, alloc},
-        ptr,
+    use crate::handle::{
+        tribute_runtime_new, tribute_runtime_destroy,
+        tribute_handle_new_string_from_str, tribute_handle_get_string_length,
+        tribute_handle_get_type, tribute_handle_release,
     };
+    use crate::value::TributeValue;
 
     #[test]
-    fn test_box_unbox_string() {
+    fn test_handle_string_operations() {
         unsafe {
+            let runtime = tribute_runtime_new();
+            
             // Create a test string
             let test_str = "Hello, World!";
-            let length = test_str.len();
+            let expected_length = test_str.len();
 
-            // Allocate memory and copy the string data
-            let layout = Layout::from_size_align(length, 1).unwrap();
-            let data = alloc(layout);
-            ptr::copy_nonoverlapping(test_str.as_ptr(), data, length);
-
-            // Box the string
-            let boxed = tribute_box_string(data, length);
-            assert!(!boxed.is_null());
-
+            // Create string handle
+            let handle = tribute_handle_new_string_from_str(runtime, test_str);
+            
             // Check type
-            assert_eq!(tribute_get_type(boxed), TributeValue::TYPE_STRING);
-
-            // Test length retrieval (new API returns 0 length for legacy unbox)
-            let mut out_length = 0;
-            let unboxed_data = tribute_unbox_string(boxed, &mut out_length);
-            assert_eq!(out_length, length);
-            // Note: unboxed_data is now null due to interned string system
-            // This is expected behavior for the new implementation
-
+            assert_eq!(tribute_handle_get_type(runtime, handle), TributeValue::TYPE_STRING);
+            
+            // Check length
+            assert_eq!(tribute_handle_get_string_length(runtime, handle), expected_length);
+            
             // Clean up
-            tribute_release(boxed);
+            tribute_handle_release(runtime, handle);
+            tribute_runtime_destroy(runtime);
         }
     }
 }

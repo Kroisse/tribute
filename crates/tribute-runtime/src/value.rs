@@ -2,7 +2,6 @@
 //!
 //! Provides reference-counted boxed values and memory management.
 
-#![allow(deprecated)] // Internal implementation can use deprecated functions
 
 use crate::{array::TributeArray, handle::TributeHandle, interned_string::TributeString};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -96,80 +95,16 @@ impl TributeBoxed {
     }
 }
 
-/// Increment the reference count of a boxed value
-#[deprecated(
-    since = "0.1.0",
-    note = "Use handle-based API instead. See tribute_handle_retain() for safer alternatives."
-)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_retain(boxed: *mut TributeBoxed) -> *mut TributeBoxed {
-    if boxed.is_null() {
-        return std::ptr::null_mut();
-    }
-
-    unsafe {
-        let boxed_ref = &*boxed;
-        boxed_ref.retain();
-        boxed
-    }
-}
-
-/// Decrement the reference count of a boxed value
-#[deprecated(
-    since = "0.1.0",
-    note = "Use handle-based API instead. See tribute_handle_release() for safer alternatives."
-)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_release(boxed: *mut TributeBoxed) {
-    if !boxed.is_null() {
-        unsafe {
-            let boxed_ref = &*boxed;
-            let old_count = boxed_ref.ref_count.fetch_sub(1, Ordering::Relaxed);
-            if old_count == 1 {
-                // Last reference, deallocate
-                drop(Box::from_raw(boxed));
-            }
-        }
-    }
-}
-
-/// Get the reference count of a boxed value
-#[deprecated(
-    since = "0.1.0",
-    note = "Use handle-based API instead. See tribute_handle_get_ref_count() for safer alternatives."
-)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_get_ref_count(boxed: *const TributeBoxed) -> usize {
-    if boxed.is_null() {
-        return 0;
-    }
-
-    unsafe {
-        let boxed_ref = &*boxed;
-        boxed_ref.ref_count()
-    }
-}
-
-/// Get the type of a boxed value
-#[deprecated(
-    since = "0.1.0",
-    note = "Use handle-based API instead. See tribute_handle_get_type() for safer alternatives."
-)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_get_type(boxed: *const TributeBoxed) -> u8 {
-    if boxed.is_null() {
-        return TributeValue::TYPE_NIL;
-    }
-
-    unsafe {
-        let boxed_ref = &*boxed;
-        boxed_ref.value.type_id()
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handle::{
+        tribute_runtime_new, tribute_runtime_destroy,
+        tribute_handle_new_number, tribute_handle_new_boolean,
+        tribute_handle_get_type, tribute_handle_get_ref_count,
+        tribute_handle_retain, tribute_handle_release,
+    };
 
     #[test]
     fn test_boxed_value_creation() {
@@ -182,35 +117,42 @@ mod tests {
     }
 
     #[test]
-    fn test_reference_counting() {
+    fn test_handle_reference_counting() {
         unsafe {
-            let value = Box::new(TributeBoxed::new(TributeValue::Boolean(true)));
-            let ptr = Box::into_raw(value);
+            let runtime = tribute_runtime_new();
+            
+            // Use a non-interned value (numbers > 4 are not interned)
+            let handle = tribute_handle_new_number(runtime, 100);
+            assert_eq!(tribute_handle_get_ref_count(runtime, handle), 1);
 
-            assert_eq!(tribute_get_ref_count(ptr), 1);
+            let retained_handle = tribute_handle_retain(runtime, handle);
+            assert_eq!(tribute_handle_get_ref_count(runtime, handle), 2);
+            assert_eq!(retained_handle, handle);
 
-            let retained_ptr = tribute_retain(ptr);
-            assert_eq!(tribute_get_ref_count(ptr), 2);
-            assert_eq!(retained_ptr, ptr);
+            tribute_handle_release(runtime, handle);
+            assert_eq!(tribute_handle_get_ref_count(runtime, handle), 1);
 
-            tribute_release(ptr);
-            assert_eq!(tribute_get_ref_count(ptr), 1);
-
-            tribute_release(ptr);
+            tribute_handle_release(runtime, retained_handle);
+            
+            tribute_runtime_destroy(runtime);
         }
     }
 
     #[test]
-    fn test_type_checking() {
+    fn test_handle_type_checking() {
         unsafe {
-            let num_ptr = TributeBoxed::new(TributeValue::Number(123)).as_ptr();
-            let bool_ptr = TributeBoxed::new(TributeValue::Boolean(false)).as_ptr();
+            let runtime = tribute_runtime_new();
+            
+            let num_handle = tribute_handle_new_number(runtime, 123);
+            let bool_handle = tribute_handle_new_boolean(runtime, false);
 
-            assert_eq!(tribute_get_type(num_ptr), TributeValue::TYPE_NUMBER);
-            assert_eq!(tribute_get_type(bool_ptr), TributeValue::TYPE_BOOLEAN);
+            assert_eq!(tribute_handle_get_type(runtime, num_handle), TributeValue::TYPE_NUMBER);
+            assert_eq!(tribute_handle_get_type(runtime, bool_handle), TributeValue::TYPE_BOOLEAN);
 
-            tribute_release(num_ptr);
-            tribute_release(bool_ptr);
+            tribute_handle_release(runtime, num_handle);
+            tribute_handle_release(runtime, bool_handle);
+            
+            tribute_runtime_destroy(runtime);
         }
     }
 }
