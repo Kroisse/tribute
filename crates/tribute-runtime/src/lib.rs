@@ -9,6 +9,7 @@
 
 mod array;
 mod boolean;
+mod handle;
 mod list;
 mod number;
 mod string;
@@ -16,7 +17,14 @@ mod value;
 
 pub use array::TributeArray;
 pub use boolean::{tribute_box_boolean, tribute_unbox_boolean};
-pub use list::{tribute_box_list_empty, tribute_box_list_from_array, tribute_list_length, tribute_list_get, tribute_list_set, tribute_list_push, tribute_list_pop};
+// Legacy pointer-based list API (deprecated)
+// pub use list::{tribute_box_list_empty, tribute_box_list_from_array, tribute_list_length, tribute_list_get, tribute_list_set, tribute_list_push, tribute_list_pop};
+
+// Handle-based list API (recommended)
+pub use list::{
+    tribute_handle_list_get, tribute_handle_list_length, tribute_handle_list_pop,
+    tribute_handle_list_push, tribute_handle_list_set, tribute_handle_new_list_empty,
+};
 pub use number::{
     tribute_add_boxed, tribute_box_number, tribute_div_boxed, tribute_eq_boxed, tribute_gt_boxed,
     tribute_gte_boxed, tribute_lt_boxed, tribute_lte_boxed, tribute_mod_boxed, tribute_mul_boxed,
@@ -24,7 +32,17 @@ pub use number::{
 };
 pub use string::{tribute_box_string, tribute_unbox_string};
 pub use value::{
-    tribute_get_ref_count, tribute_get_type, tribute_release, tribute_retain, TributeBoxed, TributeValue,
+    TributeBoxed, TributeValue, tribute_get_ref_count, tribute_get_type, tribute_release,
+    tribute_retain,
+};
+
+// Handle-based API (recommended for new code and GC compatibility)
+pub use handle::{
+    TRIBUTE_HANDLE_INVALID, TributeHandle, tribute_handle_add_numbers, tribute_handle_clear_all,
+    tribute_handle_get_ref_count, tribute_handle_get_stats, tribute_handle_get_type,
+    tribute_handle_is_valid, tribute_handle_new_boolean, tribute_handle_new_nil,
+    tribute_handle_new_number, tribute_handle_release, tribute_handle_retain,
+    tribute_handle_unbox_boolean, tribute_handle_unbox_number,
 };
 
 /// Initialize the Tribute runtime system

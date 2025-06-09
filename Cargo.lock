@@ -694,6 +694,9 @@ dependencies = [
 [[package]]
 name = "tribute-runtime"
 version = "0.1.0"
+dependencies = [
+ "dashmap",
+]
 
 [[package]]
 name = "unicode-ident"

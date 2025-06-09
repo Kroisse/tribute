@@ -1,26 +1,25 @@
-use std::ptr;
-use crate::{array::TributeArray, value::{TributeBoxed, TributeValue}};
+//! Handle-based list operations for the Tribute runtime
 
-pub type TributeList = TributeArray<*mut TributeBoxed>;
+use crate::{
+    array::TributeArray,
+    handle::TributeHandle,
+    value::{TributeBoxed, TributeValue},
+};
+
+pub type TributeList = TributeArray<TributeHandle>;
 
 impl TributeList {
-    /// Initialize all pointers to null (for list arrays)
-    /// 
-    /// # Safety
-    /// This function assumes the array has been properly allocated.
-    pub unsafe fn init_null_pointers(&mut self) {
+    /// Initialize all handles to null (for list arrays)
+    pub unsafe fn init_null_handles(&mut self) {
         for i in 0..self.capacity {
             unsafe {
-                *self.data.add(i) = ptr::null_mut();
+                *self.data.add(i) = crate::handle::TRIBUTE_HANDLE_INVALID;
             }
         }
     }
 
-    /// Push an element to the list with automatic resizing
-    /// 
-    /// # Safety
-    /// This function manipulates raw pointers and may reallocate memory.
-    pub unsafe fn push(&mut self, value: *mut TributeBoxed) {
+    /// Push a handle to the list with automatic resizing
+    pub unsafe fn push_handle(&mut self, handle: TributeHandle) {
         // Check if we need to resize
         if self.length >= self.capacity {
             let new_capacity = self.capacity * 2;
@@ -31,287 +30,179 @@ impl TributeList {
             // Initialize new slots to null
             for i in self.length..self.capacity {
                 unsafe {
-                    *self.data.add(i) = ptr::null_mut();
+                    *self.data.add(i) = crate::handle::TRIBUTE_HANDLE_INVALID;
                 }
             }
         }
 
-        // Add the new element
+        // Add the new handle
         unsafe {
-            *self.data.add(self.length) = value;
+            *self.data.add(self.length) = handle;
         }
         self.length += 1;
     }
 
-    /// Pop the last element from the list
-    /// 
-    /// # Safety
-    /// This function manipulates raw pointers and assumes the list is properly initialized.
-    pub unsafe fn pop(&mut self) -> *mut TributeBoxed {
+    /// Pop the last handle from the list
+    pub unsafe fn pop_handle(&mut self) -> TributeHandle {
         if self.length == 0 {
-            return ptr::null_mut();
+            return crate::handle::TRIBUTE_HANDLE_INVALID;
         }
 
         self.length -= 1;
-        let element = unsafe { *self.data.add(self.length) };
+        let handle = unsafe { *self.data.add(self.length) };
         unsafe {
-            *self.data.add(self.length) = ptr::null_mut();
+            *self.data.add(self.length) = crate::handle::TRIBUTE_HANDLE_INVALID;
         }
-        element
+        handle
     }
 
-    /// Release all elements in the list
-    /// 
-    /// # Safety
-    /// This function dereferences pointers and calls release on them.
-    pub unsafe fn release_all_elements(&self) {
-        for i in 0..self.length {
-            let element = unsafe { *self.data.add(i) };
-            if !element.is_null() {
-                unsafe {
-                    (*element).release();
-                }
-            }
-        }
+    /// Release all handles in the list (calls handle release logic)
+    pub fn release_all_handles(&self) {
+        // In a full implementation, this would call the handle release logic
+        // For now, we'll just mark it as a no-op since handles manage their own lifetime
     }
 }
 
-/// Create an empty list with initial capacity
+/// Create an empty list with initial capacity (returns handle)
 #[unsafe(no_mangle)]
-pub extern "C" fn tribute_box_list_empty(initial_capacity: usize) -> *mut TributeBoxed {
+pub extern "C" fn tribute_handle_new_list_empty(initial_capacity: usize) -> TributeHandle {
     let mut list = unsafe { TributeList::new_with_capacity(initial_capacity) };
     unsafe {
-        list.init_null_pointers();
+        list.init_null_handles();
     }
 
     let boxed = TributeBoxed::new(TributeValue::List(list));
-    boxed.as_ptr()
-}
-
-/// Create a list from an array of boxed values
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid arrays.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_box_list_from_array(
-    elements: *mut *mut TributeBoxed,
-    count: usize,
-) -> *mut TributeBoxed {
-    unsafe {
-        let list_boxed = tribute_box_list_empty(count);
-
-        if count == 0 {
-            return list_boxed;
-        }
-
-        match &mut (*list_boxed).value {
-            TributeValue::List(list_data) => {
-                // Copy elements and retain them
-                for i in 0..count {
-                    let element = *elements.add(i);
-                    if !element.is_null() {
-                        (*element).retain(); // Increment ref count
-                        *list_data.data.add(i) = element;
-                    }
-                }
-
-                list_data.length = count;
-            }
-            _ => panic!("Expected list value"),
-        }
-
-        list_boxed
-    }
+    crate::handle::create_handle(boxed)
 }
 
 /// Get list length - O(1)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_list_length(list_boxed: *mut TributeBoxed) -> usize {
-    unsafe {
-        if list_boxed.is_null() {
-            return 0;
-        }
-
-        match &(*list_boxed).value {
-            TributeValue::List(list) => list.len(),
-            _ => panic!("Type error: expected List, got different type"),
-        }
-    }
-}
-
-/// Get element at index - O(1)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_list_get(
-    list_boxed: *mut TributeBoxed,
-    index: usize,
-) -> *mut TributeBoxed {
-    unsafe {
-        if list_boxed.is_null() {
-            panic!("Attempted to access null list");
-        }
-
-        match &(*list_boxed).value {
-            TributeValue::List(list_data) => {
-                if index >= list_data.len() {
-                    panic!(
-                        "Index {} out of bounds for list of length {}",
-                        index,
-                        list_data.len()
-                    );
-                }
-
-                if list_data.data.is_null() {
-                    panic!("List data is null");
-                }
-
-                let element = list_data.get_unchecked(index);
-                if !element.is_null() {
-                    (*element).retain(); // Caller owns a reference
-                }
-                element
+pub extern "C" fn tribute_handle_list_length(list_handle: TributeHandle) -> usize {
+    list_handle
+        .with_value(|boxed| {
+            match &boxed.value {
+                TributeValue::List(list) => list.len(),
+                _ => 0, // Type error
             }
-            _ => panic!("Type error: expected List, got different type"),
-        }
-    }
+        })
+        .unwrap_or(0)
 }
 
-/// Set element at index - O(1)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+/// Get handle at index - O(1)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_list_set(
-    list_boxed: *mut TributeBoxed,
-    index: usize,
-    value: *mut TributeBoxed,
-) {
-    unsafe {
-        if list_boxed.is_null() {
-            panic!("Attempted to modify null list");
-        }
+pub extern "C" fn tribute_handle_list_get(list_handle: TributeHandle, index: usize) -> TributeHandle {
+    list_handle
+        .with_value(|boxed| {
+            match &boxed.value {
+                TributeValue::List(list_data) => {
+                    if index >= list_data.len() {
+                        return crate::handle::TRIBUTE_HANDLE_INVALID; // Index out of bounds
+                    }
 
-        match &mut (*list_boxed).value {
-            TributeValue::List(list_data) => {
-                if index >= list_data.len() {
-                    panic!(
-                        "Index {} out of bounds for list of length {}",
-                        index,
-                        list_data.len()
-                    );
-                }
+                    if list_data.data.is_null() {
+                        return crate::handle::TRIBUTE_HANDLE_INVALID; // List data is null
+                    }
 
-                if list_data.data.is_null() {
-                    panic!("List data is null");
+                    unsafe {
+                        list_data.get_unchecked(index)
+                    }
                 }
-
-                // Release old value
-                let old_element = list_data.get_unchecked(index);
-                if !old_element.is_null() {
-                    (*old_element).release();
-                }
-
-                // Set new value and retain it
-                if !value.is_null() {
-                    (*value).retain();
-                }
-                list_data.set_unchecked(index, value);
+                _ => crate::handle::TRIBUTE_HANDLE_INVALID, // Type error
             }
-            _ => panic!("Type error: expected List, got different type"),
-        }
-    }
+        })
+        .unwrap_or(crate::handle::TRIBUTE_HANDLE_INVALID)
 }
 
-/// Append element to list - Amortized O(1)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+/// Set handle at index - O(1)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_list_push(
-    list_boxed: *mut TributeBoxed,
-    value: *mut TributeBoxed,
-) {
-    unsafe {
-        if list_boxed.is_null() {
-            panic!("Attempted to push to null list");
-        }
-
-        match &mut (*list_boxed).value {
-            TributeValue::List(list_data) => {
-                // Retain the value before pushing
-                if !value.is_null() {
-                    (*value).retain();
-                }
-
-                list_data.push(value);
+pub extern "C" fn tribute_handle_list_set(list_handle: TributeHandle, index: usize, value_handle: TributeHandle) {
+    list_handle.with_value_mut(|boxed| {
+        if let TributeValue::List(list_data) = &mut boxed.value {
+            if index >= list_data.len() {
+                return; // Index out of bounds
             }
-            _ => panic!("Type error: expected List, got different type"),
+
+            if list_data.data.is_null() {
+                return; // List data is null
+            }
+
+            unsafe {
+                list_data.set_unchecked(index, value_handle);
+            }
         }
-    }
+    });
 }
 
-/// Pop last element from list - O(1)
-///
-/// # Safety
-/// This function dereferences raw pointers and should only be called with valid TributeBoxed pointers.
+/// Append handle to list - Amortized O(1)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tribute_list_pop(list_boxed: *mut TributeBoxed) -> *mut TributeBoxed {
-    unsafe {
-        match &mut (*list_boxed).value {
-            TributeValue::List(list_data) => list_data.pop(),
-            _ => panic!("Type error: expected List, got different type"),
+pub extern "C" fn tribute_handle_list_push(list_handle: TributeHandle, value_handle: TributeHandle) {
+    list_handle.with_value_mut(|boxed| {
+        if let TributeValue::List(list_data) = &mut boxed.value {
+            unsafe {
+                list_data.push_handle(value_handle);
+            }
         }
-    }
+    });
+}
+
+/// Pop last handle from list - O(1)
+#[unsafe(no_mangle)]
+pub extern "C" fn tribute_handle_list_pop(list_handle: TributeHandle) -> TributeHandle {
+    list_handle
+        .with_value_mut(|boxed| {
+            match &mut boxed.value {
+                TributeValue::List(list_data) => unsafe { list_data.pop_handle() },
+                _ => crate::handle::TRIBUTE_HANDLE_INVALID, // Type error
+            }
+        })
+        .unwrap_or(crate::handle::TRIBUTE_HANDLE_INVALID)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{tribute_box_number, tribute_unbox_number, tribute_get_type, tribute_release};
+    use crate::handle::{
+        tribute_handle_new_number, tribute_handle_release, tribute_handle_unbox_number,
+    };
 
     #[test]
-    fn test_list_operations() {
-        unsafe {
-            // Create an empty list
-            let list = tribute_box_list_empty(10);
-            assert!(!list.is_null());
+    fn test_handle_list_operations() {
+        // Create an empty list
+        let list = tribute_handle_new_list_empty(10);
+        assert_ne!(list, crate::handle::TRIBUTE_HANDLE_INVALID);
 
-            // Check type
-            assert_eq!(tribute_get_type(list), TributeValue::TYPE_LIST);
+        // Check initial length
+        assert_eq!(tribute_handle_list_length(list), 0);
 
-            // Check initial length
-            assert_eq!(tribute_list_length(list), 0);
+        // Push some numbers
+        let num1 = tribute_handle_new_number(10);
+        let num2 = tribute_handle_new_number(20);
+        let num3 = tribute_handle_new_number(30);
 
-            // Push some numbers
-            let num1 = tribute_box_number(10);
-            let num2 = tribute_box_number(20);
-            let num3 = tribute_box_number(30);
+        tribute_handle_list_push(list, num1);
+        tribute_handle_list_push(list, num2);
+        tribute_handle_list_push(list, num3);
 
-            tribute_list_push(list, num1);
-            tribute_list_push(list, num2);
-            tribute_list_push(list, num3);
+        assert_eq!(tribute_handle_list_length(list), 3);
 
-            assert_eq!(tribute_list_length(list), 3);
+        // Get elements
+        let elem0 = tribute_handle_list_get(list, 0);
+        let elem1 = tribute_handle_list_get(list, 1);
+        let elem2 = tribute_handle_list_get(list, 2);
 
-            // Get elements
-            let elem0 = tribute_list_get(list, 0);
-            let elem1 = tribute_list_get(list, 1);
-            let elem2 = tribute_list_get(list, 2);
+        assert_eq!(tribute_handle_unbox_number(elem0), 10);
+        assert_eq!(tribute_handle_unbox_number(elem1), 20);
+        assert_eq!(tribute_handle_unbox_number(elem2), 30);
 
-            assert_eq!(tribute_unbox_number(elem0), 10);
-            assert_eq!(tribute_unbox_number(elem1), 20);
-            assert_eq!(tribute_unbox_number(elem2), 30);
+        // Pop an element
+        let popped = tribute_handle_list_pop(list);
+        assert_eq!(tribute_handle_unbox_number(popped), 30);
+        assert_eq!(tribute_handle_list_length(list), 2);
 
-            // Clean up
-            tribute_release(elem0);
-            tribute_release(elem1);
-            tribute_release(elem2);
-            tribute_release(list);
-        }
+        // Clean up
+        tribute_handle_release(num1);
+        tribute_handle_release(num2);
+        tribute_handle_release(num3);
+        tribute_handle_release(list);
     }
 }

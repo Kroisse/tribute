@@ -7,5 +7,10 @@ edition = "2024"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
+dashmap = "6.1.0"
+
+[[example]]
+name = "handle_demo"
+path = "examples/handle_demo.rs"
 
 [dev-dependencies]
