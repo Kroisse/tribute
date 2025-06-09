@@ -2,9 +2,13 @@
 
 use crate::{
     array::TributeArray,
-    handle::TributeHandle,
+    handle::{TributeHandle, HandleTable},
     value::{TributeBoxed, TributeValue},
 };
+use std::sync::LazyLock;
+
+// Temporary global handle table for list operations - TODO: Migrate to context-aware API
+static LIST_HANDLE_TABLE: LazyLock<HandleTable> = LazyLock::new(HandleTable::new);
 
 pub type TributeList = TributeArray<TributeHandle>;
 
@@ -72,14 +76,14 @@ pub extern "C" fn tribute_handle_new_list_empty(initial_capacity: usize) -> Trib
     }
 
     let boxed = TributeBoxed::new(TributeValue::List(list));
-    crate::handle::create_handle(boxed)
+    LIST_HANDLE_TABLE.create_handle(boxed)
 }
 
 /// Get list length - O(1)
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_handle_list_length(list_handle: TributeHandle) -> usize {
-    list_handle
-        .with_value(|boxed| {
+    LIST_HANDLE_TABLE
+        .with_value(list_handle, |boxed| {
             match &boxed.value {
                 TributeValue::List(list) => list.len(),
                 _ => 0, // Type error
@@ -91,8 +95,8 @@ pub extern "C" fn tribute_handle_list_length(list_handle: TributeHandle) -> usiz
 /// Get handle at index - O(1)
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_handle_list_get(list_handle: TributeHandle, index: usize) -> TributeHandle {
-    list_handle
-        .with_value(|boxed| {
+    LIST_HANDLE_TABLE
+        .with_value(list_handle, |boxed| {
             match &boxed.value {
                 TributeValue::List(list_data) => {
                     if index >= list_data.len() {
@@ -116,7 +120,7 @@ pub extern "C" fn tribute_handle_list_get(list_handle: TributeHandle, index: usi
 /// Set handle at index - O(1)
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_handle_list_set(list_handle: TributeHandle, index: usize, value_handle: TributeHandle) {
-    list_handle.with_value_mut(|boxed| {
+    LIST_HANDLE_TABLE.with_value_mut(list_handle, |boxed| {
         if let TributeValue::List(list_data) = &mut boxed.value {
             if index >= list_data.len() {
                 return; // Index out of bounds
@@ -136,7 +140,7 @@ pub extern "C" fn tribute_handle_list_set(list_handle: TributeHandle, index: usi
 /// Append handle to list - Amortized O(1)
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_handle_list_push(list_handle: TributeHandle, value_handle: TributeHandle) {
-    list_handle.with_value_mut(|boxed| {
+    LIST_HANDLE_TABLE.with_value_mut(list_handle, |boxed| {
         if let TributeValue::List(list_data) = &mut boxed.value {
             unsafe {
                 list_data.push_handle(value_handle);
@@ -148,8 +152,8 @@ pub extern "C" fn tribute_handle_list_push(list_handle: TributeHandle, value_han
 /// Pop last handle from list - O(1)
 #[unsafe(no_mangle)]
 pub extern "C" fn tribute_handle_list_pop(list_handle: TributeHandle) -> TributeHandle {
-    list_handle
-        .with_value_mut(|boxed| {
+    LIST_HANDLE_TABLE
+        .with_value_mut(list_handle, |boxed| {
             match &mut boxed.value {
                 TributeValue::List(list_data) => unsafe { list_data.pop_handle() },
                 _ => crate::handle::TRIBUTE_HANDLE_INVALID, // Type error
@@ -161,48 +165,82 @@ pub extern "C" fn tribute_handle_list_pop(list_handle: TributeHandle) -> Tribute
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handle::{
-        tribute_handle_new_number, tribute_handle_release, tribute_handle_unbox_number,
-    };
+    
+    // Temporary wrapper functions for list tests - TODO: Update tests to use context-aware API
+    unsafe fn tribute_handle_new_number(value: i64) -> crate::handle::TributeHandle {
+        use crate::value::{TributeBoxed, TributeValue};
+        let boxed = TributeBoxed::new(TributeValue::Number(value));
+        LIST_HANDLE_TABLE.create_handle(boxed)
+    }
+    
+    unsafe fn tribute_handle_release(handle: crate::handle::TributeHandle) {
+        use crate::handle::{INTERNED_TRUE, INTERNED_FALSE, INTERNED_NIL, INTERNED_EMPTY_STRING};
+        
+        // Never release interned values
+        if handle == INTERNED_TRUE || handle == INTERNED_FALSE || handle == INTERNED_NIL || handle == INTERNED_EMPTY_STRING {
+            return;
+        }
+
+        let should_deallocate = LIST_HANDLE_TABLE
+            .with_value(handle, |boxed| boxed.release() == 0)
+            .unwrap_or(false);
+
+        if should_deallocate {
+            LIST_HANDLE_TABLE.release(handle);
+        }
+    }
+    
+    unsafe fn tribute_handle_unbox_number(handle: crate::handle::TributeHandle) -> i64 {
+        LIST_HANDLE_TABLE
+            .with_value(handle, |boxed| {
+                match &boxed.value {
+                    TributeValue::Number(n) => *n,
+                    _ => 0,
+                }
+            })
+            .unwrap_or(0)
+    }
 
     #[test]
     fn test_handle_list_operations() {
-        // Create an empty list
-        let list = tribute_handle_new_list_empty(10);
-        assert_ne!(list, crate::handle::TRIBUTE_HANDLE_INVALID);
+        unsafe {
+            // Create an empty list
+            let list = tribute_handle_new_list_empty(10);
+            assert_ne!(list, crate::handle::TRIBUTE_HANDLE_INVALID);
 
-        // Check initial length
-        assert_eq!(tribute_handle_list_length(list), 0);
+            // Check initial length
+            assert_eq!(tribute_handle_list_length(list), 0);
 
-        // Push some numbers
-        let num1 = tribute_handle_new_number(10);
-        let num2 = tribute_handle_new_number(20);
-        let num3 = tribute_handle_new_number(30);
+            // Push some numbers
+            let num1 = tribute_handle_new_number(10);
+            let num2 = tribute_handle_new_number(20);
+            let num3 = tribute_handle_new_number(30);
 
-        tribute_handle_list_push(list, num1);
-        tribute_handle_list_push(list, num2);
-        tribute_handle_list_push(list, num3);
+            tribute_handle_list_push(list, num1);
+            tribute_handle_list_push(list, num2);
+            tribute_handle_list_push(list, num3);
 
-        assert_eq!(tribute_handle_list_length(list), 3);
+            assert_eq!(tribute_handle_list_length(list), 3);
 
-        // Get elements
-        let elem0 = tribute_handle_list_get(list, 0);
-        let elem1 = tribute_handle_list_get(list, 1);
-        let elem2 = tribute_handle_list_get(list, 2);
+            // Get elements
+            let elem0 = tribute_handle_list_get(list, 0);
+            let elem1 = tribute_handle_list_get(list, 1);
+            let elem2 = tribute_handle_list_get(list, 2);
 
-        assert_eq!(tribute_handle_unbox_number(elem0), 10);
-        assert_eq!(tribute_handle_unbox_number(elem1), 20);
-        assert_eq!(tribute_handle_unbox_number(elem2), 30);
+            assert_eq!(tribute_handle_unbox_number(elem0), 10);
+            assert_eq!(tribute_handle_unbox_number(elem1), 20);
+            assert_eq!(tribute_handle_unbox_number(elem2), 30);
 
-        // Pop an element
-        let popped = tribute_handle_list_pop(list);
-        assert_eq!(tribute_handle_unbox_number(popped), 30);
-        assert_eq!(tribute_handle_list_length(list), 2);
+            // Pop an element
+            let popped = tribute_handle_list_pop(list);
+            assert_eq!(tribute_handle_unbox_number(popped), 30);
+            assert_eq!(tribute_handle_list_length(list), 2);
 
-        // Clean up
-        tribute_handle_release(num1);
-        tribute_handle_release(num2);
-        tribute_handle_release(num3);
-        tribute_handle_release(list);
+            // Clean up
+            tribute_handle_release(num1);
+            tribute_handle_release(num2);
+            tribute_handle_release(num3);
+            tribute_handle_release(list);
+        }
     }
 }

@@ -14,3 +14,4 @@ name = "handle_demo"
 path = "examples/handle_demo.rs"
 
 [dev-dependencies]
+thread_local = "1.1"

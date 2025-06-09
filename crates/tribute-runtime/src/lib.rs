@@ -40,12 +40,15 @@ pub use value::{
 
 // Handle-based API (recommended for new code and GC compatibility)
 pub use handle::{
-    TRIBUTE_HANDLE_INVALID, TributeHandle, tribute_handle_add_numbers, tribute_handle_clear_all,
-    tribute_handle_get_ref_count, tribute_handle_get_stats, tribute_handle_get_type,
-    tribute_handle_is_valid, tribute_handle_new_boolean, tribute_handle_new_nil,
-    tribute_handle_new_number, tribute_handle_new_string, tribute_handle_new_string_from_str,
-    tribute_handle_get_string_length, tribute_handle_copy_string_data, tribute_handle_release, 
-    tribute_handle_retain, tribute_handle_unbox_boolean, tribute_handle_unbox_number,
+    TRIBUTE_HANDLE_INVALID, TributeHandle, TributeRuntime, HandleTable,
+    // Runtime-aware API (primary API)
+    tribute_runtime_new, tribute_runtime_destroy,
+    tribute_handle_new_number, tribute_handle_new_boolean, tribute_handle_new_nil,
+    tribute_handle_new_string, tribute_handle_new_string_from_str, tribute_handle_is_valid, tribute_handle_get_type,
+    tribute_handle_unbox_number, tribute_handle_unbox_boolean, 
+    tribute_handle_get_string_length, tribute_handle_copy_string_data,
+    tribute_handle_add_numbers, tribute_handle_retain, tribute_handle_release,
+    tribute_handle_get_ref_count, tribute_handle_get_stats, tribute_handle_clear_all,
 };
 
 /// Initialize the Tribute runtime system

@@ -1,21 +1,19 @@
 use crate::{
-    array::TributeArray,
     interned_string::TributeString,
     value::{TributeBoxed, TributeValue},
 };
 
-pub type TributeLegacyString = TributeArray<u8>;
-
 /// Box a string value (takes ownership of the string data)
 #[unsafe(no_mangle)]
-pub extern "C" fn tribute_box_string(data: *mut u8, length: usize) -> *mut TributeBoxed {
+pub unsafe extern "C" fn tribute_box_string(data: *mut u8, length: usize) -> *mut TributeBoxed {
     // Convert raw data to TributeString
     let bytes = if data.is_null() || length == 0 {
         &[]
     } else {
         unsafe { std::slice::from_raw_parts(data, length) }
     };
-    
+
+    #[allow(deprecated)]
     let tribute_string = TributeString::from_bytes(bytes);
     let boxed = TributeBoxed::new(TributeValue::String(tribute_string));
     boxed.as_ptr()
