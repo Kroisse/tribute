@@ -56,7 +56,6 @@ fn test_salsa_integration_simple() {
 }
 
 #[test]
-#[ignore] // Disabled due to segfault in function lowering
 fn test_function_program() {
     use tribute_hir_dialect::salsa_integration::lower_program_to_mlir;
     

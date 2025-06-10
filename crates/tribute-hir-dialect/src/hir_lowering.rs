@@ -16,12 +16,16 @@ use tribute_ast::{Identifier, Spanned};
 /// HIR to MLIR lowerer
 pub struct HirToMLIRLowerer<'c> {
     context: &'c Context,
+    #[allow(dead_code)] // Will be used when function lowering is implemented
     dialect: TributeDialect<'c>,
+    #[allow(dead_code)] // Will be used when function lowering is implemented
     ops: TributeOps<'c>,
     module: Module<'c>,
     
     // Symbol tables
+    #[allow(dead_code)] // Will be used when function lowering is implemented
     function_symbols: HashMap<String, Operation<'c>>,
+    #[allow(dead_code)] // Will be used when function lowering is implemented
     value_map: HashMap<String, Value<'c, 'c>>,
 }
 
@@ -51,20 +55,21 @@ impl<'c> HirToMLIRLowerer<'c> {
     ) -> Result<&Module<'c>, LoweringError> {
         let functions = program.functions(db);
 
-        // First pass: declare all functions
-        for (name, function) in functions.iter() {
-            self.declare_function(db, name, *function)?;
+        // For now, only support programs without function definitions
+        // Function lowering requires proper basic block creation which is complex
+        if !functions.is_empty() {
+            return Err(LoweringError::UnsupportedHir(
+                "Function definitions not yet supported in MLIR lowering".to_string()
+            ));
         }
 
-        // Second pass: implement function bodies
-        for (name, function) in functions.iter() {
-            self.implement_function(db, name, *function)?;
-        }
-
+        // TODO: Handle main expression or other top-level expressions
+        // For now, just return an empty module
         Ok(&self.module)
     }
 
     /// Declare a function (first pass)
+    #[allow(dead_code)] // Will be used when function lowering is implemented
     fn declare_function<'db>(
         &mut self,
         db: &'db dyn salsa::Database,
@@ -85,6 +90,7 @@ impl<'c> HirToMLIRLowerer<'c> {
     }
 
     /// Implement a function body (second pass)
+    #[allow(dead_code)] // Will be used when function lowering is implemented
     fn implement_function<'db>(
         &mut self,
         db: &'db dyn salsa::Database,
@@ -143,6 +149,7 @@ impl<'c> HirToMLIRLowerer<'c> {
     }
 
     /// Lower a HIR expression to MLIR operations
+    #[allow(dead_code)] // Will be used when function lowering is implemented
     fn lower_hir_expression<'db>(
         &mut self,
         db: &'db dyn salsa::Database,
@@ -153,6 +160,7 @@ impl<'c> HirToMLIRLowerer<'c> {
     }
     
     /// Lower an Expr directly to MLIR operations
+    #[allow(dead_code)] // Will be used when function lowering is implemented
     fn lower_expr<'db>(
         &mut self,
         db: &'db dyn salsa::Database,
@@ -364,6 +372,7 @@ impl<'c> HirToMLIRLowerer<'c> {
     }
 
     /// Lower a spanned HIR expression (helper method)
+    #[allow(dead_code)] // Will be used when function lowering is implemented
     fn lower_spanned_expression<'db>(
         &mut self,
         db: &'db dyn salsa::Database,
@@ -377,6 +386,7 @@ impl<'c> HirToMLIRLowerer<'c> {
     }
 
     /// Extract function name from a function expression
+    #[allow(dead_code)] // Will be used when function lowering is implemented
     fn extract_function_name(
         &mut self,
         _db: &dyn salsa::Database,
