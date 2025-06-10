@@ -1,0 +1,21 @@
+[package]
+name = "tribute-hir-dialect"
+version = "0.1.0"
+edition = "2021"
+description = "MLIR dialect for Tribute programming language"
+authors = ["Tribute Contributors"]
+
+[dependencies]
+melior = "0.25.0"
+tribute-ast = { path = "../tribute-ast" }
+tribute-hir = { path = "../tribute-hir" }
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+salsa = "0.22"
+
+[build-dependencies]
+# For future C++ glue code if needed
+cc = "1.0"
+
+[dev-dependencies]
+insta = "1.34"

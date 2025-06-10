@@ -60,7 +60,8 @@ pub enum DiagnosticSeverity {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CompilationPhase {
     Parsing,
-    HirLowering,
+    HirLowering,     // Deprecated
+    MLIRLowering,    // New MLIR-based lowering
     TypeChecking,
     Optimization,
 }
