@@ -1,6 +1,6 @@
 //! MLIR-based evaluator for Tribute
 
-use crate::errors::EvaluationError;
+use tribute_hir_dialect::errors::EvaluationError;
 use melior::{ir::Module, Context};
 use std::{collections::HashMap, fmt};
 

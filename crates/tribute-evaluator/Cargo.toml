@@ -1,0 +1,15 @@
+[package]
+name = "tribute-evaluator"
+version = "0.1.0"
+edition = "2021"
+description = "MLIR-based evaluator for Tribute programming language"
+authors = ["Tribute Contributors"]
+
+[dependencies]
+melior = "0.25.0"
+tribute-hir-dialect = { path = "../tribute-hir-dialect" }
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+insta = "1.34"

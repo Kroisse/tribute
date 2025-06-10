@@ -11,6 +11,8 @@ tree-sitter = "0.25"
 tree-sitter-tribute = { path = "crates/tree-sitter-tribute" }
 tribute-ast = { path = "crates/tribute-ast" }
 tribute-hir = { path = "crates/tribute-hir" }
+tribute-hir-dialect = { path = "crates/tribute-hir-dialect" }
+tribute-evaluator = { path = "crates/tribute-evaluator" }
 
 [package]
 name = "tribute"

@@ -954,6 +954,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tribute-evaluator"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "melior",
+ "serde",
+ "thiserror 1.0.69",
+ "tribute-hir-dialect",
+]
+
+[[package]]
 name = "tribute-hir"
 version = "0.1.0"
 dependencies = [
@@ -973,6 +984,7 @@ dependencies = [
  "serde",
  "thiserror 1.0.69",
  "tribute-ast",
+ "tribute-evaluator",
  "tribute-hir",
 ]
 
