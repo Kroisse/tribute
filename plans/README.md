@@ -10,6 +10,12 @@ Transform from Lisp-style S-expressions to a more modern, familiar syntax. This 
 ### 2. [MLIR Compiler Implementation](02-compiler-implementation.md) - **Priority: Medium** 📋 **PLANNED**
 Build a complete compilation pipeline using MLIR/melior to generate native binaries with a custom Tribute dialect. Essential for performance and real-world deployment.
 
+#### 2.01. [HIR to MLIR Lowering](02.01-hir-to-mlir.md) - **Priority: High** 📋 **PLANNED**
+Foundation step: implement translation from HIR to custom MLIR dialect, establishing the IR used by both interpreter and compiler.
+
+#### 2.02. [MLIR Interpreter](02.02-mlir-interpreter.md) - **Priority: Medium-High** 📋 **PLANNED**
+Validation step: implement MLIR interpreter to test dialect and optimization passes before native compilation.
+
 ### 3. [LSP Implementation](03-lsp-implementation.md) - **Priority: Medium**
 Create Language Server Protocol support for IDE integration. Critical for developer productivity and adoption.
 
@@ -22,18 +28,20 @@ Add gradual static typing with type inference. Strongly recommended before compi
    - Start immediately as it affects all other work
    - Can be done incrementally with backward compatibility
 
-2. **Phase 2: Type System Foundation**
-   - **Option A**: Implement basic static typing before compiler
-   - **Option B**: Proceed with dynamic compiler (slower, more complex)
-   - Strong recommendation for Option A
+2. **Phase 2: MLIR Foundation**
+   - **HIR to MLIR (02.01)**: Establish dialect and translation layer
+   - **MLIR Interpreter (02.02)**: Validate dialect with real execution
+   - **Native Compilation (02)**: Build on proven MLIR infrastructure
+   - Three-step incremental approach minimizes risk
 
-3. **Phase 3: Compiler & LSP**
-   - **Compiler**: Much simpler with type system foundation
-   - **LSP**: Can provide better IntelliSense with type information
+3. **Phase 3: Developer Experience**
+   - **LSP (03)**: Leverage MLIR for better language analysis
+   - **Type System (04)**: Add as optimization layer over MLIR
 
 4. **Phase 4: Advanced Features**
-   - Expand type system with generics, effects
+   - Standard library, package manager
    - Advanced compiler optimizations
+   - Effect systems and advanced types
 
 ## Cross-Cutting Concerns
 
@@ -45,8 +53,10 @@ Add gradual static typing with type inference. Strongly recommended before compi
 
 ## Resource Requirements
 
-- **Syntax**: 2-3 months with Tree-sitter expertise
-- **Compiler**: 4-6 months with MLIR/LLVM knowledge
+- **Syntax**: 2-3 months with Tree-sitter expertise ✅ **COMPLETED**
+- **HIR to MLIR**: 2-3 weeks with MLIR basics
+- **MLIR Interpreter**: 2-3 weeks building on established dialect
+- **Native Compiler**: 3-4 months with MLIR/LLVM knowledge  
 - **LSP**: 3-4 months with IDE integration experience
 - **Types**: 3-5 months with type theory background
 

@@ -1,10 +1,9 @@
 # Compiler Implementation Plan
 
 **Status**: 📋 **PLANNED** - Not yet started  
-**Prerequisites**: ✅ Modern Syntax (Plan 01), ✅ String Interpolation (Plan 01.01)  
-**Recommended**: 📋 Static Type System (Plan 04) - significantly simplifies implementation  
-**Estimated Timeline**: 4-6 months (8+ months without types)  
-**Complexity**: High (Very High without static types)
+**Prerequisites**: ✅ Modern Syntax (Plan 01), ✅ String Interpolation (Plan 01.01), 📋 HIR to MLIR (Plan 02.01), 📋 MLIR Interpreter (Plan 02.02)  
+**Estimated Timeline**: 3-4 months (after 02.02)  
+**Complexity**: High
 
 ## Overview
 
@@ -18,19 +17,19 @@ This plan outlines the implementation of a native Tribute compiler using MLIR (M
 4. **Debugging**: Utilize MLIR's debugging and profiling tools
 5. **Future-proofing**: Build foundation for advanced language features
 
-### Implementation Approaches
+### Implementation Approach
 
-**Option A: Dynamic-First Approach** (Current Plan)
-- Implement with fully dynamic typing using `!tribute.value`
-- Runtime type checking for all operations
-- Simpler initial implementation but complex runtime
-- Limited optimization opportunities
+**Dynamic-First with Gradual Optimization**
+- Start with fully dynamic typing using `!tribute.value` (mirrors current HIR)
+- All operations use runtime type checking initially
+- Later add type inference and specialized code paths for typed expressions
+- Gradual migration allows leveraging existing HIR evaluation logic
 
-**Option B: Types-First Approach** (Recommended)
-- Implement Plan 04 (Static Type System) first
-- Generate specialized MLIR operations for known types
-- Fallback to dynamic operations for untyped code
-- Significantly better performance and simpler MLIR code
+**Why This Approach**:
+- Gradual typing requires both dynamic and static systems anyway
+- Current HIR logic can be directly translated to MLIR operations
+- Type system can be added incrementally as optimization layer
+- Lower implementation risk with proven dynamic foundation
 
 ## Table of Contents
 
