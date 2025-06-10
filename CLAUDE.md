@@ -140,7 +140,7 @@ TributeDatabaseImpl::default().attach(|db| {
 ```
 
 ### Additional Documentation
-- **`SALSA_INTEGRATION.md`**: Detailed guide on Salsa integration with architecture diagrams and examples
+- **`guides/salsa.md`**: Detailed guide on Salsa integration with architecture diagrams and examples
 - **`plans/`**: Development plans for major features:
   - `01-syntax-modernization.md`: Modernizing syntax from S-expressions (✅ **COMPLETED**)
     - `01.01-string-interpolation.md`: String interpolation feature with `"\{expr}"` syntax (✅ **COMPLETED**)
