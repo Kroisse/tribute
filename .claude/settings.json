@@ -1,7 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo build)"
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(cargo build)",
+      "Bash(cargo run)",
+      "Bash(cargo test)",
+      "Bash(cargo test:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)"
     ],
     "deny": []
   }
