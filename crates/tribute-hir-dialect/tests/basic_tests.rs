@@ -167,11 +167,11 @@ fn test_evaluator_builtin_functions() {
         assert!(matches!(value, TributeValue::Unit));
     }
     
-    // Test input_line with no args (will fail in test environment, but should not panic)
-    let result = evaluator.call_function("input_line", vec![]);
-    // This will likely fail due to no stdin in test environment, but it shouldn't panic
-    // We just check that the function exists and handles the call properly
-    assert!(result.is_ok() || result.is_err()); // Either is fine for this test
+    // Test input_line function exists but skip actual execution in test environment
+    // (would hang waiting for stdin input)
+    // We can still test argument validation
+    let result = evaluator.call_function("input_line", vec![TributeValue::String("unexpected_arg".to_string())]);
+    assert!(result.is_err(), "input_line should reject arguments");
     
     // Test invalid function
     let result = evaluator.call_function("nonexistent", vec![]);
