@@ -159,12 +159,12 @@ TributeDatabaseImpl::default().attach(|db| {
 - **Core Language**: Function definitions, let bindings, arithmetic, built-ins
 - **Infrastructure**: Tree-sitter grammar, comprehensive testing, workspace organization
 
-### 📋 **Planned Features** (Not Yet Started)
-- **Native Compilation**: MLIR-based compiler for performance
-- **LSP Support**: IDE integration with language server protocol
-- **Static Types**: Optional type annotations and type checking
-- **Standard Library**: Collections, I/O, and common utilities
-- **Package Manager**: Dependency management and module system
+### 📋 **Planned Features** (Detailed Plans Available)
+- **Native Compilation**: MLIR dialect-based compiler for performance (Plan 02)
+- **LSP Support**: IDE integration with language server protocol (Plan 03)
+- **Static Types**: Gradual static typing system (Plan 04)
+- **Standard Library**: Collections, I/O, and common utilities (Plan 05)
+- **Package Manager**: Dependency management and module system (Plan 06)
 
 ### ⚠️ **Known Issues**
 - Tree-sitter grammar tests may have token naming inconsistencies

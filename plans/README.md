@@ -4,31 +4,36 @@ This directory contains detailed plans for major features and improvements to th
 
 ## Plans Overview
 
-### 1. [Syntax Modernization](01-syntax-modernization.md) - **Priority: High**
+### 1. [Syntax Modernization](01-syntax-modernization.md) - **Priority: High** ✅ **COMPLETED**
 Transform from Lisp-style S-expressions to a more modern, familiar syntax. This is the foundation for all other improvements and directly impacts user experience.
 
-### 2. [MLIR Compiler Implementation](02-compiler-implementation.md) - **Priority: Medium**
-Build a complete compilation pipeline using MLIR/melior to generate native binaries. Essential for performance and real-world deployment.
+### 2. [MLIR Compiler Implementation](02-compiler-implementation.md) - **Priority: Medium** 📋 **PLANNED**
+Build a complete compilation pipeline using MLIR/melior to generate native binaries with a custom Tribute dialect. Essential for performance and real-world deployment.
 
 ### 3. [LSP Implementation](03-lsp-implementation.md) - **Priority: Medium**
 Create Language Server Protocol support for IDE integration. Critical for developer productivity and adoption.
 
-### 4. [Static Type System](04-static-type-system.md) - **Priority: Low**
-Add gradual static typing with type inference. Important for language maturity but requires other foundations first.
+### 4. [Static Type System](04-static-type-system.md) - **Priority: Medium-High**
+Add gradual static typing with type inference. Strongly recommended before compiler implementation for better performance and simpler codegen.
 
 ## Recommended Implementation Order
 
-1. **Phase 1: Syntax Modernization**
+1. **Phase 1: Syntax Modernization** ✅ **COMPLETED**
    - Start immediately as it affects all other work
    - Can be done incrementally with backward compatibility
 
-2. **Phase 2: Parallel Development**
-   - **Compiler**: Begin after syntax is stable
-   - **LSP**: Can start in parallel, initially supporting both syntaxes
+2. **Phase 2: Type System Foundation**
+   - **Option A**: Implement basic static typing before compiler
+   - **Option B**: Proceed with dynamic compiler (slower, more complex)
+   - Strong recommendation for Option A
 
-3. **Phase 3: Type System**
-   - Implement after compiler and LSP are functional
-   - Benefits from existing infrastructure
+3. **Phase 3: Compiler & LSP**
+   - **Compiler**: Much simpler with type system foundation
+   - **LSP**: Can provide better IntelliSense with type information
+
+4. **Phase 4: Advanced Features**
+   - Expand type system with generics, effects
+   - Advanced compiler optimizations
 
 ## Cross-Cutting Concerns
 
