@@ -124,6 +124,10 @@ fn test_binary_operations() {
 #[test]
 fn test_function_operations() {
     let context = Context::new();
+    // Allow unregistered dialects before creating operations
+    context.set_allow_unregistered_dialects(true);
+    
+    let _dialect = TributeDialect::new(&context);
     let ops = TributeOps::new(&context);
     let types = TributeTypes::new(&context);
     let location = melior::ir::Location::unknown(&context);
@@ -138,14 +142,17 @@ fn test_function_operations() {
     );
     assert!(func_result.is_ok(), "Should create function");
 
-    // Function creation itself is sufficient test for now
-    // Full verification requires dialect registration which is done in integration tests
-    let _func_op = func_result.unwrap();
+    // Now we can verify the function operation since dialects are allowed
+    let func_op = func_result.unwrap();
+    assert!(func_op.verify(), "Function operation should be valid");
 }
 
 #[test]
 fn test_call_operations() {
     let context = Context::new();
+    context.set_allow_unregistered_dialects(true);
+    
+    let _dialect = TributeDialect::new(&context);
     let ops = TributeOps::new(&context);
     let location = melior::ir::Location::unknown(&context);
 
@@ -153,8 +160,9 @@ fn test_call_operations() {
     let call_result_0 = ops.call("my_func", &[], location);
     assert!(call_result_0.is_ok(), "Should create call with 0 arguments");
 
-    // Call creation itself is the test
-    let _ = call_result_0.unwrap();
+    // Now we can verify the call operation
+    let call_op = call_result_0.unwrap();
+    assert!(call_op.verify(), "Call operation should be valid");
 }
 
 #[test]

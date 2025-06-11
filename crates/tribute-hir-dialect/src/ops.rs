@@ -1,6 +1,6 @@
 //! MLIR operations for Tribute dialect
 
-use crate::{errors::LoweringError, types::TributeTypes};
+use crate::{errors::LoweringError, types::TributeTypes, dialect::ops};
 use melior::{
     ir::{
         attribute::{FloatAttribute, StringAttribute},
@@ -40,7 +40,7 @@ impl<'c> TributeOps<'c> {
         let string_type = self.types.string_type();
         let attr = StringAttribute::new(self.context, value).into();
         
-        OperationBuilder::new("tribute.constant", location)
+        OperationBuilder::new(ops::CONSTANT, location)
             .add_attributes(&[(Identifier::new(self.context, "value"), attr)])
             .add_results(&[string_type])
             .build()
@@ -51,7 +51,7 @@ impl<'c> TributeOps<'c> {
     pub fn to_runtime(&self, value: Value<'c, '_>, location: Location<'c>) -> Result<Operation<'c>, LoweringError> {
         let runtime_type = self.types.value_type();
         
-        OperationBuilder::new("tribute.to_runtime", location)
+        OperationBuilder::new(ops::TO_RUNTIME, location)
             .add_operands(&[value])
             .add_results(&[runtime_type])
             .build()
@@ -62,7 +62,7 @@ impl<'c> TributeOps<'c> {
     pub fn add(&self, lhs: Value<'c, '_>, rhs: Value<'c, '_>, location: Location<'c>) -> Result<Operation<'c>, LoweringError> {
         let result_type = self.types.value_type();
         
-        OperationBuilder::new("tribute.add", location)
+        OperationBuilder::new(ops::ADD, location)
             .add_operands(&[lhs, rhs])
             .add_results(&[result_type])
             .build()
@@ -73,7 +73,7 @@ impl<'c> TributeOps<'c> {
     pub fn sub(&self, lhs: Value<'c, '_>, rhs: Value<'c, '_>, location: Location<'c>) -> Result<Operation<'c>, LoweringError> {
         let result_type = self.types.value_type();
         
-        OperationBuilder::new("tribute.sub", location)
+        OperationBuilder::new(ops::SUB, location)
             .add_operands(&[lhs, rhs])
             .add_results(&[result_type])
             .build()
@@ -84,7 +84,7 @@ impl<'c> TributeOps<'c> {
     pub fn mul(&self, lhs: Value<'c, '_>, rhs: Value<'c, '_>, location: Location<'c>) -> Result<Operation<'c>, LoweringError> {
         let result_type = self.types.value_type();
         
-        OperationBuilder::new("tribute.mul", location)
+        OperationBuilder::new(ops::MUL, location)
             .add_operands(&[lhs, rhs])
             .add_results(&[result_type])
             .build()
@@ -95,7 +95,7 @@ impl<'c> TributeOps<'c> {
     pub fn div(&self, lhs: Value<'c, '_>, rhs: Value<'c, '_>, location: Location<'c>) -> Result<Operation<'c>, LoweringError> {
         let result_type = self.types.value_type();
         
-        OperationBuilder::new("tribute.div", location)
+        OperationBuilder::new(ops::DIV, location)
             .add_operands(&[lhs, rhs])
             .add_results(&[result_type])
             .build()
@@ -112,7 +112,7 @@ impl<'c> TributeOps<'c> {
     ) -> Result<Operation<'c>, LoweringError> {
         let name_attr = StringAttribute::new(self.context, name).into();
         
-        OperationBuilder::new("tribute.func", location)
+        OperationBuilder::new(ops::FUNC, location)
             .add_attributes(&[(Identifier::new(self.context, "sym_name"), name_attr)])
             .add_regions([Region::new()])
             .build()
@@ -129,7 +129,7 @@ impl<'c> TributeOps<'c> {
         let name_attr = StringAttribute::new(self.context, function_name).into();
         let result_type = self.types.value_type();
         
-        OperationBuilder::new("tribute.call", location)
+        OperationBuilder::new(ops::CALL, location)
             .add_attributes(&[(Identifier::new(self.context, "callee"), name_attr)])
             .add_operands(args)
             .add_results(&[result_type])
@@ -139,7 +139,7 @@ impl<'c> TributeOps<'c> {
 
     /// Create a return operation
     pub fn return_op(&self, value: Option<Value<'c, '_>>, location: Location<'c>) -> Result<Operation<'c>, LoweringError> {
-        let mut builder = OperationBuilder::new("tribute.return", location);
+        let mut builder = OperationBuilder::new(ops::RETURN, location);
         
         if let Some(val) = value {
             builder = builder.add_operands(&[val]);

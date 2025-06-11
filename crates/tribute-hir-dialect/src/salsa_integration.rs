@@ -20,6 +20,8 @@ pub struct MLIRModuleResult {
 pub fn lower_program_to_mlir<'db>(db: &'db dyn salsa::Database, program: HirProgram<'db>) -> MLIRModuleResult {
     // Create MLIR context (not cached, created fresh each time)
     let context = Context::new();
+    // Allow unregistered dialects for tribute operations
+    context.set_allow_unregistered_dialects(true);
     
     // Create lowerer
     let mut lowerer = HirToMLIRLowerer::new(&context);
