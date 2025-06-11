@@ -1,21 +1,96 @@
 //! Build script for tribute-hir-dialect
 //!
-//! This script processes TableGen files and generates Rust code for MLIR operations.
+//! This script processes TableGen files using CMake and generates Rust code for MLIR operations.
 
-use std::{env, fs, io::Write, path::Path};
+use std::{env, fs, io::Write, path::Path, path::PathBuf};
 
 type Error = Box<dyn std::error::Error>;
 
 fn main() -> Result<(), Error> {
     // Tell Cargo to rerun if TableGen files change
     println!("cargo:rerun-if-changed=tablegen/TributeOps.td");
+    println!("cargo:rerun-if-changed=CMakeLists.txt");
     println!("cargo:rerun-if-changed=build.rs");
 
-    // Use tblgen (requires LLVM installation)
-    try_tablegen_generation()?;
-    println!("cargo:rustc-cfg=feature=\"tablegen\"");
-    println!("TableGen generation successful");
+    // Try CMake-based TableGen generation first
+    if try_cmake_tablegen_generation().is_ok() {
+        println!("cargo:rustc-cfg=feature=\"tablegen\"");
+        println!("CMake TableGen generation successful");
+    } else {
+        // Fallback to tblgen crate (requires LLVM installation)
+        try_tablegen_generation()?;
+        println!("cargo:rustc-cfg=feature=\"tablegen\"");
+        println!("Fallback TableGen generation successful");
+    }
 
+    Ok(())
+}
+
+fn try_cmake_tablegen_generation() -> Result<(), Error> {
+    use std::process::Command;
+    
+    println!("cargo:warning=Attempting CMake-based TableGen generation...");
+    
+    // Get the output directory for build artifacts
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+    let build_dir = out_dir.join("cmake-build");
+    
+    // Create build directory
+    fs::create_dir_all(&build_dir)?;
+    
+    // Get the crate root directory where CMakeLists.txt is located
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    
+    // Configure step
+    let status = Command::new("cmake")
+        .current_dir(&build_dir)
+        .arg(&manifest_dir)  // Point to the crate directory where CMakeLists.txt is
+        .arg("-DCMAKE_BUILD_TYPE=Release")
+        .status()
+        .map_err(|e| format!("Failed to run cmake configure: {}", e))?;
+    
+    if !status.success() {
+        return Err("CMake configuration failed".into());
+    }
+    
+    // Build step - just build the tribute-dialect target
+    let status = Command::new("cmake")
+        .current_dir(&build_dir)
+        .arg("--build")
+        .arg(".")
+        .arg("--target")
+        .arg("tribute-dialect")
+        .status()
+        .map_err(|e| format!("Failed to run cmake build: {}", e))?;
+    
+    if !status.success() {
+        return Err("CMake build failed".into());
+    }
+    
+    // Check if the files were actually generated
+    let expected_files = [
+        "TributeOps.h.inc",
+        "TributeOps.cpp.inc", 
+        "TributeDialect.h.inc",
+        "TributeDialect.cpp.inc",
+        "TributeTypes.h.inc",
+        "TributeTypes.cpp.inc",
+    ];
+    
+    for file in &expected_files {
+        let file_path = build_dir.join(file);
+        if !file_path.exists() {
+            return Err(format!("Expected generated file not found: {}", file_path.display()).into());
+        }
+    }
+    
+    // Tell cargo where to find the generated headers
+    println!("cargo:include={}", build_dir.display());
+    
+    // Set environment variable for use in the crate
+    println!("cargo:rustc-env=TRIBUTE_TABLEGEN_INCLUDE_DIR={}", build_dir.display());
+    
+    println!("cargo:warning=CMake TableGen generation completed successfully");
     Ok(())
 }
 
