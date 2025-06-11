@@ -11,6 +11,9 @@ pub mod hir_lowering;
 pub mod errors;
 pub mod salsa_integration;
 
+// Include generated code from TableGen
+include!(concat!(env!("OUT_DIR"), "/tablegen_ops.rs"));
+
 pub use dialect::TributeDialect;
 pub use errors::{LoweringError, EvaluationError};
 pub use lowering::AstToMLIRLowerer;

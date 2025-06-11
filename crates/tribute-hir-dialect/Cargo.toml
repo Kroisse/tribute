@@ -16,6 +16,8 @@ salsa = "0.22"
 [build-dependencies]
 # For future C++ glue code if needed
 cc = "1.0"
+# TableGen processing
+tblgen = "0.6"
 
 [dev-dependencies]
 insta = "1.34"

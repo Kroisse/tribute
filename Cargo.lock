@@ -982,6 +982,7 @@ dependencies = [
  "melior",
  "salsa",
  "serde",
+ "tblgen",
  "thiserror 1.0.69",
  "tribute-ast",
  "tribute-evaluator",

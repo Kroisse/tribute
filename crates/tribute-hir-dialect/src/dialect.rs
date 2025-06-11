@@ -13,31 +13,12 @@ pub struct TributeDialect<'c> {
 }
 
 /// Operation names in the Tribute dialect
+/// 
+/// These are now available through the generated_ops module when TableGen is available,
+/// or through fallback constants when TableGen is not available.
 pub mod ops {
-    /// Function definition operation
-    pub const FUNC: &str = "tribute.func";
-    
-    /// Function call operation
-    pub const CALL: &str = "tribute.call";
-    
-    /// Return operation
-    pub const RETURN: &str = "tribute.return";
-    
-    /// Constant value operation
-    pub const CONSTANT: &str = "tribute.constant";
-    
-    /// Runtime type conversion
-    pub const TO_RUNTIME: &str = "tribute.to_runtime";
-    
-    /// Arithmetic operations
-    pub const ADD: &str = "tribute.add";
-    pub const SUB: &str = "tribute.sub";
-    pub const MUL: &str = "tribute.mul";
-    pub const DIV: &str = "tribute.div";
-    
-    /// String operations
-    pub const STRING_CONCAT: &str = "tribute.string_concat";
-    pub const STRING_INTERPOLATION: &str = "tribute.string_interpolation";
+    // Re-export generated or fallback operation constants
+    pub use crate::generated_ops::*;
 }
 
 /// Tribute dialect namespace and operation definitions
@@ -60,21 +41,70 @@ impl<'c> TributeDialect<'c> {
         // Register standard dialects that we depend on
         let registry = DialectRegistry::new();
         
-        // Register the dialects we use
-        // TODO: When melior supports custom dialect registration from Rust,
-        // we should properly register the Tribute dialect here.
-        // For now, we use the standard dialects and allow unregistered operations
-        // for our custom "tribute.*" operations.
-        
         // Register standard dialects we use (arith, func, scf, etc.)
         register_all_dialects(&registry);
         
         // Apply the registry to the context
         context.append_dialect_registry(&registry);
         
-        // As a temporary measure, allow unregistered dialects for tribute operations
-        // This should be removed once we have proper C++ dialect implementation
+        // Load all available dialects
+        context.load_all_available_dialects();
+        
+        // Allow unregistered dialects for tribute operations
+        // This is necessary because Tribute dialect operations (tribute.*)
+        // are not registered as a proper MLIR dialect yet.
+        // 
+        // In the future, this could be replaced by:
+        // 1. Creating a proper C++ MLIR dialect implementation
+        // 2. Using MLIR's dynamic dialect registration
+        // 3. Building the dialect from our TableGen definitions
         context.set_allow_unregistered_dialects(true);
+        
+        // Initialize Tribute dialect based on TableGen definitions
+        {
+            // Try to initialize using generated dialect information
+            if let Err(e) = crate::initialization::initialize_tribute_dialect() {
+                eprintln!("Warning: Failed to initialize Tribute dialect: {}", e);
+            }
+        }
+        
+        // Verify that basic operations can be created
+        let registered_count = context.registered_dialect_count();
+        let loaded_count = context.loaded_dialect_count();
+        
+        // Log initialization status (only in debug builds)
+        #[cfg(debug_assertions)]
+        {
+            eprintln!("Tribute dialect context initialized:");
+            eprintln!("  - Registered dialects: {}", registered_count);
+            eprintln!("  - Loaded dialects: {}", loaded_count);
+            eprintln!("  - Unregistered dialects allowed: {}", context.allow_unregistered_dialects());
+            
+            {
+                use crate::dialect_info;
+                eprintln!("  - Tribute dialect info:");
+                eprintln!("    - Name: {}", dialect_info::NAME);
+                eprintln!("    - Namespace: {}", dialect_info::NAMESPACE);
+                eprintln!("    - Summary: {}", dialect_info::SUMMARY);
+            }
+            
+            // Test if some key dialects are available
+            let key_dialects = [
+                "arith", "builtin", "func", "scf", "cf", "llvm", 
+                "memref", "tensor", "linalg", "gpu", "async"
+            ];
+            
+            eprintln!("  - Available key dialects:");
+            for dialect_name in &key_dialects {
+                match std::panic::catch_unwind(|| {
+                    let dialect = context.get_or_load_dialect(dialect_name);
+                    dialect.namespace().map(|s| s.to_string()).unwrap_or_else(|_| "unknown".to_string())
+                }) {
+                    Ok(namespace) => eprintln!("    ✓ {} (namespace: {})", dialect_name, namespace),
+                    Err(_) => eprintln!("    ✗ {} (failed to load)", dialect_name),
+                }
+            }
+        }
     }
 
     /// Register the Tribute dialect with the given registry
