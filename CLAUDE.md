@@ -53,6 +53,7 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 - **Main package (/)**: Core interpreter (`tribute` crate)
 - **crates/tribute-ast/**: AST definitions with Salsa integration and unified diagnostics
 - **crates/tribute-hir/**: High-level IR with Salsa-integrated lowering
+- **crates/tribute-cranelift/**: Cranelift-based native code compiler (in development)
 - **crates/tree-sitter-tribute/**: Grammar definition and Tree-sitter integration
 
 ### Core Modules
@@ -62,7 +63,7 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 - **`src/builtins.rs`**: Built-in functions (print_line, input_line)
 - **`src/lib.rs`**: Main API exposing `parse_str()` and `eval_str()` functions for HIR-based operations
 - **`src/bin/trbi.rs`**: Interpreter binary (uses HIR-based evaluation)
-- **`src/bin/trbc.rs`**: Compiler binary (planned)
+- **`src/bin/trbc.rs`**: Compiler binary (in development, uses Cranelift backend)
 
 #### AST Crate (`tribute-ast`)
 - **`ast.rs`**: Salsa-tracked AST types (`Program`, `Item`, `Expr`)
@@ -73,6 +74,13 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 - **`hir.rs`**: High-level IR types (`HirProgram`, `HirFunction`, `HirExpr`)
 - **`lower.rs`**: AST to HIR lowering implementation
 - **`queries.rs`**: Salsa query definitions for HIR operations
+
+#### Cranelift Crate (`tribute-cranelift`)
+- **`compiler.rs`**: Main compiler interface and module creation
+- **`codegen.rs`**: HIR to Cranelift IR translation
+- **`runtime.rs`**: Runtime function declarations
+- **`types.rs`**: Type system mapping for dynamic values
+- **`errors.rs`**: Compilation error types
 
 ### Language Characteristics
 - **Syntax**: Modern C-like syntax `fn name(args) { body }` (transitioned from Lisp S-expressions)
@@ -105,12 +113,15 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 - **Unified Diagnostics**: All compilation phases report errors through a centralized `Diagnostic` system
 - **Automatic Parser Generation**: Tree-sitter parser is now generated automatically during build
 - **Workspace Reorganization**: Moved to conventional `crates/` directory structure
+- **Cranelift Compiler**: Replaced MLIR with Cranelift for native code compilation (in development)
 
 ### Dependencies
 - **`tree-sitter`**: Core parsing infrastructure
 - **`insta`**: Snapshot testing framework
 - **`salsa`**: Incremental computation framework for compiler infrastructure
 - **`serde`**: Serialization support
+- **`cranelift`**: Code generation backend for native compilation
+- **`target-lexicon`**: Target triple handling for cross-compilation
 
 ### API Usage
 ```rust
@@ -159,8 +170,13 @@ TributeDatabaseImpl::default().attach(|db| {
 - **Core Language**: Function definitions, let bindings, arithmetic, built-ins
 - **Infrastructure**: Tree-sitter grammar, comprehensive testing, workspace organization
 
+### 🚧 **In Development**
+- **Native Compilation**: Cranelift-based AOT compiler (replacing MLIR approach)
+  - Basic infrastructure complete
+  - Runtime function declarations defined
+  - HIR → Cranelift IR translation in progress
+
 ### 📋 **Planned Features** (Detailed Plans Available)
-- **Native Compilation**: MLIR dialect-based compiler for performance (Plan 02)
 - **LSP Support**: IDE integration with language server protocol (Plan 03)
 - **Static Types**: Gradual static typing system (Plan 04)
 - **Standard Library**: Collections, I/O, and common utilities (Plan 05)
