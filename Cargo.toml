@@ -3,13 +3,21 @@ members = [".", "crates/*"]
 
 [workspace.dependencies]
 clap = { version = "4.0", features = ["derive"] }
+cranelift-codegen = "0.104"
+cranelift-frontend = "0.104"
+cranelift-module = "0.104"
+cranelift-object = "0.104"
 derive_more = { version = "2.0", features = ["error", "display"] }
 insta = "1.43.1"
+object = "0.32"
 salsa = "0.22.0"
 serde = { version = "1.0", features = ["derive"] }
+target-lexicon = "0.12"
+tempfile = "3.8"
 tree-sitter = "0.25"
 tree-sitter-tribute = { path = "crates/tree-sitter-tribute" }
 tribute-ast = { path = "crates/tribute-ast" }
+tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-hir = { path = "crates/tribute-hir" }
 
 [package]

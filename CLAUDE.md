@@ -123,6 +123,17 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 - **`cranelift`**: Code generation backend for native compilation
 - **`target-lexicon`**: Target triple handling for cross-compilation
 
+### Dependency Management
+- **Workspace Dependencies**: All shared dependencies are centralized in the root `Cargo.toml` under `[workspace.dependencies]`
+- **Local References**: Individual crates reference workspace dependencies using `.workspace = true` (e.g., `cranelift-codegen.workspace = true`)
+- **Consistency**: This ensures consistent versions across all crates and simplifies dependency management
+
+### Error Handling
+- **Error Derive**: Use `derive_more::Display` instead of `thiserror` for error types
+- **Standard Pattern**: Combine `#[derive(Display, Debug)]` for custom error enums plus manual `std::error::Error` impl
+- **Display Format**: Use `#[display("Message: {_0}")]` syntax for error formatting
+- **Manual Implementations**: Implement `From` traits and `std::error::Error` manually for proper error chaining
+
 ### API Usage
 ```rust
 // Primary API (HIR-based)

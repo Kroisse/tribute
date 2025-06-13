@@ -1,6 +1,6 @@
 //! Error types for Cranelift compilation
 
-use thiserror::Error;
+use derive_more::Display;
 
 pub type CompilationResult<T> = Result<T, CompilationError>;
 
@@ -21,29 +21,51 @@ impl<T> BoxError<T> for Result<T, object::write::Error> {
     }
 }
 
-#[derive(Error, Debug)]
+#[derive(Display, Debug)]
 pub enum CompilationError {
-    #[error("Code generation error: {0}")]
+    #[display("Code generation error: {_0}")]
     CodegenError(String),
     
-    #[error("Module error: {0}")]
-    ModuleError(#[from] Box<cranelift_module::ModuleError>),
+    #[display("Module error: {_0}")]
+    ModuleError(Box<cranelift_module::ModuleError>),
     
-    #[error("Cranelift error: {0}")]
+    #[display("Cranelift error: {_0}")]
     CraneliftError(String),
     
-    #[error("Unsupported feature: {0}")]
+    #[display("Unsupported feature: {_0}")]
     UnsupportedFeature(String),
     
-    #[error("Type error: {0}")]
+    #[display("Type error: {_0}")]
     TypeError(String),
     
-    #[error("Function not found: {0}")]
+    #[display("Function not found: {_0}")]
     FunctionNotFound(String),
     
-    #[error("Invalid target: {0}")]
+    #[display("Invalid target: {_0}")]
     InvalidTarget(String),
     
-    #[error("Object generation failed: {0}")]
-    ObjectError(#[from] Box<object::write::Error>),
+    #[display("Object generation failed: {_0}")]
+    ObjectError(Box<object::write::Error>),
+}
+
+impl From<Box<cranelift_module::ModuleError>> for CompilationError {
+    fn from(error: Box<cranelift_module::ModuleError>) -> Self {
+        CompilationError::ModuleError(error)
+    }
+}
+
+impl From<Box<object::write::Error>> for CompilationError {
+    fn from(error: Box<object::write::Error>) -> Self {
+        CompilationError::ObjectError(error)
+    }
+}
+
+impl std::error::Error for CompilationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            CompilationError::ModuleError(e) => Some(e.as_ref()),
+            CompilationError::ObjectError(e) => Some(e.as_ref()),
+            _ => None,
+        }
+    }
 }
