@@ -4,15 +4,20 @@
 //! in Cranelift IR. We use a tagged union approach for runtime values.
 
 use cranelift_codegen::ir::AbiParam;
-use cranelift_codegen::ir::types::{I8, I64, Type};
+use cranelift_codegen::ir::types::{I8, I32, I64, Type};
+use tribute_database::{Db, TargetInfo};
 
 /// Cranelift types used in Tribute compilation
 pub struct TributeTypes;
 
 impl TributeTypes {
-    /// Get the pointer type for the current platform
-    pub fn pointer_type() -> Type {
-        I64 // 64-bit pointers for now, should be platform-specific
+    /// Get the pointer type for the target platform
+    pub fn pointer_type(db: &dyn Db, target: &TargetInfo) -> Type {
+        match target.pointer_size(db) {
+            4 => I32,
+            8 => I64,
+            _ => I64, // Default to 64-bit
+        }
     }
 
     /// Get the type for value tags (discriminant)
@@ -26,13 +31,18 @@ impl TributeTypes {
     }
 
     /// Get the type for string length/capacity
-    pub fn size_type() -> Type {
-        I64
+    pub fn size_type(db: &dyn Db, target: &TargetInfo) -> Type {
+        // Use native integer size for string lengths
+        match target.native_int_size(db) {
+            4 => I32,
+            8 => I64,
+            _ => I64, // Default to 64-bit
+        }
     }
 
     /// Get the ABI parameter for a Tribute value handle (TrHandle)
-    pub fn value_param() -> AbiParam {
-        AbiParam::new(Self::pointer_type())
+    pub fn value_param(db: &dyn Db, target: &TargetInfo) -> AbiParam {
+        AbiParam::new(Self::pointer_type(db, target))
     }
 
     /// Get the ABI parameter for a raw number

@@ -10,7 +10,6 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 
-use salsa::Database;
 use tribute_ast::{Identifier, Spanned};
 use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, MatchCase, Pattern};
 
@@ -18,6 +17,7 @@ use crate::CompilationError;
 use crate::errors::{CompilationErrorKind, CompilationResult};
 use crate::runtime::RuntimeFunctions;
 use crate::types::TributeTypes;
+use tribute_database::{Db, TargetInfo};
 
 /// String constant table for managing compile-time strings
 #[derive(Debug)]
@@ -117,6 +117,7 @@ impl StringConstantTable {
 pub struct CodeGenerator<'m, M: Module> {
     module: &'m mut M,
     runtime: &'m RuntimeFunctions,
+    target: &'m TargetInfo,
     /// Map from function names to their IDs
     function_map: HashMap<String, FuncId>,
     /// String constant table for compile-time strings
@@ -125,10 +126,11 @@ pub struct CodeGenerator<'m, M: Module> {
 
 impl<'m, M: Module> CodeGenerator<'m, M> {
     /// Create a new code generator
-    pub fn new(module: &'m mut M, runtime: &'m RuntimeFunctions) -> Self {
+    pub fn new(module: &'m mut M, runtime: &'m RuntimeFunctions, target: &'m TargetInfo) -> Self {
         Self {
             module,
             runtime,
+            target,
             function_map: HashMap::new(),
             string_table: StringConstantTable::new(),
         }
@@ -147,7 +149,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
     /// Collect all string literals from a function
     fn collect_string_literals<'db>(
         &mut self,
-        db: &'db dyn Database,
+        db: &'db dyn Db,
         func: HirFunction<'db>,
     ) -> CompilationResult<HashMap<String, u32>> {
         let mut literals = HashMap::new();
@@ -163,7 +165,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
     /// Recursively collect string literals from an expression
     fn collect_string_literals_from_expr<'db>(
         &mut self,
-        db: &'db dyn Database,
+        db: &'db dyn Db,
         expr: HirExpr<'db>,
         literals: &mut HashMap<String, u32>,
     ) -> CompilationResult<()> {
@@ -241,7 +243,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
     /// Compile a HIR program
     pub fn compile_program<'db>(
         &mut self,
-        db: &'db dyn Database,
+        db: &'db dyn Db,
         program: HirProgram<'db>,
     ) -> CompilationResult<()> {
         let functions = program.functions(db);
@@ -268,7 +270,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
     /// Declare a function (first pass)
     fn declare_function<'db>(
         &mut self,
-        db: &'db dyn Database,
+        db: &'db dyn Db,
         name: &Identifier,
         func: HirFunction<'db>,
     ) -> CompilationResult<()> {
@@ -277,9 +279,9 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
         // All Tribute functions take and return pointer-sized values
         let mut sig = Signature::new(CallConv::SystemV);
         for _ in 0..params.len() {
-            sig.params.push(TributeTypes::value_param());
+            sig.params.push(TributeTypes::value_param(db, self.target));
         }
-        sig.returns.push(TributeTypes::value_param());
+        sig.returns.push(TributeTypes::value_param(db, self.target));
 
         // Rename user's main function to avoid conflict with C main
         let func_name = if name == "main" {
@@ -299,7 +301,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
     /// Compile a function body (second pass)
     fn compile_function<'db>(
         &mut self,
-        db: &'db dyn Database,
+        db: &'db dyn Db,
         name: &Identifier,
         func: HirFunction<'db>,
     ) -> CompilationResult<()> {
@@ -342,6 +344,8 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
             &mut builder,
             self.module,
             self.runtime,
+            self.target,
+            db,
             &self.function_map,
             string_literals,
             string_table_data_id,
@@ -377,7 +381,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
     /// Compile the main function
     fn compile_main<'db>(
         &mut self,
-        db: &'db dyn Database,
+        db: &'db dyn Db,
         program: HirProgram<'db>,
     ) -> CompilationResult<()> {
         // Create main function signature
@@ -437,10 +441,12 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
 }
 
 /// Per-function lowering context
-struct FunctionLowerer<'a, 'b, M: Module> {
+struct FunctionLowerer<'a, 'b, 'db, M: Module> {
     builder: &'a mut FunctionBuilder<'b>,
     module: &'a mut M,
     runtime: &'a RuntimeFunctions,
+    target: &'a TargetInfo,
+    db: &'db dyn Db,
     function_map: &'a HashMap<String, FuncId>,
     /// Map from variable names to their current values
     variables: HashMap<String, Variable>,
@@ -452,11 +458,14 @@ struct FunctionLowerer<'a, 'b, M: Module> {
     string_table_data_id: Option<DataId>,
 }
 
-impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
+impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         builder: &'a mut FunctionBuilder<'b>,
         module: &'a mut M,
         runtime: &'a RuntimeFunctions,
+        target: &'a TargetInfo,
+        db: &'db dyn Db,
         function_map: &'a HashMap<String, FuncId>,
         string_literals: HashMap<String, u32>,
         string_table_data_id: Option<DataId>,
@@ -465,6 +474,8 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
             builder,
             module,
             runtime,
+            target,
+            db,
             function_map,
             variables: HashMap::new(),
             var_counter: 0,
@@ -477,7 +488,8 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     fn create_variable(&mut self) -> Variable {
         let var = Variable::from_u32(self.var_counter as u32);
         self.var_counter += 1;
-        self.builder.declare_var(var, TributeTypes::pointer_type());
+        self.builder
+            .declare_var(var, TributeTypes::pointer_type(self.db, self.target));
         var
     }
 
@@ -500,21 +512,20 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     fn create_unit_value(&mut self) -> CompilationResult<Value> {
         // For now, use null pointer as unit
         // TODO: Create proper unit value in runtime
-        Ok(self.builder.ins().iconst(TributeTypes::pointer_type(), 0))
+        Ok(self
+            .builder
+            .ins()
+            .iconst(TributeTypes::pointer_type(self.db, self.target), 0))
     }
 
     /// Lower a HIR expression
-    fn lower_hir_expr<'db>(
-        &mut self,
-        db: &'db dyn Database,
-        expr: HirExpr<'db>,
-    ) -> CompilationResult<Value> {
+    fn lower_hir_expr(&mut self, db: &dyn Db, expr: HirExpr) -> CompilationResult<Value> {
         let expr_data = expr.expr(db);
         self.lower_expr(db, &expr_data)
     }
 
     /// Lower an expression
-    fn lower_expr(&mut self, db: &dyn Database, expr: &Expr) -> CompilationResult<Value> {
+    fn lower_expr(&mut self, db: &dyn Db, expr: &Expr) -> CompilationResult<Value> {
         match expr {
             Expr::Number(n) => self.lower_number(*n),
             Expr::StringInterpolation(s) => self.lower_string_interpolation(db, s),
@@ -541,7 +552,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     /// Lower string interpolation
     fn lower_string_interpolation(
         &mut self,
-        _db: &dyn Database,
+        _db: &dyn Db,
         s: &tribute_hir::hir::StringInterpolation,
     ) -> CompilationResult<Value> {
         if s.segments.is_empty() {
@@ -585,11 +596,14 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
         if text.len() <= 15 {
             // For short strings, we can embed them directly
             // TODO: Implement inline string creation in runtime
-            let null = self.builder.ins().iconst(TributeTypes::pointer_type(), 0);
-            let len = self
+            let null = self
                 .builder
                 .ins()
-                .iconst(TributeTypes::size_type(), text.len() as i64);
+                .iconst(TributeTypes::pointer_type(self.db, self.target), 0);
+            let len = self.builder.ins().iconst(
+                TributeTypes::size_type(self.db, self.target),
+                text.len() as i64,
+            );
 
             let value_from_string = self.import_runtime_func(self.runtime.value_from_string)?;
             let value = self.builder.ins().call(value_from_string, &[null, len]);
@@ -597,11 +611,14 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
             Ok(self.builder.inst_results(value)[0])
         } else {
             // Long strings should go to the constant table, but if not found, use runtime allocation
-            let null = self.builder.ins().iconst(TributeTypes::pointer_type(), 0);
-            let len = self
+            let null = self
                 .builder
                 .ins()
-                .iconst(TributeTypes::size_type(), text.len() as i64);
+                .iconst(TributeTypes::pointer_type(self.db, self.target), 0);
+            let len = self.builder.ins().iconst(
+                TributeTypes::size_type(self.db, self.target),
+                text.len() as i64,
+            );
 
             let value_from_string = self.import_runtime_func(self.runtime.value_from_string)?;
             let value = self.builder.ins().call(value_from_string, &[null, len]);
@@ -613,7 +630,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     /// Lower a function call
     fn lower_call(
         &mut self,
-        db: &dyn Database,
+        db: &dyn Db,
         func: &Spanned<Expr>,
         args: &[Spanned<Expr>],
     ) -> CompilationResult<Value> {
@@ -706,7 +723,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     /// Lower a let binding
     fn lower_let(
         &mut self,
-        db: &dyn Database,
+        db: &dyn Db,
         var: &str,
         value: &Spanned<Expr>,
     ) -> CompilationResult<Value> {
@@ -716,11 +733,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     }
 
     /// Lower a block expression
-    fn lower_block(
-        &mut self,
-        db: &dyn Database,
-        exprs: &[Spanned<Expr>],
-    ) -> CompilationResult<Value> {
+    fn lower_block(&mut self, db: &dyn Db, exprs: &[Spanned<Expr>]) -> CompilationResult<Value> {
         let mut last_value = None;
 
         for expr in exprs {
@@ -737,7 +750,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     /// Simplified implementation for Phase 3 - basic pattern matching only
     fn lower_match(
         &mut self,
-        db: &dyn Database,
+        db: &dyn Db,
         expr: &Spanned<Expr>,
         cases: &[MatchCase],
     ) -> CompilationResult<Value> {

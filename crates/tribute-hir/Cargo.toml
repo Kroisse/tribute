@@ -6,5 +6,6 @@ authors.workspace = true
 
 [dependencies]
 tribute-ast.workspace = true
+tribute-database.workspace = true
 serde.workspace = true
 salsa.workspace = true

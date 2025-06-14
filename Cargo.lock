@@ -1337,6 +1337,7 @@ dependencies = [
  "salsa",
  "tribute-ast",
  "tribute-cranelift",
+ "tribute-database",
  "tribute-hir",
 ]
 
@@ -1368,7 +1369,20 @@ dependencies = [
  "tempfile",
  "tribute",
  "tribute-ast",
+ "tribute-database",
  "tribute-hir",
+]
+
+[[package]]
+name = "tribute-database"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "derive_more",
+ "salsa",
+ "serde",
+ "target-lexicon",
+ "tribute-ast",
 ]
 
 [[package]]
@@ -1378,6 +1392,7 @@ dependencies = [
  "salsa",
  "serde",
  "tribute-ast",
+ "tribute-database",
 ]
 
 [[package]]

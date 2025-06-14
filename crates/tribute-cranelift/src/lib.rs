@@ -16,15 +16,15 @@ mod tests;
 pub use compiler::TributeCompiler;
 pub use errors::{CompilationError, CompilationResult};
 
-use salsa::Database;
+use tribute_database::Db;
 use tribute_hir::hir::HirProgram;
 
 /// Compile a Tribute program to an object file
 pub fn compile_to_object<'db>(
-    db: &'db dyn Database,
+    db: &'db dyn Db,
     program: HirProgram<'db>,
     target: Option<target_lexicon::Triple>,
 ) -> CompilationResult<Vec<u8>> {
-    let compiler = TributeCompiler::new(target)?;
+    let compiler = TributeCompiler::new(db, target)?;
     compiler.compile_program(db, program)
 }

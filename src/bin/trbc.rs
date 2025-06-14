@@ -221,7 +221,7 @@ fn test_compile_file(path: &PathBuf) -> Result<usize, Box<dyn std::error::Error>
     let hir_program = lower_program_to_hir(&db, program).ok_or("Failed to lower program to HIR")?;
 
     // Create Cranelift compiler
-    let compiler = TributeCompiler::new(None)?; // Use native target
+    let compiler = TributeCompiler::new(&db, None)?; // Use native target
 
     // Compile to object code
     let object_bytes = compiler.compile_program(&db, hir_program)?;
@@ -256,7 +256,7 @@ fn compile_program(
     let hir_program = lower_program_to_hir(&db, program).ok_or("Failed to lower program to HIR")?;
 
     // Create Cranelift compiler
-    let compiler = TributeCompiler::new(None)?; // Use native target
+    let compiler = TributeCompiler::new(&db, None)?; // Use native target
 
     // Compile to object code
     let object_bytes = compiler.compile_program(&db, hir_program)?;

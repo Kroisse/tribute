@@ -48,7 +48,7 @@ pub struct RuntimeFunctions {
 impl RuntimeFunctions {
     /// Declare all runtime functions in the module
     pub fn declare_all<M: Module>(module: &mut M) -> CompilationResult<Self> {
-        let pointer = TributeTypes::pointer_type();
+        let pointer = cranelift_codegen::ir::types::I64; // Use 64-bit pointers for now
         let call_conv = CallConv::SystemV; // TODO: Make platform-specific
 
         // Helper to create signatures
@@ -90,7 +90,7 @@ impl RuntimeFunctions {
             &sig_with_params(
                 vec![
                     AbiParam::new(pointer),
-                    AbiParam::new(TributeTypes::size_type()),
+                    AbiParam::new(cranelift_codegen::ir::types::I64),
                 ],
                 vec![AbiParam::new(pointer)],
             ),
@@ -159,7 +159,7 @@ impl RuntimeFunctions {
                 vec![
                     AbiParam::new(pointer),
                     AbiParam::new(pointer),
-                    AbiParam::new(TributeTypes::size_type()),
+                    AbiParam::new(cranelift_codegen::ir::types::I64),
                 ],
                 vec![AbiParam::new(pointer)],
             ),

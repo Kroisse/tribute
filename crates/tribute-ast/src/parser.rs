@@ -620,10 +620,10 @@ mod tests {
 
     #[test]
     fn test_simple_function() {
-        use crate::TributeDatabaseImpl;
+        let db = salsa::DatabaseImpl::new();
         use salsa::Database;
 
-        TributeDatabaseImpl::default().attach(|db| {
+        db.attach(|db| {
             let source_file = crate::SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.trb"),
@@ -646,10 +646,10 @@ fn main() {
 
     #[test]
     fn test_function_with_parameters() {
-        use crate::TributeDatabaseImpl;
+        let db = salsa::DatabaseImpl::new();
         use salsa::Database;
 
-        TributeDatabaseImpl::default().attach(|db| {
+        db.attach(|db| {
             let source_file = crate::SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.trb"),
@@ -671,10 +671,10 @@ fn add(a, b) {
 
     #[test]
     fn test_match_expression() {
-        use crate::TributeDatabaseImpl;
+        let db = salsa::DatabaseImpl::new();
         use salsa::Database;
 
-        TributeDatabaseImpl::default().attach(|db| {
+        db.attach(|db| {
             let source_file = crate::SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.trb"),
@@ -851,10 +851,10 @@ fn test(n) {
 
     #[test]
     fn test_string_parsing_with_escape_sequences() {
-        use crate::TributeDatabaseImpl;
+        let db = salsa::DatabaseImpl::new();
         use salsa::Database;
 
-        TributeDatabaseImpl::default().attach(|db| {
+        db.attach(|db| {
             // Test basic quote escaping
             let source_file = crate::SourceFile::new(
                 db,
