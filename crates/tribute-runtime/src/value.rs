@@ -313,10 +313,14 @@ impl TrString {
             TrString::Inline { data, len } => {
                 String::from_utf8_lossy(&data[..*len as usize]).into_owned()
             },
-            TrString::Static { offset: _, len: _ } => {
-                // TODO: Implement when compiler support is ready
-                // For now, panic as this shouldn't be used yet
-                panic!("Static string conversion not yet implemented");
+            TrString::Static { offset, len } => {
+                // TODO: Implement proper .rodata access when compiler support is ready
+                if *len == 0 {
+                    String::new()
+                } else {
+                    // In a real implementation, this would read from .rodata section
+                    panic!("Static string conversion requires compiler integration (offset: {}, len: {})", offset, len);
+                }
             },
             TrString::Heap { data_index, len } => {
                 allocation_table().with_string_data(*data_index, |data| {
@@ -334,9 +338,19 @@ impl TrString {
                 // SAFETY: We assume the inline data is valid UTF-8
                 std::str::from_utf8_unchecked(&data[..*len as usize])
             },
-            TrString::Static { offset: _, len: _ } => {
-                // TODO: Implement when compiler support is ready
-                panic!("Static string access not yet implemented");
+            TrString::Static { offset, len } => {
+                // TODO: Implement proper .rodata access when compiler support is ready
+                // For now, return a placeholder to avoid panics in tests
+                static PLACEHOLDER: &str = "";
+                if *len == 0 {
+                    PLACEHOLDER
+                } else {
+                    // In a real implementation, this would calculate:
+                    // let base_addr = get_rodata_base_address(); // from compiler
+                    // let ptr = (base_addr + *offset) as *const u8;
+                    // std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, *len as usize))
+                    panic!("Static string access requires compiler integration (offset: {}, len: {})", offset, len);
+                }
             },
             TrString::Heap { data_index, len } => {
                 if *data_index == 0 || *len == 0 {
@@ -359,9 +373,16 @@ impl TrString {
             TrString::Inline { data, len } => {
                 (data.as_ptr(), *len as usize)
             },
-            TrString::Static { offset: _, len: _ } => {
-                // TODO: Implement when compiler support is ready
-                panic!("Static string pointer access not yet implemented");
+            TrString::Static { offset, len } => {
+                // TODO: Implement proper .rodata access when compiler support is ready
+                if *len == 0 {
+                    (b"".as_ptr(), 0)
+                } else {
+                    // In a real implementation, this would return:
+                    // let base_addr = get_rodata_base_address(); // from compiler
+                    // ((base_addr + *offset) as *const u8, *len as usize)
+                    panic!("Static string pointer access requires compiler integration (offset: {}, len: {})", offset, len);
+                }
             },
             TrString::Heap { data_index: _, len } => {
                 // This is a bit tricky - we need to return a stable pointer
