@@ -6,12 +6,10 @@ fn main() {
     println!("cargo:rerun-if-changed=grammar.js");
     println!("cargo:rerun-if-changed=src/parser.c");
     println!("cargo:rerun-if-changed=build.rs");
-    
+
     // Check if tree-sitter CLI is available and run generate
-    let output = Command::new("tree-sitter")
-        .arg("generate")
-        .output();
-        
+    let output = Command::new("tree-sitter").arg("generate").output();
+
     match output {
         Ok(output) => {
             if !output.status.success() {
@@ -22,8 +20,13 @@ fn main() {
             }
         }
         Err(e) => {
-            println!("cargo:warning=tree-sitter command not found or failed to execute: {}", e);
-            println!("cargo:warning=Make sure tree-sitter CLI is installed: npm install -g tree-sitter-cli");
+            println!(
+                "cargo:warning=tree-sitter command not found or failed to execute: {}",
+                e
+            );
+            println!(
+                "cargo:warning=Make sure tree-sitter CLI is installed: npm install -g tree-sitter-cli"
+            );
         }
     }
 

@@ -48,7 +48,10 @@ pub fn lower_program_to_hir<'db>(
 
 /// Query to lower AST to HIR for a source file (convenience wrapper)
 #[salsa::tracked]
-pub fn lower_source_to_hir<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Option<HirProgram<'db>> {
+pub fn lower_source_to_hir<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceFile,
+) -> Option<HirProgram<'db>> {
     let program = tribute_ast::parse_source_file(db, source);
     lower_program_to_hir(db, program)
 }

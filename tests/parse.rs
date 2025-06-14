@@ -1,8 +1,8 @@
 use insta::assert_debug_snapshot;
 use salsa::{Database as Db, Setter};
 use std::path::Path;
-use tribute::{parse_source_file, SourceFile, TributeDatabaseImpl};
-use tribute_hir::{lower_source_to_hir, HirProgram};
+use tribute::{SourceFile, TributeDatabaseImpl, parse_source_file};
+use tribute_hir::{HirProgram, lower_source_to_hir};
 
 pub fn parse_file_to_hir<'db>(db: &'db dyn Db, path: &Path) -> HirProgram<'db> {
     let source = std::fs::read_to_string(path).expect("Failed to read file");
@@ -18,14 +18,17 @@ mod tests {
     #[test]
     fn test_salsa_incremental_computation() {
         let mut db = TributeDatabaseImpl::default();
-        let source_file = SourceFile::new(&db, "test.trb".into(), "fn main() { 1 + 2 }".to_string());
+        let source_file =
+            SourceFile::new(&db, "test.trb".into(), "fn main() { 1 + 2 }".to_string());
 
         // First parse
         let program1 = parse_source_file(&db, source_file);
         assert_eq!(program1.items(&db).len(), 1);
-        
+
         // Modify source (simulating incremental computation)
-        source_file.set_text(&mut db).to("fn main() { 1 + 2 + 3 }".to_string());
+        source_file
+            .set_text(&mut db)
+            .to("fn main() { 1 + 2 + 3 }".to_string());
 
         // Parse again - should recompute
         let program2 = parse_source_file(&db, source_file);

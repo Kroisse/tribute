@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use tribute_ast::{Identifier, Span, Spanned};
 
-
 /// High-level intermediate representation for Tribute programs (tracked by Salsa)
 #[salsa::tracked(debug)]
 pub struct HirProgram<'db> {
@@ -58,7 +57,6 @@ pub enum Expr {
         cases: Vec<MatchCase>,
     },
 
-
     /// Block expression (sequence of expressions)
     Block(Vec<Spanned<Expr>>),
 }
@@ -105,4 +103,3 @@ pub enum Literal {
     Number(i64),
     StringInterpolation(StringInterpolation),
 }
-

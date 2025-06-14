@@ -18,7 +18,7 @@ extern crate tribute;
 
 use clap::{Arg, ArgAction, Command};
 use std::path::PathBuf;
-use tribute::{eval_str, TributeDatabaseImpl};
+use tribute::{TributeDatabaseImpl, eval_str};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("trbc")

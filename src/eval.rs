@@ -1,6 +1,6 @@
 use crate::builtins;
 use std::collections::HashMap;
-use tribute_ast::{ast::Identifier, Spanned};
+use tribute_ast::{Spanned, ast::Identifier};
 use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, Pattern};
 
 type Error = Box<dyn std::error::Error + 'static>;
@@ -327,7 +327,8 @@ fn value_to_string(value: &Value) -> Result<String, Error> {
         Value::Number(n) => Ok(n.to_string()),
         Value::String(s) => Ok(s.clone()),
         Value::List(items) => {
-            let item_strings: Result<Vec<String>, Error> = items.iter().map(value_to_string).collect();
+            let item_strings: Result<Vec<String>, Error> =
+                items.iter().map(value_to_string).collect();
             let item_strings = item_strings?;
             Ok(format!("[{}]", item_strings.join(", ")))
         }
@@ -402,7 +403,6 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
         }
     }
 }
-
 
 fn match_list_with_rest(
     values: &[Value],

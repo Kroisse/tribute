@@ -1,5 +1,5 @@
-use tribute::TributeDatabaseImpl;
 use salsa::Database;
+use tribute::TributeDatabaseImpl;
 
 #[test]
 fn test_escape_sequences_in_evaluation() {
@@ -11,7 +11,7 @@ fn test_escape_sequences_in_evaluation() {
             Err(e) => panic!("Failed to evaluate quote escape: {}", e),
         }
 
-        // Test backslash escaping  
+        // Test backslash escaping
         let source = r#"fn main() { print_line("Path: C:\\Users\\name") }"#;
         match tribute::eval_str(db, "test.trb", source) {
             Ok(_) => {} // print_line returns Unit

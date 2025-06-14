@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::eval::{Value, BuiltinFn};
+use crate::eval::{BuiltinFn, Value};
 
 type Error = Box<dyn std::error::Error + 'static>;
 
@@ -166,7 +166,7 @@ fn divide(args: &[Value]) -> Result<Value, Error> {
             } else {
                 Ok(Value::Number(a / b))
             }
-        },
+        }
         _ => Err("/ requires two numbers".into()),
     }
 }
@@ -201,7 +201,7 @@ fn split(args: &[Value]) -> Result<Value, Error> {
                 .map(|s| Value::String(s.to_string()))
                 .collect();
             Ok(Value::List(parts))
-        },
+        }
         _ => Err("split requires two strings".into()),
     }
 }
@@ -256,11 +256,10 @@ fn to_number(args: &[Value]) -> Result<Value, Error> {
         return Err("to_number requires exactly 1 argument".into());
     }
     match &args[0] {
-        Value::String(s) => {
-            s.parse::<i64>()
-                .map(Value::Number)
-                .map_err(|_| "failed to parse string as number".into())
-        },
+        Value::String(s) => s
+            .parse::<i64>()
+            .map(Value::Number)
+            .map_err(|_| "failed to parse string as number".into()),
         _ => Err("to_number requires a string".into()),
     }
 }
@@ -297,7 +296,7 @@ fn get(args: &[Value]) -> Result<Value, Error> {
             } else {
                 Err("index out of bounds".into())
             }
-        },
+        }
         _ => Err("get requires a number and a list".into()),
     }
 }

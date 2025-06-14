@@ -8,5 +8,5 @@ pub mod lower;
 pub mod queries;
 
 pub use hir::*;
-pub use lower::{LowerError, LowerResult, FunctionDef};
+pub use lower::{FunctionDef, LowerError, LowerResult};
 pub use queries::*;

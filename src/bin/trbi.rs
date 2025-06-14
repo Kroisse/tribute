@@ -4,7 +4,7 @@
 extern crate tribute;
 
 use std::{ffi::OsString, path::PathBuf};
-use tribute::{eval_str, parse_str, TributeDatabaseImpl, Value};
+use tribute::{TributeDatabaseImpl, Value, eval_str, parse_str};
 
 type Error = std::io::Error;
 
