@@ -180,17 +180,17 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
             Expr::Call { args, .. } => {
                 for arg in args {
                     // arg is Spanned<Expr>, need to extract the expression
-                    self.collect_string_literals_from_expr_data(db, &arg.0, literals)?;
+                    self.collect_string_literals_from_expr_data(&arg.0, literals)?;
                 }
             }
             Expr::Let { value, .. } => {
                 // value is Box<Spanned<Expr>>
-                self.collect_string_literals_from_expr_data(db, &value.0, literals)?;
+                self.collect_string_literals_from_expr_data(&value.0, literals)?;
             }
             Expr::Block(exprs) => {
                 for expr in exprs {
                     // expr is Spanned<Expr>
-                    self.collect_string_literals_from_expr_data(db, &expr.0, literals)?;
+                    self.collect_string_literals_from_expr_data(&expr.0, literals)?;
                 }
             }
             _ => {
@@ -203,7 +203,6 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
     /// Recursively collect string literals from an expression (raw Expr)
     fn collect_string_literals_from_expr_data(
         &mut self,
-        db: &dyn Database,
         expr: &Expr,
         literals: &mut HashMap<String, u32>,
     ) -> CompilationResult<()> {
@@ -219,17 +218,17 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
             Expr::Call { args, .. } => {
                 for arg in args {
                     // arg is Spanned<Expr>, need to extract the expression
-                    self.collect_string_literals_from_expr_data(db, &arg.0, literals)?;
+                    self.collect_string_literals_from_expr_data(&arg.0, literals)?;
                 }
             }
             Expr::Let { value, .. } => {
                 // value is Box<Spanned<Expr>>
-                self.collect_string_literals_from_expr_data(db, &value.0, literals)?;
+                self.collect_string_literals_from_expr_data(&value.0, literals)?;
             }
             Expr::Block(exprs) => {
                 for expr in exprs {
                     // expr is Spanned<Expr>
-                    self.collect_string_literals_from_expr_data(db, &expr.0, literals)?;
+                    self.collect_string_literals_from_expr_data(&expr.0, literals)?;
                 }
             }
             _ => {

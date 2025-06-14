@@ -23,6 +23,7 @@ cargo test
 # Run tests for specific package
 cargo test -p tribute
 cargo test -p tree-sitter-tribute
+cargo test -p tribute-runtime
 
 # Run the interpreter on a .trb file
 cargo run --bin trbi <file.trb>
