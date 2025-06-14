@@ -1009,6 +1009,7 @@ dependencies = [
  "insta",
  "salsa",
  "tribute-ast",
+ "tribute-cranelift",
  "tribute-hir",
 ]
 

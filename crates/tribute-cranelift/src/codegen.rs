@@ -268,8 +268,15 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
         }
         sig.returns.push(TributeTypes::value_param());
         
+        // Rename user's main function to avoid conflict with C main
+        let func_name = if name == "main" {
+            "_tribute_main"
+        } else {
+            name
+        };
+        
         let func_id = self.module
-            .declare_function(name, Linkage::Local, &sig).box_err()?;
+            .declare_function(func_name, Linkage::Local, &sig).box_err()?;
         
         self.function_map.insert(name.clone(), func_id);
         Ok(())
@@ -377,22 +384,13 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
         // Check if there's a main function defined by the user
         let functions = program.functions(db);
         if let Some(_main_func) = functions.get("main") {
-            // Create a lowering context for main evaluation
-            let mut lowerer = FunctionLowerer::new(
-                &mut builder,
-                self.module,
-                self.runtime,
-                &self.function_map,
-                HashMap::new(), // No string literals in main for now
-                None,
-            );
-            
             // Call the user-defined main function
             if let Some(main_func_id) = self.function_map.get("main") {
-                let main_func_ref = lowerer.import_user_func(*main_func_id)?;
+                let main_func_ref = self.module
+                    .declare_func_in_func(*main_func_id, &mut builder.func);
                 let _result = builder.ins().call(main_func_ref, &[]);
                 
-                // Return 0 for successful execution
+                // Return 0 for successful execution (ignore the main function's return value)
                 let zero = builder.ins().iconst(cranelift_codegen::ir::types::I32, 0);
                 builder.ins().return_(&[zero]);
             } else {
@@ -703,67 +701,116 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
             ));
         }
         
-        // For now, implement simple pattern matching with if-else chain
-        // This is a simplified version for Phase 3
+        // Evaluate the match expression value
         let match_value = self.lower_expr(db, &expr.0)?;
         
         // Create a variable to store the result
         let result_var = self.create_variable();
         
-        // Create blocks for control flow
-        let mut current_block = self.builder.current_block().unwrap();
+        // Create the end block where all cases will converge
         let end_block = self.builder.create_block();
         
-        // Generate if-else chain for pattern matching
-        for (i, case) in cases.iter().enumerate() {
-            let case_body_block = self.builder.create_block();
-            let next_test_block = if i + 1 < cases.len() {
-                self.builder.create_block()
-            } else {
-                end_block
-            };
+        // Handle the very simple case of just one case (common)
+        if cases.len() == 1 {
+            let case = &cases[0];
             
-            // Switch to current test block
-            self.builder.switch_to_block(current_block);
-            
-            // Generate pattern test
+            // For single case, just check the pattern and execute
             match &case.pattern {
                 Pattern::Wildcard | Pattern::Variable(_) => {
-                    // Always match - jump to case body
-                    self.builder.ins().jump(case_body_block, &[]);
+                    // Always matches
+                    self.bind_pattern_variables(&case.pattern, match_value)?;
+                    let case_result = self.lower_expr(db, &case.body.0)?;
+                    self.builder.def_var(result_var, case_result);
+                    self.builder.ins().jump(end_block, &[]);
                 },
                 Pattern::Literal(literal) => {
-                    // Test literal equality
+                    // Test and branch
+                    let case_body_block = self.builder.create_block();
+                    let fallback_block = self.builder.create_block();
+                    
                     let condition = self.test_literal_pattern(match_value, literal)?;
-                    self.builder.ins().brif(condition, case_body_block, &[], next_test_block, &[]);
+                    self.builder.ins().brif(condition, case_body_block, &[], fallback_block, &[]);
+                    
+                    // Case body
+                    self.builder.switch_to_block(case_body_block);
+                    self.bind_pattern_variables(&case.pattern, match_value)?;
+                    let case_result = self.lower_expr(db, &case.body.0)?;
+                    self.builder.def_var(result_var, case_result);
+                    self.builder.ins().jump(end_block, &[]);
+                    self.builder.seal_block(case_body_block);
+                    
+                    // Fallback (no match)
+                    self.builder.switch_to_block(fallback_block);
+                    let unit_val = self.create_unit_value()?;
+                    self.builder.def_var(result_var, unit_val);
+                    self.builder.ins().jump(end_block, &[]);
+                    self.builder.seal_block(fallback_block);
                 },
                 _ => {
-                    // For now, unsupported patterns default to false
-                    self.builder.ins().jump(next_test_block, &[]);
+                    return Err(CompilationError::UnsupportedFeature(
+                        "Complex patterns not yet implemented".to_string()
+                    ));
                 }
             }
+        } else {
+            // Handle multiple cases with if-else chain
+            let mut blocks = Vec::new();
             
-            // Generate case body
-            self.builder.switch_to_block(case_body_block);
-            self.bind_pattern_variables(&case.pattern, match_value)?;
-            let case_result = self.lower_expr(db, &case.body.0)?;
-            self.builder.def_var(result_var, case_result);
-            self.builder.ins().jump(end_block, &[]);
+            // Create all blocks first
+            for _ in 0..cases.len() {
+                blocks.push((
+                    self.builder.create_block(), // test block
+                    self.builder.create_block(), // body block
+                ));
+            }
+            let fallback_block = self.builder.create_block();
             
-            // Seal the case body block
-            self.builder.seal_block(case_body_block);
+            // Jump to the first test block
+            self.builder.ins().jump(blocks[0].0, &[]);
             
-            current_block = next_test_block;
-        }
-        
-        // Handle default case (no match found)
-        if current_block != end_block {
-            self.builder.switch_to_block(current_block);
-            // TODO: Add proper runtime panic for non-exhaustive matches
+            // Generate each case
+            for (i, case) in cases.iter().enumerate() {
+                let (test_block, body_block) = blocks[i];
+                let next_test_block = if i + 1 < blocks.len() {
+                    blocks[i + 1].0
+                } else {
+                    fallback_block
+                };
+                
+                // Generate test
+                self.builder.switch_to_block(test_block);
+                
+                match &case.pattern {
+                    Pattern::Wildcard | Pattern::Variable(_) => {
+                        // Always match
+                        self.builder.ins().jump(body_block, &[]);
+                    },
+                    Pattern::Literal(literal) => {
+                        let condition = self.test_literal_pattern(match_value, literal)?;
+                        self.builder.ins().brif(condition, body_block, &[], next_test_block, &[]);
+                    },
+                    _ => {
+                        // Unsupported pattern - skip to next
+                        self.builder.ins().jump(next_test_block, &[]);
+                    }
+                }
+                self.builder.seal_block(test_block);
+                
+                // Generate body
+                self.builder.switch_to_block(body_block);
+                self.bind_pattern_variables(&case.pattern, match_value)?;
+                let case_result = self.lower_expr(db, &case.body.0)?;
+                self.builder.def_var(result_var, case_result);
+                self.builder.ins().jump(end_block, &[]);
+                self.builder.seal_block(body_block);
+            }
+            
+            // Generate fallback (no match found)
+            self.builder.switch_to_block(fallback_block);
             let unit_val = self.create_unit_value()?;
             self.builder.def_var(result_var, unit_val);
             self.builder.ins().jump(end_block, &[]);
-            self.builder.seal_block(current_block);
+            self.builder.seal_block(fallback_block);
         }
         
         // Switch to end block and return result

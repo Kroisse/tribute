@@ -33,4 +33,5 @@ clap.workspace = true
 insta.workspace = true
 salsa.workspace = true
 tribute-ast.workspace = true
+tribute-cranelift.workspace = true
 tribute-hir.workspace = true

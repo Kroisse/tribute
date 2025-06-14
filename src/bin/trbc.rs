@@ -14,11 +14,11 @@
 //! trbc --compile program.trb -o output_binary
 //! ```
 
-extern crate tribute;
-
 use clap::{Arg, ArgAction, Command};
 use std::path::PathBuf;
-use tribute::{eval_str, TributeDatabaseImpl};
+use tribute::{eval_str, parse_str, TributeDatabaseImpl};
+use tribute_cranelift::TributeCompiler;
+use tribute_hir::queries::lower_program_to_hir;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("trbc")
@@ -52,8 +52,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let compile_mode = matches.get_flag("compile");
 
     if compile_mode {
-        eprintln!("Error: Compilation support is not yet implemented");
-        std::process::exit(1);
+        let output_path = matches.get_one::<String>("output")
+            .ok_or("Output path is required when compiling")?;
+        compile_program(&input_path, output_path)?;
     } else {
         // Interpreter mode (default)
         interpret_program(&input_path)?;
@@ -81,5 +82,47 @@ fn interpret_program(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    Ok(())
+}
+
+/// Compiles a Tribute program to native binary
+fn compile_program(input_path: &PathBuf, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Compiling {} to {}...", input_path.display(), output_path);
+    
+    // Read source code
+    let source = std::fs::read_to_string(input_path)?;
+    let db = TributeDatabaseImpl::default();
+    
+    // Parse to AST
+    let (program, diagnostics) = parse_str(&db, input_path, &source);
+    
+    // Check for parsing errors
+    if !diagnostics.is_empty() {
+        eprintln!("Compilation errors:");
+        for diagnostic in diagnostics {
+            eprintln!("  {:?}", diagnostic);
+        }
+        std::process::exit(1);
+    }
+    
+    // Lower to HIR
+    let hir_program = lower_program_to_hir(&db, program)
+        .ok_or("Failed to lower program to HIR")?;
+    
+    // Create Cranelift compiler
+    let compiler = TributeCompiler::new(None)?; // Use native target
+    
+    // Compile to object code
+    let object_bytes = compiler.compile_program(&db, hir_program)?;
+    
+    // Write object file (for now, we'll just write the raw object)
+    // TODO: Link with runtime library to create executable
+    let object_path = format!("{}.o", output_path);
+    std::fs::write(&object_path, &object_bytes)?;
+    
+    println!("Successfully compiled to object file: {}", object_path);
+    println!("Note: Linking with runtime library is not yet implemented");
+    println!("Object file size: {} bytes", object_bytes.len());
+    
     Ok(())
 }
