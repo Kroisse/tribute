@@ -132,7 +132,7 @@ pub extern "C" fn tr_string_length(handle: TrHandle) -> usize {
     unsafe {
         let val = handle.deref();
         match val.tag {
-            ValueTag::String => val.data.string.len,
+            ValueTag::String => val.data.string.len(),
             _ => 0,
         }
     }

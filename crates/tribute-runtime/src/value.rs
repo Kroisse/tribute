@@ -228,104 +228,172 @@ pub enum ValueTag {
 }
 
 /// String representation for dynamic values
-/// Uses allocation table index instead of direct pointers for GC compatibility
+/// Three-mode enum for optimal memory usage and performance
 #[repr(C)]
 #[derive(Debug)]
-pub struct TrString {
-    /// Index into the global string allocation table (0 = null/empty)
-    pub data_index: u32,
-    /// Length of the string in bytes
-    pub len: usize,
-    /// Whether this is a static string (doesn't need deallocation)
-    pub is_static: bool,
-    /// Padding to maintain C ABI compatibility
-    pub _padding: [u8; 3],
+pub enum TrString {
+    /// Mode 1: Inline - strings ≤ 15 bytes stored directly
+    Inline { 
+        data: [u8; 15], 
+        len: u8 
+    },
+    /// Mode 2: Static - compile-time strings in object file
+    Static { 
+        offset: u32,     // Offset in .rodata section
+        len: u32        // Use u32 instead of usize to keep size consistent
+    },
+    /// Mode 3: Heap - runtime strings in AllocationTable
+    Heap { 
+        data_index: u32, // AllocationTable index
+        len: u32        // Use u32 instead of usize to keep size consistent
+    },
 }
 
 impl TrString {
+    /// Create an appropriate TrString from a regular String
     pub fn new(s: String) -> Self {
-        let len = s.len();
-        if len == 0 {
-            return TrString {
-                data_index: 0,
-                len: 0,
-                is_static: false,
-                _padding: [0; 3],
-            };
-        }
+        let bytes = s.as_bytes();
+        let len = bytes.len();
         
-        let data_index = allocation_table().allocate_string(s.into_bytes());
-        TrString {
-            data_index,
-            len,
-            is_static: false,
-            _padding: [0; 3],
+        if len <= 15 {
+            // Use inline mode for short strings
+            let mut data = [0u8; 15];
+            data[..len].copy_from_slice(bytes);
+            TrString::Inline { data, len: len as u8 }
+        } else {
+            // Use heap mode for longer strings
+            let data_index = allocation_table().allocate_string(s.into_bytes());
+            TrString::Heap { data_index, len: len as u32 }
         }
     }
     
+    /// Create an inline TrString from bytes (for strings ≤ 15 bytes)
+    pub fn new_inline(bytes: &[u8]) -> Self {
+        assert!(bytes.len() <= 15, "Inline strings must be ≤ 15 bytes");
+        let mut data = [0u8; 15];
+        data[..bytes.len()].copy_from_slice(bytes);
+        TrString::Inline { data, len: bytes.len() as u8 }
+    }
+    
+    /// Create a static TrString with offset into .rodata section
+    pub fn new_static(offset: u32, len: u32) -> Self {
+        TrString::Static { offset, len }
+    }
+    
+    /// Create a heap TrString from bytes
+    pub fn new_heap(bytes: &[u8]) -> Self {
+        let len = bytes.len();
+        let data_index = allocation_table().allocate_string(bytes.to_vec());
+        TrString::Heap { data_index, len: len as u32 }
+    }
+    
+    /// Create from a static str (currently uses heap allocation)
+    /// TODO: This will be optimized to use Static mode when compiler support is ready
     pub fn from_static(s: &'static str) -> Self {
-        let len = s.len();
-        if len == 0 {
-            return TrString {
-                data_index: 0,
-                len: 0,
-                is_static: true,
-                _padding: [0; 3],
-            };
+        TrString::new(s.to_string())
+    }
+    
+    /// Get the length of the string
+    pub fn len(&self) -> usize {
+        match self {
+            TrString::Inline { len, .. } => *len as usize,
+            TrString::Static { len, .. } => *len as usize,
+            TrString::Heap { len, .. } => *len as usize,
         }
-        
-        // For static strings, we still allocate in the table for consistency
-        // but mark them as static so they can be handled specially during GC
-        let data_index = allocation_table().allocate_string(s.as_bytes().to_vec());
-        TrString {
-            data_index,
-            len,
-            is_static: true,
-            _padding: [0; 3],
-        }
+    }
+    
+    /// Check if string is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
     
     /// Convert back to Rust String (takes ownership)
     pub unsafe fn to_string(&self) -> String {
-        if self.data_index == 0 || self.len == 0 {
-            return String::new();
+        match self {
+            TrString::Inline { data, len } => {
+                String::from_utf8_lossy(&data[..*len as usize]).into_owned()
+            },
+            TrString::Static { offset: _, len: _ } => {
+                // TODO: Implement when compiler support is ready
+                // For now, panic as this shouldn't be used yet
+                panic!("Static string conversion not yet implemented");
+            },
+            TrString::Heap { data_index, len } => {
+                allocation_table().with_string_data(*data_index, |data| {
+                    String::from_utf8_lossy(&data[..*len as usize]).into_owned()
+                }).unwrap_or_default()
+            },
         }
-        
-        allocation_table().with_string_data(self.data_index, |data| {
-            String::from_utf8_lossy(&data[..self.len]).into_owned()
-        }).unwrap_or_default()
     }
     
     /// Get a string slice (borrowing) - creates temporary static string
     /// WARNING: This leaks memory temporarily for C compatibility
     pub unsafe fn as_str(&self) -> &str {
-        if self.data_index == 0 || self.len == 0 {
-            return "";
+        match self {
+            TrString::Inline { data, len } => {
+                // SAFETY: We assume the inline data is valid UTF-8
+                std::str::from_utf8_unchecked(&data[..*len as usize])
+            },
+            TrString::Static { offset: _, len: _ } => {
+                // TODO: Implement when compiler support is ready
+                panic!("Static string access not yet implemented");
+            },
+            TrString::Heap { data_index, len } => {
+                if *data_index == 0 || *len == 0 {
+                    return "";
+                }
+                
+                // Create a static string by leaking memory - only safe for temporary C calls
+                allocation_table().with_string_data(*data_index, |data| {
+                    let s = String::from_utf8_unchecked(data[..*len as usize].to_vec());
+                    let leaked: &'static str = Box::leak(s.into_boxed_str());
+                    leaked
+                }).unwrap_or("")
+            },
         }
-        
-        // Create a static string by leaking memory - only safe for temporary C calls
-        allocation_table().with_string_data(self.data_index, |data| {
-            let s = String::from_utf8_unchecked(data[..self.len].to_vec());
-            let leaked: &'static str = Box::leak(s.into_boxed_str());
-            leaked
-        }).unwrap_or("")
+    }
+    
+    /// Get pointer and length for C FFI
+    pub fn as_ptr_len(&self) -> (*const u8, usize) {
+        match self {
+            TrString::Inline { data, len } => {
+                (data.as_ptr(), *len as usize)
+            },
+            TrString::Static { offset: _, len: _ } => {
+                // TODO: Implement when compiler support is ready
+                panic!("Static string pointer access not yet implemented");
+            },
+            TrString::Heap { data_index: _, len } => {
+                // This is a bit tricky - we need to return a stable pointer
+                // For now, we'll use the leaked string approach
+                let str_ref = unsafe { self.as_str() };
+                (str_ref.as_ptr(), *len as usize)
+            },
+        }
     }
 }
 
 impl Drop for TrString {
     fn drop(&mut self) {
-        // Free string data from allocation table when TrString is dropped
-        // Static strings are left in the table for consistency but could be freed during GC
-        if self.data_index != 0 && !self.is_static {
-            allocation_table().free_string(self.data_index);
+        // Only heap strings need cleanup
+        if let TrString::Heap { data_index, .. } = self {
+            if *data_index != 0 {
+                allocation_table().free_string(*data_index);
+            }
         }
+        // Inline and Static strings don't need cleanup
     }
 }
 
-// SAFETY: TrString now uses indices instead of pointers
-// All memory access goes through the thread-safe allocation table
+// SAFETY: TrString is safe to send/sync as it uses indices or inline data
 unsafe impl Send for TrString {}
 unsafe impl Sync for TrString {}
+
+// Ensure the layout is 20 bytes with the optimized structure
+const _: () = {
+    assert!(std::mem::size_of::<TrString>() == 20);
+    assert!(std::mem::align_of::<TrString>() == 4);
+};
 
 /// Main Tribute value type - must match the layout in tribute-cranelift/src/types.rs
 #[repr(C)]
@@ -448,7 +516,10 @@ impl fmt::Display for TrValue {
 
 // Ensure the layout matches what Cranelift expects
 const _: () = {
-    assert!(std::mem::size_of::<TrValue>() == 32); // tag(1) + padding(7) + data(24)
+    // tag(1) + padding(7) + data(max of: f64(8), TrString(20), unit(0))
+    // The union will be at least 20 bytes (size of TrString)
+    // With 8-byte alignment, total size will be 32 bytes
+    assert!(std::mem::size_of::<TrValue>() == 32);
     assert!(std::mem::align_of::<TrValue>() == 8);
 };
 

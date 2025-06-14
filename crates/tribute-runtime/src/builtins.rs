@@ -148,7 +148,7 @@ pub extern "C" fn tr_builtin_is_truthy(handle: TrHandle) -> bool {
         let val = handle.deref();
         match val.tag {
             ValueTag::Number => val.data.number != 0.0 && !val.data.number.is_nan(),
-            ValueTag::String => val.data.string.len > 0,
+            ValueTag::String => val.data.string.len() > 0,
             ValueTag::Unit => false,
         }
     }
