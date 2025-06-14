@@ -34,20 +34,21 @@ for file in "${TEST_FILES[@]}"; do
         
         # Test interpreter
         echo -n "📝 Interpreter: "
-        INTERPRETER_TIME=$(( time cargo run --release --bin trbi "$file" > /dev/null 2>&1 ) 2>&1 | grep real | awk '{print $2}')
+        INTERPRETER_TIME=$( { time cargo run --release --bin trbi "$file" > /dev/null 2>&1; } 2>&1 | grep real | awk '{print $2}')
         echo "$INTERPRETER_TIME"
         
         # Test compiler (if compilation succeeds)
         echo -n "⚡ Compiler: "
         if cargo run --release --bin trbc -- --compile "$file" -o "/tmp/tribute_test_$filename" > /dev/null 2>&1; then
-            COMPILER_TIME=$(( time cargo run --release --bin trbc -- --compile "$file" -o "/tmp/tribute_test_$filename" > /dev/null ) 2>&1 | grep real | awk '{print $2}')
+            COMPILER_TIME=$( { time cargo run --release --bin trbc -- --compile "$file" -o "/tmp/tribute_test_$filename" > /dev/null 2>&1; } 2>&1 | grep real | awk '{print $2}')
             echo "$COMPILER_TIME"
             
             # Check object file size
-            if [ -f "/tmp/tribute_test_$filename.o" ]; then
-                SIZE=$(ls -lh "/tmp/tribute_test_$filename.o" | awk '{print $5}')
+            object_file="/tmp/tribute_test_$filename.o"
+            if [ -f "$object_file" ]; then
+                SIZE=$(stat -f%z "$object_file" 2>/dev/null || stat -c%s "$object_file" 2>/dev/null | numfmt --to=iec)
                 echo "📁 Object size: $SIZE"
-                rm -f "/tmp/tribute_test_$filename.o"
+                rm -f "$object_file"
             fi
         else
             echo "❌ Compilation failed"
