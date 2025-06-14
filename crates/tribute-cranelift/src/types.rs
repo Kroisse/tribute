@@ -52,7 +52,7 @@ pub enum ValueTag {
 /// Runtime value layout (matches what the runtime library expects)
 /// 
 /// Now uses Rust enum layout:
-/// ```rust
+/// ```ignore
 /// #[repr(C)]
 /// enum TrValue {
 ///     Number(f64),      // discriminant + 8 bytes

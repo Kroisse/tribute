@@ -1,21 +1,21 @@
 //! Tests for the runtime library
 
-use crate::value::{TrValue, ValueTag};
+use crate::value::TrValue;
 use crate::memory::*;
 use crate::arithmetic::*;
 
 #[test]
 fn test_value_creation() {
     let num_val = TrValue::number(42.0);
-    assert_eq!(num_val.tag(), ValueTag::Number);
+    assert!(matches!(num_val, TrValue::Number(_)));
     assert_eq!(num_val.as_number(), 42.0);
     
     let str_val = TrValue::string("hello".to_string());
-    assert_eq!(str_val.tag(), ValueTag::String);
+    assert!(matches!(str_val, TrValue::String(_)));
     assert_eq!(str_val.as_string(), Some("hello"));
     
     let unit_val = TrValue::unit();
-    assert_eq!(unit_val.tag(), ValueTag::Unit);
+    assert!(matches!(unit_val, TrValue::Unit));
     assert!(unit_val.is_unit());
 }
 
@@ -66,6 +66,7 @@ fn test_arithmetic_operations() {
     assert_eq!(tr_value_to_number(quotient), 2.0);
     tr_value_free(quotient);
     
+    // Clean up original values
     tr_value_free(left);
     tr_value_free(right);
 }
@@ -77,7 +78,7 @@ fn test_string_arithmetic() {
     
     // Test string concatenation through addition
     let result = tr_value_add(hello, world);
-    assert_eq!(tr_value_get_tag(result), ValueTag::String as u8);
+    assert_eq!(tr_value_get_tag(result), 1); // String tag is 1
     
     tr_value_free(hello);
     tr_value_free(world);
