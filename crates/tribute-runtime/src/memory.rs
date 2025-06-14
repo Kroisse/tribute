@@ -29,8 +29,8 @@ pub extern "C" fn tr_value_from_number(num: f64) -> TrHandle {
 /// Create a string value from raw parts (automatically selects optimal mode)
 /// 
 /// The function automatically chooses the most efficient storage mode:
-/// - Strings ≤ 15 bytes: inline storage (no heap allocation)
-/// - Strings > 15 bytes: heap storage
+/// - Strings ≤ 7 bytes: inline storage (no heap allocation)
+/// - Strings > 7 bytes: heap storage
 #[no_mangle]
 pub extern "C" fn tr_value_from_string(data: *const u8, len: usize) -> TrHandle {
     if data.is_null() {
@@ -59,13 +59,7 @@ pub extern "C" fn tr_value_from_static_string(offset: u32, len: u32) -> TrHandle
     use crate::value::TrString;
     
     let tr_string = TrString::new_static(offset, len);
-    let value = TrValue {
-        tag: crate::value::ValueTag::String,
-        _padding: [0; 7],
-        data: crate::value::TrValueData {
-            string: std::mem::ManuallyDrop::new(tr_string),
-        },
-    };
+    let value = TrValue::String(tr_string);
     allocation_table().allocate(value)
 }
 
@@ -79,10 +73,10 @@ pub extern "C" fn tr_string_as_ptr(handle: TrHandle, out_len: *mut usize) -> *co
     
     // Use allocation table's safe access method
     allocation_table().with_value(handle, |val| {
-        match val.tag {
-            crate::value::ValueTag::String => {
+        match val {
+            TrValue::String(s) => {
                 unsafe {
-                    let (ptr, len) = val.data.string.as_ptr_len();
+                    let (ptr, len) = s.as_ptr_len();
                     *out_len = len;
                     ptr
                 }

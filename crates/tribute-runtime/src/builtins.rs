@@ -4,7 +4,7 @@
 //! to all Tribute programs, such as print_line and input_line.
 //! Uses handle-based API for GC compatibility.
 
-use crate::value::{TrValue, TrHandle, ValueTag, allocation_table};
+use crate::value::{TrValue, TrHandle, allocation_table};
 
 /// Print a value followed by a newline
 #[no_mangle]
@@ -16,15 +16,15 @@ pub extern "C" fn tr_builtin_print_line(handle: TrHandle) {
     
     unsafe {
         let val = handle.deref();
-        let output = match val.tag {
-            ValueTag::String => {
-                let s = val.data.string.as_str();
-                format!("{}\n", s)
+        let output = match val {
+            TrValue::String(s) => {
+                let str_val = s.as_str();
+                format!("{}\n", str_val)
             },
-            ValueTag::Number => {
-                format!("{}\n", val.data.number)
+            TrValue::Number(n) => {
+                format!("{}\n", n)
             },
-            ValueTag::Unit => "()\n".to_owned(),
+            TrValue::Unit => "()\n".to_owned(),
         };
         
         print_str(&output);
@@ -41,15 +41,15 @@ pub extern "C" fn tr_builtin_print(handle: TrHandle) {
     
     unsafe {
         let val = handle.deref();
-        let output = match val.tag {
-            ValueTag::String => {
-                let s = val.data.string.as_str();
-                s.to_owned()
+        let output = match val {
+            TrValue::String(s) => {
+                let str_val = s.as_str();
+                str_val.to_owned()
             },
-            ValueTag::Number => {
-                format!("{}", val.data.number)
+            TrValue::Number(n) => {
+                format!("{}", n)
             },
-            ValueTag::Unit => "()".to_owned(),
+            TrValue::Unit => "()".to_owned(),
         };
         
         print_str(&output);
@@ -88,17 +88,17 @@ pub extern "C" fn tr_builtin_number_to_string(handle: TrHandle) -> TrHandle {
     
     unsafe {
         let val = handle.deref();
-        let result = match val.tag {
-            ValueTag::Number => {
-                let s = format!("{}", val.data.number);
+        let result = match val {
+            TrValue::Number(n) => {
+                let s = format!("{}", n);
                 TrValue::string(s)
             },
-            ValueTag::String => {
+            TrValue::String(s) => {
                 // Already a string, clone it
-                let s = val.data.string.as_str();
-                TrValue::string(s.to_owned())
+                let str_val = s.as_str();
+                TrValue::string(str_val.to_owned())
             },
-            ValueTag::Unit => {
+            TrValue::Unit => {
                 TrValue::string_static("()")
             }
         };
@@ -116,19 +116,19 @@ pub extern "C" fn tr_builtin_string_to_number(handle: TrHandle) -> TrHandle {
     
     unsafe {
         let val = handle.deref();
-        let result = match val.tag {
-            ValueTag::String => {
-                let s = val.data.string.as_str();
-                match s.parse::<f64>() {
+        let result = match val {
+            TrValue::String(s) => {
+                let str_val = s.as_str();
+                match str_val.parse::<f64>() {
                     Ok(num) => TrValue::number(num),
                     Err(_) => TrValue::number(0.0),
                 }
             },
-            ValueTag::Number => {
+            TrValue::Number(n) => {
                 // Already a number, clone it
-                TrValue::number(val.data.number)
+                TrValue::number(*n)
             },
-            ValueTag::Unit => {
+            TrValue::Unit => {
                 TrValue::number(0.0)
             }
         };
@@ -146,10 +146,10 @@ pub extern "C" fn tr_builtin_is_truthy(handle: TrHandle) -> bool {
     
     unsafe {
         let val = handle.deref();
-        match val.tag {
-            ValueTag::Number => val.data.number != 0.0 && !val.data.number.is_nan(),
-            ValueTag::String => val.data.string.len() > 0,
-            ValueTag::Unit => false,
+        match val {
+            TrValue::Number(n) => *n != 0.0 && !n.is_nan(),
+            TrValue::String(s) => !s.is_empty(),
+            TrValue::Unit => false,
         }
     }
 }
@@ -163,10 +163,10 @@ pub extern "C" fn tr_builtin_type_of(handle: TrHandle) -> TrHandle {
     
     unsafe {
         let val = handle.deref();
-        let type_name = match val.tag {
-            ValueTag::Number => "number",
-            ValueTag::String => "string", 
-            ValueTag::Unit => "unit",
+        let type_name = match val {
+            TrValue::Number(_) => "number",
+            TrValue::String(_) => "string", 
+            TrValue::Unit => "unit",
         };
         
         allocation_table().allocate(TrValue::string_static(type_name))

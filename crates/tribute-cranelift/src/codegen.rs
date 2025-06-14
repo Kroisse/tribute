@@ -29,6 +29,12 @@ pub struct StringConstantTable {
     data_id: Option<DataId>,
 }
 
+impl Default for StringConstantTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StringConstantTable {
     /// Create a new empty string constant table
     pub fn new() -> Self {
@@ -69,6 +75,7 @@ impl StringConstantTable {
     }
     
     /// Get or create the data ID for this table
+    #[allow(clippy::result_large_err)]
     pub fn get_or_create_data_id<M: Module>(&mut self, module: &mut M) -> Result<DataId, cranelift_module::ModuleError> {
         if let Some(data_id) = self.data_id {
             return Ok(data_id);
@@ -81,6 +88,7 @@ impl StringConstantTable {
     }
     
     /// Finalize the string table in the module
+    #[allow(clippy::result_large_err)]
     pub fn finalize<M: Module>(&mut self, module: &mut M) -> Result<(), cranelift_module::ModuleError> {
         if self.data.is_empty() {
             return Ok(());
@@ -187,6 +195,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
     }
     
     /// Recursively collect string literals from an expression (raw Expr)
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_string_literals_from_expr_data(
         &mut self,
         db: &dyn Database,
@@ -387,7 +396,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
             // Call the user-defined main function
             if let Some(main_func_id) = self.function_map.get("main") {
                 let main_func_ref = self.module
-                    .declare_func_in_func(*main_func_id, &mut builder.func);
+                    .declare_func_in_func(*main_func_id, builder.func);
                 let _result = builder.ins().call(main_func_ref, &[]);
                 
                 // Return 0 for successful execution (ignore the main function's return value)

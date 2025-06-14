@@ -5,7 +5,7 @@
 //! Uses handle-based API for GC compatibility.
 
 use std::string::String;
-use crate::value::{TrValue, TrHandle, ValueTag, allocation_table};
+use crate::value::{TrValue, TrHandle, allocation_table};
 
 /// Concatenate two string values
 #[no_mangle]
@@ -19,24 +19,24 @@ pub extern "C" fn tr_string_concat(left: TrHandle, right: TrHandle) -> TrHandle 
         let right_val = right.deref();
         
         // Convert both values to strings
-        let left_str = match left_val.tag {
-            ValueTag::String => left_val.data.string.as_str(),
-            ValueTag::Number => {
+        let left_str = match left_val {
+            TrValue::String(s) => s.as_str(),
+            TrValue::Number(n) => {
                 // For concatenation, convert number to string
-                let num_str = format!("{}", left_val.data.number);
+                let num_str = format!("{}", n);
                 return tr_string_concat_with_str(num_str.as_ptr(), num_str.len(), right);
             },
-            ValueTag::Unit => "()",
+            TrValue::Unit => "()",
         };
         
-        let right_str = match right_val.tag {
-            ValueTag::String => right_val.data.string.as_str(),
-            ValueTag::Number => {
-                let num_str = format!("{}", right_val.data.number);
+        let right_str = match right_val {
+            TrValue::String(s) => s.as_str(),
+            TrValue::Number(n) => {
+                let num_str = format!("{}", n);
                 let result = format!("{}{}", left_str, num_str);
                 return allocation_table().allocate(TrValue::string(result));
             },
-            ValueTag::Unit => "()",
+            TrValue::Unit => "()",
         };
         
         let result = format!("{}{}", left_str, right_str);
@@ -59,14 +59,14 @@ pub extern "C" fn tr_string_concat_with_str(str_data: *const u8, str_len: usize,
         };
         
         let val = handle.deref();
-        let value_str = match val.tag {
-            ValueTag::String => val.data.string.as_str(),
-            ValueTag::Number => {
-                let num_str = format!("{}", val.data.number);
+        let value_str = match val {
+            TrValue::String(s) => s.as_str(),
+            TrValue::Number(n) => {
+                let num_str = format!("{}", n);
                 let result = format!("{}{}", str_part, num_str);
                 return allocation_table().allocate(TrValue::string(result));
             },
-            ValueTag::Unit => "()",
+            TrValue::Unit => "()",
         };
         
         let result = format!("{}{}", str_part, value_str);
@@ -87,8 +87,8 @@ pub extern "C" fn tr_string_interpolate(
     
     unsafe {
         let format_val = format_handle.deref();
-        let format_str = match format_val.tag {
-            ValueTag::String => format_val.data.string.as_str(),
+        let format_str = match format_val {
+            TrValue::String(s) => s.as_str(),
             _ => return allocation_table().allocate(TrValue::string_static("")),
         };
         
@@ -103,10 +103,10 @@ pub extern "C" fn tr_string_interpolate(
             while let Some(pos) = result.find("{}") {
                 if arg_index < arg_slice.len() && !arg_slice[arg_index].is_null() {
                     let arg_val = arg_slice[arg_index].deref();
-                    let replacement = match arg_val.tag {
-                        ValueTag::String => arg_val.data.string.as_str().to_owned(),
-                        ValueTag::Number => format!("{}", arg_val.data.number),
-                        ValueTag::Unit => "()".to_owned(),
+                    let replacement = match arg_val {
+                        TrValue::String(s) => s.as_str().to_owned(),
+                        TrValue::Number(n) => format!("{}", n),
+                        TrValue::Unit => "()".to_owned(),
                     };
                     
                     result.replace_range(pos..pos+2, &replacement);
@@ -131,8 +131,8 @@ pub extern "C" fn tr_string_length(handle: TrHandle) -> usize {
     
     unsafe {
         let val = handle.deref();
-        match val.tag {
-            ValueTag::String => val.data.string.len(),
+        match val {
+            TrValue::String(s) => s.len(),
             _ => 0,
         }
     }
@@ -152,12 +152,10 @@ pub extern "C" fn tr_string_contains(
         let haystack_val = haystack.deref();
         let needle_val = needle.deref();
         
-        if haystack_val.tag != ValueTag::String || needle_val.tag != ValueTag::String {
-            return false;
-        }
-        
-        let haystack_str = haystack_val.data.string.as_str();
-        let needle_str = needle_val.data.string.as_str();
+        let (haystack_str, needle_str) = match (haystack_val, needle_val) {
+            (TrValue::String(hs), TrValue::String(ns)) => (hs.as_str(), ns.as_str()),
+            _ => return false,
+        };
         
         haystack_str.contains(needle_str)
     }
@@ -172,16 +170,16 @@ pub extern "C" fn tr_value_to_string(handle: TrHandle) -> TrHandle {
     
     unsafe {
         let val = handle.deref();
-        let result = match val.tag {
-            ValueTag::String => {
+        let result = match val {
+            TrValue::String(s) => {
                 // Already a string, clone it
-                let s = val.data.string.as_str();
-                s.to_owned()
+                let str_val = s.as_str();
+                str_val.to_owned()
             },
-            ValueTag::Number => {
-                format!("{}", val.data.number)
+            TrValue::Number(n) => {
+                format!("{}", n)
             },
-            ValueTag::Unit => "()".to_owned(),
+            TrValue::Unit => "()".to_owned(),
         };
         
         allocation_table().allocate(TrValue::string(result))

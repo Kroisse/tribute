@@ -4,7 +4,7 @@
 //! which must match the layout expected by the Cranelift compiler.
 //! Uses Handle-based API with allocation table for true GC compatibility.
 
-use std::{boxed::Box, string::String, fmt, mem::ManuallyDrop, sync::{LazyLock, atomic::{AtomicU32, Ordering}}};
+use std::{boxed::Box, string::String, fmt, sync::{LazyLock, atomic::{AtomicU32, Ordering}}};
 use dashmap::DashMap;
 
 /// Handle type for GC-compatible value references
@@ -120,7 +120,7 @@ impl AllocationTable {
         }
         
         if let Some(value_ref) = self.table.get(&handle.index) {
-            value_ref.value().tag as u8
+            value_ref.value().tag() as u8
         } else {
             ValueTag::Unit as u8
         }
@@ -140,21 +140,18 @@ impl AllocationTable {
         
         match (left_val, right_val) {
             (Some(l), Some(r)) => {
-                let l_val = l.value();
-                let r_val = r.value();
+                let l_val = l.value().as_ref();
+                let r_val = r.value().as_ref();
                 
-                if l_val.tag != r_val.tag {
-                    return false;
-                }
-                
-                match l_val.tag {
-                    ValueTag::Number => unsafe { l_val.data.number == r_val.data.number },
-                    ValueTag::String => unsafe {
-                        let left_str = l_val.data.string.as_str();
-                        let right_str = r_val.data.string.as_str();
+                match (l_val, r_val) {
+                    (TrValue::Number(ln), TrValue::Number(rn)) => ln == rn,
+                    (TrValue::String(ls), TrValue::String(rs)) => unsafe {
+                        let left_str = ls.as_str();
+                        let right_str = rs.as_str();
                         left_str == right_str
                     },
-                    ValueTag::Unit => true,
+                    (TrValue::Unit, TrValue::Unit) => true,
+                    _ => false,
                 }
             },
             _ => false,
@@ -242,9 +239,9 @@ pub enum ValueTag {
 #[repr(C)]
 #[derive(Debug)]
 pub enum TrString {
-    /// Mode 1: Inline - strings ≤ 15 bytes stored directly
+    /// Mode 1: Inline - strings ≤ 7 bytes stored directly
     Inline { 
-        data: [u8; 15], 
+        data: [u8; 7], 
         len: u8 
     },
     /// Mode 2: Static - compile-time strings in object file
@@ -265,9 +262,9 @@ impl TrString {
         let bytes = s.as_bytes();
         let len = bytes.len();
         
-        if len <= 15 {
+        if len <= 7 {
             // Use inline mode for short strings
-            let mut data = [0u8; 15];
+            let mut data = [0u8; 7];
             data[..len].copy_from_slice(bytes);
             TrString::Inline { data, len: len as u8 }
         } else {
@@ -277,10 +274,10 @@ impl TrString {
         }
     }
     
-    /// Create an inline TrString from bytes (for strings ≤ 15 bytes)
+    /// Create an inline TrString from bytes (for strings ≤ 7 bytes)
     pub fn new_inline(bytes: &[u8]) -> Self {
-        assert!(bytes.len() <= 15, "Inline strings must be ≤ 15 bytes");
-        let mut data = [0u8; 15];
+        assert!(bytes.len() <= 7, "Inline strings must be ≤ 7 bytes");
+        let mut data = [0u8; 7];
         data[..bytes.len()].copy_from_slice(bytes);
         TrString::Inline { data, len: bytes.len() as u8 }
     }
@@ -448,137 +445,116 @@ impl Drop for TrString {
 unsafe impl Send for TrString {}
 unsafe impl Sync for TrString {}
 
-// Ensure the layout is 20 bytes with the optimized structure
+// Ensure the layout is 12 bytes with the optimized structure
 const _: () = {
-    assert!(std::mem::size_of::<TrString>() == 20);
+    assert!(std::mem::size_of::<TrString>() == 12);
     assert!(std::mem::align_of::<TrString>() == 4);
 };
 
 /// Main Tribute value type - must match the layout in tribute-cranelift/src/types.rs
 #[repr(C)]
-pub struct TrValue {
-    pub tag: ValueTag,
-    pub _padding: [u8; 7], // Padding to align data to 8 bytes
-    pub data: TrValueData,
-}
-
-/// Value data union
-#[repr(C)]
-pub union TrValueData {
-    pub number: f64,
-    pub string: ManuallyDrop<TrString>,
-    pub unit: (), // Zero-sized for unit values
+pub enum TrValue {
+    Number(f64),
+    String(TrString),
+    Unit,
 }
 
 impl TrValue {
     /// Create a new number value
     pub fn number(n: f64) -> Self {
-        TrValue {
-            tag: ValueTag::Number,
-            _padding: [0; 7],
-            data: TrValueData { number: n },
-        }
+        TrValue::Number(n)
     }
     
     /// Create a new string value
     pub fn string(s: String) -> Self {
-        TrValue {
-            tag: ValueTag::String,
-            _padding: [0; 7],
-            data: TrValueData { 
-                string: ManuallyDrop::new(TrString::new(s))
-            },
-        }
+        TrValue::String(TrString::new(s))
     }
     
     /// Create a new string value from static str
     pub fn string_static(s: &'static str) -> Self {
-        TrValue {
-            tag: ValueTag::String,
-            _padding: [0; 7],
-            data: TrValueData { 
-                string: ManuallyDrop::new(TrString::from_static(s))
-            },
-        }
+        TrValue::String(TrString::from_static(s))
     }
     
     /// Create a unit value
     pub fn unit() -> Self {
-        TrValue {
-            tag: ValueTag::Unit,
-            _padding: [0; 7],
-            data: TrValueData { unit: () },
-        }
+        TrValue::Unit
     }
     
     /// Get the value as a number (returns 0.0 if not a number)
     pub fn as_number(&self) -> f64 {
-        match self.tag {
-            ValueTag::Number => unsafe { self.data.number },
+        match self {
+            TrValue::Number(n) => *n,
             _ => 0.0,
         }
     }
     
     /// Get the value as a string reference
     pub fn as_string(&self) -> Option<&str> {
-        match self.tag {
-            ValueTag::String => unsafe { 
-                Some(self.data.string.as_str())
-            },
+        match self {
+            TrValue::String(s) => unsafe { Some(s.as_str()) },
             _ => None,
         }
     }
     
     /// Check if this is a unit value
     pub fn is_unit(&self) -> bool {
-        matches!(self.tag, ValueTag::Unit)
+        matches!(self, TrValue::Unit)
     }
     
     /// Clone the value (deep copy for strings)
     pub fn clone_value(&self) -> Self {
-        match self.tag {
-            ValueTag::Number => TrValue::number(unsafe { self.data.number }),
-            ValueTag::String => {
-                let s = unsafe { self.data.string.to_string() };
-                TrValue::string(s)
+        match self {
+            TrValue::Number(n) => TrValue::Number(*n),
+            TrValue::String(s) => {
+                let s_str = unsafe { s.to_string() };
+                TrValue::String(TrString::new(s_str))
             },
-            ValueTag::Unit => TrValue::unit(),
+            TrValue::Unit => TrValue::Unit,
+        }
+    }
+    
+    /// Get the tag of the value
+    pub fn tag(&self) -> ValueTag {
+        match self {
+            TrValue::Number(_) => ValueTag::Number,
+            TrValue::String(_) => ValueTag::String,
+            TrValue::Unit => ValueTag::Unit,
         }
     }
 }
 
 impl fmt::Debug for TrValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.tag {
-            ValueTag::Number => write!(f, "Number({})", unsafe { self.data.number }),
-            ValueTag::String => {
-                let s = unsafe { self.data.string.as_str() };
-                write!(f, "String({:?})", s)
+        match self {
+            TrValue::Number(n) => write!(f, "Number({})", n),
+            TrValue::String(s) => {
+                let s_str = unsafe { s.as_str() };
+                write!(f, "String({:?})", s_str)
             },
-            ValueTag::Unit => write!(f, "Unit"),
+            TrValue::Unit => write!(f, "Unit"),
         }
     }
 }
 
 impl fmt::Display for TrValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.tag {
-            ValueTag::Number => write!(f, "{}", unsafe { self.data.number }),
-            ValueTag::String => {
-                let s = unsafe { self.data.string.as_str() };
-                write!(f, "{}", s)
+        match self {
+            TrValue::Number(n) => write!(f, "{}", n),
+            TrValue::String(s) => {
+                let s_str = unsafe { s.as_str() };
+                write!(f, "{}", s_str)
             },
-            ValueTag::Unit => write!(f, "()"),
+            TrValue::Unit => write!(f, "()"),
         }
     }
 }
 
 // Ensure the layout matches what Cranelift expects
 const _: () = {
-    // tag(1) + padding(7) + data(max of: f64(8), TrString(20), unit(0))
-    // The union will be at least 20 bytes (size of TrString)
-    // With 8-byte alignment, total size will be 32 bytes
-    assert!(std::mem::size_of::<TrValue>() == 32);
+    // For enums, Rust adds a discriminant tag (1 byte) + padding for alignment
+    // Largest variant is TrString (12 bytes) + discriminant (1 byte) + padding
+    // With 8-byte alignment, total size will be 24 bytes
+    assert!(std::mem::size_of::<TrValue>() == 24);
     assert!(std::mem::align_of::<TrValue>() == 8);
 };
 
@@ -615,12 +591,12 @@ mod tests {
     
     #[test]
     fn test_trstring_three_modes() {
-        // Test inline mode (≤ 15 bytes)
+        // Test inline mode (≤ 7 bytes)
         let short_str = TrString::new("hello".to_string());
         assert!(matches!(short_str, TrString::Inline { .. }));
         assert_eq!(short_str.len(), 5);
         
-        // Test heap mode (> 15 bytes)
+        // Test heap mode (> 7 bytes)
         let long_str = TrString::new("this is a very long string".to_string());
         assert!(matches!(long_str, TrString::Heap { .. }));
         assert_eq!(long_str.len(), 26);
@@ -715,7 +691,7 @@ mod tests {
         }
         
         // Long string should use heap mode
-        let long_data = b"this is a very long string that exceeds fifteen characters";
+        let long_data = b"this is a very long string that exceeds seven characters";
         let handle_long = crate::memory::tr_value_from_string(long_data.as_ptr(), long_data.len());
         
         let mut len_long = 0usize;

@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .long("test")
                 .help("Run compilation tests on all examples in lang-examples/")
                 .action(ArgAction::SetTrue)
-                .conflicts_with_all(&["input", "compile"]),
+                .conflicts_with_all(["input", "compile"]),
         )
         .get_matches();
 

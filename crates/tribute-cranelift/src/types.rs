@@ -51,38 +51,24 @@ pub enum ValueTag {
 
 /// Runtime value layout (matches what the runtime library expects)
 /// 
-/// ```c
-/// struct TrValue {
-///     uint8_t tag;
-///     uint8_t _padding[7];
-///     union {
-///         double number;
-///         struct {
-///             char* data;
-///             size_t len;
-///             size_t capacity;
-///         } string;
-///     } data;
-/// };
+/// Now uses Rust enum layout:
+/// ```rust
+/// #[repr(C)]
+/// enum TrValue {
+///     Number(f64),      // discriminant + 8 bytes
+///     String(TrString), // discriminant + 12 bytes
+///     Unit,             // discriminant only
+/// }
 /// ```
 pub struct ValueLayout;
 
 impl ValueLayout {
-    /// Offset of the tag field
-    pub const TAG_OFFSET: i32 = 0;
+    /// Offset of the discriminant field (enum tag)
+    pub const DISCRIMINANT_OFFSET: i32 = 0;
     
-    /// Offset of the data union
-    pub const DATA_OFFSET: i32 = 8;  // After tag + padding
+    /// Offset of the data field (after discriminant and padding)
+    pub const DATA_OFFSET: i32 = 8;  // After discriminant + padding for alignment
     
-    /// Offset of string data pointer (within data union)
-    pub const STRING_DATA_OFFSET: i32 = Self::DATA_OFFSET;
-    
-    /// Offset of string length (within data union)
-    pub const STRING_LEN_OFFSET: i32 = Self::DATA_OFFSET + 8;
-    
-    /// Offset of string capacity (within data union)
-    pub const STRING_CAPACITY_OFFSET: i32 = Self::DATA_OFFSET + 16;
-    
-    /// Total size of a TrValue
-    pub const VALUE_SIZE: i32 = 32;  // tag(1) + padding(7) + union(24)
+    /// Total size of a TrValue enum
+    pub const VALUE_SIZE: i32 = 24;  // discriminant(1) + padding + largest_variant(12) with 8-byte alignment
 }

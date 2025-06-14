@@ -4,7 +4,7 @@
 //! type checking and coercion at runtime.
 //! Uses handle-based API for GC compatibility.
 
-use crate::value::{TrValue, TrHandle, ValueTag, allocation_table};
+use crate::value::{TrValue, TrHandle, allocation_table};
 
 /// Add two values - supports number + number and string concatenation
 #[no_mangle]
@@ -17,27 +17,25 @@ pub extern "C" fn tr_value_add(left: TrHandle, right: TrHandle) -> TrHandle {
         let left_val = left.deref();
         let right_val = right.deref();
         
-        let result = match (left_val.tag, right_val.tag) {
-            (ValueTag::Number, ValueTag::Number) => {
-                let sum = left_val.data.number + right_val.data.number;
+        let result = match (left_val, right_val) {
+            (&TrValue::Number(ln), &TrValue::Number(rn)) => {
+                let sum = ln + rn;
                 TrValue::number(sum)
             },
-            (ValueTag::String, ValueTag::String) => {
-                let left_str = left_val.data.string.as_str();
-                let right_str = right_val.data.string.as_str();
+            (TrValue::String(ls), TrValue::String(rs)) => {
+                let left_str = ls.as_str();
+                let right_str = rs.as_str();
                 let result = format!("{}{}", left_str, right_str);
                 TrValue::string(result)
             },
-            (ValueTag::String, ValueTag::Number) => {
-                let left_str = left_val.data.string.as_str();
-                let right_num = right_val.data.number;
-                let result = format!("{}{}", left_str, right_num);
+            (TrValue::String(ls), &TrValue::Number(rn)) => {
+                let left_str = ls.as_str();
+                let result = format!("{}{}", left_str, rn);
                 TrValue::string(result)
             },
-            (ValueTag::Number, ValueTag::String) => {
-                let left_num = left_val.data.number;
-                let right_str = right_val.data.string.as_str();
-                let result = format!("{}{}", left_num, right_str);
+            (&TrValue::Number(ln), TrValue::String(rs)) => {
+                let right_str = rs.as_str();
+                let result = format!("{}{}", ln, right_str);
                 TrValue::string(result)
             },
             _ => {
@@ -61,9 +59,9 @@ pub extern "C" fn tr_value_sub(left: TrHandle, right: TrHandle) -> TrHandle {
         let left_val = left.deref();
         let right_val = right.deref();
         
-        let result = match (left_val.tag, right_val.tag) {
-            (ValueTag::Number, ValueTag::Number) => {
-                let diff = left_val.data.number - right_val.data.number;
+        let result = match (left_val, right_val) {
+            (&TrValue::Number(ln), &TrValue::Number(rn)) => {
+                let diff = ln - rn;
                 TrValue::number(diff)
             },
             _ => {
@@ -87,9 +85,9 @@ pub extern "C" fn tr_value_mul(left: TrHandle, right: TrHandle) -> TrHandle {
         let left_val = left.deref();
         let right_val = right.deref();
         
-        let result = match (left_val.tag, right_val.tag) {
-            (ValueTag::Number, ValueTag::Number) => {
-                let product = left_val.data.number * right_val.data.number;
+        let result = match (left_val, right_val) {
+            (&TrValue::Number(ln), &TrValue::Number(rn)) => {
+                let product = ln * rn;
                 TrValue::number(product)
             },
             _ => {
@@ -113,11 +111,11 @@ pub extern "C" fn tr_value_div(left: TrHandle, right: TrHandle) -> TrHandle {
         let left_val = left.deref();
         let right_val = right.deref();
         
-        let result = match (left_val.tag, right_val.tag) {
-            (ValueTag::Number, ValueTag::Number) => {
+        let result = match (left_val, right_val) {
+            (&TrValue::Number(ln), &TrValue::Number(rn)) => {
                 // IEEE 754 floating point handles division by zero automatically
                 // (returns +/-inf or NaN as appropriate)
-                let quotient = left_val.data.number / right_val.data.number;
+                let quotient = ln / rn;
                 TrValue::number(quotient)
             },
             _ => {
@@ -141,9 +139,9 @@ pub extern "C" fn tr_value_mod(left: TrHandle, right: TrHandle) -> TrHandle {
         let left_val = left.deref();
         let right_val = right.deref();
         
-        let result = match (left_val.tag, right_val.tag) {
-            (ValueTag::Number, ValueTag::Number) => {
-                let remainder = left_val.data.number % right_val.data.number;
+        let result = match (left_val, right_val) {
+            (&TrValue::Number(ln), &TrValue::Number(rn)) => {
+                let remainder = ln % rn;
                 TrValue::number(remainder)
             },
             _ => {
@@ -166,9 +164,9 @@ pub extern "C" fn tr_value_neg(handle: TrHandle) -> TrHandle {
     unsafe {
         let val = handle.deref();
         
-        let result = match val.tag {
-            ValueTag::Number => {
-                let negated = -val.data.number;
+        let result = match val {
+            &TrValue::Number(n) => {
+                let negated = -n;
                 TrValue::number(negated)
             },
             _ => {

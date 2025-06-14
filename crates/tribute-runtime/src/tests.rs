@@ -7,15 +7,15 @@ use crate::arithmetic::*;
 #[test]
 fn test_value_creation() {
     let num_val = TrValue::number(42.0);
-    assert_eq!(num_val.tag, ValueTag::Number);
+    assert_eq!(num_val.tag(), ValueTag::Number);
     assert_eq!(num_val.as_number(), 42.0);
     
     let str_val = TrValue::string("hello".to_string());
-    assert_eq!(str_val.tag, ValueTag::String);
+    assert_eq!(str_val.tag(), ValueTag::String);
     assert_eq!(str_val.as_string(), Some("hello"));
     
     let unit_val = TrValue::unit();
-    assert_eq!(unit_val.tag, ValueTag::Unit);
+    assert_eq!(unit_val.tag(), ValueTag::Unit);
     assert!(unit_val.is_unit());
 }
 
