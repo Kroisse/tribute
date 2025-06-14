@@ -10,8 +10,8 @@ use std::{
     fmt,
     string::String,
     sync::{
-        atomic::{AtomicU32, Ordering},
         LazyLock,
+        atomic::{AtomicU32, Ordering},
     },
 };
 
@@ -47,7 +47,7 @@ impl TrHandle {
         if self.is_null() {
             panic!("Attempted to dereference null handle");
         }
-        ALLOCATION_TABLE.deref_handle(*self)
+        unsafe { ALLOCATION_TABLE.deref_handle(*self) }
     }
 }
 
@@ -106,7 +106,7 @@ impl AllocationTable {
         // 1. The caller doesn't hold the reference longer than the value's lifetime
         // 2. The allocation table is not modified while the reference is held
         // 3. This is used only for temporary access within C functions
-        std::mem::transmute::<&TrValue, &TrValue>(value_ref.value().as_ref())
+        unsafe { std::mem::transmute::<&TrValue, &TrValue>(value_ref.value().as_ref()) }
     }
 
     /// Clone a value (deep copy)
@@ -155,11 +155,11 @@ impl AllocationTable {
 
                 match (l_val, r_val) {
                     (TrValue::Number(ln), TrValue::Number(rn)) => ln == rn,
-                    (TrValue::String(ls), TrValue::String(rs)) => unsafe {
-                        let left_str = ls.as_str();
-                        let right_str = rs.as_str();
+                    (TrValue::String(ls), TrValue::String(rs)) => {
+                        let left_str = unsafe { ls.as_str() };
+                        let right_str = unsafe { rs.as_str() };
                         left_str == right_str
-                    },
+                    }
                     (TrValue::Unit, TrValue::Unit) => true,
                     _ => false,
                 }
@@ -347,12 +347,19 @@ impl TrString {
                     {
                         // For testing: access mock string table
                         let (ptr, len) = get_mock_static_string(*offset, *len as usize);
-                        String::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len).to_vec())
+                        unsafe {
+                            String::from_utf8_unchecked(
+                                std::slice::from_raw_parts(ptr, len).to_vec(),
+                            )
+                        }
                     }
                     #[cfg(not(test))]
                     {
                         // In a real implementation, this would read from .rodata section
-                        panic!("Static string conversion requires compiler integration (offset: {}, len: {})", offset, len);
+                        panic!(
+                            "Static string conversion requires compiler integration (offset: {}, len: {})",
+                            offset, len
+                        );
                     }
                 }
             }
@@ -370,7 +377,7 @@ impl TrString {
         match self {
             TrString::Inline { data, len } => {
                 // SAFETY: We assume the inline data is valid UTF-8
-                std::str::from_utf8_unchecked(&data[..*len as usize])
+                unsafe { std::str::from_utf8_unchecked(&data[..*len as usize]) }
             }
             TrString::Static { offset, len } => {
                 if *len == 0 {
@@ -380,7 +387,9 @@ impl TrString {
                     {
                         // For testing: access mock string table
                         let (ptr, len) = get_mock_static_string(*offset, *len as usize);
-                        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+                        unsafe {
+                            std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+                        }
                     }
                     #[cfg(not(test))]
                     {
@@ -388,7 +397,10 @@ impl TrString {
                         // let base_addr = get_rodata_base_address(); // from compiler
                         // let ptr = (base_addr + *offset) as *const u8;
                         // std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, *len as usize))
-                        panic!("Static string access requires compiler integration (offset: {}, len: {})", offset, len);
+                        panic!(
+                            "Static string access requires compiler integration (offset: {}, len: {})",
+                            offset, len
+                        );
                     }
                 }
             }
@@ -400,7 +412,8 @@ impl TrString {
                 // Create a static string by leaking memory - only safe for temporary C calls
                 allocation_table()
                     .with_string_data(*data_index, |data| {
-                        let s = String::from_utf8_unchecked(data[..*len as usize].to_vec());
+                        let s =
+                            unsafe { String::from_utf8_unchecked(data[..*len as usize].to_vec()) };
                         let leaked: &'static str = Box::leak(s.into_boxed_str());
                         leaked
                     })
@@ -434,7 +447,10 @@ impl TrString {
                         // In a real implementation, this would return:
                         // let base_addr = get_rodata_base_address(); // from compiler
                         // ((base_addr + *offset) as *const u8, *len as usize)
-                        panic!("Static string pointer access requires compiler integration (offset: {}, len: {})", offset, len);
+                        panic!(
+                            "Static string pointer access requires compiler integration (offset: {}, len: {})",
+                            offset, len
+                        );
                     }
                 }
             }
@@ -594,12 +610,10 @@ fn get_mock_static_string(offset: u32, len: usize) -> (*const u8, usize) {
         && len > 0
         && offset_usize.saturating_add(len) <= MOCK_STRING_TABLE.len()
     {
-        unsafe {
-            let ptr = MOCK_STRING_TABLE.as_ptr().add(offset_usize);
-            // Extra safety check - make sure we don't read beyond our mock data
-            let actual_len = std::cmp::min(len, MOCK_STRING_TABLE.len() - offset_usize);
-            (ptr, actual_len)
-        }
+        let ptr = unsafe { MOCK_STRING_TABLE.as_ptr().add(offset_usize) };
+        // Extra safety check - make sure we don't read beyond our mock data
+        let actual_len = std::cmp::min(len, MOCK_STRING_TABLE.len() - offset_usize);
+        (ptr, actual_len)
     } else {
         (b"".as_ptr(), 0)
     }
@@ -609,6 +623,42 @@ fn get_mock_static_string(offset: u32, len: usize) -> (*const u8, usize) {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn test_value_creation() {
+        // Clear allocation table for test isolation
+        allocation_table().clear();
+        let num_val = TrValue::number(42.0);
+        assert!(matches!(num_val, TrValue::Number(_)));
+        assert_eq!(num_val.as_number(), 42.0);
+
+        let str_val = TrValue::string("hello".to_string());
+        assert!(matches!(str_val, TrValue::String(_)));
+        assert_eq!(str_val.as_string(), Some("hello"));
+
+        let unit_val = TrValue::unit();
+        assert!(matches!(unit_val, TrValue::Unit));
+        assert!(unit_val.is_unit());
+    }
+
+    #[test]
+    #[serial]
+    fn test_value_equality() {
+        use crate::memory::*;
+        // Clear allocation table for test isolation
+        allocation_table().clear();
+        let num1 = tr_value_from_number(42.0);
+        let num2 = tr_value_from_number(42.0);
+        let num3 = tr_value_from_number(43.0);
+
+        assert_eq!(tr_value_equals(num1, num2), 1);
+        assert_eq!(tr_value_equals(num1, num3), 0);
+
+        tr_value_free(num1);
+        tr_value_free(num2);
+        tr_value_free(num3);
+    }
 
     #[test]
     #[serial]

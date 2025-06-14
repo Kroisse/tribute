@@ -4,23 +4,23 @@
 //! that are called by compiled Tribute code.
 //! Uses index-based handle system with allocation table for GC compatibility.
 
-use crate::value::{allocation_table, TrHandle, TrValue};
+use crate::value::{TrHandle, TrValue, allocation_table};
 
 /// Allocate a new unit TrValue on the heap
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_value_new() -> TrHandle {
     let value = TrValue::unit();
     allocation_table().allocate(value)
 }
 
 /// Free a TrValue allocated on the heap
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_value_free(handle: TrHandle) {
     allocation_table().free(handle);
 }
 
 /// Create a number value
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_value_from_number(num: f64) -> TrHandle {
     let value = TrValue::number(num);
     allocation_table().allocate(value)
@@ -31,7 +31,7 @@ pub extern "C" fn tr_value_from_number(num: f64) -> TrHandle {
 /// The function automatically chooses the most efficient storage mode:
 /// - Strings ≤ 7 bytes: inline storage (no heap allocation)
 /// - Strings > 7 bytes: heap storage
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_value_from_string(data: *const u8, len: usize) -> TrHandle {
     if data.is_null() {
         let value = TrValue::string_static("");
@@ -54,7 +54,7 @@ pub extern "C" fn tr_value_from_string(data: *const u8, len: usize) -> TrHandle 
 
 /// Create a static string value with offset into .rodata section
 /// This is used by the compiler for string literals
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_value_from_static_string(offset: u32, len: u32) -> TrHandle {
     use crate::value::TrString;
 
@@ -64,7 +64,7 @@ pub extern "C" fn tr_value_from_static_string(offset: u32, len: u32) -> TrHandle
 }
 
 /// Get pointer and length from a string value
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_string_as_ptr(handle: TrHandle, out_len: *mut usize) -> *const u8 {
     if handle.is_null() || out_len.is_null() {
         return std::ptr::null();
@@ -94,29 +94,61 @@ pub extern "C" fn tr_string_as_ptr(handle: TrHandle, out_len: *mut usize) -> *co
 }
 
 /// Extract a number from a TrValue
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_value_to_number(handle: TrHandle) -> f64 {
     allocation_table().to_number(handle)
 }
 
 /// Clone a TrValue (deep copy)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_value_clone(handle: TrHandle) -> TrHandle {
     allocation_table().clone_value(handle)
 }
 
 /// Get the tag of a value for type checking
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_value_get_tag(handle: TrHandle) -> u8 {
     allocation_table().get_tag(handle)
 }
 
 /// Check if two values are equal (for pattern matching)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_value_equals(left: TrHandle, right: TrHandle) -> u8 {
     if allocation_table().values_equal(left, right) {
         1
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::value::allocation_table;
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn test_memory_management() {
+        // Clear allocation table for test isolation
+        allocation_table().clear();
+        // Test number value
+        let num_handle = tr_value_from_number(123.0);
+        assert!(!num_handle.is_null());
+        assert_eq!(tr_value_to_number(num_handle), 123.0);
+        tr_value_free(num_handle);
+
+        // Test string value
+        let test_str = "test string";
+        let str_handle = tr_value_from_string(test_str.as_ptr(), test_str.len());
+        assert!(!str_handle.is_null());
+        tr_value_free(str_handle);
+
+        // Test cloning
+        let original = tr_value_from_number(99.0);
+        let cloned = tr_value_clone(original);
+        assert_eq!(tr_value_to_number(original), tr_value_to_number(cloned));
+        tr_value_free(original);
+        tr_value_free(cloned);
     }
 }

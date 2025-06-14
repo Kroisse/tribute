@@ -1,6 +1,11 @@
 [workspace]
 members = [".", "crates/*"]
 
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Eunchong Yu <kroisse@gmail.com>"]
+
 [workspace.dependencies]
 clap = { version = "4.5", features = ["derive"] }
 cranelift-codegen = "0.120"
@@ -23,10 +28,9 @@ tribute-runtime = { path = "crates/tribute-runtime" }
 
 [package]
 name = "tribute"
-version = "0.1.0"
-edition = "2024"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
 
 [dependencies]
 clap.workspace = true

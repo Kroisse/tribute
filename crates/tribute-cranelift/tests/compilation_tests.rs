@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::path::PathBuf;
-use tribute::{parse_str, TributeDatabaseImpl};
+use tribute::{TributeDatabaseImpl, parse_str};
 use tribute_cranelift::TributeCompiler;
 use tribute_hir::queries::lower_program_to_hir;
 

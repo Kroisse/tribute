@@ -1,8 +1,8 @@
 [package]
 name = "tribute-cranelift"
-version = "0.1.0"
-edition = "2021"
-authors = ["Tribute Contributors"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
 description = "Cranelift-based native code compiler for Tribute programming language"
 
 [dependencies]

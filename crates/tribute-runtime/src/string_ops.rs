@@ -4,11 +4,11 @@
 //! concatenation and interpolation support.
 //! Uses handle-based API for GC compatibility.
 
-use crate::value::{allocation_table, TrHandle, TrValue};
+use crate::value::{TrHandle, TrValue, allocation_table};
 use std::string::String;
 
 /// Concatenate two string values
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_string_concat(left: TrHandle, right: TrHandle) -> TrHandle {
     if left.is_null() || right.is_null() {
         return allocation_table().allocate(TrValue::string_static(""));
@@ -45,7 +45,7 @@ pub extern "C" fn tr_string_concat(left: TrHandle, right: TrHandle) -> TrHandle 
 }
 
 /// Helper function to concatenate a C string with a TrValue
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_string_concat_with_str(
     str_data: *const u8,
     str_len: usize,
@@ -79,7 +79,7 @@ pub extern "C" fn tr_string_concat_with_str(
 }
 
 /// String interpolation - takes a format string and array of values
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_string_interpolate(
     format_handle: TrHandle,
     args: *const TrHandle,
@@ -127,7 +127,7 @@ pub extern "C" fn tr_string_interpolate(
 }
 
 /// Get the length of a string value
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_string_length(handle: TrHandle) -> usize {
     if handle.is_null() {
         return 0;
@@ -143,7 +143,7 @@ pub extern "C" fn tr_string_length(handle: TrHandle) -> usize {
 }
 
 /// Check if a string contains a substring
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_string_contains(haystack: TrHandle, needle: TrHandle) -> bool {
     if haystack.is_null() || needle.is_null() {
         return false;
@@ -163,7 +163,7 @@ pub extern "C" fn tr_string_contains(haystack: TrHandle, needle: TrHandle) -> bo
 }
 
 /// Convert any value to a string representation
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_value_to_string(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
         return allocation_table().allocate(TrValue::string_static("null"));

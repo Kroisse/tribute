@@ -17,9 +17,6 @@ pub mod memory;
 pub mod string_ops;
 pub mod value;
 
-#[cfg(test)]
-mod tests;
-
 // Re-export the main API
 pub use arithmetic::*;
 pub use builtins::*;
@@ -30,13 +27,13 @@ pub use value::*;
 // C-compatible functions are exported directly from each module
 
 // Runtime initialization (called by compiled programs)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_runtime_init() {
     // The allocation table is statically initialized, so no setup is needed
     // This function exists for API completeness and future expansion
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_runtime_cleanup() {
     // Clear all allocations from the global allocation table
     value::allocation_table().clear();

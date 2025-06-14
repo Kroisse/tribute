@@ -3,8 +3,8 @@
 //! This module defines how Tribute's dynamic types are represented
 //! in Cranelift IR. We use a tagged union approach for runtime values.
 
-use cranelift_codegen::ir::types::{Type, I64, I8};
 use cranelift_codegen::ir::AbiParam;
+use cranelift_codegen::ir::types::{I8, I64, Type};
 
 /// Cranelift types used in Tribute compilation
 pub struct TributeTypes;

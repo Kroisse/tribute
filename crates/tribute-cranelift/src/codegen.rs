@@ -14,10 +14,10 @@ use salsa::Database;
 use tribute_ast::{Identifier, Spanned};
 use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, MatchCase, Pattern};
 
+use crate::CompilationError;
 use crate::errors::{CompilationErrorKind, CompilationResult};
 use crate::runtime::RuntimeFunctions;
 use crate::types::TributeTypes;
-use crate::CompilationError;
 
 /// String constant table for managing compile-time strings
 #[derive(Debug)]
@@ -623,7 +623,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
             _ => {
                 return Err(CompilationError::unsupported_feature(
                     "calling via expression",
-                ))
+                ));
             }
         };
 

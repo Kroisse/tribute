@@ -5,7 +5,7 @@
 //! - Static: compile-time strings in .rodata
 //! - Heap: runtime strings in AllocationTable
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use tribute_runtime::memory::*;
 use tribute_runtime::string_ops::*;
 

@@ -4,10 +4,10 @@
 //! to all Tribute programs, such as print_line and input_line.
 //! Uses handle-based API for GC compatibility.
 
-use crate::value::{allocation_table, TrHandle, TrValue};
+use crate::value::{TrHandle, TrValue, allocation_table};
 
 /// Print a value followed by a newline
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_builtin_print_line(handle: TrHandle) {
     if handle.is_null() {
         print_str("(null)\n");
@@ -32,7 +32,7 @@ pub extern "C" fn tr_builtin_print_line(handle: TrHandle) {
 }
 
 /// Print a value without a newline
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_builtin_print(handle: TrHandle) {
     if handle.is_null() {
         print_str("(null)");
@@ -57,7 +57,7 @@ pub extern "C" fn tr_builtin_print(handle: TrHandle) {
 }
 
 /// Read a line of input from the user
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_builtin_input_line() -> TrHandle {
     // For now, return a placeholder string
     // In a full implementation, this would read from stdin
@@ -66,7 +66,7 @@ pub extern "C" fn tr_builtin_input_line() -> TrHandle {
 }
 
 /// Read input with a prompt
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_builtin_input_with_prompt(prompt: TrHandle) -> TrHandle {
     if !prompt.is_null() {
         tr_builtin_print(prompt);
@@ -80,7 +80,7 @@ fn print_str(s: &str) {
 }
 
 /// Convert a number to string (utility function)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_builtin_number_to_string(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
         return allocation_table().allocate(TrValue::string_static("0"));
@@ -106,7 +106,7 @@ pub extern "C" fn tr_builtin_number_to_string(handle: TrHandle) -> TrHandle {
 }
 
 /// Try to parse a string as a number
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_builtin_string_to_number(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
         return allocation_table().allocate(TrValue::number(0.0));
@@ -134,7 +134,7 @@ pub extern "C" fn tr_builtin_string_to_number(handle: TrHandle) -> TrHandle {
 }
 
 /// Check if a value is truthy (for conditional expressions)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_builtin_is_truthy(handle: TrHandle) -> bool {
     if handle.is_null() {
         return false;
@@ -151,7 +151,7 @@ pub extern "C" fn tr_builtin_is_truthy(handle: TrHandle) -> bool {
 }
 
 /// Get the type name of a value (for debugging)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn tr_builtin_type_of(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
         return allocation_table().allocate(TrValue::string_static("null"));
