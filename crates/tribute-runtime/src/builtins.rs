@@ -4,7 +4,7 @@
 //! to all Tribute programs, such as print_line and input_line.
 //! Uses handle-based API for GC compatibility.
 
-use crate::value::{TrValue, TrHandle, allocation_table};
+use crate::value::{allocation_table, TrHandle, TrValue};
 
 /// Print a value followed by a newline
 #[no_mangle]
@@ -13,20 +13,20 @@ pub extern "C" fn tr_builtin_print_line(handle: TrHandle) {
         print_str("(null)\n");
         return;
     }
-    
+
     unsafe {
         let val = handle.deref();
         let output = match val {
             TrValue::String(s) => {
                 let str_val = s.as_str();
                 format!("{}\n", str_val)
-            },
+            }
             TrValue::Number(n) => {
                 format!("{}\n", n)
-            },
+            }
             TrValue::Unit => "()\n".to_owned(),
         };
-        
+
         print_str(&output);
     }
 }
@@ -38,20 +38,20 @@ pub extern "C" fn tr_builtin_print(handle: TrHandle) {
         print_str("(null)");
         return;
     }
-    
+
     unsafe {
         let val = handle.deref();
         let output = match val {
             TrValue::String(s) => {
                 let str_val = s.as_str();
                 str_val.to_owned()
-            },
+            }
             TrValue::Number(n) => {
                 format!("{}", n)
-            },
+            }
             TrValue::Unit => "()".to_owned(),
         };
-        
+
         print_str(&output);
     }
 }
@@ -85,24 +85,22 @@ pub extern "C" fn tr_builtin_number_to_string(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
         return allocation_table().allocate(TrValue::string_static("0"));
     }
-    
+
     unsafe {
         let val = handle.deref();
         let result = match val {
             TrValue::Number(n) => {
                 let s = format!("{}", n);
                 TrValue::string(s)
-            },
+            }
             TrValue::String(s) => {
                 // Already a string, clone it
                 let str_val = s.as_str();
                 TrValue::string(str_val.to_owned())
-            },
-            TrValue::Unit => {
-                TrValue::string_static("()")
             }
+            TrValue::Unit => TrValue::string_static("()"),
         };
-        
+
         allocation_table().allocate(result)
     }
 }
@@ -113,7 +111,7 @@ pub extern "C" fn tr_builtin_string_to_number(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
         return allocation_table().allocate(TrValue::number(0.0));
     }
-    
+
     unsafe {
         let val = handle.deref();
         let result = match val {
@@ -123,16 +121,14 @@ pub extern "C" fn tr_builtin_string_to_number(handle: TrHandle) -> TrHandle {
                     Ok(num) => TrValue::number(num),
                     Err(_) => TrValue::number(0.0),
                 }
-            },
+            }
             TrValue::Number(n) => {
                 // Already a number, clone it
                 TrValue::number(*n)
-            },
-            TrValue::Unit => {
-                TrValue::number(0.0)
             }
+            TrValue::Unit => TrValue::number(0.0),
         };
-        
+
         allocation_table().allocate(result)
     }
 }
@@ -143,7 +139,7 @@ pub extern "C" fn tr_builtin_is_truthy(handle: TrHandle) -> bool {
     if handle.is_null() {
         return false;
     }
-    
+
     unsafe {
         let val = handle.deref();
         match val {
@@ -160,15 +156,15 @@ pub extern "C" fn tr_builtin_type_of(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
         return allocation_table().allocate(TrValue::string_static("null"));
     }
-    
+
     unsafe {
         let val = handle.deref();
         let type_name = match val {
             TrValue::Number(_) => "number",
-            TrValue::String(_) => "string", 
+            TrValue::String(_) => "string",
             TrValue::Unit => "unit",
         };
-        
+
         allocation_table().allocate(TrValue::string_static(type_name))
     }
 }

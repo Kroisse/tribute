@@ -11,21 +11,21 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 #![allow(clippy::missing_safety_doc)]
 
-pub mod value;
-pub mod memory;
 pub mod arithmetic;
-pub mod string_ops;
 pub mod builtins;
+pub mod memory;
+pub mod string_ops;
+pub mod value;
 
 #[cfg(test)]
 mod tests;
 
 // Re-export the main API
-pub use value::*;
-pub use memory::*;
 pub use arithmetic::*;
-pub use string_ops::*;
 pub use builtins::*;
+pub use memory::*;
+pub use string_ops::*;
+pub use value::*;
 
 // C-compatible functions are exported directly from each module
 

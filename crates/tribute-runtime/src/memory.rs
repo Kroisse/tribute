@@ -4,7 +4,7 @@
 //! that are called by compiled Tribute code.
 //! Uses index-based handle system with allocation table for GC compatibility.
 
-use crate::value::{TrValue, TrHandle, allocation_table};
+use crate::value::{allocation_table, TrHandle, TrValue};
 
 /// Allocate a new unit TrValue on the heap
 #[no_mangle]
@@ -27,7 +27,7 @@ pub extern "C" fn tr_value_from_number(num: f64) -> TrHandle {
 }
 
 /// Create a string value from raw parts (automatically selects optimal mode)
-/// 
+///
 /// The function automatically chooses the most efficient storage mode:
 /// - Strings ≤ 7 bytes: inline storage (no heap allocation)
 /// - Strings > 7 bytes: heap storage
@@ -37,7 +37,7 @@ pub extern "C" fn tr_value_from_string(data: *const u8, len: usize) -> TrHandle 
         let value = TrValue::string_static("");
         return allocation_table().allocate(value);
     }
-    
+
     unsafe {
         let slice = std::slice::from_raw_parts(data, len);
         if let Ok(s) = std::str::from_utf8(slice) {
@@ -57,12 +57,11 @@ pub extern "C" fn tr_value_from_string(data: *const u8, len: usize) -> TrHandle 
 #[no_mangle]
 pub extern "C" fn tr_value_from_static_string(offset: u32, len: u32) -> TrHandle {
     use crate::value::TrString;
-    
+
     let tr_string = TrString::new_static(offset, len);
     let value = TrValue::String(tr_string);
     allocation_table().allocate(value)
 }
-
 
 /// Get pointer and length from a string value
 #[no_mangle]
@@ -70,26 +69,28 @@ pub extern "C" fn tr_string_as_ptr(handle: TrHandle, out_len: *mut usize) -> *co
     if handle.is_null() || out_len.is_null() {
         return std::ptr::null();
     }
-    
+
     // Use allocation table's safe access method
-    allocation_table().with_value(handle, |val| {
-        match val {
-            TrValue::String(s) => {
-                unsafe {
-                    let (ptr, len) = s.as_ptr_len();
-                    *out_len = len;
-                    ptr
-                }
+    allocation_table()
+        .with_value(handle, |val| match val {
+            TrValue::String(s) => unsafe {
+                let (ptr, len) = s.as_ptr_len();
+                *out_len = len;
+                ptr
             },
             _ => {
-                unsafe { *out_len = 0; }
+                unsafe {
+                    *out_len = 0;
+                }
                 std::ptr::null()
             }
-        }
-    }).unwrap_or_else(|| {
-        unsafe { *out_len = 0; }
-        std::ptr::null()
-    })
+        })
+        .unwrap_or_else(|| {
+            unsafe {
+                *out_len = 0;
+            }
+            std::ptr::null()
+        })
 }
 
 /// Extract a number from a TrValue
@@ -113,5 +114,9 @@ pub extern "C" fn tr_value_get_tag(handle: TrHandle) -> u8 {
 /// Check if two values are equal (for pattern matching)
 #[no_mangle]
 pub extern "C" fn tr_value_equals(left: TrHandle, right: TrHandle) -> u8 {
-    if allocation_table().values_equal(left, right) { 1 } else { 0 }
+    if allocation_table().values_equal(left, right) {
+        1
+    } else {
+        0
+    }
 }
