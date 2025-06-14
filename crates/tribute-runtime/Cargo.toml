@@ -17,6 +17,17 @@ dashmap = "6.0"
 # For C header generation if needed later
 # cbindgen = "0.24"
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "string_performance"
+harness = false
+
+[[bench]]
+name = "quick_benchmark"
+harness = false
+
 [features]
 default = []
 # Debug features for development

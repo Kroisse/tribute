@@ -90,8 +90,8 @@ fn test_value_equality() {
     let num2 = tr_value_from_number(42.0);
     let num3 = tr_value_from_number(43.0);
     
-    assert!(tr_value_equals(num1, num2));
-    assert!(!tr_value_equals(num1, num3));
+    assert_eq!(tr_value_equals(num1, num2), 1);
+    assert_eq!(tr_value_equals(num1, num3), 0);
     
     tr_value_free(num1);
     tr_value_free(num2);
