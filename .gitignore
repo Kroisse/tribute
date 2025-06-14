@@ -1,7 +1,7 @@
 /target
 .claude/settings.local.json
 CLAUDE.local.md
-tree-sitter-tribute/src/
+crates/tree-sitter-tribute/src/
 node_modules/
 .envrc
 
