@@ -1039,6 +1039,7 @@ dependencies = [
  "salsa",
  "target-lexicon",
  "tempfile",
+ "tribute",
  "tribute-ast",
  "tribute-hir",
 ]

@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .arg(
             Arg::new("input")
                 .help("Input Tribute source file")
-                .required(true)
+                .required_unless_present("test")
                 .value_name("FILE")
                 .index(1),
         )
@@ -46,17 +46,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .value_name("OUTPUT")
                 .requires("compile"),
         )
+        .arg(
+            Arg::new("test")
+                .long("test")
+                .help("Run compilation tests on all examples in lang-examples/")
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(&["input", "compile"]),
+        )
         .get_matches();
 
-    let input_path = PathBuf::from(matches.get_one::<String>("input").unwrap());
+    let test_mode = matches.get_flag("test");
     let compile_mode = matches.get_flag("compile");
 
-    if compile_mode {
+    if test_mode {
+        run_compilation_tests()?;
+    } else if compile_mode {
+        let input_path = PathBuf::from(matches.get_one::<String>("input")
+            .ok_or("Input file is required when compiling")?);
         let output_path = matches.get_one::<String>("output")
             .ok_or("Output path is required when compiling")?;
         compile_program(&input_path, output_path)?;
     } else {
         // Interpreter mode (default)
+        let input_path = PathBuf::from(matches.get_one::<String>("input")
+            .ok_or("Input file is required for interpretation")?);
         interpret_program(&input_path)?;
     }
 
@@ -83,6 +96,123 @@ fn interpret_program(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Runs compilation tests on example files
+fn run_compilation_tests() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Running compilation tests...");
+    
+    // Find lang-examples directory
+    let examples_dir = std::env::current_dir()?.join("lang-examples");
+    if !examples_dir.exists() {
+        eprintln!("Warning: lang-examples directory not found at {}", examples_dir.display());
+        return Ok(());
+    }
+    
+    // Test cases that should compile successfully
+    let should_compile = &[
+        "basic.trb",
+        "functions.trb", 
+        "pattern_matching.trb",
+        "pattern_advanced.trb",
+        "hello.trb",
+        "let_simple.trb",
+        "let_bindings.trb",
+        "calc.trb",
+    ];
+    
+    // Test cases that should fail to compile
+    let should_fail = &[
+        "string_interpolation.trb", // Complex interpolation not implemented
+    ];
+    
+    let mut success_count = 0;
+    let mut failure_count = 0;
+    let mut total_size = 0;
+    
+    println!("\n=== Testing successful compilation cases ===");
+    for &example_name in should_compile {
+        let example_path = examples_dir.join(example_name);
+        if example_path.exists() {
+            print!("Testing {}... ", example_name);
+            match test_compile_file(&example_path) {
+                Ok(size) => {
+                    println!("✓ ({} bytes)", size);
+                    success_count += 1;
+                    total_size += size;
+                },
+                Err(e) => {
+                    println!("✗ Failed: {}", e);
+                    failure_count += 1;
+                }
+            }
+        } else {
+            println!("Skipping {} (file not found)", example_name);
+        }
+    }
+    
+    println!("\n=== Testing expected failure cases ===");
+    for &example_name in should_fail {
+        let example_path = examples_dir.join(example_name);
+        if example_path.exists() {
+            print!("Testing {} (should fail)... ", example_name);
+            match test_compile_file(&example_path) {
+                Ok(_) => {
+                    println!("✗ Unexpectedly succeeded");
+                    failure_count += 1;
+                },
+                Err(_) => {
+                    println!("✓ Failed as expected");
+                    success_count += 1;
+                }
+            }
+        } else {
+            println!("Skipping {} (file not found)", example_name);
+        }
+    }
+    
+    println!("\n=== Test Results ===");
+    println!("✓ Successful tests: {}", success_count);
+    println!("✗ Failed tests: {}", failure_count);
+    if success_count > 0 {
+        println!("📊 Average object size: {} bytes", total_size / success_count);
+        println!("📏 Total object size: {} bytes", total_size);
+    }
+    
+    if failure_count > 0 {
+        println!("\nSome tests failed. Check the output above for details.");
+        std::process::exit(1);
+    } else {
+        println!("\n🎉 All compilation tests passed!");
+    }
+    
+    Ok(())
+}
+
+/// Test compiling a single file and return the object size
+fn test_compile_file(path: &PathBuf) -> Result<usize, Box<dyn std::error::Error>> {
+    let source = std::fs::read_to_string(path)?;
+    let db = TributeDatabaseImpl::default();
+    
+    // Parse to AST
+    let (program, diagnostics) = parse_str(&db, path, &source);
+    
+    // Check for parsing errors
+    if !diagnostics.is_empty() {
+        return Err(format!("Parsing errors: {:?}", diagnostics).into());
+    }
+    
+    // Lower to HIR
+    let hir_program = lower_program_to_hir(&db, program)
+        .ok_or("Failed to lower program to HIR")?;
+    
+    // Create Cranelift compiler
+    let compiler = TributeCompiler::new(None)?; // Use native target
+    
+    // Compile to object code
+    let object_bytes = compiler.compile_program(&db, hir_program)?;
+    
+    Ok(object_bytes.len())
 }
 
 /// Compiles a Tribute program to native binary
