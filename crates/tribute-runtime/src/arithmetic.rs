@@ -4,48 +4,49 @@
 //! type checking and coercion at runtime.
 //! Uses handle-based API for GC compatibility.
 
-use std::boxed::Box;
-use crate::value::{TrValue, TrHandle, ValueTag};
+use crate::value::{TrValue, TrHandle, ValueTag, allocation_table};
 
 /// Add two values - supports number + number and string concatenation
 #[no_mangle]
 pub extern "C" fn tr_value_add(left: TrHandle, right: TrHandle) -> TrHandle {
     if left.is_null() || right.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::unit())));
+        return allocation_table().allocate(TrValue::unit());
     }
     
     unsafe {
         let left_val = left.deref();
         let right_val = right.deref();
         
-        match (left_val.tag, right_val.tag) {
+        let result = match (left_val.tag, right_val.tag) {
             (ValueTag::Number, ValueTag::Number) => {
-                let result = left_val.data.number + right_val.data.number;
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(result))))
+                let sum = left_val.data.number + right_val.data.number;
+                TrValue::number(sum)
             },
             (ValueTag::String, ValueTag::String) => {
                 let left_str = left_val.data.string.as_str();
                 let right_str = right_val.data.string.as_str();
                 let result = format!("{}{}", left_str, right_str);
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string(result))))
+                TrValue::string(result)
             },
             (ValueTag::String, ValueTag::Number) => {
                 let left_str = left_val.data.string.as_str();
                 let right_num = right_val.data.number;
                 let result = format!("{}{}", left_str, right_num);
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string(result))))
+                TrValue::string(result)
             },
             (ValueTag::Number, ValueTag::String) => {
                 let left_num = left_val.data.number;
                 let right_str = right_val.data.string.as_str();
                 let result = format!("{}{}", left_num, right_str);
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string(result))))
+                TrValue::string(result)
             },
             _ => {
                 // Other combinations result in unit
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::unit())))
+                TrValue::unit()
             }
-        }
+        };
+        
+        allocation_table().allocate(result)
     }
 }
 
@@ -53,23 +54,25 @@ pub extern "C" fn tr_value_add(left: TrHandle, right: TrHandle) -> TrHandle {
 #[no_mangle]
 pub extern "C" fn tr_value_sub(left: TrHandle, right: TrHandle) -> TrHandle {
     if left.is_null() || right.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))));
+        return allocation_table().allocate(TrValue::number(0.0));
     }
     
     unsafe {
         let left_val = left.deref();
         let right_val = right.deref();
         
-        match (left_val.tag, right_val.tag) {
+        let result = match (left_val.tag, right_val.tag) {
             (ValueTag::Number, ValueTag::Number) => {
-                let result = left_val.data.number - right_val.data.number;
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(result))))
+                let diff = left_val.data.number - right_val.data.number;
+                TrValue::number(diff)
             },
             _ => {
                 // Non-numeric subtraction results in 0
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))))
+                TrValue::number(0.0)
             }
-        }
+        };
+        
+        allocation_table().allocate(result)
     }
 }
 
@@ -77,23 +80,25 @@ pub extern "C" fn tr_value_sub(left: TrHandle, right: TrHandle) -> TrHandle {
 #[no_mangle]
 pub extern "C" fn tr_value_mul(left: TrHandle, right: TrHandle) -> TrHandle {
     if left.is_null() || right.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))));
+        return allocation_table().allocate(TrValue::number(0.0));
     }
     
     unsafe {
         let left_val = left.deref();
         let right_val = right.deref();
         
-        match (left_val.tag, right_val.tag) {
+        let result = match (left_val.tag, right_val.tag) {
             (ValueTag::Number, ValueTag::Number) => {
-                let result = left_val.data.number * right_val.data.number;
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(result))))
+                let product = left_val.data.number * right_val.data.number;
+                TrValue::number(product)
             },
             _ => {
                 // Non-numeric multiplication results in 0
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))))
+                TrValue::number(0.0)
             }
-        }
+        };
+        
+        allocation_table().allocate(result)
     }
 }
 
@@ -101,30 +106,31 @@ pub extern "C" fn tr_value_mul(left: TrHandle, right: TrHandle) -> TrHandle {
 #[no_mangle]
 pub extern "C" fn tr_value_div(left: TrHandle, right: TrHandle) -> TrHandle {
     if left.is_null() || right.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))));
+        return allocation_table().allocate(TrValue::number(0.0));
     }
     
     unsafe {
         let left_val = left.deref();
         let right_val = right.deref();
         
-        match (left_val.tag, right_val.tag) {
+        let result = match (left_val.tag, right_val.tag) {
             (ValueTag::Number, ValueTag::Number) => {
                 let divisor = right_val.data.number;
-                if divisor == 0.0 {
+                let quotient = if divisor == 0.0 {
                     // Division by zero - return infinity or NaN
-                    let result = left_val.data.number / divisor; // This will be inf or NaN
-                    TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(result))))
+                    left_val.data.number / divisor // This will be inf or NaN
                 } else {
-                    let result = left_val.data.number / divisor;
-                    TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(result))))
-                }
+                    left_val.data.number / divisor
+                };
+                TrValue::number(quotient)
             },
             _ => {
                 // Non-numeric division results in 0
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))))
+                TrValue::number(0.0)
             }
-        }
+        };
+        
+        allocation_table().allocate(result)
     }
 }
 
@@ -132,23 +138,25 @@ pub extern "C" fn tr_value_div(left: TrHandle, right: TrHandle) -> TrHandle {
 #[no_mangle]
 pub extern "C" fn tr_value_mod(left: TrHandle, right: TrHandle) -> TrHandle {
     if left.is_null() || right.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))));
+        return allocation_table().allocate(TrValue::number(0.0));
     }
     
     unsafe {
         let left_val = left.deref();
         let right_val = right.deref();
         
-        match (left_val.tag, right_val.tag) {
+        let result = match (left_val.tag, right_val.tag) {
             (ValueTag::Number, ValueTag::Number) => {
-                let result = left_val.data.number % right_val.data.number;
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(result))))
+                let remainder = left_val.data.number % right_val.data.number;
+                TrValue::number(remainder)
             },
             _ => {
                 // Non-numeric modulo results in 0
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))))
+                TrValue::number(0.0)
             }
-        }
+        };
+        
+        allocation_table().allocate(result)
     }
 }
 
@@ -156,21 +164,23 @@ pub extern "C" fn tr_value_mod(left: TrHandle, right: TrHandle) -> TrHandle {
 #[no_mangle]
 pub extern "C" fn tr_value_neg(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))));
+        return allocation_table().allocate(TrValue::number(0.0));
     }
     
     unsafe {
         let val = handle.deref();
         
-        match val.tag {
+        let result = match val.tag {
             ValueTag::Number => {
-                let result = -val.data.number;
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(result))))
+                let negated = -val.data.number;
+                TrValue::number(negated)
             },
             _ => {
                 // Non-numeric negation results in 0
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))))
+                TrValue::number(0.0)
             }
-        }
+        };
+        
+        allocation_table().allocate(result)
     }
 }

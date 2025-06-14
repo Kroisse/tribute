@@ -39,12 +39,12 @@ extern "C" {
 // Runtime initialization (called by compiled programs)
 #[no_mangle]
 pub extern "C" fn tr_runtime_init() {
-    // Initialize any global state if needed
-    // For now, this is a no-op
+    // The allocation table is statically initialized, so no setup is needed
+    // This function exists for API completeness and future expansion
 }
 
 #[no_mangle]
 pub extern "C" fn tr_runtime_cleanup() {
-    // Clean up any global state if needed
-    // For now, this is a no-op
+    // Clear all allocations from the global allocation table
+    value::allocation_table().clear();
 }

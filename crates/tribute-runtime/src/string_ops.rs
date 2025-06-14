@@ -4,14 +4,14 @@
 //! concatenation and interpolation support.
 //! Uses handle-based API for GC compatibility.
 
-use std::{boxed::Box, string::String};
-use crate::value::{TrValue, TrHandle, ValueTag};
+use std::string::String;
+use crate::value::{TrValue, TrHandle, ValueTag, allocation_table};
 
 /// Concatenate two string values
 #[no_mangle]
 pub extern "C" fn tr_string_concat(left: TrHandle, right: TrHandle) -> TrHandle {
     if left.is_null() || right.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string_static(""))));
+        return allocation_table().allocate(TrValue::string_static(""));
     }
     
     unsafe {
@@ -34,13 +34,13 @@ pub extern "C" fn tr_string_concat(left: TrHandle, right: TrHandle) -> TrHandle 
             ValueTag::Number => {
                 let num_str = format!("{}", right_val.data.number);
                 let result = format!("{}{}", left_str, num_str);
-                return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string(result))));
+                return allocation_table().allocate(TrValue::string(result));
             },
             ValueTag::Unit => "()",
         };
         
         let result = format!("{}{}", left_str, right_str);
-        TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string(result))))
+        allocation_table().allocate(TrValue::string(result))
     }
 }
 
@@ -48,14 +48,14 @@ pub extern "C" fn tr_string_concat(left: TrHandle, right: TrHandle) -> TrHandle 
 #[no_mangle]
 pub extern "C" fn tr_string_concat_with_str(str_data: *const u8, str_len: usize, handle: TrHandle) -> TrHandle {
     if str_data.is_null() || handle.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string_static(""))));
+        return allocation_table().allocate(TrValue::string_static(""));
     }
     
     unsafe {
         let str_slice = std::slice::from_raw_parts(str_data, str_len);
         let str_part = match std::str::from_utf8(str_slice) {
             Ok(s) => s,
-            Err(_) => return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string_static("")))),
+            Err(_) => return allocation_table().allocate(TrValue::string_static("")),
         };
         
         let val = handle.deref();
@@ -64,13 +64,13 @@ pub extern "C" fn tr_string_concat_with_str(str_data: *const u8, str_len: usize,
             ValueTag::Number => {
                 let num_str = format!("{}", val.data.number);
                 let result = format!("{}{}", str_part, num_str);
-                return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string(result))));
+                return allocation_table().allocate(TrValue::string(result));
             },
             ValueTag::Unit => "()",
         };
         
         let result = format!("{}{}", str_part, value_str);
-        TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string(result))))
+        allocation_table().allocate(TrValue::string(result))
     }
 }
 
@@ -82,14 +82,14 @@ pub extern "C" fn tr_string_interpolate(
     arg_count: usize
 ) -> TrHandle {
     if format_handle.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string_static(""))));
+        return allocation_table().allocate(TrValue::string_static(""));
     }
     
     unsafe {
         let format_val = format_handle.deref();
         let format_str = match format_val.tag {
             ValueTag::String => format_val.data.string.as_str(),
-            _ => return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string_static("")))),
+            _ => return allocation_table().allocate(TrValue::string_static("")),
         };
         
         // Simple interpolation: replace {} with arguments in order
@@ -118,7 +118,7 @@ pub extern "C" fn tr_string_interpolate(
             }
         }
         
-        TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string(result))))
+        allocation_table().allocate(TrValue::string(result))
     }
 }
 
@@ -167,7 +167,7 @@ pub extern "C" fn tr_string_contains(
 #[no_mangle]
 pub extern "C" fn tr_value_to_string(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string_static("null"))));
+        return allocation_table().allocate(TrValue::string_static("null"));
     }
     
     unsafe {
@@ -184,6 +184,6 @@ pub extern "C" fn tr_value_to_string(handle: TrHandle) -> TrHandle {
             ValueTag::Unit => "()".to_owned(),
         };
         
-        TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string(result))))
+        allocation_table().allocate(TrValue::string(result))
     }
 }

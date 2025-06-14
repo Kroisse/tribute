@@ -4,8 +4,7 @@
 //! to all Tribute programs, such as print_line and input_line.
 //! Uses handle-based API for GC compatibility.
 
-use std::boxed::Box;
-use crate::value::{TrValue, TrHandle, ValueTag};
+use crate::value::{TrValue, TrHandle, ValueTag, allocation_table};
 
 /// Print a value followed by a newline
 #[no_mangle]
@@ -63,7 +62,7 @@ pub extern "C" fn tr_builtin_input_line() -> TrHandle {
     // For now, return a placeholder string
     // In a full implementation, this would read from stdin
     let placeholder = "input_placeholder";
-    TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string_static(placeholder))))
+    allocation_table().allocate(TrValue::string_static(placeholder))
 }
 
 /// Read input with a prompt
@@ -84,25 +83,27 @@ fn print_str(s: &str) {
 #[no_mangle]
 pub extern "C" fn tr_builtin_number_to_string(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string_static("0"))));
+        return allocation_table().allocate(TrValue::string_static("0"));
     }
     
     unsafe {
         let val = handle.deref();
-        match val.tag {
+        let result = match val.tag {
             ValueTag::Number => {
                 let s = format!("{}", val.data.number);
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string(s))))
+                TrValue::string(s)
             },
             ValueTag::String => {
                 // Already a string, clone it
                 let s = val.data.string.as_str();
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string(s.to_owned()))))
+                TrValue::string(s.to_owned())
             },
             ValueTag::Unit => {
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string_static("()"))))
+                TrValue::string_static("()")
             }
-        }
+        };
+        
+        allocation_table().allocate(result)
     }
 }
 
@@ -110,27 +111,29 @@ pub extern "C" fn tr_builtin_number_to_string(handle: TrHandle) -> TrHandle {
 #[no_mangle]
 pub extern "C" fn tr_builtin_string_to_number(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))));
+        return allocation_table().allocate(TrValue::number(0.0));
     }
     
     unsafe {
         let val = handle.deref();
-        match val.tag {
+        let result = match val.tag {
             ValueTag::String => {
                 let s = val.data.string.as_str();
                 match s.parse::<f64>() {
-                    Ok(num) => TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(num)))),
-                    Err(_) => TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0)))),
+                    Ok(num) => TrValue::number(num),
+                    Err(_) => TrValue::number(0.0),
                 }
             },
             ValueTag::Number => {
                 // Already a number, clone it
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(val.data.number))))
+                TrValue::number(val.data.number)
             },
             ValueTag::Unit => {
-                TrHandle::from_raw(Box::into_raw(Box::new(TrValue::number(0.0))))
+                TrValue::number(0.0)
             }
-        }
+        };
+        
+        allocation_table().allocate(result)
     }
 }
 
@@ -155,7 +158,7 @@ pub extern "C" fn tr_builtin_is_truthy(handle: TrHandle) -> bool {
 #[no_mangle]
 pub extern "C" fn tr_builtin_type_of(handle: TrHandle) -> TrHandle {
     if handle.is_null() {
-        return TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string_static("null"))));
+        return allocation_table().allocate(TrValue::string_static("null"));
     }
     
     unsafe {
@@ -166,6 +169,6 @@ pub extern "C" fn tr_builtin_type_of(handle: TrHandle) -> TrHandle {
             ValueTag::Unit => "unit",
         };
         
-        TrHandle::from_raw(Box::into_raw(Box::new(TrValue::string_static(type_name))))
+        allocation_table().allocate(TrValue::string_static(type_name))
     }
 }
