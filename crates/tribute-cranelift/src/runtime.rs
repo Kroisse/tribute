@@ -27,6 +27,8 @@ pub struct RuntimeFunctions {
     pub value_to_number: FuncId,
     /// Clone a value (for reference counting)
     pub value_clone: FuncId,
+    /// Compare two values for equality
+    pub value_equals: FuncId,
     
     /// Arithmetic operations
     pub value_add: FuncId,
@@ -121,6 +123,16 @@ impl RuntimeFunctions {
             )
         ).box_err()?;
         
+        // value_equals(left: TrHandle, right: TrHandle) -> bool
+        let value_equals = module.declare_function(
+            "tr_value_equals",
+            Linkage::Import,
+            &sig_with_params(
+                vec![AbiParam::new(pointer), AbiParam::new(pointer)],
+                vec![AbiParam::new(cranelift_codegen::ir::types::I8)] // bool as i8
+            )
+        ).box_err()?;
+        
         // Arithmetic operations: (left: TrHandle, right: TrHandle) -> TrHandle
         let binary_op_sig = sig_with_params(
             vec![AbiParam::new(pointer), AbiParam::new(pointer)],
@@ -172,6 +184,7 @@ impl RuntimeFunctions {
             value_from_static_string,
             value_to_number,
             value_clone,
+            value_equals,
             value_add,
             value_sub,
             value_mul,

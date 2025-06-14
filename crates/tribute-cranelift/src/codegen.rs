@@ -12,7 +12,7 @@ use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 
 use salsa::Database;
 use tribute_ast::{Identifier, Spanned};
-use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram};
+use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, MatchCase, Pattern, Literal};
 
 use crate::errors::{BoxError, CompilationError, CompilationResult};
 use crate::runtime::RuntimeFunctions;
@@ -351,8 +351,8 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
     /// Compile the main function
     fn compile_main<'db>(
         &mut self,
-        _db: &'db dyn Database,
-        _program: HirProgram<'db>,
+        db: &'db dyn Database,
+        program: HirProgram<'db>,
     ) -> CompilationResult<()> {
         // Create main function signature
         let mut sig = Signature::new(CallConv::SystemV);
@@ -374,10 +374,37 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
         builder.switch_to_block(entry_block);
         builder.seal_block(entry_block);
         
-        // TODO: Evaluate top-level expressions
-        // For now, just return 0
-        let zero = builder.ins().iconst(cranelift_codegen::ir::types::I32, 0);
-        builder.ins().return_(&[zero]);
+        // Check if there's a main function defined by the user
+        let functions = program.functions(db);
+        if let Some(_main_func) = functions.get("main") {
+            // Create a lowering context for main evaluation
+            let mut lowerer = FunctionLowerer::new(
+                &mut builder,
+                self.module,
+                self.runtime,
+                &self.function_map,
+                HashMap::new(), // No string literals in main for now
+                None,
+            );
+            
+            // Call the user-defined main function
+            if let Some(main_func_id) = self.function_map.get("main") {
+                let main_func_ref = lowerer.import_user_func(*main_func_id)?;
+                let _result = builder.ins().call(main_func_ref, &[]);
+                
+                // Return 0 for successful execution
+                let zero = builder.ins().iconst(cranelift_codegen::ir::types::I32, 0);
+                builder.ins().return_(&[zero]);
+            } else {
+                // Main function not yet compiled - return error code
+                let error_code = builder.ins().iconst(cranelift_codegen::ir::types::I32, 1);
+                builder.ins().return_(&[error_code]);
+            }
+        } else {
+            // No main function - just return 0
+            let zero = builder.ins().iconst(cranelift_codegen::ir::types::I32, 0);
+            builder.ins().return_(&[zero]);
+        }
         
         // Finalize the function
         builder.finalize();
@@ -478,9 +505,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
             Expr::Call { func, args } => self.lower_call(db, func, args),
             Expr::Let { var, value } => self.lower_let(db, var, value),
             Expr::Block(exprs) => self.lower_block(db, exprs),
-            Expr::Match { .. } => Err(CompilationError::UnsupportedFeature(
-                "Pattern matching not yet implemented".to_string()
-            )),
+            Expr::Match { expr, cases } => self.lower_match(db, expr, cases),
         }
     }
     
@@ -661,6 +686,139 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
         match last_value {
             Some(val) => Ok(val),
             None => self.create_unit_value(),
+        }
+    }
+    
+    /// Lower a match expression  
+    /// Simplified implementation for Phase 3 - basic pattern matching only
+    fn lower_match(
+        &mut self,
+        db: &dyn Database,
+        expr: &Spanned<Expr>,
+        cases: &[MatchCase],
+    ) -> CompilationResult<Value> {
+        if cases.is_empty() {
+            return Err(CompilationError::TypeError(
+                "Match expression must have at least one case".to_string()
+            ));
+        }
+        
+        // For now, implement simple pattern matching with if-else chain
+        // This is a simplified version for Phase 3
+        let match_value = self.lower_expr(db, &expr.0)?;
+        
+        // Create a variable to store the result
+        let result_var = self.create_variable();
+        
+        // Create blocks for control flow
+        let mut current_block = self.builder.current_block().unwrap();
+        let end_block = self.builder.create_block();
+        
+        // Generate if-else chain for pattern matching
+        for (i, case) in cases.iter().enumerate() {
+            let case_body_block = self.builder.create_block();
+            let next_test_block = if i + 1 < cases.len() {
+                self.builder.create_block()
+            } else {
+                end_block
+            };
+            
+            // Switch to current test block
+            self.builder.switch_to_block(current_block);
+            
+            // Generate pattern test
+            match &case.pattern {
+                Pattern::Wildcard | Pattern::Variable(_) => {
+                    // Always match - jump to case body
+                    self.builder.ins().jump(case_body_block, &[]);
+                },
+                Pattern::Literal(literal) => {
+                    // Test literal equality
+                    let condition = self.test_literal_pattern(match_value, literal)?;
+                    self.builder.ins().brif(condition, case_body_block, &[], next_test_block, &[]);
+                },
+                _ => {
+                    // For now, unsupported patterns default to false
+                    self.builder.ins().jump(next_test_block, &[]);
+                }
+            }
+            
+            // Generate case body
+            self.builder.switch_to_block(case_body_block);
+            self.bind_pattern_variables(&case.pattern, match_value)?;
+            let case_result = self.lower_expr(db, &case.body.0)?;
+            self.builder.def_var(result_var, case_result);
+            self.builder.ins().jump(end_block, &[]);
+            
+            // Seal the case body block
+            self.builder.seal_block(case_body_block);
+            
+            current_block = next_test_block;
+        }
+        
+        // Handle default case (no match found)
+        if current_block != end_block {
+            self.builder.switch_to_block(current_block);
+            // TODO: Add proper runtime panic for non-exhaustive matches
+            let unit_val = self.create_unit_value()?;
+            self.builder.def_var(result_var, unit_val);
+            self.builder.ins().jump(end_block, &[]);
+            self.builder.seal_block(current_block);
+        }
+        
+        // Switch to end block and return result
+        self.builder.switch_to_block(end_block);
+        self.builder.seal_block(end_block);
+        
+        Ok(self.builder.use_var(result_var))
+    }
+    
+    /// Test a literal pattern for matching (returns boolean)
+    fn test_literal_pattern(
+        &mut self,
+        match_value: Value,
+        literal: &Literal,
+    ) -> CompilationResult<Value> {
+        match literal {
+            Literal::Number(n) => {
+                let literal_value = self.lower_number(*n)?;
+                let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
+                let comparison = self.builder.ins().call(equals_func, &[match_value, literal_value]);
+                Ok(self.builder.inst_results(comparison)[0])
+            },
+            Literal::StringInterpolation(s) => {
+                if s.segments.is_empty() {
+                    let literal_value = self.lower_string_literal(&s.leading_text)?;
+                    let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
+                    let comparison = self.builder.ins().call(equals_func, &[match_value, literal_value]);
+                    Ok(self.builder.inst_results(comparison)[0])
+                } else {
+                    Err(CompilationError::UnsupportedFeature(
+                        "String interpolation in patterns not yet implemented".to_string()
+                    ))
+                }
+            },
+        }
+    }
+    
+    /// Bind variables from pattern matching
+    fn bind_pattern_variables(&mut self, pattern: &Pattern, value: Value) -> CompilationResult<()> {
+        match pattern {
+            Pattern::Variable(name) => {
+                // Bind the variable to the matched value
+                self.define_variable(name, value);
+                Ok(())
+            },
+            Pattern::Wildcard | Pattern::Literal(_) => {
+                // No variables to bind
+                Ok(())
+            },
+            Pattern::List(_) | Pattern::Rest(_) => {
+                // TODO: Implement in future iterations
+                Err(CompilationError::UnsupportedFeature(
+                    "Complex pattern variable binding not yet implemented".to_string()
+                ))
+            },
         }
     }
     

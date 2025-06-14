@@ -116,8 +116,8 @@ pub extern "C" fn tr_value_get_tag(handle: TrHandle) -> u8 {
     allocation_table().get_tag(handle)
 }
 
-/// Check if two values are equal (for debugging/testing)
+/// Check if two values are equal (for pattern matching)
 #[no_mangle]
-pub extern "C" fn tr_value_equals(left: TrHandle, right: TrHandle) -> bool {
-    allocation_table().values_equal(left, right)
+pub extern "C" fn tr_value_equals(left: TrHandle, right: TrHandle) -> u8 {
+    if allocation_table().values_equal(left, right) { 1 } else { 0 }
 }
