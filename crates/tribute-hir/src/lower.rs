@@ -1,6 +1,9 @@
 use crate::hir::*;
 use std::collections::BTreeMap;
-use tribute_ast::{Program, ItemKind, FunctionDefinition, Statement, Expr as AstExpr, Span, Spanned, Pattern as AstPattern, LiteralPattern};
+use tribute_ast::{
+    Expr as AstExpr, FunctionDefinition, ItemKind, LiteralPattern, Pattern as AstPattern, Program,
+    Span, Spanned, Statement,
+};
 
 /// Error type for HIR lowering
 #[derive(Debug, Clone, PartialEq)]
@@ -42,7 +45,13 @@ pub struct FunctionDef {
 }
 
 /// Convert AST Program to HIR function definitions
-pub fn lower_program_to_hir<'db>(db: &'db dyn salsa::Database, program: Program<'db>) -> LowerResult<(BTreeMap<tribute_ast::Identifier, FunctionDef>, Option<tribute_ast::Identifier>)> {
+pub fn lower_program_to_hir<'db>(
+    db: &'db dyn salsa::Database,
+    program: Program<'db>,
+) -> LowerResult<(
+    BTreeMap<tribute_ast::Identifier, FunctionDef>,
+    Option<tribute_ast::Identifier>,
+)> {
     let mut functions = BTreeMap::new();
     let mut main_function = None;
 
@@ -56,9 +65,7 @@ pub fn lower_program_to_hir<'db>(db: &'db dyn salsa::Database, program: Program<
                 functions.insert(function.name.clone(), function);
             }
             _ => {
-                return Err(LowerError::UnknownForm(
-                    "Unknown item kind".to_string(),
-                ));
+                return Err(LowerError::UnknownForm("Unknown item kind".to_string()));
             }
         }
     }
@@ -66,11 +73,14 @@ pub fn lower_program_to_hir<'db>(db: &'db dyn salsa::Database, program: Program<
     Ok((functions, main_function))
 }
 
-fn lower_function_def<'db>(db: &'db dyn salsa::Database, func_def: FunctionDefinition<'db>) -> LowerResult<FunctionDef> {
+fn lower_function_def<'db>(
+    db: &'db dyn salsa::Database,
+    func_def: FunctionDefinition<'db>,
+) -> LowerResult<FunctionDef> {
     let name = func_def.name(db);
     let params = func_def.parameters(db);
     let body_block = func_def.body(db);
-    
+
     // Convert body statements to HIR expressions
     let mut body_exprs = Vec::new();
     for statement in &body_block.statements {
@@ -88,7 +98,7 @@ fn lower_function_def<'db>(db: &'db dyn salsa::Database, func_def: FunctionDefin
             }
         }
     }
-    
+
     Ok(FunctionDef {
         name,
         params,
@@ -104,7 +114,9 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
     let hir_expr = match ast_expr {
         AstExpr::Number(n) => Expr::Number(*n),
         AstExpr::StringInterpolation(interp) => {
-            let segments: LowerResult<Vec<_>> = interp.segments.iter()
+            let segments: LowerResult<Vec<_>> = interp
+                .segments
+                .iter()
                 .map(|segment| {
                     Ok(crate::hir::StringSegment {
                         interpolation: Box::new(lower_expr(&segment.interpolation)?),
@@ -112,9 +124,9 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
                     })
                 })
                 .collect();
-            Expr::StringInterpolation(crate::hir::StringInterpolation { 
+            Expr::StringInterpolation(crate::hir::StringInterpolation {
                 leading_text: interp.leading_text.clone(),
-                segments: segments? 
+                segments: segments?,
             })
         }
         AstExpr::Identifier(id) => Expr::Variable(id.clone()),
@@ -139,14 +151,19 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
         }
         AstExpr::Match(match_expr) => {
             let expr = Box::new(lower_expr(&match_expr.value)?);
-            let cases: LowerResult<Vec<_>> = match_expr.arms.iter()
+            let cases: LowerResult<Vec<_>> = match_expr
+                .arms
+                .iter()
                 .map(|arm| {
                     let pattern = lower_pattern(&arm.pattern)?;
                     let body = lower_expr(&arm.value)?;
                     Ok(MatchCase { pattern, body })
                 })
                 .collect();
-            Expr::Match { expr, cases: cases? }
+            Expr::Match {
+                expr,
+                cases: cases?,
+            }
         }
     };
 
@@ -160,13 +177,17 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
                 LiteralPattern::Number(n) => Ok(Pattern::Literal(Literal::Number(*n))),
                 LiteralPattern::String(s) => {
                     // Convert simple string to StringInterpolation without segments
-                    Ok(Pattern::Literal(Literal::StringInterpolation(crate::hir::StringInterpolation {
-                        leading_text: s.clone(),
-                        segments: Vec::new(),
-                    })))
+                    Ok(Pattern::Literal(Literal::StringInterpolation(
+                        crate::hir::StringInterpolation {
+                            leading_text: s.clone(),
+                            segments: Vec::new(),
+                        },
+                    )))
                 }
                 LiteralPattern::StringInterpolation(interp) => {
-                    let segments: LowerResult<Vec<_>> = interp.segments.iter()
+                    let segments: LowerResult<Vec<_>> = interp
+                        .segments
+                        .iter()
                         .map(|segment| {
                             Ok(crate::hir::StringSegment {
                                 interpolation: Box::new(lower_expr(&segment.interpolation)?),
@@ -174,10 +195,12 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
                             })
                         })
                         .collect();
-                    Ok(Pattern::Literal(Literal::StringInterpolation(crate::hir::StringInterpolation { 
-                        leading_text: interp.leading_text.clone(),
-                        segments: segments? 
-                    })))
+                    Ok(Pattern::Literal(Literal::StringInterpolation(
+                        crate::hir::StringInterpolation {
+                            leading_text: interp.leading_text.clone(),
+                            segments: segments?,
+                        },
+                    )))
                 }
             }
         }
@@ -185,7 +208,6 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
         AstPattern::Identifier(id) => Ok(Pattern::Variable(id.clone())),
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -198,7 +220,6 @@ mod tests {
     fn test_identifier(name: &str) -> AstExpr {
         AstExpr::Identifier(name.to_string())
     }
-
 
     // TODO: Update tests to work with new AST structure
     #[test]

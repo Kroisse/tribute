@@ -1,7 +1,7 @@
 // Example showing how to use the Salsa database for the Tribute language
 
 use salsa::Setter;
-use tribute::{parse_source_file, parse_str, SourceFile, TributeDatabaseImpl};
+use tribute::{SourceFile, TributeDatabaseImpl, parse_source_file, parse_str};
 
 fn main() {
     // Example 1: Basic database usage

@@ -129,4 +129,3 @@ pub enum LiteralPattern {
     String(String),
     StringInterpolation(StringInterpolation),
 }
-

@@ -1,4 +1,4 @@
-use tribute::{eval_str, Value};
+use tribute::{Value, eval_str};
 use tribute_ast::TributeDatabaseImpl;
 
 #[test]

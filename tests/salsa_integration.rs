@@ -1,13 +1,16 @@
 use std::path::Path;
 
 use salsa::{Database as _, Setter as _};
-use tribute::{parse_source_file, Diagnostic, SourceFile, TributeDatabaseImpl};
+use tribute::{Diagnostic, SourceFile, TributeDatabaseImpl, parse_source_file};
 
 #[test]
 fn test_salsa_database_examples() {
     // Example source code
     let examples = vec![
-        (Path::new("hello.trb"), r#"fn main() { print_line("Hello, World!") }"#),
+        (
+            Path::new("hello.trb"),
+            r#"fn main() { print_line("Hello, World!") }"#,
+        ),
         (Path::new("calc.trb"), r#"fn main() { 1 + 2 + 3 }"#),
         (
             Path::new("complex.trb"),
@@ -24,7 +27,10 @@ fn main() {
 }
 "#,
         ),
-        (Path::new("invalid.trb"), r#"fn main() { invalid syntax here }"#),
+        (
+            Path::new("invalid.trb"),
+            r#"fn main() { invalid syntax here }"#,
+        ),
     ];
 
     for (filename, source_code) in examples {
@@ -56,7 +62,10 @@ fn main() {
             }
             "invalid.trb" => {
                 // Invalid syntax should still parse as a function with invalid content
-                assert_eq!(expr_count, 1, "Invalid syntax should still produce 1 function");
+                assert_eq!(
+                    expr_count, 1,
+                    "Invalid syntax should still produce 1 function"
+                );
             }
             _ => {}
         }
@@ -67,7 +76,11 @@ fn main() {
 fn test_salsa_incremental_computation_detailed() {
     // Demonstrate incremental computation
     let mut db = TributeDatabaseImpl::default();
-    let source_file = SourceFile::new(&db, "incremental.trb".into(), "fn main() { 1 + 2 }".to_string());
+    let source_file = SourceFile::new(
+        &db,
+        "incremental.trb".into(),
+        "fn main() { 1 + 2 }".to_string(),
+    );
 
     // Initial parse
     let program1 = parse_source_file(&db, source_file);
@@ -75,7 +88,9 @@ fn test_salsa_incremental_computation_detailed() {
     let _program1_str = format!("{:?}", program1);
 
     // Modify the source file
-    source_file.set_text(&mut db).to("fn main() { 1 + 2 + 3 + 4 }".to_string());
+    source_file
+        .set_text(&mut db)
+        .to("fn main() { 1 + 2 + 3 + 4 }".to_string());
 
     // Parse again - should recompute
     let program2 = parse_source_file(&db, source_file);
@@ -100,7 +115,8 @@ fn test_salsa_incremental_computation_detailed() {
 fn test_salsa_diagnostics_collection() {
     // Test with valid code - should have no diagnostics
     let (valid_expr_count, valid_diag_count) = TributeDatabaseImpl::default().attach(|db| {
-        let valid_source = SourceFile::new(db, "valid.trb".into(), "fn main() { 1 + 2 }".to_string());
+        let valid_source =
+            SourceFile::new(db, "valid.trb".into(), "fn main() { 1 + 2 }".to_string());
         let valid_program = parse_source_file(db, valid_source);
         let valid_diagnostics = parse_source_file::accumulated::<Diagnostic>(db, valid_source);
 
@@ -122,7 +138,8 @@ fn test_salsa_diagnostics_collection() {
 fn add(a, b) { a + b }
 fn multiply(a, b) { a * b }  
 fn main() { print_line("test") }
-"#.to_string(),
+"#
+            .to_string(),
         );
         let multi_program = parse_source_file(db, multi_source);
         let multi_diagnostics = parse_source_file::accumulated::<Diagnostic>(db, multi_source);
@@ -165,18 +182,14 @@ fn test_salsa_database_isolation() {
 #[test]
 fn test_salsa_function_tracking() {
     let source = "fn main() { 1 + 2 }";
-    let (item_count, program_str) =
-        TributeDatabaseImpl::default().attach(|db| {
-            let source_file = SourceFile::new(db, "span_test.trb".into(), source.to_string());
-            let program = parse_source_file(db, source_file);
+    let (item_count, program_str) = TributeDatabaseImpl::default().attach(|db| {
+        let source_file = SourceFile::new(db, "span_test.trb".into(), source.to_string());
+        let program = parse_source_file(db, source_file);
 
-            assert_eq!(program.items(db).len(), 1);
+        assert_eq!(program.items(db).len(), 1);
 
-            (
-                program.items(db).len(),
-                format!("{:?}", program),
-            )
-        });
+        (program.items(db).len(), format!("{:?}", program))
+    });
 
     // Verify results
     assert_eq!(item_count, 1);

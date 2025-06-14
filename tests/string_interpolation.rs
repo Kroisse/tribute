@@ -1,5 +1,5 @@
-use tribute::TributeDatabaseImpl;
 use salsa::Database;
+use tribute::TributeDatabaseImpl;
 
 #[test]
 fn test_basic_string_interpolation() {
