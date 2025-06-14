@@ -14,7 +14,7 @@ pub mod types;
 mod tests;
 
 pub use compiler::TributeCompiler;
-pub use errors::{BoxError, CompilationError, CompilationResult};
+pub use errors::{CompilationError, CompilationResult};
 
 use salsa::Database;
 use tribute_hir::hir::HirProgram;

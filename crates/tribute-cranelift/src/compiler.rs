@@ -11,7 +11,7 @@ use salsa::Database;
 use tribute_hir::hir::HirProgram;
 
 use crate::codegen::CodeGenerator;
-use crate::errors::{BoxError, CompilationError, CompilationResult};
+use crate::errors::CompilationResult;
 use crate::runtime::RuntimeFunctions;
 
 /// Tribute compiler using Cranelift
@@ -28,27 +28,19 @@ impl TributeCompiler {
 
         // Configure Cranelift settings
         let mut flag_builder = settings::builder();
-        flag_builder
-            .set("use_colocated_libcalls", "false")
-            .map_err(|e| CompilationError::CraneliftError(e.to_string()))?;
-        flag_builder
-            .set("is_pic", "false")
-            .map_err(|e| CompilationError::CraneliftError(e.to_string()))?;
+        flag_builder.set("use_colocated_libcalls", "false")?;
+        flag_builder.set("is_pic", "false")?;
 
-        let isa_builder = cranelift_codegen::isa::lookup(target.clone())
-            .map_err(|e| CompilationError::InvalidTarget(e.to_string()))?;
+        let isa_builder = cranelift_codegen::isa::lookup(target.clone())?;
 
-        let isa = isa_builder
-            .finish(settings::Flags::new(flag_builder))
-            .map_err(|e| CompilationError::CraneliftError(e.to_string()))?;
+        let isa = isa_builder.finish(settings::Flags::new(flag_builder))?;
 
         // Create object module
         let object_builder = ObjectBuilder::new(
             isa,
             format!("tribute_{}", std::process::id()),
             cranelift_module::default_libcall_names(),
-        )
-        .box_err()?;
+        )?;
 
         let mut module = ObjectModule::new(object_builder);
 
@@ -72,7 +64,7 @@ impl TributeCompiler {
 
         // Finalize the module and get the object file
         let object = self.module.finish();
-        let bytes = object.emit().box_err()?;
+        let bytes = object.emit()?;
 
         Ok(bytes)
     }

@@ -14,9 +14,10 @@ use salsa::Database;
 use tribute_ast::{Identifier, Spanned};
 use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, MatchCase, Pattern};
 
-use crate::errors::{BoxError, CompilationError, CompilationResult};
+use crate::errors::{CompilationErrorKind, CompilationResult};
 use crate::runtime::RuntimeFunctions;
 use crate::types::TributeTypes;
+use crate::CompilationError;
 
 /// String constant table for managing compile-time strings
 #[derive(Debug)]
@@ -78,7 +79,7 @@ impl StringConstantTable {
     pub fn get_or_create_data_id<M: Module>(
         &mut self,
         module: &mut M,
-    ) -> Result<DataId, cranelift_module::ModuleError> {
+    ) -> Result<DataId, Box<cranelift_module::ModuleError>> {
         if let Some(data_id) = self.data_id {
             return Ok(data_id);
         }
@@ -91,11 +92,10 @@ impl StringConstantTable {
     }
 
     /// Finalize the string table in the module
-    #[allow(clippy::result_large_err)]
     pub fn finalize<M: Module>(
         &mut self,
         module: &mut M,
-    ) -> Result<(), cranelift_module::ModuleError> {
+    ) -> Result<(), Box<cranelift_module::ModuleError>> {
         if self.data.is_empty() {
             return Ok(());
         }
@@ -141,9 +141,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
 
     /// Get the data ID for the string constant table
     pub fn get_string_table_data_id(&mut self) -> CompilationResult<DataId> {
-        self.string_table
-            .get_or_create_data_id(self.module)
-            .box_err()
+        Ok(self.string_table.get_or_create_data_id(self.module)?)
     }
 
     /// Collect all string literals from a function
@@ -263,7 +261,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
         self.compile_main(db, program)?;
 
         // Finalize string constant table
-        self.string_table.finalize(self.module).box_err()?;
+        self.string_table.finalize(self.module)?;
 
         Ok(())
     }
@@ -293,8 +291,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
 
         let func_id = self
             .module
-            .declare_function(func_name, Linkage::Local, &sig)
-            .box_err()?;
+            .declare_function(func_name, Linkage::Local, &sig)?;
 
         self.function_map.insert(name.clone(), func_id);
         Ok(())
@@ -373,7 +370,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
         builder.finalize();
 
         // Define the function in the module
-        self.module.define_function(func_id, &mut ctx).box_err()?;
+        self.module.define_function(func_id, &mut ctx)?;
 
         Ok(())
     }
@@ -391,8 +388,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
 
         let main_id = self
             .module
-            .declare_function("main", Linkage::Export, &sig)
-            .box_err()?;
+            .declare_function("main", Linkage::Export, &sig)?;
 
         // Create context for main function
         let mut ctx = self.module.make_context();
@@ -435,7 +431,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
         builder.finalize();
 
         // Define the function in the module
-        self.module.define_function(main_id, &mut ctx).box_err()?;
+        self.module.define_function(main_id, &mut ctx)?;
 
         Ok(())
     }
@@ -495,10 +491,9 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
 
     /// Get the value of a variable
     fn use_variable(&mut self, name: &str) -> CompilationResult<Value> {
-        let var = self
-            .variables
-            .get(name)
-            .ok_or_else(|| CompilationError::TypeError(format!("Undefined variable: {}", name)))?;
+        let var = self.variables.get(name).ok_or_else(|| {
+            CompilationErrorKind::TypeError(format!("Undefined variable: {}", name))
+        })?;
         Ok(self.builder.use_var(*var))
     }
 
@@ -555,8 +550,8 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
             self.lower_string_literal(&s.leading_text)
         } else {
             // Complex interpolation - not yet implemented
-            Err(CompilationError::UnsupportedFeature(
-                "String interpolation not yet implemented".to_string(),
+            Err(CompilationError::unsupported_feature(
+                "string interpolation",
             ))
         }
     }
@@ -627,8 +622,8 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
         let func_name = match &func.0 {
             Expr::Variable(name) => name,
             _ => {
-                return Err(CompilationError::UnsupportedFeature(
-                    "Only direct function calls supported".to_string(),
+                return Err(CompilationError::unsupported_feature(
+                    "calling via expression",
                 ))
             }
         };
@@ -652,7 +647,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
                 let func_id = self
                     .function_map
                     .get(func_name)
-                    .ok_or_else(|| CompilationError::FunctionNotFound(func_name.clone()))?;
+                    .ok_or_else(|| CompilationError::function_not_found(func_name.clone()))?;
 
                 let func_ref = self.import_user_func(*func_id)?;
                 let result = self.builder.ins().call(func_ref, &arg_values);
@@ -668,7 +663,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
         args: &[Value],
     ) -> CompilationResult<Value> {
         if args.len() != 2 {
-            return Err(CompilationError::TypeError(format!(
+            return Err(CompilationError::type_error(format!(
                 "Binary operation requires 2 arguments, got {}",
                 args.len()
             )));
@@ -682,7 +677,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     /// Lower print_line built-in
     fn lower_print_line(&mut self, args: &[Value]) -> CompilationResult<Value> {
         if args.len() != 1 {
-            return Err(CompilationError::TypeError(format!(
+            return Err(CompilationError::type_error(format!(
                 "print_line requires 1 argument, got {}",
                 args.len()
             )));
@@ -698,7 +693,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     /// Lower input_line built-in
     fn lower_input_line(&mut self, args: &[Value]) -> CompilationResult<Value> {
         if !args.is_empty() {
-            return Err(CompilationError::TypeError(format!(
+            return Err(CompilationError::type_error(format!(
                 "input_line requires 0 arguments, got {}",
                 args.len()
             )));
@@ -748,7 +743,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
         cases: &[MatchCase],
     ) -> CompilationResult<Value> {
         if cases.is_empty() {
-            return Err(CompilationError::TypeError(
+            return Err(CompilationError::type_error(
                 "Match expression must have at least one case".to_string(),
             ));
         }
@@ -801,9 +796,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
                     self.builder.seal_block(fallback_block);
                 }
                 _ => {
-                    return Err(CompilationError::UnsupportedFeature(
-                        "Complex patterns not yet implemented".to_string(),
-                    ));
+                    return Err(CompilationError::unsupported_feature("complex patterns"));
                 }
             }
         } else {
@@ -902,8 +895,8 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
                         .call(equals_func, &[match_value, literal_value]);
                     Ok(self.builder.inst_results(comparison)[0])
                 } else {
-                    Err(CompilationError::UnsupportedFeature(
-                        "String interpolation in patterns not yet implemented".to_string(),
+                    Err(CompilationError::unsupported_feature(
+                        "string interpolation in patterns",
                     ))
                 }
             }
@@ -924,8 +917,8 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
             }
             Pattern::List(_) | Pattern::Rest(_) => {
                 // TODO: Implement in future iterations
-                Err(CompilationError::UnsupportedFeature(
-                    "Complex pattern variable binding not yet implemented".to_string(),
+                Err(CompilationError::unsupported_feature(
+                    "complex pattern variable binding",
                 ))
             }
         }

@@ -8,7 +8,7 @@ use cranelift_codegen::ir::{AbiParam, Signature};
 use cranelift_codegen::isa::CallConv;
 use cranelift_module::{FuncId, Linkage, Module};
 
-use crate::errors::{BoxError, CompilationResult};
+use crate::errors::CompilationResult;
 use crate::types::TributeTypes;
 
 /// Runtime function signatures and IDs
@@ -60,97 +60,81 @@ impl RuntimeFunctions {
         };
 
         // value_new() -> TrHandle
-        let value_new = module
-            .declare_function(
-                "tr_value_new",
-                Linkage::Import,
-                &sig_with_params(vec![], vec![AbiParam::new(pointer)]),
-            )
-            .box_err()?;
+        let value_new = module.declare_function(
+            "tr_value_new",
+            Linkage::Import,
+            &sig_with_params(vec![], vec![AbiParam::new(pointer)]),
+        )?;
 
         // value_free(handle: TrHandle) -> void
-        let value_free = module
-            .declare_function(
-                "tr_value_free",
-                Linkage::Import,
-                &sig_with_params(vec![AbiParam::new(pointer)], vec![]),
-            )
-            .box_err()?;
+        let value_free = module.declare_function(
+            "tr_value_free",
+            Linkage::Import,
+            &sig_with_params(vec![AbiParam::new(pointer)], vec![]),
+        )?;
 
         // value_from_number(num: f64) -> TrHandle
-        let value_from_number = module
-            .declare_function(
-                "tr_value_from_number",
-                Linkage::Import,
-                &sig_with_params(
-                    vec![TributeTypes::number_param()],
-                    vec![AbiParam::new(pointer)],
-                ),
-            )
-            .box_err()?;
+        let value_from_number = module.declare_function(
+            "tr_value_from_number",
+            Linkage::Import,
+            &sig_with_params(
+                vec![TributeTypes::number_param()],
+                vec![AbiParam::new(pointer)],
+            ),
+        )?;
 
         // value_from_string(data: *char, len: i64) -> TrHandle
-        let value_from_string = module
-            .declare_function(
-                "tr_value_from_string",
-                Linkage::Import,
-                &sig_with_params(
-                    vec![
-                        AbiParam::new(pointer),
-                        AbiParam::new(TributeTypes::size_type()),
-                    ],
-                    vec![AbiParam::new(pointer)],
-                ),
-            )
-            .box_err()?;
+        let value_from_string = module.declare_function(
+            "tr_value_from_string",
+            Linkage::Import,
+            &sig_with_params(
+                vec![
+                    AbiParam::new(pointer),
+                    AbiParam::new(TributeTypes::size_type()),
+                ],
+                vec![AbiParam::new(pointer)],
+            ),
+        )?;
 
         // value_from_static_string(offset: u32, len: u32) -> TrHandle
-        let value_from_static_string = module
-            .declare_function(
-                "tr_value_from_static_string",
-                Linkage::Import,
-                &sig_with_params(
-                    vec![
-                        AbiParam::new(cranelift_codegen::ir::types::I32),
-                        AbiParam::new(cranelift_codegen::ir::types::I32),
-                    ],
-                    vec![AbiParam::new(pointer)],
-                ),
-            )
-            .box_err()?;
+        let value_from_static_string = module.declare_function(
+            "tr_value_from_static_string",
+            Linkage::Import,
+            &sig_with_params(
+                vec![
+                    AbiParam::new(cranelift_codegen::ir::types::I32),
+                    AbiParam::new(cranelift_codegen::ir::types::I32),
+                ],
+                vec![AbiParam::new(pointer)],
+            ),
+        )?;
 
         // value_to_number(handle: TrHandle) -> f64
-        let value_to_number = module
-            .declare_function(
-                "tr_value_to_number",
-                Linkage::Import,
-                &sig_with_params(
-                    vec![AbiParam::new(pointer)],
-                    vec![TributeTypes::number_param()],
-                ),
-            )
-            .box_err()?;
+        let value_to_number = module.declare_function(
+            "tr_value_to_number",
+            Linkage::Import,
+            &sig_with_params(
+                vec![AbiParam::new(pointer)],
+                vec![TributeTypes::number_param()],
+            ),
+        )?;
 
         // value_clone(handle: TrHandle) -> TrHandle
-        let value_clone = module
-            .declare_function(
-                "tr_value_clone",
-                Linkage::Import,
-                &sig_with_params(vec![AbiParam::new(pointer)], vec![AbiParam::new(pointer)]),
-            )
-            .box_err()?;
+        let value_clone = module.declare_function(
+            "tr_value_clone",
+            Linkage::Import,
+            &sig_with_params(vec![AbiParam::new(pointer)], vec![AbiParam::new(pointer)]),
+        )?;
 
         // value_equals(left: TrHandle, right: TrHandle) -> bool
-        let value_equals = module
-            .declare_function(
-                "tr_value_equals",
-                Linkage::Import,
-                &sig_with_params(
-                    vec![AbiParam::new(pointer), AbiParam::new(pointer)],
-                    vec![AbiParam::new(cranelift_codegen::ir::types::I8)], // bool as i8
-                ),
-            )
-            .box_err()?;
+        let value_equals = module.declare_function(
+            "tr_value_equals",
+            Linkage::Import,
+            &sig_with_params(
+                vec![AbiParam::new(pointer), AbiParam::new(pointer)],
+                vec![AbiParam::new(cranelift_codegen::ir::types::I8)], // bool as i8
+            ),
+        )?;
 
         // Arithmetic operations: (left: TrHandle, right: TrHandle) -> TrHandle
         let binary_op_sig = sig_with_params(
@@ -158,58 +142,43 @@ impl RuntimeFunctions {
             vec![AbiParam::new(pointer)],
         );
 
-        let value_add = module
-            .declare_function("tr_value_add", Linkage::Import, &binary_op_sig)
-            .box_err()?;
-        let value_sub = module
-            .declare_function("tr_value_sub", Linkage::Import, &binary_op_sig)
-            .box_err()?;
-        let value_mul = module
-            .declare_function("tr_value_mul", Linkage::Import, &binary_op_sig)
-            .box_err()?;
-        let value_div = module
-            .declare_function("tr_value_div", Linkage::Import, &binary_op_sig)
-            .box_err()?;
+        let value_add = module.declare_function("tr_value_add", Linkage::Import, &binary_op_sig)?;
+        let value_sub = module.declare_function("tr_value_sub", Linkage::Import, &binary_op_sig)?;
+        let value_mul = module.declare_function("tr_value_mul", Linkage::Import, &binary_op_sig)?;
+        let value_div = module.declare_function("tr_value_div", Linkage::Import, &binary_op_sig)?;
 
         // String operations
-        let string_concat = module
-            .declare_function("tr_string_concat", Linkage::Import, &binary_op_sig)
-            .box_err()?;
+        let string_concat =
+            module.declare_function("tr_string_concat", Linkage::Import, &binary_op_sig)?;
 
         // string_interpolate(format: TrHandle, args: *TrHandle, count: i64) -> TrHandle
-        let string_interpolate = module
-            .declare_function(
-                "tr_string_interpolate",
-                Linkage::Import,
-                &sig_with_params(
-                    vec![
-                        AbiParam::new(pointer),
-                        AbiParam::new(pointer),
-                        AbiParam::new(TributeTypes::size_type()),
-                    ],
-                    vec![AbiParam::new(pointer)],
-                ),
-            )
-            .box_err()?;
+        let string_interpolate = module.declare_function(
+            "tr_string_interpolate",
+            Linkage::Import,
+            &sig_with_params(
+                vec![
+                    AbiParam::new(pointer),
+                    AbiParam::new(pointer),
+                    AbiParam::new(TributeTypes::size_type()),
+                ],
+                vec![AbiParam::new(pointer)],
+            ),
+        )?;
 
         // Built-in functions
         // print_line(handle: TrHandle) -> void
-        let builtin_print_line = module
-            .declare_function(
-                "tr_builtin_print_line",
-                Linkage::Import,
-                &sig_with_params(vec![AbiParam::new(pointer)], vec![]),
-            )
-            .box_err()?;
+        let builtin_print_line = module.declare_function(
+            "tr_builtin_print_line",
+            Linkage::Import,
+            &sig_with_params(vec![AbiParam::new(pointer)], vec![]),
+        )?;
 
         // input_line() -> TrHandle
-        let builtin_input_line = module
-            .declare_function(
-                "tr_builtin_input_line",
-                Linkage::Import,
-                &sig_with_params(vec![], vec![AbiParam::new(pointer)]),
-            )
-            .box_err()?;
+        let builtin_input_line = module.declare_function(
+            "tr_builtin_input_line",
+            Linkage::Import,
+            &sig_with_params(vec![], vec![AbiParam::new(pointer)]),
+        )?;
 
         Ok(RuntimeFunctions {
             value_new,
