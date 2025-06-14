@@ -17,10 +17,10 @@ fn bench_string_modes(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("heap_string_20_bytes", |b| {
+    group.bench_function("heap_string_21_bytes", |b| {
         b.iter(|| {
-            let handle =
-                tr_value_from_string(black_box("this is a long string".as_ptr()), black_box(20));
+            const LONG: &str = "this is a long string";
+            let handle = tr_value_from_string(black_box(LONG.as_ptr()), black_box(LONG.len()));
             tr_value_free(black_box(handle));
         });
     });
