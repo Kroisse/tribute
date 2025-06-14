@@ -1,11 +1,17 @@
 //! Tests for the runtime library
+//! 
+//! Note: These tests use serial_test to ensure thread safety with global allocation table
 
-use crate::value::TrValue;
+use crate::value::{TrValue, allocation_table};
 use crate::memory::*;
 use crate::arithmetic::*;
+use serial_test::serial;
 
 #[test]
+#[serial]
 fn test_value_creation() {
+    // Clear allocation table for test isolation
+    allocation_table().clear();
     let num_val = TrValue::number(42.0);
     assert!(matches!(num_val, TrValue::Number(_)));
     assert_eq!(num_val.as_number(), 42.0);
@@ -20,7 +26,10 @@ fn test_value_creation() {
 }
 
 #[test]
+#[serial]
 fn test_memory_management() {
+    // Clear allocation table for test isolation
+    allocation_table().clear();
     // Test number value
     let num_handle = tr_value_from_number(123.0);
     assert!(!num_handle.is_null());
@@ -42,7 +51,10 @@ fn test_memory_management() {
 }
 
 #[test]
+#[serial]
 fn test_arithmetic_operations() {
+    // Clear allocation table for test isolation
+    allocation_table().clear();
     let left = tr_value_from_number(10.0);
     let right = tr_value_from_number(5.0);
     
@@ -72,7 +84,10 @@ fn test_arithmetic_operations() {
 }
 
 #[test]
+#[serial]
 fn test_string_arithmetic() {
+    // Clear allocation table for test isolation
+    allocation_table().clear();
     let hello = tr_value_from_string("Hello ".as_ptr(), 6);
     let world = tr_value_from_string("World!".as_ptr(), 6);
     
@@ -86,7 +101,10 @@ fn test_string_arithmetic() {
 }
 
 #[test]
+#[serial]
 fn test_value_equality() {
+    // Clear allocation table for test isolation
+    allocation_table().clear();
     let num1 = tr_value_from_number(42.0);
     let num2 = tr_value_from_number(42.0);
     let num3 = tr_value_from_number(43.0);

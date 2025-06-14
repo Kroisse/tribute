@@ -588,9 +588,13 @@ fn get_mock_static_string(offset: u32, len: usize) -> (*const u8, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     
     #[test]
+    #[serial]
     fn test_trstring_three_modes() {
+        // Clear allocation table for test isolation
+        allocation_table().clear();
         // Test inline mode (≤ 7 bytes)
         let short_str = TrString::new("hello".to_string());
         assert!(matches!(short_str, TrString::Inline { .. }));
@@ -608,7 +612,10 @@ mod tests {
     }
     
     #[test]
+    #[serial]
     fn test_static_string_runtime_functions() {
+        // Clear allocation table for test isolation
+        allocation_table().clear();
         // Clear allocation table before test
         allocation_table().clear();
         
@@ -633,7 +640,10 @@ mod tests {
     }
     
     #[test]
+    #[serial]
     fn test_static_string_different_offsets() {
+        // Clear allocation table for test isolation
+        allocation_table().clear();
         // Clear allocation table before test
         allocation_table().clear();
         
@@ -672,7 +682,10 @@ mod tests {
     }
     
     #[test]
+    #[serial]
     fn test_string_mode_automatic_selection() {
+        // Clear allocation table for test isolation
+        allocation_table().clear();
         // Clear allocation table before test
         allocation_table().clear();
         
@@ -708,7 +721,10 @@ mod tests {
     }
     
     #[test]
+    #[serial]
     fn test_empty_static_string() {
+        // Clear allocation table for test isolation
+        allocation_table().clear();
         // Test edge case: empty static string
         let handle = crate::memory::tr_value_from_static_string(0, 0);
         assert!(!handle.is_null());
@@ -723,8 +739,9 @@ mod tests {
     }
     
     #[test]
+    #[serial]
     fn test_static_string_value_comparison() {
-        // Clear allocation table before test
+        // Clear allocation table for test isolation
         allocation_table().clear();
         
         // Test that static strings work with value comparison
