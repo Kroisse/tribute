@@ -119,6 +119,8 @@ fn run_compilation_tests() -> Result<(), Box<dyn std::error::Error>> {
         "let_simple.trb",
         "let_bindings.trb",
         "calc.trb",
+        "empty_program.trb",
+        "simple_function.trb",
     ];
     
     // Test cases that should fail to compile

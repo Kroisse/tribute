@@ -25,17 +25,9 @@ const TEST_CASES: &[(&str, &str, bool)] = &[
     // Cases that should fail to compile
     ("string_interpolation.trb", include_str!("../../../lang-examples/string_interpolation.trb"), false),
     
-    // Additional inline test cases for edge cases
-    ("empty_program", "", true),
-    ("simple_function", r#"
-fn add(a, b) {
-    a + b
-}
-
-fn main() {
-    print_line("Hello World")
-}
-"#, true),
+    // Additional test cases for edge cases
+    ("empty_program.trb", include_str!("../../../lang-examples/empty_program.trb"), true),
+    ("simple_function.trb", include_str!("../../../lang-examples/simple_function.trb"), true),
 ];
 
 #[test]
