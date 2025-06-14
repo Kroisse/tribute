@@ -12,29 +12,29 @@ pub struct TributeTypes;
 impl TributeTypes {
     /// Get the pointer type for the current platform
     pub fn pointer_type() -> Type {
-        I64  // 64-bit pointers for now, should be platform-specific
+        I64 // 64-bit pointers for now, should be platform-specific
     }
-    
+
     /// Get the type for value tags (discriminant)
     pub fn tag_type() -> Type {
-        I8  // Single byte for type tags
+        I8 // Single byte for type tags
     }
-    
+
     /// Get the type for numbers (f64 internally)
     pub fn number_type() -> Type {
         cranelift_codegen::ir::types::F64
     }
-    
+
     /// Get the type for string length/capacity
     pub fn size_type() -> Type {
         I64
     }
-    
+
     /// Get the ABI parameter for a Tribute value handle (TrHandle)
     pub fn value_param() -> AbiParam {
         AbiParam::new(Self::pointer_type())
     }
-    
+
     /// Get the ABI parameter for a raw number
     pub fn number_param() -> AbiParam {
         AbiParam::new(Self::number_type())
@@ -50,25 +50,22 @@ pub enum ValueTag {
 }
 
 /// Runtime value layout (matches what the runtime library expects)
-/// 
-/// Now uses Rust enum layout:
-/// ```ignore
-/// #[repr(C)]
-/// enum TrValue {
-///     Number(f64),      // discriminant + 8 bytes
-///     String(TrString), // discriminant + 12 bytes
-///     Unit,             // discriminant only
-/// }
-/// ```
+///
+/// The TrValue enum is defined in the runtime crate with this layout:
+/// - Number variant: discriminant + 8 bytes (f64)
+/// - String variant: discriminant + 12 bytes (TrString enum)
+/// - Unit variant: discriminant only
+///
+/// Total size: 24 bytes with 8-byte alignment
 pub struct ValueLayout;
 
 impl ValueLayout {
     /// Offset of the discriminant field (enum tag)
     pub const DISCRIMINANT_OFFSET: i32 = 0;
-    
+
     /// Offset of the data field (after discriminant and padding)
-    pub const DATA_OFFSET: i32 = 8;  // After discriminant + padding for alignment
-    
+    pub const DATA_OFFSET: i32 = 8; // After discriminant + padding for alignment
+
     /// Total size of a TrValue enum
-    pub const VALUE_SIZE: i32 = 24;  // discriminant(1) + padding + largest_variant(12) with 8-byte alignment
+    pub const VALUE_SIZE: i32 = 24; // discriminant(1) + padding + largest_variant(12) with 8-byte alignment
 }

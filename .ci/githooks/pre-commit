@@ -7,6 +7,9 @@ echo "Running pre-commit checks..."
 echo "Running clippy..."
 cargo clippy --all -- -D warnings
 
+echo "Running cargo fmt..."
+cargo fmt --all --check
+
 echo "Running tests..."
 cargo test --all
 

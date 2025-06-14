@@ -25,25 +25,25 @@ impl<T> BoxError<T> for Result<T, object::write::Error> {
 pub enum CompilationError {
     #[display("Code generation error: {_0}")]
     CodegenError(String),
-    
+
     #[display("Module error: {_0}")]
     ModuleError(Box<cranelift_module::ModuleError>),
-    
+
     #[display("Cranelift error: {_0}")]
     CraneliftError(String),
-    
+
     #[display("Unsupported feature: {_0}")]
     UnsupportedFeature(String),
-    
+
     #[display("Type error: {_0}")]
     TypeError(String),
-    
+
     #[display("Function not found: {_0}")]
     FunctionNotFound(String),
-    
+
     #[display("Invalid target: {_0}")]
     InvalidTarget(String),
-    
+
     #[display("Object generation failed: {_0}")]
     ObjectError(Box<object::write::Error>),
 }

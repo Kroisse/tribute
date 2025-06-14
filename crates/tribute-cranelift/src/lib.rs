@@ -1,13 +1,14 @@
+#![warn(clippy::all)]
 //! Cranelift-based native code compiler for Tribute
 //!
 //! This crate provides ahead-of-time (AOT) compilation of Tribute programs
 //! to native executables using the Cranelift code generation library.
 
-pub mod compiler;
 pub mod codegen;
+pub mod compiler;
+pub mod errors;
 pub mod runtime;
 pub mod types;
-pub mod errors;
 
 #[cfg(test)]
 mod tests;
