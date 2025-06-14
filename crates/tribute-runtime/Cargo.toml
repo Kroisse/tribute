@@ -10,8 +10,8 @@ description = "Runtime library for compiled Tribute programs"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-# Only minimal dependencies for the runtime
-# No allocator dependencies to avoid conflicts
+# DashMap for concurrent hash maps - better performance than Mutex<HashMap>
+dashmap = "6.0"
 
 [build-dependencies]
 # For C header generation if needed later

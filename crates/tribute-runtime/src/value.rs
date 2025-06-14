@@ -4,7 +4,8 @@
 //! which must match the layout expected by the Cranelift compiler.
 //! Uses Handle-based API with allocation table for true GC compatibility.
 
-use std::{boxed::Box, string::String, fmt, mem::ManuallyDrop, sync::{Mutex, LazyLock}, collections::HashMap};
+use std::{boxed::Box, string::String, fmt, mem::ManuallyDrop, sync::{LazyLock, atomic::{AtomicU32, Ordering}}};
+use dashmap::DashMap;
 
 /// Handle type for GC-compatible value references
 /// Uses index-based approach with allocation table for true GC compatibility
@@ -45,38 +46,33 @@ impl TrHandle {
 /// Global allocation table for managing TrValue instances and string memory
 /// This provides the indirection needed for garbage collection
 pub struct AllocationTable {
-    /// Map from handle index to allocated TrValue
+    /// Concurrent map from handle index to allocated TrValue
     /// Using Box to keep values on heap and allow for future relocation
-    table: Mutex<HashMap<u32, Box<TrValue>>>,
-    /// Map from string handle index to allocated string data
+    table: DashMap<u32, Box<TrValue>>,
+    /// Concurrent map from string handle index to allocated string data
     /// All string memory is managed centrally for GC compatibility
-    string_table: Mutex<HashMap<u32, Box<[u8]>>>,
-    /// Counter for generating unique handle indices
-    next_index: Mutex<u32>,
-    /// Counter for generating unique string handle indices
-    next_string_index: Mutex<u32>,
+    string_table: DashMap<u32, Box<[u8]>>,
+    /// Atomic counter for generating unique handle indices
+    next_index: AtomicU32,
+    /// Atomic counter for generating unique string handle indices
+    next_string_index: AtomicU32,
 }
 
 impl AllocationTable {
     /// Create a new allocation table
     fn new() -> Self {
         Self {
-            table: Mutex::new(HashMap::new()),
-            string_table: Mutex::new(HashMap::new()),
-            next_index: Mutex::new(1), // Start at 1, reserve 0 for null
-            next_string_index: Mutex::new(1), // Start at 1, reserve 0 for null
+            table: DashMap::new(),
+            string_table: DashMap::new(),
+            next_index: AtomicU32::new(1), // Start at 1, reserve 0 for null
+            next_string_index: AtomicU32::new(1), // Start at 1, reserve 0 for null
         }
     }
     
     /// Allocate a new value and return its handle
     pub fn allocate(&self, value: TrValue) -> TrHandle {
-        let mut table = self.table.lock().unwrap();
-        let mut next_index = self.next_index.lock().unwrap();
-        
-        let index = *next_index;
-        *next_index += 1;
-        
-        table.insert(index, Box::new(value));
+        let index = self.next_index.fetch_add(1, Ordering::Relaxed);
+        self.table.insert(index, Box::new(value));
         TrHandle::from_index(index)
     }
     
@@ -86,15 +82,13 @@ impl AllocationTable {
             return;
         }
         
-        let mut table = self.table.lock().unwrap();
-        table.remove(&handle.index);
+        self.table.remove(&handle.index);
     }
     
     /// Get a reference to the value for a handle
     /// SAFETY: Caller must ensure handle is valid
     unsafe fn deref_handle(&self, handle: TrHandle) -> &TrValue {
-        let table = self.table.lock().unwrap();
-        let value_box = table.get(&handle.index)
+        let value_ref = self.table.get(&handle.index)
             .expect("Invalid handle: value not found in allocation table");
         
         // SAFETY: We're extending the lifetime of the reference here.
@@ -102,7 +96,7 @@ impl AllocationTable {
         // 1. The caller doesn't hold the reference longer than the value's lifetime
         // 2. The allocation table is not modified while the reference is held
         // 3. This is used only for temporary access within C functions
-        std::mem::transmute::<&TrValue, &TrValue>(value_box.as_ref())
+        std::mem::transmute::<&TrValue, &TrValue>(value_ref.value().as_ref())
     }
     
     /// Clone a value (deep copy)
@@ -111,15 +105,12 @@ impl AllocationTable {
             return TrHandle::null();
         }
         
-        let cloned_value = {
-            let table = self.table.lock().unwrap();
-            if let Some(value_box) = table.get(&handle.index) {
-                value_box.clone_value()
-            } else {
-                return TrHandle::null();
-            }
-        };
-        self.allocate(cloned_value)
+        if let Some(value_ref) = self.table.get(&handle.index) {
+            let cloned_value = value_ref.value().clone_value();
+            self.allocate(cloned_value)
+        } else {
+            TrHandle::null()
+        }
     }
     
     /// Get the tag of a value
@@ -128,9 +119,8 @@ impl AllocationTable {
             return ValueTag::Unit as u8;
         }
         
-        let table = self.table.lock().unwrap();
-        if let Some(value_box) = table.get(&handle.index) {
-            value_box.tag as u8
+        if let Some(value_ref) = self.table.get(&handle.index) {
+            value_ref.value().tag as u8
         } else {
             ValueTag::Unit as u8
         }
@@ -145,21 +135,23 @@ impl AllocationTable {
             return false;
         }
         
-        let table = self.table.lock().unwrap();
-        let left_val = table.get(&left.index);
-        let right_val = table.get(&right.index);
+        let left_val = self.table.get(&left.index);
+        let right_val = self.table.get(&right.index);
         
         match (left_val, right_val) {
             (Some(l), Some(r)) => {
-                if l.tag != r.tag {
+                let l_val = l.value();
+                let r_val = r.value();
+                
+                if l_val.tag != r_val.tag {
                     return false;
                 }
                 
-                match l.tag {
-                    ValueTag::Number => unsafe { l.data.number == r.data.number },
+                match l_val.tag {
+                    ValueTag::Number => unsafe { l_val.data.number == r_val.data.number },
                     ValueTag::String => unsafe {
-                        let left_str = l.data.string.as_str();
-                        let right_str = r.data.string.as_str();
+                        let left_str = l_val.data.string.as_str();
+                        let right_str = r_val.data.string.as_str();
                         left_str == right_str
                     },
                     ValueTag::Unit => true,
@@ -175,9 +167,8 @@ impl AllocationTable {
             return 0.0;
         }
         
-        let table = self.table.lock().unwrap();
-        if let Some(value_box) = table.get(&handle.index) {
-            value_box.as_number()
+        if let Some(value_ref) = self.table.get(&handle.index) {
+            value_ref.value().as_number()
         } else {
             0.0
         }
@@ -185,13 +176,8 @@ impl AllocationTable {
     
     /// Allocate string data and return its handle index
     pub fn allocate_string(&self, data: Vec<u8>) -> u32 {
-        let mut string_table = self.string_table.lock().unwrap();
-        let mut next_string_index = self.next_string_index.lock().unwrap();
-        
-        let index = *next_string_index;
-        *next_string_index += 1;
-        
-        string_table.insert(index, data.into_boxed_slice());
+        let index = self.next_string_index.fetch_add(1, Ordering::Relaxed);
+        self.string_table.insert(index, data.into_boxed_slice());
         index
     }
     
@@ -201,44 +187,31 @@ impl AllocationTable {
             return;
         }
         
-        let mut string_table = self.string_table.lock().unwrap();
-        string_table.remove(&string_index);
+        self.string_table.remove(&string_index);
     }
     
-    /// Get string data by handle index
-    pub fn get_string_data(&self, string_index: u32) -> Option<&[u8]> {
+    /// Get string data by handle index with a closure to avoid lifetime issues
+    pub fn with_string_data<T>(&self, string_index: u32, f: impl FnOnce(&[u8]) -> T) -> Option<T> {
         if string_index == 0 {
             return None;
         }
         
-        let string_table = self.string_table.lock().unwrap();
-        let data = string_table.get(&string_index)?;
-        
-        // SAFETY: We're extending the lifetime of the reference here.
-        // This is safe as long as:
-        // 1. The caller doesn't hold the reference longer than the string's lifetime
-        // 2. The string table is not modified while the reference is held
-        // 3. This is used only for temporary access within C functions
-        Some(unsafe { std::mem::transmute::<&[u8], &[u8]>(data.as_ref()) })
+        let data_ref = self.string_table.get(&string_index)?;
+        Some(f(data_ref.value()))
     }
     
     /// Clear all allocations (for cleanup)
     pub fn clear(&self) {
-        let mut table = self.table.lock().unwrap();
-        table.clear();
-        let mut string_table = self.string_table.lock().unwrap();
-        string_table.clear();
-        let mut next_index = self.next_index.lock().unwrap();
-        *next_index = 1;
-        let mut next_string_index = self.next_string_index.lock().unwrap();
-        *next_string_index = 1;
+        self.table.clear();
+        self.string_table.clear();
+        self.next_index.store(1, Ordering::Relaxed);
+        self.next_string_index.store(1, Ordering::Relaxed);
     }
     
     /// Get the current number of allocated values (for debugging)
     #[allow(dead_code)]
     fn allocation_count(&self) -> usize {
-        let table = self.table.lock().unwrap();
-        table.len()
+        self.table.len()
     }
 }
 
@@ -318,24 +291,24 @@ impl TrString {
             return String::new();
         }
         
-        if let Some(data) = allocation_table().get_string_data(self.data_index) {
+        allocation_table().with_string_data(self.data_index, |data| {
             String::from_utf8_lossy(&data[..self.len]).into_owned()
-        } else {
-            String::new()
-        }
+        }).unwrap_or_default()
     }
     
-    /// Get a string slice (borrowing)
+    /// Get a string slice (borrowing) - creates temporary static string
+    /// WARNING: This leaks memory temporarily for C compatibility
     pub unsafe fn as_str(&self) -> &str {
         if self.data_index == 0 || self.len == 0 {
             return "";
         }
         
-        if let Some(data) = allocation_table().get_string_data(self.data_index) {
-            std::str::from_utf8_unchecked(&data[..self.len])
-        } else {
-            ""
-        }
+        // Create a static string by leaking memory - only safe for temporary C calls
+        allocation_table().with_string_data(self.data_index, |data| {
+            let s = String::from_utf8_unchecked(data[..self.len].to_vec());
+            let leaked: &'static str = Box::leak(s.into_boxed_str());
+            leaked
+        }).unwrap_or("")
     }
 }
 
