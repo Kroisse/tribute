@@ -1,0 +1,23 @@
+[package]
+name = "tribute-runtime"
+version = "0.1.0"
+edition = "2021"
+authors = ["Tribute Contributors"]
+description = "Runtime library for compiled Tribute programs"
+
+[lib]
+# Build both static and dynamic libraries for maximum compatibility
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# Only minimal dependencies for the runtime
+# No allocator dependencies to avoid conflicts
+
+[build-dependencies]
+# For C header generation if needed later
+# cbindgen = "0.24"
+
+[features]
+default = []
+# Debug features for development
+debug_runtime = []

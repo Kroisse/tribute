@@ -19,6 +19,7 @@ tree-sitter-tribute = { path = "crates/tree-sitter-tribute" }
 tribute-ast = { path = "crates/tribute-ast" }
 tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-hir = { path = "crates/tribute-hir" }
+tribute-runtime = { path = "crates/tribute-runtime" }
 
 [package]
 name = "tribute"

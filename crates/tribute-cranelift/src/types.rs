@@ -30,7 +30,7 @@ impl TributeTypes {
         I64
     }
     
-    /// Get the ABI parameter for a Tribute value (passed by pointer)
+    /// Get the ABI parameter for a Tribute value handle (TrHandle)
     pub fn value_param() -> AbiParam {
         AbiParam::new(Self::pointer_type())
     }
@@ -52,8 +52,9 @@ pub enum ValueTag {
 /// Runtime value layout (matches what the runtime library expects)
 /// 
 /// ```c
-/// struct TributeValue {
+/// struct TrValue {
 ///     uint8_t tag;
+///     uint8_t _padding[7];
 ///     union {
 ///         double number;
 ///         struct {
@@ -82,6 +83,6 @@ impl ValueLayout {
     /// Offset of string capacity (within data union)
     pub const STRING_CAPACITY_OFFSET: i32 = Self::DATA_OFFSET + 16;
     
-    /// Total size of a TributeValue
+    /// Total size of a TrValue
     pub const VALUE_SIZE: i32 = 32;  // tag(1) + padding(7) + union(24)
 }
