@@ -242,7 +242,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     fn create_unit_value(&mut self) -> CompilationResult<Value> {
         // For now, use null pointer as unit
         // TODO: Create proper unit value in runtime
-        Ok(self.builder.ins().null(TributeTypes::pointer_type()))
+        Ok(self.builder.ins().iconst(TributeTypes::pointer_type(), 0))
     }
     
     /// Lower a HIR expression
@@ -307,7 +307,7 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     fn lower_string_literal(&mut self, text: &str) -> CompilationResult<Value> {
         // For now, create a dummy string
         // TODO: Emit string data and get pointer
-        let null = self.builder.ins().null(TributeTypes::pointer_type());
+        let null = self.builder.ins().iconst(TributeTypes::pointer_type(), 0);
         let len = self.builder.ins().iconst(TributeTypes::size_type(), text.len() as i64);
         
         let value_from_string = self.import_runtime_func(self.runtime.value_from_string)?;
