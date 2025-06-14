@@ -115,13 +115,9 @@ pub extern "C" fn tr_value_div(left: TrHandle, right: TrHandle) -> TrHandle {
         
         let result = match (left_val.tag, right_val.tag) {
             (ValueTag::Number, ValueTag::Number) => {
-                let divisor = right_val.data.number;
-                let quotient = if divisor == 0.0 {
-                    // Division by zero - return infinity or NaN
-                    left_val.data.number / divisor // This will be inf or NaN
-                } else {
-                    left_val.data.number / divisor
-                };
+                // IEEE 754 floating point handles division by zero automatically
+                // (returns +/-inf or NaN as appropriate)
+                let quotient = left_val.data.number / right_val.data.number;
                 TrValue::number(quotient)
             },
             _ => {

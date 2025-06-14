@@ -11,10 +11,6 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 #![allow(clippy::missing_safety_doc)]
 
-// Allow unsafe operations for C-compatible runtime functions
-#![allow(clippy::not_unsafe_ptr_arg_deref)]
-#![allow(clippy::missing_safety_doc)]
-
 pub mod value;
 pub mod memory;
 pub mod arithmetic;
@@ -31,10 +27,7 @@ pub use arithmetic::*;
 pub use string_ops::*;
 pub use builtins::*;
 
-// Export C-compatible functions
-extern "C" {
-    // These will be implemented in each module
-}
+// C-compatible functions are exported directly from each module
 
 // Runtime initialization (called by compiled programs)
 #[no_mangle]
