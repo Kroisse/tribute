@@ -77,20 +77,25 @@ pub extern "C" fn tr_string_as_ptr(handle: TrHandle, out_len: *mut usize) -> *co
         return std::ptr::null();
     }
     
-    unsafe {
-        let val = handle.deref();
+    // Use allocation table's safe access method
+    allocation_table().with_value(handle, |val| {
         match val.tag {
             crate::value::ValueTag::String => {
-                let (ptr, len) = val.data.string.as_ptr_len();
-                *out_len = len;
-                ptr
+                unsafe {
+                    let (ptr, len) = val.data.string.as_ptr_len();
+                    *out_len = len;
+                    ptr
+                }
             },
             _ => {
-                *out_len = 0;
+                unsafe { *out_len = 0; }
                 std::ptr::null()
             }
         }
-    }
+    }).unwrap_or_else(|| {
+        unsafe { *out_len = 0; }
+        std::ptr::null()
+    })
 }
 
 /// Extract a number from a TrValue

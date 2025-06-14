@@ -21,6 +21,8 @@ pub struct RuntimeFunctions {
     pub value_from_number: FuncId,
     /// Create a string value
     pub value_from_string: FuncId,
+    /// Create a static string value from .rodata section
+    pub value_from_static_string: FuncId,
     /// Get number from value (with type check)
     pub value_to_number: FuncId,
     /// Clone a value (for reference counting)
@@ -85,6 +87,16 @@ impl RuntimeFunctions {
             Linkage::Import,
             &sig_with_params(
                 vec![AbiParam::new(pointer), AbiParam::new(TributeTypes::size_type())],
+                vec![AbiParam::new(pointer)]
+            )
+        ).box_err()?;
+        
+        // value_from_static_string(offset: u32, len: u32) -> TrHandle
+        let value_from_static_string = module.declare_function(
+            "tr_value_from_static_string",
+            Linkage::Import,
+            &sig_with_params(
+                vec![AbiParam::new(cranelift_codegen::ir::types::I32), AbiParam::new(cranelift_codegen::ir::types::I32)],
                 vec![AbiParam::new(pointer)]
             )
         ).box_err()?;
@@ -157,6 +169,7 @@ impl RuntimeFunctions {
             value_free,
             value_from_number,
             value_from_string,
+            value_from_static_string,
             value_to_number,
             value_clone,
             value_add,

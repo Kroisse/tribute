@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use cranelift_codegen::ir::{AbiParam, FuncRef, InstBuilder, Signature, Value};
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift_module::{FuncId, Linkage, Module};
+use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 
 use salsa::Database;
 use tribute_ast::{Identifier, Spanned};
@@ -18,12 +18,95 @@ use crate::errors::{BoxError, CompilationError, CompilationResult};
 use crate::runtime::RuntimeFunctions;
 use crate::types::TributeTypes;
 
+/// String constant table for managing compile-time strings
+#[derive(Debug)]
+pub struct StringConstantTable {
+    /// Map from string content to its offset in the data section
+    strings: HashMap<String, u32>,
+    /// Raw string data that will be placed in .rodata
+    data: Vec<u8>,
+    /// Data ID for the string table in Cranelift
+    data_id: Option<DataId>,
+}
+
+impl StringConstantTable {
+    /// Create a new empty string constant table
+    pub fn new() -> Self {
+        Self {
+            strings: HashMap::new(),
+            data: Vec::new(),
+            data_id: None,
+        }
+    }
+    
+    /// Add a string constant and return its offset
+    pub fn add_string(&mut self, text: &str) -> u32 {
+        if let Some(&offset) = self.strings.get(text) {
+            return offset;
+        }
+        
+        let offset = self.data.len() as u32;
+        
+        // Add string data with length prefix for easy access
+        let bytes = text.as_bytes();
+        self.data.extend_from_slice(bytes);
+        
+        // Add null terminator for C compatibility
+        self.data.push(0);
+        
+        self.strings.insert(text.to_string(), offset);
+        offset
+    }
+    
+    /// Get the total size of the string data
+    pub fn data_size(&self) -> usize {
+        self.data.len()
+    }
+    
+    /// Get the raw data
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+    
+    /// Get or create the data ID for this table
+    pub fn get_or_create_data_id<M: Module>(&mut self, module: &mut M) -> Result<DataId, cranelift_module::ModuleError> {
+        if let Some(data_id) = self.data_id {
+            return Ok(data_id);
+        }
+        
+        // Create a data section for the string constants
+        let data_id = module.declare_data("__tribute_string_constants", Linkage::Local, true, false)?;
+        self.data_id = Some(data_id);
+        Ok(data_id)
+    }
+    
+    /// Finalize the string table in the module
+    pub fn finalize<M: Module>(&mut self, module: &mut M) -> Result<(), cranelift_module::ModuleError> {
+        if self.data.is_empty() {
+            return Ok(());
+        }
+        
+        let data_id = self.get_or_create_data_id(module)?;
+        
+        // Create the data description
+        let mut data_desc = DataDescription::new();
+        data_desc.define(self.data.clone().into_boxed_slice());
+        
+        // Define the data in the module
+        module.define_data(data_id, &data_desc)?;
+        
+        Ok(())
+    }
+}
+
 /// Code generator for Tribute → Cranelift IR
 pub struct CodeGenerator<'m, M: Module> {
     module: &'m mut M,
     runtime: &'m RuntimeFunctions,
     /// Map from function names to their IDs
     function_map: HashMap<String, FuncId>,
+    /// String constant table for compile-time strings
+    string_table: StringConstantTable,
 }
 
 impl<'m, M: Module> CodeGenerator<'m, M> {
@@ -33,7 +116,113 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
             module,
             runtime,
             function_map: HashMap::new(),
+            string_table: StringConstantTable::new(),
         }
+    }
+    
+    /// Add a string literal to the constant table and return its offset
+    pub fn add_string_literal(&mut self, text: &str) -> u32 {
+        self.string_table.add_string(text)
+    }
+    
+    /// Get the data ID for the string constant table
+    pub fn get_string_table_data_id(&mut self) -> CompilationResult<DataId> {
+        self.string_table.get_or_create_data_id(self.module).box_err()
+    }
+    
+    /// Collect all string literals from a function
+    fn collect_string_literals<'db>(
+        &mut self,
+        db: &'db dyn Database,
+        func: HirFunction<'db>,
+    ) -> CompilationResult<HashMap<String, u32>> {
+        let mut literals = HashMap::new();
+        let body = func.body(db);
+        
+        for expr in body.iter() {
+            self.collect_string_literals_from_expr(db, *expr, &mut literals)?;
+        }
+        
+        Ok(literals)
+    }
+    
+    /// Recursively collect string literals from an expression
+    fn collect_string_literals_from_expr<'db>(
+        &mut self,
+        db: &'db dyn Database,
+        expr: HirExpr<'db>,
+        literals: &mut HashMap<String, u32>,
+    ) -> CompilationResult<()> {
+        let expr_data = expr.expr(db);
+        match &expr_data {
+            Expr::StringInterpolation(s) => {
+                if s.segments.is_empty() {
+                    // Simple string literal
+                    let offset = self.add_string_literal(&s.leading_text);
+                    literals.insert(s.leading_text.clone(), offset);
+                }
+                // TODO: Handle complex interpolation
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    // arg is Spanned<Expr>, need to extract the expression
+                    self.collect_string_literals_from_expr_data(db, &arg.0, literals)?;
+                }
+            }
+            Expr::Let { value, .. } => {
+                // value is Box<Spanned<Expr>>
+                self.collect_string_literals_from_expr_data(db, &value.0, literals)?;
+            }
+            Expr::Block(exprs) => {
+                for expr in exprs {
+                    // expr is Spanned<Expr>
+                    self.collect_string_literals_from_expr_data(db, &expr.0, literals)?;
+                }
+            }
+            _ => {
+                // Other expressions don't contain string literals
+            }
+        }
+        Ok(())
+    }
+    
+    /// Recursively collect string literals from an expression (raw Expr)
+    fn collect_string_literals_from_expr_data(
+        &mut self,
+        db: &dyn Database,
+        expr: &Expr,
+        literals: &mut HashMap<String, u32>,
+    ) -> CompilationResult<()> {
+        match expr {
+            Expr::StringInterpolation(s) => {
+                if s.segments.is_empty() {
+                    // Simple string literal
+                    let offset = self.add_string_literal(&s.leading_text);
+                    literals.insert(s.leading_text.clone(), offset);
+                }
+                // TODO: Handle complex interpolation
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    // arg is Spanned<Expr>, need to extract the expression
+                    self.collect_string_literals_from_expr_data(db, &arg.0, literals)?;
+                }
+            }
+            Expr::Let { value, .. } => {
+                // value is Box<Spanned<Expr>>
+                self.collect_string_literals_from_expr_data(db, &value.0, literals)?;
+            }
+            Expr::Block(exprs) => {
+                for expr in exprs {
+                    // expr is Spanned<Expr>
+                    self.collect_string_literals_from_expr_data(db, &expr.0, literals)?;
+                }
+            }
+            _ => {
+                // Other expressions don't contain string literals
+            }
+        }
+        Ok(())
     }
     
     /// Compile a HIR program
@@ -56,6 +245,9 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
         
         // Create main function that evaluates top-level expressions
         self.compile_main(db, program)?;
+        
+        // Finalize string constant table
+        self.string_table.finalize(self.module).box_err()?;
         
         Ok(())
     }
@@ -111,12 +303,22 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
         // Map parameters to variables
         let param_values: Vec<Value> = builder.block_params(entry_block).to_vec();
         
+        // Collect string literals from this function
+        let string_literals = self.collect_string_literals(db, func)?;
+        let string_table_data_id = if !string_literals.is_empty() {
+            Some(self.get_string_table_data_id()?)
+        } else {
+            None
+        };
+        
         // Create a new lowering context for this function
         let mut lowerer = FunctionLowerer::new(
             &mut builder,
             self.module,
             self.runtime,
             &self.function_map,
+            string_literals,
+            string_table_data_id,
         );
         
         // Define parameters
@@ -197,6 +399,10 @@ struct FunctionLowerer<'a, 'b, M: Module> {
     variables: HashMap<String, Variable>,
     /// Counter for generating unique variables
     var_counter: usize,
+    /// Map from string literals to their offsets in the constant table
+    string_literals: HashMap<String, u32>,
+    /// Data ID for the string constant table
+    string_table_data_id: Option<DataId>,
 }
 
 impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
@@ -205,6 +411,8 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
         module: &'a mut M,
         runtime: &'a RuntimeFunctions,
         function_map: &'a HashMap<String, FuncId>,
+        string_literals: HashMap<String, u32>,
+        string_table_data_id: Option<DataId>,
     ) -> Self {
         Self {
             builder,
@@ -213,6 +421,8 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
             function_map,
             variables: HashMap::new(),
             var_counter: 0,
+            string_literals,
+            string_table_data_id,
         }
     }
     
@@ -305,15 +515,41 @@ impl<'a, 'b, M: Module> FunctionLowerer<'a, 'b, M> {
     
     /// Lower a string literal
     fn lower_string_literal(&mut self, text: &str) -> CompilationResult<Value> {
-        // For now, create a dummy string
-        // TODO: Emit string data and get pointer
-        let null = self.builder.ins().iconst(TributeTypes::pointer_type(), 0);
-        let len = self.builder.ins().iconst(TributeTypes::size_type(), text.len() as i64);
+        if let Some(&offset) = self.string_literals.get(text) {
+            // String is in the constant table, use static string function
+            if let Some(_data_id) = self.string_table_data_id {
+                let offset_val = self.builder.ins().iconst(cranelift_codegen::ir::types::I32, offset as i64);
+                let len_val = self.builder.ins().iconst(cranelift_codegen::ir::types::I32, text.len() as i64);
+                
+                let value_from_static_string = self.import_runtime_func(self.runtime.value_from_static_string)?;
+                let value = self.builder.ins().call(value_from_static_string, &[offset_val, len_val]);
+                
+                return Ok(self.builder.inst_results(value)[0]);
+            }
+        }
         
-        let value_from_string = self.import_runtime_func(self.runtime.value_from_string)?;
-        let value = self.builder.ins().call(value_from_string, &[null, len]);
-        
-        Ok(self.builder.inst_results(value)[0])
+        // Fallback: create runtime string (for strings that are too short for static storage)
+        // This automatically uses inline or heap mode based on length
+        if text.len() <= 15 {
+            // For short strings, we can embed them directly
+            // TODO: Implement inline string creation in runtime
+            let null = self.builder.ins().iconst(TributeTypes::pointer_type(), 0);
+            let len = self.builder.ins().iconst(TributeTypes::size_type(), text.len() as i64);
+            
+            let value_from_string = self.import_runtime_func(self.runtime.value_from_string)?;
+            let value = self.builder.ins().call(value_from_string, &[null, len]);
+            
+            Ok(self.builder.inst_results(value)[0])
+        } else {
+            // Long strings should go to the constant table, but if not found, use runtime allocation
+            let null = self.builder.ins().iconst(TributeTypes::pointer_type(), 0);
+            let len = self.builder.ins().iconst(TributeTypes::size_type(), text.len() as i64);
+            
+            let value_from_string = self.import_runtime_func(self.runtime.value_from_string)?;
+            let value = self.builder.ins().call(value_from_string, &[null, len]);
+            
+            Ok(self.builder.inst_results(value)[0])
+        }
     }
     
     /// Lower a function call
