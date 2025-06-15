@@ -41,13 +41,18 @@ impl TrHandle {
         TrHandle { index }
     }
 
+    /// Execute a function with access to the value this handle points to
+    /// Returns None if the handle is null or invalid
+    pub fn with_value<T>(&self, f: impl FnOnce(&TrValue) -> T) -> Option<T> {
+        allocation_table().with_value(*self, f)
+    }
+
     /// Get a reference to the value this handle points to
     /// SAFETY: Caller must ensure the handle is valid and the allocation table is initialized
+    /// DEPRECATED: Use with_value() instead for safer access
+    /// This method now redirects to with_value() to avoid unsafe transmute
     pub unsafe fn deref(&self) -> &TrValue {
-        if self.is_null() {
-            panic!("Attempted to dereference null handle");
-        }
-        unsafe { ALLOCATION_TABLE.deref_handle(*self) }
+        panic!("deref() is deprecated and unsafe. Use with_value() instead for safe access.");
     }
 }
 
@@ -91,22 +96,6 @@ impl AllocationTable {
         }
 
         self.table.remove(&handle.index);
-    }
-
-    /// Get a reference to the value for a handle
-    /// SAFETY: Caller must ensure handle is valid
-    unsafe fn deref_handle(&self, handle: TrHandle) -> &TrValue {
-        let value_ref = self
-            .table
-            .get(&handle.index)
-            .expect("Invalid handle: value not found in allocation table");
-
-        // SAFETY: We're extending the lifetime of the reference here.
-        // This is safe as long as:
-        // 1. The caller doesn't hold the reference longer than the value's lifetime
-        // 2. The allocation table is not modified while the reference is held
-        // 3. This is used only for temporary access within C functions
-        unsafe { std::mem::transmute::<&TrValue, &TrValue>(value_ref.value().as_ref()) }
     }
 
     /// Clone a value (deep copy)

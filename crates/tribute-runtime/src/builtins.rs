@@ -14,21 +14,20 @@ pub extern "C" fn tr_builtin_print_line(handle: TrHandle) {
         return;
     }
 
-    unsafe {
-        let val = handle.deref();
-        let output = match val {
+    let output = handle
+        .with_value(|val| match val {
             TrValue::String(s) => {
-                let str_val = s.as_str();
+                let str_val = unsafe { s.as_str() };
                 format!("{}\n", str_val)
             }
             TrValue::Number(n) => {
                 format!("{}\n", n)
             }
             TrValue::Unit => "()\n".to_owned(),
-        };
+        })
+        .unwrap_or_else(|| "Invalid handle\n".to_owned());
 
-        print_str(&output);
-    }
+    print_str(&output);
 }
 
 /// Print a value without a newline
@@ -39,21 +38,20 @@ pub extern "C" fn tr_builtin_print(handle: TrHandle) {
         return;
     }
 
-    unsafe {
-        let val = handle.deref();
-        let output = match val {
+    let output = handle
+        .with_value(|val| match val {
             TrValue::String(s) => {
-                let str_val = s.as_str();
+                let str_val = unsafe { s.as_str() };
                 str_val.to_owned()
             }
             TrValue::Number(n) => {
                 format!("{}", n)
             }
             TrValue::Unit => "()".to_owned(),
-        };
+        })
+        .unwrap_or_else(|| "Invalid handle".to_owned());
 
-        print_str(&output);
-    }
+    print_str(&output);
 }
 
 /// Read a line of input from the user
@@ -86,23 +84,24 @@ pub extern "C" fn tr_builtin_number_to_string(handle: TrHandle) -> TrHandle {
         return allocation_table().allocate(TrValue::string_static("0"));
     }
 
-    unsafe {
-        let val = handle.deref();
-        let result = match val {
-            TrValue::Number(n) => {
-                let s = format!("{}", n);
-                TrValue::string(s)
+    let result = handle
+        .with_value(|val| {
+            match val {
+                TrValue::Number(n) => {
+                    let s = format!("{}", n);
+                    TrValue::string(s)
+                }
+                TrValue::String(s) => {
+                    // Already a string, clone it
+                    let str_val = unsafe { s.as_str() };
+                    TrValue::string(str_val.to_owned())
+                }
+                TrValue::Unit => TrValue::string_static("()"),
             }
-            TrValue::String(s) => {
-                // Already a string, clone it
-                let str_val = s.as_str();
-                TrValue::string(str_val.to_owned())
-            }
-            TrValue::Unit => TrValue::string_static("()"),
-        };
+        })
+        .unwrap_or_else(|| TrValue::string_static("0"));
 
-        allocation_table().allocate(result)
-    }
+    allocation_table().allocate(result)
 }
 
 /// Try to parse a string as a number
@@ -112,25 +111,26 @@ pub extern "C" fn tr_builtin_string_to_number(handle: TrHandle) -> TrHandle {
         return allocation_table().allocate(TrValue::number(0.0));
     }
 
-    unsafe {
-        let val = handle.deref();
-        let result = match val {
-            TrValue::String(s) => {
-                let str_val = s.as_str();
-                match str_val.parse::<f64>() {
-                    Ok(num) => TrValue::number(num),
-                    Err(_) => TrValue::number(0.0),
+    let result = handle
+        .with_value(|val| {
+            match val {
+                TrValue::String(s) => {
+                    let str_val = unsafe { s.as_str() };
+                    match str_val.parse::<f64>() {
+                        Ok(num) => TrValue::number(num),
+                        Err(_) => TrValue::number(0.0),
+                    }
                 }
+                TrValue::Number(n) => {
+                    // Already a number, clone it
+                    TrValue::number(*n)
+                }
+                TrValue::Unit => TrValue::number(0.0),
             }
-            TrValue::Number(n) => {
-                // Already a number, clone it
-                TrValue::number(*n)
-            }
-            TrValue::Unit => TrValue::number(0.0),
-        };
+        })
+        .unwrap_or_else(|| TrValue::number(0.0));
 
-        allocation_table().allocate(result)
-    }
+    allocation_table().allocate(result)
 }
 
 /// Check if a value is truthy (for conditional expressions)
@@ -140,14 +140,13 @@ pub extern "C" fn tr_builtin_is_truthy(handle: TrHandle) -> bool {
         return false;
     }
 
-    unsafe {
-        let val = handle.deref();
-        match val {
+    handle
+        .with_value(|val| match val {
             TrValue::Number(n) => *n != 0.0 && !n.is_nan(),
             TrValue::String(s) => !s.is_empty(),
             TrValue::Unit => false,
-        }
-    }
+        })
+        .unwrap_or(false)
 }
 
 /// Get the type name of a value (for debugging)
@@ -157,14 +156,13 @@ pub extern "C" fn tr_builtin_type_of(handle: TrHandle) -> TrHandle {
         return allocation_table().allocate(TrValue::string_static("null"));
     }
 
-    unsafe {
-        let val = handle.deref();
-        let type_name = match val {
+    let type_name = handle
+        .with_value(|val| match val {
             TrValue::Number(_) => "number",
             TrValue::String(_) => "string",
             TrValue::Unit => "unit",
-        };
+        })
+        .unwrap_or("null");
 
-        allocation_table().allocate(TrValue::string_static(type_name))
-    }
+    allocation_table().allocate(TrValue::string_static(type_name))
 }
