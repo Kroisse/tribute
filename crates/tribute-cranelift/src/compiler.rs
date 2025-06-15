@@ -12,7 +12,7 @@ use tribute_hir::hir::HirProgram;
 use crate::codegen::CodeGenerator;
 use crate::errors::CompilationResult;
 use crate::runtime::RuntimeFunctions;
-use tribute_database::{Db, TargetInfo};
+use tribute_core::{Db, TargetInfo};
 
 /// Tribute compiler using Cranelift
 pub struct TributeCompiler {

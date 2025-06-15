@@ -23,7 +23,7 @@ tree-sitter = "0.25.6"
 tree-sitter-tribute = { path = "crates/tree-sitter-tribute" }
 tribute-ast = { path = "crates/tribute-ast" }
 tribute-cranelift = { path = "crates/tribute-cranelift" }
-tribute-database = { path = "crates/tribute-database" }
+tribute-core = { path = "crates/tribute-core" }
 tribute-hir = { path = "crates/tribute-hir" }
 tribute-runtime = { path = "crates/tribute-runtime" }
 
@@ -39,5 +39,5 @@ insta.workspace = true
 salsa.workspace = true
 tribute-ast.workspace = true
 tribute-cranelift.workspace = true
-tribute-database.workspace = true
+tribute-core.workspace = true
 tribute-hir.workspace = true

@@ -449,7 +449,7 @@ fn match_list_with_rest(
 mod tests {
     use super::*;
     use salsa::Database;
-    use tribute_database::TributeDatabaseImpl;
+    use tribute_core::TributeDatabaseImpl;
 
     #[test]
     fn test_hir_arithmetic() {

@@ -1,5 +1,5 @@
 [package]
-name = "tribute-database"
+name = "tribute-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -17,7 +17,7 @@ use crate::CompilationError;
 use crate::errors::{CompilationErrorKind, CompilationResult};
 use crate::runtime::RuntimeFunctions;
 use crate::types::TributeTypes;
-use tribute_database::{Db, TargetInfo};
+use tribute_core::{Db, TargetInfo};
 
 /// String constant table for managing compile-time strings
 #[derive(Debug)]

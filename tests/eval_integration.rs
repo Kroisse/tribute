@@ -1,5 +1,5 @@
 use tribute::{Value, eval_str};
-use tribute_database::TributeDatabaseImpl;
+use tribute_core::TributeDatabaseImpl;
 
 #[test]
 fn test_arithmetic_operations() {

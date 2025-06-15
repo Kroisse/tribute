@@ -1,4 +1,4 @@
-pub use tribute_database::{Span, Spanned};
+pub use tribute_core::{Span, Spanned};
 
 pub type Identifier = String;
 

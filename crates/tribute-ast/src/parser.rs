@@ -1,6 +1,6 @@
 use crate::ast::*;
 use tree_sitter::{Node, Parser};
-use tribute_database::SourceFile;
+use tribute_core::SourceFile;
 
 pub struct TributeParser {
     parser: Parser,
@@ -618,11 +618,11 @@ mod tests {
 
     #[test]
     fn test_simple_function() {
-        let db = tribute_database::TributeDatabaseImpl::default();
+        let db = tribute_core::TributeDatabaseImpl::default();
         use salsa::Database;
 
         db.attach(|db| {
-            let source_file = tribute_database::SourceFile::new(
+            let source_file = tribute_core::SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.trb"),
                 r#"
@@ -644,11 +644,11 @@ fn main() {
 
     #[test]
     fn test_function_with_parameters() {
-        let db = tribute_database::TributeDatabaseImpl::default();
+        let db = tribute_core::TributeDatabaseImpl::default();
         use salsa::Database;
 
         db.attach(|db| {
-            let source_file = tribute_database::SourceFile::new(
+            let source_file = tribute_core::SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.trb"),
                 r#"
@@ -669,11 +669,11 @@ fn add(a, b) {
 
     #[test]
     fn test_match_expression() {
-        let db = tribute_database::TributeDatabaseImpl::default();
+        let db = tribute_core::TributeDatabaseImpl::default();
         use salsa::Database;
 
         db.attach(|db| {
-            let source_file = tribute_database::SourceFile::new(
+            let source_file = tribute_core::SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.trb"),
                 r#"
@@ -849,12 +849,12 @@ fn test(n) {
 
     #[test]
     fn test_string_parsing_with_escape_sequences() {
-        let db = tribute_database::TributeDatabaseImpl::default();
+        let db = tribute_core::TributeDatabaseImpl::default();
         use salsa::Database;
 
         db.attach(|db| {
             // Test basic quote escaping
-            let source_file = tribute_database::SourceFile::new(
+            let source_file = tribute_core::SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.trb"),
                 r#"

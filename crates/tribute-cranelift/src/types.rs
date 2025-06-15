@@ -5,7 +5,7 @@
 
 use cranelift_codegen::ir::AbiParam;
 use cranelift_codegen::ir::types::{I8, I32, I64, Type};
-use tribute_database::{Db, TargetInfo};
+use tribute_core::{Db, TargetInfo};
 
 /// Cranelift types used in Tribute compilation
 pub struct TributeTypes;

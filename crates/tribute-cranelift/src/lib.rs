@@ -16,7 +16,7 @@ mod tests;
 pub use compiler::TributeCompiler;
 pub use errors::{CompilationError, CompilationResult};
 
-use tribute_database::Db;
+use tribute_core::Db;
 use tribute_hir::hir::HirProgram;
 
 /// Compile a Tribute program to an object file

@@ -1,7 +1,7 @@
 //! Tests for the Cranelift compiler
 
 use tribute_ast::parse_source_file;
-use tribute_database::{SourceFile, TributeDatabaseImpl};
+use tribute_core::{SourceFile, TributeDatabaseImpl};
 use tribute_hir::lower_program_to_hir;
 
 use crate::compile_to_object;
