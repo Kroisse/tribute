@@ -10,4 +10,3 @@ derive_more.workspace = true
 salsa.workspace = true
 serde.workspace = true
 target-lexicon.workspace = true
-tribute-ast.workspace = true

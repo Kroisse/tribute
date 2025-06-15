@@ -1351,6 +1351,7 @@ dependencies = [
  "serde",
  "tree-sitter",
  "tree-sitter-tribute",
+ "tribute-database",
 ]
 
 [[package]]
@@ -1382,7 +1383,6 @@ dependencies = [
  "salsa",
  "serde",
  "target-lexicon",
- "tribute-ast",
 ]
 
 [[package]]

@@ -1,9 +1,1 @@
-use std::path::PathBuf;
-
-#[salsa::input(debug)]
-pub struct SourceFile {
-    #[returns(ref)]
-    pub path: PathBuf,
-    #[returns(ref)]
-    pub text: String,
-}
+// SourceFile has been moved to tribute-database to avoid circular dependencies

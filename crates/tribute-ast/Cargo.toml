@@ -11,3 +11,4 @@ salsa.workspace = true
 serde.workspace = true
 tree-sitter.workspace = true
 tree-sitter-tribute.workspace = true
+tribute-database.workspace = true

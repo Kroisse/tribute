@@ -1,7 +1,29 @@
 use dashmap::{DashMap, Entry};
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tribute_ast::{SourceFile, ast::Span};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Span {
+    pub const fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+}
+
+pub type Spanned<T> = (T, Span);
+
+#[salsa::input(debug)]
+pub struct SourceFile {
+    #[returns(ref)]
+    pub path: PathBuf,
+    #[returns(ref)]
+    pub text: String,
+}
 
 #[salsa::db]
 pub trait Db: salsa::Database {

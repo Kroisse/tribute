@@ -1,8 +1,8 @@
 use crate::{HirExpr, HirFunction, HirProgram};
 use salsa::Accumulator;
 use std::collections::BTreeMap;
-use tribute_ast::{Program, SourceFile};
-use tribute_database::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_ast::Program;
+use tribute_database::{CompilationPhase, Diagnostic, DiagnosticSeverity, SourceFile};
 
 /// Query to lower Program to HIR
 #[salsa::tracked]

@@ -1,17 +1,4 @@
-use serde::{Deserialize, Serialize};
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-}
-
-impl Span {
-    pub const fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
-    }
-}
-pub type Spanned<T> = (T, Span);
+pub use tribute_database::{Span, Spanned};
 
 pub type Identifier = String;
 
