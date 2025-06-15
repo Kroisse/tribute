@@ -33,7 +33,8 @@ impl TributeCompiler {
         // Configure Cranelift settings
         let mut flag_builder = settings::builder();
         flag_builder.set("use_colocated_libcalls", "false")?;
-        flag_builder.set("is_pic", "false")?;
+        // Enable PIC for better linking compatibility
+        flag_builder.set("is_pic", "true")?;
 
         let isa_builder = cranelift_codegen::isa::lookup(target_triple)?;
 
