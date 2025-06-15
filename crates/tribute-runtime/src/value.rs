@@ -145,11 +145,7 @@ impl AllocationTable {
                 match (l_val, r_val) {
                     (TrValue::Number(ln), TrValue::Number(rn)) => ln == rn,
                     (TrValue::String(ls), TrValue::String(rs)) => {
-                        ls.with_string(|left_str| {
-                            rs.with_string(|right_str| {
-                                left_str == right_str
-                            })
-                        })
+                        ls.with_string(|left_str| rs.with_string(|right_str| left_str == right_str))
                     }
                     (TrValue::Unit, TrValue::Unit) => true,
                     _ => false,
@@ -385,7 +381,9 @@ impl TrString {
                     #[cfg(test)]
                     {
                         let (ptr, len) = get_mock_static_string(*offset, *len as usize);
-                        let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) };
+                        let s = unsafe {
+                            std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+                        };
                         f(s)
                     }
                     #[cfg(not(test))]
@@ -403,7 +401,8 @@ impl TrString {
                 } else {
                     allocation_table()
                         .with_string_data(*data_index, |data| {
-                            let s = unsafe { std::str::from_utf8_unchecked(&data[..*len as usize]) };
+                            let s =
+                                unsafe { std::str::from_utf8_unchecked(&data[..*len as usize]) };
                             f(s)
                         })
                         .expect("Invalid string data access")
@@ -411,7 +410,6 @@ impl TrString {
             }
         }
     }
-
 
     /// Get pointer and length for C FFI
     pub fn as_ptr_len(&self) -> (*const u8, usize) {
@@ -455,9 +453,7 @@ impl TrString {
                     // UNSAFE: This creates a temporary pointer that may become invalid
                     // Only use this in controlled situations where the lifetime is managed
                     allocation_table()
-                        .with_string_data(*data_index, |data| {
-                            (data.as_ptr(), *len as usize)
-                        })
+                        .with_string_data(*data_index, |data| (data.as_ptr(), *len as usize))
                         .unwrap_or((b"".as_ptr(), 0))
                 }
             }
@@ -567,9 +563,7 @@ impl fmt::Debug for TrValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TrValue::Number(n) => write!(f, "Number({})", n),
-            TrValue::String(s) => {
-                s.with_string(|s_str| write!(f, "String({:?})", s_str))
-            }
+            TrValue::String(s) => s.with_string(|s_str| write!(f, "String({:?})", s_str)),
             TrValue::Unit => write!(f, "Unit"),
         }
     }
@@ -579,9 +573,7 @@ impl fmt::Display for TrValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TrValue::Number(n) => write!(f, "{}", n),
-            TrValue::String(s) => {
-                s.with_string(|s_str| write!(f, "{}", s_str))
-            }
+            TrValue::String(s) => s.with_string(|s_str| write!(f, "{}", s_str)),
             TrValue::Unit => write!(f, "()"),
         }
     }
@@ -638,7 +630,10 @@ mod tests {
 
         let str_val = TrValue::string("hello".to_string());
         assert!(matches!(str_val, TrValue::String(_)));
-        assert_eq!(str_val.with_string(|s| s.to_string()), Some("hello".to_string()));
+        assert_eq!(
+            str_val.with_string(|s| s.to_string()),
+            Some("hello".to_string())
+        );
 
         let unit_val = TrValue::unit();
         assert!(matches!(unit_val, TrValue::Unit));

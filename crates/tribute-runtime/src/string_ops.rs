@@ -19,35 +19,23 @@ pub extern "C" fn tr_string_concat(left: TrHandle, right: TrHandle) -> TrHandle 
             right.with_value(|right_val| {
                 // Convert both values to strings
                 match (left_val, right_val) {
-                    (TrValue::String(ls), TrValue::String(rs)) => {
-                        ls.with_string(|left_str| {
-                            rs.with_string(|right_str| {
-                                format!("{}{}", left_str, right_str)
-                            })
-                        })
-                    }
+                    (TrValue::String(ls), TrValue::String(rs)) => ls.with_string(|left_str| {
+                        rs.with_string(|right_str| format!("{}{}", left_str, right_str))
+                    }),
                     (TrValue::String(ls), TrValue::Number(rn)) => {
-                        ls.with_string(|left_str| {
-                            format!("{}{}", left_str, rn)
-                        })
+                        ls.with_string(|left_str| format!("{}{}", left_str, rn))
                     }
                     (TrValue::Number(ln), TrValue::String(rs)) => {
-                        rs.with_string(|right_str| {
-                            format!("{}{}", ln, right_str)
-                        })
+                        rs.with_string(|right_str| format!("{}{}", ln, right_str))
                     }
                     (TrValue::Number(ln), TrValue::Number(rn)) => {
                         format!("{}{}", ln, rn)
                     }
                     (TrValue::String(ls), TrValue::Unit) => {
-                        ls.with_string(|left_str| {
-                            format!("{}()", left_str)
-                        })
+                        ls.with_string(|left_str| format!("{}()", left_str))
                     }
                     (TrValue::Unit, TrValue::String(rs)) => {
-                        rs.with_string(|right_str| {
-                            format!("(){}", right_str)
-                        })
+                        rs.with_string(|right_str| format!("(){}", right_str))
                     }
                     (TrValue::Number(ln), TrValue::Unit) => {
                         format!("{}()", ln)
@@ -55,9 +43,7 @@ pub extern "C" fn tr_string_concat(left: TrHandle, right: TrHandle) -> TrHandle 
                     (TrValue::Unit, TrValue::Number(rn)) => {
                         format!("(){}", rn)
                     }
-                    (TrValue::Unit, TrValue::Unit) => {
-                        "()()".to_string()
-                    }
+                    (TrValue::Unit, TrValue::Unit) => "()()".to_string(),
                 }
             })
         })
@@ -85,19 +71,13 @@ pub extern "C" fn tr_string_concat_with_str(
     };
 
     let result = handle
-        .with_value(|val| {
-            match val {
-                TrValue::String(s) => {
-                    s.with_string(|value_str| {
-                        format!("{}{}", str_part, value_str)
-                    })
-                }
-                TrValue::Number(n) => {
-                    format!("{}{}", str_part, n)
-                }
-                TrValue::Unit => {
-                    format!("{}()", str_part)
-                }
+        .with_value(|val| match val {
+            TrValue::String(s) => s.with_string(|value_str| format!("{}{}", str_part, value_str)),
+            TrValue::Number(n) => {
+                format!("{}{}", str_part, n)
+            }
+            TrValue::Unit => {
+                format!("{}()", str_part)
             }
         })
         .unwrap_or_default();
@@ -124,29 +104,31 @@ pub extern "C" fn tr_string_interpolate(
                         // Simple interpolation: replace {} with arguments in order
                         let mut result = String::from(format_str);
 
-            if !args.is_null() && arg_count > 0 {
-                let arg_slice = unsafe { std::slice::from_raw_parts(args, arg_count) };
-                let mut arg_index = 0;
+                        if !args.is_null() && arg_count > 0 {
+                            let arg_slice = unsafe { std::slice::from_raw_parts(args, arg_count) };
+                            let mut arg_index = 0;
 
-                // Find and replace {} patterns
-                while let Some(pos) = result.find("{}") {
-                    if arg_index < arg_slice.len() && !arg_slice[arg_index].is_null() {
-                        let replacement = arg_slice[arg_index]
-                            .with_value(|arg_val| match arg_val {
-                                TrValue::String(s) => s.with_string(|str_val| str_val.to_owned()),
-                                TrValue::Number(n) => format!("{}", n),
-                                TrValue::Unit => "()".to_owned(),
-                            })
-                            .unwrap_or_else(|| "(invalid)".to_owned());
+                            // Find and replace {} patterns
+                            while let Some(pos) = result.find("{}") {
+                                if arg_index < arg_slice.len() && !arg_slice[arg_index].is_null() {
+                                    let replacement = arg_slice[arg_index]
+                                        .with_value(|arg_val| match arg_val {
+                                            TrValue::String(s) => {
+                                                s.with_string(|str_val| str_val.to_owned())
+                                            }
+                                            TrValue::Number(n) => format!("{}", n),
+                                            TrValue::Unit => "()".to_owned(),
+                                        })
+                                        .unwrap_or_else(|| "(invalid)".to_owned());
 
-                        result.replace_range(pos..pos + 2, &replacement);
-                        arg_index += 1;
-                    } else {
-                        // No more arguments, leave {} as is
-                        break;
-                    }
-                }
-            }
+                                    result.replace_range(pos..pos + 2, &replacement);
+                                    arg_index += 1;
+                                } else {
+                                    // No more arguments, leave {} as is
+                                    break;
+                                }
+                            }
+                        }
 
                         result
                     })
@@ -183,17 +165,11 @@ pub extern "C" fn tr_string_contains(haystack: TrHandle, needle: TrHandle) -> bo
 
     haystack
         .with_value(|haystack_val| {
-            needle.with_value(|needle_val| {
-                match (haystack_val, needle_val) {
-                    (TrValue::String(hs), TrValue::String(ns)) => {
-                        hs.with_string(|haystack_str| {
-                            ns.with_string(|needle_str| {
-                                haystack_str.contains(needle_str)
-                            })
-                        })
-                    }
-                    _ => false,
-                }
+            needle.with_value(|needle_val| match (haystack_val, needle_val) {
+                (TrValue::String(hs), TrValue::String(ns)) => hs.with_string(|haystack_str| {
+                    ns.with_string(|needle_str| haystack_str.contains(needle_str))
+                }),
+                _ => false,
             })
         })
         .flatten()

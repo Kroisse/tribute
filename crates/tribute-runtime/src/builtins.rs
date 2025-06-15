@@ -16,9 +16,7 @@ pub extern "C" fn tr_builtin_print_line(handle: TrHandle) {
 
     let output = handle
         .with_value(|val| match val {
-            TrValue::String(s) => {
-                s.with_string(|str_val| format!("{}\n", str_val))
-            }
+            TrValue::String(s) => s.with_string(|str_val| format!("{}\n", str_val)),
             TrValue::Number(n) => {
                 format!("{}\n", n)
             }
@@ -39,9 +37,7 @@ pub extern "C" fn tr_builtin_print(handle: TrHandle) {
 
     let output = handle
         .with_value(|val| match val {
-            TrValue::String(s) => {
-                s.with_string(|str_val| str_val.to_owned())
-            }
+            TrValue::String(s) => s.with_string(|str_val| str_val.to_owned()),
             TrValue::Number(n) => {
                 format!("{}", n)
             }
@@ -111,14 +107,10 @@ pub extern "C" fn tr_builtin_string_to_number(handle: TrHandle) -> TrHandle {
     let result = handle
         .with_value(|val| {
             match val {
-                TrValue::String(s) => {
-                    s.with_string(|str_val| {
-                        match str_val.parse::<f64>() {
-                            Ok(num) => TrValue::number(num),
-                            Err(_) => TrValue::number(0.0),
-                        }
-                    })
-                }
+                TrValue::String(s) => s.with_string(|str_val| match str_val.parse::<f64>() {
+                    Ok(num) => TrValue::number(num),
+                    Err(_) => TrValue::number(0.0),
+                }),
                 TrValue::Number(n) => {
                     // Already a number, clone it
                     TrValue::number(*n)

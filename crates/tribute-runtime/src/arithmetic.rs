@@ -21,26 +21,20 @@ pub extern "C" fn tr_value_add(left: TrHandle, right: TrHandle) -> TrHandle {
                         let sum = ln + rn;
                         TrValue::number(sum)
                     }
-                    (TrValue::String(ls), TrValue::String(rs)) => {
-                        ls.with_string(|left_str| {
-                            rs.with_string(|right_str| {
-                                let result = format!("{}{}", left_str, right_str);
-                                TrValue::string(result)
-                            })
-                        })
-                    }
-                    (TrValue::String(ls), &TrValue::Number(rn)) => {
-                        ls.with_string(|left_str| {
-                            let result = format!("{}{}", left_str, rn);
-                            TrValue::string(result)
-                        })
-                    }
-                    (&TrValue::Number(ln), TrValue::String(rs)) => {
+                    (TrValue::String(ls), TrValue::String(rs)) => ls.with_string(|left_str| {
                         rs.with_string(|right_str| {
-                            let result = format!("{}{}", ln, right_str);
+                            let result = format!("{}{}", left_str, right_str);
                             TrValue::string(result)
                         })
-                    }
+                    }),
+                    (TrValue::String(ls), &TrValue::Number(rn)) => ls.with_string(|left_str| {
+                        let result = format!("{}{}", left_str, rn);
+                        TrValue::string(result)
+                    }),
+                    (&TrValue::Number(ln), TrValue::String(rs)) => rs.with_string(|right_str| {
+                        let result = format!("{}{}", ln, right_str);
+                        TrValue::string(result)
+                    }),
                     _ => {
                         // Other combinations result in unit
                         TrValue::unit()
