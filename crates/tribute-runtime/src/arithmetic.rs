@@ -22,20 +22,24 @@ pub extern "C" fn tr_value_add(left: TrHandle, right: TrHandle) -> TrHandle {
                         TrValue::number(sum)
                     }
                     (TrValue::String(ls), TrValue::String(rs)) => {
-                        let left_str = unsafe { ls.as_str() };
-                        let right_str = unsafe { rs.as_str() };
-                        let result = format!("{}{}", left_str, right_str);
-                        TrValue::string(result)
+                        ls.with_string(|left_str| {
+                            rs.with_string(|right_str| {
+                                let result = format!("{}{}", left_str, right_str);
+                                TrValue::string(result)
+                            })
+                        })
                     }
                     (TrValue::String(ls), &TrValue::Number(rn)) => {
-                        let left_str = unsafe { ls.as_str() };
-                        let result = format!("{}{}", left_str, rn);
-                        TrValue::string(result)
+                        ls.with_string(|left_str| {
+                            let result = format!("{}{}", left_str, rn);
+                            TrValue::string(result)
+                        })
                     }
                     (&TrValue::Number(ln), TrValue::String(rs)) => {
-                        let right_str = unsafe { rs.as_str() };
-                        let result = format!("{}{}", ln, right_str);
-                        TrValue::string(result)
+                        rs.with_string(|right_str| {
+                            let result = format!("{}{}", ln, right_str);
+                            TrValue::string(result)
+                        })
                     }
                     _ => {
                         // Other combinations result in unit

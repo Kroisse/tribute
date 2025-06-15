@@ -145,9 +145,11 @@ impl AllocationTable {
                 match (l_val, r_val) {
                     (TrValue::Number(ln), TrValue::Number(rn)) => ln == rn,
                     (TrValue::String(ls), TrValue::String(rs)) => {
-                        let left_str = unsafe { ls.as_str() };
-                        let right_str = unsafe { rs.as_str() };
-                        left_str == right_str
+                        ls.with_string(|left_str| {
+                            rs.with_string(|right_str| {
+                                left_str == right_str
+                            })
+                        })
                     }
                     (TrValue::Unit, TrValue::Unit) => true,
                     _ => false,
@@ -368,32 +370,26 @@ impl TrString {
         }
     }
 
-    /// Get a string slice (borrowing) - creates temporary static string
-    /// WARNING: This leaks memory temporarily for C compatibility
-    pub unsafe fn as_str(&self) -> &str {
+    /// Execute a function with access to the string content without memory leaks
+    /// This is the safe alternative to as_str() that doesn't leak memory
+    pub fn with_string<T>(&self, f: impl FnOnce(&str) -> T) -> T {
         match self {
             TrString::Inline { data, len } => {
-                // SAFETY: We assume the inline data is valid UTF-8
-                unsafe { std::str::from_utf8_unchecked(&data[..*len as usize]) }
+                let s = unsafe { std::str::from_utf8_unchecked(&data[..*len as usize]) };
+                f(s)
             }
             TrString::Static { offset, len } => {
                 if *len == 0 {
-                    ""
+                    f("")
                 } else {
                     #[cfg(test)]
                     {
-                        // For testing: access mock string table
                         let (ptr, len) = get_mock_static_string(*offset, *len as usize);
-                        unsafe {
-                            std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
-                        }
+                        let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) };
+                        f(s)
                     }
                     #[cfg(not(test))]
                     {
-                        // In a real implementation, this would calculate:
-                        // let base_addr = get_rodata_base_address(); // from compiler
-                        // let ptr = (base_addr + *offset) as *const u8;
-                        // std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, *len as usize))
                         panic!(
                             "Static string access requires compiler integration (offset: {}, len: {})",
                             offset, len
@@ -403,21 +399,19 @@ impl TrString {
             }
             TrString::Heap { data_index, len } => {
                 if *data_index == 0 || *len == 0 {
-                    return "";
+                    f("")
+                } else {
+                    allocation_table()
+                        .with_string_data(*data_index, |data| {
+                            let s = unsafe { std::str::from_utf8_unchecked(&data[..*len as usize]) };
+                            f(s)
+                        })
+                        .expect("Invalid string data access")
                 }
-
-                // Create a static string by leaking memory - only safe for temporary C calls
-                allocation_table()
-                    .with_string_data(*data_index, |data| {
-                        let s =
-                            unsafe { String::from_utf8_unchecked(data[..*len as usize].to_vec()) };
-                        let leaked: &'static str = Box::leak(s.into_boxed_str());
-                        leaked
-                    })
-                    .unwrap_or("")
             }
         }
     }
+
 
     /// Get pointer and length for C FFI
     pub fn as_ptr_len(&self) -> (*const u8, usize) {
@@ -451,11 +445,21 @@ impl TrString {
                     }
                 }
             }
-            TrString::Heap { data_index: _, len } => {
-                // This is a bit tricky - we need to return a stable pointer
-                // For now, we'll use the leaked string approach
-                let str_ref = unsafe { self.as_str() };
-                (str_ref.as_ptr(), *len as usize)
+            TrString::Heap { data_index, len } => {
+                // WARNING: This is inherently unsafe for heap strings
+                // The pointer returned here is only valid during the with_string_data closure
+                // For proper C FFI, consider using a different API that copies the string data
+                if *data_index == 0 || *len == 0 {
+                    (b"".as_ptr(), 0)
+                } else {
+                    // UNSAFE: This creates a temporary pointer that may become invalid
+                    // Only use this in controlled situations where the lifetime is managed
+                    allocation_table()
+                        .with_string_data(*data_index, |data| {
+                            (data.as_ptr(), *len as usize)
+                        })
+                        .unwrap_or((b"".as_ptr(), 0))
+                }
             }
         }
     }
@@ -523,10 +527,11 @@ impl TrValue {
         }
     }
 
-    /// Get the value as a string reference
-    pub fn as_string(&self) -> Option<&str> {
+    /// Execute a function with access to the string value if this is a string
+    /// Returns None if this is not a string value
+    pub fn with_string<T>(&self, f: impl FnOnce(&str) -> T) -> Option<T> {
         match self {
-            TrValue::String(s) => unsafe { Some(s.as_str()) },
+            TrValue::String(s) => Some(s.with_string(f)),
             _ => None,
         }
     }
@@ -563,8 +568,7 @@ impl fmt::Debug for TrValue {
         match self {
             TrValue::Number(n) => write!(f, "Number({})", n),
             TrValue::String(s) => {
-                let s_str = unsafe { s.as_str() };
-                write!(f, "String({:?})", s_str)
+                s.with_string(|s_str| write!(f, "String({:?})", s_str))
             }
             TrValue::Unit => write!(f, "Unit"),
         }
@@ -576,8 +580,7 @@ impl fmt::Display for TrValue {
         match self {
             TrValue::Number(n) => write!(f, "{}", n),
             TrValue::String(s) => {
-                let s_str = unsafe { s.as_str() };
-                write!(f, "{}", s_str)
+                s.with_string(|s_str| write!(f, "{}", s_str))
             }
             TrValue::Unit => write!(f, "()"),
         }
@@ -635,7 +638,7 @@ mod tests {
 
         let str_val = TrValue::string("hello".to_string());
         assert!(matches!(str_val, TrValue::String(_)));
-        assert_eq!(str_val.as_string(), Some("hello"));
+        assert_eq!(str_val.with_string(|s| s.to_string()), Some("hello".to_string()));
 
         let unit_val = TrValue::unit();
         assert!(matches!(unit_val, TrValue::Unit));

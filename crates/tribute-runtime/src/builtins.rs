@@ -17,8 +17,7 @@ pub extern "C" fn tr_builtin_print_line(handle: TrHandle) {
     let output = handle
         .with_value(|val| match val {
             TrValue::String(s) => {
-                let str_val = unsafe { s.as_str() };
-                format!("{}\n", str_val)
+                s.with_string(|str_val| format!("{}\n", str_val))
             }
             TrValue::Number(n) => {
                 format!("{}\n", n)
@@ -41,8 +40,7 @@ pub extern "C" fn tr_builtin_print(handle: TrHandle) {
     let output = handle
         .with_value(|val| match val {
             TrValue::String(s) => {
-                let str_val = unsafe { s.as_str() };
-                str_val.to_owned()
+                s.with_string(|str_val| str_val.to_owned())
             }
             TrValue::Number(n) => {
                 format!("{}", n)
@@ -93,8 +91,7 @@ pub extern "C" fn tr_builtin_number_to_string(handle: TrHandle) -> TrHandle {
                 }
                 TrValue::String(s) => {
                     // Already a string, clone it
-                    let str_val = unsafe { s.as_str() };
-                    TrValue::string(str_val.to_owned())
+                    s.with_string(|str_val| TrValue::string(str_val.to_owned()))
                 }
                 TrValue::Unit => TrValue::string_static("()"),
             }
@@ -115,11 +112,12 @@ pub extern "C" fn tr_builtin_string_to_number(handle: TrHandle) -> TrHandle {
         .with_value(|val| {
             match val {
                 TrValue::String(s) => {
-                    let str_val = unsafe { s.as_str() };
-                    match str_val.parse::<f64>() {
-                        Ok(num) => TrValue::number(num),
-                        Err(_) => TrValue::number(0.0),
-                    }
+                    s.with_string(|str_val| {
+                        match str_val.parse::<f64>() {
+                            Ok(num) => TrValue::number(num),
+                            Err(_) => TrValue::number(0.0),
+                        }
+                    })
                 }
                 TrValue::Number(n) => {
                     // Already a number, clone it
