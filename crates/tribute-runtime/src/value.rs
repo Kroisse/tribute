@@ -246,6 +246,10 @@ pub enum ValueTag {
 
 /// String representation for dynamic values
 /// Three-mode enum for optimal memory usage and performance
+///
+/// Note: TrString allows null bytes (\0) in string content, unlike C strings,
+/// but requires valid UTF-8 encoding. This enables storing UTF-8 text with
+/// embedded null characters while maintaining string safety.
 #[repr(C)]
 #[derive(Debug)]
 pub enum TrString {
@@ -265,6 +269,7 @@ pub enum TrString {
 
 impl TrString {
     /// Create an appropriate TrString from a regular String
+    /// Supports null bytes (\0) within valid UTF-8 text
     pub fn new(s: String) -> Self {
         let bytes = s.as_bytes();
         let len = bytes.len();
@@ -288,6 +293,7 @@ impl TrString {
     }
 
     /// Create an inline TrString from bytes (for strings ≤ 7 bytes)
+    /// Supports null bytes (\0) within valid UTF-8 text
     pub fn new_inline(bytes: &[u8]) -> Self {
         assert!(bytes.len() <= 7, "Inline strings must be ≤ 7 bytes");
         let mut data = [0u8; 7];
@@ -304,6 +310,7 @@ impl TrString {
     }
 
     /// Create a heap TrString from bytes
+    /// Supports null bytes (\0) within valid UTF-8 text
     pub fn new_heap(bytes: &[u8]) -> Self {
         let len = bytes.len();
         let data_index = allocation_table().allocate_string(bytes.to_vec());
@@ -314,6 +321,7 @@ impl TrString {
     }
 
     /// Create from a static str (currently uses heap allocation)
+    /// Supports null bytes (\0) within valid UTF-8 text
     /// TODO: This will be optimized to use Static mode when compiler support is ready
     pub fn from_static(s: &'static str) -> Self {
         TrString::new(s.to_string())
@@ -487,6 +495,9 @@ const _: () = {
 };
 
 /// Main Tribute value type - must match the layout in tribute-cranelift/src/types.rs
+///
+/// String values support null bytes (\0) within valid UTF-8 text, enabling
+/// storage of UTF-8 strings with embedded null characters.
 #[repr(C)]
 pub enum TrValue {
     Number(f64),

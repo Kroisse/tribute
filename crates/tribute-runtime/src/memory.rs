@@ -31,6 +31,9 @@ pub extern "C" fn tr_value_from_number(num: f64) -> TrHandle {
 /// The function automatically chooses the most efficient storage mode:
 /// - Strings ≤ 7 bytes: inline storage (no heap allocation)
 /// - Strings > 7 bytes: heap storage
+///
+/// Note: Supports null bytes (\0) within valid UTF-8 text. Invalid UTF-8
+/// data will result in an empty string.
 #[unsafe(no_mangle)]
 pub extern "C" fn tr_value_from_string(data: *const u8, len: usize) -> TrHandle {
     if data.is_null() {
