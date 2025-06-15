@@ -54,12 +54,9 @@ impl StringConstantTable {
 
         let offset = self.data.len() as u32;
 
-        // Add string data with length prefix for easy access
+        // Add string data (length-based, no null terminator needed)
         let bytes = text.as_bytes();
         self.data.extend_from_slice(bytes);
-
-        // Add null terminator for C compatibility
-        self.data.push(0);
 
         self.strings.insert(text.to_string(), offset);
         offset
