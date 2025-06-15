@@ -388,7 +388,7 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
 
         let main_id = self
             .module
-            .declare_function("main", Linkage::Export, &sig)?;
+            .declare_function("tribute_main_entry", Linkage::Export, &sig)?;
 
         // Create context for main function
         let mut ctx = self.module.make_context();
