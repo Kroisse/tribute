@@ -1,0 +1,24 @@
+fn test_string_patterns(s) {
+    match s {
+        "hello" => "greeting found",
+        "world" => "world found", 
+        name => name
+    }
+}
+
+fn test_number_with_variable(x) {
+    match x {
+        0 => "zero value",
+        value => value
+    }
+}
+
+fn main() {
+    print_line("Testing advanced patterns:")
+    print_line(test_string_patterns("hello"))
+    print_line(test_string_patterns("world"))
+    print_line(test_string_patterns("other"))
+    
+    print_line(test_number_with_variable(0))
+    print_line(test_number_with_variable(123))
+}

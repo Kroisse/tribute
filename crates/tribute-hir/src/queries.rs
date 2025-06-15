@@ -1,7 +1,8 @@
 use crate::{HirExpr, HirFunction, HirProgram};
 use salsa::Accumulator;
 use std::collections::BTreeMap;
-use tribute_ast::{CompilationPhase, Diagnostic, DiagnosticSeverity, Program, SourceFile};
+use tribute_ast::Program;
+use tribute_database::{CompilationPhase, Diagnostic, DiagnosticSeverity, SourceFile};
 
 /// Query to lower Program to HIR
 #[salsa::tracked]
@@ -83,7 +84,7 @@ pub fn compile_to_hir(
 ) -> (Option<HirProgram<'static>>, Vec<Diagnostic>) {
     use salsa::Database;
 
-    let db = tribute_ast::TributeDatabaseImpl::default();
+    let db = tribute_database::TributeDatabaseImpl::default();
     let file = SourceFile::new(&db, path.to_path_buf(), source.to_string());
 
     // Since we need to return the HIR program, we use the database's attach method

@@ -1,0 +1,25 @@
+// Performance test example for interpreter vs compiler comparison
+fn fibonacci(n) {
+    match n {
+        0 => 0,
+        1 => 1,
+        _ => fibonacci(n - 1) + fibonacci(n - 2)
+    }
+}
+
+fn string_operations() {
+    let short = "hello"
+    let long = "this is a longer string for testing heap allocation"
+    let result = short
+    result
+}
+
+fn main() {
+    // Test recursion performance
+    let fib_result = fibonacci(20)
+    
+    // Test string performance  
+    let str_result = string_operations()
+    
+    print_line("Performance test completed")
+}

@@ -1,5 +1,5 @@
 use tribute::{Value, eval_str};
-use tribute_ast::TributeDatabaseImpl;
+use tribute_database::TributeDatabaseImpl;
 
 // Helper function to evaluate a calculator expression: a op b
 fn eval_calc_expr(op: &str, a: i64, b: i64) -> i64 {

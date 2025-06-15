@@ -23,6 +23,7 @@ cargo test
 # Run tests for specific package
 cargo test -p tribute
 cargo test -p tree-sitter-tribute
+cargo test -p tribute-runtime
 
 # Run the interpreter on a .trb file
 cargo run --bin trbi <file.trb>
@@ -53,6 +54,8 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 - **Main package (/)**: Core interpreter (`tribute` crate)
 - **crates/tribute-ast/**: AST definitions with Salsa integration and unified diagnostics
 - **crates/tribute-hir/**: High-level IR with Salsa-integrated lowering
+- **crates/tribute-cranelift/**: Cranelift-based native code compiler (in development)
+- **crates/tribute-runtime/**: Runtime library for compiled Tribute programs
 - **crates/tree-sitter-tribute/**: Grammar definition and Tree-sitter integration
 
 ### Core Modules
@@ -62,7 +65,7 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 - **`src/builtins.rs`**: Built-in functions (print_line, input_line)
 - **`src/lib.rs`**: Main API exposing `parse_str()` and `eval_str()` functions for HIR-based operations
 - **`src/bin/trbi.rs`**: Interpreter binary (uses HIR-based evaluation)
-- **`src/bin/trbc.rs`**: Compiler binary (planned)
+- **`src/bin/trbc.rs`**: Compiler binary (in development, uses Cranelift backend)
 
 #### AST Crate (`tribute-ast`)
 - **`ast.rs`**: Salsa-tracked AST types (`Program`, `Item`, `Expr`)
@@ -73,6 +76,20 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 - **`hir.rs`**: High-level IR types (`HirProgram`, `HirFunction`, `HirExpr`)
 - **`lower.rs`**: AST to HIR lowering implementation
 - **`queries.rs`**: Salsa query definitions for HIR operations
+
+#### Cranelift Crate (`tribute-cranelift`)
+- **`compiler.rs`**: Main compiler interface and module creation
+- **`codegen.rs`**: HIR to Cranelift IR translation
+- **`runtime.rs`**: Runtime function declarations
+- **`types.rs`**: Type system mapping for dynamic values
+- **`errors.rs`**: Compilation error types
+
+#### Runtime Crate (`tribute-runtime`)
+- **`value.rs`**: TrValue struct and dynamic type system with TrHandle for GC compatibility
+- **`memory.rs`**: Memory management and allocation functions (tr_value_* API)
+- **`arithmetic.rs`**: Dynamic arithmetic operations (tr_value_add, tr_value_sub, etc.)
+- **`string_ops.rs`**: String manipulation and interpolation (tr_string_* API)
+- **`builtins.rs`**: Built-in functions (tr_builtin_* API)
 
 ### Language Characteristics
 - **Syntax**: Modern C-like syntax `fn name(args) { body }` (transitioned from Lisp S-expressions)
@@ -105,12 +122,27 @@ The `lang-examples/` directory contains `.trb` files that are automatically test
 - **Unified Diagnostics**: All compilation phases report errors through a centralized `Diagnostic` system
 - **Automatic Parser Generation**: Tree-sitter parser is now generated automatically during build
 - **Workspace Reorganization**: Moved to conventional `crates/` directory structure
+- **Cranelift Compiler**: Replaced MLIR with Cranelift for native code compilation (in development)
+- **Runtime Library Refactoring**: Adopted handle-based API with `Tr` prefix for GC compatibility
 
 ### Dependencies
 - **`tree-sitter`**: Core parsing infrastructure
 - **`insta`**: Snapshot testing framework
 - **`salsa`**: Incremental computation framework for compiler infrastructure
 - **`serde`**: Serialization support
+- **`cranelift`**: Code generation backend for native compilation
+- **`target-lexicon`**: Target triple handling for cross-compilation
+
+### Dependency Management
+- **Workspace Dependencies**: All shared dependencies are centralized in the root `Cargo.toml` under `[workspace.dependencies]`
+- **Local References**: Individual crates reference workspace dependencies using `.workspace = true` (e.g., `cranelift-codegen.workspace = true`)
+- **Consistency**: This ensures consistent versions across all crates and simplifies dependency management
+
+### Error Handling
+- **Error Derive**: Use `derive_more::Display` instead of `thiserror` for error types
+- **Standard Pattern**: Combine `#[derive(Display, Debug)]` for custom error enums plus manual `std::error::Error` impl
+- **Display Format**: Use `#[display("Message: {_0}")]` syntax for error formatting
+- **Manual Implementations**: Implement `From` traits and `std::error::Error` manually for proper error chaining
 
 ### API Usage
 ```rust
@@ -159,8 +191,16 @@ TributeDatabaseImpl::default().attach(|db| {
 - **Core Language**: Function definitions, let bindings, arithmetic, built-ins
 - **Infrastructure**: Tree-sitter grammar, comprehensive testing, workspace organization
 
+### 🚧 **In Development**
+- **Native Compilation**: Cranelift-based AOT compiler (replacing MLIR approach)
+  - ✅ Basic infrastructure complete
+  - ✅ Runtime function declarations defined
+  - ✅ Complete runtime library with C-compatible ABI and handle-based API
+  - ✅ Dynamic value system (TrValue/TrHandle) and memory management
+  - ✅ Arithmetic and string operations with `tr_` prefix convention
+  - 🔄 HIR → Cranelift IR translation in progress
+
 ### 📋 **Planned Features** (Detailed Plans Available)
-- **Native Compilation**: MLIR dialect-based compiler for performance (Plan 02)
 - **LSP Support**: IDE integration with language server protocol (Plan 03)
 - **Static Types**: Gradual static typing system (Plan 04)
 - **Standard Library**: Collections, I/O, and common utilities (Plan 05)
@@ -170,6 +210,27 @@ TributeDatabaseImpl::default().attach(|db| {
 - Tree-sitter grammar tests may have token naming inconsistencies
 - Pattern matching evaluation is basic (parsing works, evaluation needs completion)
 
+## Runtime Library Conventions
+
+### Naming Convention
+The runtime library uses a consistent `tr_` prefix for all public C ABI functions:
+- **Value Operations**: `tr_value_*` (e.g., `tr_value_new`, `tr_value_free`, `tr_value_add`)
+- **String Operations**: `tr_string_*` (e.g., `tr_string_concat`, `tr_string_length`)  
+- **Built-in Functions**: `tr_builtin_*` (e.g., `tr_builtin_print_line`, `tr_builtin_input_line`)
+- **Runtime Management**: `tr_runtime_*` (e.g., `tr_runtime_init`, `tr_runtime_cleanup`)
+
+### Handle-Based API
+- **TrHandle**: GC-compatible handle type that wraps `*mut TrValue`
+- **Future-Proof**: When GC is implemented, handles can be updated to use indirection tables
+- **Safety**: All C functions accept/return handles instead of raw pointers
+- **Memory Management**: `tr_value_free()` handles proper cleanup including string deallocation
+
+### Core Types
+- **TrValue**: Main runtime value type (replaces TributeValue)
+- **TrString**: Runtime string representation (replaces TributeString)
+- **TrHandle**: GC-compatible handle wrapper
+- **ValueTag**: Type discrimination enum (Number, String, Unit)
+
 When working on this codebase, pay attention to:
 - The separation between parsing (Tree-sitter), AST, HIR, and evaluation phases
 - Using the Salsa database for any new compiler features
@@ -177,3 +238,4 @@ When working on this codebase, pay attention to:
 - Use `TributeDatabaseImpl::default().attach()` pattern only for tests and snapshot testing
 - For production code, create database instances normally: `TributeDatabaseImpl::default()`
 - Use the simplified `eval_str()` and `parse_str()` API for all HIR-based operations
+- Runtime library functions use `tr_` prefix and handle-based API for GC compatibility

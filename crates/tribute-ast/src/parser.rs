@@ -1,5 +1,6 @@
 use crate::ast::*;
 use tree_sitter::{Node, Parser};
+use tribute_database::SourceFile;
 
 pub struct TributeParser {
     parser: Parser,
@@ -44,10 +45,7 @@ impl TributeParser {
 }
 
 #[salsa::tracked]
-pub fn parse_source_file<'db>(
-    db: &'db dyn salsa::Database,
-    source: crate::SourceFile,
-) -> Program<'db> {
+pub fn parse_source_file<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Program<'db> {
     let mut parser = match TributeParser::new() {
         Ok(p) => p,
         Err(_) => return Program::new(db, Vec::new()),
@@ -620,11 +618,11 @@ mod tests {
 
     #[test]
     fn test_simple_function() {
-        use crate::TributeDatabaseImpl;
+        let db = tribute_database::TributeDatabaseImpl::default();
         use salsa::Database;
 
-        TributeDatabaseImpl::default().attach(|db| {
-            let source_file = crate::SourceFile::new(
+        db.attach(|db| {
+            let source_file = tribute_database::SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.trb"),
                 r#"
@@ -646,11 +644,11 @@ fn main() {
 
     #[test]
     fn test_function_with_parameters() {
-        use crate::TributeDatabaseImpl;
+        let db = tribute_database::TributeDatabaseImpl::default();
         use salsa::Database;
 
-        TributeDatabaseImpl::default().attach(|db| {
-            let source_file = crate::SourceFile::new(
+        db.attach(|db| {
+            let source_file = tribute_database::SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.trb"),
                 r#"
@@ -671,11 +669,11 @@ fn add(a, b) {
 
     #[test]
     fn test_match_expression() {
-        use crate::TributeDatabaseImpl;
+        let db = tribute_database::TributeDatabaseImpl::default();
         use salsa::Database;
 
-        TributeDatabaseImpl::default().attach(|db| {
-            let source_file = crate::SourceFile::new(
+        db.attach(|db| {
+            let source_file = tribute_database::SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.trb"),
                 r#"
@@ -851,12 +849,12 @@ fn test(n) {
 
     #[test]
     fn test_string_parsing_with_escape_sequences() {
-        use crate::TributeDatabaseImpl;
+        let db = tribute_database::TributeDatabaseImpl::default();
         use salsa::Database;
 
-        TributeDatabaseImpl::default().attach(|db| {
+        db.attach(|db| {
             // Test basic quote escaping
-            let source_file = crate::SourceFile::new(
+            let source_file = tribute_database::SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.trb"),
                 r#"
@@ -878,7 +876,7 @@ fn test() {
             }
 
             // Test mixed escape sequences
-            let source_file2 = crate::SourceFile::new(
+            let source_file2 = SourceFile::new(
                 db,
                 std::path::PathBuf::from("test2.trb"),
                 r#"
