@@ -5,12 +5,29 @@ set -e
 echo "Running pre-commit checks..."
 
 echo "Running clippy..."
-cargo clippy --all -- -D warnings
+# Limit clippy output to first 20 errors and use compact format
+if ! cargo clippy --all --message-format=short -- -D warnings 2>&1 | head -n 40; then
+    echo ""
+    echo "❌ Clippy failed with warnings/errors. Fix the issues above and try again."
+    echo "   Run 'cargo clippy --all' to see all issues."
+    exit 1
+fi
 
 echo "Running cargo fmt..."
-cargo fmt --all --check
+if ! cargo fmt --all --check; then
+    echo ""
+    echo "❌ Code formatting check failed."
+    echo "   Run 'cargo fmt --all' to fix formatting issues."
+    exit 1
+fi
 
 echo "Running tests..."
-cargo test --all
+# Limit test output and stop on first failure
+if ! cargo test --all --quiet; then
+    echo ""
+    echo "❌ Tests failed."
+    echo "   Run 'cargo test' to see detailed test output."
+    exit 1
+fi
 
-echo "All pre-commit checks passed!"
+echo "✅ All pre-commit checks passed!"
