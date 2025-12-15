@@ -171,6 +171,133 @@ fn divide(args: &[Value]) -> Result<Value, Error> {
     }
 }
 
+/// Returns the remainder of integer division.
+fn modulo(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("% requires exactly 2 arguments".into());
+    }
+    match (&args[0], &args[1]) {
+        (Value::Number(a), Value::Number(b)) => {
+            if *b == 0 {
+                Err("modulo by zero".into())
+            } else {
+                Ok(Value::Number(a % b))
+            }
+        }
+        _ => Err("% requires two numbers".into()),
+    }
+}
+
+/// Checks if two values are equal.
+fn equal(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("== requires exactly 2 arguments".into());
+    }
+    let result = match (&args[0], &args[1]) {
+        (Value::Number(a), Value::Number(b)) => a == b,
+        (Value::String(a), Value::String(b)) => a == b,
+        (Value::Unit, Value::Unit) => true,
+        _ => false,
+    };
+    Ok(Value::Number(if result { 1 } else { 0 }))
+}
+
+/// Checks if two values are not equal.
+fn not_equal(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("!= requires exactly 2 arguments".into());
+    }
+    let result = match (&args[0], &args[1]) {
+        (Value::Number(a), Value::Number(b)) => a != b,
+        (Value::String(a), Value::String(b)) => a != b,
+        (Value::Unit, Value::Unit) => false,
+        _ => true,
+    };
+    Ok(Value::Number(if result { 1 } else { 0 }))
+}
+
+/// Checks if the first number is less than the second.
+fn less_than(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("< requires exactly 2 arguments".into());
+    }
+    match (&args[0], &args[1]) {
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(if a < b { 1 } else { 0 })),
+        _ => Err("< requires two numbers".into()),
+    }
+}
+
+/// Checks if the first number is greater than the second.
+fn greater_than(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("> requires exactly 2 arguments".into());
+    }
+    match (&args[0], &args[1]) {
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(if a > b { 1 } else { 0 })),
+        _ => Err("> requires two numbers".into()),
+    }
+}
+
+/// Checks if the first number is less than or equal to the second.
+fn less_equal(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("<= requires exactly 2 arguments".into());
+    }
+    match (&args[0], &args[1]) {
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(if a <= b { 1 } else { 0 })),
+        _ => Err("<= requires two numbers".into()),
+    }
+}
+
+/// Checks if the first number is greater than or equal to the second.
+fn greater_equal(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err(">= requires exactly 2 arguments".into());
+    }
+    match (&args[0], &args[1]) {
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(if a >= b { 1 } else { 0 })),
+        _ => Err(">= requires two numbers".into()),
+    }
+}
+
+/// Logical AND - returns 1 if both values are truthy (non-zero), 0 otherwise.
+fn logical_and(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("&& requires exactly 2 arguments".into());
+    }
+    let is_truthy = |v: &Value| -> bool {
+        match v {
+            Value::Number(n) => *n != 0,
+            Value::String(s) => !s.is_empty(),
+            Value::List(items) => !items.is_empty(),
+            Value::Unit => false,
+            Value::Fn(_, _, _) => true,
+            Value::BuiltinFn(_, _) => true,
+        }
+    };
+    let result = is_truthy(&args[0]) && is_truthy(&args[1]);
+    Ok(Value::Number(if result { 1 } else { 0 }))
+}
+
+/// Logical OR - returns 1 if either value is truthy (non-zero), 0 otherwise.
+fn logical_or(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("|| requires exactly 2 arguments".into());
+    }
+    let is_truthy = |v: &Value| -> bool {
+        match v {
+            Value::Number(n) => *n != 0,
+            Value::String(s) => !s.is_empty(),
+            Value::List(items) => !items.is_empty(),
+            Value::Unit => false,
+            Value::Fn(_, _, _) => true,
+            Value::BuiltinFn(_, _) => true,
+        }
+    };
+    let result = is_truthy(&args[0]) || is_truthy(&args[1]);
+    Ok(Value::Number(if result { 1 } else { 0 }))
+}
+
 /// Splits a string into a list of substrings using the given delimiter.
 ///
 /// # Arguments
@@ -328,15 +455,30 @@ fn get(args: &[Value]) -> Result<Value, Error> {
 /// - `get`: Get element by index
 pub static BUILTINS: LazyLock<HashMap<String, Value>> = LazyLock::new(|| {
     let temp: &[(&str, BuiltinFn)] = &[
+        // I/O
         ("print_line", print_line),
         ("input_line", input_line),
+        // Arithmetic
         ("+", add),
         ("-", subtract),
         ("*", multiply),
         ("/", divide),
+        ("%", modulo),
+        // Comparison
+        ("==", equal),
+        ("!=", not_equal),
+        ("<", less_than),
+        (">", greater_than),
+        ("<=", less_equal),
+        (">=", greater_equal),
+        // Logical
+        ("&&", logical_and),
+        ("||", logical_or),
+        // String
         ("split", split),
         ("trim_right", trim_right),
         ("to_number", to_number),
+        // List
         ("get", get),
     ];
     temp.iter()

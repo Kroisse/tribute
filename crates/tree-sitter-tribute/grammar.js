@@ -50,10 +50,25 @@ module.exports = grammar({
     ),
 
     binary_expression: $ => choice(
-      prec.left(1, seq($._expression, '+', $._expression)),
-      prec.left(1, seq($._expression, '-', $._expression)),
-      prec.left(2, seq($._expression, '*', $._expression)),
-      prec.left(2, seq($._expression, '/', $._expression))
+      // Precedence (higher number = binds tighter)
+      // 5: * / %
+      prec.left(5, seq($._expression, '*', $._expression)),
+      prec.left(5, seq($._expression, '/', $._expression)),
+      prec.left(5, seq($._expression, '%', $._expression)),
+      // 4: + -
+      prec.left(4, seq($._expression, '+', $._expression)),
+      prec.left(4, seq($._expression, '-', $._expression)),
+      // 3: == != < > <= >=
+      prec.left(3, seq($._expression, '==', $._expression)),
+      prec.left(3, seq($._expression, '!=', $._expression)),
+      prec.left(3, seq($._expression, '<', $._expression)),
+      prec.left(3, seq($._expression, '>', $._expression)),
+      prec.left(3, seq($._expression, '<=', $._expression)),
+      prec.left(3, seq($._expression, '>=', $._expression)),
+      // 2: &&
+      prec.left(2, seq($._expression, '&&', $._expression)),
+      // 1: ||
+      prec.left(1, seq($._expression, '||', $._expression))
     ),
 
     call_expression: $ => prec(10, seq(

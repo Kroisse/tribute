@@ -67,10 +67,22 @@ pub struct BinaryExpression {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BinaryOperator {
+    // Arithmetic
     Add,
     Subtract,
     Multiply,
     Divide,
+    Modulo,
+    // Comparison
+    Equal,
+    NotEqual,
+    LessThan,
+    GreaterThan,
+    LessEqual,
+    GreaterEqual,
+    // Logical
+    And,
+    Or,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

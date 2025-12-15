@@ -134,10 +134,22 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
             let left = Box::new(lower_expr(&bin_expr.left)?);
             let right = Box::new(lower_expr(&bin_expr.right)?);
             let op_name = match bin_expr.operator {
+                // Arithmetic
                 tribute_ast::BinaryOperator::Add => "+".to_string(),
                 tribute_ast::BinaryOperator::Subtract => "-".to_string(),
                 tribute_ast::BinaryOperator::Multiply => "*".to_string(),
                 tribute_ast::BinaryOperator::Divide => "/".to_string(),
+                tribute_ast::BinaryOperator::Modulo => "%".to_string(),
+                // Comparison
+                tribute_ast::BinaryOperator::Equal => "==".to_string(),
+                tribute_ast::BinaryOperator::NotEqual => "!=".to_string(),
+                tribute_ast::BinaryOperator::LessThan => "<".to_string(),
+                tribute_ast::BinaryOperator::GreaterThan => ">".to_string(),
+                tribute_ast::BinaryOperator::LessEqual => "<=".to_string(),
+                tribute_ast::BinaryOperator::GreaterEqual => ">=".to_string(),
+                // Logical
+                tribute_ast::BinaryOperator::And => "&&".to_string(),
+                tribute_ast::BinaryOperator::Or => "||".to_string(),
             };
             Expr::Call {
                 func: Box::new((Expr::Variable(op_name), span)),

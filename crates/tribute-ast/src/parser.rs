@@ -247,10 +247,22 @@ impl TributeParser {
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
                 match child.kind() {
+                    // Arithmetic
                     "+" => operator = Some(BinaryOperator::Add),
                     "-" => operator = Some(BinaryOperator::Subtract),
                     "*" => operator = Some(BinaryOperator::Multiply),
                     "/" => operator = Some(BinaryOperator::Divide),
+                    "%" => operator = Some(BinaryOperator::Modulo),
+                    // Comparison
+                    "==" => operator = Some(BinaryOperator::Equal),
+                    "!=" => operator = Some(BinaryOperator::NotEqual),
+                    "<" => operator = Some(BinaryOperator::LessThan),
+                    ">" => operator = Some(BinaryOperator::GreaterThan),
+                    "<=" => operator = Some(BinaryOperator::LessEqual),
+                    ">=" => operator = Some(BinaryOperator::GreaterEqual),
+                    // Logical
+                    "&&" => operator = Some(BinaryOperator::And),
+                    "||" => operator = Some(BinaryOperator::Or),
                     _ => {
                         // Try to parse as expression
                         if let Ok(expr) = self.node_to_expr_with_span(child, source) {
