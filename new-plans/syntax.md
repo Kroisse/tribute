@@ -56,7 +56,13 @@ type where in do
 ### Literals
 
 ```
-Number     ::= '-'? Digit+ ('.' Digit+)?
+// 숫자 리터럴
+NatLiteral   ::= Digit+                        // 0, 1, 42 → Nat
+IntLiteral   ::= ('+' | '-') Digit+            // +1, -1 → Int
+FloatLiteral ::= Digit+ '.' Digit+             // 1.0, 3.14 → Float
+               | ('+' | '-') Digit+ '.' Digit+ // +1.0, -3.14 → Float
+
+Number     ::= NatLiteral | IntLiteral | FloatLiteral
 
 // String literals
 String       ::= 's'? '"' StringContent* '"'              // "..." 또는 s"..."
@@ -125,6 +131,33 @@ rb"\x00"                    // raw bytes (문자 그대로 \x00)
 ?\x41    // 'A' (hex)
 ?\u0041  // 'A' (unicode)
 ?\u3042  // 'あ' (unicode)
+```
+
+**숫자 리터럴 예시:**
+
+```rust
+// Nat (0과 양수)
+0
+1
+42
+1000
+
+// Int (부호 명시)
++1
+-1
++42
+-1000
+
+// Float (소수점 + 소수부 필수)
+1.0
+3.14
++1.0
+-3.14
+0.5
+
+// UFCS와 구분
+1.abs        // Nat(1).abs() - UFCS 호출
+1.0.abs      // Float(1.0).abs() - UFCS 호출
 ```
 
 ### Comments
@@ -332,7 +365,9 @@ EffectTail ::= ',' LowerIdentifier            // row variable
 **예시:**
 
 ```rust
-Int
+Nat                           // 0, 양수
+Int                           // 정수 (부호 있음)
+Float                         // 부동소수점
 String
 List(Int)
 Option(String)
@@ -928,7 +963,7 @@ fn main() ->{Console} Nil {
 
 | 구문                     | 의미                           |
 | ------------------------ | ------------------------------ |
-| `Int`, `String`, ...     | 기본 타입                      |
+| `Nat`, `Int`, `Float`, `String`, ... | 기본 타입             |
 | `List(a)`, `Option(Int)` | 제네릭 타입                    |
 | `#(Int, String)`         | Tuple 타입                     |
 | `fn(a) -> b`             | 함수 타입 (암묵적 polymorphic) |
