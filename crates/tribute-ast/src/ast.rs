@@ -174,7 +174,8 @@ pub enum Expr {
     /// Block expression: { expr1; expr2; ... }
     Block(Vec<Statement>),
     List(Vec<Spanned<Expr>>),
-    Tuple(Vec<Spanned<Expr>>),
+    /// Tuple expression: #(a, b, c) - first element + rest (non-empty)
+    Tuple(Box<Spanned<Expr>>, Vec<Spanned<Expr>>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -266,6 +267,8 @@ pub enum Pattern {
     Identifier(Identifier),
     /// Constructor pattern: Some(x), None, Pair(a, b), Ok { value: x }
     Constructor(ConstructorPattern),
+    /// Tuple pattern: #(a, b), #(x, y, z) - first element + rest (non-empty)
+    Tuple(Box<Pattern>, Vec<Pattern>),
 }
 
 /// Constructor pattern for matching enum variants

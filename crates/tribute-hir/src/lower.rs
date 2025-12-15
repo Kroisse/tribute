@@ -239,9 +239,10 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
             let lowered: LowerResult<Vec<_>> = elements.iter().map(lower_expr).collect();
             Expr::List(lowered?)
         }
-        AstExpr::Tuple(elements) => {
-            let lowered: LowerResult<Vec<_>> = elements.iter().map(lower_expr).collect();
-            Expr::Tuple(lowered?)
+        AstExpr::Tuple(first, rest) => {
+            let lowered_first = Box::new(lower_expr(first)?);
+            let lowered_rest: LowerResult<Vec<_>> = rest.iter().map(lower_expr).collect();
+            Expr::Tuple(lowered_first, lowered_rest?)
         }
     };
 
@@ -292,6 +293,11 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
                 name: ctor.name.clone(),
                 args,
             })
+        }
+        AstPattern::Tuple(first, rest) => {
+            let lowered_first = Box::new(lower_pattern(first)?);
+            let lowered_rest: LowerResult<Vec<_>> = rest.iter().map(lower_pattern).collect();
+            Ok(Pattern::Tuple(lowered_first, lowered_rest?))
         }
     }
 }

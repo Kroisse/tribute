@@ -1785,3 +1785,184 @@ fn test(result) {
                         (identifier)))))))
             value: (primary_expression
               (identifier))))))))
+
+================================================================================
+Tuple pattern with two elements
+================================================================================
+
+fn test(pair) {
+    case pair {
+        #(a, b) -> a + b,
+        _ -> 0
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (tuple_pattern
+                elements: (pattern_list
+                  (pattern
+                    (identifier_pattern
+                      (identifier)))
+                  (pattern
+                    (identifier_pattern
+                      (identifier))))))
+            value: (binary_expression
+              (primary_expression
+                (identifier))
+              (primary_expression
+                (identifier))))
+          (case_arm
+            pattern: (pattern
+              (wildcard_pattern))
+            value: (primary_expression
+              (number))))))))
+
+================================================================================
+Tuple pattern with three elements
+================================================================================
+
+fn test(triple) {
+    case triple {
+        #(x, y, z) -> x + y + z
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (tuple_pattern
+                elements: (pattern_list
+                  (pattern
+                    (identifier_pattern
+                      (identifier)))
+                  (pattern
+                    (identifier_pattern
+                      (identifier)))
+                  (pattern
+                    (identifier_pattern
+                      (identifier))))))
+            value: (binary_expression
+              (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (identifier)))
+              (primary_expression
+                (identifier)))))))))
+
+================================================================================
+Nested tuple pattern
+================================================================================
+
+fn test(nested) {
+    case nested {
+        #(#(a, b), c) -> a + b + c
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (tuple_pattern
+                elements: (pattern_list
+                  (pattern
+                    (tuple_pattern
+                      elements: (pattern_list
+                        (pattern
+                          (identifier_pattern
+                            (identifier)))
+                        (pattern
+                          (identifier_pattern
+                            (identifier))))))
+                  (pattern
+                    (identifier_pattern
+                      (identifier))))))
+            value: (binary_expression
+              (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (identifier)))
+              (primary_expression
+                (identifier)))))))))
+
+================================================================================
+Tuple pattern with wildcard
+================================================================================
+
+fn test(pair) {
+    case pair {
+        #(x, _) -> x
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (tuple_pattern
+                elements: (pattern_list
+                  (pattern
+                    (identifier_pattern
+                      (identifier)))
+                  (pattern
+                    (wildcard_pattern)))))
+            value: (primary_expression
+              (identifier))))))))

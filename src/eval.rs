@@ -363,14 +363,17 @@ fn eval_spanned_expr<'db>(
                 .collect();
             Ok(Value::List(values?))
         }
-        Tuple(elements) => {
+        Tuple(first, rest) => {
             // For now, tuples are represented as lists
             // TODO: Add proper Tuple value type when needed
-            let values: Result<Vec<Value>, Error> = elements
+            let first_value = eval_spanned_expr(context, env, *first)?;
+            let rest_values: Result<Vec<Value>, Error> = rest
                 .into_iter()
                 .map(|elem| eval_spanned_expr(context, env, elem))
                 .collect();
-            Ok(Value::List(values?))
+            let mut values = vec![first_value];
+            values.extend(rest_values?);
+            Ok(Value::List(values))
         }
         Lambda { params, body } => {
             // Create a lambda value with the body
@@ -467,6 +470,34 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
             // TODO: Constructor pattern matching requires runtime representation of enum values
             // For now, constructor patterns don't match anything
             None
+        }
+        Pattern::Tuple(first, rest) => {
+            // Tuple patterns match against list values (tuples are represented as lists)
+            match value {
+                Value::List(values) => {
+                    let pattern_count = 1 + rest.len();
+                    if values.len() != pattern_count {
+                        return None;
+                    }
+                    let mut bindings = Vec::new();
+                    // Match first pattern
+                    if let Some(mut first_bindings) = match_pattern(&values[0], first) {
+                        bindings.append(&mut first_bindings);
+                    } else {
+                        return None;
+                    }
+                    // Match rest patterns
+                    for (value, pattern) in values[1..].iter().zip(rest.iter()) {
+                        if let Some(mut pattern_bindings) = match_pattern(value, pattern) {
+                            bindings.append(&mut pattern_bindings);
+                        } else {
+                            return None;
+                        }
+                    }
+                    Some(bindings)
+                }
+                _ => None,
+            }
         }
     }
 }

@@ -1041,7 +1041,15 @@ impl TributeParser {
             }
         }
 
-        Ok(Expr::Tuple(elements))
+        if elements.is_empty() {
+            return Err("Tuple must have at least one element".into());
+        }
+
+        let mut iter = elements.into_iter();
+        let first = iter.next().unwrap();
+        let rest: Vec<_> = iter.collect();
+
+        Ok(Expr::Tuple(Box::new(first), rest))
     }
 
     /// Parse lambda expression: fn(x) x + 1, fn(x) -> Int x + 1
@@ -1112,6 +1120,10 @@ impl TributeParser {
                             self.parse_constructor_pattern(child, source)?,
                         ));
                     }
+                    "tuple_pattern" => {
+                        let (first, rest) = self.parse_tuple_pattern(child, source)?;
+                        return Ok(Pattern::Tuple(Box::new(first), rest));
+                    }
                     "identifier_pattern" => {
                         if let Some(id_child) = child.child(0) {
                             let text = id_child.utf8_text(source.as_bytes())?;
@@ -1123,6 +1135,29 @@ impl TributeParser {
             }
         }
         Err("Invalid pattern".into())
+    }
+
+    fn parse_tuple_pattern(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<(Pattern, Vec<Pattern>), Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
+
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "pattern_list" {
+                let patterns = self.parse_pattern_list(child, source)?;
+                if patterns.is_empty() {
+                    return Err("Tuple pattern must have at least one element".into());
+                }
+                let mut iter = patterns.into_iter();
+                let first = iter.next().unwrap();
+                let rest: Vec<_> = iter.collect();
+                return Ok((first, rest));
+            }
+        }
+
+        Err("Missing elements in tuple pattern".into())
     }
 
     fn parse_constructor_pattern(

@@ -535,7 +535,7 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
             Expr::Match { expr, cases } => self.lower_match(db, expr, cases),
             Expr::Lambda { .. } => Err(CompilationError::unsupported_feature("Lambda expressions")),
             Expr::List(_) => Err(CompilationError::unsupported_feature("List literals")),
-            Expr::Tuple(_) => Err(CompilationError::unsupported_feature("Tuple literals")),
+            Expr::Tuple(..) => Err(CompilationError::unsupported_feature("Tuple literals")),
         }
     }
 
@@ -938,7 +938,10 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
                 // No variables to bind
                 Ok(())
             }
-            Pattern::List(_) | Pattern::Rest(_) | Pattern::Constructor { .. } => {
+            Pattern::List(_)
+            | Pattern::Rest(_)
+            | Pattern::Constructor { .. }
+            | Pattern::Tuple(..) => {
                 // TODO: Implement in future iterations
                 Err(CompilationError::unsupported_feature(
                     "complex pattern variable binding",

@@ -363,6 +363,7 @@ module.exports = grammar({
       $.literal_pattern,
       $.wildcard_pattern,
       $.constructor_pattern,
+      $.tuple_pattern,
       $.identifier_pattern
     ),
 
@@ -385,6 +386,14 @@ module.exports = grammar({
         // Struct-style: Ok { value: x }
         seq('{', optional(field('fields', $.pattern_fields)), '}')
       ))
+    ),
+
+    // Tuple pattern: #(a, b), #(x, y, z)
+    tuple_pattern: $ => seq(
+      '#',
+      '(',
+      field('elements', $.pattern_list),
+      ')'
     ),
 
     pattern_list: $ => seq(
@@ -458,15 +467,13 @@ module.exports = grammar({
       ']'
     ),
 
-    // #(1, "hello", 3.14)
+    // #(1, "hello", 3.14) - at least one element required
     tuple_expression: $ => seq(
       '#',
       '(',
-      optional(seq(
-        $._expression,
-        repeat(seq(',', $._expression)),
-        optional(',')  // trailing comma
-      )),
+      $._expression,
+      repeat(seq(',', $._expression)),
+      optional(','),  // trailing comma
       ')'
     ),
 

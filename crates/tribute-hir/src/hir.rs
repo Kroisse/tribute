@@ -71,8 +71,8 @@ pub enum Expr {
     /// List literal [a, b, c]
     List(Vec<Spanned<Expr>>),
 
-    /// Tuple literal #(a, b, c)
-    Tuple(Vec<Spanned<Expr>>),
+    /// Tuple literal #(a, b, c) - first element + rest (non-empty)
+    Tuple(Box<Spanned<Expr>>, Vec<Spanned<Expr>>),
 }
 
 /// Pattern matching case
@@ -97,6 +97,8 @@ pub enum Pattern {
         name: Identifier,
         args: ConstructorArgs,
     },
+    /// Tuple pattern: #(a, b), #(x, y, z) - first element + rest
+    Tuple(Box<Pattern>, Vec<Pattern>),
     /// List pattern (matches list structure)
     List(Vec<Pattern>),
     /// Rest pattern for matching remaining elements
