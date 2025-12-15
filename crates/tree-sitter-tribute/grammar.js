@@ -287,6 +287,7 @@ module.exports = grammar({
       $.method_call_expression,
       $.case_expression,
       $.handle_expression,
+      $.record_expression,
       $.primary_expression
     ),
 
@@ -499,6 +500,31 @@ module.exports = grammar({
       $.list_expression,
       $.tuple_expression,
       $.block  // { expr } for grouping
+    ),
+
+    // Record expression: User { name: "Alice", age: 30 }
+    // Record with shorthand: User { name, age }
+    // Record with spread: User { ..user, age: 31 }
+    record_expression: $ => seq(
+      field('type', $.type_identifier),
+      '{',
+      optional(field('fields', $.record_fields)),
+      '}'
+    ),
+
+    record_fields: $ => seq(
+      $.record_field,
+      repeat(seq(',', $.record_field)),
+      optional(',')
+    ),
+
+    record_field: $ => choice(
+      // Spread: ..expr
+      seq($.spread, field('value', $._expression)),
+      // Full form: name: value
+      seq(field('name', $.identifier), ':', field('value', $._expression)),
+      // Shorthand: name (binds to identifier with same name)
+      field('name', $.identifier)
     ),
 
     // fn(x) x + 1

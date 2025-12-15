@@ -536,6 +536,7 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
             Expr::Lambda { .. } => Err(CompilationError::unsupported_feature("Lambda expressions")),
             Expr::List(_) => Err(CompilationError::unsupported_feature("List literals")),
             Expr::Tuple(..) => Err(CompilationError::unsupported_feature("Tuple literals")),
+            Expr::Record { .. } => Err(CompilationError::unsupported_feature("Record expressions")),
         }
     }
 

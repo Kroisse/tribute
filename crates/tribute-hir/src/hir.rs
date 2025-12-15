@@ -73,6 +73,26 @@ pub enum Expr {
 
     /// Tuple literal #(a, b, c) - first element + rest (non-empty)
     Tuple(Box<Spanned<Expr>>, Vec<Spanned<Expr>>),
+
+    /// Record expression: User { name: "Alice", age: 30 }
+    Record {
+        type_name: Identifier,
+        fields: Vec<RecordField>,
+    },
+}
+
+/// A field in a record expression
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RecordField {
+    /// Spread: ..expr
+    Spread(Spanned<Expr>),
+    /// Full form: name: value
+    Field {
+        name: Identifier,
+        value: Spanned<Expr>,
+    },
+    /// Shorthand: name (equivalent to name: name)
+    Shorthand(Identifier),
 }
 
 /// Pattern matching case

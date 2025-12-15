@@ -739,6 +739,7 @@ impl TributeParser {
             "lambda_expression" => self.parse_lambda_expression(node, source),
             "list_expression" => self.parse_list_expression(node, source),
             "tuple_expression" => self.parse_tuple_expression(node, source),
+            "record_expression" => self.parse_record_expression(node, source),
             "block" => self.parse_block_as_expr(node, source),
             "primary_expression" => {
                 // primary_expression should have one child
@@ -1041,6 +1042,66 @@ impl TributeParser {
         let rest: Vec<_> = iter.collect();
 
         Ok(Expr::Tuple(Box::new(first), rest))
+    }
+
+    /// Parse record expression: User { name: "Alice", age: 30 }
+    fn parse_record_expression(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let type_node = node
+            .child_by_field_name("type")
+            .ok_or("Missing type in record expression")?;
+        let type_name = type_node.utf8_text(source.as_bytes())?.to_string();
+
+        let mut fields = Vec::new();
+        if let Some(fields_node) = node.child_by_field_name("fields") {
+            let mut cursor = fields_node.walk();
+            for child in fields_node.named_children(&mut cursor) {
+                if child.kind() == "record_field" {
+                    fields.push(self.parse_record_field(child, source)?);
+                }
+            }
+        }
+
+        Ok(Expr::Record(RecordExpression { type_name, fields }))
+    }
+
+    /// Parse a single record field: name: value, name, or ..expr
+    fn parse_record_field(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<RecordField, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
+
+        // Check if it's a spread field
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "spread" {
+                // Spread: ..expr
+                if let Some(value_node) = node.child_by_field_name("value") {
+                    let value = self.node_to_expr_with_span(value_node, source)?;
+                    return Ok(RecordField::Spread(value));
+                }
+                return Err("Missing value in spread field".into());
+            }
+        }
+
+        // Check for name field
+        if let Some(name_node) = node.child_by_field_name("name") {
+            let name = name_node.utf8_text(source.as_bytes())?.to_string();
+
+            // Check if it has a value (full form) or is shorthand
+            if let Some(value_node) = node.child_by_field_name("value") {
+                let value = self.node_to_expr_with_span(value_node, source)?;
+                Ok(RecordField::Field { name, value })
+            } else {
+                Ok(RecordField::Shorthand(name))
+            }
+        } else {
+            Err("Invalid record field".into())
+        }
     }
 
     /// Parse lambda expression: fn(x) x + 1, fn(x) -> Int x + 1

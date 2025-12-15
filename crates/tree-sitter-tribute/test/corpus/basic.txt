@@ -2487,3 +2487,115 @@ fn test() {
               (argument_list
                 (primary_expression
                   (keyword_nil))))))))))
+
+================================================================================
+Record expression with fields
+================================================================================
+
+fn test() {
+    User { name: "Alice", age: 30 }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (record_expression
+          type: (type_identifier)
+          fields: (record_fields
+            (record_field
+              name: (identifier)
+              value: (primary_expression
+                (string
+                  (string_segment))))
+            (record_field
+              name: (identifier)
+              value: (primary_expression
+                (number)))))))))
+
+================================================================================
+Record expression with shorthand
+================================================================================
+
+fn test() {
+    User { name, age }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (record_expression
+          type: (type_identifier)
+          fields: (record_fields
+            (record_field
+              name: (identifier))
+            (record_field
+              name: (identifier))))))))
+
+================================================================================
+Record expression with spread
+================================================================================
+
+fn test() {
+    User { ..user, age: 31 }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (record_expression
+          type: (type_identifier)
+          fields: (record_fields
+            (record_field
+              (spread)
+              value: (primary_expression
+                (identifier)))
+            (record_field
+              name: (identifier)
+              value: (primary_expression
+                (number)))))))))
+
+================================================================================
+Record expression mixed
+================================================================================
+
+fn test() {
+    User { ..base, name: "Bob", age }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (record_expression
+          type: (type_identifier)
+          fields: (record_fields
+            (record_field
+              (spread)
+              value: (primary_expression
+                (identifier)))
+            (record_field
+              name: (identifier)
+              value: (primary_expression
+                (string
+                  (string_segment))))
+            (record_field
+              name: (identifier))))))))

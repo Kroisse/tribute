@@ -244,9 +244,32 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
             let lowered_rest: LowerResult<Vec<_>> = rest.iter().map(lower_expr).collect();
             Expr::Tuple(lowered_first, lowered_rest?)
         }
+        AstExpr::Record(record_expr) => {
+            let fields: LowerResult<Vec<_>> =
+                record_expr.fields.iter().map(lower_record_field).collect();
+            Expr::Record {
+                type_name: record_expr.type_name.clone(),
+                fields: fields?,
+            }
+        }
     };
 
     Ok((hir_expr, span))
+}
+
+fn lower_record_field(field: &tribute_ast::RecordField) -> LowerResult<crate::hir::RecordField> {
+    match field {
+        tribute_ast::RecordField::Spread(expr) => {
+            Ok(crate::hir::RecordField::Spread(lower_expr(expr)?))
+        }
+        tribute_ast::RecordField::Field { name, value } => Ok(crate::hir::RecordField::Field {
+            name: name.clone(),
+            value: lower_expr(value)?,
+        }),
+        tribute_ast::RecordField::Shorthand(name) => {
+            Ok(crate::hir::RecordField::Shorthand(name.clone()))
+        }
+    }
 }
 
 fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {

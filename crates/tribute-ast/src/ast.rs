@@ -176,6 +176,8 @@ pub enum Expr {
     List(Vec<Spanned<Expr>>),
     /// Tuple expression: #(a, b, c) - first element + rest (non-empty)
     Tuple(Box<Spanned<Expr>>, Vec<Spanned<Expr>>),
+    /// Record expression: User { name: "Alice", age: 30 }
+    Record(RecordExpression),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -258,6 +260,29 @@ pub struct LambdaExpression {
     /// Optional return type annotation: -> Int
     pub return_type: Option<TypeRef>,
     pub body: Box<Spanned<Expr>>,
+}
+
+/// Record expression: User { name: "Alice", age: 30 }
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RecordExpression {
+    /// Type name (e.g., "User", "Point")
+    pub type_name: Identifier,
+    /// Record fields
+    pub fields: Vec<RecordField>,
+}
+
+/// A field in a record expression
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RecordField {
+    /// Spread: ..expr
+    Spread(Spanned<Expr>),
+    /// Full form: name: value
+    Field {
+        name: Identifier,
+        value: Spanned<Expr>,
+    },
+    /// Shorthand: name (equivalent to name: name)
+    Shorthand(Identifier),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

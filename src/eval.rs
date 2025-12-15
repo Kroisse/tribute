@@ -14,6 +14,8 @@ pub enum Value {
     Number(i64),
     String(String),
     List(Vec<Value>),
+    /// Record value: type name, fields (name -> value)
+    Record(Identifier, HashMap<Identifier, Value>),
     Fn(
         Identifier,
         Vec<Identifier>,
@@ -41,6 +43,16 @@ impl std::fmt::Display for Value {
                     write!(f, "{}", item)?;
                 }
                 f.write_str("]")
+            }
+            Value::Record(type_name, fields) => {
+                write!(f, "{} {{ ", type_name)?;
+                for (i, (name, value)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{}: {}", name, value)?;
+                }
+                f.write_str(" }")
             }
             Value::Fn(name, _, _) => write!(f, "<fn '{}'>", name),
             Value::Lambda(params, _) => write!(f, "<lambda({})>", params.join(", ")),
@@ -379,6 +391,36 @@ fn eval_spanned_expr<'db>(
             // Create a lambda value with the body
             Ok(Value::Lambda(params, body))
         }
+        Record { type_name, fields } => {
+            use tribute_hir::hir::RecordField;
+            let mut field_map = HashMap::new();
+            for field in fields {
+                match field {
+                    RecordField::Spread(spread_expr) => {
+                        // Spread: ..expr - merge fields from another record
+                        let spread_value = eval_spanned_expr(context, env, spread_expr)?;
+                        match spread_value {
+                            Value::Record(_, spread_fields) => {
+                                for (name, value) in spread_fields {
+                                    field_map.insert(name, value);
+                                }
+                            }
+                            _ => return Err("spread must be a record".into()),
+                        }
+                    }
+                    RecordField::Field { name, value } => {
+                        let field_value = eval_spanned_expr(context, env, value)?;
+                        field_map.insert(name, field_value);
+                    }
+                    RecordField::Shorthand(name) => {
+                        // Shorthand: name - get value from variable with same name
+                        let value = env.lookup(&name).cloned()?;
+                        field_map.insert(name, value);
+                    }
+                }
+            }
+            Ok(Value::Record(type_name, field_map))
+        }
     }
 }
 
@@ -395,6 +437,14 @@ fn value_to_string(value: &Value) -> Result<String, Error> {
                 items.iter().map(value_to_string).collect();
             let item_strings = item_strings?;
             Ok(format!("[{}]", item_strings.join(", ")))
+        }
+        Value::Record(type_name, fields) => {
+            let field_strings: Result<Vec<String>, Error> = fields
+                .iter()
+                .map(|(name, value)| Ok(format!("{}: {}", name, value_to_string(value)?)))
+                .collect();
+            let field_strings = field_strings?;
+            Ok(format!("{} {{ {} }}", type_name, field_strings.join(", ")))
         }
         Value::Fn(name, _, _) => Ok(format!("<fn '{}'>", name)),
         Value::Lambda(params, _) => Ok(format!("<lambda({})>", params.join(", "))),
