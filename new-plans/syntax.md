@@ -243,7 +243,7 @@ pub const VERSION = "0.1.0"
 ```
 StructDecl ::= 'pub'? 'struct' TypeId TypeParams? StructBody
 
-TypeParams ::= '(' TypeParam (',' TypeParam)* ')'
+TypeParams ::= '(' TypeParam (',' TypeParam)* ','? ')'
 TypeParam  ::= LowerIdentifier
 
 StructBody ::= '{' StructFields '}'
@@ -277,7 +277,7 @@ EnumBody ::= '{' EnumVariants '}'
 EnumVariants ::= EnumVariant (FieldSep EnumVariant)* FieldSep?
 EnumVariant ::= TypeId VariantFields?
 
-VariantFields ::= '(' Type (',' Type)* ')'     // positional
+VariantFields ::= '(' Type (',' Type)* ','? ')'     // positional
                 | '{' StructFields '}'          // named
 ```
 
@@ -314,15 +314,15 @@ Type ::= TypePath TypeArgs?
        | '(' Type ')'
 
 TypePath ::= (PathSegment '::')* TypeId
-TypeArgs ::= '(' Type (',' Type)* ')'
+TypeArgs ::= '(' Type (',' Type)* ','? ')'
 
 FunctionType ::= 'fn' '(' TypeList? ')' ReturnType
-TypeList ::= Type (',' Type)*
+TypeList ::= Type (',' Type)* ','?
 
 ReturnType ::= '->' Type                      // 암묵적 effect polymorphic
              | '->' '{' EffectRow? '}' Type   // 명시적 effect
 
-EffectRow ::= EffectItem (',' EffectItem)* EffectTail?
+EffectRow ::= EffectItem (',' EffectItem)* EffectTail? ','?
 EffectItem ::= TypeId TypeArgs?
 EffectTail ::= ',' LowerIdentifier            // row variable
 ```
@@ -424,7 +424,7 @@ case handle comp() {
 ```
 FunctionDef ::= 'pub'? 'fn' Identifier '(' ParamList? ')' ReturnType? Block
 
-ParamList ::= Param (',' Param)*
+ParamList ::= Param (',' Param)* ','?
 Param ::= Identifier (':' Type)?
 
 // ReturnType은 Type Syntax 섹션에 정의됨
@@ -553,7 +553,7 @@ UFCSExpr ::= Expression '.' Identifier CallArgs?
 CallArgs ::= '(' ExprList? ')'
            | /* empty - 인자 없으면 괄호 생략 가능 */
 
-ExprList ::= Expression (',' Expression)*
+ExprList ::= Expression (',' Expression)* ','?
 ```
 
 **UFCS 규칙:**
@@ -649,8 +649,8 @@ VariantPattern ::= TypeId ('(' PatternList ')' | '{' RecordPatternFields '}')?
 RecordPattern ::= TypeId '{' RecordPatternFields '}'
 ParenPattern ::= '(' Pattern ')'
 
-PatternList ::= Pattern (',' Pattern)*
-RecordPatternFields ::= RecordPatternField (',' RecordPatternField)* (',' '..')?
+PatternList ::= Pattern (',' Pattern)* ','?
+RecordPatternFields ::= RecordPatternField (',' RecordPatternField)* ','? '..'?
 RecordPatternField ::= Identifier (':' Pattern)?
 ```
 
