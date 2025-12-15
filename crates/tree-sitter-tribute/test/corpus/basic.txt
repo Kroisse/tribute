@@ -678,3 +678,82 @@ pub use internal::api
       (identifier)
       (use_path_segment
         (identifier)))))
+
+================================================================================
+Simple mod declaration
+================================================================================
+
+mod foo
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (mod_declaration
+    (keyword_mod)
+    name: (identifier)))
+
+================================================================================
+Pub mod declaration
+================================================================================
+
+pub mod api
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (mod_declaration
+    (keyword_pub)
+    (keyword_mod)
+    name: (identifier)))
+
+================================================================================
+Mod with inline body
+================================================================================
+
+mod utils {
+    fn helper() {
+        42
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (mod_declaration
+    (keyword_mod)
+    name: (identifier)
+    body: (mod_body
+      (function_definition
+        (keyword_fn)
+        name: (identifier)
+        body: (block
+          (expression_statement
+            (primary_expression
+              (number))))))))
+
+================================================================================
+Nested mod declarations
+================================================================================
+
+mod outer {
+    mod inner {
+        const VALUE = 100
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (mod_declaration
+    (keyword_mod)
+    name: (identifier)
+    body: (mod_body
+      (mod_declaration
+        (keyword_mod)
+        name: (identifier)
+        body: (mod_body
+          (const_declaration
+            (keyword_const)
+            name: (identifier)
+            value: (primary_expression
+              (number))))))))

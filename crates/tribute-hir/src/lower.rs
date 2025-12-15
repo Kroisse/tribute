@@ -64,8 +64,12 @@ pub fn lower_program_to_hir<'db>(
                 }
                 functions.insert(function.name.clone(), function);
             }
-            ItemKind::Use(_) | ItemKind::Struct(_) | ItemKind::Enum(_) | ItemKind::Const(_) => {
-                // Use/type/const declarations are not evaluated code
+            ItemKind::Use(_)
+            | ItemKind::Mod(_)
+            | ItemKind::Struct(_)
+            | ItemKind::Enum(_)
+            | ItemKind::Const(_) => {
+                // Use/mod/type/const declarations are not evaluated code
                 // They will be handled by the module system and type checker (future work)
             }
             _ => {

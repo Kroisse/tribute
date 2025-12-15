@@ -9,10 +9,27 @@ module.exports = grammar({
 
     _item: $ => choice(
       $.use_declaration,
+      $.mod_declaration,
       $.function_definition,
       $.struct_declaration,
       $.enum_declaration,
       $.const_declaration
+    ),
+
+    // mod foo
+    // mod foo { ... }
+    // pub mod foo
+    mod_declaration: $ => seq(
+      optional($.keyword_pub),
+      $.keyword_mod,
+      field('name', $.identifier),
+      optional(field('body', $.mod_body))
+    ),
+
+    mod_body: $ => seq(
+      '{',
+      repeat($._item),
+      '}'
     ),
 
     // use std::io
@@ -344,6 +361,7 @@ module.exports = grammar({
     keyword_const: $ => 'const',
     keyword_pub: $ => 'pub',
     keyword_use: $ => 'use',
+    keyword_mod: $ => 'mod',
 
     // Comments
     line_comment: $ => token(seq(

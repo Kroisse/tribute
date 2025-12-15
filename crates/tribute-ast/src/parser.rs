@@ -255,6 +255,39 @@ impl TributeParser {
                     span,
                 ))
             }
+            "mod_declaration" => {
+                let mut name = None;
+                let mut items = None;
+                let mut is_pub = false;
+
+                for i in 0..node.child_count() {
+                    if let Some(child) = node.child(i) {
+                        match child.kind() {
+                            "keyword_pub" => {
+                                is_pub = true;
+                            }
+                            "identifier" => {
+                                if name.is_none() {
+                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                                }
+                            }
+                            "mod_body" => {
+                                items = Some(self.parse_mod_body(db, child, source)?);
+                            }
+                            _ => {} // Skip other tokens
+                        }
+                    }
+                }
+
+                let name = name.ok_or("Missing mod name")?;
+                let span = Span::new(node.start_byte(), node.end_byte());
+
+                Ok(Item::new(
+                    db,
+                    ItemKind::Mod(ModDeclaration::new(db, name, items, is_pub, span)),
+                    span,
+                ))
+            }
             _ => Err(format!("Unknown item kind: {}", node.kind()).into()),
         }
     }
@@ -324,6 +357,31 @@ impl TributeParser {
                 && child.kind() == "identifier"
             {
                 items.push(child.utf8_text(source.as_bytes())?.to_string());
+            }
+        }
+
+        Ok(items)
+    }
+
+    fn parse_mod_body<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        node: Node,
+        source: &'db str,
+    ) -> Result<Vec<Item<'db>>, Box<dyn std::error::Error>> {
+        let mut items = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                // Skip braces and comments
+                if child.kind() == "{"
+                    || child.kind() == "}"
+                    || child.kind() == "line_comment"
+                    || child.kind() == "block_comment"
+                {
+                    continue;
+                }
+                items.push(self.node_to_item(db, child, source)?);
             }
         }
 

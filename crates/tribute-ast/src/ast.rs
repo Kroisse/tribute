@@ -21,6 +21,7 @@ pub struct Item<'db> {
 #[non_exhaustive]
 pub enum ItemKind<'db> {
     Use(UseDeclaration<'db>),
+    Mod(ModDeclaration<'db>),
     Function(FunctionDefinition<'db>),
     Struct(StructDefinition<'db>),
     Enum(EnumDefinition<'db>),
@@ -42,6 +43,18 @@ pub struct UsePath {
     pub segments: Vec<Identifier>,
     /// Optional group of items: {List, Map}
     pub group: Option<Vec<Identifier>>,
+}
+
+/// Module declaration: mod foo, mod foo { ... }
+#[salsa::tracked(debug)]
+pub struct ModDeclaration<'db> {
+    pub name: Identifier,
+    /// None for external module (mod foo), Some for inline module (mod foo { ... })
+    #[tracked]
+    #[returns(ref)]
+    pub items: Option<Vec<Item<'db>>>,
+    pub is_pub: bool,
+    pub span: Span,
 }
 
 #[salsa::tracked(debug)]
