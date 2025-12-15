@@ -316,14 +316,15 @@ Type ::= TypePath TypeArgs?
 TypePath ::= (PathSegment '::')* TypeId
 TypeArgs ::= '(' Type (',' Type)* ')'
 
-FunctionType ::= 'fn' '(' TypeList? ')' EffectAnnotation? '->' Type
+FunctionType ::= 'fn' '(' TypeList? ')' ReturnType
 TypeList ::= Type (',' Type)*
 
-EffectAnnotation ::= '->' '{' EffectRow? '}' Type
-                   | '->' Type                      // 암묵적 polymorphic
-EffectRow ::= (EffectItem (',' EffectItem)*)? EffectTail?
+ReturnType ::= '->' Type                      // 암묵적 effect polymorphic
+             | '->' '{' EffectRow? '}' Type   // 명시적 effect
+
+EffectRow ::= EffectItem (',' EffectItem)* EffectTail?
 EffectItem ::= TypeId TypeArgs?
-EffectTail ::= ',' LowerIdentifier                  // row variable
+EffectTail ::= ',' LowerIdentifier            // row variable
 ```
 
 **예시:**
@@ -426,9 +427,7 @@ FunctionDef ::= 'pub'? 'fn' Identifier '(' ParamList? ')' ReturnType? Block
 ParamList ::= Param (',' Param)*
 Param ::= Identifier (':' Type)?
 
-ReturnType ::= EffectAnnotation? Type
-             | '->' Type
-             | '->' '{' EffectRow '}' Type
+// ReturnType은 Type Syntax 섹션에 정의됨
 ```
 
 **예시:**
