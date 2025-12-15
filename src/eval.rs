@@ -14,6 +14,8 @@ pub enum Value {
     Number(i64),
     String(String),
     List(Vec<Value>),
+    /// Tuple value: #(a, b, c)
+    Tuple(Vec<Value>),
     /// Record value: type name, fields (name -> value)
     Record(Identifier, HashMap<Identifier, Value>),
     Fn(
@@ -43,6 +45,16 @@ impl std::fmt::Display for Value {
                     write!(f, "{}", item)?;
                 }
                 f.write_str("]")
+            }
+            Value::Tuple(items) => {
+                f.write_str("#(")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{}", item)?;
+                }
+                f.write_str(")")
             }
             Value::Record(type_name, fields) => {
                 write!(f, "{} {{ ", type_name)?;
@@ -376,8 +388,6 @@ fn eval_spanned_expr<'db>(
             Ok(Value::List(values?))
         }
         Tuple(first, rest) => {
-            // For now, tuples are represented as lists
-            // TODO: Add proper Tuple value type when needed
             let first_value = eval_spanned_expr(context, env, *first)?;
             let rest_values: Result<Vec<Value>, Error> = rest
                 .into_iter()
@@ -385,7 +395,7 @@ fn eval_spanned_expr<'db>(
                 .collect();
             let mut values = vec![first_value];
             values.extend(rest_values?);
-            Ok(Value::List(values))
+            Ok(Value::Tuple(values))
         }
         Lambda { params, body } => {
             // Create a lambda value with the body
@@ -437,6 +447,12 @@ fn value_to_string(value: &Value) -> Result<String, Error> {
                 items.iter().map(value_to_string).collect();
             let item_strings = item_strings?;
             Ok(format!("[{}]", item_strings.join(", ")))
+        }
+        Value::Tuple(items) => {
+            let item_strings: Result<Vec<String>, Error> =
+                items.iter().map(value_to_string).collect();
+            let item_strings = item_strings?;
+            Ok(format!("#({})", item_strings.join(", ")))
         }
         Value::Record(type_name, fields) => {
             let field_strings: Result<Vec<String>, Error> = fields
@@ -597,9 +613,9 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
             }
         }
         Pattern::Tuple(first, rest) => {
-            // Tuple patterns match against list values (tuples are represented as lists)
+            // Tuple patterns match against tuple values
             match value {
-                Value::List(values) => {
+                Value::Tuple(values) => {
                     let pattern_count = 1 + rest.len();
                     if values.len() != pattern_count {
                         return None;
