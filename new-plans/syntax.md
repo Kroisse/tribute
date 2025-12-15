@@ -479,8 +479,7 @@ fn(x) {
 PrimaryExpr ::= Literal
               | Identifier
               | Path
-              | '(' Expression ')'
-              | Block
+              | Block                             // { expr } 로 그룹화
               | ListExpr
               | RecordExpr
               | OperatorFn
@@ -507,12 +506,19 @@ LetStatement ::= 'let' Pattern (':' Type)? '=' Expression
 **예시:**
 
 ```rust
+// 여러 문장
 {
     let x = 1
     let y = 2
     x + y
 }
+
+// 연산 우선순위 조정 (괄호 대신 블록 사용)
+{ a + b } * c           // (a + b) * c 와 동일
+x * { y + z }           // x * (y + z) 와 동일
 ```
+
+**Note:** `(expr)` 형태의 괄호 표현식은 지원하지 않음. 우선순위 조정에는 `{ expr }` 사용. `(...)` 는 연산자-함수 `(+)`, `(<>)` 전용.
 
 ### Record Expression
 
@@ -677,7 +683,6 @@ Pattern ::= LiteralPattern
           | RecordPattern
           | ListPattern
           | HandlerPattern
-          | ParenPattern
 
 LiteralPattern ::= Number | String | Rune
 WildcardPattern ::= '_'
@@ -689,7 +694,6 @@ ListPattern ::= '[' PatternList? ']'
 HandlerPattern ::= '{' HandlerCase '}'
 HandlerCase ::= Identifier                                  // completion: { result }
               | Path '(' PatternList? ')' '->' Identifier   // suspend: { Op(args) -> k }
-ParenPattern ::= '(' Pattern ')'
 
 PatternList ::= Pattern (',' Pattern)* ','?
 RecordPatternFields ::= RecordPatternField (',' RecordPatternField)* ','? '..'?
@@ -921,7 +925,7 @@ fn main() ->{Console} Nil {
 
 | 구문                  | 의미                   |
 | --------------------- | ---------------------- |
-| `{ stmts; expr }`     | Block                  |
+| `{ stmts; expr }`     | Block / 그룹화         |
 | `fn(x) expr`          | Lambda                 |
 | `case e { pat -> e }` | Pattern matching       |
 | `handle e`            | Effect handling        |
