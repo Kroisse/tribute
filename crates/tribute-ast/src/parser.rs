@@ -685,8 +685,10 @@ impl TributeParser {
             "call_expression" => self.parse_call_expression(node, source),
             "method_call_expression" => self.parse_method_call_expression(node, source),
             "case_expression" => self.parse_case_expression(node, source),
+            "lambda_expression" => self.parse_lambda_expression(node, source),
             "list_expression" => self.parse_list_expression(node, source),
             "tuple_expression" => self.parse_tuple_expression(node, source),
+            "block" => self.parse_block_as_expr(node, source),
             "primary_expression" => {
                 // primary_expression should have one child
                 if let Some(child) = node.child(0) {
@@ -989,6 +991,47 @@ impl TributeParser {
         }
 
         Ok(Expr::Tuple(elements))
+    }
+
+    /// Parse lambda expression: fn(x) x + 1, fn(x, y) { x + y }
+    fn parse_lambda_expression(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
+        let mut parameters = Vec::new();
+        let mut body = None;
+
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "parameter_list" => {
+                    parameters = self.parse_parameter_list(child, source)?;
+                }
+                _ => {
+                    // Try to parse as body expression
+                    if body.is_none()
+                        && let Ok(expr) = self.node_to_expr_with_span(child, source)
+                    {
+                        body = Some(Box::new(expr));
+                    }
+                }
+            }
+        }
+
+        let body = body.ok_or("Missing lambda body")?;
+
+        Ok(Expr::Lambda(LambdaExpression { parameters, body }))
+    }
+
+    /// Parse a block as an expression (e.g., { let x = 1; x + 1 })
+    fn parse_block_as_expr(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let block = self.parse_block(node, source)?;
+        Ok(Expr::Block(block.statements))
     }
 
     fn parse_pattern(

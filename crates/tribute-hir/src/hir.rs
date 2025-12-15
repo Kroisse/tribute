@@ -59,6 +59,12 @@ pub enum Expr {
         cases: Vec<MatchCase>,
     },
 
+    /// Lambda expression: fn(x) x + 1
+    Lambda {
+        params: Vec<Identifier>,
+        body: Box<Spanned<Expr>>,
+    },
+
     /// Block expression (sequence of expressions)
     Block(Vec<Spanned<Expr>>),
 

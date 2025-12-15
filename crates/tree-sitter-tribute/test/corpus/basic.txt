@@ -1185,3 +1185,148 @@ fn test() {
               (wildcard_pattern))
             value: (primary_expression
               (identifier))))))))
+
+================================================================================
+Simple lambda expression
+================================================================================
+
+fn test() {
+    fn(x) x + 1
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          (parameter_list
+            (identifier))
+          body: (binary_expression
+            (primary_expression
+              (identifier))
+            (primary_expression
+              (number))))))))
+
+================================================================================
+Lambda with multiple parameters
+================================================================================
+
+fn test() {
+    fn(x, y) x + y
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          (parameter_list
+            (identifier)
+            (identifier))
+          body: (binary_expression
+            (primary_expression
+              (identifier))
+            (primary_expression
+              (identifier))))))))
+
+================================================================================
+Lambda with block body
+================================================================================
+
+fn test() {
+    fn(x) {
+        let y = x + 1
+        y * 2
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          (parameter_list
+            (identifier))
+          body: (primary_expression
+            (block
+              (let_statement
+                (keyword_let)
+                name: (identifier)
+                value: (binary_expression
+                  (primary_expression
+                    (identifier))
+                  (primary_expression
+                    (number))))
+              (expression_statement
+                (binary_expression
+                  (primary_expression
+                    (identifier))
+                  (primary_expression
+                    (number)))))))))))
+
+================================================================================
+Lambda without parameters
+================================================================================
+
+fn test() {
+    fn() 42
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          body: (primary_expression
+            (number)))))))
+
+================================================================================
+Lambda as function argument
+================================================================================
+
+fn test() {
+    list.map(fn(x) x * 2)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (method_call_expression
+          receiver: (primary_expression
+            (identifier))
+          method: (identifier)
+          (argument_list
+            (lambda_expression
+              (keyword_fn)
+              (parameter_list
+                (identifier))
+              body: (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (number))))))))))

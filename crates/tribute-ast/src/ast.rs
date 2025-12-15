@@ -160,6 +160,9 @@ pub enum Expr {
     Call(CallExpression),
     MethodCall(MethodCallExpression),
     Match(MatchExpression),
+    Lambda(LambdaExpression),
+    /// Block expression: { expr1; expr2; ... }
+    Block(Vec<Statement>),
     List(Vec<Spanned<Expr>>),
     Tuple(Vec<Spanned<Expr>>),
 }
@@ -235,6 +238,13 @@ pub struct MatchArm {
 pub struct GuardedBranch {
     pub guard: Option<Spanned<Expr>>,
     pub value: Spanned<Expr>,
+}
+
+/// Lambda expression: fn(x) x + 1, fn(x, y) { x + y }
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LambdaExpression {
+    pub parameters: Vec<Identifier>,
+    pub body: Box<Spanned<Expr>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

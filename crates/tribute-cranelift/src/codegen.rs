@@ -533,6 +533,7 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
             Expr::Let { var, value } => self.lower_let(db, var, value),
             Expr::Block(exprs) => self.lower_block(db, exprs),
             Expr::Match { expr, cases } => self.lower_match(db, expr, cases),
+            Expr::Lambda { .. } => Err(CompilationError::unsupported_feature("Lambda expressions")),
             Expr::List(_) => Err(CompilationError::unsupported_feature("List literals")),
             Expr::Tuple(_) => Err(CompilationError::unsupported_feature("Tuple literals")),
         }

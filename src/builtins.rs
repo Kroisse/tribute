@@ -273,6 +273,7 @@ fn logical_and(args: &[Value]) -> Result<Value, Error> {
             Value::List(items) => !items.is_empty(),
             Value::Unit => false,
             Value::Fn(_, _, _) => true,
+            Value::Lambda(_, _) => true,
             Value::BuiltinFn(_, _) => true,
         }
     };
@@ -293,6 +294,7 @@ fn logical_or(args: &[Value]) -> Result<Value, Error> {
             Value::List(items) => !items.is_empty(),
             Value::Unit => false,
             Value::Fn(_, _, _) => true,
+            Value::Lambda(_, _) => true,
             Value::BuiltinFn(_, _) => true,
         }
     };

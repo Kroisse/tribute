@@ -267,6 +267,7 @@ module.exports = grammar({
 
     _expression: $ => choice(
       $.binary_expression,
+      $.lambda_expression,
       $.call_expression,
       $.method_call_expression,
       $.case_expression,
@@ -379,6 +380,18 @@ module.exports = grammar({
       $.block  // { expr } for grouping
     ),
 
+    // fn(x) x + 1
+    // fn(x, y) x + y
+    // fn(x) { let y = x + 1; y * 2 }
+    // Lowest precedence (0) so lambda body captures entire expression
+    lambda_expression: $ => prec.right(0, seq(
+      $.keyword_fn,
+      '(',
+      optional($.parameter_list),
+      ')',
+      field('body', $._expression)
+    )),
+
     // Path expression: std::io, Int::to_string, Std::Collections::List
     // Keywords (True, False, Nil) won't match because identifier is lowercase-only
     // Note: path_segment wraps identifier/type_identifier due to tree-sitter lexer limitations
@@ -438,7 +451,7 @@ module.exports = grammar({
     _name: $ => choice($.identifier, $.type_identifier),
 
     // Keywords
-    keyword_fn: $ => 'fn',
+    keyword_fn: $ => token(prec(2, 'fn')),
     keyword_let: $ => 'let',
     keyword_case: $ => 'case',
     keyword_struct: $ => 'struct',

@@ -200,6 +200,32 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
             }
             Expr::Match { expr, cases }
         }
+        AstExpr::Lambda(lambda_expr) => {
+            let body = Box::new(lower_expr(&lambda_expr.body)?);
+            Expr::Lambda {
+                params: lambda_expr.parameters.clone(),
+                body,
+            }
+        }
+        AstExpr::Block(statements) => {
+            let mut exprs = Vec::new();
+            for statement in statements {
+                match statement {
+                    Statement::Let(let_stmt) => {
+                        let value = lower_expr(&let_stmt.value)?;
+                        let let_expr = Expr::Let {
+                            var: let_stmt.name.clone(),
+                            value: Box::new(value),
+                        };
+                        exprs.push((let_expr, let_stmt.value.1));
+                    }
+                    Statement::Expression(expr) => {
+                        exprs.push(lower_expr(expr)?);
+                    }
+                }
+            }
+            Expr::Block(exprs)
+        }
         AstExpr::List(elements) => {
             let lowered: LowerResult<Vec<_>> = elements.iter().map(lower_expr).collect();
             Expr::List(lowered?)

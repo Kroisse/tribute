@@ -19,6 +19,8 @@ pub enum Value {
         Vec<Identifier>,
         Vec<Spanned<tribute_ast::ast::Expr>>,
     ),
+    /// Lambda closure: params, body, captured environment
+    Lambda(Vec<Identifier>, Box<Spanned<Expr>>),
     BuiltinFn(&'static str, BuiltinFn),
 }
 
@@ -41,6 +43,7 @@ impl std::fmt::Display for Value {
                 f.write_str("]")
             }
             Value::Fn(name, _, _) => write!(f, "<fn '{}'>", name),
+            Value::Lambda(params, _) => write!(f, "<lambda({})>", params.join(", ")),
             Value::BuiltinFn(name, _) => write!(f, "<builtin fn '{}'>", name),
         }
     }
@@ -290,6 +293,28 @@ fn eval_spanned_expr<'db>(
                         Err(format!("Function '{}' not found", name).into())
                     }
                 }
+                Value::Lambda(params, body) => {
+                    let arg_values: Result<Vec<Value>, Error> = args
+                        .into_iter()
+                        .map(|arg| eval_spanned_expr(context, env, arg))
+                        .collect();
+                    let arg_values = arg_values?;
+
+                    if params.len() != arg_values.len() {
+                        return Err(format!(
+                            "lambda expects {} arguments, got {}",
+                            params.len(),
+                            arg_values.len()
+                        )
+                        .into());
+                    }
+
+                    let bindings: Vec<(Identifier, Value)> =
+                        params.into_iter().zip(arg_values).collect();
+
+                    let mut child_env = env.child(bindings);
+                    eval_spanned_expr(context, &mut child_env, *body)
+                }
                 Value::BuiltinFn(_, f) => {
                     let arg_values: Result<Vec<Value>, Error> = args
                         .into_iter()
@@ -347,6 +372,10 @@ fn eval_spanned_expr<'db>(
                 .collect();
             Ok(Value::List(values?))
         }
+        Lambda { params, body } => {
+            // Create a lambda value with the body
+            Ok(Value::Lambda(params, body))
+        }
     }
 }
 
@@ -365,6 +394,7 @@ fn value_to_string(value: &Value) -> Result<String, Error> {
             Ok(format!("[{}]", item_strings.join(", ")))
         }
         Value::Fn(name, _, _) => Ok(format!("<fn '{}'>", name)),
+        Value::Lambda(params, _) => Ok(format!("<lambda({})>", params.join(", "))),
         Value::BuiltinFn(name, _) => Ok(format!("<builtin fn '{}'>", name)),
     }
 }
@@ -606,6 +636,63 @@ mod tests {
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(120)) => {}
                 Ok(other) => panic!("Expected Number(120), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_lambda_expression() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test simple lambda expression
+            let source = r#"
+                fn main() {
+                    let add = fn(x, y) x + y
+                    add(3, 4)
+                }
+            "#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Number(7)) => {}
+                Ok(other) => panic!("Expected Number(7), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_lambda_with_block() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test lambda with block body
+            let source = r#"
+                fn main() {
+                    let double_plus_one = fn(x) {
+                        let doubled = x * 2
+                        doubled + 1
+                    }
+                    double_plus_one(5)
+                }
+            "#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Number(11)) => {}
+                Ok(other) => panic!("Expected Number(11), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_lambda_no_params() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test lambda without parameters
+            let source = r#"
+                fn main() {
+                    let constant = fn() 42
+                    constant()
+                }
+            "#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Number(42)) => {}
+                Ok(other) => panic!("Expected Number(42), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
         });
