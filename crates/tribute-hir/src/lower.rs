@@ -86,7 +86,12 @@ fn lower_function_def<'db>(
     func_def: FunctionDefinition<'db>,
 ) -> LowerResult<FunctionDef> {
     let name = func_def.name(db);
-    let params = func_def.parameters(db);
+    // Extract just the parameter names (type annotations are handled by type checker)
+    let params: Vec<_> = func_def
+        .parameters(db)
+        .iter()
+        .map(|p| p.name.clone())
+        .collect();
     let body_block = func_def.body(db);
 
     // Convert body statements to HIR expressions
@@ -202,10 +207,13 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
         }
         AstExpr::Lambda(lambda_expr) => {
             let body = Box::new(lower_expr(&lambda_expr.body)?);
-            Expr::Lambda {
-                params: lambda_expr.parameters.clone(),
-                body,
-            }
+            // Extract just the parameter names (type annotations are handled by type checker)
+            let params: Vec<_> = lambda_expr
+                .parameters
+                .iter()
+                .map(|p| p.name.clone())
+                .collect();
+            Expr::Lambda { params, body }
         }
         AstExpr::Block(statements) => {
             let mut exprs = Vec::new();

@@ -80,9 +80,11 @@ fn add(a, b) {
   (function_definition
     (keyword_fn)
     name: (identifier)
-    (parameter_list
-      (identifier)
-      (identifier))
+    params: (parameter_list
+      (parameter
+        name: (identifier))
+      (parameter
+        name: (identifier)))
     body: (block
       (expression_statement
         (binary_expression
@@ -272,8 +274,9 @@ fn test_number(n) {
   (function_definition
     (keyword_fn)
     name: (identifier)
-    (parameter_list
-      (identifier))
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
     body: (block
       (expression_statement
         (case_expression
@@ -832,8 +835,9 @@ fn test(b) {
   (function_definition
     (keyword_fn)
     name: (identifier)
-    (parameter_list
-      (identifier))
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
     body: (block
       (expression_statement
         (case_expression
@@ -872,8 +876,9 @@ fn test(x) {
   (function_definition
     (keyword_fn)
     name: (identifier)
-    (parameter_list
-      (identifier))
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
     body: (block
       (expression_statement
         (case_expression
@@ -962,8 +967,9 @@ fn test(n) {
   (function_definition
     (keyword_fn)
     name: (identifier)
-    (parameter_list
-      (identifier))
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
     body: (block
       (expression_statement
         (case_expression
@@ -1009,8 +1015,9 @@ fn test(n) {
   (function_definition
     (keyword_fn)
     name: (identifier)
-    (parameter_list
-      (identifier))
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
     body: (block
       (expression_statement
         (case_expression
@@ -1204,8 +1211,9 @@ fn test() {
       (expression_statement
         (lambda_expression
           (keyword_fn)
-          (parameter_list
-            (identifier))
+          params: (parameter_list
+            (parameter
+              name: (identifier)))
           body: (binary_expression
             (primary_expression
               (identifier))
@@ -1230,9 +1238,11 @@ fn test() {
       (expression_statement
         (lambda_expression
           (keyword_fn)
-          (parameter_list
-            (identifier)
-            (identifier))
+          params: (parameter_list
+            (parameter
+              name: (identifier))
+            (parameter
+              name: (identifier)))
           body: (binary_expression
             (primary_expression
               (identifier))
@@ -1260,8 +1270,9 @@ fn test() {
       (expression_statement
         (lambda_expression
           (keyword_fn)
-          (parameter_list
-            (identifier))
+          params: (parameter_list
+            (parameter
+              name: (identifier)))
           body: (primary_expression
             (block
               (let_statement
@@ -1323,8 +1334,9 @@ fn test() {
           (argument_list
             (lambda_expression
               (keyword_fn)
-              (parameter_list
-                (identifier))
+              params: (parameter_list
+                (parameter
+                  name: (identifier)))
               body: (binary_expression
                 (primary_expression
                   (identifier))
@@ -1345,9 +1357,11 @@ fn add(x, y) -> Int {
   (function_definition
     (keyword_fn)
     name: (identifier)
-    (parameter_list
-      (identifier)
-      (identifier))
+    params: (parameter_list
+      (parameter
+        name: (identifier))
+      (parameter
+        name: (identifier)))
     return_type: (return_type_annotation
       (type_identifier))
     body: (block
@@ -1372,8 +1386,9 @@ fn wrap(value) -> Option(Int) {
   (function_definition
     (keyword_fn)
     name: (identifier)
-    (parameter_list
-      (identifier))
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
     return_type: (return_type_annotation
       (generic_type
         (type_identifier)
@@ -1401,8 +1416,9 @@ fn test() {
       (expression_statement
         (lambda_expression
           (keyword_fn)
-          (parameter_list
-            (identifier))
+          params: (parameter_list
+            (parameter
+              name: (identifier)))
           return_type: (return_type_annotation
             (type_identifier))
           body: (binary_expression
@@ -1410,3 +1426,122 @@ fn test() {
               (identifier))
             (primary_expression
               (number))))))))
+
+================================================================================
+Function with typed parameters
+================================================================================
+
+fn add(x: Int, y: Int) -> Int {
+    x + y
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type_annotation
+      (type_identifier))
+    body: (block
+      (expression_statement
+        (binary_expression
+          (primary_expression
+            (identifier))
+          (primary_expression
+            (identifier)))))))
+
+================================================================================
+Function with generic typed parameter
+================================================================================
+
+fn wrap(value: a) -> Option(a) {
+    value
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (type_variable
+          (identifier))))
+    return_type: (return_type_annotation
+      (generic_type
+        (type_identifier)
+        (type_variable
+          (identifier))))
+    body: (block
+      (expression_statement
+        (primary_expression
+          (identifier))))))
+
+================================================================================
+Lambda with typed parameter
+================================================================================
+
+fn test() {
+    fn(x: Int) -> Int x * 2
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          params: (parameter_list
+            (parameter
+              name: (identifier)
+              type: (type_identifier)))
+          return_type: (return_type_annotation
+            (type_identifier))
+          body: (binary_expression
+            (primary_expression
+              (identifier))
+            (primary_expression
+              (number))))))))
+
+================================================================================
+Mixed typed and untyped parameters
+================================================================================
+
+fn bar(x: a, y) -> a {
+    x
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (type_variable
+          (identifier)))
+      (parameter
+        name: (identifier)))
+    return_type: (return_type_annotation
+      (type_variable
+        (identifier)))
+    body: (block
+      (expression_statement
+        (primary_expression
+          (identifier))))))

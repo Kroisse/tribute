@@ -233,12 +233,13 @@ module.exports = grammar({
     ),
 
     // fn add(x, y) { x + y }
-    // fn add(x, y) -> Int { x + y }
+    // fn add(x: Int, y: Int) -> Int { x + y }
+    // fn add(x: a, y) -> a { x }  -- mixed typed/untyped
     function_definition: $ => seq(
       $.keyword_fn,
       field('name', $.identifier),
       '(',
-      optional($.parameter_list),
+      optional(field('params', $.parameter_list)),
       ')',
       optional(field('return_type', $.return_type_annotation)),
       field('body', $.block)
@@ -247,9 +248,17 @@ module.exports = grammar({
     // -> Type
     return_type_annotation: $ => seq('->', $._type),
 
+    // Parameter with optional type annotation: x or x: Int
+    parameter: $ => seq(
+      field('name', $.identifier),
+      optional(seq(':', field('type', $._type)))
+    ),
+
+    // Parameter list (requires at least one, can mix typed/untyped)
     parameter_list: $ => seq(
-      $.identifier,
-      repeat(seq(',', $.identifier))
+      $.parameter,
+      repeat(seq(',', $.parameter)),
+      optional(',')
     ),
 
     block: $ => seq(
@@ -387,14 +396,14 @@ module.exports = grammar({
     ),
 
     // fn(x) x + 1
-    // fn(x) -> Int x + 1
+    // fn(x: Int) -> Int x + 1
     // fn(x, y) x + y
     // fn(x) { let y = x + 1; y * 2 }
     // Lowest precedence (0) so lambda body captures entire expression
     lambda_expression: $ => prec.right(0, seq(
       $.keyword_fn,
       '(',
-      optional($.parameter_list),
+      optional(field('params', $.parameter_list)),
       ')',
       optional(field('return_type', $.return_type_annotation)),
       field('body', $._expression)

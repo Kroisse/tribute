@@ -57,10 +57,18 @@ pub struct ModDeclaration<'db> {
     pub span: Span,
 }
 
+/// Parameter with optional type annotation: x or x: Int
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Parameter {
+    pub name: Identifier,
+    /// Optional type annotation
+    pub ty: Option<TypeRef>,
+}
+
 #[salsa::tracked(debug)]
 pub struct FunctionDefinition<'db> {
     pub name: Identifier,
-    pub parameters: Vec<Identifier>,
+    pub parameters: Vec<Parameter>,
     /// Optional return type annotation: -> Int
     pub return_type: Option<TypeRef>,
     pub body: Block,
@@ -242,10 +250,10 @@ pub struct GuardedBranch {
     pub value: Spanned<Expr>,
 }
 
-/// Lambda expression: fn(x) x + 1, fn(x) -> Int x + 1
+/// Lambda expression: fn(x) x + 1, fn(x: Int) -> Int x + 1
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LambdaExpression {
-    pub parameters: Vec<Identifier>,
+    pub parameters: Vec<Parameter>,
     /// Optional return type annotation: -> Int
     pub return_type: Option<TypeRef>,
     pub body: Box<Spanned<Expr>>,

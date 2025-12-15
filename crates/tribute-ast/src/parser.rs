@@ -271,17 +271,43 @@ impl TributeParser {
         &self,
         node: Node,
         source: &str,
-    ) -> Result<Vec<Identifier>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<Parameter>, Box<dyn std::error::Error>> {
         let mut cursor = node.walk();
         let mut parameters = Vec::new();
 
         for child in node.named_children(&mut cursor) {
-            if child.kind() == "identifier" {
-                parameters.push(child.utf8_text(source.as_bytes())?.to_string());
+            if child.kind() == "parameter" {
+                parameters.push(self.parse_parameter(child, source)?);
             }
         }
 
         Ok(parameters)
+    }
+
+    fn parse_parameter(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Parameter, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
+        let mut name = None;
+        let mut ty = None;
+
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "identifier" if name.is_none() => {
+                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                }
+                "type_identifier" | "type_variable" | "generic_type" => {
+                    ty = Some(self.parse_type_ref(child, source)?);
+                }
+                _ => {}
+            }
+        }
+
+        let name = name.ok_or("Missing parameter name")?;
+
+        Ok(Parameter { name, ty })
     }
 
     fn parse_use_path(
@@ -1329,7 +1355,84 @@ fn add(a, b) {
                 panic!("Expected function")
             };
             assert_eq!(func.name(db), "add");
-            assert_eq!(func.parameters(db), vec!["a".to_string(), "b".to_string()]);
+            let params = func.parameters(db);
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0].name, "a");
+            assert_eq!(params[0].ty, None);
+            assert_eq!(params[1].name, "b");
+            assert_eq!(params[1].ty, None);
+        });
+    }
+
+    #[test]
+    fn test_function_with_typed_parameters() {
+        let db = tribute_core::TributeDatabaseImpl::default();
+        use salsa::Database;
+
+        db.attach(|db| {
+            let source_file = tribute_core::SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.trb"),
+                r#"
+fn add(x: Int, y: Int) -> Int {
+    x + y
+}
+"#
+                .to_string(),
+            );
+            let result = parse_source_file(db, source_file);
+
+            assert_eq!(result.items(db).len(), 1);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db) else {
+                panic!("Expected function")
+            };
+            assert_eq!(func.name(db), "add");
+            let params = func.parameters(db);
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0].name, "x");
+            assert_eq!(params[0].ty, Some(TypeRef::Named("Int".to_string())));
+            assert_eq!(params[1].name, "y");
+            assert_eq!(params[1].ty, Some(TypeRef::Named("Int".to_string())));
+            assert_eq!(
+                func.return_type(db),
+                Some(TypeRef::Named("Int".to_string()))
+            );
+        });
+    }
+
+    #[test]
+    fn test_function_with_mixed_parameters() {
+        let db = tribute_core::TributeDatabaseImpl::default();
+        use salsa::Database;
+
+        db.attach(|db| {
+            let source_file = tribute_core::SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.trb"),
+                r#"
+fn bar(x: a, y) -> a {
+    x
+}
+"#
+                .to_string(),
+            );
+            let result = parse_source_file(db, source_file);
+
+            assert_eq!(result.items(db).len(), 1);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db) else {
+                panic!("Expected function")
+            };
+            assert_eq!(func.name(db), "bar");
+            let params = func.parameters(db);
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0].name, "x");
+            assert_eq!(params[0].ty, Some(TypeRef::Variable("a".to_string())));
+            assert_eq!(params[1].name, "y");
+            assert_eq!(params[1].ty, None);
+            assert_eq!(
+                func.return_type(db),
+                Some(TypeRef::Variable("a".to_string()))
+            );
         });
     }
 
