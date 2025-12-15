@@ -232,14 +232,20 @@ module.exports = grammar({
       field('value', $._expression)
     ),
 
+    // fn add(x, y) { x + y }
+    // fn add(x, y) -> Int { x + y }
     function_definition: $ => seq(
       $.keyword_fn,
       field('name', $.identifier),
       '(',
       optional($.parameter_list),
       ')',
+      optional(field('return_type', $.return_type_annotation)),
       field('body', $.block)
     ),
+
+    // -> Type
+    return_type_annotation: $ => seq('->', $._type),
 
     parameter_list: $ => seq(
       $.identifier,
@@ -381,6 +387,7 @@ module.exports = grammar({
     ),
 
     // fn(x) x + 1
+    // fn(x) -> Int x + 1
     // fn(x, y) x + y
     // fn(x) { let y = x + 1; y * 2 }
     // Lowest precedence (0) so lambda body captures entire expression
@@ -389,6 +396,7 @@ module.exports = grammar({
       '(',
       optional($.parameter_list),
       ')',
+      optional(field('return_type', $.return_type_annotation)),
       field('body', $._expression)
     )),
 

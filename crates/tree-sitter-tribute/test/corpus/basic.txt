@@ -1330,3 +1330,83 @@ fn test() {
                   (identifier))
                 (primary_expression
                   (number))))))))))
+
+================================================================================
+Function with return type annotation
+================================================================================
+
+fn add(x, y) -> Int {
+    x + y
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    (parameter_list
+      (identifier)
+      (identifier))
+    return_type: (return_type_annotation
+      (type_identifier))
+    body: (block
+      (expression_statement
+        (binary_expression
+          (primary_expression
+            (identifier))
+          (primary_expression
+            (identifier)))))))
+
+================================================================================
+Function with generic return type
+================================================================================
+
+fn wrap(value) -> Option(Int) {
+    value
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    (parameter_list
+      (identifier))
+    return_type: (return_type_annotation
+      (generic_type
+        (type_identifier)
+        (type_identifier)))
+    body: (block
+      (expression_statement
+        (primary_expression
+          (identifier))))))
+
+================================================================================
+Lambda with return type annotation
+================================================================================
+
+fn test() {
+    fn(x) -> Int x + 1
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          (parameter_list
+            (identifier))
+          return_type: (return_type_annotation
+            (type_identifier))
+          body: (binary_expression
+            (primary_expression
+              (identifier))
+            (primary_expression
+              (number))))))))

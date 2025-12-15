@@ -61,6 +61,8 @@ pub struct ModDeclaration<'db> {
 pub struct FunctionDefinition<'db> {
     pub name: Identifier,
     pub parameters: Vec<Identifier>,
+    /// Optional return type annotation: -> Int
+    pub return_type: Option<TypeRef>,
     pub body: Block,
     pub span: Span,
 }
@@ -240,10 +242,12 @@ pub struct GuardedBranch {
     pub value: Spanned<Expr>,
 }
 
-/// Lambda expression: fn(x) x + 1, fn(x, y) { x + y }
+/// Lambda expression: fn(x) x + 1, fn(x) -> Int x + 1
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LambdaExpression {
     pub parameters: Vec<Identifier>,
+    /// Optional return type annotation: -> Int
+    pub return_type: Option<TypeRef>,
     pub body: Box<Spanned<Expr>>,
 }
 

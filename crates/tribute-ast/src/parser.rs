@@ -61,6 +61,7 @@ impl TributeParser {
             "function_definition" => {
                 let mut name = None;
                 let mut parameters = Vec::new();
+                let mut return_type = None;
                 let mut body = None;
 
                 for child in node.named_children(&mut cursor) {
@@ -72,6 +73,9 @@ impl TributeParser {
                         }
                         "parameter_list" => {
                             parameters = self.parse_parameter_list(child, source)?;
+                        }
+                        "return_type_annotation" => {
+                            return_type = Some(self.parse_return_type_annotation(child, source)?);
                         }
                         "block" => {
                             body = Some(self.parse_block(child, source)?);
@@ -86,7 +90,14 @@ impl TributeParser {
 
                 Ok(Item::new(
                     db,
-                    ItemKind::Function(FunctionDefinition::new(db, name, parameters, body, span)),
+                    ItemKind::Function(FunctionDefinition::new(
+                        db,
+                        name,
+                        parameters,
+                        return_type,
+                        body,
+                        span,
+                    )),
                     span,
                 ))
             }
@@ -529,6 +540,20 @@ impl TributeParser {
         }
 
         Ok(VariantFields::Struct(Vec::new()))
+    }
+
+    /// Parse return type annotation: -> Type
+    fn parse_return_type_annotation(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<TypeRef, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
+        // return_type_annotation contains a single _type child
+        if let Some(child) = node.named_children(&mut cursor).next() {
+            return self.parse_type_ref(child, source);
+        }
+        Err("Missing type in return type annotation".into())
     }
 
     #[allow(clippy::only_used_in_recursion)]
@@ -993,7 +1018,7 @@ impl TributeParser {
         Ok(Expr::Tuple(elements))
     }
 
-    /// Parse lambda expression: fn(x) x + 1, fn(x, y) { x + y }
+    /// Parse lambda expression: fn(x) x + 1, fn(x) -> Int x + 1
     fn parse_lambda_expression(
         &self,
         node: Node,
@@ -1001,12 +1026,16 @@ impl TributeParser {
     ) -> Result<Expr, Box<dyn std::error::Error>> {
         let mut cursor = node.walk();
         let mut parameters = Vec::new();
+        let mut return_type = None;
         let mut body = None;
 
         for child in node.named_children(&mut cursor) {
             match child.kind() {
                 "parameter_list" => {
                     parameters = self.parse_parameter_list(child, source)?;
+                }
+                "return_type_annotation" => {
+                    return_type = Some(self.parse_return_type_annotation(child, source)?);
                 }
                 _ => {
                     // Try to parse as body expression
@@ -1021,7 +1050,11 @@ impl TributeParser {
 
         let body = body.ok_or("Missing lambda body")?;
 
-        Ok(Expr::Lambda(LambdaExpression { parameters, body }))
+        Ok(Expr::Lambda(LambdaExpression {
+            parameters,
+            return_type,
+            body,
+        }))
     }
 
     /// Parse a block as an expression (e.g., { let x = 1; x + 1 })
