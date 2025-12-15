@@ -66,7 +66,7 @@ fn fetch_user(id: UserId) ->{Http, Async} User {
 
 ## Module System
 
-> 상세 내용은 tribute-modules.md 참조
+> 상세 내용은 modules.md 참조
 
 ### 핵심 결정 사항
 
@@ -105,7 +105,7 @@ let ys = xs.map(fn(x) x + 1)  // List::map(xs, ...) 로 해석
 
 ## Ability System
 
-> 상세 문법은 tribute-abilities.md 참조
+> 상세 문법은 abilities.md 참조
 
 Tribute는 Unison의 선례를 따라 algebraic effect를 **ability**라고 부른다.
 
@@ -144,7 +144,7 @@ Continuation은 **linear 타입**으로 취급한다:
 
 ## Type System
 
-> 타입 선언, record, UFCS 규칙은 tribute-types.md 참조
+> 타입 선언, record, UFCS 규칙은 types.md 참조
 
 ### 함수 타입과 Ability
 

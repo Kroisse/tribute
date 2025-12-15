@@ -12,12 +12,12 @@ See **[../new-plans/](../new-plans/)** for the comprehensive language redesign:
 
 | Document | Description |
 |----------|-------------|
-| [tribute-design.md](../new-plans/tribute-design.md) | Overall language design overview |
-| [tribute-types.md](../new-plans/tribute-types.md) | Type system (struct/enum, UFCS) |
-| [tribute-abilities.md](../new-plans/tribute-abilities.md) | Ability (algebraic effects) system |
-| [tribute-modules.md](../new-plans/tribute-modules.md) | Module system and name resolution |
-| [tribute-type-inference.md](../new-plans/tribute-type-inference.md) | Type inference with effect rows |
-| [tribute-implementation.md](../new-plans/tribute-implementation.md) | Implementation strategy |
+| [design.md](../new-plans/design.md) | Overall language design overview |
+| [types.md](../new-plans/types.md) | Type system (struct/enum, UFCS) |
+| [abilities.md](../new-plans/abilities.md) | Ability (algebraic effects) system |
+| [modules.md](../new-plans/modules.md) | Module system and name resolution |
+| [type-inference.md](../new-plans/type-inference.md) | Type inference with effect rows |
+| [implementation.md](../new-plans/implementation.md) | Implementation strategy |
 
 ---
 

@@ -1,6 +1,6 @@
 # Tribute Module System & Name Resolution
 
-> 이 문서는 tribute-design.md를 보완하여 모듈 시스템, 네임스페이스, 이름 해소 규칙을 정의한다.
+> 이 문서는 design.md를 보완하여 모듈 시스템, 네임스페이스, 이름 해소 규칙을 정의한다.
 
 ## Design Decisions
 
