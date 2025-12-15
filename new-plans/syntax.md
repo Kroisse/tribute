@@ -481,10 +481,16 @@ PrimaryExpr ::= Literal
               | Path
               | '(' Expression ')'
               | Block
+              | ListExpr
               | RecordExpr
+              | OperatorFn
               | Lambda
               | CaseExpr
               | HandleExpr
+
+ListExpr ::= '[' ExprList? ']'
+OperatorFn ::= '(' Operator ')'           // (+), (<>)
+             | '(' QualifiedOp ')'        // (Int::+), (String::<>)
 ```
 
 ### Block Expression
@@ -588,6 +594,10 @@ BinaryExpr ::= Expression BinOp Expression
 
 QualifiedOp ::= Path '::' Operator        // List::<>, Int::+
 
+// 연산자를 함수로 사용
+OperatorFn ::= '(' Operator ')'           // (+), (<>)
+             | '(' QualifiedOp ')'        // (Int::+), (String::<>)
+
 // 우선순위 (높은 것부터)
 // 1. * / %
 // 2. + - <>
@@ -605,6 +615,18 @@ QualifiedOp ::= Path '::' Operator        // List::<>, Int::+
 // 명시적으로 연산자 지정
 xs List::<> ys                  // List::<> 명시
 a Int::+ b                      // Int::+ 명시
+```
+
+**연산자를 함수로 사용:**
+
+```rust
+(+)(a, b)                       // a + b 와 동일
+(String::<>)("a", "b")          // "a" <> "b" 와 동일
+
+// 고차 함수에 전달
+xs.fold(0, (+))                 // 합계
+xs.fold("", (String::<>))       // 문자열 연결
+numbers.reduce((Int::*))        // 곱셈
 ```
 
 ### Case Expression
@@ -653,17 +675,20 @@ Pattern ::= LiteralPattern
           | IdentifierPattern
           | VariantPattern
           | RecordPattern
+          | ListPattern
           | HandlerPattern
           | ParenPattern
 
 LiteralPattern ::= Number | String | Rune
-HandlerPattern ::= '{' HandlerCase '}'
-HandlerCase ::= Identifier                                  // completion: { result }
-              | Path '(' PatternList? ')' '->' Identifier   // suspend: { Op(args) -> k }
 WildcardPattern ::= '_'
 IdentifierPattern ::= Identifier
 VariantPattern ::= TypeId ('(' PatternList ')' | '{' RecordPatternFields '}')?
 RecordPattern ::= TypeId '{' RecordPatternFields '}'
+ListPattern ::= '[' PatternList? ']'
+              | '[' PatternList ',' '..' Identifier? ']'    // [head, ..tail] or [head, ..]
+HandlerPattern ::= '{' HandlerCase '}'
+HandlerCase ::= Identifier                                  // completion: { result }
+              | Path '(' PatternList? ')' '->' Identifier   // suspend: { Op(args) -> k }
 ParenPattern ::= '(' Pattern ')'
 
 PatternList ::= Pattern (',' Pattern)* ','?
@@ -696,6 +721,13 @@ Err { error: e }
 User { name, age }
 User { name, .. }           // 나머지 무시
 Point { x, y: y_coord }     // 이름 변경
+
+// List pattern
+[]                          // 빈 리스트
+[x]                         // 단일 원소
+[a, b, c]                   // 정확히 3개
+[head, ..tail]              // head + 나머지
+[first, second, ..]         // 처음 두 개만
 
 // Handler pattern (Request 타입 매칭)
 { result }                   // Done(result) 매칭
@@ -898,8 +930,10 @@ fn main() ->{Console} Nil {
 | `T::f(x)`             | Qualified call         |
 | `T { f: v }`          | Record construction    |
 | `T { ..x, f: v }`     | Record update (spread) |
+| `[a, b, c]`           | List literal           |
 | `a <> b`              | Concatenation          |
 | `a T::<> b`           | Qualified operator     |
+| `(+)`, `(T::<>)`      | Operator as function   |
 
 ### Patterns
 
@@ -911,5 +945,7 @@ fn main() ->{Console} Nil {
 | `Some(x)`          | Variant (positional)           |
 | `Ok { value }`     | Variant (named)                |
 | `T { f, .. }`      | Record (나머지 무시)           |
+| `[a, b, c]`        | List (정확히 일치)             |
+| `[h, ..t]`         | List (head + tail)             |
 | `{ result }`       | Handler: Request::Done 매칭    |
 | `{ Op(x) -> k }`   | Handler: Request::Suspend 매칭 |
