@@ -16,9 +16,9 @@ fn test_salsa_database_examples() {
             Path::new("complex.trb"),
             r#"
 fn factorial(n) {
-  match n {
-    0 => 1,
-    _ => n * factorial(n - 1)
+  case n {
+    0 -> 1,
+    _ -> n * factorial(n - 1)
   }
 }
 

@@ -509,10 +509,10 @@ mod tests {
             // Test pattern matching
             let source = r#"
                 fn test_number(n) {
-                  match n {
-                    0 => "zero",
-                    1 => "one",
-                    _ => "other"
+                  case n {
+                    0 -> "zero",
+                    1 -> "one",
+                    _ -> "other"
                   }
                 }
                 fn main() { test_number(0) }
@@ -564,9 +564,9 @@ mod tests {
             // Test recursive function (factorial)
             let source = r#"
                 fn factorial(n) {
-                  match n {
-                    0 => 1,
-                    _ => n * factorial(n - 1)
+                  case n {
+                    0 -> 1,
+                    _ -> n * factorial(n - 1)
                   }
                 }
                 fn main() { factorial(5) }

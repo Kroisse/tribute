@@ -222,7 +222,7 @@ impl TributeParser {
             }
             "binary_expression" => self.parse_binary_expression(node, source),
             "call_expression" => self.parse_call_expression(node, source),
-            "match_expression" => self.parse_match_expression(node, source),
+            "case_expression" => self.parse_case_expression(node, source),
             "primary_expression" => {
                 // primary_expression should have one child
                 if let Some(child) = node.child(0) {
@@ -230,17 +230,6 @@ impl TributeParser {
                 } else {
                     Err("Empty primary expression".into())
                 }
-            }
-            "parenthesized_expression" => {
-                // Find the expression inside parentheses
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        if child.kind() != "(" && child.kind() != ")" {
-                            return self.node_to_expr(child, source);
-                        }
-                    }
-                }
-                Err("Empty parenthesized expression".into())
             }
             _ => Err(format!("Unknown expression kind: {}", node.kind()).into()),
         }
@@ -339,7 +328,7 @@ impl TributeParser {
         Ok(arguments)
     }
 
-    fn parse_match_expression(
+    fn parse_case_expression(
         &self,
         node: Node,
         source: &str,
@@ -350,10 +339,10 @@ impl TributeParser {
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
                 match child.kind() {
-                    "match_arm" => {
-                        arms.push(self.parse_match_arm(child, source)?);
+                    "case_arm" => {
+                        arms.push(self.parse_case_arm(child, source)?);
                     }
-                    "match" | "{" | "}" => {
+                    "keyword_case" | "{" | "}" => {
                         // Skip keywords and delimiters
                     }
                     _ => {
@@ -368,12 +357,12 @@ impl TributeParser {
             }
         }
 
-        let value = value.ok_or("Missing match value")?;
+        let value = value.ok_or("Missing case value")?;
 
         Ok(Expr::Match(MatchExpression { value, arms }))
     }
 
-    fn parse_match_arm(
+    fn parse_case_arm(
         &self,
         node: Node,
         source: &str,
@@ -387,7 +376,7 @@ impl TributeParser {
                     "pattern" => {
                         pattern = Some(self.parse_pattern(child, source)?);
                     }
-                    "=>" | "," => {
+                    "->" | "," => {
                         // Skip tokens
                     }
                     _ => {
@@ -403,7 +392,7 @@ impl TributeParser {
         }
 
         let pattern = pattern.ok_or("Missing pattern")?;
-        let value = value.ok_or("Missing match arm value")?;
+        let value = value.ok_or("Missing case arm value")?;
 
         Ok(MatchArm { pattern, value })
     }
@@ -668,7 +657,7 @@ fn add(a, b) {
     }
 
     #[test]
-    fn test_match_expression() {
+    fn test_case_expression() {
         let db = tribute_core::TributeDatabaseImpl::default();
         use salsa::Database;
 
@@ -678,10 +667,10 @@ fn add(a, b) {
                 std::path::PathBuf::from("test.trb"),
                 r#"
 fn test(n) {
-    match n {
-        0 => "zero",
-        1 => "one",
-        _ => "other"
+    case n {
+        0 -> "zero",
+        1 -> "one",
+        _ -> "other"
     }
 }
 "#
@@ -692,9 +681,9 @@ fn test(n) {
             assert_eq!(result.items(db).len(), 1);
             let ItemKind::Function(func) = result.items(db)[0].kind(db);
             if let Statement::Expression((Expr::Match(_), _)) = &func.body(db).statements[0] {
-                // Match expression parsed successfully
+                // Case expression parsed successfully
             } else {
-                panic!("Expected match expression");
+                panic!("Expected case expression");
             }
         });
     }

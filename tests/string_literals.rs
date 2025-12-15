@@ -68,10 +68,10 @@ fn test_string_literals_in_pattern_matching() {
     TributeDatabaseImpl::default().attach(|db| {
         let source = r#"
             fn test_string(s) {
-                match s {
-                    "hello\tworld" => "tab found",
-                    "hello\"world" => "quote found",
-                    _ => "other"
+                case s {
+                    "hello\tworld" -> "tab found",
+                    "hello\"world" -> "quote found",
+                    _ -> "other"
                 }
             }
             fn main() { test_string("hello\tworld") }
@@ -81,7 +81,7 @@ fn test_string_literals_in_pattern_matching() {
                 assert_eq!(s, "tab found");
             }
             Ok(other) => panic!("Expected String(\"tab found\"), got {:?}", other),
-            Err(e) => panic!("Failed to evaluate string literal in match: {}", e),
+            Err(e) => panic!("Failed to evaluate string literal in case: {}", e),
         }
     });
 }

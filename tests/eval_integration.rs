@@ -82,35 +82,35 @@ fn test_collection_functions() {
 fn test_match_case() {
     let db = TributeDatabaseImpl::default();
 
-    // Test match with string patterns
+    // Test case with string patterns
     let source = r#"
         fn main() {
-          match "+" {
-            "+" => 100,
-            "-" => 200
+          case "+" {
+            "+" -> 100,
+            "-" -> 200
           }
         }
     "#;
     let result = eval_str(&db, "test.trb", source).unwrap();
     assert!(matches!(result, Value::Number(100)));
 
-    // Test match with number patterns
+    // Test case with number patterns
     let source = r#"
         fn main() {
-          match 42 {
-            41 => "wrong",
-            42 => "correct"
+          case 42 {
+            41 -> "wrong",
+            42 -> "correct"
           }
         }
     "#;
     let result = eval_str(&db, "test.trb", source).unwrap();
     assert!(matches!(result, Value::String(ref s) if s == "correct"));
 
-    // Test match with no matching case
+    // Test case with no matching case
     let source = r#"
         fn main() {
-          match "unknown" {
-            "known" => 1
+          case "unknown" {
+            "known" -> 1
           }
         }
     "#;

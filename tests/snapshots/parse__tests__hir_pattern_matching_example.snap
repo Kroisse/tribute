@@ -18,8 +18,8 @@ HirProgram {
                                 "print_line",
                             ),
                             Span {
-                                start: 360,
-                                end: 399,
+                                start: 357,
+                                end: 396,
                             },
                         ),
                         args: [
@@ -31,15 +31,15 @@ HirProgram {
                                     },
                                 ),
                                 Span {
-                                    start: 371,
-                                    end: 398,
+                                    start: 368,
+                                    end: 395,
                                 },
                             ),
                         ],
                     },
                     span: Span {
-                        start: 360,
-                        end: 399,
+                        start: 357,
+                        end: 396,
                     },
                 },
                 HirExpr {
@@ -50,8 +50,8 @@ HirProgram {
                                 "print_line",
                             ),
                             Span {
-                                start: 404,
-                                end: 430,
+                                start: 401,
+                                end: 427,
                             },
                         ),
                         args: [
@@ -62,8 +62,8 @@ HirProgram {
                                             "test_number",
                                         ),
                                         Span {
-                                            start: 415,
-                                            end: 429,
+                                            start: 412,
+                                            end: 426,
                                         },
                                     ),
                                     args: [
@@ -72,22 +72,22 @@ HirProgram {
                                                 0,
                                             ),
                                             Span {
-                                                start: 427,
-                                                end: 428,
+                                                start: 424,
+                                                end: 425,
                                             },
                                         ),
                                     ],
                                 },
                                 Span {
-                                    start: 415,
-                                    end: 429,
+                                    start: 412,
+                                    end: 426,
                                 },
                             ),
                         ],
                     },
                     span: Span {
-                        start: 404,
-                        end: 430,
+                        start: 401,
+                        end: 427,
                     },
                 },
                 HirExpr {
@@ -98,8 +98,8 @@ HirProgram {
                                 "print_line",
                             ),
                             Span {
-                                start: 435,
-                                end: 461,
+                                start: 432,
+                                end: 458,
                             },
                         ),
                         args: [
@@ -110,8 +110,8 @@ HirProgram {
                                             "test_number",
                                         ),
                                         Span {
-                                            start: 446,
-                                            end: 460,
+                                            start: 443,
+                                            end: 457,
                                         },
                                     ),
                                     args: [
@@ -120,22 +120,22 @@ HirProgram {
                                                 1,
                                             ),
                                             Span {
-                                                start: 458,
-                                                end: 459,
+                                                start: 455,
+                                                end: 456,
                                             },
                                         ),
                                     ],
                                 },
                                 Span {
-                                    start: 446,
-                                    end: 460,
+                                    start: 443,
+                                    end: 457,
                                 },
                             ),
                         ],
                     },
                     span: Span {
-                        start: 435,
-                        end: 461,
+                        start: 432,
+                        end: 458,
                     },
                 },
                 HirExpr {
@@ -146,8 +146,8 @@ HirProgram {
                                 "print_line",
                             ),
                             Span {
-                                start: 466,
-                                end: 493,
+                                start: 463,
+                                end: 490,
                             },
                         ),
                         args: [
@@ -158,8 +158,8 @@ HirProgram {
                                             "test_number",
                                         ),
                                         Span {
-                                            start: 477,
-                                            end: 492,
+                                            start: 474,
+                                            end: 489,
                                         },
                                     ),
                                     args: [
@@ -168,28 +168,28 @@ HirProgram {
                                                 42,
                                             ),
                                             Span {
-                                                start: 489,
-                                                end: 491,
+                                                start: 486,
+                                                end: 488,
                                             },
                                         ),
                                     ],
                                 },
                                 Span {
-                                    start: 477,
-                                    end: 492,
+                                    start: 474,
+                                    end: 489,
                                 },
                             ),
                         ],
                     },
                     span: Span {
-                        start: 466,
-                        end: 493,
+                        start: 463,
+                        end: 490,
                     },
                 },
             ],
             span: Span {
-                start: 344,
-                end: 495,
+                start: 341,
+                end: 492,
             },
         },
         "test_number": HirFunction {
@@ -207,8 +207,8 @@ HirProgram {
                                 "n",
                             ),
                             Span {
-                                start: 241,
-                                end: 242,
+                                start: 239,
+                                end: 240,
                             },
                         ),
                         cases: [
@@ -226,8 +226,8 @@ HirProgram {
                                         },
                                     ),
                                     Span {
-                                        start: 258,
-                                        end: 264,
+                                        start: 256,
+                                        end: 262,
                                     },
                                 ),
                             },
@@ -245,8 +245,8 @@ HirProgram {
                                         },
                                     ),
                                     Span {
-                                        start: 279,
-                                        end: 284,
+                                        start: 277,
+                                        end: 282,
                                     },
                                 ),
                             },
@@ -264,8 +264,8 @@ HirProgram {
                                         },
                                     ),
                                     Span {
-                                        start: 300,
-                                        end: 305,
+                                        start: 297,
+                                        end: 302,
                                     },
                                 ),
                             },
@@ -279,22 +279,22 @@ HirProgram {
                                         },
                                     ),
                                     Span {
-                                        start: 320,
-                                        end: 334,
+                                        start: 317,
+                                        end: 331,
                                     },
                                 ),
                             },
                         ],
                     },
                     span: Span {
-                        start: 235,
-                        end: 340,
+                        start: 234,
+                        end: 337,
                     },
                 },
             ],
             span: Span {
-                start: 211,
-                end: 342,
+                start: 210,
+                end: 339,
             },
         },
     },

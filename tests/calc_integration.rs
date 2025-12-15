@@ -100,9 +100,9 @@ fn test_match_case_with_operators() {
     let db = TributeDatabaseImpl::default();
     let source = r#"
         fn main() {
-          match "+" {
-            "+" => 5 + 3,
-            "-" => 5 - 3
+          case "+" {
+            "+" -> 5 + 3,
+            "-" -> 5 - 3
           }
         }
     "#;

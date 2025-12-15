@@ -45,7 +45,7 @@ module.exports = grammar({
     _expression: $ => choice(
       $.binary_expression,
       $.call_expression,
-      $.match_expression,
+      $.case_expression,
       $.primary_expression
     ),
 
@@ -63,17 +63,17 @@ module.exports = grammar({
       ')'
     )),
 
-    match_expression: $ => seq(
-      $.keyword_match,
+    case_expression: $ => seq(
+      $.keyword_case,
       field('value', $._expression),
       '{',
-      repeat($.match_arm),
+      repeat($.case_arm),
       '}'
     ),
 
-    match_arm: $ => seq(
+    case_arm: $ => seq(
       field('pattern', $.pattern),
-      '=>',
+      '->',
       field('value', $._expression),
       optional(',')
     ),
@@ -102,13 +102,7 @@ module.exports = grammar({
       $.number,
       $.string,
       $.identifier,
-      $.parenthesized_expression
-    ),
-
-    parenthesized_expression: $ => seq(
-      '(',
-      $._expression,
-      ')'
+      $.block  // { expr } for grouping
     ),
 
     number: $ => /-?\d+(\.\d+)?/,
@@ -137,7 +131,7 @@ module.exports = grammar({
     // Keywords
     keyword_fn: $ => 'fn',
     keyword_let: $ => 'let',
-    keyword_match: $ => 'match',
+    keyword_case: $ => 'case',
 
     // Comments
     line_comment: $ => token(seq(
