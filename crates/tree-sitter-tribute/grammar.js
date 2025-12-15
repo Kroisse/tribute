@@ -360,13 +360,13 @@ module.exports = grammar({
     ),
 
     pattern: $ => choice(
-      $._simple_pattern,
+      $.simple_pattern,
       $.as_pattern,
       $.handler_pattern
     ),
 
     // Simple patterns (can be used in as_pattern without recursion)
-    _simple_pattern: $ => choice(
+    simple_pattern: $ => choice(
       $.literal_pattern,
       $.wildcard_pattern,
       $.constructor_pattern,
@@ -413,9 +413,12 @@ module.exports = grammar({
     pattern_fields: $ => seq(
       $.pattern_field,
       repeat(seq(',', $.pattern_field)),
-      optional(seq(',', '..')),  // trailing .. to ignore rest
+      optional(seq(',', $.spread)),  // trailing .. to ignore rest
       optional(',')
     ),
+
+    // Spread operator: ..
+    spread: $ => '..',
 
     // Pattern field: name: pattern or just name (shorthand)
     pattern_field: $ => choice(
@@ -450,13 +453,13 @@ module.exports = grammar({
 
     // Rest pattern: ..tail or ..
     rest_pattern: $ => seq(
-      '..',
+      $.spread,
       optional(field('name', $.identifier))
     ),
 
     // As pattern: Some(x) as opt
     as_pattern: $ => prec.left(seq(
-      field('pattern', $._simple_pattern),
+      field('pattern', $.simple_pattern),
       $.keyword_as,
       field('binding', $.identifier)
     )),

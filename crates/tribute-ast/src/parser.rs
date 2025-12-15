@@ -757,39 +757,38 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut left = None;
         let mut operator = None;
         let mut right = None;
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    // Arithmetic
-                    "+" => operator = Some(BinaryOperator::Add),
-                    "-" => operator = Some(BinaryOperator::Subtract),
-                    "*" => operator = Some(BinaryOperator::Multiply),
-                    "/" => operator = Some(BinaryOperator::Divide),
-                    "%" => operator = Some(BinaryOperator::Modulo),
-                    // Comparison
-                    "==" => operator = Some(BinaryOperator::Equal),
-                    "!=" => operator = Some(BinaryOperator::NotEqual),
-                    "<" => operator = Some(BinaryOperator::LessThan),
-                    ">" => operator = Some(BinaryOperator::GreaterThan),
-                    "<=" => operator = Some(BinaryOperator::LessEqual),
-                    ">=" => operator = Some(BinaryOperator::GreaterEqual),
-                    // Logical
-                    "&&" => operator = Some(BinaryOperator::And),
-                    "||" => operator = Some(BinaryOperator::Or),
-                    // Concatenation
-                    "<>" => operator = Some(BinaryOperator::Concat),
-                    _ => {
-                        // Try to parse as expression
-                        if let Ok(expr) = self.node_to_expr_with_span(child, source) {
-                            if left.is_none() {
-                                left = Some(Box::new(expr));
-                            } else if right.is_none() {
-                                right = Some(Box::new(expr));
-                            }
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                // Arithmetic
+                "+" => operator = Some(BinaryOperator::Add),
+                "-" => operator = Some(BinaryOperator::Subtract),
+                "*" => operator = Some(BinaryOperator::Multiply),
+                "/" => operator = Some(BinaryOperator::Divide),
+                "%" => operator = Some(BinaryOperator::Modulo),
+                // Comparison
+                "==" => operator = Some(BinaryOperator::Equal),
+                "!=" => operator = Some(BinaryOperator::NotEqual),
+                "<" => operator = Some(BinaryOperator::LessThan),
+                ">" => operator = Some(BinaryOperator::GreaterThan),
+                "<=" => operator = Some(BinaryOperator::LessEqual),
+                ">=" => operator = Some(BinaryOperator::GreaterEqual),
+                // Logical
+                "&&" => operator = Some(BinaryOperator::And),
+                "||" => operator = Some(BinaryOperator::Or),
+                // Concatenation
+                "<>" => operator = Some(BinaryOperator::Concat),
+                _ => {
+                    // Try to parse as expression
+                    if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                        if left.is_none() {
+                            left = Some(Box::new(expr));
+                        } else if right.is_none() {
+                            right = Some(Box::new(expr));
                         }
                     }
                 }
@@ -1024,20 +1023,12 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut elements = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "#" | "(" | ")" | "," => {
-                        // Skip hash, parentheses and commas
-                    }
-                    _ => {
-                        if let Ok(expr) = self.node_to_expr_with_span(child, source) {
-                            elements.push(expr);
-                        }
-                    }
-                }
+        for child in node.named_children(&mut cursor) {
+            if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                elements.push(expr);
             }
         }
 
@@ -1106,44 +1097,60 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Pattern, Box<dyn std::error::Error>> {
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "literal_pattern" => {
-                        return Ok(Pattern::Literal(self.parse_literal_pattern(child, source)?));
-                    }
-                    "wildcard_pattern" => {
-                        return Ok(Pattern::Wildcard);
-                    }
-                    "constructor_pattern" => {
-                        return Ok(Pattern::Constructor(
-                            self.parse_constructor_pattern(child, source)?,
-                        ));
-                    }
-                    "tuple_pattern" => {
-                        let (first, rest) = self.parse_tuple_pattern(child, source)?;
-                        return Ok(Pattern::Tuple(Box::new(first), rest));
-                    }
-                    "list_pattern" => {
-                        return Ok(Pattern::List(self.parse_list_pattern(child, source)?));
-                    }
-                    "as_pattern" => {
-                        return self.parse_as_pattern(child, source);
-                    }
-                    "handler_pattern" => {
-                        return Ok(Pattern::Handler(self.parse_handler_pattern(child, source)?));
-                    }
-                    "identifier_pattern" => {
-                        if let Some(id_child) = child.child(0) {
-                            let text = id_child.utf8_text(source.as_bytes())?;
-                            return Ok(Pattern::Identifier(text.to_string()));
-                        }
-                    }
-                    _ => {}
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "simple_pattern" => {
+                    return self.parse_simple_pattern_node(child, source);
                 }
+                "as_pattern" => {
+                    return self.parse_as_pattern(child, source);
+                }
+                "handler_pattern" => {
+                    return Ok(Pattern::Handler(self.parse_handler_pattern(child, source)?));
+                }
+                _ => {}
             }
         }
         Err("Invalid pattern".into())
+    }
+
+    fn parse_simple_pattern_node(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Pattern, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "literal_pattern" => {
+                    return Ok(Pattern::Literal(self.parse_literal_pattern(child, source)?));
+                }
+                "wildcard_pattern" => {
+                    return Ok(Pattern::Wildcard);
+                }
+                "constructor_pattern" => {
+                    return Ok(Pattern::Constructor(
+                        self.parse_constructor_pattern(child, source)?,
+                    ));
+                }
+                "tuple_pattern" => {
+                    let (first, rest) = self.parse_tuple_pattern(child, source)?;
+                    return Ok(Pattern::Tuple(Box::new(first), rest));
+                }
+                "list_pattern" => {
+                    return Ok(Pattern::List(self.parse_list_pattern(child, source)?));
+                }
+                "identifier_pattern" => {
+                    if let Some(id_child) = child.child(0) {
+                        let text = id_child.utf8_text(source.as_bytes())?;
+                        return Ok(Pattern::Identifier(text.to_string()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Err("Invalid simple pattern".into())
     }
 
     fn parse_tuple_pattern(
@@ -1221,21 +1228,19 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<(Vec<PatternField>, bool), Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut fields = Vec::new();
         let mut has_rest = false;
 
-        // Check all children including anonymous nodes for ".."
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "pattern_field" => {
-                        fields.push(self.parse_pattern_field(child, source)?);
-                    }
-                    ".." => {
-                        has_rest = true;
-                    }
-                    _ => {}
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "pattern_field" => {
+                    fields.push(self.parse_pattern_field(child, source)?);
                 }
+                "spread" => {
+                    has_rest = true;
+                }
+                _ => {}
             }
         }
 
@@ -1275,25 +1280,24 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<ListPattern, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut elements = Vec::new();
         let mut rest: Option<Option<Identifier>> = None;
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "pattern" => {
-                        elements.push(self.parse_pattern(child, source)?);
-                    }
-                    "rest_pattern" => {
-                        // rest_pattern contains optional "name" field
-                        let name = child
-                            .child_by_field_name("name")
-                            .map(|n| n.utf8_text(source.as_bytes()).map(|s| s.to_string()))
-                            .transpose()?;
-                        rest = Some(name);
-                    }
-                    _ => {}
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "pattern" => {
+                    elements.push(self.parse_pattern(child, source)?);
                 }
+                "rest_pattern" => {
+                    // rest_pattern contains optional "name" field
+                    let name = child
+                        .child_by_field_name("name")
+                        .map(|n| n.utf8_text(source.as_bytes()).map(|s| s.to_string()))
+                        .transpose()?;
+                    rest = Some(name);
+                }
+                _ => {}
             }
         }
 
@@ -1305,65 +1309,17 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Pattern, Box<dyn std::error::Error>> {
-        let mut inner_pattern = None;
-        let mut binding = None;
+        let pattern_node = node
+            .child_by_field_name("pattern")
+            .ok_or("Missing pattern in as pattern")?;
+        let binding_node = node
+            .child_by_field_name("binding")
+            .ok_or("Missing binding in as pattern")?;
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    // The inner pattern can be any simple pattern
-                    "literal_pattern"
-                    | "wildcard_pattern"
-                    | "constructor_pattern"
-                    | "tuple_pattern"
-                    | "list_pattern"
-                    | "identifier_pattern" => {
-                        // Wrap in a fake "pattern" node parsing
-                        inner_pattern = Some(self.parse_simple_pattern(child, source)?);
-                    }
-                    "identifier" => {
-                        // This could be the binding
-                        if inner_pattern.is_some() && binding.is_none() {
-                            binding = Some(child.utf8_text(source.as_bytes())?.to_string());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
+        let inner = self.parse_simple_pattern_node(pattern_node, source)?;
+        let binding = binding_node.utf8_text(source.as_bytes())?.to_string();
 
-        let inner = inner_pattern.ok_or("Missing pattern in as pattern")?;
-        let bind = binding.ok_or("Missing binding in as pattern")?;
-
-        Ok(Pattern::As(Box::new(inner), bind))
-    }
-
-    fn parse_simple_pattern(
-        &self,
-        node: Node,
-        source: &str,
-    ) -> Result<Pattern, Box<dyn std::error::Error>> {
-        match node.kind() {
-            "literal_pattern" => Ok(Pattern::Literal(self.parse_literal_pattern(node, source)?)),
-            "wildcard_pattern" => Ok(Pattern::Wildcard),
-            "constructor_pattern" => Ok(Pattern::Constructor(
-                self.parse_constructor_pattern(node, source)?,
-            )),
-            "tuple_pattern" => {
-                let (first, rest) = self.parse_tuple_pattern(node, source)?;
-                Ok(Pattern::Tuple(Box::new(first), rest))
-            }
-            "list_pattern" => Ok(Pattern::List(self.parse_list_pattern(node, source)?)),
-            "identifier_pattern" => {
-                if let Some(id_child) = node.child(0) {
-                    let text = id_child.utf8_text(source.as_bytes())?;
-                    Ok(Pattern::Identifier(text.to_string()))
-                } else {
-                    Err("Invalid identifier pattern".into())
-                }
-            }
-            _ => Err(format!("Unknown simple pattern kind: {}", node.kind()).into()),
-        }
+        Ok(Pattern::As(Box::new(inner), binding))
     }
 
     fn parse_handler_pattern(
@@ -1410,11 +1366,9 @@ impl TributeParser {
         match node.kind() {
             "identifier" => Ok(vec![node.utf8_text(source.as_bytes())?.to_string()]),
             "path_expression" => {
+                let mut cursor = node.walk();
                 let mut segments = Vec::new();
-                for i in 0..node.child_count() {
-                    let Some(child) = node.child(i) else {
-                        continue;
-                    };
+                for child in node.named_children(&mut cursor) {
                     if child.kind() != "path_segment" {
                         continue;
                     }
@@ -1433,48 +1387,44 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut segments: Vec<StringSegment> = Vec::new();
         let mut leading_text = String::new();
         let mut current_text = String::new();
         let mut expecting_text = true; // Start expecting text (leading_text)
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "string_segment" => {
-                        let text = child.utf8_text(source.as_bytes())?;
-                        let processed = process_escape_sequences(text)?;
-                        current_text.push_str(&processed);
-                    }
-                    "interpolation" => {
-                        if let Some(expr_node) = child.child_by_field_name("expression") {
-                            let expr = self.node_to_expr_with_span(expr_node, source)?;
-
-                            if expecting_text {
-                                // This is the first interpolation, current_text is leading_text
-                                leading_text = std::mem::take(&mut current_text);
-                                expecting_text = false;
-                            } else {
-                                // Update the trailing_text of the previous segment
-                                if let Some(last_segment) = segments.last_mut() {
-                                    last_segment.trailing_text = std::mem::take(&mut current_text);
-                                }
-                            }
-
-                            // Create new segment with empty trailing_text (will be filled later)
-                            segments.push(StringSegment {
-                                interpolation: Box::new(expr),
-                                trailing_text: String::new(),
-                            });
-                        } else {
-                            return Err("Interpolation missing expression".into());
-                        }
-                    }
-                    "\"" => {
-                        // Skip quote delimiters
-                    }
-                    _ => {}
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "string_segment" => {
+                    let text = child.utf8_text(source.as_bytes())?;
+                    let processed = process_escape_sequences(text)?;
+                    current_text.push_str(&processed);
                 }
+                "interpolation" => {
+                    if let Some(expr_node) = child.child_by_field_name("expression") {
+                        let expr = self.node_to_expr_with_span(expr_node, source)?;
+
+                        if expecting_text {
+                            // This is the first interpolation, current_text is leading_text
+                            leading_text = std::mem::take(&mut current_text);
+                            expecting_text = false;
+                        } else {
+                            // Update the trailing_text of the previous segment
+                            if let Some(last_segment) = segments.last_mut() {
+                                last_segment.trailing_text = std::mem::take(&mut current_text);
+                            }
+                        }
+
+                        // Create new segment with empty trailing_text (will be filled later)
+                        segments.push(StringSegment {
+                            interpolation: Box::new(expr),
+                            trailing_text: String::new(),
+                        });
+                    } else {
+                        return Err("Interpolation missing expression".into());
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -1502,33 +1452,32 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<LiteralPattern, Box<dyn std::error::Error>> {
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "number" => {
-                        let text = child.utf8_text(source.as_bytes())?;
-                        let num = text.parse::<i64>()?;
-                        return Ok(LiteralPattern::Number(num));
-                    }
-                    "string" => {
-                        // Parse as StringInterpolation and convert to appropriate pattern
-                        if let Ok(Expr::StringInterpolation(interp)) =
-                            self.parse_interpolated_string(child, source)
-                        {
-                            if interp.segments.is_empty() {
-                                // Simple string without interpolation
-                                return Ok(LiteralPattern::String(interp.leading_text));
-                            } else {
-                                // String with interpolation
-                                return Ok(LiteralPattern::StringInterpolation(interp));
-                            }
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "number" => {
+                    let text = child.utf8_text(source.as_bytes())?;
+                    let num = text.parse::<i64>()?;
+                    return Ok(LiteralPattern::Number(num));
+                }
+                "string" => {
+                    // Parse as StringInterpolation and convert to appropriate pattern
+                    if let Ok(Expr::StringInterpolation(interp)) =
+                        self.parse_interpolated_string(child, source)
+                    {
+                        if interp.segments.is_empty() {
+                            // Simple string without interpolation
+                            return Ok(LiteralPattern::String(interp.leading_text));
+                        } else {
+                            // String with interpolation
+                            return Ok(LiteralPattern::StringInterpolation(interp));
                         }
                     }
-                    "keyword_true" => return Ok(LiteralPattern::Bool(true)),
-                    "keyword_false" => return Ok(LiteralPattern::Bool(false)),
-                    "keyword_nil" => return Ok(LiteralPattern::Nil),
-                    _ => {}
                 }
+                "keyword_true" => return Ok(LiteralPattern::Bool(true)),
+                "keyword_false" => return Ok(LiteralPattern::Bool(false)),
+                "keyword_nil" => return Ok(LiteralPattern::Nil),
+                _ => {}
             }
         }
         Err("Invalid literal pattern".into())

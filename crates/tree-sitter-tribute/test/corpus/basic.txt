@@ -285,28 +285,32 @@ fn test_number(n) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (literal_pattern
-                (number)))
+              (simple_pattern
+                (literal_pattern
+                  (number))))
             value: (primary_expression
               (string
                 (string_segment))))
           (case_arm
             pattern: (pattern
-              (literal_pattern
-                (number)))
+              (simple_pattern
+                (literal_pattern
+                  (number))))
             value: (primary_expression
               (string
                 (string_segment))))
           (case_arm
             pattern: (pattern
-              (literal_pattern
-                (number)))
+              (simple_pattern
+                (literal_pattern
+                  (number))))
             value: (primary_expression
               (string
                 (string_segment))))
           (case_arm
             pattern: (pattern
-              (wildcard_pattern))
+              (simple_pattern
+                (wildcard_pattern)))
             value: (primary_expression
               (string
                 (string_segment)))))))))
@@ -846,15 +850,17 @@ fn test(b) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (literal_pattern
-                (keyword_true)))
+              (simple_pattern
+                (literal_pattern
+                  (keyword_true))))
             value: (primary_expression
               (string
                 (string_segment))))
           (case_arm
             pattern: (pattern
-              (literal_pattern
-                (keyword_false)))
+              (simple_pattern
+                (literal_pattern
+                  (keyword_false))))
             value: (primary_expression
               (string
                 (string_segment)))))))))
@@ -887,14 +893,16 @@ fn test(x) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (literal_pattern
-                (keyword_nil)))
+              (simple_pattern
+                (literal_pattern
+                  (keyword_nil))))
             value: (primary_expression
               (string
                 (string_segment))))
           (case_arm
             pattern: (pattern
-              (wildcard_pattern))
+              (simple_pattern
+                (wildcard_pattern)))
             value: (primary_expression
               (string
                 (string_segment)))))))))
@@ -978,8 +986,9 @@ fn test(n) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (identifier_pattern
-                (identifier)))
+              (simple_pattern
+                (identifier_pattern
+                  (identifier))))
             (guarded_branch
               (keyword_if)
               guard: (binary_expression
@@ -992,7 +1001,8 @@ fn test(n) {
                   (string_segment)))))
           (case_arm
             pattern: (pattern
-              (wildcard_pattern))
+              (simple_pattern
+                (wildcard_pattern)))
             value: (primary_expression
               (string
                 (string_segment)))))))))
@@ -1026,8 +1036,9 @@ fn test(n) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (identifier_pattern
-                (identifier)))
+              (simple_pattern
+                (identifier_pattern
+                  (identifier))))
             (guarded_branch
               (keyword_if)
               guard: (binary_expression
@@ -1050,7 +1061,8 @@ fn test(n) {
                   (string_segment)))))
           (case_arm
             pattern: (pattern
-              (wildcard_pattern))
+              (simple_pattern
+                (wildcard_pattern)))
             value: (primary_expression
               (string
                 (string_segment)))))))))
@@ -1189,7 +1201,8 @@ fn test() {
               function: (identifier)))
           (case_arm
             pattern: (pattern
-              (wildcard_pattern))
+              (simple_pattern
+                (wildcard_pattern)))
             value: (primary_expression
               (identifier))))))))
 
@@ -1574,14 +1587,16 @@ fn test(opt) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (constructor_pattern
-                name: (type_identifier)))
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier))))
             value: (primary_expression
               (string
                 (string_segment))))
           (case_arm
             pattern: (pattern
-              (wildcard_pattern))
+              (simple_pattern
+                (wildcard_pattern)))
             value: (primary_expression
               (string
                 (string_segment)))))))))
@@ -1614,18 +1629,21 @@ fn test(opt) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (constructor_pattern
-                name: (type_identifier)
-                args: (pattern_list
-                  (pattern
-                    (identifier_pattern
-                      (identifier))))))
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  args: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))))))
             value: (primary_expression
               (identifier)))
           (case_arm
             pattern: (pattern
-              (constructor_pattern
-                name: (type_identifier)))
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier))))
             value: (primary_expression
               (number))))))))
 
@@ -1657,15 +1675,18 @@ fn test(pair) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (constructor_pattern
-                name: (type_identifier)
-                args: (pattern_list
-                  (pattern
-                    (identifier_pattern
-                      (identifier)))
-                  (pattern
-                    (identifier_pattern
-                      (identifier))))))
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  args: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))))))
             value: (binary_expression
               (primary_expression
                 (identifier))
@@ -1673,7 +1694,8 @@ fn test(pair) {
                 (identifier))))
           (case_arm
             pattern: (pattern
-              (wildcard_pattern))
+              (simple_pattern
+                (wildcard_pattern)))
             value: (primary_expression
               (number))))))))
 
@@ -1706,32 +1728,38 @@ fn test(opt) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (constructor_pattern
-                name: (type_identifier)
-                args: (pattern_list
-                  (pattern
-                    (constructor_pattern
-                      name: (type_identifier)
-                      args: (pattern_list
-                        (pattern
-                          (identifier_pattern
-                            (identifier)))))))))
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  args: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (constructor_pattern
+                          name: (type_identifier)
+                          args: (pattern_list
+                            (pattern
+                              (simple_pattern
+                                (identifier_pattern
+                                  (identifier))))))))))))
             value: (primary_expression
               (identifier)))
           (case_arm
             pattern: (pattern
-              (constructor_pattern
-                name: (type_identifier)
-                args: (pattern_list
-                  (pattern
-                    (constructor_pattern
-                      name: (type_identifier))))))
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  args: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (constructor_pattern
+                          name: (type_identifier))))))))
             value: (primary_expression
               (number)))
           (case_arm
             pattern: (pattern
-              (constructor_pattern
-                name: (type_identifier)))
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier))))
             value: (primary_expression
               (number))))))))
 
@@ -1763,26 +1791,30 @@ fn test(result) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (constructor_pattern
-                name: (type_identifier)
-                fields: (pattern_fields
-                  (pattern_field
-                    name: (identifier)
-                    pattern: (pattern
-                      (identifier_pattern
-                        (identifier)))))))
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  fields: (pattern_fields
+                    (pattern_field
+                      name: (identifier)
+                      pattern: (pattern
+                        (simple_pattern
+                          (identifier_pattern
+                            (identifier)))))))))
             value: (primary_expression
               (identifier)))
           (case_arm
             pattern: (pattern
-              (constructor_pattern
-                name: (type_identifier)
-                fields: (pattern_fields
-                  (pattern_field
-                    name: (identifier)
-                    pattern: (pattern
-                      (identifier_pattern
-                        (identifier)))))))
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  fields: (pattern_fields
+                    (pattern_field
+                      name: (identifier)
+                      pattern: (pattern
+                        (simple_pattern
+                          (identifier_pattern
+                            (identifier)))))))))
             value: (primary_expression
               (identifier))))))))
 
@@ -1814,14 +1846,17 @@ fn test(pair) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (tuple_pattern
-                elements: (pattern_list
-                  (pattern
-                    (identifier_pattern
-                      (identifier)))
-                  (pattern
-                    (identifier_pattern
-                      (identifier))))))
+              (simple_pattern
+                (tuple_pattern
+                  elements: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))))))
             value: (binary_expression
               (primary_expression
                 (identifier))
@@ -1829,7 +1864,8 @@ fn test(pair) {
                 (identifier))))
           (case_arm
             pattern: (pattern
-              (wildcard_pattern))
+              (simple_pattern
+                (wildcard_pattern)))
             value: (primary_expression
               (number))))))))
 
@@ -1860,17 +1896,21 @@ fn test(triple) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (tuple_pattern
-                elements: (pattern_list
-                  (pattern
-                    (identifier_pattern
-                      (identifier)))
-                  (pattern
-                    (identifier_pattern
-                      (identifier)))
-                  (pattern
-                    (identifier_pattern
-                      (identifier))))))
+              (simple_pattern
+                (tuple_pattern
+                  elements: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))))))
             value: (binary_expression
               (binary_expression
                 (primary_expression
@@ -1907,20 +1947,25 @@ fn test(nested) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (tuple_pattern
-                elements: (pattern_list
-                  (pattern
-                    (tuple_pattern
-                      elements: (pattern_list
-                        (pattern
-                          (identifier_pattern
-                            (identifier)))
-                        (pattern
-                          (identifier_pattern
-                            (identifier))))))
-                  (pattern
-                    (identifier_pattern
-                      (identifier))))))
+              (simple_pattern
+                (tuple_pattern
+                  elements: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (tuple_pattern
+                          elements: (pattern_list
+                            (pattern
+                              (simple_pattern
+                                (identifier_pattern
+                                  (identifier))))
+                            (pattern
+                              (simple_pattern
+                                (identifier_pattern
+                                  (identifier))))))))
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))))))
             value: (binary_expression
               (binary_expression
                 (primary_expression
@@ -1957,13 +2002,16 @@ fn test(pair) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (tuple_pattern
-                elements: (pattern_list
-                  (pattern
-                    (identifier_pattern
-                      (identifier)))
-                  (pattern
-                    (wildcard_pattern)))))
+              (simple_pattern
+                (tuple_pattern
+                  elements: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (pattern
+                      (simple_pattern
+                        (wildcard_pattern)))))))
             value: (primary_expression
               (identifier))))))))
 
@@ -1994,7 +2042,8 @@ fn test(xs) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (list_pattern))
+              (simple_pattern
+                (list_pattern)))
             value: (primary_expression
               (number))))))))
 
@@ -2025,16 +2074,20 @@ fn test(xs) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (list_pattern
-                (pattern
-                  (identifier_pattern
-                    (identifier)))
-                (pattern
-                  (identifier_pattern
-                    (identifier)))
-                (pattern
-                  (identifier_pattern
-                    (identifier)))))
+              (simple_pattern
+                (list_pattern
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier))))
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier))))
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier)))))))
             value: (binary_expression
               (binary_expression
                 (primary_expression
@@ -2071,12 +2124,15 @@ fn test(xs) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (list_pattern
-                (pattern
-                  (identifier_pattern
-                    (identifier)))
-                (rest_pattern
-                  name: (identifier))))
+              (simple_pattern
+                (list_pattern
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier))))
+                  (rest_pattern
+                    (spread)
+                    name: (identifier)))))
             value: (primary_expression
               (identifier))))))))
 
@@ -2107,14 +2163,18 @@ fn test(xs) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (list_pattern
-                (pattern
-                  (identifier_pattern
-                    (identifier)))
-                (pattern
-                  (identifier_pattern
-                    (identifier)))
-                (rest_pattern)))
+              (simple_pattern
+                (list_pattern
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier))))
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier))))
+                  (rest_pattern
+                    (spread)))))
             value: (binary_expression
               (primary_expression
                 (identifier))
@@ -2148,9 +2208,11 @@ fn test(xs) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (list_pattern
-                (rest_pattern
-                  name: (identifier))))
+              (simple_pattern
+                (list_pattern
+                  (rest_pattern
+                    (spread)
+                    name: (identifier)))))
             value: (primary_expression
               (identifier))))))))
 
@@ -2181,13 +2243,14 @@ fn test(user) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (constructor_pattern
-                name: (type_identifier)
-                fields: (pattern_fields
-                  (pattern_field
-                    name: (identifier))
-                  (pattern_field
-                    name: (identifier)))))
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  fields: (pattern_fields
+                    (pattern_field
+                      name: (identifier))
+                    (pattern_field
+                      name: (identifier))))))
             value: (primary_expression
               (identifier))))))))
 
@@ -2218,11 +2281,13 @@ fn test(user) {
             (identifier))
           (case_arm
             pattern: (pattern
-              (constructor_pattern
-                name: (type_identifier)
-                fields: (pattern_fields
-                  (pattern_field
-                    name: (identifier)))))
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  fields: (pattern_fields
+                    (pattern_field
+                      name: (identifier))
+                    (spread)))))
             value: (primary_expression
               (identifier))))))))
 
@@ -2254,12 +2319,14 @@ fn test(opt) {
           (case_arm
             pattern: (pattern
               (as_pattern
-                pattern: (constructor_pattern
-                  name: (type_identifier)
-                  args: (pattern_list
-                    (pattern
-                      (identifier_pattern
-                        (identifier)))))
+                pattern: (simple_pattern
+                  (constructor_pattern
+                    name: (type_identifier)
+                    args: (pattern_list
+                      (pattern
+                        (simple_pattern
+                          (identifier_pattern
+                            (identifier)))))))
                 (keyword_as)
                 binding: (identifier)))
             value: (primary_expression
@@ -2293,12 +2360,15 @@ fn test(xs) {
           (case_arm
             pattern: (pattern
               (as_pattern
-                pattern: (list_pattern
-                  (pattern
-                    (identifier_pattern
-                      (identifier)))
-                  (rest_pattern
-                    name: (identifier)))
+                pattern: (simple_pattern
+                  (list_pattern
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (rest_pattern
+                      (spread)
+                      name: (identifier))))
                 (keyword_as)
                 binding: (identifier)))
             value: (primary_expression
@@ -2408,8 +2478,9 @@ fn test() {
                     (identifier)))
                 args: (pattern_list
                   (pattern
-                    (identifier_pattern
-                      (identifier))))
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier)))))
                 continuation: (identifier)))
             value: (call_expression
               function: (identifier)
