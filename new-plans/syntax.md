@@ -97,7 +97,10 @@ RuneEscape ::= '\' ('n' | 'r' | 't' | '0' | '\' | 'x' HexDigit{2} | 'u' HexDigit
 Bool       ::= 'True' | 'False'
 Unit       ::= 'Nil'
 
-Literal    ::= Number | String | Bytes | Rune | Bool | Unit
+// Literal (String과 Bytes는 raw 변형 포함)
+StringLit  ::= String | RawString
+BytesLit   ::= Bytes | RawBytes
+Literal    ::= Number | StringLit | BytesLit | Rune | Bool | Unit
 
 Identifier ::= (Letter | '_') (Letter | Digit | '_')*
 TypeId     ::= UpperLetter (Letter | Digit | '_')*   // 타입명은 대문자 시작
@@ -325,7 +328,7 @@ FieldSep ::= ',' | '\n'
 ```rust
 struct User {
     name: String
-    age: Int
+    age: Nat
 }
 
 struct Box(a) {
@@ -352,8 +355,6 @@ VariantFields ::= '(' Type (',' Type)* ','? ')'     // positional
 **예시:**
 
 ```rust
-enum Bool { True, False }
-
 enum Option(a) {
     None
     Some(a)
@@ -854,11 +855,11 @@ User { name, .. } as user   // name과 전체 user 바인딩
 
 ```rust
 // struct 필드는 자동으로 getter 생성
-struct User { name: String, age: Int }
+struct User { name: String, age: Nat }
 
 // 생성되는 함수:
 // User::name : fn(User) -> String
-// User::age  : fn(User) -> Int
+// User::age  : fn(User) -> Nat
 
 user.name    // User::name(user)
 user.age     // User::age(user)
@@ -919,11 +920,11 @@ Visibility ::= 'pub'?
 // 개행으로 구분
 struct User {
     name: String
-    age: Int
+    age: Nat
 }
 
 // 한 줄이면 쉼표 필수
-struct User { name: String, age: Int }
+struct User { name: String, age: Nat }
 ```
 
 ### 세미콜론
@@ -944,7 +945,7 @@ use std::io::Console
 
 struct User {
     name: String
-    age: Int
+    age: Nat
 }
 
 enum Status {
