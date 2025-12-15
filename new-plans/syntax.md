@@ -376,17 +376,32 @@ ability Http {
 
 ```
 HandleExpr ::= 'handle' Expression
+```
 
-// handle 결과는 case로 패턴 매칭
-// 핸들러 패턴은 중괄호로 감쌈
-HandlerPattern ::= '{' HandlerCase '}'
-HandlerCase ::= Identifier                           // completion
-              | Path '(' PatternList? ')' '->' Identifier  // suspend + continuation
+`handle expr`은 `Request` 타입의 값을 반환한다. 이 값은 일반적인 `case` 표현식에서 handler pattern으로 매칭할 수 있다.
+
+```rust
+// Request 타입 (내장)
+enum Request(a, e) {
+    Done(a)                              // computation 완료
+    Suspend { op: e, k: fn(?) -> Request(a, e) }  // effect 발생 + continuation
+}
 ```
 
 **예시:**
 
 ```rust
+// handle은 Request 값을 반환
+let req = handle comp()
+
+// case로 Request를 패턴 매칭
+case req {
+    { result } -> result
+    { State::get() -> k } -> run_state(fn() k(state), state)
+    { State::set(v) -> k } -> run_state(fn() k(Nil), v)
+}
+
+// 보통은 한 번에 작성
 case handle comp() {
     { result } -> result
     { State::get() -> k } -> run_state(fn() k(state), state)
@@ -661,10 +676,10 @@ User { name, age }
 User { name, .. }           // 나머지 무시
 Point { x, y: y_coord }     // 이름 변경
 
-// Handler pattern (case handle 내부에서 사용)
-{ result }                   // completion: 정상 완료
-{ State::get() -> k }        // suspend: effect 연산 + continuation
-{ Logger::log(msg) -> k }    // suspend: 인자와 continuation 바인딩
+// Handler pattern (Request 타입 매칭)
+{ result }                   // Done(result) 매칭
+{ State::get() -> k }        // Suspend 매칭: effect 연산 + continuation
+{ Logger::log(msg) -> k }    // Suspend 매칭: 인자와 continuation 바인딩
 ```
 
 ---
@@ -874,5 +889,5 @@ fn main() ->{Console} Nil {
 | `Some(x)`              | Variant (positional)           |
 | `Ok { value }`         | Variant (named)                |
 | `T { f, .. }`          | Record (나머지 무시)           |
-| `{ result }`           | Handler (completion)           |
-| `{ Op(x) -> k }`       | Handler (suspend)              |
+| `{ result }`           | Handler: Request::Done 매칭    |
+| `{ Op(x) -> k }`       | Handler: Request::Suspend 매칭 |
