@@ -879,11 +879,11 @@ fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
 }
 
 fn main() ->{Console} Nil {
-    let users = List::of(
+    let users = [
         User { name: "Alice", age: 30 },
         User { name: "Bob", age: 17 },
-        User { name: "Charlie", age: 25 }
-    )
+        User { name: "Charlie", age: 25 },
+    ]
 
     run_logger(fn() {
         let names = process(users)
