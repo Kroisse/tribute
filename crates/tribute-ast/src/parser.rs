@@ -186,6 +186,48 @@ impl TributeParser {
                     span,
                 ))
             }
+            "const_declaration" => {
+                let mut name = None;
+                let mut ty = None;
+                let mut value = None;
+                let mut is_pub = false;
+
+                for i in 0..node.child_count() {
+                    if let Some(child) = node.child(i) {
+                        match child.kind() {
+                            "keyword_pub" => {
+                                is_pub = true;
+                            }
+                            "identifier" => {
+                                if name.is_none() {
+                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                                }
+                            }
+                            "type_identifier" | "type_variable" | "generic_type" => {
+                                ty = Some(self.parse_type_ref(child, source)?);
+                            }
+                            _ => {
+                                // Try to parse as value expression
+                                if value.is_none()
+                                    && let Ok(expr) = self.node_to_expr_with_span(child, source)
+                                {
+                                    value = Some(expr);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let name = name.ok_or("Missing const name")?;
+                let value = value.ok_or("Missing const value")?;
+                let span = Span::new(node.start_byte(), node.end_byte());
+
+                Ok(Item::new(
+                    db,
+                    ItemKind::Const(ConstDefinition::new(db, name, ty, value, is_pub, span)),
+                    span,
+                ))
+            }
             _ => Err(format!("Unknown item kind: {}", node.kind()).into()),
         }
     }

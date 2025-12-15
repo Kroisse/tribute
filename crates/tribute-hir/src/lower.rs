@@ -64,8 +64,8 @@ pub fn lower_program_to_hir<'db>(
                 }
                 functions.insert(function.name.clone(), function);
             }
-            ItemKind::Struct(_) | ItemKind::Enum(_) => {
-                // Type declarations are not evaluated code
+            ItemKind::Struct(_) | ItemKind::Enum(_) | ItemKind::Const(_) => {
+                // Type/const declarations are not evaluated code
                 // They will be handled by the type checker (future work)
             }
             _ => {

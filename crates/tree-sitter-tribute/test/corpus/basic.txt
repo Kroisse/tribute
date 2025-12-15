@@ -545,3 +545,51 @@ enum Result(a, e) {
                   name: (identifier)
                   type: (type_variable
                     (identifier)))))))))))
+
+================================================================================
+Simple const declaration
+================================================================================
+
+const MAX_SIZE = 1000
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (const_declaration
+    (keyword_const)
+    name: (identifier)
+    value: (primary_expression
+      (number))))
+
+================================================================================
+Const with type annotation
+================================================================================
+
+const PI: Float = 3.14159
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (const_declaration
+    (keyword_const)
+    name: (identifier)
+    type: (type_identifier)
+    value: (primary_expression
+      (number))))
+
+================================================================================
+Pub const with string value
+================================================================================
+
+pub const VERSION = "0.1.0"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (const_declaration
+    (keyword_pub)
+    (keyword_const)
+    name: (identifier)
+    value: (primary_expression
+      (string
+        (string_segment)))))

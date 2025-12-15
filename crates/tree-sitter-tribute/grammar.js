@@ -10,7 +10,8 @@ module.exports = grammar({
     _item: $ => choice(
       $.function_definition,
       $.struct_declaration,
-      $.enum_declaration
+      $.enum_declaration,
+      $.const_declaration
     ),
 
     // struct User { name: String, age: Nat }
@@ -123,6 +124,18 @@ module.exports = grammar({
       '{',
       optional($.struct_fields),
       '}'
+    ),
+
+    // const MAX_SIZE = 1000
+    // const PI: Float = 3.14159
+    // pub const VERSION = "0.1.0"
+    const_declaration: $ => seq(
+      optional($.keyword_pub),
+      $.keyword_const,
+      field('name', $.identifier),
+      optional(seq(':', field('type', $._type))),
+      '=',
+      field('value', $._expression)
     ),
 
     function_definition: $ => seq(
@@ -300,6 +313,7 @@ module.exports = grammar({
     keyword_case: $ => 'case',
     keyword_struct: $ => 'struct',
     keyword_enum: $ => 'enum',
+    keyword_const: $ => 'const',
     keyword_pub: $ => 'pub',
 
     // Comments

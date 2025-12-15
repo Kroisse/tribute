@@ -23,6 +23,7 @@ pub enum ItemKind<'db> {
     Function(FunctionDefinition<'db>),
     Struct(StructDefinition<'db>),
     Enum(EnumDefinition<'db>),
+    Const(ConstDefinition<'db>),
 }
 
 #[salsa::tracked(debug)]
@@ -74,6 +75,16 @@ pub enum VariantFields {
     Tuple(Vec<TypeRef>),
     /// Struct fields: Ok { value: a }
     Struct(Vec<StructField>),
+}
+
+/// Const definition: const MAX_SIZE = 1000
+#[salsa::tracked(debug)]
+pub struct ConstDefinition<'db> {
+    pub name: Identifier,
+    pub ty: Option<TypeRef>,
+    pub value: Spanned<Expr>,
+    pub is_pub: bool,
+    pub span: Span,
 }
 
 /// Type reference in type annotations
