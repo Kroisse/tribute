@@ -13,6 +13,7 @@ module.exports = grammar({
       $.function_definition,
       $.struct_declaration,
       $.enum_declaration,
+      $.ability_declaration,
       $.const_declaration
     ),
 
@@ -172,6 +173,53 @@ module.exports = grammar({
       '}'
     ),
 
+    // ability Console {
+    //     fn print(msg: String) -> Nil
+    //     fn read() -> String
+    // }
+    // ability State(s) {
+    //     fn get() -> s
+    //     fn set(value: s) -> Nil
+    // }
+    // pub ability Http { ... }
+    ability_declaration: $ => seq(
+      optional($.keyword_pub),
+      $.keyword_ability,
+      field('name', $.type_identifier),
+      optional(field('type_params', $.type_parameters)),
+      field('body', $.ability_body)
+    ),
+
+    ability_body: $ => seq(
+      '{',
+      repeat($.ability_operation),
+      '}'
+    ),
+
+    // fn print(msg: String) -> Nil
+    ability_operation: $ => seq(
+      $.keyword_fn,
+      field('name', $.identifier),
+      '(',
+      optional($.typed_parameter_list),
+      ')',
+      '->',
+      field('return_type', $._type)
+    ),
+
+    // (msg: String, value: Int)
+    typed_parameter_list: $ => seq(
+      $.typed_parameter,
+      repeat(seq(',', $.typed_parameter)),
+      optional(',')
+    ),
+
+    typed_parameter: $ => seq(
+      field('name', $.identifier),
+      ':',
+      field('type', $._type)
+    ),
+
     // const MAX_SIZE = 1000
     // const PI: Float = 3.14159
     // pub const VERSION = "0.1.0"
@@ -222,6 +270,7 @@ module.exports = grammar({
       $.call_expression,
       $.method_call_expression,
       $.case_expression,
+      $.handle_expression,
       $.primary_expression
     ),
 
@@ -285,6 +334,13 @@ module.exports = grammar({
       field('guard', $._expression),
       '->',
       field('value', $._expression)
+    ),
+
+    // handle comp()
+    // handle { some_effectful_computation() }
+    handle_expression: $ => seq(
+      $.keyword_handle,
+      field('expr', $._expression)
     ),
 
     pattern: $ => choice(
@@ -387,11 +443,13 @@ module.exports = grammar({
     keyword_case: $ => 'case',
     keyword_struct: $ => 'struct',
     keyword_enum: $ => 'enum',
+    keyword_ability: $ => 'ability',
     keyword_const: $ => 'const',
     keyword_pub: $ => 'pub',
     keyword_use: $ => 'use',
     keyword_mod: $ => 'mod',
     keyword_if: $ => 'if',
+    keyword_handle: $ => 'handle',
     keyword_true: $ => token(prec(1, 'True')),
     keyword_false: $ => token(prec(1, 'False')),
     keyword_nil: $ => token(prec(1, 'Nil')),
