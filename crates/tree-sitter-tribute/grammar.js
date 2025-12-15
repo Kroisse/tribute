@@ -360,10 +360,18 @@ module.exports = grammar({
     ),
 
     pattern: $ => choice(
+      $._simple_pattern,
+      $.as_pattern,
+      $.handler_pattern
+    ),
+
+    // Simple patterns (can be used in as_pattern without recursion)
+    _simple_pattern: $ => choice(
       $.literal_pattern,
       $.wildcard_pattern,
       $.constructor_pattern,
       $.tuple_pattern,
+      $.list_pattern,
       $.identifier_pattern
     ),
 
@@ -405,16 +413,72 @@ module.exports = grammar({
     pattern_fields: $ => seq(
       $.pattern_field,
       repeat(seq(',', $.pattern_field)),
+      optional(seq(',', '..')),  // trailing .. to ignore rest
       optional(',')
     ),
 
-    pattern_field: $ => seq(
-      field('name', $.identifier),
-      ':',
-      field('pattern', $.pattern)
+    // Pattern field: name: pattern or just name (shorthand)
+    pattern_field: $ => choice(
+      // Full form: name: pattern
+      seq(
+        field('name', $.identifier),
+        ':',
+        field('pattern', $.pattern)
+      ),
+      // Shorthand: name (binds to identifier with same name)
+      field('name', $.identifier)
     ),
 
     identifier_pattern: $ => $.identifier,
+
+    // List pattern: [], [a, b, c], [head, ..tail], [first, ..]
+    list_pattern: $ => seq(
+      '[',
+      optional(choice(
+        // [a, b, c] or [head, ..tail] or [first, ..]
+        seq(
+          $.pattern,
+          repeat(seq(',', $.pattern)),
+          optional(seq(',', $.rest_pattern)),
+          optional(',')
+        ),
+        // [..tail] - rest only
+        $.rest_pattern
+      )),
+      ']'
+    ),
+
+    // Rest pattern: ..tail or ..
+    rest_pattern: $ => seq(
+      '..',
+      optional(field('name', $.identifier))
+    ),
+
+    // As pattern: Some(x) as opt
+    as_pattern: $ => prec.left(seq(
+      field('pattern', $._simple_pattern),
+      $.keyword_as,
+      field('binding', $.identifier)
+    )),
+
+    // Handler pattern: { result } or { State::get() -> k }
+    handler_pattern: $ => seq(
+      '{',
+      choice(
+        // Completion: { result }
+        field('result', $.identifier),
+        // Suspend: { Path::op(args) -> k }
+        seq(
+          field('operation', choice($.path_expression, $.identifier)),
+          '(',
+          optional(field('args', $.pattern_list)),
+          ')',
+          '->',
+          field('continuation', $.identifier)
+        )
+      ),
+      '}'
+    ),
 
     argument_list: $ => seq(
       $._expression,
@@ -517,6 +581,7 @@ module.exports = grammar({
     keyword_mod: $ => 'mod',
     keyword_if: $ => 'if',
     keyword_handle: $ => 'handle',
+    keyword_as: $ => 'as',
     keyword_true: $ => token(prec(1, 'True')),
     keyword_false: $ => token(prec(1, 'False')),
     keyword_nil: $ => token(prec(1, 'Nil')),

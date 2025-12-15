@@ -99,10 +99,17 @@ pub enum Pattern {
     },
     /// Tuple pattern: #(a, b), #(x, y, z) - first element + rest
     Tuple(Box<Pattern>, Vec<Pattern>),
-    /// List pattern (matches list structure)
-    List(Vec<Pattern>),
+    /// List pattern (matches list structure): [], [a, b], [head, ..tail]
+    List {
+        elements: Vec<Pattern>,
+        rest: Option<Option<Identifier>>,
+    },
     /// Rest pattern for matching remaining elements
     Rest(Identifier),
+    /// As pattern: Some(x) as opt
+    As(Box<Pattern>, Identifier),
+    /// Handler pattern for effect handling
+    Handler(HandlerPattern),
 }
 
 /// Arguments for a constructor pattern
@@ -112,15 +119,32 @@ pub enum ConstructorArgs {
     None,
     /// Tuple-style arguments: Some(x), Pair(a, b)
     Positional(Vec<Pattern>),
-    /// Struct-style fields: Ok { value: x }
-    Named(Vec<PatternField>),
+    /// Struct-style fields: Ok { value: x }, User { name, .. }
+    Named {
+        fields: Vec<PatternField>,
+        rest: bool,
+    },
 }
 
 /// A named field in a struct-style constructor pattern
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PatternField {
     pub name: Identifier,
+    /// For shorthand `{ name }`, pattern is `Variable(name)` (same as field name)
     pub pattern: Pattern,
+}
+
+/// Handler pattern for matching effect requests
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum HandlerPattern {
+    /// Completion pattern: { result }
+    Done(Identifier),
+    /// Suspend pattern: { Path::op(args) -> k }
+    Suspend {
+        operation: Vec<Identifier>,
+        args: Vec<Pattern>,
+        continuation: Identifier,
+    },
 }
 
 /// String interpolation in HIR

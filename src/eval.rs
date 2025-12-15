@@ -435,29 +435,51 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
             // Wildcard always matches without binding
             Some(vec![])
         }
-        Pattern::List(patterns) => {
+        Pattern::List { elements, rest } => {
             // List pattern matching
             match value {
                 Value::List(values) => {
-                    // Check if we have a rest pattern
-                    if let Some(Pattern::Rest(_)) = patterns.last() {
-                        return match_list_with_rest(values, patterns);
-                    }
-
-                    // Exact length matching
-                    if values.len() != patterns.len() {
-                        return None;
-                    }
-
-                    let mut bindings = Vec::new();
-                    for (value, pattern) in values.iter().zip(patterns.iter()) {
-                        if let Some(mut pattern_bindings) = match_pattern(value, pattern) {
-                            bindings.append(&mut pattern_bindings);
-                        } else {
-                            return None;
+                    // Handle rest pattern
+                    match rest {
+                        Some(rest_binding) => {
+                            // [a, b, ..tail] or [a, b, ..]
+                            if values.len() < elements.len() {
+                                return None;
+                            }
+                            let mut bindings = Vec::new();
+                            // Match element patterns
+                            for (value, pattern) in
+                                values.iter().take(elements.len()).zip(elements.iter())
+                            {
+                                if let Some(mut pattern_bindings) = match_pattern(value, pattern) {
+                                    bindings.append(&mut pattern_bindings);
+                                } else {
+                                    return None;
+                                }
+                            }
+                            // Bind rest if named
+                            if let Some(name) = rest_binding {
+                                let rest_values = values[elements.len()..].to_vec();
+                                bindings.push((name.clone(), Value::List(rest_values)));
+                            }
+                            Some(bindings)
+                        }
+                        None => {
+                            // Exact length matching: [a, b, c]
+                            if values.len() != elements.len() {
+                                return None;
+                            }
+                            let mut bindings = Vec::new();
+                            for (value, pattern) in values.iter().zip(elements.iter()) {
+                                if let Some(mut pattern_bindings) = match_pattern(value, pattern) {
+                                    bindings.append(&mut pattern_bindings);
+                                } else {
+                                    return None;
+                                }
+                            }
+                            Some(bindings)
                         }
                     }
-                    Some(bindings)
                 }
                 _ => None,
             }
@@ -499,47 +521,19 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
                 _ => None,
             }
         }
-    }
-}
-
-fn match_list_with_rest(
-    values: &[Value],
-    patterns: &[Pattern],
-) -> Option<Vec<(std::string::String, Value)>> {
-    if patterns.is_empty() {
-        return None;
-    }
-
-    let (rest_pattern, head_patterns) = patterns.split_last().unwrap();
-
-    if let Pattern::Rest(rest_name) = rest_pattern {
-        // Must have at least as many values as head patterns
-        if values.len() < head_patterns.len() {
-            return None;
-        }
-
-        let mut bindings = Vec::new();
-
-        // Match head patterns
-        for (value, pattern) in values
-            .iter()
-            .take(head_patterns.len())
-            .zip(head_patterns.iter())
-        {
-            if let Some(mut pattern_bindings) = match_pattern(value, pattern) {
-                bindings.append(&mut pattern_bindings);
+        Pattern::As(inner_pattern, binding) => {
+            // As pattern: match inner and also bind the whole value
+            if let Some(mut bindings) = match_pattern(value, inner_pattern) {
+                bindings.push((binding.clone(), value.clone()));
+                Some(bindings)
             } else {
-                return None;
+                None
             }
         }
-
-        // Bind rest values
-        let rest_values = values[head_patterns.len()..].to_vec();
-        bindings.push((rest_name.clone(), Value::List(rest_values)));
-
-        Some(bindings)
-    } else {
-        None
+        Pattern::Handler(_) => {
+            // TODO: Handler pattern matching requires effect handling infrastructure
+            None
+        }
     }
 }
 

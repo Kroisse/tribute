@@ -299,6 +299,21 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
             let lowered_rest: LowerResult<Vec<_>> = rest.iter().map(lower_pattern).collect();
             Ok(Pattern::Tuple(lowered_first, lowered_rest?))
         }
+        AstPattern::List(list_pat) => {
+            let elements: LowerResult<Vec<_>> =
+                list_pat.elements.iter().map(lower_pattern).collect();
+            Ok(Pattern::List {
+                elements: elements?,
+                rest: list_pat.rest.clone(),
+            })
+        }
+        AstPattern::As(inner, binding) => {
+            let lowered_inner = Box::new(lower_pattern(inner)?);
+            Ok(Pattern::As(lowered_inner, binding.clone()))
+        }
+        AstPattern::Handler(handler_pat) => {
+            Ok(Pattern::Handler(lower_handler_pattern(handler_pat)?))
+        }
     }
 }
 
@@ -309,9 +324,12 @@ fn lower_constructor_args(args: &AstConstructorArgs) -> LowerResult<ConstructorA
             let lowered: LowerResult<Vec<_>> = patterns.iter().map(lower_pattern).collect();
             Ok(ConstructorArgs::Positional(lowered?))
         }
-        AstConstructorArgs::Named(fields) => {
+        AstConstructorArgs::Named { fields, rest } => {
             let lowered: LowerResult<Vec<_>> = fields.iter().map(lower_pattern_field).collect();
-            Ok(ConstructorArgs::Named(lowered?))
+            Ok(ConstructorArgs::Named {
+                fields: lowered?,
+                rest: *rest,
+            })
         }
     }
 }
@@ -321,6 +339,26 @@ fn lower_pattern_field(field: &AstPatternField) -> LowerResult<PatternField> {
         name: field.name.clone(),
         pattern: lower_pattern(&field.pattern)?,
     })
+}
+
+fn lower_handler_pattern(
+    handler_pat: &tribute_ast::HandlerPattern,
+) -> LowerResult<crate::hir::HandlerPattern> {
+    match handler_pat {
+        tribute_ast::HandlerPattern::Done(id) => Ok(crate::hir::HandlerPattern::Done(id.clone())),
+        tribute_ast::HandlerPattern::Suspend {
+            operation,
+            args,
+            continuation,
+        } => {
+            let lowered_args: LowerResult<Vec<_>> = args.iter().map(lower_pattern).collect();
+            Ok(crate::hir::HandlerPattern::Suspend {
+                operation: operation.clone(),
+                args: lowered_args?,
+                continuation: continuation.clone(),
+            })
+        }
+    }
 }
 
 #[cfg(test)]

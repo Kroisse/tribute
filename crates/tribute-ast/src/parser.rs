@@ -1124,6 +1124,15 @@ impl TributeParser {
                         let (first, rest) = self.parse_tuple_pattern(child, source)?;
                         return Ok(Pattern::Tuple(Box::new(first), rest));
                     }
+                    "list_pattern" => {
+                        return Ok(Pattern::List(self.parse_list_pattern(child, source)?));
+                    }
+                    "as_pattern" => {
+                        return self.parse_as_pattern(child, source);
+                    }
+                    "handler_pattern" => {
+                        return Ok(Pattern::Handler(self.parse_handler_pattern(child, source)?));
+                    }
                     "identifier_pattern" => {
                         if let Some(id_child) = child.child(0) {
                             let text = id_child.utf8_text(source.as_bytes())?;
@@ -1178,7 +1187,8 @@ impl TributeParser {
                     args = ConstructorArgs::Positional(self.parse_pattern_list(child, source)?);
                 }
                 "pattern_fields" => {
-                    args = ConstructorArgs::Named(self.parse_pattern_fields(child, source)?);
+                    let (fields, rest) = self.parse_pattern_fields(child, source)?;
+                    args = ConstructorArgs::Named { fields, rest };
                 }
                 _ => {}
             }
@@ -1210,17 +1220,26 @@ impl TributeParser {
         &self,
         node: Node,
         source: &str,
-    ) -> Result<Vec<PatternField>, Box<dyn std::error::Error>> {
-        let mut cursor = node.walk();
+    ) -> Result<(Vec<PatternField>, bool), Box<dyn std::error::Error>> {
         let mut fields = Vec::new();
+        let mut has_rest = false;
 
-        for child in node.named_children(&mut cursor) {
-            if child.kind() == "pattern_field" {
-                fields.push(self.parse_pattern_field(child, source)?);
+        // Check all children including anonymous nodes for ".."
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "pattern_field" => {
+                        fields.push(self.parse_pattern_field(child, source)?);
+                    }
+                    ".." => {
+                        has_rest = true;
+                    }
+                    _ => {}
+                }
             }
         }
 
-        Ok(fields)
+        Ok((fields, has_rest))
     }
 
     fn parse_pattern_field(
@@ -1245,9 +1264,168 @@ impl TributeParser {
         }
 
         let name = name.ok_or("Missing pattern field name")?;
-        let pattern = pattern.ok_or("Missing pattern field pattern")?;
+        // For shorthand { name }, use Pattern::Identifier(name)
+        let pattern = pattern.unwrap_or_else(|| Pattern::Identifier(name.clone()));
 
         Ok(PatternField { name, pattern })
+    }
+
+    fn parse_list_pattern(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<ListPattern, Box<dyn std::error::Error>> {
+        let mut elements = Vec::new();
+        let mut rest: Option<Option<Identifier>> = None;
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "pattern" => {
+                        elements.push(self.parse_pattern(child, source)?);
+                    }
+                    "rest_pattern" => {
+                        // rest_pattern contains optional "name" field
+                        let name = child
+                            .child_by_field_name("name")
+                            .map(|n| n.utf8_text(source.as_bytes()).map(|s| s.to_string()))
+                            .transpose()?;
+                        rest = Some(name);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(ListPattern { elements, rest })
+    }
+
+    fn parse_as_pattern(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Pattern, Box<dyn std::error::Error>> {
+        let mut inner_pattern = None;
+        let mut binding = None;
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    // The inner pattern can be any simple pattern
+                    "literal_pattern"
+                    | "wildcard_pattern"
+                    | "constructor_pattern"
+                    | "tuple_pattern"
+                    | "list_pattern"
+                    | "identifier_pattern" => {
+                        // Wrap in a fake "pattern" node parsing
+                        inner_pattern = Some(self.parse_simple_pattern(child, source)?);
+                    }
+                    "identifier" => {
+                        // This could be the binding
+                        if inner_pattern.is_some() && binding.is_none() {
+                            binding = Some(child.utf8_text(source.as_bytes())?.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let inner = inner_pattern.ok_or("Missing pattern in as pattern")?;
+        let bind = binding.ok_or("Missing binding in as pattern")?;
+
+        Ok(Pattern::As(Box::new(inner), bind))
+    }
+
+    fn parse_simple_pattern(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Pattern, Box<dyn std::error::Error>> {
+        match node.kind() {
+            "literal_pattern" => Ok(Pattern::Literal(self.parse_literal_pattern(node, source)?)),
+            "wildcard_pattern" => Ok(Pattern::Wildcard),
+            "constructor_pattern" => Ok(Pattern::Constructor(
+                self.parse_constructor_pattern(node, source)?,
+            )),
+            "tuple_pattern" => {
+                let (first, rest) = self.parse_tuple_pattern(node, source)?;
+                Ok(Pattern::Tuple(Box::new(first), rest))
+            }
+            "list_pattern" => Ok(Pattern::List(self.parse_list_pattern(node, source)?)),
+            "identifier_pattern" => {
+                if let Some(id_child) = node.child(0) {
+                    let text = id_child.utf8_text(source.as_bytes())?;
+                    Ok(Pattern::Identifier(text.to_string()))
+                } else {
+                    Err("Invalid identifier pattern".into())
+                }
+            }
+            _ => Err(format!("Unknown simple pattern kind: {}", node.kind()).into()),
+        }
+    }
+
+    fn parse_handler_pattern(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<HandlerPattern, Box<dyn std::error::Error>> {
+        // Check for completion pattern: { result }
+        if let Some(result) = node.child_by_field_name("result") {
+            let name = result.utf8_text(source.as_bytes())?.to_string();
+            return Ok(HandlerPattern::Done(name));
+        }
+
+        // Suspend pattern: { operation(args) -> continuation }
+        let operation_node = node
+            .child_by_field_name("operation")
+            .ok_or("Missing operation in handler pattern")?;
+
+        let operation = self.parse_path_or_identifier(operation_node, source)?;
+
+        let args = if let Some(args_node) = node.child_by_field_name("args") {
+            self.parse_pattern_list(args_node, source)?
+        } else {
+            Vec::new()
+        };
+
+        let continuation_node = node
+            .child_by_field_name("continuation")
+            .ok_or("Missing continuation in handler pattern")?;
+        let continuation = continuation_node.utf8_text(source.as_bytes())?.to_string();
+
+        Ok(HandlerPattern::Suspend {
+            operation,
+            args,
+            continuation,
+        })
+    }
+
+    fn parse_path_or_identifier(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Vec<Identifier>, Box<dyn std::error::Error>> {
+        match node.kind() {
+            "identifier" => Ok(vec![node.utf8_text(source.as_bytes())?.to_string()]),
+            "path_expression" => {
+                let mut segments = Vec::new();
+                for i in 0..node.child_count() {
+                    let Some(child) = node.child(i) else {
+                        continue;
+                    };
+                    if child.kind() != "path_segment" {
+                        continue;
+                    }
+                    if let Some(inner) = child.child(0) {
+                        segments.push(inner.utf8_text(source.as_bytes())?.to_string());
+                    }
+                }
+                Ok(segments)
+            }
+            _ => Err(format!("Unknown operation kind: {}", node.kind()).into()),
+        }
     }
 
     fn parse_interpolated_string(

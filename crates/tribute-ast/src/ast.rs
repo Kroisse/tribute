@@ -269,6 +269,12 @@ pub enum Pattern {
     Constructor(ConstructorPattern),
     /// Tuple pattern: #(a, b), #(x, y, z) - first element + rest (non-empty)
     Tuple(Box<Pattern>, Vec<Pattern>),
+    /// List pattern: [], [a, b, c], [head, ..tail]
+    List(ListPattern),
+    /// As pattern: Some(x) as opt
+    As(Box<Pattern>, Identifier),
+    /// Handler pattern: { result } or { State::get() -> k }
+    Handler(HandlerPattern),
 }
 
 /// Constructor pattern for matching enum variants
@@ -287,14 +293,19 @@ pub enum ConstructorArgs {
     None,
     /// Tuple-style arguments: Some(x), Pair(a, b)
     Positional(Vec<Pattern>),
-    /// Struct-style fields: Ok { value: x }
-    Named(Vec<PatternField>),
+    /// Struct-style fields: Ok { value: x }, User { name, .. }
+    Named {
+        fields: Vec<PatternField>,
+        /// True if `..` is present to ignore remaining fields
+        rest: bool,
+    },
 }
 
 /// A named field in a struct-style constructor pattern
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PatternField {
     pub name: Identifier,
+    /// For shorthand `{ name }`, pattern is `Identifier(name)` (same as field name)
     pub pattern: Pattern,
 }
 
@@ -305,4 +316,29 @@ pub enum LiteralPattern {
     Nil,
     String(String),
     StringInterpolation(StringInterpolation),
+}
+
+/// List pattern: [], [a, b, c], [head, ..tail]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ListPattern {
+    /// Patterns for list elements
+    pub elements: Vec<Pattern>,
+    /// Optional rest pattern: ..tail or just ..
+    pub rest: Option<Option<Identifier>>,
+}
+
+/// Handler pattern for matching effect requests
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum HandlerPattern {
+    /// Completion pattern: { result }
+    Done(Identifier),
+    /// Suspend pattern: { Path::op(args) -> k }
+    Suspend {
+        /// Operation path (e.g., "State::get")
+        operation: Vec<Identifier>,
+        /// Pattern arguments for the operation
+        args: Vec<Pattern>,
+        /// Continuation binding
+        continuation: Identifier,
+    },
 }
