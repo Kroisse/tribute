@@ -759,20 +759,15 @@ user.age     // User::age(user)
 
 ### Setter and Modifier
 
-```
-SetterExpr ::= Expression '.' Identifier '::set' '(' Expression ')'
-ModifierExpr ::= Expression '.' Identifier '::modify' '(' Expression ')'
-```
-
-**예시:**
+Struct 필드에 대해 자동 생성되는 함수들 (별도 문법 없음, UFCS로 호출):
 
 ```rust
-// 생성되는 함수:
+// 자동 생성되는 함수:
 // User::name::set    : fn(User, String) -> User
 // User::name::modify : fn(User, fn(String) -> String) -> User
 
-user.name::set("Jane")
-user.age::modify(fn(n) n + 1)
+user.name::set("Jane")              // UFCS: User::name::set(user, "Jane")
+user.age::modify(fn(n) n + 1)       // UFCS: User::age::modify(user, ...)
 
 // 체이닝
 user
