@@ -1,68 +1,70 @@
 # Tribute Development Plans
 
-This directory contains detailed plans for major features and improvements to the Tribute programming language.
+This directory contains implementation plans for major features.
 
-## Plans Overview
+> **Note**: A new comprehensive language design has been created in `new-plans/` directory.
+> The new design introduces algebraic effects (abilities), row polymorphic types, and a dual-target
+> compiler architecture (Cranelift + WasmGC). Some plans below have been deprecated in favor of the new design.
 
-### 1. [Syntax Modernization](01-syntax-modernization.md) - **Priority: High** ✅ **COMPLETED**
-Transform from Lisp-style S-expressions to a more modern, familiar syntax. This is the foundation for all other improvements and directly impacts user experience.
+## New Design Documents
 
-### 2. [MLIR Compiler Implementation](02-compiler-implementation.md) - **Priority: Medium** 📋 **PLANNED**
-Build a complete compilation pipeline using MLIR/melior to generate native binaries with a custom Tribute dialect. Essential for performance and real-world deployment.
+See **[../new-plans/](../new-plans/)** for the comprehensive language redesign:
 
-#### 2.01. [HIR to MLIR Lowering](02.01-hir-to-mlir.md) - **Priority: High** 📋 **PLANNED**
-Foundation step: implement translation from HIR to custom MLIR dialect, establishing the IR used by both interpreter and compiler.
+| Document | Description |
+|----------|-------------|
+| [tribute-design.md](../new-plans/tribute-design.md) | Overall language design overview |
+| [tribute-types.md](../new-plans/tribute-types.md) | Type system (struct/enum, UFCS) |
+| [tribute-abilities.md](../new-plans/tribute-abilities.md) | Ability (algebraic effects) system |
+| [tribute-modules.md](../new-plans/tribute-modules.md) | Module system and name resolution |
+| [tribute-type-inference.md](../new-plans/tribute-type-inference.md) | Type inference with effect rows |
+| [tribute-implementation.md](../new-plans/tribute-implementation.md) | Implementation strategy |
 
-#### 2.02. [MLIR Interpreter](02.02-mlir-interpreter.md) - **Priority: Medium-High** 📋 **PLANNED**
-Validation step: implement MLIR interpreter to test dialect and optimization passes before native compilation.
+---
 
-### 3. [LSP Implementation](03-lsp-implementation.md) - **Priority: Medium**
-Create Language Server Protocol support for IDE integration. Critical for developer productivity and adoption.
+## Legacy Plans
 
-### 4. [Static Type System](04-static-type-system.md) - **Priority: Medium-High**
-Add gradual static typing with type inference. Strongly recommended before compiler implementation for better performance and simpler codegen.
+### Completed
 
-## Recommended Implementation Order
+| Plan | Status |
+|------|--------|
+| [01-syntax-modernization.md](01-syntax-modernization.md) | ✅ **COMPLETED** |
+| [01.01-string-interpolation.md](01.01-string-interpolation.md) | ✅ **COMPLETED** |
 
-1. **Phase 1: Syntax Modernization** ✅ **COMPLETED**
-   - Start immediately as it affects all other work
-   - Can be done incrementally with backward compatibility
+### Active (Transitioning)
 
-2. **Phase 2: MLIR Foundation**
-   - **HIR to MLIR (02.01)**: Establish dialect and translation layer
-   - **MLIR Interpreter (02.02)**: Validate dialect with real execution
-   - **Native Compilation (02)**: Build on proven MLIR infrastructure
-   - Three-step incremental approach minimizes risk
+| Plan | Status | Notes |
+|------|--------|-------|
+| [02-compiler-implementation.md](02-compiler-implementation.md) | 🔄 **TRANSITIONING** | Current Cranelift work continues; new design expands scope |
+| [02.02-cranelift-completion.md](02.02-cranelift-completion.md) | 🚧 **IN PROGRESS** | Active Cranelift implementation |
 
-3. **Phase 3: Developer Experience**
-   - **LSP (03)**: Leverage MLIR for better language analysis
-   - **Type System (04)**: Add as optimization layer over MLIR
+### Deprecated
 
-4. **Phase 4: Advanced Features**
-   - Standard library, package manager
-   - Advanced compiler optimizations
-   - Effect systems and advanced types
+| Plan | Status | Superseded By |
+|------|--------|---------------|
+| [02.01-hir-to-mlir.md](02.01-hir-to-mlir.md) | ❌ **DEPRECATED** | `new-plans/tribute-implementation.md` |
+| [02.02-mlir-interpreter.md](02.02-mlir-interpreter.md) | ❌ **DEPRECATED** | Cranelift approach |
+| [04-static-type-system.md](04-static-type-system.md) | ❌ **DEPRECATED** | `new-plans/tribute-type-inference.md` |
 
-## Cross-Cutting Concerns
+### Planned (May Need Updates)
 
-- **Testing**: Each feature needs comprehensive test coverage
-- **Documentation**: Update docs as features are implemented
-- **Performance**: Monitor compilation and runtime performance
-- **Compatibility**: Maintain backward compatibility where possible
-- **Error Messages**: Focus on helpful, actionable error reporting
+| Plan | Status | Notes |
+|------|--------|-------|
+| [03-lsp-implementation.md](03-lsp-implementation.md) | 📋 **PLANNED** | May need updates for new type/ability system |
+| [05-standard-library.md](05-standard-library.md) | 📋 **PLANNED** | |
+| [06-package-manager.md](06-package-manager.md) | 📋 **PLANNED** | |
+| [07-testing-framework.md](07-testing-framework.md) | 📋 **PLANNED** | |
+| [08-documentation-system.md](08-documentation-system.md) | 📋 **PLANNED** | |
 
-## Resource Requirements
+---
 
-- **Syntax**: 2-3 months with Tree-sitter expertise ✅ **COMPLETED**
-- **HIR to MLIR**: 2-3 weeks with MLIR basics
-- **MLIR Interpreter**: 2-3 weeks building on established dialect
-- **Native Compiler**: 3-4 months with MLIR/LLVM knowledge  
-- **LSP**: 3-4 months with IDE integration experience
-- **Types**: 3-5 months with type theory background
+## Implementation Roadmap
 
-## Next Steps
+### Current Focus
+1. Complete Cranelift compiler (Plan 02.02) for basic language features
+2. Integrate new language design (new-plans/) for ability system and advanced types
 
-1. Review and refine each plan
-2. Set up tracking for implementation progress
-3. Begin with syntax modernization prototype
-4. Recruit contributors with relevant expertise
+### Future Phases
+1. **Ability System**: Implement algebraic effects with evidence passing
+2. **Static Types**: Row polymorphic effect types with bidirectional inference
+3. **WasmGC Target**: Add WebAssembly compilation with Stack Switching
+4. **Developer Tools**: LSP, package manager, documentation

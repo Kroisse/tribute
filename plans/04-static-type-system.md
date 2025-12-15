@@ -1,6 +1,21 @@
 # Static Type System Plan
 
-## Overview
+**Status**: ❌ **DEPRECATED** - Superseded by new language design
+**Superseded By**: [../new-plans/tribute-type-inference.md](../new-plans/tribute-type-inference.md), [../new-plans/tribute-types.md](../new-plans/tribute-types.md)
+**Deprecation Date**: 2024-12-15
+**Reason**: New design includes row polymorphic effect typing and ability (algebraic effects) system integration
+
+> ⚠️ **This plan has been deprecated in favor of the new comprehensive language design.**
+> See `new-plans/` directory for the updated type system design that includes:
+> - Row polymorphic effect types (`fn(a) ->{E} b`)
+> - Ability (algebraic effects) system
+> - struct/enum type declarations
+> - UFCS (Uniform Function Call Syntax)
+> - Type inference with effect inference
+
+---
+
+## Original Overview (DEPRECATED)
 Add a gradual static type system to Tribute using bidirectional type checking, allowing optional type annotations while maintaining compatibility with untyped code.
 
 ## Priority: Medium (3/4)
