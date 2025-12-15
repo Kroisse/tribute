@@ -311,7 +311,9 @@ enum Expr {
 ```
 Type ::= TypePath TypeArgs?
        | FunctionType
-       | '(' Type ')'
+       | TupleType
+
+TupleType ::= '#(' TypeList? ')'              // #(Int, String, Float)
 
 TypePath ::= (PathSegment '::')* TypeId
 TypeArgs ::= '(' Type (',' Type)* ','? ')'
@@ -335,6 +337,10 @@ String
 List(Int)
 Option(String)
 Result(Int, String)
+
+#(Int, String)                // 2-tuple (pair)
+#(Int, String, Float)         // 3-tuple
+Nil                           // unit type (#() 대신 사용)
 
 fn(Int, Int) -> Int           // 암묵적 effect polymorphic
 fn(Int) ->{} Int              // 순수 함수
@@ -481,6 +487,7 @@ PrimaryExpr ::= Literal
               | Path
               | Block                             // { expr } 로 그룹화
               | ListExpr
+              | TupleExpr
               | RecordExpr
               | OperatorFn
               | Lambda
@@ -488,6 +495,7 @@ PrimaryExpr ::= Literal
               | HandleExpr
 
 ListExpr ::= '[' ExprList? ']'
+TupleExpr ::= '#(' ExprList? ')'          // #(1, "hello", 3.14)
 OperatorFn ::= '(' Operator ')'           // (+), (<>)
              | '(' QualifiedOp ')'        // (Int::+), (String::<>)
 ```
@@ -687,6 +695,7 @@ Pattern ::= LiteralPattern
           | VariantPattern
           | RecordPattern
           | ListPattern
+          | TuplePattern
           | HandlerPattern
 
 LiteralPattern ::= Number | String | Rune
@@ -696,6 +705,7 @@ VariantPattern ::= TypeId ('(' PatternList ')' | '{' RecordPatternFields '}')?
 RecordPattern ::= TypeId '{' RecordPatternFields '}'
 ListPattern ::= '[' PatternList? ']'
               | '[' PatternList ',' '..' Identifier? ']'    // [head, ..tail] or [head, ..]
+TuplePattern ::= '#(' PatternList? ')'
 HandlerPattern ::= '{' HandlerCase '}'
 HandlerCase ::= Identifier                                  // completion: { result }
               | Path '(' PatternList? ')' '->' Identifier   // suspend: { Op(args) -> k }
@@ -737,6 +747,10 @@ Point { x, y: y_coord }     // 이름 변경
 [a, b, c]                   // 정확히 3개
 [head, ..tail]              // head + 나머지
 [first, second, ..]         // 처음 두 개만
+
+// Tuple pattern
+#(a, b)                     // pair
+#(x, _, z)                  // 일부만 바인딩
 
 // Handler pattern (Request 타입 매칭)
 { result }                   // Done(result) 매칭
@@ -916,6 +930,7 @@ fn main() ->{Console} Nil {
 | ------------------------ | ------------------------------ |
 | `Int`, `String`, ...     | 기본 타입                      |
 | `List(a)`, `Option(Int)` | 제네릭 타입                    |
+| `#(Int, String)`         | Tuple 타입                     |
 | `fn(a) -> b`             | 함수 타입 (암묵적 polymorphic) |
 | `fn(a) ->{} b`           | 순수 함수 타입                 |
 | `fn(a) ->{E} b`          | Effect E를 수행하는 함수       |
@@ -935,6 +950,7 @@ fn main() ->{Console} Nil {
 | `T { f: v }`          | Record construction    |
 | `T { ..x, f: v }`     | Record update (spread) |
 | `[a, b, c]`           | List literal           |
+| `#(a, b, c)`          | Tuple literal          |
 | `a <> b`              | Concatenation          |
 | `a T::<> b`           | Qualified operator     |
 | `(+)`, `(T::<>)`      | Operator as function   |
@@ -950,6 +966,7 @@ fn main() ->{Console} Nil {
 | `Ok { value }`     | Variant (named)                |
 | `T { f, .. }`      | Record (나머지 무시)           |
 | `[a, b, c]`        | List (정확히 일치)             |
+| `#(a, b, c)`       | Tuple                          |
 | `[h, ..t]`         | List (head + tail)             |
 | `{ result }`       | Handler: Request::Done 매칭    |
 | `{ Op(x) -> k }`   | Handler: Request::Suspend 매칭 |
