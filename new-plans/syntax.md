@@ -22,6 +22,7 @@ A?          선택적 (0개 또는 1개)
 
 ```
 fn let const struct enum ability mod pub use case handle if as
+True False Nil
 ```
 
 **Note:** `if`는 guard 문법에서만 사용 (독립적인 if expression 없음)
@@ -91,6 +92,12 @@ BytesInterpolation  ::= '\{' Expression '}'   // Expression은 Bytes 타입
 // Rune (Unicode codepoint)
 Rune       ::= '?' (PrintableChar | RuneEscape)
 RuneEscape ::= '\' ('n' | 'r' | 't' | '0' | '\' | 'x' HexDigit{2} | 'u' HexDigit{4})
+
+// Bool / Nil (키워드)
+Bool       ::= 'True' | 'False'
+Unit       ::= 'Nil'
+
+Literal    ::= Number | String | Bytes | Rune | Bool | Unit
 
 Identifier ::= (Letter | '_') (Letter | Digit | '_')*
 TypeId     ::= UpperLetter (Letter | Digit | '_')*   // 타입명은 대문자 시작
@@ -741,8 +748,11 @@ Pattern ::= LiteralPattern
           | ListPattern
           | TuplePattern
           | HandlerPattern
+          | AsPattern
 
-LiteralPattern ::= Number | String | Rune
+AsPattern ::= Pattern 'as' Identifier        // 전체를 바인딩
+
+LiteralPattern ::= Number | String | Rune | 'True' | 'False' | 'Nil'
 WildcardPattern ::= '_'
 IdentifierPattern ::= Identifier
 VariantPattern ::= TypeId ('(' PatternList ')' | '{' RecordPatternFields '}')?
@@ -795,6 +805,11 @@ Point { x, y: y_coord }     // 이름 변경
 // Tuple pattern
 #(a, b)                     // pair
 #(x, _, z)                  // 일부만 바인딩
+
+// As pattern (전체 바인딩)
+Some(x) as opt              // x에 내부값, opt에 전체
+[head, ..tail] as list      // head, tail, list 모두 바인딩
+User { name, .. } as user   // name과 전체 user 바인딩
 
 // Handler pattern (Request 타입 매칭)
 { result }                   // Done(result) 매칭
@@ -1012,5 +1027,6 @@ fn main() ->{Console} Nil {
 | `[a, b, c]`        | List (정확히 일치)             |
 | `#(a, b, c)`       | Tuple                          |
 | `[h, ..t]`         | List (head + tail)             |
+| `pat as x`         | As (전체 바인딩)               |
 | `{ result }`       | Handler: Request::Done 매칭    |
 | `{ Op(x) -> k }`   | Handler: Request::Suspend 매칭 |
