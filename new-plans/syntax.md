@@ -44,7 +44,7 @@ type where in do
 ==  !=  <  >  <=  >=
 
 // 논리
-&&  ||  !
+&&  ||
 
 // 기타
 =  ->  ::  .  ,  ;  :  |  <>
@@ -246,11 +246,10 @@ std::io::Console::println
 ```
 ConstDecl ::= 'pub'? 'const' Identifier (':' Type)? '=' ConstExpr
 
-ConstExpr ::= Literal
+ConstExpr ::= Literal                        // -1은 Int 리터럴로 처리
             | Path                           // 다른 상수 참조
             | ConstExpr BinOp ConstExpr      // 상수 폴딩
-            | '-' ConstExpr                  // 단항 마이너스
-            | '(' ConstExpr ')'
+            | '{' ConstExpr '}'              // 그룹화
 ```
 
 **Note:** 함수 호출은 const 표현식에서 허용되지 않음 (const fn 없음)
@@ -681,6 +680,16 @@ a Int::+ b                      // Int::+ 명시
 xs.fold(0, (+))                 // 합계
 xs.fold("", (String::<>))       // 문자열 연결
 numbers.reduce((Int::*))        // 곱셈
+```
+
+**단항 연산 (UFCS로 처리):**
+
+단항 연산자 없음. 모든 단항 연산은 UFCS 메서드로 처리:
+
+```rust
+x.negate      // -x (숫자 부정)
+flag.not      // !flag (논리 부정)
+bits.bit_not  // ~bits (비트 부정)
 ```
 
 ### Case Expression
