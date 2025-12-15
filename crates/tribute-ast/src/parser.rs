@@ -228,6 +228,33 @@ impl TributeParser {
                     span,
                 ))
             }
+            "use_declaration" => {
+                let mut path = None;
+                let mut is_pub = false;
+
+                for i in 0..node.child_count() {
+                    if let Some(child) = node.child(i) {
+                        match child.kind() {
+                            "keyword_pub" => {
+                                is_pub = true;
+                            }
+                            "use_path" => {
+                                path = Some(self.parse_use_path(child, source)?);
+                            }
+                            _ => {} // Skip other tokens
+                        }
+                    }
+                }
+
+                let path = path.ok_or("Missing use path")?;
+                let span = Span::new(node.start_byte(), node.end_byte());
+
+                Ok(Item::new(
+                    db,
+                    ItemKind::Use(UseDeclaration::new(db, path, is_pub, span)),
+                    span,
+                ))
+            }
             _ => Err(format!("Unknown item kind: {}", node.kind()).into()),
         }
     }
@@ -248,6 +275,59 @@ impl TributeParser {
         }
 
         Ok(parameters)
+    }
+
+    fn parse_use_path(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<UsePath, Box<dyn std::error::Error>> {
+        let mut segments = Vec::new();
+        let mut group = None;
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "identifier" | "use_path_segment" => {
+                        // use_path_segment contains an identifier
+                        let text = if child.kind() == "use_path_segment" {
+                            if let Some(id_child) = child.child(0) {
+                                id_child.utf8_text(source.as_bytes())?
+                            } else {
+                                continue;
+                            }
+                        } else {
+                            child.utf8_text(source.as_bytes())?
+                        };
+                        segments.push(text.to_string());
+                    }
+                    "use_group" => {
+                        group = Some(self.parse_use_group(child, source)?);
+                    }
+                    _ => {} // Skip :: and other tokens
+                }
+            }
+        }
+
+        Ok(UsePath { segments, group })
+    }
+
+    fn parse_use_group(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Vec<Identifier>, Box<dyn std::error::Error>> {
+        let mut items = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i)
+                && child.kind() == "identifier"
+            {
+                items.push(child.utf8_text(source.as_bytes())?.to_string());
+            }
+        }
+
+        Ok(items)
     }
 
     fn parse_type_parameters(

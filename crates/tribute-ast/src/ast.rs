@@ -20,10 +20,28 @@ pub struct Item<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 #[non_exhaustive]
 pub enum ItemKind<'db> {
+    Use(UseDeclaration<'db>),
     Function(FunctionDefinition<'db>),
     Struct(StructDefinition<'db>),
     Enum(EnumDefinition<'db>),
     Const(ConstDefinition<'db>),
+}
+
+/// Use declaration: use std::io, use std::collections::{List, Map}
+#[salsa::tracked(debug)]
+pub struct UseDeclaration<'db> {
+    pub path: UsePath,
+    pub is_pub: bool,
+    pub span: Span,
+}
+
+/// Path in a use declaration
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct UsePath {
+    /// Path segments: ["std", "collections"]
+    pub segments: Vec<Identifier>,
+    /// Optional group of items: {List, Map}
+    pub group: Option<Vec<Identifier>>,
 }
 
 #[salsa::tracked(debug)]

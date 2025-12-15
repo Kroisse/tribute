@@ -593,3 +593,88 @@ pub const VERSION = "0.1.0"
     value: (primary_expression
       (string
         (string_segment)))))
+
+================================================================================
+Simple use declaration
+================================================================================
+
+use std
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (use_declaration
+    (keyword_use)
+    path: (use_path
+      (identifier))))
+
+================================================================================
+Use declaration with path
+================================================================================
+
+use std::io
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (use_declaration
+    (keyword_use)
+    path: (use_path
+      (identifier)
+      (use_path_segment
+        (identifier)))))
+
+================================================================================
+Use declaration with deep path
+================================================================================
+
+use std::collections::HashMap
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (use_declaration
+    (keyword_use)
+    path: (use_path
+      (identifier)
+      (use_path_segment
+        (identifier))
+      (use_path_segment
+        (identifier)))))
+
+================================================================================
+Use declaration with group
+================================================================================
+
+use std::collections::{List, Map, Set}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (use_declaration
+    (keyword_use)
+    path: (use_path
+      (identifier)
+      (use_path_segment
+        (identifier))
+      (use_group
+        (identifier)
+        (identifier)
+        (identifier)))))
+
+================================================================================
+Pub use declaration
+================================================================================
+
+pub use internal::api
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (use_declaration
+    (keyword_pub)
+    (keyword_use)
+    path: (use_path
+      (identifier)
+      (use_path_segment
+        (identifier)))))

@@ -8,10 +8,38 @@ module.exports = grammar({
     source_file: $ => repeat($._item),
 
     _item: $ => choice(
+      $.use_declaration,
       $.function_definition,
       $.struct_declaration,
       $.enum_declaration,
       $.const_declaration
+    ),
+
+    // use std::io
+    // use std::collections::List
+    // use std::math::{sin, cos, tan}
+    // pub use internal::api
+    use_declaration: $ => seq(
+      optional($.keyword_pub),
+      $.keyword_use,
+      field('path', $.use_path)
+    ),
+
+    use_path: $ => seq(
+      $.identifier,
+      repeat(seq('::', $.use_path_segment)),
+      optional(seq('::', $.use_group))
+    ),
+
+    use_path_segment: $ => $.identifier,
+
+    // ::{item1, item2, item3}
+    use_group: $ => seq(
+      '{',
+      $.identifier,
+      repeat(seq(',', $.identifier)),
+      optional(','),
+      '}'
     ),
 
     // struct User { name: String, age: Nat }
@@ -315,6 +343,7 @@ module.exports = grammar({
     keyword_enum: $ => 'enum',
     keyword_const: $ => 'const',
     keyword_pub: $ => 'pub',
+    keyword_use: $ => 'use',
 
     // Comments
     line_comment: $ => token(seq(
