@@ -263,6 +263,8 @@ impl TributeParser {
                     // Logical
                     "&&" => operator = Some(BinaryOperator::And),
                     "||" => operator = Some(BinaryOperator::Or),
+                    // Concatenation
+                    "<>" => operator = Some(BinaryOperator::Concat),
                     _ => {
                         // Try to parse as expression
                         if let Ok(expr) = self.node_to_expr_with_span(child, source) {

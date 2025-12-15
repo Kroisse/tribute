@@ -298,6 +298,22 @@ fn logical_or(args: &[Value]) -> Result<Value, Error> {
     Ok(Value::Number(if result { 1 } else { 0 }))
 }
 
+/// Concatenates two values (String or List).
+fn concat(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("<> requires exactly 2 arguments".into());
+    }
+    match (&args[0], &args[1]) {
+        (Value::String(a), Value::String(b)) => Ok(Value::String(format!("{}{}", a, b))),
+        (Value::List(a), Value::List(b)) => {
+            let mut result = a.clone();
+            result.extend(b.iter().cloned());
+            Ok(Value::List(result))
+        }
+        _ => Err("<> requires two strings or two lists".into()),
+    }
+}
+
 /// Splits a string into a list of substrings using the given delimiter.
 ///
 /// # Arguments
@@ -474,6 +490,8 @@ pub static BUILTINS: LazyLock<HashMap<String, Value>> = LazyLock::new(|| {
         // Logical
         ("&&", logical_and),
         ("||", logical_or),
+        // Concatenation
+        ("<>", concat),
         // String
         ("split", split),
         ("trim_right", trim_right),

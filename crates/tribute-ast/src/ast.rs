@@ -83,6 +83,8 @@ pub enum BinaryOperator {
     // Logical
     And,
     Or,
+    // Concatenation
+    Concat,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

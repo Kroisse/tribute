@@ -150,6 +150,8 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
                 // Logical
                 tribute_ast::BinaryOperator::And => "&&".to_string(),
                 tribute_ast::BinaryOperator::Or => "||".to_string(),
+                // Concatenation
+                tribute_ast::BinaryOperator::Concat => "<>".to_string(),
             };
             Expr::Call {
                 func: Box::new((Expr::Variable(op_name), span)),

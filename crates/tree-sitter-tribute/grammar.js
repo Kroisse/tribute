@@ -55,9 +55,10 @@ module.exports = grammar({
       prec.left(5, seq($._expression, '*', $._expression)),
       prec.left(5, seq($._expression, '/', $._expression)),
       prec.left(5, seq($._expression, '%', $._expression)),
-      // 4: + -
+      // 4: + - <>
       prec.left(4, seq($._expression, '+', $._expression)),
       prec.left(4, seq($._expression, '-', $._expression)),
+      prec.left(4, seq($._expression, '<>', $._expression)),
       // 3: == != < > <= >=
       prec.left(3, seq($._expression, '==', $._expression)),
       prec.left(3, seq($._expression, '!=', $._expression)),
