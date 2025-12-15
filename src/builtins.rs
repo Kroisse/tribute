@@ -196,10 +196,11 @@ fn equal(args: &[Value]) -> Result<Value, Error> {
     let result = match (&args[0], &args[1]) {
         (Value::Number(a), Value::Number(b)) => a == b,
         (Value::String(a), Value::String(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Unit, Value::Unit) => true,
         _ => false,
     };
-    Ok(Value::Number(if result { 1 } else { 0 }))
+    Ok(Value::Bool(result))
 }
 
 /// Checks if two values are not equal.
@@ -210,10 +211,11 @@ fn not_equal(args: &[Value]) -> Result<Value, Error> {
     let result = match (&args[0], &args[1]) {
         (Value::Number(a), Value::Number(b)) => a != b,
         (Value::String(a), Value::String(b)) => a != b,
+        (Value::Bool(a), Value::Bool(b)) => a != b,
         (Value::Unit, Value::Unit) => false,
         _ => true,
     };
-    Ok(Value::Number(if result { 1 } else { 0 }))
+    Ok(Value::Bool(result))
 }
 
 /// Checks if the first number is less than the second.
@@ -222,7 +224,7 @@ fn less_than(args: &[Value]) -> Result<Value, Error> {
         return Err("< requires exactly 2 arguments".into());
     }
     match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(if a < b { 1 } else { 0 })),
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a < b)),
         _ => Err("< requires two numbers".into()),
     }
 }
@@ -233,7 +235,7 @@ fn greater_than(args: &[Value]) -> Result<Value, Error> {
         return Err("> requires exactly 2 arguments".into());
     }
     match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(if a > b { 1 } else { 0 })),
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a > b)),
         _ => Err("> requires two numbers".into()),
     }
 }
@@ -244,7 +246,7 @@ fn less_equal(args: &[Value]) -> Result<Value, Error> {
         return Err("<= requires exactly 2 arguments".into());
     }
     match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(if a <= b { 1 } else { 0 })),
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a <= b)),
         _ => Err("<= requires two numbers".into()),
     }
 }
@@ -255,7 +257,7 @@ fn greater_equal(args: &[Value]) -> Result<Value, Error> {
         return Err(">= requires exactly 2 arguments".into());
     }
     match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(if a >= b { 1 } else { 0 })),
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a >= b)),
         _ => Err(">= requires two numbers".into()),
     }
 }

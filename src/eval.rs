@@ -538,10 +538,63 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
             // Rest patterns should only appear in list contexts
             None
         }
-        Pattern::Constructor { name: _, args: _ } => {
-            // TODO: Constructor pattern matching requires runtime representation of enum values
-            // For now, constructor patterns don't match anything
-            None
+        Pattern::Constructor { name, args } => {
+            // Constructor patterns can match Record values
+            match value {
+                Value::Record(type_name, fields) => {
+                    // Type name must match
+                    if name != type_name {
+                        return None;
+                    }
+                    match args {
+                        tribute_hir::hir::ConstructorArgs::None => {
+                            // Match only if record has no fields
+                            if fields.is_empty() {
+                                Some(Vec::new())
+                            } else {
+                                None
+                            }
+                        }
+                        tribute_hir::hir::ConstructorArgs::Positional(_) => {
+                            // Positional args don't make sense for records
+                            None
+                        }
+                        tribute_hir::hir::ConstructorArgs::Named {
+                            fields: pattern_fields,
+                            rest,
+                        } => {
+                            // Match each pattern field against the record field
+                            let mut bindings = Vec::new();
+                            for pattern_field in pattern_fields {
+                                if let Some(field_value) = fields.get(&pattern_field.name) {
+                                    if let Some(mut field_bindings) =
+                                        match_pattern(field_value, &pattern_field.pattern)
+                                    {
+                                        bindings.append(&mut field_bindings);
+                                    } else {
+                                        return None;
+                                    }
+                                } else {
+                                    // Field not found in record
+                                    return None;
+                                }
+                            }
+                            // If rest is false, ensure all fields are accounted for
+                            if !rest {
+                                let matched_fields: std::collections::HashSet<_> =
+                                    pattern_fields.iter().map(|f| &f.name).collect();
+                                for field_name in fields.keys() {
+                                    if !matched_fields.contains(field_name) {
+                                        return None;
+                                    }
+                                }
+                            }
+                            Some(bindings)
+                        }
+                    }
+                }
+                _ => None,
+            }
         }
         Pattern::Tuple(first, rest) => {
             // Tuple patterns match against list values (tuples are represented as lists)

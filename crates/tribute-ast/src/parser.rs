@@ -976,29 +976,16 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<GuardedBranch, Box<dyn std::error::Error>> {
-        let mut cursor = node.walk();
-        let mut guard = None;
-        let mut value = None;
-
-        for child in node.named_children(&mut cursor) {
-            let field_name = node.field_name_for_child(child.id() as u32);
-            match field_name {
-                Some("guard") => {
-                    guard = Some(self.node_to_expr_with_span(child, source)?);
-                }
-                Some("value") => {
-                    value = Some(self.node_to_expr_with_span(child, source)?);
-                }
-                _ => {}
-            }
-        }
-
-        let guard = guard.ok_or("Missing guard expression")?;
-        let value = value.ok_or("Missing guarded branch value")?;
+        let guard = node
+            .child_by_field_name("guard")
+            .ok_or("Missing guard expression")?;
+        let value = node
+            .child_by_field_name("value")
+            .ok_or("Missing guarded branch value")?;
 
         Ok(GuardedBranch {
-            guard: Some(guard),
-            value,
+            guard: Some(self.node_to_expr_with_span(guard, source)?),
+            value: self.node_to_expr_with_span(value, source)?,
         })
     }
 

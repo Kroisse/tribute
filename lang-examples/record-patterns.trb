@@ -1,0 +1,35 @@
+// Test record pattern matching
+
+fn get_name(user) {
+    case user {
+        User { name, age } -> name
+    }
+}
+
+fn get_age_with_rest(user) {
+    case user {
+        User { age, .. } -> age
+    }
+}
+
+fn describe(user) {
+    case user {
+        User { name, age } if age >= 18 -> "adult"
+        User { name, age } -> "minor"
+    }
+}
+
+fn main() {
+    let alice = User { name: "Alice", age: 30 }
+    let bob = User { name: "Bob", age: 15 }
+
+    // Test basic pattern matching
+    print_line(get_name(alice))
+
+    // Test pattern with rest (..)
+    print_line(get_age_with_rest(alice))
+
+    // Test guard conditions
+    print_line(describe(alice))
+    print_line(describe(bob))
+}
