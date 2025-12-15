@@ -222,6 +222,7 @@ impl TributeParser {
             }
             "binary_expression" => self.parse_binary_expression(node, source),
             "call_expression" => self.parse_call_expression(node, source),
+            "method_call_expression" => self.parse_method_call_expression(node, source),
             "case_expression" => self.parse_case_expression(node, source),
             "list_expression" => self.parse_list_expression(node, source),
             "tuple_expression" => self.parse_tuple_expression(node, source),
@@ -320,6 +321,53 @@ impl TributeParser {
 
         Ok(Expr::Call(CallExpression {
             function,
+            arguments,
+        }))
+    }
+
+    /// Parse UFCS method call: x.f(y) or x.f
+    fn parse_method_call_expression(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut receiver = None;
+        let mut method = None;
+        let mut arguments = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "identifier" => {
+                        // Method name comes after receiver
+                        if receiver.is_some() && method.is_none() {
+                            method = Some(child.utf8_text(source.as_bytes())?.to_string());
+                        }
+                    }
+                    "argument_list" => {
+                        arguments = self.parse_argument_list(child, source)?;
+                    }
+                    "." | "(" | ")" => {
+                        // Skip tokens
+                    }
+                    _ => {
+                        // Try to parse as receiver expression
+                        if receiver.is_none() {
+                            if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                                receiver = Some(Box::new(expr));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let receiver = receiver.ok_or("Missing method call receiver")?;
+        let method = method.ok_or("Missing method name")?;
+
+        Ok(Expr::MethodCall(MethodCallExpression {
+            receiver,
+            method,
             arguments,
         }))
     }

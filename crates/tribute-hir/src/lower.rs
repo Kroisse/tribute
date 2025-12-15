@@ -163,6 +163,16 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
             let args: LowerResult<Vec<_>> = call_expr.arguments.iter().map(lower_expr).collect();
             Expr::Call { func, args: args? }
         }
+        // UFCS: x.f(y, z) -> f(x, y, z)
+        AstExpr::MethodCall(method_call) => {
+            let func = Box::new((Expr::Variable(method_call.method.clone()), span));
+            let receiver = lower_expr(&method_call.receiver)?;
+            let mut args = vec![receiver];
+            for arg in &method_call.arguments {
+                args.push(lower_expr(arg)?);
+            }
+            Expr::Call { func, args }
+        }
         AstExpr::Match(match_expr) => {
             let expr = Box::new(lower_expr(&match_expr.value)?);
             let cases: LowerResult<Vec<_>> = match_expr

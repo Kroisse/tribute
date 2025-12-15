@@ -55,6 +55,7 @@ pub enum Expr {
     Identifier(Identifier),
     Binary(BinaryExpression),
     Call(CallExpression),
+    MethodCall(MethodCallExpression),
     Match(MatchExpression),
     List(Vec<Spanned<Expr>>),
     Tuple(Vec<Spanned<Expr>>),
@@ -104,6 +105,14 @@ pub struct StringSegment {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CallExpression {
     pub function: Identifier,
+    pub arguments: Vec<Spanned<Expr>>,
+}
+
+/// UFCS method call: x.f(y) -> f(x, y), x.f -> f(x)
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MethodCallExpression {
+    pub receiver: Box<Spanned<Expr>>,
+    pub method: Identifier,
     pub arguments: Vec<Spanned<Expr>>,
 }
 

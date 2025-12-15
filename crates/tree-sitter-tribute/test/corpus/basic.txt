@@ -307,3 +307,79 @@ fn test_number(n) {
             value: (primary_expression
               (string
                 (string_segment)))))))))
+
+================================================================================
+UFCS method call with arguments
+================================================================================
+
+fn test() {
+    list.map(fn_double)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (method_call_expression
+          receiver: (primary_expression
+            (identifier))
+          method: (identifier)
+          (argument_list
+            (primary_expression
+              (identifier))))))))
+
+================================================================================
+UFCS method call without arguments
+================================================================================
+
+fn test() {
+    list.len
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (method_call_expression
+          receiver: (primary_expression
+            (identifier))
+          method: (identifier))))))
+
+================================================================================
+Chained UFCS method calls
+================================================================================
+
+fn test() {
+    data.filter(is_valid).map(double).sum
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (method_call_expression
+          receiver: (method_call_expression
+            receiver: (method_call_expression
+              receiver: (primary_expression
+                (identifier))
+              method: (identifier)
+              (argument_list
+                (primary_expression
+                  (identifier))))
+            method: (identifier)
+            (argument_list
+              (primary_expression
+                (identifier))))
+          method: (identifier))))))

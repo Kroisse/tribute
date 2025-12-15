@@ -45,6 +45,7 @@ module.exports = grammar({
     _expression: $ => choice(
       $.binary_expression,
       $.call_expression,
+      $.method_call_expression,
       $.case_expression,
       $.primary_expression
     ),
@@ -77,6 +78,14 @@ module.exports = grammar({
       '(',
       optional($.argument_list),
       ')'
+    )),
+
+    // UFCS: x.f(y) -> f(x, y), x.f -> f(x)
+    method_call_expression: $ => prec.left(10, seq(
+      field('receiver', $._expression),
+      '.',
+      field('method', $.identifier),
+      optional(seq('(', optional($.argument_list), ')'))
     )),
 
     case_expression: $ => seq(
