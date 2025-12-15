@@ -7,7 +7,123 @@ module.exports = grammar({
   rules: {
     source_file: $ => repeat($._item),
 
-    _item: $ => $.function_definition,
+    _item: $ => choice(
+      $.function_definition,
+      $.struct_declaration,
+      $.enum_declaration
+    ),
+
+    // struct User { name: String, age: Nat }
+    // struct Box(a) { value: a }
+    // pub struct Point { x: Int, y: Int }
+    struct_declaration: $ => seq(
+      optional($.keyword_pub),
+      $.keyword_struct,
+      field('name', $.type_identifier),
+      optional(field('type_params', $.type_parameters)),
+      field('body', $.struct_body)
+    ),
+
+    type_parameters: $ => seq(
+      '(',
+      $.identifier,
+      repeat(seq(',', $.identifier)),
+      optional(','),
+      ')'
+    ),
+
+    struct_body: $ => seq(
+      '{',
+      optional($.struct_fields),
+      '}'
+    ),
+
+    struct_fields: $ => seq(
+      $.struct_field,
+      repeat(seq(optional(','), $.struct_field)),
+      optional(',')
+    ),
+
+    struct_field: $ => seq(
+      field('name', $.identifier),
+      ':',
+      field('type', $._type)
+    ),
+
+    // Type reference (simple for now)
+    // Can be: String (type_identifier), a (type_variable), List(a) (generic_type)
+    _type: $ => choice(
+      $.type_identifier,
+      $.type_variable,
+      $.generic_type
+    ),
+
+    // Type variables are lowercase: a, b, elem
+    type_variable: $ => $.identifier,
+
+    // Generic type like List(a) or Option(String)
+    generic_type: $ => seq(
+      $.type_identifier,
+      '(',
+      $._type,
+      repeat(seq(',', $._type)),
+      optional(','),
+      ')'
+    ),
+
+    // Type names start with uppercase: User, String, List
+    type_identifier: $ => /[A-Z][a-zA-Z0-9_]*/,
+
+    // enum Option(a) { None, Some(a) }
+    // enum Result(a, e) { Ok { value: a }, Err { error: e } }
+    // pub enum Status { Active, Inactive }
+    enum_declaration: $ => seq(
+      optional($.keyword_pub),
+      $.keyword_enum,
+      field('name', $.type_identifier),
+      optional(field('type_params', $.type_parameters)),
+      field('body', $.enum_body)
+    ),
+
+    enum_body: $ => seq(
+      '{',
+      optional($.enum_variants),
+      '}'
+    ),
+
+    enum_variants: $ => seq(
+      $.enum_variant,
+      repeat(seq(optional(','), $.enum_variant)),
+      optional(',')
+    ),
+
+    // Variant: None, Some(a), Ok { value: a }
+    enum_variant: $ => seq(
+      field('name', $.type_identifier),
+      optional(field('fields', $.variant_fields))
+    ),
+
+    // Variant fields: tuple (a, b) or struct { name: Type }
+    variant_fields: $ => choice(
+      $.tuple_fields,
+      $.struct_fields_block
+    ),
+
+    // Tuple variant fields: (Int, String)
+    tuple_fields: $ => seq(
+      '(',
+      $._type,
+      repeat(seq(',', $._type)),
+      optional(','),
+      ')'
+    ),
+
+    // Struct variant fields: { name: Type, ... }
+    struct_fields_block: $ => seq(
+      '{',
+      optional($.struct_fields),
+      '}'
+    ),
 
     function_definition: $ => seq(
       $.keyword_fn,
@@ -182,6 +298,9 @@ module.exports = grammar({
     keyword_fn: $ => 'fn',
     keyword_let: $ => 'let',
     keyword_case: $ => 'case',
+    keyword_struct: $ => 'struct',
+    keyword_enum: $ => 'enum',
+    keyword_pub: $ => 'pub',
 
     // Comments
     line_comment: $ => token(seq(

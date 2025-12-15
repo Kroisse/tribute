@@ -98,6 +98,94 @@ impl TributeParser {
                     span,
                 ))
             }
+            "struct_declaration" => {
+                let mut name = None;
+                let mut type_params = Vec::new();
+                let mut fields = Vec::new();
+                let mut is_pub = false;
+
+                for i in 0..node.child_count() {
+                    if let Some(child) = node.child(i) {
+                        match child.kind() {
+                            "keyword_pub" => {
+                                is_pub = true;
+                            }
+                            "type_identifier" => {
+                                if name.is_none() {
+                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                                }
+                            }
+                            "type_parameters" => {
+                                type_params = self.parse_type_parameters(child, source)?;
+                            }
+                            "struct_body" => {
+                                fields = self.parse_struct_body(child, source)?;
+                            }
+                            _ => {} // Skip other tokens
+                        }
+                    }
+                }
+
+                let name = name.ok_or("Missing struct name")?;
+                let span = Span::new(node.start_byte(), node.end_byte());
+
+                Ok(Item::new(
+                    db,
+                    ItemKind::Struct(StructDefinition::new(
+                        db,
+                        name,
+                        type_params,
+                        fields,
+                        is_pub,
+                        span,
+                    )),
+                    span,
+                ))
+            }
+            "enum_declaration" => {
+                let mut name = None;
+                let mut type_params = Vec::new();
+                let mut variants = Vec::new();
+                let mut is_pub = false;
+
+                for i in 0..node.child_count() {
+                    if let Some(child) = node.child(i) {
+                        match child.kind() {
+                            "keyword_pub" => {
+                                is_pub = true;
+                            }
+                            "type_identifier" => {
+                                if name.is_none() {
+                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                                }
+                            }
+                            "type_parameters" => {
+                                type_params = self.parse_type_parameters(child, source)?;
+                            }
+                            "enum_body" => {
+                                variants = self.parse_enum_body(child, source)?;
+                            }
+                            _ => {} // Skip other tokens
+                        }
+                    }
+                }
+
+                let name = name.ok_or("Missing enum name")?;
+                let span = Span::new(node.start_byte(), node.end_byte());
+
+                Ok(Item::new(
+                    db,
+                    ItemKind::Enum(EnumDefinition::new(
+                        db,
+                        name,
+                        type_params,
+                        variants,
+                        is_pub,
+                        span,
+                    )),
+                    span,
+                ))
+            }
             _ => Err(format!("Unknown item kind: {}", node.kind()).into()),
         }
     }
@@ -110,14 +198,275 @@ impl TributeParser {
         let mut parameters = Vec::new();
 
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                if child.kind() == "identifier" {
-                    parameters.push(child.utf8_text(source.as_bytes())?.to_string());
-                }
+            if let Some(child) = node.child(i)
+                && child.kind() == "identifier"
+            {
+                parameters.push(child.utf8_text(source.as_bytes())?.to_string());
             }
         }
 
         Ok(parameters)
+    }
+
+    fn parse_type_parameters(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Vec<Identifier>, Box<dyn std::error::Error>> {
+        let mut params = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i)
+                && child.kind() == "identifier"
+            {
+                params.push(child.utf8_text(source.as_bytes())?.to_string());
+            }
+        }
+
+        Ok(params)
+    }
+
+    fn parse_struct_body(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Vec<StructField>, Box<dyn std::error::Error>> {
+        let mut fields = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i)
+                && child.kind() == "struct_fields"
+            {
+                fields = self.parse_struct_fields(child, source)?;
+            }
+        }
+
+        Ok(fields)
+    }
+
+    fn parse_struct_fields(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Vec<StructField>, Box<dyn std::error::Error>> {
+        let mut fields = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i)
+                && child.kind() == "struct_field"
+            {
+                fields.push(self.parse_struct_field(child, source)?);
+            }
+        }
+
+        Ok(fields)
+    }
+
+    fn parse_struct_field(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<StructField, Box<dyn std::error::Error>> {
+        let mut name = None;
+        let mut ty = None;
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "identifier" => {
+                        if name.is_none() {
+                            name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                        }
+                    }
+                    "type_identifier" | "type_variable" | "generic_type" => {
+                        ty = Some(self.parse_type_ref(child, source)?);
+                    }
+                    _ => {} // Skip colon
+                }
+            }
+        }
+
+        let name = name.ok_or("Missing field name")?;
+        let ty = ty.ok_or("Missing field type")?;
+
+        Ok(StructField { name, ty })
+    }
+
+    fn parse_enum_body(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Vec<EnumVariant>, Box<dyn std::error::Error>> {
+        let mut variants = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i)
+                && child.kind() == "enum_variants"
+            {
+                variants = self.parse_enum_variants(child, source)?;
+            }
+        }
+
+        Ok(variants)
+    }
+
+    fn parse_enum_variants(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Vec<EnumVariant>, Box<dyn std::error::Error>> {
+        let mut variants = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i)
+                && child.kind() == "enum_variant"
+            {
+                variants.push(self.parse_enum_variant(child, source)?);
+            }
+        }
+
+        Ok(variants)
+    }
+
+    fn parse_enum_variant(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<EnumVariant, Box<dyn std::error::Error>> {
+        let mut name = None;
+        let mut fields = None;
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "type_identifier" => {
+                        if name.is_none() {
+                            name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                        }
+                    }
+                    "variant_fields" => {
+                        fields = Some(self.parse_variant_fields(child, source)?);
+                    }
+                    _ => {} // Skip other tokens
+                }
+            }
+        }
+
+        let name = name.ok_or("Missing variant name")?;
+
+        Ok(EnumVariant { name, fields })
+    }
+
+    fn parse_variant_fields(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<VariantFields, Box<dyn std::error::Error>> {
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "tuple_fields" => {
+                        return self.parse_tuple_fields(child, source);
+                    }
+                    "struct_fields_block" => {
+                        return self.parse_struct_fields_block(child, source);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Err("Empty variant fields".into())
+    }
+
+    fn parse_tuple_fields(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<VariantFields, Box<dyn std::error::Error>> {
+        let mut types = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "type_identifier" | "type_variable" | "generic_type" => {
+                        types.push(self.parse_type_ref(child, source)?);
+                    }
+                    _ => {} // Skip parens and commas
+                }
+            }
+        }
+
+        Ok(VariantFields::Tuple(types))
+    }
+
+    fn parse_struct_fields_block(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<VariantFields, Box<dyn std::error::Error>> {
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i)
+                && child.kind() == "struct_fields"
+            {
+                let fields = self.parse_struct_fields(child, source)?;
+                return Ok(VariantFields::Struct(fields));
+            }
+        }
+
+        Ok(VariantFields::Struct(Vec::new()))
+    }
+
+    #[allow(clippy::only_used_in_recursion)]
+    fn parse_type_ref(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<TypeRef, Box<dyn std::error::Error>> {
+        match node.kind() {
+            "type_identifier" => {
+                let name = node.utf8_text(source.as_bytes())?.to_string();
+                Ok(TypeRef::Named(name))
+            }
+            "type_variable" => {
+                // type_variable contains an identifier child
+                if let Some(child) = node.child(0) {
+                    let name = child.utf8_text(source.as_bytes())?.to_string();
+                    Ok(TypeRef::Variable(name))
+                } else {
+                    Err("Empty type variable".into())
+                }
+            }
+            "generic_type" => {
+                let mut name = None;
+                let mut args = Vec::new();
+
+                for i in 0..node.child_count() {
+                    if let Some(child) = node.child(i) {
+                        match child.kind() {
+                            "type_identifier" => {
+                                if name.is_none() {
+                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                                } else {
+                                    // Nested type_identifier as arg
+                                    args.push(TypeRef::Named(
+                                        child.utf8_text(source.as_bytes())?.to_string(),
+                                    ));
+                                }
+                            }
+                            "type_variable" | "generic_type" => {
+                                args.push(self.parse_type_ref(child, source)?);
+                            }
+                            _ => {} // Skip parens and commas
+                        }
+                    }
+                }
+
+                let name = name.ok_or("Missing generic type name")?;
+                Ok(TypeRef::Generic { name, args })
+            }
+            _ => Err(format!("Unknown type reference kind: {}", node.kind()).into()),
+        }
     }
 
     fn parse_block(&self, node: Node, source: &str) -> Result<Block, Box<dyn std::error::Error>> {
@@ -352,10 +701,10 @@ impl TributeParser {
                     }
                     _ => {
                         // Try to parse as receiver expression
-                        if receiver.is_none() {
-                            if let Ok(expr) = self.node_to_expr_with_span(child, source) {
-                                receiver = Some(Box::new(expr));
-                            }
+                        if receiver.is_none()
+                            && let Ok(expr) = self.node_to_expr_with_span(child, source)
+                        {
+                            receiver = Some(Box::new(expr));
                         }
                     }
                 }
@@ -380,12 +729,11 @@ impl TributeParser {
         let mut arguments = Vec::new();
 
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                if child.kind() != "," {
-                    if let Ok(expr) = self.node_to_expr_with_span(child, source) {
-                        arguments.push(expr);
-                    }
-                }
+            if let Some(child) = node.child(i)
+                && child.kind() != ","
+                && let Ok(expr) = self.node_to_expr_with_span(child, source)
+            {
+                arguments.push(expr);
             }
         }
 
@@ -411,10 +759,10 @@ impl TributeParser {
                     }
                     _ => {
                         // Try to parse as the value expression
-                        if value.is_none() {
-                            if let Ok(expr) = self.node_to_expr_with_span(child, source) {
-                                value = Some(Box::new(expr));
-                            }
+                        if value.is_none()
+                            && let Ok(expr) = self.node_to_expr_with_span(child, source)
+                        {
+                            value = Some(Box::new(expr));
                         }
                     }
                 }
@@ -445,10 +793,10 @@ impl TributeParser {
                     }
                     _ => {
                         // Try to parse as value expression
-                        if value.is_none() {
-                            if let Ok(expr) = self.node_to_expr_with_span(child, source) {
-                                value = Some(expr);
-                            }
+                        if value.is_none()
+                            && let Ok(expr) = self.node_to_expr_with_span(child, source)
+                        {
+                            value = Some(expr);
                         }
                     }
                 }
@@ -738,7 +1086,9 @@ fn main() {
             let result = parse_source_file(db, source_file);
 
             assert_eq!(result.items(db).len(), 1);
-            let ItemKind::Function(func) = result.items(db)[0].kind(db);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db) else {
+                panic!("Expected function")
+            };
             assert_eq!(func.name(db), "main");
             assert_eq!(func.parameters(db).len(), 0);
             assert_eq!(func.body(db).statements.len(), 1);
@@ -764,7 +1114,9 @@ fn add(a, b) {
             let result = parse_source_file(db, source_file);
 
             assert_eq!(result.items(db).len(), 1);
-            let ItemKind::Function(func) = result.items(db)[0].kind(db);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db) else {
+                panic!("Expected function")
+            };
             assert_eq!(func.name(db), "add");
             assert_eq!(func.parameters(db), vec!["a".to_string(), "b".to_string()]);
         });
@@ -793,7 +1145,9 @@ fn test(n) {
             let result = parse_source_file(db, source_file);
 
             assert_eq!(result.items(db).len(), 1);
-            let ItemKind::Function(func) = result.items(db)[0].kind(db);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db) else {
+                panic!("Expected function")
+            };
             if let Statement::Expression((Expr::Match(_), _)) = &func.body(db).statements[0] {
                 // Case expression parsed successfully
             } else {
@@ -969,7 +1323,9 @@ fn test() {
             );
             let result = parse_source_file(db, source_file);
             assert_eq!(result.items(db).len(), 1);
-            let ItemKind::Function(func) = result.items(db)[0].kind(db);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db) else {
+                panic!("Expected function")
+            };
             if let Statement::Expression((Expr::StringInterpolation(interp), _)) =
                 &func.body(db).statements[0]
             {
@@ -991,7 +1347,9 @@ fn test() {
             );
             let result = parse_source_file(db, source_file2);
             assert_eq!(result.items(db).len(), 1);
-            let ItemKind::Function(func) = result.items(db)[0].kind(db);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db) else {
+                panic!("Expected function")
+            };
             if let Statement::Expression((Expr::StringInterpolation(interp), _)) =
                 &func.body(db).statements[0]
             {

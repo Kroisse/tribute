@@ -21,6 +21,8 @@ pub struct Item<'db> {
 #[non_exhaustive]
 pub enum ItemKind<'db> {
     Function(FunctionDefinition<'db>),
+    Struct(StructDefinition<'db>),
+    Enum(EnumDefinition<'db>),
 }
 
 #[salsa::tracked(debug)]
@@ -29,6 +31,63 @@ pub struct FunctionDefinition<'db> {
     pub parameters: Vec<Identifier>,
     pub body: Block,
     pub span: Span,
+}
+
+/// Struct type definition: struct User { name: String, age: Nat }
+#[salsa::tracked(debug)]
+pub struct StructDefinition<'db> {
+    pub name: Identifier,
+    pub type_params: Vec<Identifier>,
+    pub fields: Vec<StructField>,
+    pub is_pub: bool,
+    pub span: Span,
+}
+
+/// Field in a struct definition
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct StructField {
+    pub name: Identifier,
+    pub ty: TypeRef,
+}
+
+/// Enum type definition: enum Option(a) { None, Some(a) }
+#[salsa::tracked(debug)]
+pub struct EnumDefinition<'db> {
+    pub name: Identifier,
+    pub type_params: Vec<Identifier>,
+    pub variants: Vec<EnumVariant>,
+    pub is_pub: bool,
+    pub span: Span,
+}
+
+/// Variant in an enum definition
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct EnumVariant {
+    pub name: Identifier,
+    pub fields: Option<VariantFields>,
+}
+
+/// Fields for an enum variant
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum VariantFields {
+    /// Tuple fields: Some(a), Lit(Int)
+    Tuple(Vec<TypeRef>),
+    /// Struct fields: Ok { value: a }
+    Struct(Vec<StructField>),
+}
+
+/// Type reference in type annotations
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TypeRef {
+    /// Simple type name: String, Nat, User
+    Named(Identifier),
+    /// Type variable: a, b, elem
+    Variable(Identifier),
+    /// Generic type: List(a), Option(String)
+    Generic {
+        name: Identifier,
+        args: Vec<TypeRef>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

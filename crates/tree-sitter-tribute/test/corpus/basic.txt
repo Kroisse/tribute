@@ -383,3 +383,165 @@ fn test() {
               (primary_expression
                 (identifier))))
           method: (identifier))))))
+
+================================================================================
+Simple struct declaration
+================================================================================
+
+struct User {
+    name: String,
+    age: Nat
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (keyword_struct)
+    name: (type_identifier)
+    body: (struct_body
+      (struct_fields
+        (struct_field
+          name: (identifier)
+          type: (type_identifier))
+        (struct_field
+          name: (identifier)
+          type: (type_identifier))))))
+
+================================================================================
+Generic struct declaration
+================================================================================
+
+struct Box(a) {
+    value: a
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (keyword_struct)
+    name: (type_identifier)
+    type_params: (type_parameters
+      (identifier))
+    body: (struct_body
+      (struct_fields
+        (struct_field
+          name: (identifier)
+          type: (type_variable
+            (identifier)))))))
+
+================================================================================
+Pub struct with generic type field
+================================================================================
+
+pub struct Container(a) {
+    items: List(a)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (keyword_pub)
+    (keyword_struct)
+    name: (type_identifier)
+    type_params: (type_parameters
+      (identifier))
+    body: (struct_body
+      (struct_fields
+        (struct_field
+          name: (identifier)
+          type: (generic_type
+            (type_identifier)
+            (type_variable
+              (identifier))))))))
+
+================================================================================
+Simple enum declaration
+================================================================================
+
+enum Status {
+    Active,
+    Inactive
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (keyword_enum)
+    name: (type_identifier)
+    body: (enum_body
+      (enum_variants
+        (enum_variant
+          name: (type_identifier))
+        (enum_variant
+          name: (type_identifier))))))
+
+================================================================================
+Generic enum with tuple variant
+================================================================================
+
+enum Option(a) {
+    None,
+    Some(a)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (keyword_enum)
+    name: (type_identifier)
+    type_params: (type_parameters
+      (identifier))
+    body: (enum_body
+      (enum_variants
+        (enum_variant
+          name: (type_identifier))
+        (enum_variant
+          name: (type_identifier)
+          fields: (variant_fields
+            (tuple_fields
+              (type_variable
+                (identifier)))))))))
+
+================================================================================
+Enum with struct variant fields
+================================================================================
+
+enum Result(a, e) {
+    Ok { value: a },
+    Err { error: e }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (keyword_enum)
+    name: (type_identifier)
+    type_params: (type_parameters
+      (identifier)
+      (identifier))
+    body: (enum_body
+      (enum_variants
+        (enum_variant
+          name: (type_identifier)
+          fields: (variant_fields
+            (struct_fields_block
+              (struct_fields
+                (struct_field
+                  name: (identifier)
+                  type: (type_variable
+                    (identifier)))))))
+        (enum_variant
+          name: (type_identifier)
+          fields: (variant_fields
+            (struct_fields_block
+              (struct_fields
+                (struct_field
+                  name: (identifier)
+                  type: (type_variable
+                    (identifier)))))))))))
