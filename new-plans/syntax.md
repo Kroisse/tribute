@@ -172,6 +172,35 @@ rb"\x00"                    // raw bytes (문자 그대로 \x00)
 ```
 LineComment  ::= '//' .* '\n'
 BlockComment ::= '/*' .* '*/'
+
+// Doc comments
+DocComment   ::= '///' .* '\n'              // 한 줄 문서화
+DocBlock     ::= '/**' .* '*/'              // 블록 문서화
+```
+
+**Doc comment 예시:**
+
+```rust
+/// 두 숫자를 더한다.
+///
+/// ## Examples
+/// ```
+/// add(1, 2)  // 3
+/// ```
+fn add(x: Nat, y: Nat) -> Nat {
+    x + y
+}
+
+/**
+ * 사용자 정보를 담는 구조체.
+ *
+ * name: 사용자 이름
+ * age: 사용자 나이
+ */
+struct User {
+    name: String
+    age: Nat
+}
 ```
 
 ---
