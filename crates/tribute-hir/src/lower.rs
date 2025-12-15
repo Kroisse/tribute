@@ -121,6 +121,8 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
 
     let hir_expr = match ast_expr {
         AstExpr::Number(n) => Expr::Number(*n),
+        AstExpr::Bool(b) => Expr::Bool(*b),
+        AstExpr::Nil => Expr::Nil,
         AstExpr::StringInterpolation(interp) => {
             let segments: LowerResult<Vec<_>> = interp
                 .segments
@@ -215,6 +217,8 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
         AstPattern::Literal(lit) => {
             match lit {
                 LiteralPattern::Number(n) => Ok(Pattern::Literal(Literal::Number(*n))),
+                LiteralPattern::Bool(b) => Ok(Pattern::Literal(Literal::Bool(*b))),
+                LiteralPattern::Nil => Ok(Pattern::Literal(Literal::Nil)),
                 LiteralPattern::String(s) => {
                     // Convert simple string to StringInterpolation without segments
                     Ok(Pattern::Literal(Literal::StringInterpolation(

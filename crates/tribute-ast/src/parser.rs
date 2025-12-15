@@ -678,6 +678,9 @@ impl TributeParser {
                 let text = node.utf8_text(source.as_bytes())?;
                 Ok(Expr::Identifier(text.to_string()))
             }
+            "keyword_true" => Ok(Expr::Bool(true)),
+            "keyword_false" => Ok(Expr::Bool(false)),
+            "keyword_nil" => Ok(Expr::Nil),
             "binary_expression" => self.parse_binary_expression(node, source),
             "call_expression" => self.parse_call_expression(node, source),
             "method_call_expression" => self.parse_method_call_expression(node, source),
@@ -1069,6 +1072,9 @@ impl TributeParser {
                             }
                         }
                     }
+                    "keyword_true" => return Ok(LiteralPattern::Bool(true)),
+                    "keyword_false" => return Ok(LiteralPattern::Bool(false)),
+                    "keyword_nil" => return Ok(LiteralPattern::Nil),
                     _ => {}
                 }
             }

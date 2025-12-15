@@ -10,6 +10,7 @@ pub type BuiltinFn = for<'a> fn(&'a [Value]) -> Result<Value, Error>;
 #[derive(Clone, Debug)]
 pub enum Value {
     Unit,
+    Bool(bool),
     Number(i64),
     String(String),
     List(Vec<Value>),
@@ -24,7 +25,9 @@ pub enum Value {
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Value::Unit => f.write_str("()"),
+            Value::Unit => f.write_str("Nil"),
+            Value::Bool(true) => f.write_str("True"),
+            Value::Bool(false) => f.write_str("False"),
             Value::Number(n) => write!(f, "{}", n),
             Value::String(s) => write!(f, "\"{}\"", s),
             Value::List(items) => {
@@ -232,6 +235,8 @@ fn eval_spanned_expr<'db>(
 
     match expr {
         Number(n) => Ok(Value::Number(n)),
+        Bool(b) => Ok(Value::Bool(b)),
+        Nil => Ok(Value::Unit),
         StringInterpolation(interp) => {
             if interp.segments.is_empty() {
                 // Simple string without interpolation
@@ -339,7 +344,9 @@ fn eval_spanned_expr<'db>(
 /// Convert a Value to its string representation for interpolation
 fn value_to_string(value: &Value) -> Result<String, Error> {
     match value {
-        Value::Unit => Ok("()".to_string()),
+        Value::Unit => Ok("Nil".to_string()),
+        Value::Bool(true) => Ok("True".to_string()),
+        Value::Bool(false) => Ok("False".to_string()),
         Value::Number(n) => Ok(n.to_string()),
         Value::String(s) => Ok(s.clone()),
         Value::List(items) => {
@@ -359,6 +366,8 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
             // Compare literal values
             match (lit, value) {
                 (Literal::Number(a), Value::Number(b)) if a == b => Some(vec![]),
+                (Literal::Bool(a), Value::Bool(b)) if a == b => Some(vec![]),
+                (Literal::Nil, Value::Unit) => Some(vec![]),
                 (Literal::StringInterpolation(interp), Value::String(s)) => {
                     if interp.segments.is_empty() {
                         // Simple string pattern
@@ -389,10 +398,8 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
             match value {
                 Value::List(values) => {
                     // Check if we have a rest pattern
-                    if let Some(last_pattern) = patterns.last() {
-                        if matches!(last_pattern, Pattern::Rest(_)) {
-                            return match_list_with_rest(values, patterns);
-                        }
+                    if let Some(Pattern::Rest(_)) = patterns.last() {
+                        return match_list_with_rest(values, patterns);
                     }
 
                     // Exact length matching

@@ -152,6 +152,8 @@ pub struct LetStatement {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Expr {
     Number(i64),
+    Bool(bool),
+    Nil,
     StringInterpolation(StringInterpolation),
     Identifier(Identifier),
     Binary(BinaryExpression),
@@ -239,6 +241,8 @@ pub enum Pattern {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LiteralPattern {
     Number(i64),
+    Bool(bool),
+    Nil,
     String(String),
     StringInterpolation(StringInterpolation),
 }

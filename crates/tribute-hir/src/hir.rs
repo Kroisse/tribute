@@ -34,6 +34,8 @@ pub struct HirExpr<'db> {
 pub enum Expr {
     /// Literal values
     Number(i64),
+    Bool(bool),
+    Nil,
     StringInterpolation(StringInterpolation),
 
     /// Variable reference
@@ -107,5 +109,7 @@ pub struct StringSegment {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Literal {
     Number(i64),
+    Bool(bool),
+    Nil,
     StringInterpolation(StringInterpolation),
 }

@@ -17,12 +17,13 @@ module.exports = grammar({
     ),
 
     // mod foo
+    // mod Foo
     // mod foo { ... }
     // pub mod foo
     mod_declaration: $ => seq(
       optional($.keyword_pub),
       $.keyword_mod,
-      field('name', $.identifier),
+      field('name', $._name),
       optional(field('body', $.mod_body))
     ),
 
@@ -43,18 +44,18 @@ module.exports = grammar({
     ),
 
     use_path: $ => seq(
-      $.identifier,
+      $._name,
       repeat(seq('::', $.use_path_segment)),
       optional(seq('::', $.use_group))
     ),
 
-    use_path_segment: $ => $.identifier,
+    use_path_segment: $ => $._name,
 
-    // ::{item1, item2, item3}
+    // ::{item1, item2, Item3}
     use_group: $ => seq(
       '{',
-      $.identifier,
-      repeat(seq(',', $.identifier)),
+      $._name,
+      repeat(seq(',', $._name)),
       optional(','),
       '}'
     ),
@@ -248,7 +249,7 @@ module.exports = grammar({
     ),
 
     call_expression: $ => prec(10, seq(
-      field('function', $.identifier),
+      field('function', choice($.identifier, $.path_expression)),
       '(',
       optional($.argument_list),
       ')'
@@ -285,7 +286,10 @@ module.exports = grammar({
 
     literal_pattern: $ => choice(
       $.number,
-      $.string
+      $.string,
+      $.keyword_true,
+      $.keyword_false,
+      $.keyword_nil
     ),
 
     wildcard_pattern: $ => '_',
@@ -298,13 +302,25 @@ module.exports = grammar({
     ),
 
     primary_expression: $ => choice(
+      $.keyword_true,
+      $.keyword_false,
+      $.keyword_nil,
       $.number,
       $.string,
+      $.path_expression,
       $.identifier,
       $.list_expression,
       $.tuple_expression,
       $.block  // { expr } for grouping
     ),
+
+    // Path expression: std::io, Int::to_string, Std::Collections::List
+    // Keywords (True, False, Nil) won't match because identifier is lowercase-only
+    // Note: path_segment wraps identifier/type_identifier due to tree-sitter lexer limitations
+    path_expression: $ => prec.right(11, seq(
+      alias($._name, $.path_segment),
+      repeat1(seq('::', alias($._name, $.path_segment)))
+    )),
 
     // [1, 2, 3]
     list_expression: $ => seq(
@@ -350,7 +366,11 @@ module.exports = grammar({
       '}'
     ),
 
-    identifier: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
+    // Identifiers start with lowercase letter or underscore (values, functions, constants)
+    identifier: $ => /[a-z_][a-zA-Z0-9_]*/,
+
+    // Name can be either identifier or type_identifier (used in paths, modules)
+    _name: $ => choice($.identifier, $.type_identifier),
 
     // Keywords
     keyword_fn: $ => 'fn',
@@ -362,6 +382,9 @@ module.exports = grammar({
     keyword_pub: $ => 'pub',
     keyword_use: $ => 'use',
     keyword_mod: $ => 'mod',
+    keyword_true: $ => token(prec(1, 'True')),
+    keyword_false: $ => token(prec(1, 'False')),
+    keyword_nil: $ => token(prec(1, 'Nil')),
 
     // Comments
     line_comment: $ => token(seq(

@@ -550,7 +550,7 @@ enum Result(a, e) {
 Simple const declaration
 ================================================================================
 
-const MAX_SIZE = 1000
+const max_size = 1000
 
 --------------------------------------------------------------------------------
 
@@ -565,7 +565,7 @@ const MAX_SIZE = 1000
 Const with type annotation
 ================================================================================
 
-const PI: Float = 3.14159
+const pi: Float = 3.14159
 
 --------------------------------------------------------------------------------
 
@@ -581,7 +581,7 @@ const PI: Float = 3.14159
 Pub const with string value
 ================================================================================
 
-pub const VERSION = "0.1.0"
+pub const version = "0.1.0"
 
 --------------------------------------------------------------------------------
 
@@ -640,7 +640,7 @@ use std::collections::HashMap
       (use_path_segment
         (identifier))
       (use_path_segment
-        (identifier)))))
+        (type_identifier)))))
 
 ================================================================================
 Use declaration with group
@@ -658,9 +658,9 @@ use std::collections::{List, Map, Set}
       (use_path_segment
         (identifier))
       (use_group
-        (identifier)
-        (identifier)
-        (identifier)))))
+        (type_identifier)
+        (type_identifier)
+        (type_identifier)))))
 
 ================================================================================
 Pub use declaration
@@ -737,7 +737,7 @@ Nested mod declarations
 
 mod outer {
     mod inner {
-        const VALUE = 100
+        const value = 100
     }
 }
 
@@ -756,4 +756,191 @@ mod outer {
             (keyword_const)
             name: (identifier)
             value: (primary_expression
+              (number))))))))
+
+================================================================================
+True literal
+================================================================================
+
+fn test() {
+    True
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (keyword_true))))))
+
+================================================================================
+False literal
+================================================================================
+
+fn test() {
+    False
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (keyword_false))))))
+
+================================================================================
+Nil literal
+================================================================================
+
+fn test() {
+    Nil
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (keyword_nil))))))
+
+================================================================================
+Case expression with True/False patterns
+================================================================================
+
+fn test(b) {
+    case b {
+        True -> "yes",
+        False -> "no"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    (parameter_list
+      (identifier))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (literal_pattern
+                (keyword_true)))
+            value: (primary_expression
+              (string
+                (string_segment))))
+          (case_arm
+            pattern: (pattern
+              (literal_pattern
+                (keyword_false)))
+            value: (primary_expression
+              (string
+                (string_segment)))))))))
+
+================================================================================
+Case expression with Nil pattern
+================================================================================
+
+fn test(x) {
+    case x {
+        Nil -> "nothing",
+        _ -> "something"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    (parameter_list
+      (identifier))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (literal_pattern
+                (keyword_nil)))
+            value: (primary_expression
+              (string
+                (string_segment))))
+          (case_arm
+            pattern: (pattern
+              (wildcard_pattern))
+            value: (primary_expression
+              (string
+                (string_segment)))))))))
+
+================================================================================
+Path expression with identifier
+================================================================================
+
+fn test() {
+    std::io::print
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (path_expression
+            (path_segment
+              (identifier))
+            (path_segment
+              (identifier))
+            (path_segment
+              (identifier))))))))
+
+================================================================================
+Path expression with type
+================================================================================
+
+fn test() {
+    Int::to_string(42)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (path_expression
+            (path_segment
+              (type_identifier))
+            (path_segment
+              (identifier)))
+          (argument_list
+            (primary_expression
               (number))))))))

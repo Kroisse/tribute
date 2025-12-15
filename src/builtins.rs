@@ -268,6 +268,7 @@ fn logical_and(args: &[Value]) -> Result<Value, Error> {
     let is_truthy = |v: &Value| -> bool {
         match v {
             Value::Number(n) => *n != 0,
+            Value::Bool(b) => *b,
             Value::String(s) => !s.is_empty(),
             Value::List(items) => !items.is_empty(),
             Value::Unit => false,
@@ -276,7 +277,7 @@ fn logical_and(args: &[Value]) -> Result<Value, Error> {
         }
     };
     let result = is_truthy(&args[0]) && is_truthy(&args[1]);
-    Ok(Value::Number(if result { 1 } else { 0 }))
+    Ok(Value::Bool(result))
 }
 
 /// Logical OR - returns 1 if either value is truthy (non-zero), 0 otherwise.
@@ -287,6 +288,7 @@ fn logical_or(args: &[Value]) -> Result<Value, Error> {
     let is_truthy = |v: &Value| -> bool {
         match v {
             Value::Number(n) => *n != 0,
+            Value::Bool(b) => *b,
             Value::String(s) => !s.is_empty(),
             Value::List(items) => !items.is_empty(),
             Value::Unit => false,
@@ -295,7 +297,7 @@ fn logical_or(args: &[Value]) -> Result<Value, Error> {
         }
     };
     let result = is_truthy(&args[0]) || is_truthy(&args[1]);
-    Ok(Value::Number(if result { 1 } else { 0 }))
+    Ok(Value::Bool(result))
 }
 
 /// Concatenates two values (String or List).

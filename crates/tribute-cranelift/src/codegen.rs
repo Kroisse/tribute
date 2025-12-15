@@ -525,6 +525,8 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
     fn lower_expr(&mut self, db: &dyn Db, expr: &Expr) -> CompilationResult<Value> {
         match expr {
             Expr::Number(n) => self.lower_number(*n),
+            Expr::Bool(_) => Err(CompilationError::unsupported_feature("Bool literals")),
+            Expr::Nil => Err(CompilationError::unsupported_feature("Nil literal")),
             Expr::StringInterpolation(s) => self.lower_string_interpolation(db, s),
             Expr::Variable(name) => self.use_variable(name),
             Expr::Call { func, args } => self.lower_call(db, func, args),
@@ -896,6 +898,8 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
                     .call(equals_func, &[match_value, literal_value]);
                 Ok(self.builder.inst_results(comparison)[0])
             }
+            Literal::Bool(_) => Err(CompilationError::unsupported_feature("Bool patterns")),
+            Literal::Nil => Err(CompilationError::unsupported_feature("Nil patterns")),
             Literal::StringInterpolation(s) => {
                 if s.segments.is_empty() {
                     let literal_value = self.lower_string_literal(&s.leading_text)?;
