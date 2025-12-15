@@ -604,8 +604,10 @@ BinaryExpr ::= Expression BinOp Expression
 ```
 CaseExpr ::= 'case' Expression '{' CaseArm+ '}'
 
-CaseArm ::= Pattern Guard? '->' Expression
-Guard ::= 'if' Expression
+CaseArm ::= Pattern '->' Expression           // guard 없음
+          | Pattern GuardedBranch+            // guard 하나 이상
+
+GuardedBranch ::= 'if' Expression '->' Expression
 ```
 
 **예시:**
@@ -616,10 +618,17 @@ case opt {
     None -> 0
 }
 
+// 단일 guard
 case value {
-    0 -> "zero"
     n if n > 0 -> "positive"
-    _ -> "negative"
+    _ -> "non-positive"
+}
+
+// 다중 guard (같은 패턴에 여러 조건)
+case value {
+    n if n > 0 -> "positive"
+      if n < 0 -> "negative"
+    _ -> "zero"
 }
 
 case result {
