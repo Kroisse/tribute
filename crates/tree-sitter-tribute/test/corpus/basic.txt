@@ -1545,3 +1545,243 @@ fn bar(x: a, y) -> a {
       (expression_statement
         (primary_expression
           (identifier))))))
+
+================================================================================
+Constructor pattern without arguments
+================================================================================
+
+fn test(opt) {
+    case opt {
+        None -> "nothing",
+        _ -> "something"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (constructor_pattern
+                name: (type_identifier)))
+            value: (primary_expression
+              (string
+                (string_segment))))
+          (case_arm
+            pattern: (pattern
+              (wildcard_pattern))
+            value: (primary_expression
+              (string
+                (string_segment)))))))))
+
+================================================================================
+Constructor pattern with single argument
+================================================================================
+
+fn test(opt) {
+    case opt {
+        Some(x) -> x,
+        None -> 0
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (constructor_pattern
+                name: (type_identifier)
+                args: (pattern_list
+                  (pattern
+                    (identifier_pattern
+                      (identifier))))))
+            value: (primary_expression
+              (identifier)))
+          (case_arm
+            pattern: (pattern
+              (constructor_pattern
+                name: (type_identifier)))
+            value: (primary_expression
+              (number))))))))
+
+================================================================================
+Constructor pattern with multiple arguments
+================================================================================
+
+fn test(pair) {
+    case pair {
+        Pair(a, b) -> a + b,
+        _ -> 0
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (constructor_pattern
+                name: (type_identifier)
+                args: (pattern_list
+                  (pattern
+                    (identifier_pattern
+                      (identifier)))
+                  (pattern
+                    (identifier_pattern
+                      (identifier))))))
+            value: (binary_expression
+              (primary_expression
+                (identifier))
+              (primary_expression
+                (identifier))))
+          (case_arm
+            pattern: (pattern
+              (wildcard_pattern))
+            value: (primary_expression
+              (number))))))))
+
+================================================================================
+Nested constructor patterns
+================================================================================
+
+fn test(opt) {
+    case opt {
+        Some(Some(x)) -> x,
+        Some(None) -> 0,
+        None -> 0
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (constructor_pattern
+                name: (type_identifier)
+                args: (pattern_list
+                  (pattern
+                    (constructor_pattern
+                      name: (type_identifier)
+                      args: (pattern_list
+                        (pattern
+                          (identifier_pattern
+                            (identifier)))))))))
+            value: (primary_expression
+              (identifier)))
+          (case_arm
+            pattern: (pattern
+              (constructor_pattern
+                name: (type_identifier)
+                args: (pattern_list
+                  (pattern
+                    (constructor_pattern
+                      name: (type_identifier))))))
+            value: (primary_expression
+              (number)))
+          (case_arm
+            pattern: (pattern
+              (constructor_pattern
+                name: (type_identifier)))
+            value: (primary_expression
+              (number))))))))
+
+================================================================================
+Constructor pattern with struct fields
+================================================================================
+
+fn test(result) {
+    case result {
+        Ok { value: x } -> x,
+        Err { error: e } -> e
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (constructor_pattern
+                name: (type_identifier)
+                fields: (pattern_fields
+                  (pattern_field
+                    name: (identifier)
+                    pattern: (pattern
+                      (identifier_pattern
+                        (identifier)))))))
+            value: (primary_expression
+              (identifier)))
+          (case_arm
+            pattern: (pattern
+              (constructor_pattern
+                name: (type_identifier)
+                fields: (pattern_fields
+                  (pattern_field
+                    name: (identifier)
+                    pattern: (pattern
+                      (identifier_pattern
+                        (identifier)))))))
+            value: (primary_expression
+              (identifier))))))))

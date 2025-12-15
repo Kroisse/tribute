@@ -362,6 +362,7 @@ module.exports = grammar({
     pattern: $ => choice(
       $.literal_pattern,
       $.wildcard_pattern,
+      $.constructor_pattern,
       $.identifier_pattern
     ),
 
@@ -374,6 +375,35 @@ module.exports = grammar({
     ),
 
     wildcard_pattern: $ => '_',
+
+    // Constructor pattern: None, Some(x), Pair(a, b), Ok { value: x }
+    constructor_pattern: $ => seq(
+      field('name', $.type_identifier),
+      optional(choice(
+        // Tuple-style: Some(x), Pair(a, b)
+        seq('(', optional(field('args', $.pattern_list)), ')'),
+        // Struct-style: Ok { value: x }
+        seq('{', optional(field('fields', $.pattern_fields)), '}')
+      ))
+    ),
+
+    pattern_list: $ => seq(
+      $.pattern,
+      repeat(seq(',', $.pattern)),
+      optional(',')
+    ),
+
+    pattern_fields: $ => seq(
+      $.pattern_field,
+      repeat(seq(',', $.pattern_field)),
+      optional(',')
+    ),
+
+    pattern_field: $ => seq(
+      field('name', $.identifier),
+      ':',
+      field('pattern', $.pattern)
+    ),
 
     identifier_pattern: $ => $.identifier,
 

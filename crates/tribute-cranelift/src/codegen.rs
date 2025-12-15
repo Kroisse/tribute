@@ -938,7 +938,7 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
                 // No variables to bind
                 Ok(())
             }
-            Pattern::List(_) | Pattern::Rest(_) => {
+            Pattern::List(_) | Pattern::Rest(_) | Pattern::Constructor { .. } => {
                 // TODO: Implement in future iterations
                 Err(CompilationError::unsupported_feature(
                     "complex pattern variable binding",

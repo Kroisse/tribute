@@ -264,6 +264,35 @@ pub enum Pattern {
     Literal(LiteralPattern),
     Wildcard,
     Identifier(Identifier),
+    /// Constructor pattern: Some(x), None, Pair(a, b), Ok { value: x }
+    Constructor(ConstructorPattern),
+}
+
+/// Constructor pattern for matching enum variants
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ConstructorPattern {
+    /// Constructor name (e.g., "Some", "None", "Ok")
+    pub name: Identifier,
+    /// Pattern arguments
+    pub args: ConstructorArgs,
+}
+
+/// Arguments for a constructor pattern
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ConstructorArgs {
+    /// No arguments: None
+    None,
+    /// Tuple-style arguments: Some(x), Pair(a, b)
+    Positional(Vec<Pattern>),
+    /// Struct-style fields: Ok { value: x }
+    Named(Vec<PatternField>),
+}
+
+/// A named field in a struct-style constructor pattern
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PatternField {
+    pub name: Identifier,
+    pub pattern: Pattern,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

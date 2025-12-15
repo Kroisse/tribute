@@ -1,8 +1,9 @@
 use crate::hir::*;
 use std::collections::BTreeMap;
 use tribute_ast::{
-    Expr as AstExpr, FunctionDefinition, ItemKind, LiteralPattern, Pattern as AstPattern, Program,
-    Span, Spanned, Statement,
+    ConstructorArgs as AstConstructorArgs, Expr as AstExpr, FunctionDefinition, ItemKind,
+    LiteralPattern, Pattern as AstPattern, PatternField as AstPatternField, Program, Span, Spanned,
+    Statement,
 };
 
 /// Error type for HIR lowering
@@ -285,7 +286,35 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
         }
         AstPattern::Wildcard => Ok(Pattern::Wildcard),
         AstPattern::Identifier(id) => Ok(Pattern::Variable(id.clone())),
+        AstPattern::Constructor(ctor) => {
+            let args = lower_constructor_args(&ctor.args)?;
+            Ok(Pattern::Constructor {
+                name: ctor.name.clone(),
+                args,
+            })
+        }
     }
+}
+
+fn lower_constructor_args(args: &AstConstructorArgs) -> LowerResult<ConstructorArgs> {
+    match args {
+        AstConstructorArgs::None => Ok(ConstructorArgs::None),
+        AstConstructorArgs::Positional(patterns) => {
+            let lowered: LowerResult<Vec<_>> = patterns.iter().map(lower_pattern).collect();
+            Ok(ConstructorArgs::Positional(lowered?))
+        }
+        AstConstructorArgs::Named(fields) => {
+            let lowered: LowerResult<Vec<_>> = fields.iter().map(lower_pattern_field).collect();
+            Ok(ConstructorArgs::Named(lowered?))
+        }
+    }
+}
+
+fn lower_pattern_field(field: &AstPatternField) -> LowerResult<PatternField> {
+    Ok(PatternField {
+        name: field.name.clone(),
+        pattern: lower_pattern(&field.pattern)?,
+    })
 }
 
 #[cfg(test)]

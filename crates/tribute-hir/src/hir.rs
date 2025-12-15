@@ -92,10 +92,33 @@ pub enum Pattern {
     Variable(Identifier),
     /// Wildcard pattern (matches anything)
     Wildcard,
+    /// Constructor pattern: Some(x), None, Pair(a, b)
+    Constructor {
+        name: Identifier,
+        args: ConstructorArgs,
+    },
     /// List pattern (matches list structure)
     List(Vec<Pattern>),
     /// Rest pattern for matching remaining elements
     Rest(Identifier),
+}
+
+/// Arguments for a constructor pattern
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ConstructorArgs {
+    /// No arguments: None
+    None,
+    /// Tuple-style arguments: Some(x), Pair(a, b)
+    Positional(Vec<Pattern>),
+    /// Struct-style fields: Ok { value: x }
+    Named(Vec<PatternField>),
+}
+
+/// A named field in a struct-style constructor pattern
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PatternField {
+    pub name: Identifier,
+    pub pattern: Pattern,
 }
 
 /// String interpolation in HIR

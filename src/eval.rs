@@ -463,6 +463,11 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
             // Rest patterns should only appear in list contexts
             None
         }
+        Pattern::Constructor { name: _, args: _ } => {
+            // TODO: Constructor pattern matching requires runtime representation of enum values
+            // For now, constructor patterns don't match anything
+            None
+        }
     }
 }
 
