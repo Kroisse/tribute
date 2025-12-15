@@ -380,12 +380,17 @@ HandleExpr ::= 'handle' Expression
 
 `handle expr`은 `Request` 타입의 값을 반환한다. 이 값은 일반적인 `case` 표현식에서 handler pattern으로 매칭할 수 있다.
 
-```rust
-// Request 타입 (내장)
-enum Request(a, e) {
-    Done(a)                              // computation 완료
-    Suspend { op: e, k: fn(?) -> Request(a, e) }  // effect 발생 + continuation
-}
+`Request(e, a)`는 **builtin 타입**이다 (Unison의 `Request {A} T`와 동일한 역할):
+
+- `e`: ability 타입
+- `a`: computation의 결과 타입
+
+개념적으로 다음과 같은 구조이지만, 사용자가 직접 정의하거나 생성할 수 없다:
+
+```
+Request(e, a) ≈
+  | Done(a)                    -- computation 완료
+  | Suspend(op: e, k: ...)     -- effect 발생 + continuation
 ```
 
 **예시:**
@@ -881,13 +886,13 @@ fn main() ->{Console} Nil {
 
 ### Patterns
 
-| 패턴                   | 의미                           |
-| ---------------------- | ------------------------------ |
-| `42`, `"hi"`, `?a`     | Literal (Number, String, Rune) |
-| `_`                    | Wildcard                       |
-| `x`                    | Binding                        |
-| `Some(x)`              | Variant (positional)           |
-| `Ok { value }`         | Variant (named)                |
-| `T { f, .. }`          | Record (나머지 무시)           |
-| `{ result }`           | Handler: Request::Done 매칭    |
-| `{ Op(x) -> k }`       | Handler: Request::Suspend 매칭 |
+| 패턴               | 의미                           |
+| ------------------ | ------------------------------ |
+| `42`, `"hi"`, `?a` | Literal (Number, String, Rune) |
+| `_`                | Wildcard                       |
+| `x`                | Binding                        |
+| `Some(x)`          | Variant (positional)           |
+| `Ok { value }`     | Variant (named)                |
+| `T { f, .. }`      | Record (나머지 무시)           |
+| `{ result }`       | Handler: Request::Done 매칭    |
+| `{ Op(x) -> k }`   | Handler: Request::Suspend 매칭 |
