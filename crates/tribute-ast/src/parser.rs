@@ -23,21 +23,14 @@ impl TributeParser {
 
         let root_node = tree.root_node();
         let mut items = Vec::new();
+        let mut cursor = root_node.walk();
 
-        for i in 0..root_node.child_count() {
-            if let Some(child) = root_node.child(i) {
-                // Skip comments and whitespace
-                if child.kind() == "line_comment"
-                    || child.kind() == "block_comment"
-                    || child.kind() == "ERROR"
-                {
-                    continue;
-                }
-                match self.node_to_item(db, child, source) {
-                    Ok(item) => items.push(item),
-                    Err(e) => return Err(e),
-                }
+        for child in root_node.named_children(&mut cursor) {
+            // Skip comments
+            if child.kind() == "line_comment" || child.kind() == "block_comment" {
+                continue;
             }
+            items.push(self.node_to_item(db, child, source)?);
         }
 
         Ok(Program::new(db, items))
@@ -63,28 +56,27 @@ impl TributeParser {
         node: Node,
         source: &'db str,
     ) -> Result<Item<'db>, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         match node.kind() {
             "function_definition" => {
                 let mut name = None;
                 let mut parameters = Vec::new();
                 let mut body = None;
 
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        match child.kind() {
-                            "identifier" => {
-                                if name.is_none() {
-                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
-                                }
+                for child in node.named_children(&mut cursor) {
+                    match child.kind() {
+                        "identifier" => {
+                            if name.is_none() {
+                                name = Some(child.utf8_text(source.as_bytes())?.to_string());
                             }
-                            "parameter_list" => {
-                                parameters = self.parse_parameter_list(child, source)?;
-                            }
-                            "block" => {
-                                body = Some(self.parse_block(child, source)?);
-                            }
-                            _ => {} // Skip other tokens like 'fn', '(', ')'
                         }
+                        "parameter_list" => {
+                            parameters = self.parse_parameter_list(child, source)?;
+                        }
+                        "block" => {
+                            body = Some(self.parse_block(child, source)?);
+                        }
+                        _ => {}
                     }
                 }
 
@@ -104,25 +96,19 @@ impl TributeParser {
                 let mut fields = Vec::new();
                 let mut is_pub = false;
 
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        match child.kind() {
-                            "keyword_pub" => {
-                                is_pub = true;
-                            }
-                            "type_identifier" => {
-                                if name.is_none() {
-                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
-                                }
-                            }
-                            "type_parameters" => {
-                                type_params = self.parse_type_parameters(child, source)?;
-                            }
-                            "struct_body" => {
-                                fields = self.parse_struct_body(child, source)?;
-                            }
-                            _ => {} // Skip other tokens
+                for child in node.named_children(&mut cursor) {
+                    match child.kind() {
+                        "keyword_pub" => is_pub = true,
+                        "type_identifier" if name.is_none() => {
+                            name = Some(child.utf8_text(source.as_bytes())?.to_string());
                         }
+                        "type_parameters" => {
+                            type_params = self.parse_type_parameters(child, source)?;
+                        }
+                        "struct_body" => {
+                            fields = self.parse_struct_body(child, source)?;
+                        }
+                        _ => {}
                     }
                 }
 
@@ -148,25 +134,19 @@ impl TributeParser {
                 let mut variants = Vec::new();
                 let mut is_pub = false;
 
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        match child.kind() {
-                            "keyword_pub" => {
-                                is_pub = true;
-                            }
-                            "type_identifier" => {
-                                if name.is_none() {
-                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
-                                }
-                            }
-                            "type_parameters" => {
-                                type_params = self.parse_type_parameters(child, source)?;
-                            }
-                            "enum_body" => {
-                                variants = self.parse_enum_body(child, source)?;
-                            }
-                            _ => {} // Skip other tokens
+                for child in node.named_children(&mut cursor) {
+                    match child.kind() {
+                        "keyword_pub" => is_pub = true,
+                        "type_identifier" if name.is_none() => {
+                            name = Some(child.utf8_text(source.as_bytes())?.to_string());
                         }
+                        "type_parameters" => {
+                            type_params = self.parse_type_parameters(child, source)?;
+                        }
+                        "enum_body" => {
+                            variants = self.parse_enum_body(child, source)?;
+                        }
+                        _ => {}
                     }
                 }
 
@@ -192,27 +172,21 @@ impl TributeParser {
                 let mut value = None;
                 let mut is_pub = false;
 
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        match child.kind() {
-                            "keyword_pub" => {
-                                is_pub = true;
-                            }
-                            "identifier" => {
-                                if name.is_none() {
-                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
-                                }
-                            }
-                            "type_identifier" | "type_variable" | "generic_type" => {
-                                ty = Some(self.parse_type_ref(child, source)?);
-                            }
-                            _ => {
-                                // Try to parse as value expression
-                                if value.is_none()
-                                    && let Ok(expr) = self.node_to_expr_with_span(child, source)
-                                {
-                                    value = Some(expr);
-                                }
+                for child in node.named_children(&mut cursor) {
+                    match child.kind() {
+                        "keyword_pub" => is_pub = true,
+                        "identifier" if name.is_none() => {
+                            name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                        }
+                        "type_identifier" | "type_variable" | "generic_type" => {
+                            ty = Some(self.parse_type_ref(child, source)?);
+                        }
+                        _ => {
+                            // Try to parse as value expression
+                            if value.is_none()
+                                && let Ok(expr) = self.node_to_expr_with_span(child, source)
+                            {
+                                value = Some(expr);
                             }
                         }
                     }
@@ -232,17 +206,13 @@ impl TributeParser {
                 let mut path = None;
                 let mut is_pub = false;
 
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        match child.kind() {
-                            "keyword_pub" => {
-                                is_pub = true;
-                            }
-                            "use_path" => {
-                                path = Some(self.parse_use_path(child, source)?);
-                            }
-                            _ => {} // Skip other tokens
+                for child in node.named_children(&mut cursor) {
+                    match child.kind() {
+                        "keyword_pub" => is_pub = true,
+                        "use_path" => {
+                            path = Some(self.parse_use_path(child, source)?);
                         }
+                        _ => {}
                     }
                 }
 
@@ -260,22 +230,16 @@ impl TributeParser {
                 let mut items = None;
                 let mut is_pub = false;
 
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        match child.kind() {
-                            "keyword_pub" => {
-                                is_pub = true;
-                            }
-                            "identifier" => {
-                                if name.is_none() {
-                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
-                                }
-                            }
-                            "mod_body" => {
-                                items = Some(self.parse_mod_body(db, child, source)?);
-                            }
-                            _ => {} // Skip other tokens
+                for child in node.named_children(&mut cursor) {
+                    match child.kind() {
+                        "keyword_pub" => is_pub = true,
+                        "identifier" if name.is_none() => {
+                            name = Some(child.utf8_text(source.as_bytes())?.to_string());
                         }
+                        "mod_body" => {
+                            items = Some(self.parse_mod_body(db, child, source)?);
+                        }
+                        _ => {}
                     }
                 }
 
@@ -297,12 +261,11 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Vec<Identifier>, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut parameters = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i)
-                && child.kind() == "identifier"
-            {
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "identifier" {
                 parameters.push(child.utf8_text(source.as_bytes())?.to_string());
             }
         }
@@ -315,30 +278,25 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<UsePath, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut segments = Vec::new();
         let mut group = None;
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "identifier" | "use_path_segment" => {
-                        // use_path_segment contains an identifier
-                        let text = if child.kind() == "use_path_segment" {
-                            if let Some(id_child) = child.child(0) {
-                                id_child.utf8_text(source.as_bytes())?
-                            } else {
-                                continue;
-                            }
-                        } else {
-                            child.utf8_text(source.as_bytes())?
-                        };
-                        segments.push(text.to_string());
-                    }
-                    "use_group" => {
-                        group = Some(self.parse_use_group(child, source)?);
-                    }
-                    _ => {} // Skip :: and other tokens
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "identifier" => {
+                    segments.push(child.utf8_text(source.as_bytes())?.to_string());
                 }
+                "use_path_segment" => {
+                    // use_path_segment contains an identifier
+                    if let Some(id_child) = child.child(0) {
+                        segments.push(id_child.utf8_text(source.as_bytes())?.to_string());
+                    }
+                }
+                "use_group" => {
+                    group = Some(self.parse_use_group(child, source)?);
+                }
+                _ => {}
             }
         }
 
@@ -350,12 +308,11 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Vec<Identifier>, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut items = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i)
-                && child.kind() == "identifier"
-            {
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "identifier" {
                 items.push(child.utf8_text(source.as_bytes())?.to_string());
             }
         }
@@ -369,20 +326,15 @@ impl TributeParser {
         node: Node,
         source: &'db str,
     ) -> Result<Vec<Item<'db>>, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut items = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                // Skip braces and comments
-                if child.kind() == "{"
-                    || child.kind() == "}"
-                    || child.kind() == "line_comment"
-                    || child.kind() == "block_comment"
-                {
-                    continue;
-                }
-                items.push(self.node_to_item(db, child, source)?);
+        for child in node.named_children(&mut cursor) {
+            // Skip comments
+            if child.kind() == "line_comment" || child.kind() == "block_comment" {
+                continue;
             }
+            items.push(self.node_to_item(db, child, source)?);
         }
 
         Ok(items)
@@ -393,12 +345,11 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Vec<Identifier>, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut params = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i)
-                && child.kind() == "identifier"
-            {
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "identifier" {
                 params.push(child.utf8_text(source.as_bytes())?.to_string());
             }
         }
@@ -411,17 +362,15 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Vec<StructField>, Box<dyn std::error::Error>> {
-        let mut fields = Vec::new();
+        let mut cursor = node.walk();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i)
-                && child.kind() == "struct_fields"
-            {
-                fields = self.parse_struct_fields(child, source)?;
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "struct_fields" {
+                return self.parse_struct_fields(child, source);
             }
         }
 
-        Ok(fields)
+        Ok(Vec::new())
     }
 
     fn parse_struct_fields(
@@ -429,12 +378,11 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Vec<StructField>, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut fields = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i)
-                && child.kind() == "struct_field"
-            {
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "struct_field" {
                 fields.push(self.parse_struct_field(child, source)?);
             }
         }
@@ -447,22 +395,19 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<StructField, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut name = None;
         let mut ty = None;
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "identifier" => {
-                        if name.is_none() {
-                            name = Some(child.utf8_text(source.as_bytes())?.to_string());
-                        }
-                    }
-                    "type_identifier" | "type_variable" | "generic_type" => {
-                        ty = Some(self.parse_type_ref(child, source)?);
-                    }
-                    _ => {} // Skip colon
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "identifier" if name.is_none() => {
+                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
                 }
+                "type_identifier" | "type_variable" | "generic_type" => {
+                    ty = Some(self.parse_type_ref(child, source)?);
+                }
+                _ => {}
             }
         }
 
@@ -477,17 +422,15 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Vec<EnumVariant>, Box<dyn std::error::Error>> {
-        let mut variants = Vec::new();
+        let mut cursor = node.walk();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i)
-                && child.kind() == "enum_variants"
-            {
-                variants = self.parse_enum_variants(child, source)?;
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "enum_variants" {
+                return self.parse_enum_variants(child, source);
             }
         }
 
-        Ok(variants)
+        Ok(Vec::new())
     }
 
     fn parse_enum_variants(
@@ -495,12 +438,11 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Vec<EnumVariant>, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut variants = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i)
-                && child.kind() == "enum_variant"
-            {
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "enum_variant" {
                 variants.push(self.parse_enum_variant(child, source)?);
             }
         }
@@ -513,22 +455,19 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<EnumVariant, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut name = None;
         let mut fields = None;
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "type_identifier" => {
-                        if name.is_none() {
-                            name = Some(child.utf8_text(source.as_bytes())?.to_string());
-                        }
-                    }
-                    "variant_fields" => {
-                        fields = Some(self.parse_variant_fields(child, source)?);
-                    }
-                    _ => {} // Skip other tokens
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "type_identifier" if name.is_none() => {
+                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
                 }
+                "variant_fields" => {
+                    fields = Some(self.parse_variant_fields(child, source)?);
+                }
+                _ => {}
             }
         }
 
@@ -542,17 +481,13 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<VariantFields, Box<dyn std::error::Error>> {
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "tuple_fields" => {
-                        return self.parse_tuple_fields(child, source);
-                    }
-                    "struct_fields_block" => {
-                        return self.parse_struct_fields_block(child, source);
-                    }
-                    _ => {}
-                }
+        let mut cursor = node.walk();
+
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "tuple_fields" => return self.parse_tuple_fields(child, source),
+                "struct_fields_block" => return self.parse_struct_fields_block(child, source),
+                _ => {}
             }
         }
 
@@ -564,16 +499,15 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<VariantFields, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut types = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "type_identifier" | "type_variable" | "generic_type" => {
-                        types.push(self.parse_type_ref(child, source)?);
-                    }
-                    _ => {} // Skip parens and commas
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "type_identifier" | "type_variable" | "generic_type" => {
+                    types.push(self.parse_type_ref(child, source)?);
                 }
+                _ => {}
             }
         }
 
@@ -585,10 +519,10 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<VariantFields, Box<dyn std::error::Error>> {
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i)
-                && child.kind() == "struct_fields"
-            {
+        let mut cursor = node.walk();
+
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "struct_fields" {
                 let fields = self.parse_struct_fields(child, source)?;
                 return Ok(VariantFields::Struct(fields));
             }
@@ -618,27 +552,26 @@ impl TributeParser {
                 }
             }
             "generic_type" => {
+                let mut cursor = node.walk();
                 let mut name = None;
                 let mut args = Vec::new();
 
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        match child.kind() {
-                            "type_identifier" => {
-                                if name.is_none() {
-                                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
-                                } else {
-                                    // Nested type_identifier as arg
-                                    args.push(TypeRef::Named(
-                                        child.utf8_text(source.as_bytes())?.to_string(),
-                                    ));
-                                }
+                for child in node.named_children(&mut cursor) {
+                    match child.kind() {
+                        "type_identifier" => {
+                            if name.is_none() {
+                                name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                            } else {
+                                // Nested type_identifier as arg
+                                args.push(TypeRef::Named(
+                                    child.utf8_text(source.as_bytes())?.to_string(),
+                                ));
                             }
-                            "type_variable" | "generic_type" => {
-                                args.push(self.parse_type_ref(child, source)?);
-                            }
-                            _ => {} // Skip parens and commas
                         }
+                        "type_variable" | "generic_type" => {
+                            args.push(self.parse_type_ref(child, source)?);
+                        }
+                        _ => {}
                     }
                 }
 
@@ -650,27 +583,26 @@ impl TributeParser {
     }
 
     fn parse_block(&self, node: Node, source: &str) -> Result<Block, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut statements = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "let_statement" => {
-                        statements.push(Statement::Let(self.parse_let_statement(child, source)?));
-                    }
-                    "expression_statement" => {
-                        statements.push(Statement::Expression(
-                            self.parse_expression_statement(child, source)?,
-                        ));
-                    }
-                    "line_comment" | "block_comment" | "{" | "}" => {
-                        // Skip comments and block delimiters
-                    }
-                    _ => {
-                        // Try to parse as expression statement
-                        if let Ok(expr) = self.node_to_expr_with_span(child, source) {
-                            statements.push(Statement::Expression(expr));
-                        }
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "let_statement" => {
+                    statements.push(Statement::Let(self.parse_let_statement(child, source)?));
+                }
+                "expression_statement" => {
+                    statements.push(Statement::Expression(
+                        self.parse_expression_statement(child, source)?,
+                    ));
+                }
+                "line_comment" | "block_comment" => {
+                    // Skip comments
+                }
+                _ => {
+                    // Try to parse as expression statement
+                    if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                        statements.push(Statement::Expression(expr));
                     }
                 }
             }
@@ -684,22 +616,19 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<LetStatement, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut name = None;
         let mut value = None;
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "identifier" => {
-                        if name.is_none() {
-                            name = Some(child.utf8_text(source.as_bytes())?.to_string());
-                        }
-                    }
-                    _ => {
-                        // Try to parse as expression
-                        if let Ok(expr) = self.node_to_expr_with_span(child, source) {
-                            value = Some(expr);
-                        }
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "identifier" if name.is_none() => {
+                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
+                }
+                _ => {
+                    // Try to parse as expression
+                    if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                        value = Some(expr);
                     }
                 }
             }
@@ -827,22 +756,19 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut function = None;
         let mut arguments = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "identifier" => {
-                        if function.is_none() {
-                            function = Some(child.utf8_text(source.as_bytes())?.to_string());
-                        }
-                    }
-                    "argument_list" => {
-                        arguments = self.parse_argument_list(child, source)?;
-                    }
-                    _ => {} // Skip other tokens like '(', ')'
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "identifier" if function.is_none() => {
+                    function = Some(child.utf8_text(source.as_bytes())?.to_string());
                 }
+                "argument_list" => {
+                    arguments = self.parse_argument_list(child, source)?;
+                }
+                _ => {}
             }
         }
 
@@ -860,32 +786,28 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut receiver = None;
         let mut method = None;
         let mut arguments = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "identifier" => {
-                        // Method name comes after receiver
-                        if receiver.is_some() && method.is_none() {
-                            method = Some(child.utf8_text(source.as_bytes())?.to_string());
-                        }
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "identifier" => {
+                    // Method name comes after receiver
+                    if receiver.is_some() && method.is_none() {
+                        method = Some(child.utf8_text(source.as_bytes())?.to_string());
                     }
-                    "argument_list" => {
-                        arguments = self.parse_argument_list(child, source)?;
-                    }
-                    "." | "(" | ")" => {
-                        // Skip tokens
-                    }
-                    _ => {
-                        // Try to parse as receiver expression
-                        if receiver.is_none()
-                            && let Ok(expr) = self.node_to_expr_with_span(child, source)
-                        {
-                            receiver = Some(Box::new(expr));
-                        }
+                }
+                "argument_list" => {
+                    arguments = self.parse_argument_list(child, source)?;
+                }
+                _ => {
+                    // Try to parse as receiver expression
+                    if receiver.is_none()
+                        && let Ok(expr) = self.node_to_expr_with_span(child, source)
+                    {
+                        receiver = Some(Box::new(expr));
                     }
                 }
             }
@@ -906,13 +828,11 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Vec<Spanned<Expr>>, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut arguments = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i)
-                && child.kind() != ","
-                && let Ok(expr) = self.node_to_expr_with_span(child, source)
-            {
+        for child in node.named_children(&mut cursor) {
+            if let Ok(expr) = self.node_to_expr_with_span(child, source) {
                 arguments.push(expr);
             }
         }
@@ -925,25 +845,24 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut value = None;
         let mut arms = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "case_arm" => {
-                        arms.push(self.parse_case_arm(child, source)?);
-                    }
-                    "keyword_case" | "{" | "}" => {
-                        // Skip keywords and delimiters
-                    }
-                    _ => {
-                        // Try to parse as the value expression
-                        if value.is_none()
-                            && let Ok(expr) = self.node_to_expr_with_span(child, source)
-                        {
-                            value = Some(Box::new(expr));
-                        }
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "case_arm" => {
+                    arms.push(self.parse_case_arm(child, source)?);
+                }
+                "keyword_case" => {
+                    // Skip keyword
+                }
+                _ => {
+                    // Try to parse as the value expression
+                    if value.is_none()
+                        && let Ok(expr) = self.node_to_expr_with_span(child, source)
+                    {
+                        value = Some(Box::new(expr));
                     }
                 }
             }
@@ -959,25 +878,21 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<MatchArm, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut pattern = None;
         let mut value = None;
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "pattern" => {
-                        pattern = Some(self.parse_pattern(child, source)?);
-                    }
-                    "->" | "," => {
-                        // Skip tokens
-                    }
-                    _ => {
-                        // Try to parse as value expression
-                        if value.is_none()
-                            && let Ok(expr) = self.node_to_expr_with_span(child, source)
-                        {
-                            value = Some(expr);
-                        }
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "pattern" => {
+                    pattern = Some(self.parse_pattern(child, source)?);
+                }
+                _ => {
+                    // Try to parse as value expression
+                    if value.is_none()
+                        && let Ok(expr) = self.node_to_expr_with_span(child, source)
+                    {
+                        value = Some(expr);
                     }
                 }
             }
@@ -994,20 +909,12 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
         let mut elements = Vec::new();
 
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "[" | "]" | "," => {
-                        // Skip brackets and commas
-                    }
-                    _ => {
-                        if let Ok(expr) = self.node_to_expr_with_span(child, source) {
-                            elements.push(expr);
-                        }
-                    }
-                }
+        for child in node.named_children(&mut cursor) {
+            if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                elements.push(expr);
             }
         }
 
