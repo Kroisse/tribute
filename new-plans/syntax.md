@@ -561,7 +561,7 @@ Err { error: "failed" }
 
 ```
 CallExpr ::= Expression '(' ExprList? ')'
-UFCSExpr ::= Expression '.' Identifier CallArgs?
+UFCSExpr ::= Expression '.' Path CallArgs?
 CallArgs ::= '(' ExprList? ')'
            | /* empty - 인자 없으면 괄호 생략 가능 */
 
@@ -572,6 +572,7 @@ ExprList ::= Expression (',' Expression)* ','?
 
 - `x.f(y)` → `f(x, y)` 또는 `T::f(x, y)` (타입 T에서 해소)
 - `x.f` → `f(x)` (인자가 없으면 괄호 생략 가능)
+- `x.a::b(y)` → `a::b(x, y)` (qualified path도 가능)
 
 **예시:**
 
@@ -580,10 +581,14 @@ ExprList ::= Expression (',' Expression)* ','?
 add(1, 2)
 List::map(xs, fn(x) x + 1)
 
-// UFCS
+// UFCS - 단순 식별자
 xs.map(fn(x) x + 1)     // List::map(xs, ...)
 xs.len                   // List::len(xs) - 괄호 생략
 user.name                // User::name(user) - 필드 접근도 UFCS
+
+// UFCS - qualified path
+user.name::set("Jane")   // User::name::set(user, "Jane")
+user.age::modify(fn(n) n + 1)
 
 // 체이닝
 data
