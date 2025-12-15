@@ -37,14 +37,6 @@ See **[../new-plans/](../new-plans/)** for the comprehensive language redesign:
 | [02-compiler-implementation.md](02-compiler-implementation.md) | 🔄 **TRANSITIONING** | Current Cranelift work continues; new design expands scope |
 | [02.02-cranelift-completion.md](02.02-cranelift-completion.md) | 🚧 **IN PROGRESS** | Active Cranelift implementation |
 
-### Deprecated
-
-| Plan | Status | Superseded By |
-|------|--------|---------------|
-| [02.01-hir-to-mlir.md](02.01-hir-to-mlir.md) | ❌ **DEPRECATED** | `new-plans/tribute-implementation.md` |
-| [02.02-mlir-interpreter.md](02.02-mlir-interpreter.md) | ❌ **DEPRECATED** | Cranelift approach |
-| [04-static-type-system.md](04-static-type-system.md) | ❌ **DEPRECATED** | `new-plans/tribute-type-inference.md` |
-
 ### Planned (May Need Updates)
 
 | Plan | Status | Notes |
