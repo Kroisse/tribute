@@ -310,6 +310,15 @@ fn eval_spanned_expr<'db>(
             for case in cases {
                 if let Some(bindings) = match_pattern(&value, &case.pattern) {
                     let mut child_env = env.child(bindings);
+                    // Check guard condition if present
+                    if let Some(guard) = case.guard {
+                        let guard_result = eval_spanned_expr(context, &mut child_env, guard)?;
+                        match guard_result {
+                            Value::Bool(true) => {}         // Guard passed
+                            Value::Bool(false) => continue, // Guard failed, try next case
+                            _ => return Err("guard expression must evaluate to Bool".into()),
+                        }
+                    }
                     return eval_spanned_expr(context, &mut child_env, case.body);
                 }
             }

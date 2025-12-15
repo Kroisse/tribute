@@ -73,6 +73,7 @@ pub enum Expr {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MatchCase {
     pub pattern: Pattern,
+    pub guard: Option<Spanned<Expr>>,
     pub body: Spanned<Expr>,
 }
 

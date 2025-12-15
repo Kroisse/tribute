@@ -944,3 +944,106 @@ fn test() {
           (argument_list
             (primary_expression
               (number))))))))
+
+================================================================================
+Case with single guard
+================================================================================
+
+fn test(n) {
+    case n {
+        x if x > 0 -> "positive",
+        _ -> "non-positive"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    (parameter_list
+      (identifier))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (identifier_pattern
+                (identifier)))
+            (guarded_branch
+              (keyword_if)
+              guard: (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (number)))
+              value: (primary_expression
+                (string
+                  (string_segment)))))
+          (case_arm
+            pattern: (pattern
+              (wildcard_pattern))
+            value: (primary_expression
+              (string
+                (string_segment)))))))))
+
+================================================================================
+Case with multiple guards
+================================================================================
+
+fn test(n) {
+    case n {
+        x if x > 0 -> "positive"
+          if x < 0 -> "negative",
+        _ -> "zero"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    (parameter_list
+      (identifier))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (identifier_pattern
+                (identifier)))
+            (guarded_branch
+              (keyword_if)
+              guard: (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (number)))
+              value: (primary_expression
+                (string
+                  (string_segment))))
+            (guarded_branch
+              (keyword_if)
+              guard: (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (number)))
+              value: (primary_expression
+                (string
+                  (string_segment)))))
+          (case_arm
+            pattern: (pattern
+              (wildcard_pattern))
+            value: (primary_expression
+              (string
+                (string_segment)))))))))

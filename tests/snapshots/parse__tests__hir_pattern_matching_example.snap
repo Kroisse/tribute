@@ -218,6 +218,7 @@ HirProgram {
                                         0,
                                     ),
                                 ),
+                                guard: None,
                                 body: (
                                     StringInterpolation(
                                         StringInterpolation {
@@ -237,6 +238,7 @@ HirProgram {
                                         1,
                                     ),
                                 ),
+                                guard: None,
                                 body: (
                                     StringInterpolation(
                                         StringInterpolation {
@@ -256,6 +258,7 @@ HirProgram {
                                         2,
                                     ),
                                 ),
+                                guard: None,
                                 body: (
                                     StringInterpolation(
                                         StringInterpolation {
@@ -271,6 +274,7 @@ HirProgram {
                             },
                             MatchCase {
                                 pattern: Wildcard,
+                                guard: None,
                                 body: (
                                     StringInterpolation(
                                         StringInterpolation {

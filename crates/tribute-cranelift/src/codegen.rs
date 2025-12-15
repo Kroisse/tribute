@@ -761,6 +761,13 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
             ));
         }
 
+        // Check for guards (not yet supported in codegen)
+        for case in cases {
+            if case.guard.is_some() {
+                return Err(CompilationError::unsupported_feature("pattern guards"));
+            }
+        }
+
         // Evaluate the match expression value
         let match_value = self.lower_expr(db, &expr.0)?;
 

@@ -883,28 +883,70 @@ impl TributeParser {
     ) -> Result<MatchArm, Box<dyn std::error::Error>> {
         let mut cursor = node.walk();
         let mut pattern = None;
-        let mut value = None;
+        let mut branches = Vec::new();
+        let mut simple_value = None;
 
         for child in node.named_children(&mut cursor) {
             match child.kind() {
                 "pattern" => {
                     pattern = Some(self.parse_pattern(child, source)?);
                 }
+                "guarded_branch" => {
+                    branches.push(self.parse_guarded_branch(child, source)?);
+                }
                 _ => {
-                    // Try to parse as value expression
-                    if value.is_none()
+                    // Try to parse as value expression (simple case without guard)
+                    if simple_value.is_none()
                         && let Ok(expr) = self.node_to_expr_with_span(child, source)
                     {
-                        value = Some(expr);
+                        simple_value = Some(expr);
                     }
                 }
             }
         }
 
         let pattern = pattern.ok_or("Missing pattern")?;
-        let value = value.ok_or("Missing case arm value")?;
 
-        Ok(MatchArm { pattern, value })
+        // If we have guarded branches, use them; otherwise use the simple value
+        let branches = if !branches.is_empty() {
+            branches
+        } else {
+            let value = simple_value.ok_or("Missing case arm value")?;
+            vec![GuardedBranch { guard: None, value }]
+        };
+
+        Ok(MatchArm { pattern, branches })
+    }
+
+    fn parse_guarded_branch(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<GuardedBranch, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
+        let mut guard = None;
+        let mut value = None;
+
+        for child in node.named_children(&mut cursor) {
+            let field_name = node.field_name_for_child(child.id() as u32);
+            match field_name {
+                Some("guard") => {
+                    guard = Some(self.node_to_expr_with_span(child, source)?);
+                }
+                Some("value") => {
+                    value = Some(self.node_to_expr_with_span(child, source)?);
+                }
+                _ => {}
+            }
+        }
+
+        let guard = guard.ok_or("Missing guard expression")?;
+        let value = value.ok_or("Missing guarded branch value")?;
+
+        Ok(GuardedBranch {
+            guard: Some(guard),
+            value,
+        })
     }
 
     fn parse_list_expression(

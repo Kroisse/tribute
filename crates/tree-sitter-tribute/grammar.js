@@ -273,9 +273,18 @@ module.exports = grammar({
 
     case_arm: $ => seq(
       field('pattern', $.pattern),
-      '->',
-      field('value', $._expression),
+      choice(
+        seq('->', field('value', $._expression)),  // no guard
+        repeat1($.guarded_branch)                   // with guards
+      ),
       optional(',')
+    ),
+
+    guarded_branch: $ => seq(
+      $.keyword_if,
+      field('guard', $._expression),
+      '->',
+      field('value', $._expression)
     ),
 
     pattern: $ => choice(
@@ -382,6 +391,7 @@ module.exports = grammar({
     keyword_pub: $ => 'pub',
     keyword_use: $ => 'use',
     keyword_mod: $ => 'mod',
+    keyword_if: $ => 'if',
     keyword_true: $ => token(prec(1, 'True')),
     keyword_false: $ => token(prec(1, 'False')),
     keyword_nil: $ => token(prec(1, 'Nil')),

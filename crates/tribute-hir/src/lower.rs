@@ -185,19 +185,20 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
         }
         AstExpr::Match(match_expr) => {
             let expr = Box::new(lower_expr(&match_expr.value)?);
-            let cases: LowerResult<Vec<_>> = match_expr
-                .arms
-                .iter()
-                .map(|arm| {
-                    let pattern = lower_pattern(&arm.pattern)?;
-                    let body = lower_expr(&arm.value)?;
-                    Ok(MatchCase { pattern, body })
-                })
-                .collect();
-            Expr::Match {
-                expr,
-                cases: cases?,
+            let mut cases = Vec::new();
+            for arm in &match_expr.arms {
+                let pattern = lower_pattern(&arm.pattern)?;
+                for branch in &arm.branches {
+                    let guard = branch.guard.as_ref().map(lower_expr).transpose()?;
+                    let body = lower_expr(&branch.value)?;
+                    cases.push(MatchCase {
+                        pattern: pattern.clone(),
+                        guard,
+                        body,
+                    });
+                }
             }
+            Expr::Match { expr, cases }
         }
         AstExpr::List(elements) => {
             let lowered: LowerResult<Vec<_>> = elements.iter().map(lower_expr).collect();

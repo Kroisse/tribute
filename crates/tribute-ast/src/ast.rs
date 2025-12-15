@@ -228,6 +228,12 @@ pub struct MatchExpression {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    pub branches: Vec<GuardedBranch>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GuardedBranch {
+    pub guard: Option<Spanned<Expr>>,
     pub value: Spanned<Expr>,
 }
 
