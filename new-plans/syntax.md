@@ -584,6 +584,9 @@ data
 
 ```
 BinaryExpr ::= Expression BinOp Expression
+             | Expression QualifiedOp Expression
+
+QualifiedOp ::= Path '::' Operator        // List::<>, Int::+
 
 // 우선순위 (높은 것부터)
 // 1. * / %
@@ -593,10 +596,15 @@ BinaryExpr ::= Expression BinOp Expression
 // 5. ||
 ```
 
-**문자열 연결:** `<>` 연산자 사용
+**연결 연산자 `<>`**: String, List 등에 사용 (type-directed resolution)
 
 ```rust
-"Hello, " <> name <> "!"
+"Hello, " <> name <> "!"        // String::<>
+[1, 2] <> [3, 4]                // List::<>
+
+// 명시적으로 연산자 지정
+xs List::<> ys                  // List::<> 명시
+a Int::+ b                      // Int::+ 명시
 ```
 
 ### Case Expression
@@ -890,7 +898,8 @@ fn main() ->{Console} Nil {
 | `T::f(x)`             | Qualified call         |
 | `T { f: v }`          | Record construction    |
 | `T { ..x, f: v }`     | Record update (spread) |
-| `a <> b`              | String concatenation   |
+| `a <> b`              | Concatenation          |
+| `a T::<> b`           | Qualified operator     |
 
 ### Patterns
 
