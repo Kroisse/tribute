@@ -223,6 +223,8 @@ impl TributeParser {
             "binary_expression" => self.parse_binary_expression(node, source),
             "call_expression" => self.parse_call_expression(node, source),
             "case_expression" => self.parse_case_expression(node, source),
+            "list_expression" => self.parse_list_expression(node, source),
+            "tuple_expression" => self.parse_tuple_expression(node, source),
             "primary_expression" => {
                 // primary_expression should have one child
                 if let Some(child) = node.child(0) {
@@ -409,6 +411,56 @@ impl TributeParser {
         let value = value.ok_or("Missing case arm value")?;
 
         Ok(MatchArm { pattern, value })
+    }
+
+    fn parse_list_expression(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut elements = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "[" | "]" | "," => {
+                        // Skip brackets and commas
+                    }
+                    _ => {
+                        if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                            elements.push(expr);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Expr::List(elements))
+    }
+
+    fn parse_tuple_expression(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut elements = Vec::new();
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "#" | "(" | ")" | "," => {
+                        // Skip hash, parentheses and commas
+                    }
+                    _ => {
+                        if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                            elements.push(expr);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Expr::Tuple(elements))
     }
 
     fn parse_pattern(

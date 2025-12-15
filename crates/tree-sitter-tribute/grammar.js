@@ -118,7 +118,32 @@ module.exports = grammar({
       $.number,
       $.string,
       $.identifier,
+      $.list_expression,
+      $.tuple_expression,
       $.block  // { expr } for grouping
+    ),
+
+    // [1, 2, 3]
+    list_expression: $ => seq(
+      '[',
+      optional(seq(
+        $._expression,
+        repeat(seq(',', $._expression)),
+        optional(',')  // trailing comma
+      )),
+      ']'
+    ),
+
+    // #(1, "hello", 3.14)
+    tuple_expression: $ => seq(
+      '#',
+      '(',
+      optional(seq(
+        $._expression,
+        repeat(seq(',', $._expression)),
+        optional(',')  // trailing comma
+      )),
+      ')'
     ),
 
     number: $ => /-?\d+(\.\d+)?/,

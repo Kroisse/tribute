@@ -59,6 +59,12 @@ pub enum Expr {
 
     /// Block expression (sequence of expressions)
     Block(Vec<Spanned<Expr>>),
+
+    /// List literal [a, b, c]
+    List(Vec<Spanned<Expr>>),
+
+    /// Tuple literal #(a, b, c)
+    Tuple(Vec<Spanned<Expr>>),
 }
 
 /// Pattern matching case

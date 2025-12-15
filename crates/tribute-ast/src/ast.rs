@@ -56,6 +56,8 @@ pub enum Expr {
     Binary(BinaryExpression),
     Call(CallExpression),
     Match(MatchExpression),
+    List(Vec<Spanned<Expr>>),
+    Tuple(Vec<Spanned<Expr>>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

@@ -317,6 +317,22 @@ fn eval_spanned_expr<'db>(
             }
             Ok(result)
         }
+        List(elements) => {
+            let values: Result<Vec<Value>, Error> = elements
+                .into_iter()
+                .map(|elem| eval_spanned_expr(context, env, elem))
+                .collect();
+            Ok(Value::List(values?))
+        }
+        Tuple(elements) => {
+            // For now, tuples are represented as lists
+            // TODO: Add proper Tuple value type when needed
+            let values: Result<Vec<Value>, Error> = elements
+                .into_iter()
+                .map(|elem| eval_spanned_expr(context, env, elem))
+                .collect();
+            Ok(Value::List(values?))
+        }
     }
 }
 

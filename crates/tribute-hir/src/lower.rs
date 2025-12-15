@@ -179,6 +179,14 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
                 cases: cases?,
             }
         }
+        AstExpr::List(elements) => {
+            let lowered: LowerResult<Vec<_>> = elements.iter().map(lower_expr).collect();
+            Expr::List(lowered?)
+        }
+        AstExpr::Tuple(elements) => {
+            let lowered: LowerResult<Vec<_>> = elements.iter().map(lower_expr).collect();
+            Expr::Tuple(lowered?)
+        }
     };
 
     Ok((hir_expr, span))

@@ -463,13 +463,12 @@ impl TrString {
 
 impl Drop for TrString {
     fn drop(&mut self) {
-        // Only heap strings need cleanup
-        if let TrString::Heap { data_index, .. } = self {
-            if *data_index != 0 {
-                allocation_table().free_string(*data_index);
-            }
+        // Only heap strings need cleanup (inline and static don't need cleanup)
+        if let TrString::Heap { data_index, .. } = self
+            && *data_index != 0
+        {
+            allocation_table().free_string(*data_index);
         }
-        // Inline and Static strings don't need cleanup
     }
 }
 
