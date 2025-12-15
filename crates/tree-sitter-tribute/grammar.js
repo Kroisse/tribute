@@ -272,7 +272,7 @@ module.exports = grammar({
 
     let_statement: $ => seq(
       $.keyword_let,
-      field('name', $.identifier),
+      field('pattern', $.pattern),
       '=',
       field('value', $._expression)
     ),

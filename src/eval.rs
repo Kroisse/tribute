@@ -349,10 +349,16 @@ fn eval_spanned_expr<'db>(
                 _ => Err(format!("not a function: {:?}", func_expr).into()),
             }
         }
-        Let { var, value } => {
+        Let { pattern, value } => {
             let val = eval_spanned_expr(context, env, *value)?;
-            env.bind(var, val.clone());
-            Ok(val)
+            if let Some(bindings) = match_pattern(&val, &pattern) {
+                for (name, bound_value) in bindings {
+                    env.bind(name, bound_value);
+                }
+                Ok(val)
+            } else {
+                Err("pattern match failed in let binding".to_string().into())
+            }
         }
         Match { expr, cases } => {
             let value = eval_spanned_expr(context, env, *expr)?;

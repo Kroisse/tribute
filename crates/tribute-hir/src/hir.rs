@@ -47,9 +47,9 @@ pub enum Expr {
         args: Vec<Spanned<Expr>>,
     },
 
-    /// Local variable binding
+    /// Local variable binding with pattern destructuring
     Let {
-        var: Identifier,
+        pattern: Pattern,
         value: Box<Spanned<Expr>>,
     },
 

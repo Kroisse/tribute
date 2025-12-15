@@ -100,9 +100,10 @@ fn lower_function_def<'db>(
     for statement in &body_block.statements {
         match statement {
             Statement::Let(let_stmt) => {
+                let pattern = lower_pattern(&let_stmt.pattern)?;
                 let value = lower_expr(&let_stmt.value)?;
                 let let_expr = Expr::Let {
-                    var: let_stmt.name.clone(),
+                    pattern,
                     value: Box::new(value),
                 };
                 body_exprs.push((let_expr, let_stmt.value.1));
@@ -221,9 +222,10 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
             for statement in statements {
                 match statement {
                     Statement::Let(let_stmt) => {
+                        let pattern = lower_pattern(&let_stmt.pattern)?;
                         let value = lower_expr(&let_stmt.value)?;
                         let let_expr = Expr::Let {
-                            var: let_stmt.name.clone(),
+                            pattern,
                             value: Box::new(value),
                         };
                         exprs.push((let_expr, let_stmt.value.1));

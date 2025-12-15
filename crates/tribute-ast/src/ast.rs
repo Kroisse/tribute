@@ -155,7 +155,7 @@ pub enum Statement {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LetStatement {
-    pub name: Identifier,
+    pub pattern: Pattern,
     pub value: Spanned<Expr>,
 }
 

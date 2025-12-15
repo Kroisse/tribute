@@ -667,28 +667,17 @@ impl TributeParser {
         node: Node,
         source: &str,
     ) -> Result<LetStatement, Box<dyn std::error::Error>> {
-        let mut cursor = node.walk();
-        let mut name = None;
-        let mut value = None;
+        let pattern_node = node
+            .child_by_field_name("pattern")
+            .ok_or("Missing let pattern")?;
+        let value_node = node
+            .child_by_field_name("value")
+            .ok_or("Missing let value")?;
 
-        for child in node.named_children(&mut cursor) {
-            match child.kind() {
-                "identifier" if name.is_none() => {
-                    name = Some(child.utf8_text(source.as_bytes())?.to_string());
-                }
-                _ => {
-                    // Try to parse as expression
-                    if let Ok(expr) = self.node_to_expr_with_span(child, source) {
-                        value = Some(expr);
-                    }
-                }
-            }
-        }
+        let pattern = self.parse_pattern(pattern_node, source)?;
+        let value = self.node_to_expr_with_span(value_node, source)?;
 
-        let name = name.ok_or("Missing let variable name")?;
-        let value = value.ok_or("Missing let value")?;
-
-        Ok(LetStatement { name, value })
+        Ok(LetStatement { pattern, value })
     }
 
     fn parse_expression_statement(

@@ -530,7 +530,7 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
             Expr::StringInterpolation(s) => self.lower_string_interpolation(db, s),
             Expr::Variable(name) => self.use_variable(name),
             Expr::Call { func, args } => self.lower_call(db, func, args),
-            Expr::Let { var, value } => self.lower_let(db, var, value),
+            Expr::Let { pattern, value } => self.lower_let(db, pattern, value),
             Expr::Block(exprs) => self.lower_block(db, exprs),
             Expr::Match { expr, cases } => self.lower_match(db, expr, cases),
             Expr::Lambda { .. } => Err(CompilationError::unsupported_feature("Lambda expressions")),
@@ -727,12 +727,20 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
     fn lower_let(
         &mut self,
         db: &dyn Db,
-        var: &str,
+        pattern: &Pattern,
         value: &Spanned<Expr>,
     ) -> CompilationResult<Value> {
         let val = self.lower_expr(db, &value.0)?;
-        self.define_variable(var, val);
-        Ok(val)
+        // For now, only support simple identifier patterns
+        match pattern {
+            Pattern::Variable(name) => {
+                self.define_variable(name, val);
+                Ok(val)
+            }
+            _ => Err(CompilationError::unsupported_feature(
+                "Pattern destructuring in let bindings",
+            )),
+        }
     }
 
     /// Lower a block expression

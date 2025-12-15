@@ -13,7 +13,9 @@ HirProgram {
                 HirExpr {
                     [salsa id]: Id(1000),
                     expr: Let {
-                        var: "x",
+                        pattern: Variable(
+                            "x",
+                        ),
                         value: (
                             Number(
                                 42,
@@ -32,7 +34,9 @@ HirProgram {
                 HirExpr {
                     [salsa id]: Id(1001),
                     expr: Let {
-                        var: "y",
+                        pattern: Variable(
+                            "y",
+                        ),
                         value: (
                             Call {
                                 func: (
