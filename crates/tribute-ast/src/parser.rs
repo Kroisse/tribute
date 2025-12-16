@@ -741,6 +741,14 @@ impl TributeParser {
                 // Raw bytes: no escape processing
                 self.parse_raw_bytes(node, source)
             }
+            "multiline_string" => {
+                // Multiline strings: #"..."#, ##"..."##
+                self.parse_multiline_string(node, source)
+            }
+            "multiline_bytes" => {
+                // Multiline bytes: b#"..."#, b##"..."##
+                self.parse_multiline_bytes(node, source)
+            }
             "identifier" => {
                 let text = node.utf8_text(source.as_bytes())?;
                 Ok(Expr::Identifier(text.to_string()))
@@ -1588,6 +1596,50 @@ impl TributeParser {
         }
     }
 
+    /// Parse multiline string: #"hello"#, ##"contains "# inside"##
+    fn parse_multiline_string(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        // multiline_string contains multiline_string_literal from external scanner
+        if let Some(literal_node) = node.child(0) {
+            let text = literal_node.utf8_text(source.as_bytes())?;
+            let content = extract_multiline_string_content(text)?;
+            Ok(Expr::StringInterpolation(StringInterpolation {
+                leading: content,
+                segments: Vec::new(),
+            }))
+        } else {
+            Ok(Expr::StringInterpolation(StringInterpolation {
+                leading: String::new(),
+                segments: Vec::new(),
+            }))
+        }
+    }
+
+    /// Parse multiline bytes: b#"hello"#, b##"contains "# inside"##
+    fn parse_multiline_bytes(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        // multiline_bytes contains multiline_bytes_literal from external scanner
+        if let Some(literal_node) = node.child(0) {
+            let text = literal_node.utf8_text(source.as_bytes())?;
+            let content = extract_multiline_bytes_content(text)?;
+            Ok(Expr::BytesInterpolation(BytesInterpolation {
+                leading: content,
+                segments: Vec::new(),
+            }))
+        } else {
+            Ok(Expr::BytesInterpolation(BytesInterpolation {
+                leading: Vec::new(),
+                segments: Vec::new(),
+            }))
+        }
+    }
+
     fn parse_interpolated_string(
         &self,
         node: Node,
@@ -1881,6 +1933,61 @@ fn extract_raw_bytes_content(text: &str) -> Result<String, Box<dyn std::error::E
         .ok_or("Raw bytes must have matching closing delimiter")?;
 
     Ok(content.to_string())
+}
+
+/// Extract content from a multiline string literal like #"hello"# or ##"hello"##
+/// Returns the content without the #s and quotes
+fn extract_multiline_string_content(text: &str) -> Result<String, Box<dyn std::error::Error>> {
+    // Count and skip opening hashes
+    let hash_count = text.chars().take_while(|&c| c == '#').count();
+    if hash_count == 0 {
+        return Err("Multiline string must start with '#'".into());
+    }
+
+    let after_hashes = &text[hash_count..];
+
+    // Must have opening quote
+    let after_open_quote = after_hashes
+        .strip_prefix('"')
+        .ok_or("Multiline string must have opening quote")?;
+
+    // Remove closing quote and hashes
+    let closing = format!("\"{}", "#".repeat(hash_count));
+    let content = after_open_quote
+        .strip_suffix(&closing)
+        .ok_or("Multiline string must have matching closing delimiter")?;
+
+    Ok(content.to_string())
+}
+
+/// Extract content from a multiline bytes literal like b#"hello"# or b##"hello"##
+/// Returns the content as bytes without the b, #s, and quotes
+fn extract_multiline_bytes_content(text: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    // Must start with 'b'
+    let rest = text
+        .strip_prefix('b')
+        .ok_or("Multiline bytes must start with 'b'")?;
+
+    // Count and skip opening hashes
+    let hash_count = rest.chars().take_while(|&c| c == '#').count();
+    if hash_count == 0 {
+        return Err("Multiline bytes must have at least one '#' after 'b'".into());
+    }
+
+    let after_hashes = &rest[hash_count..];
+
+    // Must have opening quote
+    let after_open_quote = after_hashes
+        .strip_prefix('"')
+        .ok_or("Multiline bytes must have opening quote")?;
+
+    // Remove closing quote and hashes
+    let closing = format!("\"{}", "#".repeat(hash_count));
+    let content = after_open_quote
+        .strip_suffix(&closing)
+        .ok_or("Multiline bytes must have matching closing delimiter")?;
+
+    Ok(content.as_bytes().to_vec())
 }
 
 /// Process escape sequences in bytes literals

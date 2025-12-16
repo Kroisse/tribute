@@ -10,14 +10,11 @@ enum TokenType {
     BLOCK_COMMENT,
     // Block doc comment with nesting support: /** ... */
     BLOCK_DOC_COMMENT,
-
-    // Future: multiline strings with interpolation need start/content/end
-    // STRING_START,        // #" or s#"
-    // STRING_CONTENT,      // text between interpolations
-    // STRING_END,          // "#
-    // BYTES_START,         // b#"
-    // BYTES_CONTENT,
-    // BYTES_END,
+    // Multiline string: #"..."#, ##"..."##, etc.
+    // Supports escape sequences but no interpolation (use regular strings for that)
+    MULTILINE_STRING_LITERAL,
+    // Multiline bytes: b#"..."#, b##"..."##, etc.
+    MULTILINE_BYTES_LITERAL,
 
     ERROR_SENTINEL
 };
@@ -77,6 +74,40 @@ static bool scan_raw_literal(TSLexer *lexer, enum TokenType token_type) {
     for (;;) {
         if (lexer->eof(lexer)) {
             return false;
+        }
+
+        if (lexer->lookahead == '"') {
+            advance(lexer);
+
+            // Count closing hashes
+            uint8_t closing_hash_count = 0;
+            while (lexer->lookahead == '#' && closing_hash_count < opening_hash_count) {
+                advance(lexer);
+                closing_hash_count++;
+            }
+
+            // If we matched all hashes, we're done
+            if (closing_hash_count == opening_hash_count) {
+                lexer->result_symbol = token_type;
+                lexer->mark_end(lexer);
+                return true;
+            }
+            // Otherwise, the quote and hashes are part of the content, continue
+        } else {
+            advance(lexer);
+        }
+    }
+}
+
+// Scan multiline literal with hash delimiters
+// Used for multiline strings (#"..."#) and multiline bytes (b#"..."#)
+// Returns true if a complete multiline literal was scanned
+static bool scan_multiline_literal(TSLexer *lexer, uint8_t opening_hash_count, enum TokenType token_type) {
+    // We've already consumed the opening hashes and quote
+    // Scan content until we find closing quote + matching hashes
+    for (;;) {
+        if (lexer->eof(lexer)) {
+            return false;  // Unterminated multiline string
         }
 
         if (lexer->lookahead == '"') {
@@ -173,6 +204,45 @@ bool tree_sitter_tribute_external_scanner_scan(
             if (lexer->lookahead == '#' || lexer->lookahead == '"') {
                 return scan_raw_literal(lexer, RAW_STRING_LITERAL);
             }
+        }
+    }
+
+    // Multiline bytes: b#"..."#, b##"..."##
+    if (lexer->lookahead == 'b' && valid_symbols[MULTILINE_BYTES_LITERAL]) {
+        lexer->mark_end(lexer);
+        advance(lexer);  // consume 'b'
+
+        if (lexer->lookahead == '#') {
+            // Count opening hashes
+            uint8_t opening_hash_count = 0;
+            while (lexer->lookahead == '#') {
+                advance(lexer);
+                opening_hash_count++;
+            }
+
+            // Must have opening quote
+            if (lexer->lookahead == '"') {
+                advance(lexer);
+                return scan_multiline_literal(lexer, opening_hash_count, MULTILINE_BYTES_LITERAL);
+            }
+        }
+    }
+
+    // Multiline strings: #"..."#, ##"..."##
+    if (lexer->lookahead == '#' && valid_symbols[MULTILINE_STRING_LITERAL]) {
+        lexer->mark_end(lexer);
+
+        // Count opening hashes
+        uint8_t opening_hash_count = 0;
+        while (lexer->lookahead == '#') {
+            advance(lexer);
+            opening_hash_count++;
+        }
+
+        // Must have opening quote
+        if (lexer->lookahead == '"') {
+            advance(lexer);
+            return scan_multiline_literal(lexer, opening_hash_count, MULTILINE_STRING_LITERAL);
         }
     }
 

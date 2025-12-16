@@ -9,6 +9,8 @@ module.exports = grammar({
     $.raw_bytes_literal,
     $.block_comment,
     $.block_doc_comment,
+    $.multiline_string_literal,
+    $.multiline_bytes_literal,
     $._error_sentinel,
   ],
 
@@ -514,8 +516,10 @@ module.exports = grammar({
       $.nat_literal,
       $.string,
       $.raw_string,
+      $.multiline_string,
       $.bytes_string,
       $.raw_bytes,
+      $.multiline_bytes,
       $.rune,
       $.path_expression,
       $.identifier,
@@ -698,6 +702,16 @@ module.exports = grammar({
     // Raw bytes: rb"...", rb#"..."#, etc.
     // Handled by external scanner for proper hash delimiter matching
     raw_bytes: $ => $.raw_bytes_literal,
+
+    // Multiline strings: #"..."#, ##"..."##, etc.
+    // Can span multiple lines, no escape sequence processing
+    // Handled by external scanner for proper hash delimiter matching
+    multiline_string: $ => $.multiline_string_literal,
+
+    // Multiline bytes: b#"..."#, b##"..."##, etc.
+    // Can span multiple lines, no escape sequence processing
+    // Handled by external scanner for proper hash delimiter matching
+    multiline_bytes: $ => $.multiline_bytes_literal,
 
     // Identifiers start with lowercase letter or underscore (values, functions, constants)
     identifier: $ => /[a-z_][a-zA-Z0-9_]*/,

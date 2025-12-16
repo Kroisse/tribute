@@ -1,0 +1,117 @@
+================================================================================
+Basic multiline string
+================================================================================
+
+fn main() { #"hello"# }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (multiline_string
+            (multiline_string_literal)))))))
+
+================================================================================
+Multiline string spanning lines
+================================================================================
+
+fn main() {
+  #"
+    hello
+    world
+  "#
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (multiline_string
+            (multiline_string_literal)))))))
+
+================================================================================
+Multiline string with double hash
+================================================================================
+
+fn main() { ##"contains "# inside"## }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (multiline_string
+            (multiline_string_literal)))))))
+
+================================================================================
+Basic multiline bytes
+================================================================================
+
+fn main() { b#"hello"# }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (multiline_bytes
+            (multiline_bytes_literal)))))))
+
+================================================================================
+Multiline bytes spanning lines
+================================================================================
+
+fn main() {
+  b#"
+    binary
+    data
+  "#
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (multiline_bytes
+            (multiline_bytes_literal)))))))
+
+================================================================================
+Multiline bytes with double hash
+================================================================================
+
+fn main() { b##"contains "# inside"## }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (multiline_bytes
+            (multiline_bytes_literal)))))))
