@@ -37,6 +37,7 @@ impl<'db> LoweringCtx<'db> {
 }
 
 /// Lower an AST program to a TrunkIR module.
+#[salsa::tracked]
 pub fn lower_program<'db>(
     db: &'db dyn salsa::Database,
     path: PathId<'db>,
@@ -363,7 +364,7 @@ mod tests {
 
     /// Helper tracked function to create AST and lower it.
     #[salsa::tracked]
-    fn lower_simple_function_helper(db: &dyn salsa::Database) -> crate::Operation<'_> {
+    fn lower_simple_function_helper(db: &dyn salsa::Database) -> core::Module<'_> {
         let path = PathId::new(db, PathBuf::from("test.tr"));
 
         // Create a simple AST: fn main() { 42 }
@@ -378,15 +379,13 @@ mod tests {
 
         let program = Program::new(db, vec![item]);
 
-        // Lower to TrunkIR and return the underlying operation
-        lower_program(db, path, program).operation()
+        lower_program(db, path, program)
     }
 
     #[test]
     fn test_lower_simple_function() {
         TributeDatabaseImpl::default().attach(|db| {
-            let op = lower_simple_function_helper(db);
-            let module = core::Module::from_operation(db, op).unwrap();
+            let module = lower_simple_function_helper(db);
 
             // Verify module structure
             assert_eq!(module.name(db), "main");
@@ -408,7 +407,7 @@ mod tests {
 
     /// Helper to create AST with binary expression: fn main() { 1 + 2 }
     #[salsa::tracked]
-    fn lower_binary_expr_helper(db: &dyn salsa::Database) -> crate::Operation<'_> {
+    fn lower_binary_expr_helper(db: &dyn salsa::Database) -> core::Module<'_> {
         let path = PathId::new(db, PathBuf::from("test.tr"));
 
         // Create AST: fn main() { 1 + 2 }
@@ -429,14 +428,13 @@ mod tests {
         let item = tribute_ast::Item::new(db, ItemKind::Function(func_def), Span::new(0, 21));
         let program = Program::new(db, vec![item]);
 
-        lower_program(db, path, program).operation()
+        lower_program(db, path, program)
     }
 
     #[test]
     fn test_lower_binary_expression() {
         TributeDatabaseImpl::default().attach(|db| {
-            let op = lower_binary_expr_helper(db);
-            let module = core::Module::from_operation(db, op).unwrap();
+            let module = lower_binary_expr_helper(db);
 
             // Get the function
             let body_region = module.body(db);
@@ -462,7 +460,7 @@ mod tests {
 
     /// Helper to create AST with let binding: fn main() { let x = 42; x }
     #[salsa::tracked]
-    fn lower_let_binding_helper(db: &dyn salsa::Database) -> crate::Operation<'_> {
+    fn lower_let_binding_helper(db: &dyn salsa::Database) -> core::Module<'_> {
         let path = PathId::new(db, PathBuf::from("test.tr"));
 
         // Create AST: fn main() { let x = 42; x }
@@ -483,14 +481,13 @@ mod tests {
         let item = tribute_ast::Item::new(db, ItemKind::Function(func_def), Span::new(0, 19));
         let program = Program::new(db, vec![item]);
 
-        lower_program(db, path, program).operation()
+        lower_program(db, path, program)
     }
 
     #[test]
     fn test_lower_let_binding() {
         TributeDatabaseImpl::default().attach(|db| {
-            let op = lower_let_binding_helper(db);
-            let module = core::Module::from_operation(db, op).unwrap();
+            let module = lower_let_binding_helper(db);
 
             // Get the function
             let body_region = module.body(db);

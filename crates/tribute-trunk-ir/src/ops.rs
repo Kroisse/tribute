@@ -412,7 +412,7 @@ macro_rules! define_op {
     ) => {
         $crate::paste::paste! {
             $($meta)*
-            #[derive(Clone, Copy)]
+            #[derive(Clone, Copy, PartialEq, Eq, salsa::Update)]
             pub struct [<$op:camel>]<'db> {
                 op: $crate::Operation<'db>,
             }
@@ -515,7 +515,7 @@ macro_rules! define_op {
     ) => {
         $crate::paste::paste! {
             $($meta)*
-            #[derive(Clone, Copy)]
+            #[derive(Clone, Copy, PartialEq, Eq, salsa::Update)]
             pub struct [<$op:camel>]<'db> {
                 op: $crate::Operation<'db>,
             }
@@ -620,7 +620,7 @@ macro_rules! define_op {
     ) => {
         $crate::paste::paste! {
             $($meta)*
-            #[derive(Clone, Copy)]
+            #[derive(Clone, Copy, PartialEq, Eq, salsa::Update)]
             pub struct [<$op:camel>]<'db> {
                 op: $crate::Operation<'db>,
             }
