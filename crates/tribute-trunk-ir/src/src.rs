@@ -14,5 +14,10 @@ dialect! {
         /// `src.var` operation: unresolved variable reference.
         /// The name will be resolved to a concrete value (parameter, local, etc.).
         op var[name]() -> result {};
+
+        /// `src.binop` operation: unresolved binary operation.
+        /// Used for operators that need type-directed resolution (e.g., `<>` concat).
+        /// The `op` attribute holds the operator name.
+        op binop[op](lhs, rhs) -> result {};
     }
 }

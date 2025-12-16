@@ -4,7 +4,10 @@
 //! At this stage, names are unresolved (using `src` dialect ops).
 
 use crate::{Attribute, BlockBuilder, Type, Value, arith, core, func, src};
-use tribute_ast::{CallExpression, Expr, FunctionDefinition, ItemKind, Program, Statement};
+use tribute_ast::{
+    BinaryExpression, BinaryOperator, CallExpression, Expr, FunctionDefinition, ItemKind, Program,
+    Statement,
+};
 use tribute_core::{Location, PathId, Span, Spanned};
 
 /// Lower an AST program to a TrunkIR module.
@@ -144,11 +147,22 @@ fn lower_expr<'db>(
             op.result(db)
         }
 
+        // Binary expressions
+        Expr::Binary(BinaryExpression {
+            left,
+            operator,
+            qualifier: _, // TODO: Handle qualified operators
+            right,
+        }) => {
+            let lhs = lower_expr(db, path, block, left);
+            let rhs = lower_expr(db, path, block, right);
+            lower_binary_op(db, location, block, operator.clone(), lhs, rhs)
+        }
+
         // Not yet implemented
         Expr::StringInterpolation(_) => todo!("string interpolation"),
         Expr::BytesInterpolation(_) => todo!("bytes interpolation"),
         Expr::Rune(_) => todo!("rune literals"),
-        Expr::Binary(_) => todo!("binary expressions"),
         Expr::MethodCall(_) => todo!("method calls"),
         Expr::Match(_) => todo!("match expressions"),
         Expr::Lambda(_) => todo!("lambda expressions"),
@@ -160,12 +174,122 @@ fn lower_expr<'db>(
     }
 }
 
+/// Lower a binary operation to the appropriate TrunkIR op.
+fn lower_binary_op<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    block: &mut BlockBuilder<'db>,
+    operator: BinaryOperator,
+    lhs: Value<'db>,
+    rhs: Value<'db>,
+) -> Value<'db> {
+    // Result type is unknown until type inference
+    let result_ty = Type::Unit;
+
+    match operator {
+        // Arithmetic operations → arith dialect
+        BinaryOperator::Add => block
+            .op(arith::Add::new(db, location, lhs, rhs, result_ty))
+            .result(db),
+        BinaryOperator::Subtract => block
+            .op(arith::Sub::new(db, location, lhs, rhs, result_ty))
+            .result(db),
+        BinaryOperator::Multiply => block
+            .op(arith::Mul::new(db, location, lhs, rhs, result_ty))
+            .result(db),
+        BinaryOperator::Divide => block
+            .op(arith::Div::new(db, location, lhs, rhs, result_ty))
+            .result(db),
+        BinaryOperator::Modulo => block
+            .op(arith::Rem::new(db, location, lhs, rhs, result_ty))
+            .result(db),
+
+        // Comparison operations → arith dialect (result is i1)
+        BinaryOperator::Equal => block
+            .op(arith::CmpEq::new(
+                db,
+                location,
+                lhs,
+                rhs,
+                Type::I { bits: 1 },
+            ))
+            .result(db),
+        BinaryOperator::NotEqual => block
+            .op(arith::CmpNe::new(
+                db,
+                location,
+                lhs,
+                rhs,
+                Type::I { bits: 1 },
+            ))
+            .result(db),
+        BinaryOperator::LessThan => block
+            .op(arith::CmpLt::new(
+                db,
+                location,
+                lhs,
+                rhs,
+                Type::I { bits: 1 },
+            ))
+            .result(db),
+        BinaryOperator::LessEqual => block
+            .op(arith::CmpLe::new(
+                db,
+                location,
+                lhs,
+                rhs,
+                Type::I { bits: 1 },
+            ))
+            .result(db),
+        BinaryOperator::GreaterThan => block
+            .op(arith::CmpGt::new(
+                db,
+                location,
+                lhs,
+                rhs,
+                Type::I { bits: 1 },
+            ))
+            .result(db),
+        BinaryOperator::GreaterEqual => block
+            .op(arith::CmpGe::new(
+                db,
+                location,
+                lhs,
+                rhs,
+                Type::I { bits: 1 },
+            ))
+            .result(db),
+
+        // Logical operations → arith bitwise (works for i1 booleans)
+        BinaryOperator::And => block
+            .op(arith::And::new(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .result(db),
+        BinaryOperator::Or => block
+            .op(arith::Or::new(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .result(db),
+
+        // Concat needs type-directed resolution → src.binop
+        BinaryOperator::Concat => {
+            let op = block.op(src::Binop::new(
+                db,
+                location,
+                lhs,
+                rhs,
+                result_ty,
+                Attribute::String("concat".to_string()),
+            ));
+            op.result(db)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::DialectOp;
     use salsa::Database;
     use std::path::PathBuf;
+    use tribute_ast::BinaryExpression;
     use tribute_core::TributeDatabaseImpl;
 
     /// Helper tracked function to create AST and lower it.
@@ -210,6 +334,60 @@ mod tests {
             // Verify it's a func.func operation
             let func_op = func::Func::from_operation(db, ops[0]).unwrap();
             assert_eq!(func_op.name(db), "main");
+        });
+    }
+
+    /// Helper to create AST with binary expression: fn main() { 1 + 2 }
+    #[salsa::tracked]
+    fn lower_binary_expr_helper(db: &dyn salsa::Database) -> crate::Operation<'_> {
+        let path = PathId::new(db, PathBuf::from("test.tr"));
+
+        // Create AST: fn main() { 1 + 2 }
+        let binary_expr = Expr::Binary(BinaryExpression {
+            left: Box::new((Expr::Nat(1), Span::new(14, 15))),
+            operator: BinaryOperator::Add,
+            qualifier: None,
+            right: Box::new((Expr::Nat(2), Span::new(18, 19))),
+        });
+
+        let body = tribute_ast::Block {
+            statements: vec![Statement::Expression((binary_expr, Span::new(14, 19)))],
+        };
+
+        let func_def =
+            FunctionDefinition::new(db, "main".to_string(), vec![], None, body, Span::new(0, 21));
+
+        let item = tribute_ast::Item::new(db, ItemKind::Function(func_def), Span::new(0, 21));
+        let program = Program::new(db, vec![item]);
+
+        lower_program(db, path, program).operation()
+    }
+
+    #[test]
+    fn test_lower_binary_expression() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let op = lower_binary_expr_helper(db);
+            let module = core::Module::from_operation(db, op).unwrap();
+
+            // Get the function
+            let body_region = module.body(db);
+            let blocks = body_region.blocks(db);
+            let func_op = func::Func::from_operation(db, blocks[0].operations(db)[0]).unwrap();
+
+            // Get the function's entry block
+            let func_body = func_op.body(db);
+            let func_blocks = func_body.blocks(db);
+            assert_eq!(func_blocks.len(), 1);
+
+            let entry_block = &func_blocks[0];
+            let ops = entry_block.operations(db);
+
+            // Should have: arith.const(1), arith.const(2), arith.add, func.return
+            assert_eq!(ops.len(), 4);
+
+            // Verify the add operation
+            let add_op = arith::Add::from_operation(db, ops[2]).unwrap();
+            assert!(add_op.lhs(db) != add_op.rhs(db)); // lhs and rhs should be different values
         });
     }
 }
