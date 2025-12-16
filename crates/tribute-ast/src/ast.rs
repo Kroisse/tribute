@@ -162,6 +162,8 @@ pub struct LetStatement {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Expr {
     Number(i64),
+    /// Rune literal: ?a, ?\n, ?\x41, ?\u0041 (Unicode codepoint)
+    Rune(char),
     Bool(bool),
     Nil,
     StringInterpolation(StringInterpolation),
@@ -350,6 +352,8 @@ pub struct PatternField {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LiteralPattern {
     Number(i64),
+    /// Rune literal pattern: ?a, ?\n, ?\x41
+    Rune(char),
     Bool(bool),
     Nil,
     String(String),

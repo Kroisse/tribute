@@ -381,6 +381,7 @@ module.exports = grammar({
     literal_pattern: $ => choice(
       $.number,
       $.string,
+      $.rune,
       $.keyword_true,
       $.keyword_false,
       $.keyword_nil
@@ -497,6 +498,7 @@ module.exports = grammar({
       $.keyword_nil,
       $.number,
       $.string,
+      $.rune,
       $.path_expression,
       $.identifier,
       $.list_expression,
@@ -602,6 +604,19 @@ module.exports = grammar({
     ),
 
     number: $ => /-?\d+(\.\d+)?/,
+
+    // Rune literal: ?a, ?\n, ?\t, ?\x41, ?\u0041
+    // Matches: ? followed by either:
+    //   - A single printable character (not backslash or whitespace)
+    //   - An escape sequence: \n, \r, \t, \0, \\, \xHH, \uHHHH
+    rune: $ => token(choice(
+      // Simple rune: ?a, ?Z, ?!, ?@, etc. (any printable non-backslash, non-whitespace)
+      /\?[^\\\s]/,
+      // Escape sequences
+      /\?\\[nrt0\\]/,        // ?\n, ?\r, ?\t, ?\0, ?\\
+      /\?\\x[0-9a-fA-F]{2}/, // ?\x41
+      /\?\\u[0-9a-fA-F]{4}/  // ?\u0041
+    )),
 
     string: $ => seq(
       '"',

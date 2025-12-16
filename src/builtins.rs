@@ -270,6 +270,7 @@ fn logical_and(args: &[Value]) -> Result<Value, Error> {
     let is_truthy = |v: &Value| -> bool {
         match v {
             Value::Number(n) => *n != 0,
+            Value::Rune(_) => true, // Runes are always truthy
             Value::Bool(b) => *b,
             Value::String(s) => !s.is_empty(),
             Value::List(items) => !items.is_empty(),
@@ -293,6 +294,7 @@ fn logical_or(args: &[Value]) -> Result<Value, Error> {
     let is_truthy = |v: &Value| -> bool {
         match v {
             Value::Number(n) => *n != 0,
+            Value::Rune(_) => true, // Runes are always truthy
             Value::Bool(b) => *b,
             Value::String(s) => !s.is_empty(),
             Value::List(items) => !items.is_empty(),

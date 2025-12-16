@@ -34,6 +34,8 @@ pub struct HirExpr<'db> {
 pub enum Expr {
     /// Literal values
     Number(i64),
+    /// Rune (Unicode codepoint): ?a, ?\n, ?\x41, ?\u0041
+    Rune(char),
     Bool(bool),
     Nil,
     StringInterpolation(StringInterpolation),
@@ -185,6 +187,8 @@ pub struct StringSegment {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Literal {
     Number(i64),
+    /// Rune (Unicode codepoint)
+    Rune(char),
     Bool(bool),
     Nil,
     StringInterpolation(StringInterpolation),

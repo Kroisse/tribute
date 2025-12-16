@@ -710,6 +710,11 @@ impl TributeParser {
                 let num = text.parse::<i64>()?;
                 Ok(Expr::Number(num))
             }
+            "rune" => {
+                let text = node.utf8_text(source.as_bytes())?;
+                let ch = parse_rune_literal(text)?;
+                Ok(Expr::Rune(ch))
+            }
             "string" => {
                 // All strings are now StringInterpolation, even simple ones
                 self.parse_interpolated_string(node, source)
@@ -1536,6 +1541,11 @@ impl TributeParser {
                     let num = text.parse::<i64>()?;
                     return Ok(LiteralPattern::Number(num));
                 }
+                "rune" => {
+                    let text = child.utf8_text(source.as_bytes())?;
+                    let ch = parse_rune_literal(text)?;
+                    return Ok(LiteralPattern::Rune(ch));
+                }
                 "string" => {
                     // Parse as StringInterpolation and convert to appropriate pattern
                     if let Ok(Expr::StringInterpolation(interp)) =
@@ -1655,6 +1665,59 @@ fn parse_operator_token(token: &str) -> Option<BinaryOperator> {
         // Concatenation
         "<>" => Some(BinaryOperator::Concat),
         _ => None,
+    }
+}
+
+/// Parse a rune literal like ?a, ?\n, ?\x41, ?\u0041
+fn parse_rune_literal(text: &str) -> Result<char, Box<dyn std::error::Error>> {
+    // Text should start with '?'
+    if !text.starts_with('?') {
+        return Err("Rune literal must start with '?'".into());
+    }
+
+    let rest = &text[1..]; // Skip the '?'
+
+    if let Some(escape) = rest.strip_prefix('\\') {
+        // Escape sequence
+        match escape.chars().next() {
+            Some('n') => Ok('\n'),
+            Some('r') => Ok('\r'),
+            Some('t') => Ok('\t'),
+            Some('0') => Ok('\0'),
+            Some('\\') => Ok('\\'),
+            Some('x') => {
+                // \xHH - two hex digits
+                let hex = &escape[1..];
+                if hex.len() != 2 {
+                    return Err("Invalid hex escape in rune".into());
+                }
+                let code = u8::from_str_radix(hex, 16)?;
+                Ok(code as char)
+            }
+            Some('u') => {
+                // \uHHHH - four hex digits
+                let hex = &escape[1..];
+                if hex.len() != 4 {
+                    return Err("Invalid unicode escape in rune".into());
+                }
+                let code = u32::from_str_radix(hex, 16)?;
+                char::from_u32(code).ok_or_else(|| "Invalid unicode codepoint".into())
+            }
+            _ => Err(format!("Unknown escape sequence in rune: \\{}", escape).into()),
+        }
+    } else {
+        // Simple character
+        let mut chars = rest.chars();
+        match chars.next() {
+            Some(ch) => {
+                if chars.next().is_some() {
+                    Err("Rune literal must be a single character".into())
+                } else {
+                    Ok(ch)
+                }
+            }
+            None => Err("Empty rune literal".into()),
+        }
     }
 }
 

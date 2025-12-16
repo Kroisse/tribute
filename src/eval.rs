@@ -12,6 +12,8 @@ pub enum Value {
     Unit,
     Bool(bool),
     Number(i64),
+    /// Rune (Unicode codepoint): ?a, ?\n, ?\x41
+    Rune(char),
     String(String),
     List(Vec<Value>),
     /// Tuple value: #(a, b, c)
@@ -35,6 +37,18 @@ impl std::fmt::Display for Value {
             Value::Bool(true) => f.write_str("True"),
             Value::Bool(false) => f.write_str("False"),
             Value::Number(n) => write!(f, "{}", n),
+            Value::Rune(ch) => {
+                // Display rune with ? prefix, using escape for special chars
+                match ch {
+                    '\n' => write!(f, "?\\n"),
+                    '\r' => write!(f, "?\\r"),
+                    '\t' => write!(f, "?\\t"),
+                    '\0' => write!(f, "?\\0"),
+                    '\\' => write!(f, "?\\\\"),
+                    c if c.is_ascii_graphic() || *c == ' ' => write!(f, "?{}", c),
+                    c => write!(f, "?\\u{:04X}", *c as u32),
+                }
+            }
             Value::String(s) => write!(f, "\"{}\"", s),
             Value::List(items) => {
                 f.write_str("[")?;
@@ -262,6 +276,7 @@ fn eval_spanned_expr<'db>(
 
     match expr {
         Number(n) => Ok(Value::Number(n)),
+        Rune(ch) => Ok(Value::Rune(ch)),
         Bool(b) => Ok(Value::Bool(b)),
         Nil => Ok(Value::Unit),
         StringInterpolation(interp) => {
@@ -447,6 +462,7 @@ fn value_to_string(value: &Value) -> Result<String, Error> {
         Value::Bool(true) => Ok("True".to_string()),
         Value::Bool(false) => Ok("False".to_string()),
         Value::Number(n) => Ok(n.to_string()),
+        Value::Rune(ch) => Ok(ch.to_string()),
         Value::String(s) => Ok(s.clone()),
         Value::List(items) => {
             let item_strings: Result<Vec<String>, Error> =
@@ -480,6 +496,7 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
             // Compare literal values
             match (lit, value) {
                 (Literal::Number(a), Value::Number(b)) if a == b => Some(vec![]),
+                (Literal::Rune(a), Value::Rune(b)) if a == b => Some(vec![]),
                 (Literal::Bool(a), Value::Bool(b)) if a == b => Some(vec![]),
                 (Literal::Nil, Value::Unit) => Some(vec![]),
                 (Literal::StringInterpolation(interp), Value::String(s)) => {
@@ -849,6 +866,54 @@ mod tests {
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(42)) => {}
                 Ok(other) => panic!("Expected Number(42), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_rune_literals() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test simple rune literal
+            let source = r#"fn main() { ?A }"#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Rune('A')) => {}
+                Ok(other) => panic!("Expected Rune('A'), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_rune_escape_sequences() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test rune with escape sequence
+            let source = r#"fn main() { ?\n }"#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Rune('\n')) => {}
+                Ok(other) => panic!("Expected Rune('\\n'), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_rune_pattern_matching() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test rune in pattern matching
+            let source = r#"
+                fn classify(ch) {
+                    case ch {
+                        ?A -> "letter A",
+                        ?B -> "letter B",
+                        _ -> "other"
+                    }
+                }
+                fn main() { classify(?A) }
+            "#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::String(s)) if s == "letter A" => {}
+                Ok(other) => panic!("Expected String(\"letter A\"), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
         });
