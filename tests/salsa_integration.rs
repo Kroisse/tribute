@@ -136,7 +136,7 @@ fn test_salsa_diagnostics_collection() {
             "multi.trb".into(),
             r#"
 fn add(a, b) { a + b }
-fn multiply(a, b) { a * b }  
+fn multiply(a, b) { a * b }
 fn main() { print_line("test") }
 "#
             .to_string(),
