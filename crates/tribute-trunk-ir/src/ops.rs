@@ -130,210 +130,200 @@ macro_rules! dialect {
 #[macro_export]
 macro_rules! define_op {
     // ========================================================================
-    // Entry rules - parse surface syntax and normalize to @impl
+    // Entry point - start TT munching
+    // ========================================================================
+    (
+        $(#[$meta:meta])*
+        $vis:vis op $dialect:ident.$op:ident $($rest:tt)*
+    ) => {
+        $crate::define_op!(@parse_attrs
+            meta: [$(#[$meta])*],
+            vis: $vis,
+            dialect: $dialect,
+            op: $op,
+            rest: [$($rest)*]
+        );
+    };
+
+    // ========================================================================
+    // @parse_attrs - Extract [attrs] if present
     // ========================================================================
 
-    // With attributes, fixed operands, WITH result, optional region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?]($($operand:ident),* $(,)?) -> result { $($region:ident)? }
+    // Has attrs: [$attr, ...]
+    (@parse_attrs
+        meta: $meta:tt,
+        vis: $vis:vis,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        rest: [[$($attr:ident),* $(,)?] $($rest:tt)*]
     ) => {
-        $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
+        $crate::define_op!(@parse_operands
+            meta: $meta,
             vis: $vis,
             dialect: $dialect,
             op: $op,
-            attrs: [$($attr),+],
+            attrs: [$($attr),*],
+            rest: [$($rest)*]
+        );
+    };
+
+    // No attrs: starts with (
+    (@parse_attrs
+        meta: $meta:tt,
+        vis: $vis:vis,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        rest: [$($rest:tt)*]
+    ) => {
+        $crate::define_op!(@parse_operands
+            meta: $meta,
+            vis: $vis,
+            dialect: $dialect,
+            op: $op,
+            attrs: [],
+            rest: [$($rest)*]
+        );
+    };
+
+    // ========================================================================
+    // @parse_operands - Extract (operands)
+    // ========================================================================
+
+    // Variadic: (..$name)
+    (@parse_operands
+        meta: $meta:tt,
+        vis: $vis:vis,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        rest: [(..$operands:ident) $($rest:tt)*]
+    ) => {
+        $crate::define_op!(@parse_result
+            meta: $meta,
+            vis: $vis,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
+            operands: [variadic: $operands],
+            rest: [$($rest)*]
+        );
+    };
+
+    // Fixed: ($a, $b, ...)
+    (@parse_operands
+        meta: $meta:tt,
+        vis: $vis:vis,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        rest: [($($operand:ident),* $(,)?) $($rest:tt)*]
+    ) => {
+        $crate::define_op!(@parse_result
+            meta: $meta,
+            vis: $vis,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
             operands: [fixed: $($operand),*],
+            rest: [$($rest)*]
+        );
+    };
+
+    // ========================================================================
+    // @parse_result - Extract -> result if present
+    // ========================================================================
+
+    // Has result: -> result
+    (@parse_result
+        meta: $meta:tt,
+        vis: $vis:vis,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        operands: $operands:tt,
+        rest: [-> result $($rest:tt)*]
+    ) => {
+        $crate::define_op!(@parse_region
+            meta: $meta,
+            vis: $vis,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
+            operands: $operands,
             result: [result_ty],
-            region: [$($region)?]
+            rest: [$($rest)*]
         );
     };
 
-    // With attributes, fixed operands, NO result, optional region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?]($($operand:ident),* $(,)?) { $($region:ident)? }
+    // No result: starts with {
+    (@parse_result
+        meta: $meta:tt,
+        vis: $vis:vis,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        operands: $operands:tt,
+        rest: [$($rest:tt)*]
     ) => {
-        $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
+        $crate::define_op!(@parse_region
+            meta: $meta,
             vis: $vis,
             dialect: $dialect,
             op: $op,
-            attrs: [$($attr),+],
-            operands: [fixed: $($operand),*],
+            attrs: $attrs,
+            operands: $operands,
             result: [],
-            region: [$($region)?]
+            rest: [$($rest)*]
         );
     };
 
-    // With attributes, variadic operands, WITH result, optional region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?](..$operands:ident) -> result { $($region:ident)? }
+    // ========================================================================
+    // @parse_region - Extract { region } or {}
+    // ========================================================================
+
+    // Has region: { $name }
+    (@parse_region
+        meta: $meta:tt,
+        vis: $vis:vis,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        operands: $operands:tt,
+        result: $result:tt,
+        rest: [{ $region:ident }]
     ) => {
         $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
+            meta: $meta,
             vis: $vis,
             dialect: $dialect,
             op: $op,
-            attrs: [$($attr),+],
-            operands: [variadic: $operands],
-            result: [result_ty],
-            region: [$($region)?]
+            attrs: $attrs,
+            operands: $operands,
+            result: $result,
+            region: [$region]
         );
     };
 
-    // With attributes, variadic operands, no result, optional region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?](..$operands:ident) { $($region:ident)? }
+    // No region: {}
+    (@parse_region
+        meta: $meta:tt,
+        vis: $vis:vis,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        operands: $operands:tt,
+        result: $result:tt,
+        rest: [{}]
     ) => {
         $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
+            meta: $meta,
             vis: $vis,
             dialect: $dialect,
             op: $op,
-            attrs: [$($attr),+],
-            operands: [variadic: $operands],
-            result: [],
-            region: [$($region)?]
-        );
-    };
-
-    // With attributes, no operands, WITH result, optional region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?]() -> result { $($region:ident)? }
-    ) => {
-        $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
-            vis: $vis,
-            dialect: $dialect,
-            op: $op,
-            attrs: [$($attr),+],
-            operands: [fixed:],
-            result: [result_ty],
-            region: [$($region)?]
-        );
-    };
-
-    // With attributes, no operands, no result, optional region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?]() { $($region:ident)? }
-    ) => {
-        $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
-            vis: $vis,
-            dialect: $dialect,
-            op: $op,
-            attrs: [$($attr),+],
-            operands: [fixed:],
-            result: [],
-            region: [$($region)?]
-        );
-    };
-
-    // No attributes, fixed operands, WITH result, optional region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident($($operand:ident),* $(,)?) -> result { $($region:ident)? }
-    ) => {
-        $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
-            vis: $vis,
-            dialect: $dialect,
-            op: $op,
-            attrs: [],
-            operands: [fixed: $($operand),*],
-            result: [result_ty],
-            region: [$($region)?]
-        );
-    };
-
-    // No attributes, fixed operands, NO result, optional region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident($($operand:ident),+ $(,)?) { $($region:ident)? }
-    ) => {
-        $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
-            vis: $vis,
-            dialect: $dialect,
-            op: $op,
-            attrs: [],
-            operands: [fixed: $($operand),+],
-            result: [],
-            region: [$($region)?]
-        );
-    };
-
-    // No attributes, variadic operands, WITH result, optional region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident(..$operands:ident) -> result { $($region:ident)? }
-    ) => {
-        $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
-            vis: $vis,
-            dialect: $dialect,
-            op: $op,
-            attrs: [],
-            operands: [variadic: $operands],
-            result: [result_ty],
-            region: [$($region)?]
-        );
-    };
-
-    // No attributes, variadic operands, no result, optional region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident(..$operands:ident) { $($region:ident)? }
-    ) => {
-        $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
-            vis: $vis,
-            dialect: $dialect,
-            op: $op,
-            attrs: [],
-            operands: [variadic: $operands],
-            result: [],
-            region: [$($region)?]
-        );
-    };
-
-    // No attributes, no operands, WITH result, optional region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident() -> result { $($region:ident)? }
-    ) => {
-        $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
-            vis: $vis,
-            dialect: $dialect,
-            op: $op,
-            attrs: [],
-            operands: [fixed:],
-            result: [result_ty],
-            region: [$($region)?]
-        );
-    };
-
-    // No attributes, no operands, no result, optional region (minimal)
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident() { $($region:ident)? }
-    ) => {
-        $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
-            vis: $vis,
-            dialect: $dialect,
-            op: $op,
-            attrs: [],
-            operands: [fixed:],
-            result: [],
-            region: [$($region)?]
+            attrs: $attrs,
+            operands: $operands,
+            result: $result,
+            region: []
         );
     };
 
@@ -342,7 +332,7 @@ macro_rules! define_op {
     // ========================================================================
 
     (@impl
-        meta: [$(#[$meta:meta])*],
+        meta: [$($meta:tt)*],
         vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
@@ -352,7 +342,7 @@ macro_rules! define_op {
         region: [$($region:ident)?]
     ) => {
         $crate::paste::paste! {
-            $(#[$meta])*
+            $($meta)*
             #[derive(Clone, Copy)]
             $vis struct [<$op:camel>]<'db> {
                 op: $crate::Operation<'db>,
@@ -440,7 +430,7 @@ macro_rules! define_op {
     // ========================================================================
 
     (@impl
-        meta: [$(#[$meta:meta])*],
+        meta: [$($meta:tt)*],
         vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
@@ -450,7 +440,7 @@ macro_rules! define_op {
         region: [$($region:ident)?]
     ) => {
         $crate::paste::paste! {
-            $(#[$meta])*
+            $($meta)*
             #[derive(Clone, Copy)]
             $vis struct [<$op:camel>]<'db> {
                 op: $crate::Operation<'db>,
