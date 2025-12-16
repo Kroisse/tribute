@@ -422,6 +422,12 @@ macro_rules! define_op {
                     Self { op }
                 }
 
+                /// Get the underlying Operation.
+                #[allow(dead_code)]
+                pub fn operation(self) -> $crate::Operation<'db> {
+                    self.op
+                }
+
                 pub fn new(
                     db: &'db dyn salsa::Database,
                     location: $crate::Location<'db>,
@@ -517,6 +523,12 @@ macro_rules! define_op {
             impl<'db> [<$op:camel>]<'db> {
                 pub(crate) fn wrap_unchecked(op: $crate::Operation<'db>) -> Self {
                     Self { op }
+                }
+
+                /// Get the underlying Operation.
+                #[allow(dead_code)]
+                pub fn operation(self) -> $crate::Operation<'db> {
+                    self.op
                 }
 
                 pub fn new(
@@ -616,6 +628,12 @@ macro_rules! define_op {
             impl<'db> [<$op:camel>]<'db> {
                 pub(crate) fn wrap_unchecked(op: $crate::Operation<'db>) -> Self {
                     Self { op }
+                }
+
+                /// Get the underlying Operation.
+                #[allow(dead_code)]
+                pub fn operation(self) -> $crate::Operation<'db> {
+                    self.op
                 }
 
                 pub fn new(
