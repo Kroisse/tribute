@@ -178,14 +178,25 @@ pub enum Expr {
     Tuple(Box<Spanned<Expr>>, Vec<Spanned<Expr>>),
     /// Record expression: User { name: "Alice", age: 30 }
     Record(RecordExpression),
-    /// Operator as function: (+), (-), (<>), etc.
-    OperatorFn(String),
+    /// Operator as function: (+), (-), (<>), (Int::+), (String::<>), etc.
+    OperatorFn(OperatorFnExpression),
+}
+
+/// Operator function expression: (+), (Int::+), (String::<>)
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct OperatorFnExpression {
+    /// The operator: "+", "-", "<>", etc.
+    pub op: String,
+    /// Optional type qualifier: Some("Int") for (Int::+), None for (+)
+    pub qualifier: Option<Identifier>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BinaryExpression {
     pub left: Box<Spanned<Expr>>,
     pub operator: BinaryOperator,
+    /// Optional type qualifier: Some("Int") for `a Int::+ b`, None for `a + b`
+    pub qualifier: Option<Identifier>,
     pub right: Box<Spanned<Expr>>,
 }
 

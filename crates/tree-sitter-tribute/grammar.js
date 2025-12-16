@@ -311,7 +311,9 @@ module.exports = grammar({
       // 2: &&
       prec.left(2, seq($._expression, '&&', $._expression)),
       // 1: ||
-      prec.left(1, seq($._expression, '||', $._expression))
+      prec.left(1, seq($._expression, '||', $._expression)),
+      // Qualified operators: a Int::+ b, xs List::<> ys
+      prec.left(5, seq($._expression, $.qualified_operator, $._expression))
     ),
 
     call_expression: $ => prec(10, seq(
@@ -503,19 +505,32 @@ module.exports = grammar({
       $.block  // { expr } for grouping
     ),
 
-    // Operator as function: (+), (<>), (==), etc.
-    // Uses token.immediate to avoid conflicts with other uses of parentheses
+    // All binary operators
+    _operator: $ => choice(
+      '+', '-', '*', '/', '%',           // Arithmetic
+      '<>', '==', '!=', '<=', '>=', '<', '>', // Comparison & concat
+      '&&', '||'                          // Logical
+    ),
+
+    // Operator as function: (+), (<>), (==), (Int::+), (String::<>), etc.
     operator_fn: $ => seq(
       '(',
-      field('operator', alias(
-        token(choice(
+      field('operator', choice(
+        alias(token(choice(
           '+', '-', '*', '/', '%',
           '<>', '==', '!=', '<=', '>=', '<', '>',
           '&&', '||'
-        )),
-        $.operator
+        )), $.operator),
+        $.qualified_operator
       )),
       ')'
+    ),
+
+    // Qualified operator: Int::+, List::<>, String::==
+    qualified_operator: $ => seq(
+      field('type', $.type_identifier),
+      '::',
+      field('operator', alias($._operator, $.operator))
     ),
 
     // Record expression: User { name: "Alice", age: 30 }

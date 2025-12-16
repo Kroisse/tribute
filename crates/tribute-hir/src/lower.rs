@@ -150,28 +150,14 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
         AstExpr::Binary(bin_expr) => {
             let left = Box::new(lower_expr(&bin_expr.left)?);
             let right = Box::new(lower_expr(&bin_expr.right)?);
-            let op_name = match bin_expr.operator {
-                // Arithmetic
-                tribute_ast::BinaryOperator::Add => "+".to_string(),
-                tribute_ast::BinaryOperator::Subtract => "-".to_string(),
-                tribute_ast::BinaryOperator::Multiply => "*".to_string(),
-                tribute_ast::BinaryOperator::Divide => "/".to_string(),
-                tribute_ast::BinaryOperator::Modulo => "%".to_string(),
-                // Comparison
-                tribute_ast::BinaryOperator::Equal => "==".to_string(),
-                tribute_ast::BinaryOperator::NotEqual => "!=".to_string(),
-                tribute_ast::BinaryOperator::LessThan => "<".to_string(),
-                tribute_ast::BinaryOperator::GreaterThan => ">".to_string(),
-                tribute_ast::BinaryOperator::LessEqual => "<=".to_string(),
-                tribute_ast::BinaryOperator::GreaterEqual => ">=".to_string(),
-                // Logical
-                tribute_ast::BinaryOperator::And => "&&".to_string(),
-                tribute_ast::BinaryOperator::Or => "||".to_string(),
-                // Concatenation
-                tribute_ast::BinaryOperator::Concat => "<>".to_string(),
+            let op_name = operator_to_string(&bin_expr.operator);
+            // If there's a qualifier, create a qualified name like "Int::+"
+            let func_name = match &bin_expr.qualifier {
+                Some(q) => format!("{}::{}", q, op_name),
+                None => op_name,
             };
             Expr::Call {
-                func: Box::new((Expr::Variable(op_name), span)),
+                func: Box::new((Expr::Variable(func_name), span)),
                 args: vec![*left, *right],
             }
         }
@@ -254,10 +240,14 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
                 fields: fields?,
             }
         }
-        AstExpr::OperatorFn(op) => {
+        AstExpr::OperatorFn(op_fn) => {
             // Operator functions are just references to the operator as a variable
-            // e.g., (+) becomes Variable("+")
-            Expr::Variable(op.clone())
+            // e.g., (+) becomes Variable("+"), (Int::+) becomes Variable("Int::+")
+            let func_name = match &op_fn.qualifier {
+                Some(q) => format!("{}::{}", q, op_fn.op),
+                None => op_fn.op.clone(),
+            };
+            Expr::Variable(func_name)
         }
     };
 
@@ -388,6 +378,26 @@ fn lower_handler_pattern(
                 continuation: continuation.clone(),
             })
         }
+    }
+}
+
+/// Convert a BinaryOperator to its string representation
+fn operator_to_string(op: &tribute_ast::BinaryOperator) -> String {
+    match op {
+        tribute_ast::BinaryOperator::Add => "+".to_string(),
+        tribute_ast::BinaryOperator::Subtract => "-".to_string(),
+        tribute_ast::BinaryOperator::Multiply => "*".to_string(),
+        tribute_ast::BinaryOperator::Divide => "/".to_string(),
+        tribute_ast::BinaryOperator::Modulo => "%".to_string(),
+        tribute_ast::BinaryOperator::Equal => "==".to_string(),
+        tribute_ast::BinaryOperator::NotEqual => "!=".to_string(),
+        tribute_ast::BinaryOperator::LessThan => "<".to_string(),
+        tribute_ast::BinaryOperator::GreaterThan => ">".to_string(),
+        tribute_ast::BinaryOperator::LessEqual => "<=".to_string(),
+        tribute_ast::BinaryOperator::GreaterEqual => ">=".to_string(),
+        tribute_ast::BinaryOperator::And => "&&".to_string(),
+        tribute_ast::BinaryOperator::Or => "||".to_string(),
+        tribute_ast::BinaryOperator::Concat => "<>".to_string(),
     }
 }
 

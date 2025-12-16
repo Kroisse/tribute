@@ -731,10 +731,30 @@ impl TributeParser {
             "record_expression" => self.parse_record_expression(node, source),
             "block" => self.parse_block_as_expr(node, source),
             "operator_fn" => {
-                // operator_fn has a field "operator" containing the operator token
+                // operator_fn has a field "operator" containing either:
+                // - a simple operator token: (+), (<>)
+                // - a qualified_operator: (Int::+), (String::<>)
                 if let Some(op_node) = node.child_by_field_name("operator") {
-                    let op = op_node.utf8_text(source.as_bytes())?.to_string();
-                    Ok(Expr::OperatorFn(op))
+                    if op_node.kind() == "qualified_operator" {
+                        // Qualified operator: (Int::+)
+                        let (qualifier, _bin_op) =
+                            self.parse_qualified_operator(op_node, source)?;
+                        let inner_op_node = op_node
+                            .child_by_field_name("operator")
+                            .ok_or("Missing operator in qualified operator")?;
+                        let op = inner_op_node.utf8_text(source.as_bytes())?.to_string();
+                        Ok(Expr::OperatorFn(OperatorFnExpression {
+                            op,
+                            qualifier: Some(qualifier),
+                        }))
+                    } else {
+                        // Simple operator: (+)
+                        let op = op_node.utf8_text(source.as_bytes())?.to_string();
+                        Ok(Expr::OperatorFn(OperatorFnExpression {
+                            op,
+                            qualifier: None,
+                        }))
+                    }
                 } else {
                     Err("Missing operator in operator_fn".into())
                 }
@@ -759,36 +779,24 @@ impl TributeParser {
         let mut cursor = node.walk();
         let mut left = None;
         let mut operator = None;
+        let mut qualifier = None;
         let mut right = None;
 
         for child in node.children(&mut cursor) {
-            match child.kind() {
-                // Arithmetic
-                "+" => operator = Some(BinaryOperator::Add),
-                "-" => operator = Some(BinaryOperator::Subtract),
-                "*" => operator = Some(BinaryOperator::Multiply),
-                "/" => operator = Some(BinaryOperator::Divide),
-                "%" => operator = Some(BinaryOperator::Modulo),
-                // Comparison
-                "==" => operator = Some(BinaryOperator::Equal),
-                "!=" => operator = Some(BinaryOperator::NotEqual),
-                "<" => operator = Some(BinaryOperator::LessThan),
-                ">" => operator = Some(BinaryOperator::GreaterThan),
-                "<=" => operator = Some(BinaryOperator::LessEqual),
-                ">=" => operator = Some(BinaryOperator::GreaterEqual),
-                // Logical
-                "&&" => operator = Some(BinaryOperator::And),
-                "||" => operator = Some(BinaryOperator::Or),
-                // Concatenation
-                "<>" => operator = Some(BinaryOperator::Concat),
-                _ => {
-                    // Try to parse as expression
-                    if let Ok(expr) = self.node_to_expr_with_span(child, source) {
-                        if left.is_none() {
-                            left = Some(Box::new(expr));
-                        } else if right.is_none() {
-                            right = Some(Box::new(expr));
-                        }
+            // Check for qualified_operator first
+            if child.kind() == "qualified_operator" {
+                let (q, op) = self.parse_qualified_operator(child, source)?;
+                qualifier = Some(q);
+                operator = Some(op);
+            } else if let Some(op) = parse_operator_token(child.kind()) {
+                operator = Some(op);
+            } else {
+                // Try to parse as expression
+                if let Ok(expr) = self.node_to_expr_with_span(child, source) {
+                    if left.is_none() {
+                        left = Some(Box::new(expr));
+                    } else if right.is_none() {
+                        right = Some(Box::new(expr));
                     }
                 }
             }
@@ -801,8 +809,30 @@ impl TributeParser {
         Ok(Expr::Binary(BinaryExpression {
             left,
             operator,
+            qualifier,
             right,
         }))
+    }
+
+    /// Parse a qualified operator node like `Int::+` or `List::<>`
+    fn parse_qualified_operator(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<(Identifier, BinaryOperator), Box<dyn std::error::Error>> {
+        let type_node = node
+            .child_by_field_name("type")
+            .ok_or("Missing type in qualified operator")?;
+        let qualifier = type_node.utf8_text(source.as_bytes())?.to_string();
+
+        let op_node = node
+            .child_by_field_name("operator")
+            .ok_or("Missing operator in qualified operator")?;
+        let op_str = op_node.utf8_text(source.as_bytes())?;
+        let operator =
+            parse_operator_token(op_str).ok_or_else(|| format!("Unknown operator: {}", op_str))?;
+
+        Ok((qualifier, operator))
     }
 
     fn parse_call_expression(
@@ -1600,6 +1630,31 @@ fn process_escape_sequences(input: &str) -> Result<String, StringLiteralError> {
     match String::from_utf8(result) {
         Ok(valid_string) => Ok(valid_string),
         Err(_) => Err(StringLiteralError::InvalidUtf8Sequence),
+    }
+}
+
+/// Parse an operator token string to a BinaryOperator
+fn parse_operator_token(token: &str) -> Option<BinaryOperator> {
+    match token {
+        // Arithmetic
+        "+" => Some(BinaryOperator::Add),
+        "-" => Some(BinaryOperator::Subtract),
+        "*" => Some(BinaryOperator::Multiply),
+        "/" => Some(BinaryOperator::Divide),
+        "%" => Some(BinaryOperator::Modulo),
+        // Comparison
+        "==" => Some(BinaryOperator::Equal),
+        "!=" => Some(BinaryOperator::NotEqual),
+        "<" => Some(BinaryOperator::LessThan),
+        ">" => Some(BinaryOperator::GreaterThan),
+        "<=" => Some(BinaryOperator::LessEqual),
+        ">=" => Some(BinaryOperator::GreaterEqual),
+        // Logical
+        "&&" => Some(BinaryOperator::And),
+        "||" => Some(BinaryOperator::Or),
+        // Concatenation
+        "<>" => Some(BinaryOperator::Concat),
+        _ => None,
     }
 }
 
