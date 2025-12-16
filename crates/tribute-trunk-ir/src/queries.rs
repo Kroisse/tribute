@@ -85,7 +85,7 @@ pub fn compile_to_hir(
     use salsa::Database;
 
     let db = tribute_core::TributeDatabaseImpl::default();
-    let file = SourceFile::from_path(&db, path.to_path_buf(), source.to_string());
+    let file = SourceFile::new(&db, path.to_path_buf(), source.to_string());
 
     // Since we need to return the HIR program, we use the database's attach method
     db.attach(|db| {

@@ -15,7 +15,7 @@ cranelift-object = "0.120"
 derive_more = { version = "2.0", features = ["display", "error", "from"] }
 insta = "1.43.1"
 object = { version = "0.36", features = ["write_core"] }
-salsa = "0.22.0"
+salsa = "0.24.0"
 serde = { version = "1.0", features = ["derive"] }
 target-lexicon = "0.13"
 tempfile = "3.8"
