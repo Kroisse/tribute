@@ -1,0 +1,13 @@
+[package]
+name = "tribute-passes"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Compiler passes for Tribute (AST to TrunkIR lowering, type inference, etc.)"
+
+[dependencies]
+salsa.workspace = true
+serde.workspace = true
+tribute-ast.workspace = true
+tribute-core.workspace = true
+tribute-trunk-ir.workspace = true

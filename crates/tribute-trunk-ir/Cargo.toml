@@ -3,13 +3,12 @@ name = "tribute-trunk-ir"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "TrunkIR (multi-level dialect IR) for Tribute (transitional)"
+description = "TrunkIR (multi-level dialect IR) for Tribute"
 
 [dependencies]
 paste.workspace = true
 salsa.workspace = true
 serde.workspace = true
 smallvec.workspace = true
-tribute-ast.workspace = true
 tribute-core.workspace = true
 

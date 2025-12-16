@@ -1,23 +1,14 @@
 //! Tribute TrunkIR crate.
 //!
 //! `new-plans/ir.md` defines TrunkIR as the compiler's central multi-level dialect IR.
-//! This crate is the new home for IR definitions and lowering queries.
-//!
-//! Note: the current implementation is transitional and still exposes the existing
-//! HIR-shaped IR while the dialect-based TrunkIR is introduced incrementally.
+//! This crate provides IR definitions for the multi-level dialect system.
 
 // === Dialect modules ===
 pub mod dialect;
 
-// === Passes ===
-pub mod pass;
-
-// === Other modules ===
-pub mod hir;
+// === IR infrastructure ===
 pub mod ir;
-pub mod lower;
 pub mod ops;
-pub mod queries;
 pub mod types;
 
 // Re-export paste for use in macros
@@ -30,9 +21,6 @@ pub use smallvec::{self, SmallVec};
 // Re-export Location for use in macros
 pub use tribute_core::Location;
 
-pub use hir::*;
 pub use ir::*;
-pub use lower::{FunctionDef, LowerError, LowerResult};
 pub use ops::{ConversionError, DialectOp};
-pub use queries::*;
 pub use types::*;

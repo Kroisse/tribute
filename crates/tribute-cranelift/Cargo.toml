@@ -14,6 +14,7 @@ target-lexicon.workspace = true
 object.workspace = true
 tribute-ast.workspace = true
 tribute-core.workspace = true
+tribute-passes.workspace = true
 tribute-trunk-ir.workspace = true
 salsa.workspace = true
 derive_more.workspace = true

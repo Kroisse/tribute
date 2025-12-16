@@ -5,13 +5,13 @@
 
 use std::collections::HashMap;
 
-use crate::dialect::{arith, core, func, src};
-use crate::{Attribute, BlockBuilder, Region, Type, Value};
 use tribute_ast::{
     BinaryExpression, BinaryOperator, CallExpression, Expr, FunctionDefinition, ItemKind,
     LambdaExpression, LetStatement, Pattern, Program, Statement,
 };
 use tribute_core::{Location, PathId, Span, Spanned};
+use tribute_trunk_ir::dialect::{arith, core, func, src};
+use tribute_trunk_ir::{Attribute, BlockBuilder, Region, Type, Value};
 
 /// Context for lowering, tracking local variable bindings.
 struct LoweringCtx<'db> {
@@ -475,11 +475,11 @@ fn lower_binary_op<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DialectOp;
     use salsa::Database;
     use std::path::PathBuf;
     use tribute_ast::{BinaryExpression, Parameter};
     use tribute_core::TributeDatabaseImpl;
+    use tribute_trunk_ir::DialectOp;
 
     /// Helper tracked function to create AST and lower it.
     #[salsa::tracked]

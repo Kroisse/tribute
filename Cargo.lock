@@ -1054,6 +1054,7 @@ dependencies = [
  "tribute-ast",
  "tribute-core",
  "tribute-cranelift",
+ "tribute-passes",
  "tribute-trunk-ir",
 ]
 
@@ -1098,6 +1099,18 @@ dependencies = [
  "tribute",
  "tribute-ast",
  "tribute-core",
+ "tribute-passes",
+ "tribute-trunk-ir",
+]
+
+[[package]]
+name = "tribute-passes"
+version = "0.1.0"
+dependencies = [
+ "salsa",
+ "serde",
+ "tribute-ast",
+ "tribute-core",
  "tribute-trunk-ir",
 ]
 
@@ -1109,7 +1122,6 @@ dependencies = [
  "salsa",
  "serde",
  "smallvec",
- "tribute-ast",
  "tribute-core",
 ]
 

@@ -6,7 +6,7 @@
 use crate::builtins;
 use std::collections::HashMap;
 use tribute_ast::{Spanned, ast::Identifier};
-use tribute_trunk_ir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, Pattern};
+use tribute_passes::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, Pattern};
 
 type Error = Box<dyn std::error::Error + 'static>;
 
@@ -435,7 +435,7 @@ fn eval_spanned_expr<'db>(
             Ok(Value::Lambda(params, body))
         }
         Record { type_name, fields } => {
-            use tribute_trunk_ir::hir::RecordField;
+            use tribute_passes::hir::RecordField;
             let mut field_map = HashMap::new();
             for field in fields {
                 match field {
@@ -558,7 +558,7 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
                         return None;
                     }
                     match args {
-                        tribute_trunk_ir::hir::ConstructorArgs::None => {
+                        tribute_passes::hir::ConstructorArgs::None => {
                             // Match only if record has no fields
                             if fields.is_empty() {
                                 Some(Vec::new())
@@ -566,11 +566,11 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
                                 None
                             }
                         }
-                        tribute_trunk_ir::hir::ConstructorArgs::Positional(_) => {
+                        tribute_passes::hir::ConstructorArgs::Positional(_) => {
                             // Positional args don't make sense for records
                             None
                         }
-                        tribute_trunk_ir::hir::ConstructorArgs::Named {
+                        tribute_passes::hir::ConstructorArgs::Named {
                             fields: pattern_fields,
                             rest,
                         } => {

@@ -26,6 +26,7 @@ tree-sitter-tribute = { path = "crates/tree-sitter-tribute" }
 tribute-ast = { path = "crates/tribute-ast" }
 tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-core = { path = "crates/tribute-core" }
+tribute-passes = { path = "crates/tribute-passes" }
 tribute-trunk-ir = { path = "crates/tribute-trunk-ir" }
 
 [package]
@@ -56,4 +57,5 @@ salsa.workspace = true
 tribute-ast.workspace = true
 tribute-cranelift.workspace = true
 tribute-core.workspace = true
+tribute-passes.workspace = true
 tribute-trunk-ir.workspace = true
