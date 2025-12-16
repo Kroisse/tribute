@@ -1,0 +1,181 @@
+================================================================================
+Line comment
+================================================================================
+
+// This is a line comment
+fn main() { 1 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (line_comment)
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (nat_literal))))))
+
+================================================================================
+Line doc comment
+================================================================================
+
+/// This is a doc comment
+fn main() { 1 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (line_doc_comment)
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (nat_literal))))))
+
+================================================================================
+Block comment
+================================================================================
+
+/* This is a block comment */
+fn main() { 1 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (block_comment)
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (nat_literal))))))
+
+================================================================================
+Block doc comment
+================================================================================
+
+/** This is a block doc comment */
+fn main() { 1 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (block_doc_comment)
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (nat_literal))))))
+
+================================================================================
+Nested block comment
+================================================================================
+
+/* outer /* nested */ comment */
+fn main() { 1 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (block_comment)
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (nat_literal))))))
+
+================================================================================
+Multiple comments
+================================================================================
+
+// line comment
+/* block comment */
+/// doc comment
+/** block doc */
+fn main() { 1 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (line_comment)
+  (block_comment)
+  (line_doc_comment)
+  (block_doc_comment)
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (nat_literal))))))
+
+================================================================================
+Empty line comment
+================================================================================
+
+//
+fn main() { 1 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (line_comment)
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (nat_literal))))))
+
+================================================================================
+Comment inside function
+================================================================================
+
+fn main() {
+  // inside comment
+  1
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (line_comment)
+      (expression_statement
+        (primary_expression
+          (nat_literal))))))
+
+================================================================================
+Multiline block comment
+================================================================================
+
+/*
+ * This is a
+ * multiline comment
+ */
+fn main() { 1 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (block_comment)
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (nat_literal))))))

@@ -7,6 +7,8 @@ module.exports = grammar({
   externals: $ => [
     $.raw_string_literal,
     $.raw_bytes_literal,
+    $.block_comment,
+    $.block_doc_comment,
     $._error_sentinel,
   ],
 
@@ -722,15 +724,28 @@ module.exports = grammar({
     keyword_nil: $ => token(prec(1, 'Nil')),
 
     // Comments
-    line_comment: $ => token(seq(
+    // Line doc comment: /// ... (higher precedence to match before line_comment)
+    line_doc_comment: $ => token(prec(2, seq(
+      '///',
+      /.*/
+    ))),
+
+    // Line comment: // ... (lower precedence, won't match /// due to doc comment)
+    line_comment: $ => token(prec(1, seq(
       '//',
       /.*/
-    )),
+    ))),
+
+    // block_comment and block_doc_comment are handled by external scanner
+    // for proper nesting support: /* ... /* nested */ ... */
   },
 
   extras: $ => [
     /\s/,
     $.line_comment,
+    $.line_doc_comment,
+    $.block_comment,
+    $.block_doc_comment,
   ],
 
   word: $ => $.identifier,

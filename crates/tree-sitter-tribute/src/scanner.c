@@ -6,6 +6,10 @@ enum TokenType {
     RAW_STRING_LITERAL,
     // Raw bytes (no escape, no interpolation) - single token
     RAW_BYTES_LITERAL,
+    // Block comment with nesting support: /* ... /* nested */ ... */
+    BLOCK_COMMENT,
+    // Block doc comment with nesting support: /** ... */
+    BLOCK_DOC_COMMENT,
 
     // Future: multiline strings with interpolation need start/content/end
     // STRING_START,        // #" or s#"
@@ -98,6 +102,40 @@ static bool scan_raw_literal(TSLexer *lexer, enum TokenType token_type) {
     }
 }
 
+// Scan block comment with nesting support
+// Returns true if a complete block comment was scanned
+// is_doc_comment: true if this started with /** (doc comment)
+static bool scan_block_comment(TSLexer *lexer, bool is_doc_comment) {
+    // We've already consumed /* or /**
+    int nesting_depth = 1;
+
+    while (nesting_depth > 0) {
+        if (lexer->eof(lexer)) {
+            return false;  // Unterminated comment
+        }
+
+        if (lexer->lookahead == '/') {
+            advance(lexer);
+            if (lexer->lookahead == '*') {
+                advance(lexer);
+                nesting_depth++;  // Nested comment start
+            }
+        } else if (lexer->lookahead == '*') {
+            advance(lexer);
+            if (lexer->lookahead == '/') {
+                advance(lexer);
+                nesting_depth--;  // Comment end
+            }
+        } else {
+            advance(lexer);
+        }
+    }
+
+    lexer->result_symbol = is_doc_comment ? BLOCK_DOC_COMMENT : BLOCK_COMMENT;
+    lexer->mark_end(lexer);
+    return true;
+}
+
 bool tree_sitter_tribute_external_scanner_scan(
     void *payload,
     TSLexer *lexer,
@@ -134,6 +172,38 @@ bool tree_sitter_tribute_external_scanner_scan(
         if (valid_symbols[RAW_STRING_LITERAL]) {
             if (lexer->lookahead == '#' || lexer->lookahead == '"') {
                 return scan_raw_literal(lexer, RAW_STRING_LITERAL);
+            }
+        }
+    }
+
+    // Block comments: /* ... */ or /** ... */
+    if (lexer->lookahead == '/' &&
+        (valid_symbols[BLOCK_COMMENT] || valid_symbols[BLOCK_DOC_COMMENT])) {
+        lexer->mark_end(lexer);
+        advance(lexer);  // consume '/'
+
+        if (lexer->lookahead == '*') {
+            advance(lexer);  // consume '*'
+
+            // Check if it's a doc comment (/**)
+            // But /***/ is a regular comment, not a doc comment
+            if (lexer->lookahead == '*' && valid_symbols[BLOCK_DOC_COMMENT]) {
+                // Peek ahead to see if next char is '/'
+                advance(lexer);  // consume second '*'
+                if (lexer->lookahead == '/') {
+                    // This is /**/ - empty regular comment
+                    advance(lexer);
+                    lexer->result_symbol = BLOCK_COMMENT;
+                    lexer->mark_end(lexer);
+                    return true;
+                }
+                // It's /** followed by something else - doc comment
+                return scan_block_comment(lexer, true);
+            }
+
+            // Regular block comment
+            if (valid_symbols[BLOCK_COMMENT]) {
+                return scan_block_comment(lexer, false);
             }
         }
     }
