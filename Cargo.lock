@@ -1102,13 +1102,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tribute-hir"
-version = "0.1.0"
-dependencies = [
- "tribute-trunk-ir",
-]
-
-[[package]]
 name = "tribute-trunk-ir"
 version = "0.1.0"
 dependencies = [

@@ -1,8 +1,0 @@
-[package]
-name = "tribute-hir"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-
-[dependencies]
-tribute-trunk-ir.workspace = true
