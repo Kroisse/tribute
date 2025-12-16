@@ -149,6 +149,22 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
                 segments: segments?,
             })
         }
+        AstExpr::BytesInterpolation(interp) => {
+            let segments: LowerResult<Vec<_>> = interp
+                .segments
+                .iter()
+                .map(|segment| {
+                    Ok(crate::hir::BytesSegment {
+                        interpolation: Box::new(lower_expr(&segment.interpolation)?),
+                        trailing_bytes: segment.trailing_bytes.clone(),
+                    })
+                })
+                .collect();
+            Expr::BytesInterpolation(crate::hir::BytesInterpolation {
+                leading_bytes: interp.leading_bytes.clone(),
+                segments: segments?,
+            })
+        }
         AstExpr::Identifier(id) => Expr::Variable(id.clone()),
         AstExpr::Binary(bin_expr) => {
             let left = Box::new(lower_expr(&bin_expr.left)?);
@@ -305,6 +321,25 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
                     Ok(Pattern::Literal(Literal::StringInterpolation(
                         crate::hir::StringInterpolation {
                             leading_text: interp.leading_text.clone(),
+                            segments: segments?,
+                        },
+                    )))
+                }
+                LiteralPattern::Bytes(b) => Ok(Pattern::Literal(Literal::Bytes(b.clone()))),
+                LiteralPattern::BytesInterpolation(interp) => {
+                    let segments: LowerResult<Vec<_>> = interp
+                        .segments
+                        .iter()
+                        .map(|segment| {
+                            Ok(crate::hir::BytesSegment {
+                                interpolation: Box::new(lower_expr(&segment.interpolation)?),
+                                trailing_bytes: segment.trailing_bytes.clone(),
+                            })
+                        })
+                        .collect();
+                    Ok(Pattern::Literal(Literal::BytesInterpolation(
+                        crate::hir::BytesInterpolation {
+                            leading_bytes: interp.leading_bytes.clone(),
                             segments: segments?,
                         },
                     )))

@@ -43,6 +43,8 @@ pub enum Expr {
     Bool(bool),
     Nil,
     StringInterpolation(StringInterpolation),
+    /// Bytes literal: b"hello", b"\x00\x01", rb"raw"
+    BytesInterpolation(BytesInterpolation),
 
     /// Variable reference
     Variable(Identifier),
@@ -99,6 +101,7 @@ impl std::hash::Hash for Expr {
             Expr::Bool(b) => b.hash(state),
             Expr::Nil => {}
             Expr::StringInterpolation(s) => s.hash(state),
+            Expr::BytesInterpolation(b) => b.hash(state),
             Expr::Variable(id) => id.hash(state),
             Expr::Call { func, args } => {
                 func.hash(state);
@@ -230,6 +233,20 @@ pub struct StringSegment {
     pub trailing_text: String,
 }
 
+/// Bytes with interpolation: b"hello \{name}"
+#[derive(Clone, Debug, PartialEq, Hash, Serialize, Deserialize)]
+pub struct BytesInterpolation {
+    pub leading_bytes: Vec<u8>,
+    pub segments: Vec<BytesSegment>,
+}
+
+/// Bytes segment for interpolation
+#[derive(Clone, Debug, PartialEq, Hash, Serialize, Deserialize)]
+pub struct BytesSegment {
+    pub interpolation: Box<Spanned<Expr>>,
+    pub trailing_bytes: Vec<u8>,
+}
+
 /// Literal values for patterns
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Literal {
@@ -244,6 +261,9 @@ pub enum Literal {
     Bool(bool),
     Nil,
     StringInterpolation(StringInterpolation),
+    /// Bytes: b"hello", rb"raw"
+    Bytes(Vec<u8>),
+    BytesInterpolation(BytesInterpolation),
 }
 
 // Manual Hash implementation for Literal because f64 doesn't implement Hash
@@ -258,6 +278,8 @@ impl std::hash::Hash for Literal {
             Literal::Bool(b) => b.hash(state),
             Literal::Nil => {}
             Literal::StringInterpolation(s) => s.hash(state),
+            Literal::Bytes(b) => b.hash(state),
+            Literal::BytesInterpolation(b) => b.hash(state),
         }
     }
 }

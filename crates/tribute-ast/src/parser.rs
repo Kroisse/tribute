@@ -733,6 +733,14 @@ impl TributeParser {
                 // Raw strings: no escape processing, just literal content
                 self.parse_raw_string(node, source)
             }
+            "bytes_string" => {
+                // Bytes literals with escape sequences and interpolation
+                self.parse_bytes_string(node, source)
+            }
+            "raw_bytes" => {
+                // Raw bytes: no escape processing
+                self.parse_raw_bytes(node, source)
+            }
             "identifier" => {
                 let text = node.utf8_text(source.as_bytes())?;
                 Ok(Expr::Identifier(text.to_string()))
@@ -1503,6 +1511,83 @@ impl TributeParser {
         }
     }
 
+    /// Parse bytes string: b"hello", b"\x00\x01"
+    fn parse_bytes_string(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        let mut cursor = node.walk();
+        let mut segments: Vec<BytesSegment> = Vec::new();
+        let mut leading_bytes = Vec::new();
+        let mut current_bytes = Vec::new();
+        let mut expecting_bytes = true;
+
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "bytes_segment" => {
+                    let text = child.utf8_text(source.as_bytes())?;
+                    let processed = process_bytes_escape_sequences(text)?;
+                    if expecting_bytes {
+                        leading_bytes.extend(processed);
+                        expecting_bytes = false;
+                    } else {
+                        current_bytes.extend(processed);
+                    }
+                }
+                "bytes_interpolation" => {
+                    if let Some(expr_node) = child.child_by_field_name("expression") {
+                        let expr = self.node_to_expr(expr_node, source)?;
+                        let span = Span {
+                            start: expr_node.start_byte(),
+                            end: expr_node.end_byte(),
+                        };
+                        if let Some(last) = segments.last_mut() {
+                            last.trailing_bytes = std::mem::take(&mut current_bytes);
+                        }
+                        segments.push(BytesSegment {
+                            interpolation: Box::new((expr, span)),
+                            trailing_bytes: Vec::new(),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Handle trailing bytes after last interpolation
+        if let Some(last) = segments.last_mut() {
+            last.trailing_bytes = current_bytes;
+        }
+
+        Ok(Expr::BytesInterpolation(BytesInterpolation {
+            leading_bytes,
+            segments,
+        }))
+    }
+
+    /// Parse raw bytes: rb"hello", rb#"data"#
+    fn parse_raw_bytes(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        // raw_bytes contains raw_bytes_literal from external scanner
+        if let Some(literal_node) = node.child(0) {
+            let text = literal_node.utf8_text(source.as_bytes())?;
+            let content = extract_raw_bytes_content(text)?;
+            Ok(Expr::BytesInterpolation(BytesInterpolation {
+                leading_bytes: content.into_bytes(),
+                segments: Vec::new(),
+            }))
+        } else {
+            Ok(Expr::BytesInterpolation(BytesInterpolation {
+                leading_bytes: Vec::new(),
+                segments: Vec::new(),
+            }))
+        }
+    }
+
     fn parse_interpolated_string(
         &self,
         node: Node,
@@ -1616,6 +1701,26 @@ impl TributeParser {
                         self.parse_raw_string(child, source)
                     {
                         return Ok(LiteralPattern::String(interp.leading_text));
+                    }
+                }
+                "bytes_string" => {
+                    // Bytes pattern with possible interpolation
+                    if let Ok(Expr::BytesInterpolation(interp)) =
+                        self.parse_bytes_string(child, source)
+                    {
+                        if interp.segments.is_empty() {
+                            return Ok(LiteralPattern::Bytes(interp.leading_bytes));
+                        } else {
+                            return Ok(LiteralPattern::BytesInterpolation(interp));
+                        }
+                    }
+                }
+                "raw_bytes" => {
+                    // Raw bytes pattern - no escape processing
+                    if let Ok(Expr::BytesInterpolation(interp)) =
+                        self.parse_raw_bytes(child, source)
+                    {
+                        return Ok(LiteralPattern::Bytes(interp.leading_bytes));
                     }
                 }
                 "keyword_true" => return Ok(LiteralPattern::Bool(true)),
@@ -1751,6 +1856,81 @@ fn extract_raw_string_content(text: &str) -> Result<String, Box<dyn std::error::
         .ok_or("Raw string must have matching closing delimiter")?;
 
     Ok(content.to_string())
+}
+
+/// Extract content from a raw bytes literal like rb"hello" or rb#"hello"#
+fn extract_raw_bytes_content(text: &str) -> Result<String, Box<dyn std::error::Error>> {
+    // Must start with 'rb'
+    let rest = text
+        .strip_prefix("rb")
+        .ok_or("Raw bytes must start with 'rb'")?;
+
+    // Count and skip opening hashes
+    let hash_count = rest.chars().take_while(|&c| c == '#').count();
+    let after_hashes = &rest[hash_count..];
+
+    // Must have opening quote
+    let after_open_quote = after_hashes
+        .strip_prefix('"')
+        .ok_or("Raw bytes must have opening quote")?;
+
+    // Remove closing quote and hashes
+    let closing = format!("\"{}", "#".repeat(hash_count));
+    let content = after_open_quote
+        .strip_suffix(&closing)
+        .ok_or("Raw bytes must have matching closing delimiter")?;
+
+    Ok(content.to_string())
+}
+
+/// Process escape sequences in bytes literals
+/// Similar to process_escape_sequences but returns Vec<u8>
+fn process_bytes_escape_sequences(text: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut result = Vec::new();
+    let mut chars = text.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => result.push(b'\n'),
+                Some('r') => result.push(b'\r'),
+                Some('t') => result.push(b'\t'),
+                Some('0') => result.push(0),
+                Some('"') => result.push(b'"'),
+                Some('\\') => result.push(b'\\'),
+                Some('x') => {
+                    // \xNN hex escape
+                    let hex: String = chars.by_ref().take(2).collect();
+                    if hex.len() == 2 {
+                        if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                            result.push(byte);
+                        } else {
+                            return Err(format!("Invalid hex escape: \\x{}", hex).into());
+                        }
+                    } else {
+                        return Err("Incomplete hex escape".into());
+                    }
+                }
+                Some(other) => {
+                    // Unknown escape, keep as-is
+                    result.push(b'\\');
+                    if other.is_ascii() {
+                        result.push(other as u8);
+                    }
+                }
+                None => result.push(b'\\'),
+            }
+        } else if c.is_ascii() {
+            result.push(c as u8);
+        } else {
+            // Non-ASCII in bytes literal - encode as UTF-8
+            let mut buf = [0u8; 4];
+            let encoded = c.encode_utf8(&mut buf);
+            result.extend_from_slice(encoded.as_bytes());
+        }
+    }
+
+    Ok(result)
 }
 
 /// Parse a rune literal like ?a, ?\n, ?\x41, ?\u0041

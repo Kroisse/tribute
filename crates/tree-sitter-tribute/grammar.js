@@ -6,6 +6,7 @@ module.exports = grammar({
 
   externals: $ => [
     $.raw_string_literal,
+    $.raw_bytes_literal,
     $._error_sentinel,
   ],
 
@@ -389,6 +390,8 @@ module.exports = grammar({
       $.nat_literal,
       $.string,
       $.raw_string,
+      $.bytes_string,
+      $.raw_bytes,
       $.rune,
       $.keyword_true,
       $.keyword_false,
@@ -509,6 +512,8 @@ module.exports = grammar({
       $.nat_literal,
       $.string,
       $.raw_string,
+      $.bytes_string,
+      $.raw_bytes,
       $.rune,
       $.path_expression,
       $.identifier,
@@ -667,6 +672,30 @@ module.exports = grammar({
     // Raw strings: r"...", r#"..."#, r##"..."##, etc.
     // Handled by external scanner for proper hash delimiter matching
     raw_string: $ => $.raw_string_literal,
+
+    // Bytes string: b"..." with escape sequences and interpolation
+    bytes_string: $ => seq(
+      'b"',
+      $.bytes_segment,
+      optional(repeat1(seq(
+        $.bytes_interpolation,
+        $.bytes_segment
+      ))),
+      '"'
+    ),
+
+    bytes_segment: $ => prec(-1, /([^"\\]|\\[nrt0"\\]|\\x[0-9a-fA-F]{2})*/),
+
+    bytes_interpolation: $ => seq(
+      '\\',
+      '{',
+      field('expression', $._expression),
+      '}'
+    ),
+
+    // Raw bytes: rb"...", rb#"..."#, etc.
+    // Handled by external scanner for proper hash delimiter matching
+    raw_bytes: $ => $.raw_bytes_literal,
 
     // Identifiers start with lowercase letter or underscore (values, functions, constants)
     identifier: $ => /[a-z_][a-zA-Z0-9_]*/,

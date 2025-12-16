@@ -426,6 +426,7 @@ fn logical_and(args: &[Value]) -> Result<Value, Error> {
             Value::Rune(_) => true, // Runes are always truthy
             Value::Bool(b) => *b,
             Value::String(s) => !s.is_empty(),
+            Value::Bytes(bytes) => !bytes.is_empty(),
             Value::List(items) => !items.is_empty(),
             Value::Tuple(items) => !items.is_empty(),
             Value::Record(_, fields) => !fields.is_empty(),
@@ -452,6 +453,7 @@ fn logical_or(args: &[Value]) -> Result<Value, Error> {
             Value::Rune(_) => true, // Runes are always truthy
             Value::Bool(b) => *b,
             Value::String(s) => !s.is_empty(),
+            Value::Bytes(bytes) => !bytes.is_empty(),
             Value::List(items) => !items.is_empty(),
             Value::Tuple(items) => !items.is_empty(),
             Value::Record(_, fields) => !fields.is_empty(),

@@ -540,6 +540,9 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
             Expr::List(_) => Err(CompilationError::unsupported_feature("List literals")),
             Expr::Tuple(..) => Err(CompilationError::unsupported_feature("Tuple literals")),
             Expr::Record { .. } => Err(CompilationError::unsupported_feature("Record expressions")),
+            Expr::BytesInterpolation(_) => {
+                Err(CompilationError::unsupported_feature("Bytes literals"))
+            }
         }
     }
 
@@ -966,6 +969,10 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
                     ))
                 }
             }
+            Literal::Bytes(_) => Err(CompilationError::unsupported_feature("Bytes patterns")),
+            Literal::BytesInterpolation(_) => Err(CompilationError::unsupported_feature(
+                "Bytes interpolation patterns",
+            )),
         }
     }
 

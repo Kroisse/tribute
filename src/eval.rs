@@ -20,6 +20,8 @@ pub enum Value {
     /// Rune (Unicode codepoint): ?a, ?\n, ?\x41
     Rune(char),
     String(String),
+    /// Bytes: b"hello", rb"raw"
+    Bytes(Vec<u8>),
     List(Vec<Value>),
     /// Tuple value: #(a, b, c)
     Tuple(Vec<Value>),
@@ -57,6 +59,18 @@ impl std::fmt::Display for Value {
                 }
             }
             Value::String(s) => write!(f, "\"{}\"", s),
+            Value::Bytes(bytes) => {
+                // Display bytes as b"..." with hex escapes for non-printable bytes
+                f.write_str("b\"")?;
+                for &byte in bytes {
+                    if byte.is_ascii_graphic() || byte == b' ' {
+                        write!(f, "{}", byte as char)?;
+                    } else {
+                        write!(f, "\\x{:02x}", byte)?;
+                    }
+                }
+                f.write_str("\"")
+            }
             Value::List(items) => {
                 f.write_str("[")?;
                 for (i, item) in items.iter().enumerate() {
@@ -306,6 +320,24 @@ fn eval_spanned_expr<'db>(
                 Ok(Value::String(result))
             }
         }
+        BytesInterpolation(interp) => {
+            if interp.segments.is_empty() {
+                // Simple bytes without interpolation
+                Ok(Value::Bytes(interp.leading_bytes.clone()))
+            } else {
+                // Bytes with interpolation
+                let mut result = Vec::new();
+                result.extend_from_slice(&interp.leading_bytes);
+                for segment in &interp.segments {
+                    // Evaluate the interpolation expression
+                    let value = eval_spanned_expr(context, env, (*segment.interpolation).clone())?;
+                    let value_bytes = value_to_bytes(&value)?;
+                    result.extend_from_slice(&value_bytes);
+                    result.extend_from_slice(&segment.trailing_bytes);
+                }
+                Ok(Value::Bytes(result))
+            }
+        }
         Variable(name) => env.lookup(&name).cloned(),
         Call { func, args } => {
             let func_expr = eval_spanned_expr(context, env, *func)?;
@@ -475,6 +507,10 @@ fn value_to_string(value: &Value) -> Result<String, Error> {
         Value::Float(n) => Ok(n.to_string()),
         Value::Rune(ch) => Ok(ch.to_string()),
         Value::String(s) => Ok(s.clone()),
+        Value::Bytes(bytes) => {
+            // Convert bytes to string for interpolation (as lossy UTF-8)
+            Ok(String::from_utf8_lossy(bytes).into_owned())
+        }
         Value::List(items) => {
             let item_strings: Result<Vec<String>, Error> =
                 items.iter().map(value_to_string).collect();
@@ -498,6 +534,26 @@ fn value_to_string(value: &Value) -> Result<String, Error> {
         Value::Fn(name, _, _) => Ok(format!("<fn '{}'>", name)),
         Value::Lambda(params, _) => Ok(format!("<lambda({})>", params.join(", "))),
         Value::BuiltinFn(name, _) => Ok(format!("<builtin fn '{}'>", name)),
+    }
+}
+
+/// Convert a Value to bytes for bytes interpolation
+fn value_to_bytes(value: &Value) -> Result<Vec<u8>, Error> {
+    match value {
+        Value::String(s) => Ok(s.as_bytes().to_vec()),
+        Value::Bytes(bytes) => Ok(bytes.clone()),
+        Value::Nat(n) => Ok(n.to_string().into_bytes()),
+        Value::Int(n) => Ok(n.to_string().into_bytes()),
+        Value::Float(n) => Ok(n.to_string().into_bytes()),
+        Value::Rune(ch) => {
+            let mut buf = [0u8; 4];
+            Ok(ch.encode_utf8(&mut buf).as_bytes().to_vec())
+        }
+        other => {
+            // For other types, convert to string first then to bytes
+            let s = value_to_string(other)?;
+            Ok(s.into_bytes())
+        }
     }
 }
 
@@ -528,6 +584,26 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
                     } else {
                         // For now, string interpolation in patterns is not supported
                         // This would require complex pattern matching logic
+                        None
+                    }
+                }
+                (Literal::Bytes(pattern_bytes), Value::Bytes(value_bytes)) => {
+                    if pattern_bytes == value_bytes {
+                        Some(vec![])
+                    } else {
+                        None
+                    }
+                }
+                (Literal::BytesInterpolation(interp), Value::Bytes(bytes)) => {
+                    if interp.segments.is_empty() {
+                        // Simple bytes pattern
+                        if &interp.leading_bytes == bytes {
+                            Some(vec![])
+                        } else {
+                            None
+                        }
+                    } else {
+                        // For now, bytes interpolation in patterns is not supported
                         None
                     }
                 }

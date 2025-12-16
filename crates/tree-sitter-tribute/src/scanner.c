@@ -4,6 +4,8 @@
 enum TokenType {
     // Raw string (no escape, no interpolation) - single token
     RAW_STRING_LITERAL,
+    // Raw bytes (no escape, no interpolation) - single token
+    RAW_BYTES_LITERAL,
 
     // Future: multiline strings with interpolation need start/content/end
     // STRING_START,        // #" or s#"
@@ -51,14 +53,9 @@ static inline void skip(TSLexer *lexer) {
     lexer->advance(lexer, true);
 }
 
-// Scan raw string literal: r"...", r#"..."#, r##"..."##, etc.
-static bool scan_raw_string_literal(TSLexer *lexer) {
-    // Must start with 'r'
-    if (lexer->lookahead != 'r') {
-        return false;
-    }
-    advance(lexer);
-
+// Scan raw literal with hash delimiters
+// Used for both raw strings (r"...", r#"..."#) and raw bytes (rb"...", rb#"..."#)
+static bool scan_raw_literal(TSLexer *lexer, enum TokenType token_type) {
     // Count opening hashes
     uint8_t opening_hash_count = 0;
     while (lexer->lookahead == '#') {
@@ -90,7 +87,7 @@ static bool scan_raw_string_literal(TSLexer *lexer) {
 
             // If we matched all hashes, we're done
             if (closing_hash_count == opening_hash_count) {
-                lexer->result_symbol = RAW_STRING_LITERAL;
+                lexer->result_symbol = token_type;
                 lexer->mark_end(lexer);
                 return true;
             }
@@ -118,8 +115,27 @@ bool tree_sitter_tribute_external_scanner_scan(
         skip(lexer);
     }
 
-    if (valid_symbols[RAW_STRING_LITERAL] && lexer->lookahead == 'r') {
-        return scan_raw_string_literal(lexer);
+    // Both raw_string and raw_bytes start with 'r'
+    if (lexer->lookahead == 'r') {
+        // Check if it's rb" (raw bytes) or r" (raw string)
+        // We need to peek ahead without committing
+        lexer->mark_end(lexer);
+
+        advance(lexer);  // consume 'r'
+
+        if (lexer->lookahead == 'b' && valid_symbols[RAW_BYTES_LITERAL]) {
+            advance(lexer);  // consume 'b'
+            if (lexer->lookahead == '#' || lexer->lookahead == '"') {
+                return scan_raw_literal(lexer, RAW_BYTES_LITERAL);
+            }
+        }
+
+        // Not raw bytes, try raw string
+        if (valid_symbols[RAW_STRING_LITERAL]) {
+            if (lexer->lookahead == '#' || lexer->lookahead == '"') {
+                return scan_raw_literal(lexer, RAW_STRING_LITERAL);
+            }
+        }
     }
 
     return false;
