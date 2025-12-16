@@ -1477,15 +1477,19 @@ impl TributeParser {
         }
     }
 
-    /// Parse raw string: r"..." - no escape processing
+    /// Parse raw string: r"...", r#"..."#, r##"..."##, etc.
+    /// External scanner handles the full token, we extract content from it
     fn parse_raw_string(
         &self,
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
-        // raw_string has a "content" field containing raw_string_content
-        if let Some(content_node) = node.child_by_field_name("content") {
-            let content = content_node.utf8_text(source.as_bytes())?.to_string();
+        // raw_string contains raw_string_literal from external scanner
+        // The literal includes r, optional #s, quotes, and content
+        // We need to extract just the content
+        if let Some(literal_node) = node.child(0) {
+            let text = literal_node.utf8_text(source.as_bytes())?;
+            let content = extract_raw_string_content(text)?;
             Ok(Expr::StringInterpolation(StringInterpolation {
                 leading_text: content,
                 segments: Vec::new(),
@@ -1720,6 +1724,33 @@ fn parse_operator_token(token: &str) -> Option<BinaryOperator> {
         "<>" => Some(BinaryOperator::Concat),
         _ => None,
     }
+}
+
+/// Extract content from a raw string literal like r"hello" or r#"hello"#
+/// Returns the content without the r, #s, and quotes
+fn extract_raw_string_content(text: &str) -> Result<String, Box<dyn std::error::Error>> {
+    // Must start with 'r'
+    let rest = text
+        .strip_prefix('r')
+        .ok_or("Raw string must start with 'r'")?;
+
+    // Count and skip opening hashes
+    let hash_count = rest.chars().take_while(|&c| c == '#').count();
+    let after_hashes = &rest[hash_count..];
+
+    // Must have opening quote
+    let after_open_quote = after_hashes
+        .strip_prefix('"')
+        .ok_or("Raw string must have opening quote")?;
+
+    // Remove closing quote and hashes
+    // The content ends at the closing " followed by the same number of #s
+    let closing = format!("\"{}", "#".repeat(hash_count));
+    let content = after_open_quote
+        .strip_suffix(&closing)
+        .ok_or("Raw string must have matching closing delimiter")?;
+
+    Ok(content.to_string())
 }
 
 /// Parse a rune literal like ?a, ?\n, ?\x41, ?\u0041

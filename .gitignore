@@ -1,7 +1,11 @@
 /target
 .claude/settings.local.json
 CLAUDE.local.md
-crates/tree-sitter-tribute/src/
+# Tree-sitter generated files (scanner.c is manually maintained)
+crates/tree-sitter-tribute/src/parser.c
+crates/tree-sitter-tribute/src/grammar.json
+crates/tree-sitter-tribute/src/node-types.json
+crates/tree-sitter-tribute/src/tree_sitter/
 node_modules/
 .envrc
 

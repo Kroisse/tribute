@@ -4,6 +4,11 @@
 module.exports = grammar({
   name: 'tribute',
 
+  externals: $ => [
+    $.raw_string_literal,
+    $._error_sentinel,
+  ],
+
   rules: {
     source_file: $ => repeat($._item),
 
@@ -659,16 +664,9 @@ module.exports = grammar({
       '}'
     ),
 
-    // Raw strings: r"..." - no escape processing, content is literal
-    // TODO: r#"..."#, r##"..."## 등 hash delimiter 버전은 external scanner 필요
-    raw_string: $ => seq(
-      'r"',
-      field('content', $.raw_string_content),
-      '"'
-    ),
-
-    // Content for simple raw string - no " allowed
-    raw_string_content: $ => /[^"]*/,
+    // Raw strings: r"...", r#"..."#, r##"..."##, etc.
+    // Handled by external scanner for proper hash delimiter matching
+    raw_string: $ => $.raw_string_literal,
 
     // Identifiers start with lowercase letter or underscore (values, functions, constants)
     identifier: $ => /[a-z_][a-zA-Z0-9_]*/,
