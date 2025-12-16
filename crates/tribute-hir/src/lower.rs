@@ -127,7 +127,9 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
     let span = *span;
 
     let hir_expr = match ast_expr {
-        AstExpr::Number(n) => Expr::Number(*n),
+        AstExpr::Nat(n) => Expr::Nat(*n),
+        AstExpr::Int(n) => Expr::Int(*n),
+        AstExpr::Float(n) => Expr::Float(*n),
         AstExpr::Rune(ch) => Expr::Rune(*ch),
         AstExpr::Bool(b) => Expr::Bool(*b),
         AstExpr::Nil => Expr::Nil,
@@ -274,7 +276,9 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
     match pattern {
         AstPattern::Literal(lit) => {
             match lit {
-                LiteralPattern::Number(n) => Ok(Pattern::Literal(Literal::Number(*n))),
+                LiteralPattern::Nat(n) => Ok(Pattern::Literal(Literal::Nat(*n))),
+                LiteralPattern::Int(n) => Ok(Pattern::Literal(Literal::Int(*n))),
+                LiteralPattern::Float(n) => Ok(Pattern::Literal(Literal::Float(*n))),
                 LiteralPattern::Rune(ch) => Ok(Pattern::Literal(Literal::Rune(*ch))),
                 LiteralPattern::Bool(b) => Ok(Pattern::Literal(Literal::Bool(*b))),
                 LiteralPattern::Nil => Ok(Pattern::Literal(Literal::Nil)),

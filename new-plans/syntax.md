@@ -59,9 +59,19 @@ type where in do
 ```
 // 숫자 리터럴
 NatLiteral   ::= Digit+                        // 0, 1, 42 → Nat
+               | '0b' BinDigit+                // 0b1010 → Nat (binary)
+               | '0o' OctDigit+                // 0o777 → Nat (octal)
+               | '0x' HexDigit+                // 0xc0ffee → Nat (hexadecimal)
 IntLiteral   ::= ('+' | '-') Digit+            // +1, -1 → Int
+               | ('+' | '-') '0b' BinDigit+    // +0b1010, -0b1010 → Int
+               | ('+' | '-') '0o' OctDigit+    // +0o777, -0o777 → Int
+               | ('+' | '-') '0x' HexDigit+    // +0xc0ffee, -0xc0ffee → Int
 FloatLiteral ::= Digit+ '.' Digit+             // 1.0, 3.14 → Float
                | ('+' | '-') Digit+ '.' Digit+ // +1.0, -3.14 → Float
+
+BinDigit   ::= '0' | '1'
+OctDigit   ::= '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7'
+HexDigit   ::= Digit | 'a'..'f' | 'A'..'F'
 
 Number     ::= NatLiteral | IntLiteral | FloatLiteral
 
@@ -151,12 +161,19 @@ rb"\x00"                    // raw bytes (문자 그대로 \x00)
 1
 42
 1000
+0b1010       // binary: 10
+0o777        // octal: 511
+0xc0ffee     // hexadecimal: 12648430
 
 // Int (부호 명시)
 +1
 -1
 +42
 -1000
++0b1010      // binary: +10
+-0b1010      // binary: -10
++0o777       // octal: +511
+-0xc0ffee    // hexadecimal: -12648430
 
 // Float (소수점 + 소수부 필수)
 1.0

@@ -68,7 +68,7 @@ HirProgram {
                                     ),
                                     args: [
                                         (
-                                            Number(
+                                            Nat(
                                                 0,
                                             ),
                                             Span {
@@ -116,7 +116,7 @@ HirProgram {
                                     ),
                                     args: [
                                         (
-                                            Number(
+                                            Nat(
                                                 1,
                                             ),
                                             Span {
@@ -164,7 +164,7 @@ HirProgram {
                                     ),
                                     args: [
                                         (
-                                            Number(
+                                            Nat(
                                                 42,
                                             ),
                                             Span {
@@ -214,7 +214,7 @@ HirProgram {
                         cases: [
                             MatchCase {
                                 pattern: Literal(
-                                    Number(
+                                    Nat(
                                         0,
                                     ),
                                 ),
@@ -234,7 +234,7 @@ HirProgram {
                             },
                             MatchCase {
                                 pattern: Literal(
-                                    Number(
+                                    Nat(
                                         1,
                                     ),
                                 ),
@@ -254,7 +254,7 @@ HirProgram {
                             },
                             MatchCase {
                                 pattern: Literal(
-                                    Number(
+                                    Nat(
                                         2,
                                     ),
                                 ),

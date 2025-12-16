@@ -17,7 +17,7 @@ HirProgram {
                             "x",
                         ),
                         value: (
-                            Number(
+                            Nat(
                                 10,
                             ),
                             Span {
@@ -38,7 +38,7 @@ HirProgram {
                             "y",
                         ),
                         value: (
-                            Number(
+                            Nat(
                                 20,
                             ),
                             Span {

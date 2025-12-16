@@ -379,7 +379,9 @@ module.exports = grammar({
     ),
 
     literal_pattern: $ => choice(
-      $.number,
+      $.float_literal,
+      $.int_literal,
+      $.nat_literal,
       $.string,
       $.rune,
       $.keyword_true,
@@ -496,7 +498,9 @@ module.exports = grammar({
       $.keyword_true,
       $.keyword_false,
       $.keyword_nil,
-      $.number,
+      $.float_literal,
+      $.int_literal,
+      $.nat_literal,
       $.string,
       $.rune,
       $.path_expression,
@@ -603,7 +607,23 @@ module.exports = grammar({
       ')'
     ),
 
-    number: $ => /-?\d+(\.\d+)?/,
+    // Number literals with type distinction
+    // Nat: 0, 42, 0b1010, 0o777, 0xc0ffee (no sign)
+    // Int: +1, -1, +0b1010, -0xff (explicit sign required)
+    // Float: 1.0, +1.0, -3.14 (decimal point with digits required)
+    nat_literal: $ => token(choice(
+      /\d+/,                    // decimal: 0, 42
+      /0[bB][01]+/,             // binary: 0b1010
+      /0[oO][0-7]+/,            // octal: 0o777
+      /0[xX][0-9a-fA-F]+/       // hexadecimal: 0xc0ffee
+    )),
+    int_literal: $ => token(choice(
+      /[+-]\d+/,                // decimal: +1, -1
+      /[+-]0[bB][01]+/,         // binary: +0b1010, -0b1010
+      /[+-]0[oO][0-7]+/,        // octal: +0o777, -0o777
+      /[+-]0[xX][0-9a-fA-F]+/   // hexadecimal: +0xff, -0xff
+    )),
+    float_literal: $ => /[+-]?\d+\.\d+/,
 
     // Rune literal: ?a, ?\n, ?\t, ?\x41, ?\u0041
     // Matches: ? followed by either:

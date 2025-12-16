@@ -8,22 +8,22 @@ fn test_arithmetic_operations() {
     // Test addition
     let source = "fn main() { 5 + 3 }";
     let result = eval_str(&db, "test.trb", source).unwrap();
-    assert!(matches!(result, Value::Number(8)));
+    assert!(matches!(result, Value::Nat(8)));
 
-    // Test subtraction
+    // Test subtraction (returns Int because Nat - Nat can be negative)
     let source = "fn main() { 10 - 4 }";
     let result = eval_str(&db, "test.trb", source).unwrap();
-    assert!(matches!(result, Value::Number(6)));
+    assert!(matches!(result, Value::Int(6)));
 
     // Test multiplication
     let source = "fn main() { 6 * 7 }";
     let result = eval_str(&db, "test.trb", source).unwrap();
-    assert!(matches!(result, Value::Number(42)));
+    assert!(matches!(result, Value::Nat(42)));
 
     // Test division
     let source = "fn main() { 15 / 3 }";
     let result = eval_str(&db, "test.trb", source).unwrap();
-    assert!(matches!(result, Value::Number(5)));
+    assert!(matches!(result, Value::Nat(5)));
 
     // Test division by zero
     let source = "fn main() { 10 / 0 }";
@@ -52,10 +52,10 @@ fn test_string_manipulation() {
     let result = eval_str(&db, "test.trb", source).unwrap();
     assert!(matches!(result, Value::String(ref s) if s == "hello world"));
 
-    // Test to_number
+    // Test to_number (returns Int since parsing can yield negative numbers)
     let source = r#"fn main() { to_number("42") }"#;
     let result = eval_str(&db, "test.trb", source).unwrap();
-    assert!(matches!(result, Value::Number(42)));
+    assert!(matches!(result, Value::Int(42)));
 
     // Test to_number with invalid string
     let source = r#"fn main() { to_number("not_a_number") }"#;
@@ -92,7 +92,7 @@ fn test_match_case() {
         }
     "#;
     let result = eval_str(&db, "test.trb", source).unwrap();
-    assert!(matches!(result, Value::Number(100)));
+    assert!(matches!(result, Value::Nat(100)));
 
     // Test case with number patterns
     let source = r#"
@@ -128,7 +128,7 @@ fn test_function_definition_and_call() {
         fn main() { add_one(5) }
     "#;
     let result = eval_str(&db, "test.trb", source).unwrap();
-    assert!(matches!(result, Value::Number(6)));
+    assert!(matches!(result, Value::Nat(6)));
 }
 
 #[test]
@@ -143,5 +143,5 @@ fn test_let_binding() {
         }
     "#;
     let result = eval_str(&db, "test.trb", source).unwrap();
-    assert!(matches!(result, Value::Number(42)));
+    assert!(matches!(result, Value::Nat(42)));
 }

@@ -524,7 +524,9 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
     /// Lower an expression
     fn lower_expr(&mut self, db: &dyn Db, expr: &Expr) -> CompilationResult<Value> {
         match expr {
-            Expr::Number(n) => self.lower_number(*n),
+            Expr::Nat(n) => self.lower_number(*n as i64),
+            Expr::Int(n) => self.lower_number(*n),
+            Expr::Float(n) => self.lower_float(*n),
             Expr::Rune(_) => Err(CompilationError::unsupported_feature("Rune literals")),
             Expr::Bool(_) => Err(CompilationError::unsupported_feature("Bool literals")),
             Expr::Nil => Err(CompilationError::unsupported_feature("Nil literal")),
@@ -541,10 +543,22 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
         }
     }
 
-    /// Lower a number literal
+    /// Lower a number literal (integer)
     fn lower_number(&mut self, n: i64) -> CompilationResult<Value> {
         // Create f64 constant
         let float_val = self.builder.ins().f64const(n as f64);
+
+        // Call runtime to create number value
+        let value_from_number = self.import_runtime_func(self.runtime.value_from_number)?;
+        let value = self.builder.ins().call(value_from_number, &[float_val]);
+
+        Ok(self.builder.inst_results(value)[0])
+    }
+
+    /// Lower a float literal
+    fn lower_float(&mut self, n: f64) -> CompilationResult<Value> {
+        // Create f64 constant directly
+        let float_val = self.builder.ins().f64const(n);
 
         // Call runtime to create number value
         let value_from_number = self.import_runtime_func(self.runtime.value_from_number)?;
@@ -907,8 +921,26 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
         literal: &Literal,
     ) -> CompilationResult<Value> {
         match literal {
-            Literal::Number(n) => {
+            Literal::Nat(n) => {
+                let literal_value = self.lower_number(*n as i64)?;
+                let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
+                let comparison = self
+                    .builder
+                    .ins()
+                    .call(equals_func, &[match_value, literal_value]);
+                Ok(self.builder.inst_results(comparison)[0])
+            }
+            Literal::Int(n) => {
                 let literal_value = self.lower_number(*n)?;
+                let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
+                let comparison = self
+                    .builder
+                    .ins()
+                    .call(equals_func, &[match_value, literal_value]);
+                Ok(self.builder.inst_results(comparison)[0])
+            }
+            Literal::Float(n) => {
+                let literal_value = self.lower_float(*n)?;
                 let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
                 let comparison = self
                     .builder

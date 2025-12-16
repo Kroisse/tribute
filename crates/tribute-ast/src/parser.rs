@@ -705,10 +705,20 @@ impl TributeParser {
 
     fn node_to_expr(&self, node: Node, source: &str) -> Result<Expr, Box<dyn std::error::Error>> {
         match node.kind() {
-            "number" => {
+            "nat_literal" => {
                 let text = node.utf8_text(source.as_bytes())?;
-                let num = text.parse::<i64>()?;
-                Ok(Expr::Number(num))
+                let num = parse_nat_literal(text)?;
+                Ok(Expr::Nat(num))
+            }
+            "int_literal" => {
+                let text = node.utf8_text(source.as_bytes())?;
+                let num = parse_int_literal(text)?;
+                Ok(Expr::Int(num))
+            }
+            "float_literal" => {
+                let text = node.utf8_text(source.as_bytes())?;
+                let num = text.parse::<f64>()?;
+                Ok(Expr::Float(num))
             }
             "rune" => {
                 let text = node.utf8_text(source.as_bytes())?;
@@ -1536,10 +1546,20 @@ impl TributeParser {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
             match child.kind() {
-                "number" => {
+                "nat_literal" => {
                     let text = child.utf8_text(source.as_bytes())?;
-                    let num = text.parse::<i64>()?;
-                    return Ok(LiteralPattern::Number(num));
+                    let num = parse_nat_literal(text)?;
+                    return Ok(LiteralPattern::Nat(num));
+                }
+                "int_literal" => {
+                    let text = child.utf8_text(source.as_bytes())?;
+                    let num = parse_int_literal(text)?;
+                    return Ok(LiteralPattern::Int(num));
+                }
+                "float_literal" => {
+                    let text = child.utf8_text(source.as_bytes())?;
+                    let num = text.parse::<f64>()?;
+                    return Ok(LiteralPattern::Float(num));
                 }
                 "rune" => {
                     let text = child.utf8_text(source.as_bytes())?;
@@ -1719,6 +1739,44 @@ fn parse_rune_literal(text: &str) -> Result<char, Box<dyn std::error::Error>> {
             None => Err("Empty rune literal".into()),
         }
     }
+}
+
+/// Parse a Nat literal: decimal, binary, octal, or hexadecimal
+/// Examples: 42, 0b1010, 0o777, 0xc0ffee
+fn parse_nat_literal(text: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    if let Some(bin) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
+        Ok(u64::from_str_radix(bin, 2)?)
+    } else if let Some(oct) = text.strip_prefix("0o").or_else(|| text.strip_prefix("0O")) {
+        Ok(u64::from_str_radix(oct, 8)?)
+    } else if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        Ok(u64::from_str_radix(hex, 16)?)
+    } else {
+        Ok(text.parse::<u64>()?)
+    }
+}
+
+/// Parse an Int literal: signed decimal, binary, octal, or hexadecimal
+/// Examples: +1, -1, +0b1010, -0xff
+fn parse_int_literal(text: &str) -> Result<i64, Box<dyn std::error::Error>> {
+    let (sign, rest) = if let Some(rest) = text.strip_prefix('+') {
+        (1i64, rest)
+    } else if let Some(rest) = text.strip_prefix('-') {
+        (-1i64, rest)
+    } else {
+        return Err("Int literal must have explicit sign".into());
+    };
+
+    let abs_value = if let Some(bin) = rest.strip_prefix("0b").or_else(|| rest.strip_prefix("0B")) {
+        u64::from_str_radix(bin, 2)?
+    } else if let Some(oct) = rest.strip_prefix("0o").or_else(|| rest.strip_prefix("0O")) {
+        u64::from_str_radix(oct, 8)?
+    } else if let Some(hex) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+        u64::from_str_radix(hex, 16)?
+    } else {
+        rest.parse::<u64>()?
+    };
+
+    Ok(sign * (abs_value as i64))
 }
 
 #[cfg(test)]

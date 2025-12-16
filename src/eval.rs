@@ -11,7 +11,12 @@ pub type BuiltinFn = for<'a> fn(&'a [Value]) -> Result<Value, Error>;
 pub enum Value {
     Unit,
     Bool(bool),
-    Number(i64),
+    /// Natural number (non-negative): 0, 42, 0b1010
+    Nat(u64),
+    /// Integer (signed): +1, -1
+    Int(i64),
+    /// Float: 1.0, -3.14
+    Float(f64),
     /// Rune (Unicode codepoint): ?a, ?\n, ?\x41
     Rune(char),
     String(String),
@@ -36,7 +41,9 @@ impl std::fmt::Display for Value {
             Value::Unit => f.write_str("Nil"),
             Value::Bool(true) => f.write_str("True"),
             Value::Bool(false) => f.write_str("False"),
-            Value::Number(n) => write!(f, "{}", n),
+            Value::Nat(n) => write!(f, "{}", n),
+            Value::Int(n) => write!(f, "{}", n),
+            Value::Float(n) => write!(f, "{}", n),
             Value::Rune(ch) => {
                 // Display rune with ? prefix, using escape for special chars
                 match ch {
@@ -275,7 +282,9 @@ fn eval_spanned_expr<'db>(
     use Expr::*;
 
     match expr {
-        Number(n) => Ok(Value::Number(n)),
+        Nat(n) => Ok(Value::Nat(n)),
+        Int(n) => Ok(Value::Int(n)),
+        Float(n) => Ok(Value::Float(n)),
         Rune(ch) => Ok(Value::Rune(ch)),
         Bool(b) => Ok(Value::Bool(b)),
         Nil => Ok(Value::Unit),
@@ -461,7 +470,9 @@ fn value_to_string(value: &Value) -> Result<String, Error> {
         Value::Unit => Ok("Nil".to_string()),
         Value::Bool(true) => Ok("True".to_string()),
         Value::Bool(false) => Ok("False".to_string()),
-        Value::Number(n) => Ok(n.to_string()),
+        Value::Nat(n) => Ok(n.to_string()),
+        Value::Int(n) => Ok(n.to_string()),
+        Value::Float(n) => Ok(n.to_string()),
         Value::Rune(ch) => Ok(ch.to_string()),
         Value::String(s) => Ok(s.clone()),
         Value::List(items) => {
@@ -495,7 +506,14 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
         Pattern::Literal(lit) => {
             // Compare literal values
             match (lit, value) {
-                (Literal::Number(a), Value::Number(b)) if a == b => Some(vec![]),
+                (Literal::Nat(a), Value::Nat(b)) if a == b => Some(vec![]),
+                (Literal::Int(a), Value::Int(b)) if a == b => Some(vec![]),
+                // Allow Nat patterns to match Int values when the value is non-negative
+                (Literal::Nat(a), Value::Int(b)) if *b >= 0 && *a == (*b as u64) => Some(vec![]),
+                // Allow Float pattern matching with tolerance for equality
+                (Literal::Float(a), Value::Float(b)) if (a - b).abs() < f64::EPSILON => {
+                    Some(vec![])
+                }
                 (Literal::Rune(a), Value::Rune(b)) if a == b => Some(vec![]),
                 (Literal::Bool(a), Value::Bool(b)) if a == b => Some(vec![]),
                 (Literal::Nil, Value::Unit) => Some(vec![]),
@@ -691,7 +709,7 @@ mod tests {
             // Test simple arithmetic expression wrapped in a main function
             let source = r#"fn main() { 1 + 2 }"#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(3)) => {}
+                Ok(Value::Nat(3)) => {}
                 Ok(other) => panic!("Expected Number(3), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -718,7 +736,7 @@ mod tests {
             // Note: Use {} for grouping, () is reserved for operator functions
             let source = r#"fn main() { {2 * 3} + {8 / 2} }"#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(10)) => {}
+                Ok(Value::Nat(10)) => {}
                 Ok(other) => panic!("Expected Number(10), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -731,7 +749,7 @@ mod tests {
             // Test let binding without body
             let source = r#"fn main() { let x = 42; x }"#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(42)) => {}
+                Ok(Value::Nat(42)) => {}
                 Ok(other) => panic!("Expected Number(42), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -769,7 +787,7 @@ mod tests {
                 fn main() { add(10, 20) }
             "#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(30)) => {}
+                Ok(Value::Nat(30)) => {}
                 Ok(other) => panic!("Expected Number(30), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -786,7 +804,7 @@ mod tests {
                 fn main() { add_and_double(5, 10) }
             "#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(30)) => {}
+                Ok(Value::Nat(30)) => {}
                 Ok(other) => panic!("Expected Number(30), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -797,6 +815,7 @@ mod tests {
     fn test_hir_recursive_function() {
         TributeDatabaseImpl::default().attach(|db| {
             // Test recursive function (factorial)
+            // Note: Result is Int because subtraction (n - 1) returns Int
             let source = r#"
                 fn factorial(n) {
                   case n {
@@ -807,8 +826,8 @@ mod tests {
                 fn main() { factorial(5) }
             "#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(120)) => {}
-                Ok(other) => panic!("Expected Number(120), got {:?}", other),
+                Ok(Value::Nat(120)) | Ok(Value::Int(120)) => {}
+                Ok(other) => panic!("Expected 120, got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
         });
@@ -825,7 +844,7 @@ mod tests {
                 }
             "#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(7)) => {}
+                Ok(Value::Nat(7)) => {}
                 Ok(other) => panic!("Expected Number(7), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -846,7 +865,7 @@ mod tests {
                 }
             "#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(11)) => {}
+                Ok(Value::Nat(11)) => {}
                 Ok(other) => panic!("Expected Number(11), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -864,7 +883,7 @@ mod tests {
                 }
             "#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(42)) => {}
+                Ok(Value::Nat(42)) => {}
                 Ok(other) => panic!("Expected Number(42), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }

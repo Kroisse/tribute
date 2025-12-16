@@ -120,7 +120,7 @@ HirProgram {
                                     ),
                                     args: [
                                         (
-                                            Number(
+                                            Nat(
                                                 10,
                                             ),
                                             Span {
@@ -129,7 +129,7 @@ HirProgram {
                                             },
                                         ),
                                         (
-                                            Number(
+                                            Nat(
                                                 20,
                                             ),
                                             Span {
@@ -221,7 +221,7 @@ HirProgram {
                                                 ),
                                                 args: [
                                                     (
-                                                        Number(
+                                                        Nat(
                                                             3,
                                                         ),
                                                         Span {
@@ -230,7 +230,7 @@ HirProgram {
                                                         },
                                                     ),
                                                     (
-                                                        Number(
+                                                        Nat(
                                                             4,
                                                         ),
                                                         Span {
@@ -258,7 +258,7 @@ HirProgram {
                                                 ),
                                                 args: [
                                                     (
-                                                        Number(
+                                                        Nat(
                                                             15,
                                                         ),
                                                         Span {
@@ -267,7 +267,7 @@ HirProgram {
                                                         },
                                                     ),
                                                     (
-                                                        Number(
+                                                        Nat(
                                                             3,
                                                         ),
                                                         Span {
