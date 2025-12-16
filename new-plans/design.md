@@ -1,6 +1,6 @@
 # Tribute Language Design
 
-> *This is not the greatest language in the world, no. This is just a tribute.*
+> _This is not the greatest language in the world, no. This is just a tribute._
 
 ## Overview
 
@@ -70,13 +70,13 @@ fn fetch_user(id: UserId) ->{Http, Async} User {
 
 ### 핵심 결정 사항
 
-| 항목 | 선택 |
-|------|------|
-| 모듈 구분자 | `::` |
-| 메서드 호출 스타일 | UFCS (`.`) |
-| 타입 선언 | `struct` (product) / `enum` (sum) |
-| Ad-hoc polymorphism | 없음 (명시적 전달) |
-| 이름 해소 | Type-directed (use 범위 내) |
+| 항목                | 선택                              |
+| ------------------- | --------------------------------- |
+| 모듈 구분자         | `::`                              |
+| 메서드 호출 스타일  | UFCS (`.`)                        |
+| 타입 선언           | `struct` (product) / `enum` (sum) |
+| Ad-hoc polymorphism | 없음 (명시적 전달)                |
+| 이름 해소           | Type-directed (use 범위 내)       |
 
 ### 기본 문법
 
@@ -113,15 +113,16 @@ Tribute는 Unison의 선례를 따라 algebraic effect를 **ability**라고 부�
 
 Tribute의 ability 시스템은 **delimited, one-shot continuation**을 기반으로 한다.
 
-| 속성 | 선택 | 이유 |
-|------|------|------|
-| Delimited | ✅ | prompt까지만 캡처, 합성 가능 |
-| One-shot | ✅ | 구현 단순, 대부분의 실용적 ability 지원 |
-| Multi-shot | ❌ | nondeterminism 포기, 복잡도 감소 |
+| 속성       | 선택 | 이유                                    |
+| ---------- | ---- | --------------------------------------- |
+| Delimited  | ✅   | prompt까지만 캡처, 합성 가능            |
+| One-shot   | ✅   | 구현 단순, 대부분의 실용적 ability 지원 |
+| Multi-shot | ❌   | nondeterminism 포기, 복잡도 감소        |
 
 ### One-shot의 의미
 
 Continuation은 **linear 타입**으로 취급한다:
+
 - 반드시 1번 사용하거나 명시적으로 버려야 함
 - 사용: `k(value)` 로 resume
 - 버림: `drop(k)` 또는 와일드카드 바인딩
@@ -197,35 +198,20 @@ fn memoize(f: fn(a) ->{} b) ->{} fn(a) ->{} b
 
 ## Compiler Architecture
 
-### Multi-Level IR
+> 상세 내용은 ir.md 참조
 
-MLIR의 dialect 개념을 차용하여 여러 수준의 IR이 한 모듈 내에 공존할 수 있다.
-각 lowering pass는 특정 dialect만 변환하고 나머지는 보존한다.
+### TrunkIR
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    Module                           │
-│  ┌───────────────────────────────────────────────┐  │
-│  │ Block                                         │  │
-│  │  ┌─────────────┐ ┌─────────────┐             │  │
-│  │  │ Gleam.Case  │ │ Arith.Add   │  ...        │  │
-│  │  │ (dialect A) │ │ (dialect B) │             │  │
-│  │  └─────────────┘ └─────────────┘             │  │
-│  └───────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
-```
+Tribute 컴파일러는 **TrunkIR**이라는 multi-level IR을 사용한다. MLIR의 dialect 개념을 차용하여 여러 수준의 연산이 한 모듈 내에 공존할 수 있다.
 
-### Dialect 목록
+### Dialect 계층
 
-| Dialect | 수준 | 설명 |
-|---------|------|------|
-| Surface | 고 | 파싱 직후, 문법 그대로 |
-| Typed | 고 | 타입/effect 정보 부착 |
-| Core | 중 | desugaring 후, 패턴 매칭 분해 |
-| Effect | 중 | effect handler 명시적 표현 |
-| Arith | 공유 | 산술 연산 (모든 수준에서 사용) |
-| WasmGC | 저 | WasmGC 타겟 전용 |
-| Cranelift | 저 | Cranelift 타겟 전용 |
+| 수준           | Dialect                     | 설명                                |
+| -------------- | --------------------------- | ----------------------------------- |
+| Infrastructure | core, type                  | 모듈 구조, 타입 정의                |
+| High-level     | src, ability, adt           | 미해소 호출, ability, ADT           |
+| Mid-level      | cont, func, scf, arith, mem | Continuation, 함수, 제어 흐름, 산술 |
+| Low-level      | wasm._, clif._              | 타겟별 연산                         |
 
 ### Compilation Pipeline
 
@@ -233,150 +219,23 @@ MLIR의 dialect 개념을 차용하여 여러 수준의 IR이 한 모듈 내에 
 Tribute Source
     │
     ▼ Parse
-Surface AST
+TrunkIR [src, type, adt, ability, func, scf, arith]
     │
-    ▼ Type Inference + Effect Inference
-Typed HIR
+    ▼ Type Inference + Name Resolution
+TrunkIR [type, adt, ability, func, scf, arith]
     │
-    ▼ Desugar (UFCS, use, etc.)
-    │
-    ▼ Pattern Match Compilation
-    │
-Core IR + Effect Dialect
-    │
-    ▼ Effect Lowering
-    │   ├─ Handle → Prompt/Shift
-    │   └─ Continuation 명시화
-    │
-Core IR (effects resolved)
+    ▼ Ability Lowering (Evidence Passing)
+TrunkIR [type, adt, cont, func, scf, arith]
     │
     ▼ Optimization Passes
-    │   ├─ Inlining
-    │   ├─ Dead Code Elimination
-    │   ├─ Constant Folding
-    │   └─ Tail Call Optimization
     │
-    ├─────────────────────┬─────────────────────┐
-    │                     │                     │
-    ▼                     ▼                     ▼
-WasmGC Dialect      Cranelift Dialect     (Future: BEAM?)
-    │                     │
-    ▼                     ▼
-Binaryen              Cranelift
-    │                     │
-    ▼                     ▼
-.wasm                 native binary
-```
-
----
-
-## IR Design
-
-### Common Infrastructure
-
-```rust
-/// SSA Value - 모든 dialect에서 공유
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Value(u32);
-
-/// Block - 여러 dialect의 op들이 공존
-pub struct Block {
-    pub id: u32,
-    pub params: Vec<(Value, Type)>,
-    pub ops: Vec<Op>,
-    pub terminator: Terminator,
-}
-
-/// Region - 중첩 구조 (handler body 등)
-pub struct Region {
-    pub blocks: Vec<Block>,
-}
-```
-
-### Operation Enum
-
-```rust
-pub enum Op {
-    // -------- Effect Dialect --------
-    /// Effect 수행
-    Perform {
-        effect: EffectRef,
-        operation: String,
-        args: Vec<Value>,
-        result: Value,
-    },
-    
-    /// Handler 설치
-    Handle {
-        body: Region,
-        clauses: Vec<HandlerClause>,
-        result: Value,
-    },
-    
-    // -------- Core Dialect --------
-    /// Delimited continuation prompt
-    PushPrompt {
-        tag: PromptTag,
-        body: Region,
-        result: Value,
-    },
-    
-    /// Continuation 캡처 + handler로 점프
-    Shift {
-        tag: PromptTag,
-        continuation: Value,
-    },
-    
-    /// Continuation resume
-    Resume {
-        continuation: Value,
-        value: Value,
-        result: Value,
-    },
-    
-    /// Continuation abort
-    Abort {
-        continuation: Value,
-    },
-    
-    // -------- Arith Dialect --------
-    Add { lhs: Value, rhs: Value, result: Value },
-    Sub { lhs: Value, rhs: Value, result: Value },
-    // ...
-    
-    // -------- WasmGC Dialect --------
-    StructNew { type_idx: u32, fields: Vec<Value>, result: Value },
-    StructGet { struct_ref: Value, field_idx: u32, result: Value },
-    // ...
-    
-    // -------- Cranelift Dialect --------
-    Load { ptr: Value, offset: i32, result: Value },
-    Store { ptr: Value, offset: i32, value: Value },
-    // ...
-}
-```
-
-### Handler Clause
-
-```rust
-pub enum HandlerClause {
-    /// Abort: continuation을 받지 않음
-    Abort {
-        effect: EffectRef,
-        operation: String,
-        params: Vec<Value>,
-        body: Region,
-    },
-    
-    /// WithContinuation: continuation을 받아서 명시적 처리
-    Resume {
-        effect: EffectRef,
-        operation: String,
-        params: Vec<Value>,
-        continuation: Value,  // Linear 타입
-        body: Region,
-    },
-}
+    ├─────────────────────────────────────┐
+    │                                     │
+    ▼ Wasm Lowering                       ▼ Cranelift Lowering
+TrunkIR [wasm.*]                     TrunkIR [clif.*]
+    │                                     │
+    ▼                                     ▼
+.wasm                                native binary
 ```
 
 ---
@@ -457,10 +316,10 @@ pub struct Continuation {
 impl Continuation {
     /// 현재 continuation 캡처 (shift)
     pub fn capture(prompt: &Prompt) -> Self { ... }
-    
+
     /// Continuation 실행 (resume)
     pub fn resume(self, value: Value) -> ! { ... }
-    
+
     /// Continuation 버림 (abort)
     pub fn abort(self) { ... }
 }
@@ -494,8 +353,8 @@ Cranelift 타겟에서는 GC가 필요하다. 선택지:
 - [ ] Effect Dialect
 - [ ] Handler 문법 파싱
 - [ ] Delimited continuation lowering
-  - [ ] Cranelift: setjmp + 스택 복사
-  - [ ] WasmGC: CPS 또는 Stack Switching
+    - [ ] Cranelift: setjmp + 스택 복사
+    - [ ] WasmGC: CPS 또는 Stack Switching
 
 ### Phase 3: 최적화
 
