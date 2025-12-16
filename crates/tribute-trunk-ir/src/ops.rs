@@ -66,83 +66,31 @@ pub trait DialectOp<'db>: Sized + Copy {
 /// ```
 #[macro_export]
 macro_rules! dialect {
-    // Recursively process ops - base case (empty)
+    // Base case: no more ops to process
     (@parse $dialect:ident) => {};
 
-    // With attrs, fixed operands, result, optional region
+    // With attrs (optional result)
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        $vis:vis op $op:ident[$($attr:ident),+ $(,)?]($($operand:ident),* $(,)?) -> result { $($region:ident)? };
+        $vis:vis op $op:ident [$($attrs:tt)*] ($($operands:tt)*) $(-> $result:ident)? { $($region:tt)* };
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            $vis op $dialect.$op[$($attr),+]($($operand),*) -> result { $($region)? }
+            $vis op $dialect.$op [$($attrs)*] ($($operands)*) $(-> $result)? { $($region)* }
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
 
-    // No attrs, fixed operands (1+), result, optional region
+    // No attrs (optional result)
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        $vis:vis op $op:ident($($operand:ident),+ $(,)?) -> result { $($region:ident)? };
+        $vis:vis op $op:ident ($($operands:tt)*) $(-> $result:ident)? { $($region:tt)* };
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            $vis op $dialect.$op($($operand),+) -> result { $($region)? }
-        }
-        $crate::dialect!(@parse $dialect $($rest)*);
-    };
-
-    // No attrs, no operands, result, optional region
-    (@parse $dialect:ident
-        $(#[$meta:meta])*
-        $vis:vis op $op:ident() -> result { $($region:ident)? };
-        $($rest:tt)*
-    ) => {
-        $crate::define_op! {
-            $(#[$meta])*
-            $vis op $dialect.$op() -> result { $($region)? }
-        }
-        $crate::dialect!(@parse $dialect $($rest)*);
-    };
-
-    // Variadic, no result, optional region
-    (@parse $dialect:ident
-        $(#[$meta:meta])*
-        $vis:vis op $op:ident(..$operands:ident) { $($region:ident)? };
-        $($rest:tt)*
-    ) => {
-        $crate::define_op! {
-            $(#[$meta])*
-            $vis op $dialect.$op(..$operands) { $($region)? }
-        }
-        $crate::dialect!(@parse $dialect $($rest)*);
-    };
-
-    // With attrs, no operands, no result, optional region
-    (@parse $dialect:ident
-        $(#[$meta:meta])*
-        $vis:vis op $op:ident[$($attr:ident),+ $(,)?]() { $($region:ident)? };
-        $($rest:tt)*
-    ) => {
-        $crate::define_op! {
-            $(#[$meta])*
-            $vis op $dialect.$op[$($attr),+]() { $($region)? }
-        }
-        $crate::dialect!(@parse $dialect $($rest)*);
-    };
-
-    // Minimal (no attrs, no operands, no result, optional region)
-    (@parse $dialect:ident
-        $(#[$meta:meta])*
-        $vis:vis op $op:ident() { $($region:ident)? };
-        $($rest:tt)*
-    ) => {
-        $crate::define_op! {
-            $(#[$meta])*
-            $vis op $dialect.$op() { $($region)? }
+            $vis op $dialect.$op ($($operands)*) $(-> $result)? { $($region)* }
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
