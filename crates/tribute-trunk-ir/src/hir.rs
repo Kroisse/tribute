@@ -8,7 +8,7 @@ use tribute_ast::{Identifier, Span, Spanned};
 /// as specified in `new-plans/ir.md`.
 #[salsa::tracked(debug)]
 pub struct HirProgram<'db> {
-    #[return_ref]
+    #[returns(ref)]
     pub functions: BTreeMap<Identifier, HirFunction<'db>>,
     pub main: Option<Identifier>,
 }
@@ -16,11 +16,11 @@ pub struct HirProgram<'db> {
 /// Function definition in HIR (tracked by Salsa)
 #[salsa::tracked(debug)]
 pub struct HirFunction<'db> {
-    #[return_ref]
+    #[returns(ref)]
     pub name: Identifier,
-    #[return_ref]
+    #[returns(ref)]
     pub params: Vec<Identifier>,
-    #[return_ref]
+    #[returns(ref)]
     pub body: Vec<HirExpr<'db>>,
     pub span: Span,
 }

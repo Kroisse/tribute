@@ -6,10 +6,19 @@
 //! Note: the current implementation is transitional and still exposes the existing
 //! HIR-shaped IR while the dialect-based TrunkIR is introduced incrementally.
 
+pub mod arith;
+pub mod core;
+pub mod func;
 pub mod hir;
+pub mod ir;
 pub mod lower;
+pub mod ops;
 pub mod queries;
+pub mod types;
 
 pub use hir::*;
+pub use ir::*;
 pub use lower::{FunctionDef, LowerError, LowerResult};
+pub use ops::{ConversionError, DialectOp};
 pub use queries::*;
+pub use types::*;
