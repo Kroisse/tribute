@@ -18,7 +18,7 @@ use clap::{Arg, ArgAction, Command};
 use std::path::PathBuf;
 use tribute::{TributeDatabaseImpl, eval_str, parse_str};
 use tribute_cranelift::TributeCompiler;
-use tribute_hir::queries::lower_program_to_hir;
+use tribute_trunk_ir::queries::lower_program_to_hir;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = Command::new("trbc")

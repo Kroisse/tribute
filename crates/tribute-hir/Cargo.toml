@@ -5,7 +5,4 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
-tribute-ast.workspace = true
-tribute-core.workspace = true
-serde.workspace = true
-salsa.workspace = true
+tribute-trunk-ir.workspace = true

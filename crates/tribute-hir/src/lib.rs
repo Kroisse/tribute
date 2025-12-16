@@ -1,12 +1,6 @@
-//! Tribute High-level Intermediate Representation (HIR)
+//! Deprecated: use `tribute-trunk-ir` instead.
 //!
-//! This crate provides a more structured intermediate representation for Tribute
-//! programs, making compilation to MLIR more straightforward.
+//! This crate is kept as a compatibility shim. All items are re-exported from
+//! `tribute-trunk-ir`.
 
-pub mod hir;
-pub mod lower;
-pub mod queries;
-
-pub use hir::*;
-pub use lower::{FunctionDef, LowerError, LowerResult};
-pub use queries::*;
+pub use tribute_trunk_ir::*;

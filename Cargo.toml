@@ -25,6 +25,7 @@ tribute-ast = { path = "crates/tribute-ast" }
 tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-hir = { path = "crates/tribute-hir" }
+tribute-trunk-ir = { path = "crates/tribute-trunk-ir" }
 tribute-runtime = { path = "crates/tribute-runtime" }
 
 [package]
@@ -55,4 +56,4 @@ salsa.workspace = true
 tribute-ast.workspace = true
 tribute-cranelift.workspace = true
 tribute-core.workspace = true
-tribute-hir.workspace = true
+tribute-trunk-ir.workspace = true

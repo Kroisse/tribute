@@ -13,7 +13,7 @@ use std::path::Path;
 pub use crate::eval::{Environment, Value, eval_hir_expr, eval_hir_program};
 pub use tribute_ast::{Item, Program, TributeParser, ast, parse_source_file};
 pub use tribute_core::{Diagnostic, DiagnosticSeverity, SourceFile, TributeDatabaseImpl};
-pub use tribute_hir::{compile_to_hir, lower_source_to_hir};
+pub use tribute_trunk_ir::{compile_to_hir, lower_source_to_hir};
 
 /// Parse a Tribute source string and return the program along with diagnostics
 pub fn parse_str<'db>(

@@ -11,7 +11,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 
 use tribute_ast::{Identifier, Spanned};
-use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, MatchCase, Pattern};
+use tribute_trunk_ir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, MatchCase, Pattern};
 
 use crate::CompilationError;
 use crate::errors::{CompilationErrorKind, CompilationResult};

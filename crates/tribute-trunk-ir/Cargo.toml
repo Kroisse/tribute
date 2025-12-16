@@ -1,0 +1,13 @@
+[package]
+name = "tribute-trunk-ir"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "TrunkIR (multi-level dialect IR) for Tribute (transitional)"
+
+[dependencies]
+serde.workspace = true
+salsa.workspace = true
+tribute-ast.workspace = true
+tribute-core.workspace = true
+

@@ -17,7 +17,7 @@ pub use compiler::TributeCompiler;
 pub use errors::{CompilationError, CompilationResult};
 
 use tribute_core::Db;
-use tribute_hir::hir::HirProgram;
+use tribute_trunk_ir::hir::HirProgram;
 
 /// Compile a Tribute program to an object file
 pub fn compile_to_object<'db>(

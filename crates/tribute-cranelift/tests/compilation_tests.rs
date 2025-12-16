@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 use tribute::{TributeDatabaseImpl, parse_str};
 use tribute_cranelift::TributeCompiler;
-use tribute_hir::queries::lower_program_to_hir;
+use tribute_trunk_ir::queries::lower_program_to_hir;
 
 /// Test data: (filename, source_code, expected_to_compile)
 /// Uses include_str!() to load actual example files from lang-examples/

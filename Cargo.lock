@@ -1338,7 +1338,7 @@ dependencies = [
  "tribute-ast",
  "tribute-core",
  "tribute-cranelift",
- "tribute-hir",
+ "tribute-trunk-ir",
 ]
 
 [[package]]
@@ -1382,17 +1382,14 @@ dependencies = [
  "tribute",
  "tribute-ast",
  "tribute-core",
- "tribute-hir",
+ "tribute-trunk-ir",
 ]
 
 [[package]]
 name = "tribute-hir"
 version = "0.1.0"
 dependencies = [
- "salsa",
- "serde",
- "tribute-ast",
- "tribute-core",
+ "tribute-trunk-ir",
 ]
 
 [[package]]
@@ -1402,6 +1399,16 @@ dependencies = [
  "criterion",
  "dashmap",
  "serial_test",
+]
+
+[[package]]
+name = "tribute-trunk-ir"
+version = "0.1.0"
+dependencies = [
+ "salsa",
+ "serde",
+ "tribute-ast",
+ "tribute-core",
 ]
 
 [[package]]

@@ -137,22 +137,17 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
         AstExpr::Nil => Expr::Nil,
         AstExpr::StringInterpolation(interp) => {
             if interp.segments.is_empty() {
-                // Simple string without interpolation
                 Expr::StringLit(interp.leading.clone())
             } else {
-                // String with interpolation: lower to concat chain
-                // "hello \{name}!" -> concat(concat("hello ", to_string(name)), "!")
                 let mut result: Spanned<Expr> = (Expr::StringLit(interp.leading.clone()), span);
 
                 for segment in &interp.segments {
-                    // Convert interpolation to string: to_string(expr)
                     let interp_expr = lower_expr(&segment.interpolation)?;
                     let to_string_call = Expr::Call {
                         func: Box::new((Expr::Variable("to_string".to_string()), span)),
                         args: vec![interp_expr],
                     };
 
-                    // Concat current result with stringified interpolation
                     result = (
                         Expr::Call {
                             func: Box::new((Expr::Variable("<>".to_string()), span)),
@@ -161,7 +156,6 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
                         span,
                     );
 
-                    // Concat with trailing text if non-empty
                     if !segment.trailing.is_empty() {
                         result = (
                             Expr::Call {
@@ -181,21 +175,17 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
         }
         AstExpr::BytesInterpolation(interp) => {
             if interp.segments.is_empty() {
-                // Simple bytes without interpolation
                 Expr::BytesLit(interp.leading.clone())
             } else {
-                // Bytes with interpolation: lower to concat chain
                 let mut result: Spanned<Expr> = (Expr::BytesLit(interp.leading.clone()), span);
 
                 for segment in &interp.segments {
-                    // Convert interpolation to bytes: to_bytes(expr)
                     let interp_expr = lower_expr(&segment.interpolation)?;
                     let to_bytes_call = Expr::Call {
                         func: Box::new((Expr::Variable("to_bytes".to_string()), span)),
                         args: vec![interp_expr],
                     };
 
-                    // Concat current result with byte-converted interpolation
                     result = (
                         Expr::Call {
                             func: Box::new((Expr::Variable("Bytes::<>".to_string()), span)),
@@ -204,7 +194,6 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
                         span,
                     );
 
-                    // Concat with trailing bytes if non-empty
                     if !segment.trailing.is_empty() {
                         result = (
                             Expr::Call {
@@ -227,7 +216,6 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
             let left = Box::new(lower_expr(&bin_expr.left)?);
             let right = Box::new(lower_expr(&bin_expr.right)?);
             let op_name = operator_to_string(&bin_expr.operator);
-            // If there's a qualifier, create a qualified name like "Int::+"
             let func_name = match &bin_expr.qualifier {
                 Some(q) => format!("{}::{}", q, op_name),
                 None => op_name,
@@ -242,7 +230,6 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
             let args: LowerResult<Vec<_>> = call_expr.arguments.iter().map(lower_expr).collect();
             Expr::Call { func, args: args? }
         }
-        // UFCS: x.f(y, z) -> f(x, y, z)
         AstExpr::MethodCall(method_call) => {
             let func = Box::new((Expr::Variable(method_call.method.clone()), span));
             let receiver = lower_expr(&method_call.receiver)?;
@@ -271,7 +258,6 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
         }
         AstExpr::Lambda(lambda_expr) => {
             let body = Box::new(lower_expr(&lambda_expr.body)?);
-            // Extract just the parameter names (type annotations are handled by type checker)
             let params: Vec<_> = lambda_expr
                 .parameters
                 .iter()
@@ -317,8 +303,6 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
             }
         }
         AstExpr::OperatorFn(op_fn) => {
-            // Operator functions are just references to the operator as a variable
-            // e.g., (+) becomes Variable("+"), (Int::+) becomes Variable("Int::+")
             let func_name = match &op_fn.qualifier {
                 Some(q) => format!("{}::{}", q, op_fn.op),
                 None => op_fn.op.clone(),
@@ -347,38 +331,34 @@ fn lower_record_field(field: &tribute_ast::RecordField) -> LowerResult<crate::hi
 
 fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
     match pattern {
-        AstPattern::Literal(lit) => {
-            match lit {
-                LiteralPattern::Nat(n) => Ok(Pattern::Literal(Literal::Nat(*n))),
-                LiteralPattern::Int(n) => Ok(Pattern::Literal(Literal::Int(*n))),
-                LiteralPattern::Float(n) => Ok(Pattern::Literal(Literal::Float(*n))),
-                LiteralPattern::Rune(ch) => Ok(Pattern::Literal(Literal::Rune(*ch))),
-                LiteralPattern::Bool(b) => Ok(Pattern::Literal(Literal::Bool(*b))),
-                LiteralPattern::Nil => Ok(Pattern::Literal(Literal::Nil)),
-                LiteralPattern::String(s) => Ok(Pattern::Literal(Literal::StringPat(s.clone()))),
-                LiteralPattern::StringInterpolation(interp) => {
-                    // String patterns with interpolation: only support simple strings
-                    if interp.segments.is_empty() {
-                        Ok(Pattern::Literal(Literal::StringPat(interp.leading.clone())))
-                    } else {
-                        Err(LowerError::UnsupportedFeature(
-                            "String interpolation in patterns is not supported".to_string(),
-                        ))
-                    }
-                }
-                LiteralPattern::Bytes(b) => Ok(Pattern::Literal(Literal::BytesPat(b.clone()))),
-                LiteralPattern::BytesInterpolation(interp) => {
-                    // Bytes patterns with interpolation: only support simple bytes
-                    if interp.segments.is_empty() {
-                        Ok(Pattern::Literal(Literal::BytesPat(interp.leading.clone())))
-                    } else {
-                        Err(LowerError::UnsupportedFeature(
-                            "Bytes interpolation in patterns is not supported".to_string(),
-                        ))
-                    }
+        AstPattern::Literal(lit) => match lit {
+            LiteralPattern::Nat(n) => Ok(Pattern::Literal(Literal::Nat(*n))),
+            LiteralPattern::Int(n) => Ok(Pattern::Literal(Literal::Int(*n))),
+            LiteralPattern::Float(n) => Ok(Pattern::Literal(Literal::Float(*n))),
+            LiteralPattern::Rune(ch) => Ok(Pattern::Literal(Literal::Rune(*ch))),
+            LiteralPattern::Bool(b) => Ok(Pattern::Literal(Literal::Bool(*b))),
+            LiteralPattern::Nil => Ok(Pattern::Literal(Literal::Nil)),
+            LiteralPattern::String(s) => Ok(Pattern::Literal(Literal::StringPat(s.clone()))),
+            LiteralPattern::StringInterpolation(interp) => {
+                if interp.segments.is_empty() {
+                    Ok(Pattern::Literal(Literal::StringPat(interp.leading.clone())))
+                } else {
+                    Err(LowerError::UnsupportedFeature(
+                        "String interpolation in patterns is not supported".to_string(),
+                    ))
                 }
             }
-        }
+            LiteralPattern::Bytes(b) => Ok(Pattern::Literal(Literal::BytesPat(b.clone()))),
+            LiteralPattern::BytesInterpolation(interp) => {
+                if interp.segments.is_empty() {
+                    Ok(Pattern::Literal(Literal::BytesPat(interp.leading.clone())))
+                } else {
+                    Err(LowerError::UnsupportedFeature(
+                        "Bytes interpolation in patterns is not supported".to_string(),
+                    ))
+                }
+            }
+        },
         AstPattern::Wildcard => Ok(Pattern::Wildcard),
         AstPattern::Identifier(id) => Ok(Pattern::Variable(id.clone())),
         AstPattern::Constructor(ctor) => {
@@ -455,7 +435,6 @@ fn lower_handler_pattern(
     }
 }
 
-/// Convert a BinaryOperator to its string representation
 fn operator_to_string(op: &tribute_ast::BinaryOperator) -> String {
     match op {
         tribute_ast::BinaryOperator::Add => "+".to_string(),
@@ -472,25 +451,5 @@ fn operator_to_string(op: &tribute_ast::BinaryOperator) -> String {
         tribute_ast::BinaryOperator::And => "&&".to_string(),
         tribute_ast::BinaryOperator::Or => "||".to_string(),
         tribute_ast::BinaryOperator::Concat => "<>".to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use tribute_ast::{Expr as AstExpr, Span};
-
-    fn make_span() -> Span {
-        Span::new(0, 0)
-    }
-
-    fn test_identifier(name: &str) -> AstExpr {
-        AstExpr::Identifier(name.to_string())
-    }
-
-    // TODO: Update tests to work with new AST structure
-    #[test]
-    fn test_lower_simple_function() {
-        // This test needs to be rewritten to use the new AST structure
-        // For now, we'll skip it
     }
 }

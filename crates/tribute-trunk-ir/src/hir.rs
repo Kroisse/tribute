@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use tribute_ast::{Identifier, Span, Spanned};
 
-/// High-level intermediate representation for Tribute programs (tracked by Salsa)
+/// High-level intermediate representation for Tribute programs (tracked by Salsa).
+///
+/// Transitional: kept to preserve existing call sites while migrating toward TrunkIR
+/// as specified in `new-plans/ir.md`.
 #[salsa::tracked(debug)]
 pub struct HirProgram<'db> {
     #[return_ref]
