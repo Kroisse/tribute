@@ -17,11 +17,29 @@ impl Span {
 
 pub type Spanned<T> = (T, Span);
 
+#[salsa::interned(debug)]
+pub struct PathId {
+    #[returns(deref)]
+    pub path: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct Location<'db> {
+    pub path: PathId<'db>,
+    pub span: Span,
+}
+
+impl<'db> Location<'db> {
+    pub const fn new(path: PathId<'db>, span: Span) -> Self {
+        Self { path, span }
+    }
+}
+
 #[salsa::input(debug)]
 pub struct SourceFile {
-    #[returns(ref)]
+    #[returns(deref)]
     pub path: PathBuf,
-    #[returns(ref)]
+    #[returns(deref)]
     pub text: String,
 }
 
