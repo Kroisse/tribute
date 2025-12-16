@@ -285,11 +285,22 @@ module.exports = grammar({
       $.lambda_expression,
       $.call_expression,
       $.method_call_expression,
+      $.if_expression,
       $.case_expression,
       $.handle_expression,
       $.record_expression,
       $.primary_expression
     ),
+
+    // if condition { then } else { else }
+    // if condition { then } else if other { ... } else { ... }
+    if_expression: $ => prec.right(seq(
+      $.keyword_if,
+      field('condition', $._expression),
+      field('then', $.block),
+      $.keyword_else,
+      field('else', choice($.block, $.if_expression))
+    )),
 
     binary_expression: $ => choice(
       // Precedence (higher number = binds tighter)
@@ -655,6 +666,7 @@ module.exports = grammar({
     keyword_use: $ => 'use',
     keyword_mod: $ => 'mod',
     keyword_if: $ => 'if',
+    keyword_else: $ => 'else',
     keyword_handle: $ => 'handle',
     keyword_as: $ => 'as',
     keyword_true: $ => token(prec(1, 'True')),

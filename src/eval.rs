@@ -394,6 +394,30 @@ fn eval_spanned_expr<'db>(
             }
             Err("no matching case found".into())
         }
+        If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            let cond_value = eval_spanned_expr(context, env, *condition)?;
+            let is_truthy = match cond_value {
+                Value::Bool(b) => b,
+                Value::Number(n) => n != 0,
+                Value::String(ref s) => !s.is_empty(),
+                Value::List(ref items) => !items.is_empty(),
+                Value::Unit => false,
+                _ => true, // Functions, tuples, records are truthy
+            };
+
+            let branch = if is_truthy { then_branch } else { else_branch };
+
+            // Evaluate the branch as a block
+            let mut result = Value::Unit;
+            for expr in branch {
+                result = eval_spanned_expr(context, env, expr)?;
+            }
+            Ok(result)
+        }
         Block(exprs) => {
             let mut result = Value::Unit;
             for expr in exprs {
@@ -914,6 +938,71 @@ mod tests {
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::String(s)) if s == "letter A" => {}
                 Ok(other) => panic!("Expected String(\"letter A\"), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_if_expression_true() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let source = r#"fn main() { if True { 42 } else { 0 } }"#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Number(42)) => {}
+                Ok(other) => panic!("Expected Number(42), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_if_expression_false() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let source = r#"fn main() { if False { 42 } else { 0 } }"#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Number(0)) => {}
+                Ok(other) => panic!("Expected Number(0), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_if_else_if_chain() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let source = r#"
+                fn classify(n) {
+                    if n < 0 { "negative" }
+                    else if n == 0 { "zero" }
+                    else { "positive" }
+                }
+                fn main() { classify(5) }
+            "#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::String(s)) if s == "positive" => {}
+                Ok(other) => panic!("Expected String(\"positive\"), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_if_with_block() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let source = r#"
+                fn main() {
+                    if True {
+                        let x = 10
+                        let y = 20
+                        x + y
+                    } else {
+                        0
+                    }
+                }
+            "#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Number(30)) => {}
+                Ok(other) => panic!("Expected Number(30), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
         });

@@ -172,6 +172,8 @@ pub enum Expr {
     Call(CallExpression),
     MethodCall(MethodCallExpression),
     Match(MatchExpression),
+    /// If expression: if cond { then } else { else }
+    If(IfExpression),
     Lambda(LambdaExpression),
     /// Block expression: { expr1; expr2; ... }
     Block(Vec<Statement>),
@@ -266,6 +268,23 @@ pub struct MatchArm {
 pub struct GuardedBranch {
     pub guard: Option<Spanned<Expr>>,
     pub value: Spanned<Expr>,
+}
+
+/// If expression: if condition { then } else { else }
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct IfExpression {
+    pub condition: Box<Spanned<Expr>>,
+    pub then_branch: Block,
+    pub else_branch: ElseBranch,
+}
+
+/// Else branch of an if expression
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ElseBranch {
+    /// else { ... }
+    Block(Block),
+    /// else if ... { ... } else { ... }
+    ElseIf(Box<IfExpression>),
 }
 
 /// Lambda expression: fn(x) x + 1, fn(x: Int) -> Int x + 1

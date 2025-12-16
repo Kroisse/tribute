@@ -61,6 +61,13 @@ pub enum Expr {
         cases: Vec<MatchCase>,
     },
 
+    /// If expression: if cond { then } else { else }
+    If {
+        condition: Box<Spanned<Expr>>,
+        then_branch: Vec<Spanned<Expr>>,
+        else_branch: Vec<Spanned<Expr>>,
+    },
+
     /// Lambda expression: fn(x) x + 1
     Lambda {
         params: Vec<Identifier>,
