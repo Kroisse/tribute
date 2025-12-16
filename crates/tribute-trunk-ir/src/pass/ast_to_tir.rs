@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::{Attribute, BlockBuilder, Region, Type, Value, arith, core, func, src};
 use tribute_ast::{
     BinaryExpression, BinaryOperator, CallExpression, Expr, FunctionDefinition, ItemKind,
-    LetStatement, Pattern, Program, Statement,
+    LambdaExpression, LetStatement, Pattern, Program, Statement,
 };
 use tribute_core::{Location, PathId, Span, Spanned};
 
@@ -243,7 +243,60 @@ fn lower_expr<'db>(
         Expr::Rune(_) => todo!("rune literals"),
         Expr::MethodCall(_) => todo!("method calls"),
         Expr::Match(_) => todo!("match expressions"),
-        Expr::Lambda(_) => todo!("lambda expressions"),
+        Expr::Lambda(LambdaExpression {
+            parameters,
+            return_type: _, // TODO: use type annotation when available
+            body,
+        }) => {
+            // Parameter types are unknown until type inference
+            let param_types: Vec<Type> = parameters.iter().map(|_| Type::Unit).collect();
+            let result_type = Type::Unit;
+
+            // Create body block with parameters as block arguments
+            let mut body_block = BlockBuilder::new(db, location).args(param_types.clone());
+
+            // Lower body in a new scope with parameters bound to block arguments
+            let result_value = ctx.scoped(|ctx| {
+                // Bind parameters to block arguments
+                // Note: we need the built block to get arg values, so we track indices
+                for (i, param) in parameters.iter().enumerate() {
+                    // Create a placeholder - will be resolved when block is built
+                    // For now, emit src.var for parameter references
+                    // The block args will be connected during a later pass
+                    let param_value = body_block.op(src::Var::new(
+                        db,
+                        location,
+                        Type::Unit,
+                        Attribute::String(param.name.clone()),
+                    ));
+                    ctx.bind(param.name.clone(), param_value.result(db));
+                    let _ = i; // suppress unused warning for now
+                }
+
+                // Lower the body expression
+                lower_expr(db, path, ctx, &mut body_block, body)
+            });
+
+            // Add yield to return the lambda's result
+            body_block.op(src::Yield::new(db, location, result_value));
+
+            // Create the function type for the lambda
+            let func_type = Type::Function {
+                params: param_types,
+                results: vec![result_type],
+            };
+
+            // Create the src.lambda operation
+            let region = Region::new(db, location, vec![body_block.build()]);
+            let lambda_op = block.op(src::Lambda::new(
+                db,
+                location,
+                Type::Unit,
+                Attribute::Type(func_type),
+                region,
+            ));
+            lambda_op.result(db)
+        }
         Expr::Block(statements) => {
             // Create body block for the block expression
             let mut body_block = BlockBuilder::new(db, location);
@@ -413,7 +466,7 @@ mod tests {
     use crate::DialectOp;
     use salsa::Database;
     use std::path::PathBuf;
-    use tribute_ast::BinaryExpression;
+    use tribute_ast::{BinaryExpression, Parameter};
     use tribute_core::TributeDatabaseImpl;
 
     /// Helper tracked function to create AST and lower it.
@@ -654,6 +707,249 @@ mod tests {
             // Return should use the block's result
             let ret_op = func::Return::from_operation(db, ops[1]).unwrap();
             assert_eq!(ret_op.operands(db)[0], block_op.result(db));
+        });
+    }
+
+    /// Helper to create AST with lambda: fn main() { fn(x) x + 1 }
+    #[salsa::tracked]
+    fn lower_lambda_helper(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, PathBuf::from("test.tr"));
+
+        // Create AST: fn main() { fn(x) x + 1 }
+        let lambda = Expr::Lambda(LambdaExpression {
+            parameters: vec![Parameter {
+                name: "x".to_string(),
+                ty: None,
+            }],
+            return_type: None,
+            body: Box::new((
+                Expr::Binary(BinaryExpression {
+                    left: Box::new((Expr::Identifier("x".to_string()), Span::new(18, 19))),
+                    operator: BinaryOperator::Add,
+                    qualifier: None,
+                    right: Box::new((Expr::Nat(1), Span::new(22, 23))),
+                }),
+                Span::new(18, 23),
+            )),
+        });
+
+        let body = tribute_ast::Block {
+            statements: vec![Statement::Expression((lambda, Span::new(12, 24)))],
+        };
+
+        let func_def =
+            FunctionDefinition::new(db, "main".to_string(), vec![], None, body, Span::new(0, 26));
+
+        let item = tribute_ast::Item::new(db, ItemKind::Function(func_def), Span::new(0, 26));
+        let program = Program::new(db, vec![item]);
+
+        lower_program(db, path, program)
+    }
+
+    #[test]
+    fn test_lower_lambda_expression() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let module = lower_lambda_helper(db);
+
+            // Get the function
+            let body_region = module.body(db);
+            let blocks = body_region.blocks(db);
+            let func_op = func::Func::from_operation(db, blocks[0].operations(db)[0]).unwrap();
+
+            // Get the function's entry block
+            let func_body = func_op.body(db);
+            let func_blocks = func_body.blocks(db);
+            let entry_block = &func_blocks[0];
+            let ops = entry_block.operations(db);
+
+            // Should have: src.lambda, func.return
+            assert_eq!(ops.len(), 2);
+
+            // Verify we have src.lambda
+            let lambda_op = src::Lambda::from_operation(db, ops[0]).unwrap();
+
+            // Verify lambda has the type attribute
+            let ty = lambda_op.r#type(db);
+            assert!(matches!(ty, Attribute::Type(Type::Function { .. })));
+
+            // Get the lambda's body region
+            let lambda_body = lambda_op.body(db);
+            let lambda_blocks = lambda_body.blocks(db);
+            assert_eq!(lambda_blocks.len(), 1);
+
+            let inner_block = &lambda_blocks[0];
+
+            // Lambda should have one block argument (the parameter x)
+            assert_eq!(inner_block.args(db).len(), 1);
+
+            let inner_ops = inner_block.operations(db);
+
+            // Inner block should have: src.var(x), arith.const(1), arith.add, src.yield
+            assert_eq!(inner_ops.len(), 4);
+
+            // Verify the parameter is represented as src.var
+            let var_x = src::Var::from_operation(db, inner_ops[0]).unwrap();
+            assert_eq!(var_x.name(db), &Attribute::String("x".to_string()));
+
+            // Verify const and add
+            let const_1 = arith::Const::from_operation(db, inner_ops[1]).unwrap();
+            let add_op = arith::Add::from_operation(db, inner_ops[2]).unwrap();
+            assert_eq!(add_op.lhs(db), var_x.result(db));
+            assert_eq!(add_op.rhs(db), const_1.result(db));
+
+            // Verify yield uses the add result
+            let yield_op = src::Yield::from_operation(db, inner_ops[3]).unwrap();
+            assert_eq!(yield_op.value(db), add_op.result(db));
+
+            // Return should use the lambda's result
+            let ret_op = func::Return::from_operation(db, ops[1]).unwrap();
+            assert_eq!(ret_op.operands(db)[0], lambda_op.result(db));
+        });
+    }
+
+    /// Helper to create AST with complex lambda: fn main() { fn(x, y) { let z = x * y; z + x } }
+    #[salsa::tracked]
+    fn lower_complex_lambda_helper(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, PathBuf::from("test.tr"));
+
+        // Create AST: fn main() { fn(x, y) { let z = x * y; z + x } }
+        // Inner block: let z = x * y; z + x
+        let let_stmt = Statement::Let(LetStatement {
+            pattern: Pattern::Identifier("z".to_string()),
+            value: (
+                Expr::Binary(BinaryExpression {
+                    left: Box::new((Expr::Identifier("x".to_string()), Span::new(22, 23))),
+                    operator: BinaryOperator::Multiply,
+                    qualifier: None,
+                    right: Box::new((Expr::Identifier("y".to_string()), Span::new(26, 27))),
+                }),
+                Span::new(22, 27),
+            ),
+        });
+        let result_expr = Statement::Expression((
+            Expr::Binary(BinaryExpression {
+                left: Box::new((Expr::Identifier("z".to_string()), Span::new(29, 30))),
+                operator: BinaryOperator::Add,
+                qualifier: None,
+                right: Box::new((Expr::Identifier("x".to_string()), Span::new(33, 34))),
+            }),
+            Span::new(29, 34),
+        ));
+
+        let lambda = Expr::Lambda(LambdaExpression {
+            parameters: vec![
+                Parameter {
+                    name: "x".to_string(),
+                    ty: None,
+                },
+                Parameter {
+                    name: "y".to_string(),
+                    ty: None,
+                },
+            ],
+            return_type: None,
+            body: Box::new((Expr::Block(vec![let_stmt, result_expr]), Span::new(18, 36))),
+        });
+
+        let body = tribute_ast::Block {
+            statements: vec![Statement::Expression((lambda, Span::new(12, 38)))],
+        };
+
+        let func_def =
+            FunctionDefinition::new(db, "main".to_string(), vec![], None, body, Span::new(0, 40));
+
+        let item = tribute_ast::Item::new(db, ItemKind::Function(func_def), Span::new(0, 40));
+        let program = Program::new(db, vec![item]);
+
+        lower_program(db, path, program)
+    }
+
+    #[test]
+    fn test_lower_complex_lambda() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let module = lower_complex_lambda_helper(db);
+
+            // Get the function
+            let body_region = module.body(db);
+            let blocks = body_region.blocks(db);
+            let func_op = func::Func::from_operation(db, blocks[0].operations(db)[0]).unwrap();
+
+            // Get the function's entry block
+            let func_body = func_op.body(db);
+            let func_blocks = func_body.blocks(db);
+            let entry_block = &func_blocks[0];
+            let ops = entry_block.operations(db);
+
+            // Should have: src.lambda, func.return
+            assert_eq!(ops.len(), 2);
+
+            // Verify we have src.lambda
+            let lambda_op = src::Lambda::from_operation(db, ops[0]).unwrap();
+
+            // Verify lambda has two parameters
+            let ty = lambda_op.r#type(db);
+            match ty {
+                Attribute::Type(Type::Function { params, .. }) => {
+                    assert_eq!(params.len(), 2);
+                }
+                _ => panic!("expected function type"),
+            }
+
+            // Get the lambda's body region
+            let lambda_body = lambda_op.body(db);
+            let lambda_blocks = lambda_body.blocks(db);
+            assert_eq!(lambda_blocks.len(), 1);
+
+            let lambda_entry = &lambda_blocks[0];
+
+            // Lambda should have two block arguments (x, y)
+            assert_eq!(lambda_entry.args(db).len(), 2);
+
+            let lambda_ops = lambda_entry.operations(db);
+
+            // Lambda body should have: src.var(x), src.var(y), src.block, src.yield
+            assert_eq!(lambda_ops.len(), 4);
+
+            // Verify parameters are src.var
+            let var_x = src::Var::from_operation(db, lambda_ops[0]).unwrap();
+            assert_eq!(var_x.name(db), &Attribute::String("x".to_string()));
+            let var_y = src::Var::from_operation(db, lambda_ops[1]).unwrap();
+            assert_eq!(var_y.name(db), &Attribute::String("y".to_string()));
+
+            // Verify src.block for the body
+            let block_op = src::Block::from_operation(db, lambda_ops[2]).unwrap();
+
+            // Get the block's inner ops
+            let block_body = block_op.body(db);
+            let block_blocks = block_body.blocks(db);
+            let inner_block = &block_blocks[0];
+            let inner_ops = inner_block.operations(db);
+
+            // Inner block: src.var(x), src.var(y), arith.mul (for z=x*y),
+            //              src.var(z), src.var(x), arith.add, src.yield
+            // Note: x and y are looked up from context (bound to lambda's src.var ops)
+            // z is bound via let, so z+x uses the mul result directly
+
+            // Actually, let's trace through:
+            // - let z = x * y: looks up x (finds var_x), y (finds var_y), emits mul, binds z to mul result
+            // - z + x: looks up z (finds mul result), x (finds var_x), emits add
+            // So inner block should have: arith.mul, arith.add, src.yield
+            assert_eq!(inner_ops.len(), 3);
+
+            let mul_op = arith::Mul::from_operation(db, inner_ops[0]).unwrap();
+            let add_op = arith::Add::from_operation(db, inner_ops[1]).unwrap();
+
+            // mul uses var_x and var_y
+            assert_eq!(mul_op.lhs(db), var_x.result(db));
+            assert_eq!(mul_op.rhs(db), var_y.result(db));
+
+            // add uses mul result (z) and var_x
+            assert_eq!(add_op.lhs(db), mul_op.result(db));
+            assert_eq!(add_op.rhs(db), var_x.result(db));
+
+            // yield uses add result
+            let yield_op = src::Yield::from_operation(db, inner_ops[2]).unwrap();
+            assert_eq!(yield_op.value(db), add_op.result(db));
         });
     }
 }

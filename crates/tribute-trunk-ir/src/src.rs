@@ -28,5 +28,11 @@ dialect! {
         /// `src.yield` operation: yields a value from a block.
         /// Used to specify the result value of a `src.block`.
         op r#yield(value) {};
+
+        /// `src.lambda` operation: lambda expression.
+        /// Represents an anonymous function before capture analysis.
+        /// The `type` attribute holds the function type (params -> result).
+        /// The body region contains the lambda body, ending with `src.yield`.
+        op lambda[r#type]() -> result { body };
     }
 }
