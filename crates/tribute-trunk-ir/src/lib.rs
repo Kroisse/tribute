@@ -7,19 +7,7 @@
 //! HIR-shaped IR while the dialect-based TrunkIR is introduced incrementally.
 
 // === Dialect modules ===
-// Infrastructure
-pub mod core;
-
-// High-level (pre-resolution)
-pub mod src;
-
-// Mid-level (target independent)
-pub mod adt;
-pub mod arith;
-pub mod cont;
-pub mod func;
-pub mod mem;
-pub mod scf;
+pub mod dialect;
 
 // === Passes ===
 pub mod pass;

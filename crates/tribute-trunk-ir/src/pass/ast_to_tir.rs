@@ -5,7 +5,8 @@
 
 use std::collections::HashMap;
 
-use crate::{Attribute, BlockBuilder, Region, Type, Value, arith, core, func, src};
+use crate::dialect::{arith, core, func, src};
+use crate::{Attribute, BlockBuilder, Region, Type, Value};
 use tribute_ast::{
     BinaryExpression, BinaryOperator, CallExpression, Expr, FunctionDefinition, ItemKind,
     LambdaExpression, LetStatement, Pattern, Program, Statement,

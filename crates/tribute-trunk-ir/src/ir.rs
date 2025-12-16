@@ -275,7 +275,8 @@ impl<'db> BlockBuilder<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DialectOp, arith, core, func};
+    use crate::DialectOp;
+    use crate::dialect::{arith, core, func};
     use salsa::Database;
     use std::path::PathBuf;
     use tribute_core::{PathId, Span, TributeDatabaseImpl};
