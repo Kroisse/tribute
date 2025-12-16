@@ -14,7 +14,7 @@ fn main() { #"hello"# }
       (expression_statement
         (primary_expression
           (multiline_string
-            (multiline_string_literal)))))))
+            (multiline_string_segment)))))))
 
 ================================================================================
 Multiline string spanning lines
@@ -37,7 +37,7 @@ fn main() {
       (expression_statement
         (primary_expression
           (multiline_string
-            (multiline_string_literal)))))))
+            (multiline_string_segment)))))))
 
 ================================================================================
 Multiline string with double hash
@@ -55,7 +55,94 @@ fn main() { ##"contains "# inside"## }
       (expression_statement
         (primary_expression
           (multiline_string
-            (multiline_string_literal)))))))
+            (multiline_string_segment)))))))
+
+================================================================================
+Multiline string with interpolation
+================================================================================
+
+fn main() {
+  let name = "world"
+  #"hello \{name}"#
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (let_statement
+        (keyword_let)
+        pattern: (pattern
+          (simple_pattern
+            (identifier_pattern
+              (identifier))))
+        value: (primary_expression
+          (string
+            (string_segment))))
+      (expression_statement
+        (primary_expression
+          (multiline_string
+            (multiline_string_segment)
+            (multiline_interpolation
+              expression: (primary_expression
+                (identifier)))
+            (multiline_string_segment)))))))
+
+================================================================================
+Multiline string with multiple interpolations
+================================================================================
+
+fn main() {
+  let x = 1
+  let y = 2
+  #"x=\{x}, y=\{y}, sum=\{x + y}"#
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (let_statement
+        (keyword_let)
+        pattern: (pattern
+          (simple_pattern
+            (identifier_pattern
+              (identifier))))
+        value: (primary_expression
+          (nat_literal)))
+      (let_statement
+        (keyword_let)
+        pattern: (pattern
+          (simple_pattern
+            (identifier_pattern
+              (identifier))))
+        value: (primary_expression
+          (nat_literal)))
+      (expression_statement
+        (primary_expression
+          (multiline_string
+            (multiline_string_segment)
+            (multiline_interpolation
+              expression: (primary_expression
+                (identifier)))
+            (multiline_string_segment)
+            (multiline_interpolation
+              expression: (primary_expression
+                (identifier)))
+            (multiline_string_segment)
+            (multiline_interpolation
+              expression: (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (identifier))))
+            (multiline_string_segment)))))))
 
 ================================================================================
 Basic multiline bytes
@@ -73,17 +160,15 @@ fn main() { b#"hello"# }
       (expression_statement
         (primary_expression
           (multiline_bytes
-            (multiline_bytes_literal)))))))
+            (multiline_bytes_segment)))))))
 
 ================================================================================
-Multiline bytes spanning lines
+Multiline bytes with interpolation
 ================================================================================
 
 fn main() {
-  b#"
-    binary
-    data
-  "#
+  let data = "world"
+  b#"hello \{data}"#
 }
 
 --------------------------------------------------------------------------------
@@ -93,25 +178,20 @@ fn main() {
     (keyword_fn)
     name: (identifier)
     body: (block
+      (let_statement
+        (keyword_let)
+        pattern: (pattern
+          (simple_pattern
+            (identifier_pattern
+              (identifier))))
+        value: (primary_expression
+          (string
+            (string_segment))))
       (expression_statement
         (primary_expression
           (multiline_bytes
-            (multiline_bytes_literal)))))))
-
-================================================================================
-Multiline bytes with double hash
-================================================================================
-
-fn main() { b##"contains "# inside"## }
-
---------------------------------------------------------------------------------
-
-(source_file
-  (function_definition
-    (keyword_fn)
-    name: (identifier)
-    body: (block
-      (expression_statement
-        (primary_expression
-          (multiline_bytes
-            (multiline_bytes_literal)))))))
+            (multiline_bytes_segment)
+            (multiline_bytes_interpolation
+              expression: (primary_expression
+                (identifier)))
+            (multiline_bytes_segment)))))))

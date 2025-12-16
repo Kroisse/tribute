@@ -1597,45 +1597,125 @@ impl TributeParser {
     }
 
     /// Parse multiline string: #"hello"#, ##"contains "# inside"##
+    /// With optional interpolation: #"hello \{name}"#
     fn parse_multiline_string(
         &self,
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
-        // multiline_string contains multiline_string_literal from external scanner
-        if let Some(literal_node) = node.child(0) {
-            let text = literal_node.utf8_text(source.as_bytes())?;
-            let content = extract_multiline_string_content(text)?;
+        let mut cursor = node.walk();
+        let mut segments: Vec<StringSegment> = Vec::new();
+        let mut leading = String::new();
+        let mut current_text = String::new();
+        let mut expecting_text = true;
+
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "multiline_string_segment" => {
+                    // Content segment - no escape processing for multiline strings
+                    let text = child.utf8_text(source.as_bytes())?;
+                    current_text.push_str(text);
+                }
+                "multiline_interpolation" => {
+                    if let Some(expr_node) = child.child_by_field_name("expression") {
+                        let expr = self.node_to_expr_with_span(expr_node, source)?;
+
+                        if expecting_text {
+                            leading = std::mem::take(&mut current_text);
+                            expecting_text = false;
+                        } else if let Some(last_segment) = segments.last_mut() {
+                            last_segment.trailing = std::mem::take(&mut current_text);
+                        }
+
+                        segments.push(StringSegment {
+                            interpolation: Box::new(expr),
+                            trailing: String::new(),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if segments.is_empty() {
+            // Simple multiline string without interpolation
             Ok(Expr::StringInterpolation(StringInterpolation {
-                leading: content,
+                leading: current_text,
                 segments: Vec::new(),
             }))
         } else {
+            // Set trailing text for the last segment
+            if let Some(last_segment) = segments.last_mut() {
+                last_segment.trailing = current_text;
+            }
+
             Ok(Expr::StringInterpolation(StringInterpolation {
-                leading: String::new(),
-                segments: Vec::new(),
+                leading,
+                segments,
             }))
         }
     }
 
     /// Parse multiline bytes: b#"hello"#, b##"contains "# inside"##
+    /// With optional interpolation: b#"hello \{name}"#
     fn parse_multiline_bytes(
         &self,
         node: Node,
         source: &str,
     ) -> Result<Expr, Box<dyn std::error::Error>> {
-        // multiline_bytes contains multiline_bytes_literal from external scanner
-        if let Some(literal_node) = node.child(0) {
-            let text = literal_node.utf8_text(source.as_bytes())?;
-            let content = extract_multiline_bytes_content(text)?;
+        let mut cursor = node.walk();
+        let mut segments: Vec<BytesSegment> = Vec::new();
+        let mut leading = Vec::new();
+        let mut current_bytes = Vec::new();
+        let mut expecting_bytes = true;
+
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "multiline_bytes_segment" => {
+                    // Content segment - no escape processing for multiline bytes
+                    let text = child.utf8_text(source.as_bytes())?;
+                    current_bytes.extend_from_slice(text.as_bytes());
+                }
+                "multiline_bytes_interpolation" => {
+                    if let Some(expr_node) = child.child_by_field_name("expression") {
+                        let expr = self.node_to_expr(expr_node, source)?;
+                        let span = Span {
+                            start: expr_node.start_byte(),
+                            end: expr_node.end_byte(),
+                        };
+
+                        if expecting_bytes {
+                            leading = std::mem::take(&mut current_bytes);
+                            expecting_bytes = false;
+                        } else if let Some(last_segment) = segments.last_mut() {
+                            last_segment.trailing = std::mem::take(&mut current_bytes);
+                        }
+
+                        segments.push(BytesSegment {
+                            interpolation: Box::new((expr, span)),
+                            trailing: Vec::new(),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if segments.is_empty() {
+            // Simple multiline bytes without interpolation
             Ok(Expr::BytesInterpolation(BytesInterpolation {
-                leading: content,
+                leading: current_bytes,
                 segments: Vec::new(),
             }))
         } else {
+            // Set trailing bytes for the last segment
+            if let Some(last_segment) = segments.last_mut() {
+                last_segment.trailing = current_bytes;
+            }
+
             Ok(Expr::BytesInterpolation(BytesInterpolation {
-                leading: Vec::new(),
-                segments: Vec::new(),
+                leading,
+                segments,
             }))
         }
     }
@@ -1933,61 +2013,6 @@ fn extract_raw_bytes_content(text: &str) -> Result<String, Box<dyn std::error::E
         .ok_or("Raw bytes must have matching closing delimiter")?;
 
     Ok(content.to_string())
-}
-
-/// Extract content from a multiline string literal like #"hello"# or ##"hello"##
-/// Returns the content without the #s and quotes
-fn extract_multiline_string_content(text: &str) -> Result<String, Box<dyn std::error::Error>> {
-    // Count and skip opening hashes
-    let hash_count = text.chars().take_while(|&c| c == '#').count();
-    if hash_count == 0 {
-        return Err("Multiline string must start with '#'".into());
-    }
-
-    let after_hashes = &text[hash_count..];
-
-    // Must have opening quote
-    let after_open_quote = after_hashes
-        .strip_prefix('"')
-        .ok_or("Multiline string must have opening quote")?;
-
-    // Remove closing quote and hashes
-    let closing = format!("\"{}", "#".repeat(hash_count));
-    let content = after_open_quote
-        .strip_suffix(&closing)
-        .ok_or("Multiline string must have matching closing delimiter")?;
-
-    Ok(content.to_string())
-}
-
-/// Extract content from a multiline bytes literal like b#"hello"# or b##"hello"##
-/// Returns the content as bytes without the b, #s, and quotes
-fn extract_multiline_bytes_content(text: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    // Must start with 'b'
-    let rest = text
-        .strip_prefix('b')
-        .ok_or("Multiline bytes must start with 'b'")?;
-
-    // Count and skip opening hashes
-    let hash_count = rest.chars().take_while(|&c| c == '#').count();
-    if hash_count == 0 {
-        return Err("Multiline bytes must have at least one '#' after 'b'".into());
-    }
-
-    let after_hashes = &rest[hash_count..];
-
-    // Must have opening quote
-    let after_open_quote = after_hashes
-        .strip_prefix('"')
-        .ok_or("Multiline bytes must have opening quote")?;
-
-    // Remove closing quote and hashes
-    let closing = format!("\"{}", "#".repeat(hash_count));
-    let content = after_open_quote
-        .strip_suffix(&closing)
-        .ok_or("Multiline bytes must have matching closing delimiter")?;
-
-    Ok(content.as_bytes().to_vec())
 }
 
 /// Process escape sequences in bytes literals

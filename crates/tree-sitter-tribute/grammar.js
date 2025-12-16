@@ -9,8 +9,12 @@ module.exports = grammar({
     $.raw_bytes_literal,
     $.block_comment,
     $.block_doc_comment,
-    $.multiline_string_literal,
-    $.multiline_bytes_literal,
+    $._multiline_string_start,
+    $._multiline_string_content,
+    $._multiline_string_end,
+    $._multiline_bytes_start,
+    $._multiline_bytes_content,
+    $._multiline_bytes_end,
     $._error_sentinel,
   ],
 
@@ -704,14 +708,48 @@ module.exports = grammar({
     raw_bytes: $ => $.raw_bytes_literal,
 
     // Multiline strings: #"..."#, ##"..."##, etc.
-    // Can span multiple lines, no escape sequence processing
+    // Can span multiple lines, supports interpolation with \{expr}
     // Handled by external scanner for proper hash delimiter matching
-    multiline_string: $ => $.multiline_string_literal,
+    multiline_string: $ => seq(
+      $._multiline_string_start,
+      $.multiline_string_segment,
+      optional(repeat1(seq(
+        $.multiline_interpolation,
+        $.multiline_string_segment
+      ))),
+      $._multiline_string_end
+    ),
+
+    multiline_string_segment: $ => $._multiline_string_content,
+
+    multiline_interpolation: $ => seq(
+      '\\',
+      '{',
+      field('expression', $._expression),
+      '}'
+    ),
 
     // Multiline bytes: b#"..."#, b##"..."##, etc.
-    // Can span multiple lines, no escape sequence processing
+    // Can span multiple lines, supports interpolation with \{expr}
     // Handled by external scanner for proper hash delimiter matching
-    multiline_bytes: $ => $.multiline_bytes_literal,
+    multiline_bytes: $ => seq(
+      $._multiline_bytes_start,
+      $.multiline_bytes_segment,
+      optional(repeat1(seq(
+        $.multiline_bytes_interpolation,
+        $.multiline_bytes_segment
+      ))),
+      $._multiline_bytes_end
+    ),
+
+    multiline_bytes_segment: $ => $._multiline_bytes_content,
+
+    multiline_bytes_interpolation: $ => seq(
+      '\\',
+      '{',
+      field('expression', $._expression),
+      '}'
+    ),
 
     // Identifiers start with lowercase letter or underscore (values, functions, constants)
     identifier: $ => /[a-z_][a-zA-Z0-9_]*/,

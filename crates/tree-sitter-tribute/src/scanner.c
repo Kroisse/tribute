@@ -10,11 +10,14 @@ enum TokenType {
     BLOCK_COMMENT,
     // Block doc comment with nesting support: /** ... */
     BLOCK_DOC_COMMENT,
-    // Multiline string: #"..."#, ##"..."##, etc.
-    // Supports escape sequences but no interpolation (use regular strings for that)
-    MULTILINE_STRING_LITERAL,
-    // Multiline bytes: b#"..."#, b##"..."##, etc.
-    MULTILINE_BYTES_LITERAL,
+    // Multiline string with interpolation: #"...\{expr}..."#
+    MULTILINE_STRING_START,    // #"
+    MULTILINE_STRING_CONTENT,  // text between interpolations
+    MULTILINE_STRING_END,      // "#
+    // Multiline bytes with interpolation: b#"...\{expr}..."#
+    MULTILINE_BYTES_START,     // b#"
+    MULTILINE_BYTES_CONTENT,   // text between interpolations
+    MULTILINE_BYTES_END,       // "#
 
     ERROR_SENTINEL
 };
@@ -22,6 +25,8 @@ enum TokenType {
 // Scanner state for multiline strings with hash delimiters
 typedef struct {
     uint8_t opening_hash_count;
+    bool in_multiline_string;
+    bool in_multiline_bytes;
 } Scanner;
 
 void *tree_sitter_tribute_external_scanner_create(void) {
@@ -35,14 +40,20 @@ void tree_sitter_tribute_external_scanner_destroy(void *payload) {
 unsigned tree_sitter_tribute_external_scanner_serialize(void *payload, char *buffer) {
     Scanner *scanner = (Scanner *)payload;
     buffer[0] = (char)scanner->opening_hash_count;
-    return 1;
+    buffer[1] = (char)(scanner->in_multiline_string ? 1 : 0);
+    buffer[2] = (char)(scanner->in_multiline_bytes ? 1 : 0);
+    return 3;
 }
 
 void tree_sitter_tribute_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {
     Scanner *scanner = (Scanner *)payload;
     scanner->opening_hash_count = 0;
-    if (length == 1) {
+    scanner->in_multiline_string = false;
+    scanner->in_multiline_bytes = false;
+    if (length >= 3) {
         scanner->opening_hash_count = (uint8_t)buffer[0];
+        scanner->in_multiline_string = buffer[1] != 0;
+        scanner->in_multiline_bytes = buffer[2] != 0;
     }
 }
 
@@ -99,63 +110,118 @@ static bool scan_raw_literal(TSLexer *lexer, enum TokenType token_type) {
     }
 }
 
-// Scan multiline literal with hash delimiters
-// Used for multiline strings (#"..."#) and multiline bytes (b#"..."#)
-// Returns true if a complete multiline literal was scanned
-static bool scan_multiline_literal(TSLexer *lexer, uint8_t opening_hash_count, enum TokenType token_type) {
-    // We've already consumed the opening hashes and quote
-    // Scan content until we find closing quote + matching hashes
+// Scan multiline string/bytes content until interpolation or end delimiter
+// Returns true if content was found (even empty content before \{ or end)
+static bool scan_multiline_content(TSLexer *lexer, Scanner *scanner, bool is_bytes) {
+    uint8_t hash_count = scanner->opening_hash_count;
+    bool has_content = false;
+
     for (;;) {
         if (lexer->eof(lexer)) {
-            return false;  // Unterminated multiline string
+            // Unterminated - return what we have
+            if (has_content) {
+                lexer->result_symbol = is_bytes ? MULTILINE_BYTES_CONTENT : MULTILINE_STRING_CONTENT;
+                lexer->mark_end(lexer);
+                return true;
+            }
+            return false;
         }
 
+        // Check for interpolation start: \{
+        if (lexer->lookahead == '\\') {
+            lexer->mark_end(lexer);
+            advance(lexer);
+            if (lexer->lookahead == '{') {
+                // Don't consume \{ - let grammar handle it
+                // Return content we've accumulated (may be empty)
+                lexer->result_symbol = is_bytes ? MULTILINE_BYTES_CONTENT : MULTILINE_STRING_CONTENT;
+                return true;
+            }
+            // Not interpolation, backslash is part of content
+            has_content = true;
+            continue;
+        }
+
+        // Check for end delimiter: "# (with matching hash count)
         if (lexer->lookahead == '"') {
+            lexer->mark_end(lexer);
             advance(lexer);
 
             // Count closing hashes
             uint8_t closing_hash_count = 0;
-            while (lexer->lookahead == '#' && closing_hash_count < opening_hash_count) {
+            while (lexer->lookahead == '#' && closing_hash_count < hash_count) {
                 advance(lexer);
                 closing_hash_count++;
             }
 
-            // If we matched all hashes, we're done
-            if (closing_hash_count == opening_hash_count) {
-                lexer->result_symbol = token_type;
-                lexer->mark_end(lexer);
+            // If we matched all hashes, this is the end
+            if (closing_hash_count == hash_count) {
+                // Return content first (don't consume the end delimiter)
+                // The end will be returned on next scan
+                lexer->result_symbol = is_bytes ? MULTILINE_BYTES_CONTENT : MULTILINE_STRING_CONTENT;
                 return true;
             }
-            // Otherwise, the quote and hashes are part of the content, continue
-        } else {
-            advance(lexer);
+            // Not the end, quote and hashes are content
+            has_content = true;
+            continue;
         }
+
+        // Regular content character
+        advance(lexer);
+        has_content = true;
+        lexer->mark_end(lexer);
     }
 }
 
+// Scan multiline string/bytes end delimiter
+static bool scan_multiline_end(TSLexer *lexer, Scanner *scanner, bool is_bytes) {
+    uint8_t hash_count = scanner->opening_hash_count;
+
+    if (lexer->lookahead != '"') {
+        return false;
+    }
+    advance(lexer);
+
+    // Count closing hashes
+    uint8_t closing_hash_count = 0;
+    while (lexer->lookahead == '#' && closing_hash_count < hash_count) {
+        advance(lexer);
+        closing_hash_count++;
+    }
+
+    if (closing_hash_count == hash_count) {
+        lexer->result_symbol = is_bytes ? MULTILINE_BYTES_END : MULTILINE_STRING_END;
+        lexer->mark_end(lexer);
+        // Clear state
+        scanner->opening_hash_count = 0;
+        scanner->in_multiline_string = false;
+        scanner->in_multiline_bytes = false;
+        return true;
+    }
+
+    return false;
+}
+
 // Scan block comment with nesting support
-// Returns true if a complete block comment was scanned
-// is_doc_comment: true if this started with /** (doc comment)
 static bool scan_block_comment(TSLexer *lexer, bool is_doc_comment) {
-    // We've already consumed /* or /**
     int nesting_depth = 1;
 
     while (nesting_depth > 0) {
         if (lexer->eof(lexer)) {
-            return false;  // Unterminated comment
+            return false;
         }
 
         if (lexer->lookahead == '/') {
             advance(lexer);
             if (lexer->lookahead == '*') {
                 advance(lexer);
-                nesting_depth++;  // Nested comment start
+                nesting_depth++;
             }
         } else if (lexer->lookahead == '*') {
             advance(lexer);
             if (lexer->lookahead == '/') {
                 advance(lexer);
-                nesting_depth--;  // Comment end
+                nesting_depth--;
             }
         } else {
             advance(lexer);
@@ -172,34 +238,61 @@ bool tree_sitter_tribute_external_scanner_scan(
     TSLexer *lexer,
     const bool *valid_symbols
 ) {
-    (void)payload;  // Unused for now
+    Scanner *scanner = (Scanner *)payload;
+
     // Error recovery mode - bail out
     if (valid_symbols[ERROR_SENTINEL]) {
         return false;
     }
 
-    // Skip whitespace
+    // If we're inside a multiline string, handle content/end
+    if (scanner->in_multiline_string) {
+        // Try to scan end first
+        if (valid_symbols[MULTILINE_STRING_END] && lexer->lookahead == '"') {
+            if (scan_multiline_end(lexer, scanner, false)) {
+                return true;
+            }
+        }
+        // Scan content
+        if (valid_symbols[MULTILINE_STRING_CONTENT]) {
+            return scan_multiline_content(lexer, scanner, false);
+        }
+        return false;
+    }
+
+    // If we're inside multiline bytes, handle content/end
+    if (scanner->in_multiline_bytes) {
+        // Try to scan end first
+        if (valid_symbols[MULTILINE_BYTES_END] && lexer->lookahead == '"') {
+            if (scan_multiline_end(lexer, scanner, true)) {
+                return true;
+            }
+        }
+        // Scan content
+        if (valid_symbols[MULTILINE_BYTES_CONTENT]) {
+            return scan_multiline_content(lexer, scanner, true);
+        }
+        return false;
+    }
+
+    // Skip whitespace (only when not inside a string)
     while (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
            lexer->lookahead == '\n' || lexer->lookahead == '\r') {
         skip(lexer);
     }
 
-    // Both raw_string and raw_bytes start with 'r'
+    // Raw strings/bytes: r"...", r#"..."#, rb"...", rb#"..."#
     if (lexer->lookahead == 'r') {
-        // Check if it's rb" (raw bytes) or r" (raw string)
-        // We need to peek ahead without committing
         lexer->mark_end(lexer);
-
-        advance(lexer);  // consume 'r'
+        advance(lexer);
 
         if (lexer->lookahead == 'b' && valid_symbols[RAW_BYTES_LITERAL]) {
-            advance(lexer);  // consume 'b'
+            advance(lexer);
             if (lexer->lookahead == '#' || lexer->lookahead == '"') {
                 return scan_raw_literal(lexer, RAW_BYTES_LITERAL);
             }
         }
 
-        // Not raw bytes, try raw string
         if (valid_symbols[RAW_STRING_LITERAL]) {
             if (lexer->lookahead == '#' || lexer->lookahead == '"') {
                 return scan_raw_literal(lexer, RAW_STRING_LITERAL);
@@ -207,42 +300,46 @@ bool tree_sitter_tribute_external_scanner_scan(
         }
     }
 
-    // Multiline bytes: b#"..."#, b##"..."##
-    if (lexer->lookahead == 'b' && valid_symbols[MULTILINE_BYTES_LITERAL]) {
+    // Multiline bytes start: b#"
+    if (lexer->lookahead == 'b' && valid_symbols[MULTILINE_BYTES_START]) {
         lexer->mark_end(lexer);
-        advance(lexer);  // consume 'b'
+        advance(lexer);
 
         if (lexer->lookahead == '#') {
-            // Count opening hashes
-            uint8_t opening_hash_count = 0;
+            uint8_t hash_count = 0;
             while (lexer->lookahead == '#') {
                 advance(lexer);
-                opening_hash_count++;
+                hash_count++;
             }
 
-            // Must have opening quote
             if (lexer->lookahead == '"') {
                 advance(lexer);
-                return scan_multiline_literal(lexer, opening_hash_count, MULTILINE_BYTES_LITERAL);
+                lexer->result_symbol = MULTILINE_BYTES_START;
+                lexer->mark_end(lexer);
+                scanner->opening_hash_count = hash_count;
+                scanner->in_multiline_bytes = true;
+                return true;
             }
         }
     }
 
-    // Multiline strings: #"..."#, ##"..."##
-    if (lexer->lookahead == '#' && valid_symbols[MULTILINE_STRING_LITERAL]) {
+    // Multiline string start: #"
+    if (lexer->lookahead == '#' && valid_symbols[MULTILINE_STRING_START]) {
         lexer->mark_end(lexer);
 
-        // Count opening hashes
-        uint8_t opening_hash_count = 0;
+        uint8_t hash_count = 0;
         while (lexer->lookahead == '#') {
             advance(lexer);
-            opening_hash_count++;
+            hash_count++;
         }
 
-        // Must have opening quote
         if (lexer->lookahead == '"') {
             advance(lexer);
-            return scan_multiline_literal(lexer, opening_hash_count, MULTILINE_STRING_LITERAL);
+            lexer->result_symbol = MULTILINE_STRING_START;
+            lexer->mark_end(lexer);
+            scanner->opening_hash_count = hash_count;
+            scanner->in_multiline_string = true;
+            return true;
         }
     }
 
@@ -250,28 +347,22 @@ bool tree_sitter_tribute_external_scanner_scan(
     if (lexer->lookahead == '/' &&
         (valid_symbols[BLOCK_COMMENT] || valid_symbols[BLOCK_DOC_COMMENT])) {
         lexer->mark_end(lexer);
-        advance(lexer);  // consume '/'
+        advance(lexer);
 
         if (lexer->lookahead == '*') {
-            advance(lexer);  // consume '*'
+            advance(lexer);
 
-            // Check if it's a doc comment (/**)
-            // But /***/ is a regular comment, not a doc comment
             if (lexer->lookahead == '*' && valid_symbols[BLOCK_DOC_COMMENT]) {
-                // Peek ahead to see if next char is '/'
-                advance(lexer);  // consume second '*'
+                advance(lexer);
                 if (lexer->lookahead == '/') {
-                    // This is /**/ - empty regular comment
                     advance(lexer);
                     lexer->result_symbol = BLOCK_COMMENT;
                     lexer->mark_end(lexer);
                     return true;
                 }
-                // It's /** followed by something else - doc comment
                 return scan_block_comment(lexer, true);
             }
 
-            // Regular block comment
             if (valid_symbols[BLOCK_COMMENT]) {
                 return scan_block_comment(lexer, false);
             }
