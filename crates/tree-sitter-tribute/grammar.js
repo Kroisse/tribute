@@ -1,6 +1,20 @@
 /// <reference types="tree-sitter-cli/dsl" />
 // @ts-check
 
+// Use RustRegex for better Unicode support
+// RustRegex uses Rust's regex crate syntax with Unicode property support
+// See: https://docs.rs/regex/latest/regex/#syntax
+
+// Helper: tagged template literal for RustRegex without double-escaping
+// Usage: re`\d+` instead of new RustRegex('\\d+')
+const re = (strings, ...values) => {
+  let pattern = strings.raw[0];
+  for (let i = 0; i < values.length; i++) {
+    pattern += values[i] + strings.raw[i + 1];
+  }
+  return new RustRegex(pattern);
+};
+
 module.exports = grammar({
   name: 'tribute',
 
@@ -134,7 +148,8 @@ module.exports = grammar({
     )),
 
     // Type names start with uppercase: User, String, List
-    type_identifier: $ => /[A-Z][a-zA-Z0-9_]*/,
+    // Using RustRegex for future Unicode extensibility
+    type_identifier: $ => re`[A-Z][a-zA-Z0-9_]*`,
 
     // enum Option(a) { None, Some(a) }
     // enum Result(a, e) { Ok { value: a }, Err { error: e } }
@@ -634,18 +649,18 @@ module.exports = grammar({
     // Int: +1, -1, +0b1010, -0xff (explicit sign required)
     // Float: 1.0, +1.0, -3.14 (decimal point with digits required)
     nat_literal: $ => token(choice(
-      /\d+/,                    // decimal: 0, 42
-      /0[bB][01]+/,             // binary: 0b1010
-      /0[oO][0-7]+/,            // octal: 0o777
-      /0[xX][0-9a-fA-F]+/       // hexadecimal: 0xc0ffee
+      re`[0-9]+`,             // decimal: 0, 42
+      re`0[bB][01]+`,         // binary: 0b1010
+      re`0[oO][0-7]+`,        // octal: 0o777
+      re`0[xX][0-9a-fA-F]+`   // hexadecimal: 0xc0ffee
     )),
     int_literal: $ => token(choice(
-      /[+-]\d+/,                // decimal: +1, -1
-      /[+-]0[bB][01]+/,         // binary: +0b1010, -0b1010
-      /[+-]0[oO][0-7]+/,        // octal: +0o777, -0o777
-      /[+-]0[xX][0-9a-fA-F]+/   // hexadecimal: +0xff, -0xff
+      re`[+-][0-9]+`,             // decimal: +1, -1
+      re`[+-]0[bB][01]+`,         // binary: +0b1010, -0b1010
+      re`[+-]0[oO][0-7]+`,        // octal: +0o777, -0o777
+      re`[+-]0[xX][0-9a-fA-F]+`   // hexadecimal: +0xff, -0xff
     )),
-    float_literal: $ => /[+-]?\d+\.\d+/,
+    float_literal: $ => re`[+-]?[0-9]+\.[0-9]+`,
 
     // Rune literal: ?a, ?\n, ?\t, ?\x41, ?\u0041
     // Matches: ? followed by either:
@@ -653,11 +668,11 @@ module.exports = grammar({
     //   - An escape sequence: \n, \r, \t, \0, \\, \xHH, \uHHHH
     rune: $ => token(choice(
       // Simple rune: ?a, ?Z, ?!, ?@, etc. (any printable non-backslash, non-whitespace)
-      /\?[^\\\s]/,
+      re`\?[^\\\s]`,
       // Escape sequences
-      /\?\\[nrt0\\]/,        // ?\n, ?\r, ?\t, ?\0, ?\\
-      /\?\\x[0-9a-fA-F]{2}/, // ?\x41
-      /\?\\u[0-9a-fA-F]{4}/  // ?\u0041
+      re`\?\\[nrt0\\]`,          // ?\n, ?\r, ?\t, ?\0, ?\\
+      re`\?\\x[0-9a-fA-F]{2}`,   // ?\x41
+      re`\?\\u[0-9a-fA-F]{4}`    // ?\u0041
     )),
 
     string: $ => seq(
@@ -670,7 +685,7 @@ module.exports = grammar({
       '"'
     ),
 
-    string_segment: $ => prec(-1, /([^"\\]|\\[nrtN0"\\]|\\x[0-9a-fA-F]{2})*/),
+    string_segment: $ => prec(-1, re`([^"\\]|\\[nrtN0"\\]|\\x[0-9a-fA-F]{2})*`),
 
     interpolation: $ => seq(
       '\\',
@@ -694,7 +709,7 @@ module.exports = grammar({
       '"'
     ),
 
-    bytes_segment: $ => prec(-1, /([^"\\]|\\[nrt0"\\]|\\x[0-9a-fA-F]{2})*/),
+    bytes_segment: $ => prec(-1, re`([^"\\]|\\[nrt0"\\]|\\x[0-9a-fA-F]{2})*`),
 
     bytes_interpolation: $ => seq(
       '\\',
@@ -752,7 +767,8 @@ module.exports = grammar({
     ),
 
     // Identifiers start with lowercase letter or underscore (values, functions, constants)
-    identifier: $ => /[a-z_][a-zA-Z0-9_]*/,
+    // Using RustRegex for future Unicode extensibility
+    identifier: $ => re`[a-z_][a-zA-Z0-9_]*`,
 
     // Name can be either identifier or type_identifier (used in paths, modules)
     _name: $ => choice($.identifier, $.type_identifier),
@@ -779,13 +795,13 @@ module.exports = grammar({
     // Line doc comment: /// ... (higher precedence to match before line_comment)
     line_doc_comment: $ => token(prec(2, seq(
       '///',
-      /.*/
+      re`.*`
     ))),
 
     // Line comment: // ... (lower precedence, won't match /// due to doc comment)
     line_comment: $ => token(prec(1, seq(
       '//',
-      /.*/
+      re`.*`
     ))),
 
     // block_comment and block_doc_comment are handled by external scanner
@@ -793,7 +809,7 @@ module.exports = grammar({
   },
 
   extras: $ => [
-    /\s/,
+    re`\s`,  // Unicode-aware whitespace
     $.line_comment,
     $.line_doc_comment,
     $.block_comment,
