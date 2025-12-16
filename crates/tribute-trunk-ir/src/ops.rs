@@ -133,7 +133,7 @@ macro_rules! define_op {
     // Entry rules - parse surface syntax and normalize to @impl
     // ========================================================================
 
-    // With attributes, fixed operands, result, optional region
+    // With attributes, fixed operands, WITH result, optional region
     (
         $(#[$meta:meta])*
         $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?]($($operand:ident),* $(,)?) -> result { $($region:ident)? }
@@ -145,6 +145,40 @@ macro_rules! define_op {
             op: $op,
             attrs: [$($attr),+],
             operands: [fixed: $($operand),*],
+            result: [result_ty],
+            region: [$($region)?]
+        );
+    };
+
+    // With attributes, fixed operands, NO result, optional region
+    (
+        $(#[$meta:meta])*
+        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?]($($operand:ident),* $(,)?) { $($region:ident)? }
+    ) => {
+        $crate::define_op!(@impl
+            meta: [$(#[$meta])*],
+            vis: $vis,
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attr),+],
+            operands: [fixed: $($operand),*],
+            result: [],
+            region: [$($region)?]
+        );
+    };
+
+    // With attributes, variadic operands, WITH result, optional region
+    (
+        $(#[$meta:meta])*
+        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?](..$operands:ident) -> result { $($region:ident)? }
+    ) => {
+        $crate::define_op!(@impl
+            meta: [$(#[$meta])*],
+            vis: $vis,
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attr),+],
+            operands: [variadic: $operands],
             result: [result_ty],
             region: [$($region)?]
         );
@@ -167,6 +201,23 @@ macro_rules! define_op {
         );
     };
 
+    // With attributes, no operands, WITH result, optional region
+    (
+        $(#[$meta:meta])*
+        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?]() -> result { $($region:ident)? }
+    ) => {
+        $crate::define_op!(@impl
+            meta: [$(#[$meta])*],
+            vis: $vis,
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attr),+],
+            operands: [fixed:],
+            result: [result_ty],
+            region: [$($region)?]
+        );
+    };
+
     // With attributes, no operands, no result, optional region
     (
         $(#[$meta:meta])*
@@ -184,7 +235,7 @@ macro_rules! define_op {
         );
     };
 
-    // No attributes, fixed operands, result, optional region
+    // No attributes, fixed operands, WITH result, optional region
     (
         $(#[$meta:meta])*
         $vis:vis op $dialect:ident.$op:ident($($operand:ident),* $(,)?) -> result { $($region:ident)? }
@@ -196,6 +247,40 @@ macro_rules! define_op {
             op: $op,
             attrs: [],
             operands: [fixed: $($operand),*],
+            result: [result_ty],
+            region: [$($region)?]
+        );
+    };
+
+    // No attributes, fixed operands, NO result, optional region
+    (
+        $(#[$meta:meta])*
+        $vis:vis op $dialect:ident.$op:ident($($operand:ident),+ $(,)?) { $($region:ident)? }
+    ) => {
+        $crate::define_op!(@impl
+            meta: [$(#[$meta])*],
+            vis: $vis,
+            dialect: $dialect,
+            op: $op,
+            attrs: [],
+            operands: [fixed: $($operand),+],
+            result: [],
+            region: [$($region)?]
+        );
+    };
+
+    // No attributes, variadic operands, WITH result, optional region
+    (
+        $(#[$meta:meta])*
+        $vis:vis op $dialect:ident.$op:ident(..$operands:ident) -> result { $($region:ident)? }
+    ) => {
+        $crate::define_op!(@impl
+            meta: [$(#[$meta])*],
+            vis: $vis,
+            dialect: $dialect,
+            op: $op,
+            attrs: [],
+            operands: [variadic: $operands],
             result: [result_ty],
             region: [$($region)?]
         );
@@ -214,6 +299,23 @@ macro_rules! define_op {
             attrs: [],
             operands: [variadic: $operands],
             result: [],
+            region: [$($region)?]
+        );
+    };
+
+    // No attributes, no operands, WITH result, optional region
+    (
+        $(#[$meta:meta])*
+        $vis:vis op $dialect:ident.$op:ident() -> result { $($region:ident)? }
+    ) => {
+        $crate::define_op!(@impl
+            meta: [$(#[$meta])*],
+            vis: $vis,
+            dialect: $dialect,
+            op: $op,
+            attrs: [],
+            operands: [fixed:],
+            result: [result_ty],
             region: [$($region)?]
         );
     };

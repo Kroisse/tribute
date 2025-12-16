@@ -6,9 +6,19 @@
 //! Note: the current implementation is transitional and still exposes the existing
 //! HIR-shaped IR while the dialect-based TrunkIR is introduced incrementally.
 
-pub mod arith;
+// === Dialect modules ===
+// Infrastructure
 pub mod core;
+
+// Mid-level (target independent)
+pub mod adt;
+pub mod arith;
+pub mod cont;
 pub mod func;
+pub mod mem;
+pub mod scf;
+
+// === Other modules ===
 pub mod hir;
 pub mod ir;
 pub mod lower;
