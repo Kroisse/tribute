@@ -69,80 +69,80 @@ macro_rules! dialect {
     // Recursively process ops - base case (empty)
     (@parse $dialect:ident) => {};
 
-    // With attrs, result, no region
+    // With attrs, fixed operands, result, optional region
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        $vis:vis op $op:ident[$($attr:ident),+ $(,)?]($($operand:ident),* $(,)?) -> result {};
+        $vis:vis op $op:ident[$($attr:ident),+ $(,)?]($($operand:ident),* $(,)?) -> result { $($region:ident)? };
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            $vis op $dialect.$op[$($attr),+]($($operand),*) -> result {}
+            $vis op $dialect.$op[$($attr),+]($($operand),*) -> result { $($region)? }
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
 
-    // No attrs, fixed operands, result, no region
+    // No attrs, fixed operands (1+), result, optional region
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        $vis:vis op $op:ident($($operand:ident),+ $(,)?) -> result {};
+        $vis:vis op $op:ident($($operand:ident),+ $(,)?) -> result { $($region:ident)? };
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            $vis op $dialect.$op($($operand),+) -> result {}
+            $vis op $dialect.$op($($operand),+) -> result { $($region)? }
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
 
-    // No attrs, no operands, result, no region
+    // No attrs, no operands, result, optional region
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        $vis:vis op $op:ident() -> result {};
+        $vis:vis op $op:ident() -> result { $($region:ident)? };
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            $vis op $dialect.$op() -> result {}
+            $vis op $dialect.$op() -> result { $($region)? }
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
 
-    // Variadic, no result, no region
+    // Variadic, no result, optional region
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        $vis:vis op $op:ident(..$operands:ident) {};
+        $vis:vis op $op:ident(..$operands:ident) { $($region:ident)? };
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            $vis op $dialect.$op(..$operands) {}
+            $vis op $dialect.$op(..$operands) { $($region)? }
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
 
-    // With attrs, no result, with region
+    // With attrs, no operands, no result, optional region
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        $vis:vis op $op:ident[$($attr:ident),+ $(,)?]() { $region:ident };
+        $vis:vis op $op:ident[$($attr:ident),+ $(,)?]() { $($region:ident)? };
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            $vis op $dialect.$op[$($attr),+]() { $region }
+            $vis op $dialect.$op[$($attr),+]() { $($region)? }
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
 
-    // Minimal (no attrs, no operands, no result, no region)
+    // Minimal (no attrs, no operands, no result, optional region)
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        $vis:vis op $op:ident() {};
+        $vis:vis op $op:ident() { $($region:ident)? };
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            $vis op $dialect.$op() {}
+            $vis op $dialect.$op() { $($region)? }
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
@@ -194,7 +194,7 @@ macro_rules! dialect {
 /// ```
 #[macro_export]
 macro_rules! define_op {
-    // With attributes, fixed operands, result, and region
+    // With attributes, fixed operands, result, optional region
     (
         $(#[$meta:meta])*
         $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?]($($operand:ident),* $(,)?) -> result { $($region:ident)? }
@@ -211,27 +211,10 @@ macro_rules! define_op {
         );
     };
 
-    // With attributes, fixed operands, result, no region
+    // With attributes, variadic operands, no result, optional region
     (
         $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?]($($operand:ident),* $(,)?) -> result {}
-    ) => {
-        $crate::define_op!(@impl
-            meta: [$(#[$meta])*],
-            vis: $vis,
-            dialect: $dialect,
-            op: $op,
-            attrs: [$($attr),+],
-            operands: [fixed: $($operand),*],
-            result: single,
-            region: []
-        );
-    };
-
-    // With attributes, variadic operands, no result, no region
-    (
-        $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?](..$operands:ident) {}
+        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?](..$operands:ident) { $($region:ident)? }
     ) => {
         $crate::define_op!(@impl
             meta: [$(#[$meta])*],
@@ -241,14 +224,14 @@ macro_rules! define_op {
             attrs: [$($attr),+],
             operands: [variadic: $operands],
             result: none,
-            region: []
+            region: [$($region)?]
         );
     };
 
-    // With attributes, no operands, no result, with region
+    // With attributes, no operands, no result, optional region
     (
         $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?]() { $region:ident }
+        $vis:vis op $dialect:ident.$op:ident[$($attr:ident),+ $(,)?]() { $($region:ident)? }
     ) => {
         $crate::define_op!(@impl
             meta: [$(#[$meta])*],
@@ -258,14 +241,14 @@ macro_rules! define_op {
             attrs: [$($attr),+],
             operands: [fixed:],
             result: none,
-            region: [$region]
+            region: [$($region)?]
         );
     };
 
-    // No attributes, fixed operands, result, no region
+    // No attributes, fixed operands, result, optional region
     (
         $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident($($operand:ident),* $(,)?) -> result {}
+        $vis:vis op $dialect:ident.$op:ident($($operand:ident),* $(,)?) -> result { $($region:ident)? }
     ) => {
         $crate::define_op!(@impl
             meta: [$(#[$meta])*],
@@ -275,14 +258,14 @@ macro_rules! define_op {
             attrs: [],
             operands: [fixed: $($operand),*],
             result: single,
-            region: []
+            region: [$($region)?]
         );
     };
 
-    // No attributes, variadic operands, no result, no region
+    // No attributes, variadic operands, no result, optional region
     (
         $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident(..$operands:ident) {}
+        $vis:vis op $dialect:ident.$op:ident(..$operands:ident) { $($region:ident)? }
     ) => {
         $crate::define_op!(@impl
             meta: [$(#[$meta])*],
@@ -292,14 +275,14 @@ macro_rules! define_op {
             attrs: [],
             operands: [variadic: $operands],
             result: none,
-            region: []
+            region: [$($region)?]
         );
     };
 
-    // No attributes, no operands, no result, no region (minimal)
+    // No attributes, no operands, no result, optional region (minimal)
     (
         $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident() {}
+        $vis:vis op $dialect:ident.$op:ident() { $($region:ident)? }
     ) => {
         $crate::define_op!(@impl
             meta: [$(#[$meta])*],
@@ -309,7 +292,7 @@ macro_rules! define_op {
             attrs: [],
             operands: [fixed:],
             result: none,
-            region: []
+            region: [$($region)?]
         );
     };
 
@@ -356,10 +339,12 @@ macro_rules! define_op {
 
                 $crate::define_op!(@gen_accessors [<$op:camel>], [], $($operand),+);
 
+                #[allow(dead_code)]
                 pub fn result(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
                     self.op.result(db, 0)
                 }
 
+                #[allow(dead_code)]
                 pub fn result_ty(&self, db: &'db dyn salsa::Database) -> $crate::Type {
                     self.op.results(db)[0].clone()
                 }
@@ -394,14 +379,14 @@ macro_rules! define_op {
     // Helper: Generate operand accessors with counter
     // Base case: last operand
     (@gen_accessors $struct:ident, [$($counter:tt)*], $name:ident) => {
-        /// Get operand at index.
+        #[allow(dead_code)]
         pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
             self.op.operands(db)[$crate::define_op!(@count $($counter)*)]
         }
     };
     // Recursive case: more operands to process
     (@gen_accessors $struct:ident, [$($counter:tt)*], $name:ident, $($rest:ident),+) => {
-        /// Get operand at index.
+        #[allow(dead_code)]
         pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
             self.op.operands(db)[$crate::define_op!(@count $($counter)*)]
         }
@@ -451,17 +436,19 @@ macro_rules! define_op {
 
                 // Auto-generated attribute accessors
                 $(
-                    /// Get the attribute.
+                    #[allow(dead_code)]
                     pub fn $attr(&self, db: &'db dyn salsa::Database) -> &'db $crate::Attribute<'db> {
                         let key = $crate::Symbol::new(db, stringify!($attr));
                         self.op.attributes(db).get(&key).expect(concat!("missing attribute: ", stringify!($attr)))
                     }
                 )+
 
+                #[allow(dead_code)]
                 pub fn result(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
                     self.op.result(db, 0)
                 }
 
+                #[allow(dead_code)]
                 pub fn result_ty(&self, db: &'db dyn salsa::Database) -> $crate::Type {
                     self.op.results(db)[0].clone()
                 }
@@ -535,10 +522,12 @@ macro_rules! define_op {
                     Self::wrap_unchecked(op)
                 }
 
+                #[allow(dead_code)]
                 pub fn result(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
                     self.op.result(db, 0)
                 }
 
+                #[allow(dead_code)]
                 pub fn result_ty(&self, db: &'db dyn salsa::Database) -> $crate::Type {
                     self.op.results(db)[0].clone()
                 }
@@ -608,6 +597,7 @@ macro_rules! define_op {
                     Self::wrap_unchecked(op)
                 }
 
+                #[allow(dead_code)]
                 pub fn operands(&self, db: &'db dyn salsa::Database) -> &[$crate::Value<'db>] {
                     self.op.operands(db)
                 }
@@ -678,13 +668,14 @@ macro_rules! define_op {
 
                 // Auto-generated attribute accessors
                 $(
-                    /// Get the attribute.
+                    #[allow(dead_code)]
                     pub fn $attr(&self, db: &'db dyn salsa::Database) -> &'db $crate::Attribute<'db> {
                         let key = $crate::Symbol::new(db, stringify!($attr));
                         self.op.attributes(db).get(&key).expect(concat!("missing attribute: ", stringify!($attr)))
                     }
                 )+
 
+                #[allow(dead_code)]
                 pub fn $region(&self, db: &'db dyn salsa::Database) -> $crate::Region<'db> {
                     self.op.regions(db)[0]
                 }
