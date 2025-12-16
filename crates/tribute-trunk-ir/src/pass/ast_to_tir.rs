@@ -315,7 +315,18 @@ fn lower_expr<'db>(
             block_op.result(db)
         }
         Expr::List(_) => todo!("list literals"),
-        Expr::Tuple(_, _) => todo!("tuple literals"),
+        Expr::Tuple(first, rest) => {
+            // Lower all tuple elements
+            let first_value = lower_expr(db, path, ctx, block, first);
+            let mut elements = vec![first_value];
+            for elem in rest {
+                elements.push(lower_expr(db, path, ctx, block, elem));
+            }
+
+            // Create the src.tuple operation
+            let tuple_op = block.op(src::Tuple::new(db, location, elements, Type::Unit));
+            tuple_op.result(db)
+        }
         Expr::Record(_) => todo!("record expressions"),
         Expr::OperatorFn(_) => todo!("operator functions"),
     }
@@ -950,6 +961,71 @@ mod tests {
             // yield uses add result
             let yield_op = src::Yield::from_operation(db, inner_ops[2]).unwrap();
             assert_eq!(yield_op.value(db), add_op.result(db));
+        });
+    }
+
+    /// Helper to create AST with tuple: fn main() { #(1, 2, 3) }
+    #[salsa::tracked]
+    fn lower_tuple_helper(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, PathBuf::from("test.tr"));
+
+        // Create AST: fn main() { #(1, 2, 3) }
+        let tuple_expr = Expr::Tuple(
+            Box::new((Expr::Nat(1), Span::new(14, 15))),
+            vec![
+                (Expr::Nat(2), Span::new(17, 18)),
+                (Expr::Nat(3), Span::new(20, 21)),
+            ],
+        );
+
+        let body = tribute_ast::Block {
+            statements: vec![Statement::Expression((tuple_expr, Span::new(12, 23)))],
+        };
+
+        let func_def =
+            FunctionDefinition::new(db, "main".to_string(), vec![], None, body, Span::new(0, 25));
+
+        let item = tribute_ast::Item::new(db, ItemKind::Function(func_def), Span::new(0, 25));
+        let program = Program::new(db, vec![item]);
+
+        lower_program(db, path, program)
+    }
+
+    #[test]
+    fn test_lower_tuple_expression() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let module = lower_tuple_helper(db);
+
+            // Get the function
+            let body_region = module.body(db);
+            let blocks = body_region.blocks(db);
+            let func_op = func::Func::from_operation(db, blocks[0].operations(db)[0]).unwrap();
+
+            // Get the function's entry block
+            let func_body = func_op.body(db);
+            let func_blocks = func_body.blocks(db);
+            let entry_block = &func_blocks[0];
+            let ops = entry_block.operations(db);
+
+            // Should have: arith.const(1), arith.const(2), arith.const(3), src.tuple, func.return
+            assert_eq!(ops.len(), 5);
+
+            // Verify the constants
+            let const_1 = arith::Const::from_operation(db, ops[0]).unwrap();
+            let const_2 = arith::Const::from_operation(db, ops[1]).unwrap();
+            let const_3 = arith::Const::from_operation(db, ops[2]).unwrap();
+
+            // Verify the tuple operation
+            let tuple_op = src::Tuple::from_operation(db, ops[3]).unwrap();
+            let elements = tuple_op.operands(db);
+            assert_eq!(elements.len(), 3);
+            assert_eq!(elements[0], const_1.result(db));
+            assert_eq!(elements[1], const_2.result(db));
+            assert_eq!(elements[2], const_3.result(db));
+
+            // Return should use the tuple's result
+            let ret_op = func::Return::from_operation(db, ops[4]).unwrap();
+            assert_eq!(ret_op.operands(db)[0], tuple_op.result(db));
         });
     }
 }

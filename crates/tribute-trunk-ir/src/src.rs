@@ -34,5 +34,9 @@ dialect! {
         /// The `type` attribute holds the function type (params -> result).
         /// The body region contains the lambda body, ending with `src.yield`.
         op lambda[r#type]() -> result { body };
+
+        /// `src.tuple` operation: tuple construction.
+        /// Takes variadic operands (tuple elements) and produces a tuple value.
+        op tuple(..elements) -> result {};
     }
 }
