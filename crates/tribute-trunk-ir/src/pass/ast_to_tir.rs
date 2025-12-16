@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::{Attribute, BlockBuilder, Type, Value, arith, core, func, src};
+use crate::{Attribute, BlockBuilder, Region, Type, Value, arith, core, func, src};
 use tribute_ast::{
     BinaryExpression, BinaryOperator, CallExpression, Expr, FunctionDefinition, ItemKind,
     LetStatement, Pattern, Program, Statement,
@@ -33,6 +33,14 @@ impl<'db> LoweringCtx<'db> {
     /// Look up a binding by name.
     fn lookup(&self, name: &str) -> Option<Value<'db>> {
         self.bindings.get(name).copied()
+    }
+
+    /// Execute a closure in a new scope. Bindings created inside are discarded after.
+    fn scoped<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let saved = self.bindings.clone();
+        let result = f(self);
+        self.bindings = saved;
+        result
     }
 }
 
@@ -236,12 +244,58 @@ fn lower_expr<'db>(
         Expr::MethodCall(_) => todo!("method calls"),
         Expr::Match(_) => todo!("match expressions"),
         Expr::Lambda(_) => todo!("lambda expressions"),
-        Expr::Block(_) => todo!("block expressions"),
+        Expr::Block(statements) => {
+            // Create body block for the block expression
+            let mut body_block = BlockBuilder::new(db, location);
+
+            // Lower statements in a new scope
+            let result_value = ctx.scoped(|ctx| {
+                lower_statements(db, path, ctx, &mut body_block, statements, location)
+            });
+
+            // Add yield to return the value from the block
+            body_block.op(src::Yield::new(db, location, result_value));
+
+            // Create the src.block operation
+            let region = Region::new(db, location, vec![body_block.build()]);
+            let block_op = block.op(src::Block::new(db, location, Type::Unit, region));
+            block_op.result(db)
+        }
         Expr::List(_) => todo!("list literals"),
         Expr::Tuple(_, _) => todo!("tuple literals"),
         Expr::Record(_) => todo!("record expressions"),
         Expr::OperatorFn(_) => todo!("operator functions"),
     }
+}
+
+/// Lower a sequence of statements, returning the last expression's value.
+fn lower_statements<'db>(
+    db: &'db dyn salsa::Database,
+    path: PathId<'db>,
+    ctx: &mut LoweringCtx<'db>,
+    block: &mut BlockBuilder<'db>,
+    statements: &[Statement],
+    location: Location<'db>,
+) -> Value<'db> {
+    let mut last_value: Option<Value<'db>> = None;
+
+    for stmt in statements {
+        match stmt {
+            Statement::Expression(spanned_expr) => {
+                last_value = Some(lower_expr(db, path, ctx, block, spanned_expr));
+            }
+            Statement::Let(let_stmt) => {
+                lower_let(db, path, ctx, block, let_stmt);
+                last_value = None; // Let statements don't produce a value
+            }
+        }
+    }
+
+    // Return the last expression value, or unit if empty/ends with let
+    last_value.unwrap_or_else(|| {
+        let op = block.op(arith::Const::new(db, location, Type::Unit, Attribute::Unit));
+        op.result(db)
+    })
 }
 
 /// Lower a binary operation to the appropriate TrunkIR op.
@@ -512,6 +566,94 @@ mod tests {
             let ret_op = func::Return::from_operation(db, ops[1]).unwrap();
             assert_eq!(ret_op.operands(db).len(), 1);
             assert_eq!(ret_op.operands(db)[0], const_value);
+        });
+    }
+
+    /// Helper to create AST with block expression: fn main() { { let x = 1; x + 2 } }
+    #[salsa::tracked]
+    fn lower_block_expr_helper(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, PathBuf::from("test.tr"));
+
+        // Create AST: fn main() { { let x = 1; x + 2 } }
+        // Inner block: let x = 1; x + 2
+        let inner_let = Statement::Let(LetStatement {
+            pattern: Pattern::Identifier("x".to_string()),
+            value: (Expr::Nat(1), Span::new(16, 17)),
+        });
+        let inner_expr = Statement::Expression((
+            Expr::Binary(BinaryExpression {
+                left: Box::new((Expr::Identifier("x".to_string()), Span::new(19, 20))),
+                operator: BinaryOperator::Add,
+                qualifier: None,
+                right: Box::new((Expr::Nat(2), Span::new(23, 24))),
+            }),
+            Span::new(19, 24),
+        ));
+
+        let block_expr = Expr::Block(vec![inner_let, inner_expr]);
+
+        let body = tribute_ast::Block {
+            statements: vec![Statement::Expression((block_expr, Span::new(12, 26)))],
+        };
+
+        let func_def =
+            FunctionDefinition::new(db, "main".to_string(), vec![], None, body, Span::new(0, 28));
+
+        let item = tribute_ast::Item::new(db, ItemKind::Function(func_def), Span::new(0, 28));
+        let program = Program::new(db, vec![item]);
+
+        lower_program(db, path, program)
+    }
+
+    #[test]
+    fn test_lower_block_expression() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let module = lower_block_expr_helper(db);
+
+            // Get the function
+            let body_region = module.body(db);
+            let blocks = body_region.blocks(db);
+            let func_op = func::Func::from_operation(db, blocks[0].operations(db)[0]).unwrap();
+
+            // Get the function's entry block
+            let func_body = func_op.body(db);
+            let func_blocks = func_body.blocks(db);
+            let entry_block = &func_blocks[0];
+            let ops = entry_block.operations(db);
+
+            // Should have: src.block, func.return
+            assert_eq!(ops.len(), 2);
+
+            // Verify we have src.block
+            let block_op = src::Block::from_operation(db, ops[0]).unwrap();
+
+            // Get the block's body region
+            let block_body = block_op.body(db);
+            let block_blocks = block_body.blocks(db);
+            assert_eq!(block_blocks.len(), 1);
+
+            let inner_block = &block_blocks[0];
+            let inner_ops = inner_block.operations(db);
+
+            // Inner block should have: arith.const(1), arith.const(2), arith.add, src.yield
+            assert_eq!(inner_ops.len(), 4);
+
+            // Verify the operations inside the block
+            let const_1 = arith::Const::from_operation(db, inner_ops[0]).unwrap();
+            let const_2 = arith::Const::from_operation(db, inner_ops[1]).unwrap();
+            let add_op = arith::Add::from_operation(db, inner_ops[2]).unwrap();
+
+            // lhs should be x (const_1), rhs should be 2 (const_2)
+            assert_eq!(add_op.lhs(db), const_1.result(db));
+            assert_eq!(add_op.rhs(db), const_2.result(db));
+
+            // Yield should use the add result
+            let yield_op = src::Yield::from_operation(db, inner_ops[3]).unwrap();
+            assert_eq!(yield_op.value(db), add_op.result(db));
+
+            // Return should use the block's result
+            let ret_op = func::Return::from_operation(db, ops[1]).unwrap();
+            assert_eq!(ret_op.operands(db)[0], block_op.result(db));
         });
     }
 }
