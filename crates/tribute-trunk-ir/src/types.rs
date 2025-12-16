@@ -4,6 +4,9 @@ use crate::Symbol;
 use serde::{Deserialize, Serialize};
 
 /// IR type representation.
+///
+/// Note: Uses `Vec` instead of `SmallVec` because the recursive nature
+/// (Type containing Vec<Type>) would cause infinite size with inline storage.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Type {
     I {

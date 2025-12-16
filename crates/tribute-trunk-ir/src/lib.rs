@@ -30,6 +30,9 @@ pub mod types;
 #[doc(hidden)]
 pub use paste;
 
+// Re-export smallvec for use in macros and external crates
+pub use smallvec::{self, SmallVec};
+
 // Re-export Location for use in macros
 pub use tribute_core::Location;
 

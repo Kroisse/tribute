@@ -21,8 +21,7 @@ dialect! {
         op closure_new[func_ref](..captures) -> result {};
 
         /// `func.closure_call` operation: calls a closure.
-        /// First operand is the closure, rest are arguments.
-        op closure_call(..operands) -> result {};
+        op closure_call(closure, ..args) -> result {};
 
         /// `func.unreachable` operation: marks unreachable code (trap).
         op unreachable() {};

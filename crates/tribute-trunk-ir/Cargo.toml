@@ -7,8 +7,9 @@ description = "TrunkIR (multi-level dialect IR) for Tribute (transitional)"
 
 [dependencies]
 paste.workspace = true
-serde.workspace = true
 salsa.workspace = true
+serde.workspace = true
+smallvec.workspace = true
 tribute-ast.workspace = true
 tribute-core.workspace = true
 

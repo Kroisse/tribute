@@ -18,6 +18,7 @@ object = { version = "0.36", features = ["write_core"] }
 paste = "1.0"
 salsa = "0.24.0"
 serde = { version = "1.0", features = ["derive"] }
+smallvec = { version = "1.13", features = ["union", "const_generics", "serde"] }
 target-lexicon = "0.13"
 tempfile = "3.8"
 tree-sitter = "0.25.6"

@@ -181,42 +181,129 @@ macro_rules! define_op {
     };
 
     // ========================================================================
-    // @parse_operands - Extract (operands)
+    // @parse_operands - Delegate to @parse_operand_list for TT munching
     // ========================================================================
 
-    // Variadic: (..$name)
     (@parse_operands
         meta: $meta:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
-        rest: [(..$operands:ident) $($rest:tt)*]
+        rest: [($($operand_tokens:tt)*) $($rest:tt)*]
     ) => {
-        $crate::define_op!(@parse_result
+        $crate::define_op!(@parse_operand_list
             meta: $meta,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
-            operands: [variadic: $operands],
+            fixed: [],
+            tokens: [$($operand_tokens)*],
             rest: [$($rest)*]
         );
     };
 
-    // Fixed: ($a, $b, ...)
-    (@parse_operands
+    // ========================================================================
+    // @parse_operand_list - TT munch operands: (a, b, ..rest) patterns
+    // ========================================================================
+
+    // Empty - no operands left, all were fixed
+    (@parse_operand_list
         meta: $meta:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
-        rest: [($($operand:ident),* $(,)?) $($rest:tt)*]
+        fixed: [$($fixed:ident),*],
+        tokens: [],
+        rest: $rest:tt
     ) => {
         $crate::define_op!(@parse_result
             meta: $meta,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
-            operands: [fixed: $($operand),*],
-            rest: [$($rest)*]
+            operands: [fixed: $($fixed),*],
+            rest: $rest
+        );
+    };
+
+    // Pure variadic (no fixed operands before)
+    (@parse_operand_list
+        meta: $meta:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        fixed: [],
+        tokens: [..$var:ident $(,)?],
+        rest: $rest:tt
+    ) => {
+        $crate::define_op!(@parse_result
+            meta: $meta,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
+            operands: [variadic: $var],
+            rest: $rest
+        );
+    };
+
+    // Mixed: fixed operands followed by variadic
+    (@parse_operand_list
+        meta: $meta:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        fixed: [$($fixed:ident),+],
+        tokens: [..$var:ident $(,)?],
+        rest: $rest:tt
+    ) => {
+        $crate::define_op!(@parse_result
+            meta: $meta,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
+            operands: [mixed: $($fixed),+; $var],
+            rest: $rest
+        );
+    };
+
+    // Fixed operand followed by comma and more tokens
+    (@parse_operand_list
+        meta: $meta:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        fixed: [$($fixed:ident),*],
+        tokens: [$next:ident, $($remaining:tt)+],
+        rest: $rest:tt
+    ) => {
+        $crate::define_op!(@parse_operand_list
+            meta: $meta,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
+            fixed: [$($fixed,)* $next],
+            tokens: [$($remaining)+],
+            rest: $rest
+        );
+    };
+
+    // Last fixed operand (with optional trailing comma)
+    (@parse_operand_list
+        meta: $meta:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        fixed: [$($fixed:ident),*],
+        tokens: [$last:ident $(,)?],
+        rest: $rest:tt
+    ) => {
+        $crate::define_op!(@parse_result
+            meta: $meta,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
+            operands: [fixed: $($fixed,)* $last],
+            rest: $rest
         );
     };
 
@@ -453,6 +540,113 @@ macro_rules! define_op {
                 #[allow(dead_code)]
                 pub fn operands(&self, db: &'db dyn salsa::Database) -> &[$crate::Value<'db>] {
                     self.op.operands(db)
+                }
+
+                // Attribute accessors
+                $(
+                    #[allow(dead_code)]
+                    pub fn $attr(&self, db: &'db dyn salsa::Database) -> &'db $crate::Attribute<'db> {
+                        let key = $crate::Symbol::new(db, stringify!($attr));
+                        self.op.attributes(db).get(&key).expect(concat!("missing attribute: ", stringify!($attr)))
+                    }
+                )*
+
+                // Result accessors (only if result exists)
+                $crate::define_op!(@maybe_result_accessors [$($result_ty)?]);
+
+                // Region accessor (only if region exists)
+                $crate::define_op!(@maybe_region_accessor [$($region)?]);
+            }
+
+            impl<'db> $crate::DialectOp<'db> for [<$op:camel>]<'db> {
+                fn from_operation(
+                    db: &'db dyn salsa::Database,
+                    op: $crate::Operation<'db>,
+                ) -> Result<Self, $crate::ConversionError> {
+                    let expected_name = $crate::OpNameId::new(db, stringify!($dialect), stringify!($op));
+                    if op.name(db) != expected_name {
+                        return Err($crate::ConversionError::WrongOperation {
+                            expected: concat!(stringify!($dialect), ".", stringify!($op)),
+                            actual: op.name(db).to_string(db),
+                        });
+                    }
+                    // Attribute validation
+                    $(
+                        {
+                            let key = $crate::Symbol::new(db, stringify!($attr));
+                            if !op.attributes(db).contains_key(&key) {
+                                return Err($crate::ConversionError::MissingAttribute(stringify!($attr)));
+                            }
+                        }
+                    )*
+                    // Result validation
+                    $crate::define_op!(@maybe_result_validation [$($result_ty)?]; op, db);
+                    // Region validation
+                    $crate::define_op!(@maybe_region_validation [$($region)?]; op, db);
+                    Ok(Self { op })
+                }
+
+                fn as_operation(&self) -> $crate::Operation<'db> {
+                    self.op
+                }
+            }
+        }
+    };
+
+    // ========================================================================
+    // Implementation rule - Mixed operands (fixed + variadic)
+    // ========================================================================
+
+    (@impl
+        meta: [$($meta:tt)*],
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: [$($attr:ident),*],
+        operands: [mixed: $($fixed:ident),+; $var:ident],
+        result: [$($result_ty:ident)?],
+        region: [$($region:ident)?]
+    ) => {
+        $crate::paste::paste! {
+            $($meta)*
+            #[derive(Clone, Copy)]
+            pub struct [<$op:camel>]<'db> {
+                op: $crate::Operation<'db>,
+            }
+
+            impl<'db> [<$op:camel>]<'db> {
+                pub(crate) fn wrap_unchecked(op: $crate::Operation<'db>) -> Self {
+                    Self { op }
+                }
+
+                pub fn new(
+                    db: &'db dyn salsa::Database,
+                    location: $crate::Location<'db>,
+                    $($fixed: $crate::Value<'db>,)+
+                    $var: Vec<$crate::Value<'db>>,
+                    $($result_ty: $crate::Type,)?
+                    $($attr: $crate::Attribute<'db>,)*
+                    $($region: $crate::Region<'db>,)?
+                ) -> Self {
+                    let name = $crate::OpNameId::new(db, stringify!($dialect), stringify!($op));
+                    let mut operands = vec![$($fixed),+];
+                    operands.extend($var);
+                    let op = $crate::Operation::of(db, location, name)
+                        .operands(operands)
+                        $(.result($result_ty))?
+                        $(.attr(stringify!($attr), $attr))*
+                        $(.region($region))?
+                        .build();
+                    Self::wrap_unchecked(op)
+                }
+
+                // Fixed operand accessors
+                $crate::define_op!(@gen_operand_accessors [], $($fixed),+);
+
+                // Variadic operand accessor (remaining after fixed)
+                #[allow(dead_code)]
+                pub fn $var(&self, db: &'db dyn salsa::Database) -> &[$crate::Value<'db>] {
+                    const FIXED_COUNT: usize = $crate::define_op!(@count $($fixed)+);
+                    &self.op.operands(db)[FIXED_COUNT..]
                 }
 
                 // Attribute accessors

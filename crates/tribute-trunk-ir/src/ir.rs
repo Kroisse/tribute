@@ -3,7 +3,28 @@
 use std::collections::BTreeMap;
 
 use crate::{Attribute, Type};
+use smallvec::SmallVec;
 use tribute_core::Location;
+
+// ============================================================================
+// Small Vector Type Aliases
+// ============================================================================
+
+/// Small vector for SSA values (operands, results).
+/// Most operations have ≤4 operands.
+pub type ValueVec<'db> = SmallVec<[Value<'db>; 4]>;
+
+/// Small vector for blocks (successors, region blocks).
+/// Most regions have 1-2 blocks.
+pub type BlockVec<'db> = SmallVec<[Block<'db>; 2]>;
+
+/// Small vector for regions.
+/// Most operations have 0-1 regions.
+pub type RegionVec<'db> = SmallVec<[Region<'db>; 1]>;
+
+/// Small vector for operations.
+/// Entry blocks often have few operations.
+pub type OpVec<'db> = SmallVec<[Operation<'db>; 8]>;
 
 // ============================================================================
 // Interned Types
@@ -320,6 +341,9 @@ mod tests {
 
                 /// Test region operation.
                 op container[name]() { body };
+
+                /// Test mixed operands: fixed + variadic.
+                op mixed(first, second, ..rest) -> result {};
             }
         }
 
@@ -412,6 +436,46 @@ mod tests {
             TributeDatabaseImpl::default().attach(|db| {
                 let op = test_container_op(db);
                 Container::from_operation(db, op).unwrap();
+            });
+        }
+
+        #[salsa::tracked]
+        fn test_mixed_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let location = Location::new(path, Span::new(0, 0));
+
+            // Create dummy values
+            let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
+                .result(Type::I { bits: 32 })
+                .result(Type::I { bits: 32 })
+                .result(Type::I { bits: 32 })
+                .result(Type::I { bits: 32 })
+                .build();
+            let v0 = dummy_op.result(db, 0);
+            let v1 = dummy_op.result(db, 1);
+            let v2 = dummy_op.result(db, 2);
+            let v3 = dummy_op.result(db, 3);
+
+            // Test Mixed::new with fixed operands + variadic rest
+            let mixed = Mixed::new(db, location, v0, v1, vec![v2, v3], Type::I { bits: 32 });
+            mixed.as_operation()
+        }
+
+        #[test]
+        fn test_define_op_mixed() {
+            TributeDatabaseImpl::default().attach(|db| {
+                let op = test_mixed_op(db);
+                let mixed = Mixed::from_operation(db, op).unwrap();
+                assert_eq!(mixed.result_ty(db), Type::I { bits: 32 });
+
+                // Test named accessors for fixed operands
+                let first = mixed.first(db);
+                let second = mixed.second(db);
+                assert_ne!(first, second);
+
+                // Test variadic accessor
+                let rest = mixed.rest(db);
+                assert_eq!(rest.len(), 2);
             });
         }
     }
