@@ -730,7 +730,6 @@ impl TributeParser {
             "call_expression" => self.parse_call_expression(node, source),
             "method_call_expression" => self.parse_method_call_expression(node, source),
             "case_expression" => self.parse_case_expression(node, source),
-            "if_expression" => self.parse_if_expression(node, source),
             "lambda_expression" => self.parse_lambda_expression(node, source),
             "list_expression" => self.parse_list_expression(node, source),
             "tuple_expression" => self.parse_tuple_expression(node, source),
@@ -961,44 +960,6 @@ impl TributeParser {
         let value = value.ok_or("Missing case value")?;
 
         Ok(Expr::Match(MatchExpression { value, arms }))
-    }
-
-    fn parse_if_expression(
-        &self,
-        node: Node,
-        source: &str,
-    ) -> Result<Expr, Box<dyn std::error::Error>> {
-        let condition_node = node
-            .child_by_field_name("condition")
-            .ok_or("Missing condition in if expression")?;
-        let condition = Box::new(self.node_to_expr_with_span(condition_node, source)?);
-
-        let then_node = node
-            .child_by_field_name("then")
-            .ok_or("Missing then branch in if expression")?;
-        let then_branch = self.parse_block(then_node, source)?;
-
-        let else_node = node
-            .child_by_field_name("else")
-            .ok_or("Missing else branch in if expression")?;
-
-        let else_branch = if else_node.kind() == "if_expression" {
-            // else if chain
-            if let Expr::If(if_expr) = self.parse_if_expression(else_node, source)? {
-                ElseBranch::ElseIf(Box::new(if_expr))
-            } else {
-                return Err("Expected if expression in else if".into());
-            }
-        } else {
-            // Simple else block
-            ElseBranch::Block(self.parse_block(else_node, source)?)
-        };
-
-        Ok(Expr::If(IfExpression {
-            condition,
-            then_branch,
-            else_branch,
-        }))
     }
 
     fn parse_case_arm(

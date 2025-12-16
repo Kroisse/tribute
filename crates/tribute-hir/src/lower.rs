@@ -194,16 +194,6 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
             }
             Expr::Match { expr, cases }
         }
-        AstExpr::If(if_expr) => {
-            let condition = Box::new(lower_expr(&if_expr.condition)?);
-            let then_branch = lower_block(&if_expr.then_branch)?;
-            let else_branch = lower_else_branch(&if_expr.else_branch)?;
-            Expr::If {
-                condition,
-                then_branch,
-                else_branch,
-            }
-        }
         AstExpr::Lambda(lambda_expr) => {
             let body = Box::new(lower_expr(&lambda_expr.body)?);
             // Extract just the parameter names (type annotations are handled by type checker)
@@ -276,50 +266,6 @@ fn lower_record_field(field: &tribute_ast::RecordField) -> LowerResult<crate::hi
         }),
         tribute_ast::RecordField::Shorthand(name) => {
             Ok(crate::hir::RecordField::Shorthand(name.clone()))
-        }
-    }
-}
-
-/// Lower a Block (from AST) to a Vec of HIR expressions
-fn lower_block(block: &tribute_ast::Block) -> LowerResult<Vec<Spanned<Expr>>> {
-    let mut exprs = Vec::new();
-    for statement in &block.statements {
-        match statement {
-            Statement::Let(let_stmt) => {
-                let pattern = lower_pattern(&let_stmt.pattern)?;
-                let value = lower_expr(&let_stmt.value)?;
-                let let_expr = Expr::Let {
-                    pattern,
-                    value: Box::new(value),
-                };
-                exprs.push((let_expr, let_stmt.value.1));
-            }
-            Statement::Expression(expr) => {
-                exprs.push(lower_expr(expr)?);
-            }
-        }
-    }
-    Ok(exprs)
-}
-
-/// Lower an else branch (either a block or another if expression)
-fn lower_else_branch(else_branch: &tribute_ast::ElseBranch) -> LowerResult<Vec<Spanned<Expr>>> {
-    match else_branch {
-        tribute_ast::ElseBranch::Block(block) => lower_block(block),
-        tribute_ast::ElseBranch::ElseIf(if_expr) => {
-            // Convert else if into a single If expression wrapped in a vec
-            let condition = Box::new(lower_expr(&if_expr.condition)?);
-            let then_branch = lower_block(&if_expr.then_branch)?;
-            let else_branch = lower_else_branch(&if_expr.else_branch)?;
-            let span = if_expr.condition.1; // Use condition's span
-            Ok(vec![(
-                Expr::If {
-                    condition,
-                    then_branch,
-                    else_branch,
-                },
-                span,
-            )])
         }
     }
 }
