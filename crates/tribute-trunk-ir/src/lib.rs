@@ -16,6 +16,13 @@ pub mod ops;
 pub mod queries;
 pub mod types;
 
+// Re-export paste for use in macros
+#[doc(hidden)]
+pub use paste;
+
+// Re-export Location for use in macros
+pub use tribute_core::Location;
+
 pub use hir::*;
 pub use ir::*;
 pub use lower::{FunctionDef, LowerError, LowerResult};

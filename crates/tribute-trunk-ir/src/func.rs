@@ -1,37 +1,19 @@
 //! Function dialect operations.
 
-use crate::{Attribute, OpNameId, Operation, Region, Symbol, Type, define_dialect_op};
+use crate::{Attribute, Region, Type, dialect};
 use tribute_core::Location;
 
-define_dialect_op! {
-    /// `func.func` operation: defines a function.
-    pub struct Func("func", "func") {
-        has_attr("sym_name"),
-        has_attr("type"),
-        has_region,
+dialect! {
+    func {
+        /// `func.func` operation: defines a function.
+        pub op func[sym_name, r#type]() { body };
+
+        /// `func.return` operation: returns values from a function.
+        pub op r#return(..operands) {};
     }
 }
 
 impl<'db> Func<'db> {
-    /// Create a new function definition.
-    pub fn new(
-        db: &'db dyn salsa::Database,
-        location: Location<'db>,
-        name: &str,
-        params: Vec<Type>,
-        results: Vec<Type>,
-        body: Region<'db>,
-    ) -> Self {
-        let op_name = OpNameId::new(db, "func", "func");
-        let ty = Type::Function { params, results };
-        let op = Operation::of(db, location, op_name)
-            .attr("sym_name", Attribute::String(name.to_string()))
-            .attr("type", Attribute::Type(ty))
-            .region(body)
-            .build();
-        Self::wrap_unchecked(op)
-    }
-
     /// Build a function with a closure that constructs the entry block.
     pub fn build(
         db: &'db dyn salsa::Database,
@@ -43,37 +25,31 @@ impl<'db> Func<'db> {
     ) -> Self {
         let mut entry = crate::BlockBuilder::new(db, location).args(params.clone());
         f(&mut entry);
-        let body = Region::new(db, location, vec![entry.build()]);
-        Self::new(db, location, name, params, results, body)
+        let region = Region::new(db, location, vec![entry.build()]);
+        Self::new(
+            db,
+            location,
+            Attribute::String(name.to_string()),
+            Attribute::Type(Type::Function { params, results }),
+            region,
+        )
     }
 
     /// Get the function name.
-    pub fn name(&self, db: &'db dyn salsa::Database) -> String {
-        let key = Symbol::new(db, "sym_name");
-        match self.op.attributes(db).get(&key) {
-            Some(Attribute::String(s)) => s.clone(),
-            _ => panic!("func.func missing sym_name attribute"),
-        }
+    pub fn name(&self, db: &'db dyn salsa::Database) -> &str {
+        let Attribute::String(name) = self.sym_name(db) else {
+            panic!("func.func missing sym_name attribute")
+        };
+        name
     }
 
     /// Get the function type.
-    pub fn ty(&self, db: &'db dyn salsa::Database) -> Type {
-        let key = Symbol::new(db, "type");
-        match self.op.attributes(db).get(&key) {
-            Some(Attribute::Type(t)) => t.clone(),
-            _ => panic!("func.func missing type attribute"),
-        }
+    pub fn ty(&self, db: &'db dyn salsa::Database) -> &'db Type {
+        let Attribute::Type(t) = self.r#type(db) else {
+            panic!("func.func missing type attribute")
+        };
+        t
     }
-
-    /// Get the function body region.
-    pub fn body(&self, db: &'db dyn salsa::Database) -> Region<'db> {
-        self.op.regions(db)[0]
-    }
-}
-
-define_dialect_op! {
-    /// `func.return` operation: returns values from a function.
-    pub struct Return("func", "return") {}
 }
 
 impl<'db> Return<'db> {
@@ -89,21 +65,5 @@ impl<'db> Return<'db> {
         value: crate::Value<'db>,
     ) -> Self {
         Self::new(db, location, vec![value])
-    }
-
-    /// Create a new return with multiple values.
-    pub fn new(
-        db: &'db dyn salsa::Database,
-        location: Location<'db>,
-        operands: Vec<crate::Value<'db>>,
-    ) -> Self {
-        let name = OpNameId::new(db, "func", "return");
-        let op = Operation::of(db, location, name).operands(operands).build();
-        Self::wrap_unchecked(op)
-    }
-
-    /// Get the returned values.
-    pub fn operands(&self, db: &'db dyn salsa::Database) -> &[crate::Value<'db>] {
-        self.op.operands(db)
     }
 }

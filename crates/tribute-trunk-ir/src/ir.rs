@@ -295,7 +295,124 @@ mod tests {
         TributeDatabaseImpl::default().attach(|db| {
             let op = build_sample_module(db);
             let module = core::Module::from_operation(db, op).unwrap();
-            assert_eq!(module.name(db).as_str(), "main");
+            assert_eq!(module.name(db), "main");
         });
+    }
+
+    // Test the new define_op! macro
+    mod define_op_tests {
+        use crate::{Attribute, DialectOp, Region, Type, dialect};
+        use salsa::Database;
+        use std::path::PathBuf;
+        use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
+
+        // Test: dialect! macro for grouping ops
+        dialect! {
+            test {
+                /// Test binary operation.
+                pub op binary(lhs, rhs) -> result {};
+
+                /// Test constant operation.
+                pub op constant[value]() -> result {};
+
+                /// Test variadic operation.
+                pub op variadic(..args) {};
+
+                /// Test region operation.
+                pub op container[name]() { body };
+            }
+        }
+
+        #[salsa::tracked]
+        fn test_binary_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let location = Location::new(path, Span::new(0, 0));
+
+            // Create dummy values using a helper op
+            let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
+                .result(Type::I { bits: 32 })
+                .result(Type::I { bits: 32 })
+                .build();
+            let v0 = dummy_op.result(db, 0);
+            let v1 = dummy_op.result(db, 1);
+
+            // Test Binary::new
+            let binary = Binary::new(db, location, v0, v1, Type::I { bits: 32 });
+            binary.as_operation()
+        }
+
+        #[test]
+        fn test_define_op_binary() {
+            TributeDatabaseImpl::default().attach(|db| {
+                let op = test_binary_op(db);
+                let binary = Binary::from_operation(db, op).unwrap();
+                assert_eq!(binary.result_ty(db), Type::I { bits: 32 });
+
+                // Test auto-generated named accessors
+                let lhs = binary.lhs(db);
+                let rhs = binary.rhs(db);
+                assert_ne!(lhs, rhs); // They should be different values
+            });
+        }
+
+        #[salsa::tracked]
+        fn test_constant_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let location = Location::new(path, Span::new(0, 0));
+
+            let constant = Constant::new(db, location, Type::I { bits: 64 }, Attribute::Int(42));
+            constant.as_operation()
+        }
+
+        #[test]
+        fn test_define_op_constant() {
+            TributeDatabaseImpl::default().attach(|db| {
+                let op = test_constant_op(db);
+                let constant = Constant::from_operation(db, op).unwrap();
+                assert_eq!(constant.result_ty(db), Type::I { bits: 64 });
+
+                // Test auto-generated attribute accessor
+                assert_eq!(constant.value(db), &Attribute::Int(42));
+            });
+        }
+
+        #[salsa::tracked]
+        fn test_variadic_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let location = Location::new(path, Span::new(0, 0));
+
+            let variadic = Variadic::new(db, location, vec![]);
+            variadic.as_operation()
+        }
+
+        #[test]
+        fn test_define_op_variadic() {
+            TributeDatabaseImpl::default().attach(|db| {
+                let op = test_variadic_op(db);
+                let variadic = Variadic::from_operation(db, op).unwrap();
+                assert!(variadic.operands(db).is_empty());
+            });
+        }
+
+        #[salsa::tracked]
+        fn test_container_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let location = Location::new(path, Span::new(0, 0));
+
+            let block = crate::Block::new(db, location, vec![], vec![]);
+            let region = Region::new(db, location, vec![block]);
+
+            let container =
+                Container::new(db, location, Attribute::String("test".to_string()), region);
+            container.as_operation()
+        }
+
+        #[test]
+        fn test_define_op_container() {
+            TributeDatabaseImpl::default().attach(|db| {
+                let op = test_container_op(db);
+                Container::from_operation(db, op).unwrap();
+            });
+        }
     }
 }

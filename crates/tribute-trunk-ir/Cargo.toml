@@ -6,6 +6,7 @@ authors.workspace = true
 description = "TrunkIR (multi-level dialect IR) for Tribute (transitional)"
 
 [dependencies]
+paste.workspace = true
 serde.workspace = true
 salsa.workspace = true
 tribute-ast.workspace = true
