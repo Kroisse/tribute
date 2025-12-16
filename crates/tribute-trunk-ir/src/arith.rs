@@ -88,13 +88,18 @@ dialect! {
 
 impl<'db> Const<'db> {
     /// Create a new i32 constant.
-    pub fn i32(db: &'db dyn salsa::Database, location: Location<'db>, value: i64) -> Self {
-        Self::new(db, location, Type::I { bits: 32 }, Attribute::Int(value))
+    pub fn i32(db: &'db dyn salsa::Database, location: Location<'db>, value: i32) -> Self {
+        Self::new(db, location, Type::I { bits: 32 }, (value as i64).into())
     }
 
     /// Create a new i64 constant.
     pub fn i64(db: &'db dyn salsa::Database, location: Location<'db>, value: i64) -> Self {
-        Self::new(db, location, Type::I { bits: 64 }, Attribute::Int(value))
+        Self::new(db, location, Type::I { bits: 64 }, value.into())
+    }
+
+    /// Create a new u64 constant.
+    pub fn u64(db: &'db dyn salsa::Database, location: Location<'db>, value: u64) -> Self {
+        Self::new(db, location, Type::I { bits: 64 }, value.into())
     }
 
     /// Create a new f32 constant.

@@ -384,7 +384,7 @@ mod tests {
             let path = PathId::new(db, PathBuf::from("test.tr"));
             let location = Location::new(path, Span::new(0, 0));
 
-            let constant = Constant::new(db, location, Type::I { bits: 64 }, Attribute::Int(42));
+            let constant = Constant::new(db, location, Type::I { bits: 64 }, 42i64.into());
             constant.as_operation()
         }
 
@@ -396,7 +396,7 @@ mod tests {
                 assert_eq!(constant.result_ty(db), Type::I { bits: 64 });
 
                 // Test auto-generated attribute accessor
-                assert_eq!(constant.value(db), &Attribute::Int(42));
+                assert_eq!(constant.value(db), &Attribute::IntBits(42));
             });
         }
 

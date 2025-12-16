@@ -42,12 +42,31 @@ pub enum Type {
 pub enum Attribute<'db> {
     Unit,
     Bool(bool),
-    Int(i64),
-    UInt(u64),
+    /// Integer constant stored as raw bits (signless).
+    IntBits(u64),
+    /// Float constant stored as raw bits.
     FloatBits(u64),
     String(String),
     Bytes(Vec<u8>),
     Type(Type),
     /// Symbol reference path (e.g., ["module", "func_name"])
     SymbolRef(Vec<Symbol<'db>>),
+}
+
+impl From<i64> for Attribute<'_> {
+    fn from(value: i64) -> Self {
+        Attribute::IntBits(u64::from_ne_bytes(value.to_ne_bytes()))
+    }
+}
+
+impl From<u64> for Attribute<'_> {
+    fn from(value: u64) -> Self {
+        Attribute::IntBits(value)
+    }
+}
+
+impl From<bool> for Attribute<'_> {
+    fn from(value: bool) -> Self {
+        Attribute::IntBits(if value { 1 } else { 0 })
+    }
 }

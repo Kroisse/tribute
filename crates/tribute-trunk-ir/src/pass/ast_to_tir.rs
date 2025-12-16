@@ -88,7 +88,7 @@ fn lower_expr<'db>(
     match expr {
         // Literals → arith.const
         Expr::Nat(n) => {
-            let op = block.op(arith::Const::i64(db, location, *n as i64));
+            let op = block.op(arith::Const::u64(db, location, *n));
             op.result(db)
         }
         Expr::Int(n) => {
@@ -105,7 +105,7 @@ fn lower_expr<'db>(
                 db,
                 location,
                 Type::I { bits: 1 },
-                Attribute::Int(if *b { 1 } else { 0 }),
+                (*b).into(),
             ));
             op.result(db)
         }
