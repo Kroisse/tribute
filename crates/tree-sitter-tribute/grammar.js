@@ -383,6 +383,7 @@ module.exports = grammar({
       $.int_literal,
       $.nat_literal,
       $.string,
+      $.raw_string,
       $.rune,
       $.keyword_true,
       $.keyword_false,
@@ -502,6 +503,7 @@ module.exports = grammar({
       $.int_literal,
       $.nat_literal,
       $.string,
+      $.raw_string,
       $.rune,
       $.path_expression,
       $.identifier,
@@ -656,6 +658,17 @@ module.exports = grammar({
       field('expression', $._expression),
       '}'
     ),
+
+    // Raw strings: r"..." - no escape processing, content is literal
+    // TODO: r#"..."#, r##"..."## 등 hash delimiter 버전은 external scanner 필요
+    raw_string: $ => seq(
+      'r"',
+      field('content', $.raw_string_content),
+      '"'
+    ),
+
+    // Content for simple raw string - no " allowed
+    raw_string_content: $ => /[^"]*/,
 
     // Identifiers start with lowercase letter or underscore (values, functions, constants)
     identifier: $ => /[a-z_][a-zA-Z0-9_]*/,

@@ -729,6 +729,10 @@ impl TributeParser {
                 // All strings are now StringInterpolation, even simple ones
                 self.parse_interpolated_string(node, source)
             }
+            "raw_string" => {
+                // Raw strings: no escape processing, just literal content
+                self.parse_raw_string(node, source)
+            }
             "identifier" => {
                 let text = node.utf8_text(source.as_bytes())?;
                 Ok(Expr::Identifier(text.to_string()))
@@ -1473,6 +1477,28 @@ impl TributeParser {
         }
     }
 
+    /// Parse raw string: r"..." - no escape processing
+    fn parse_raw_string(
+        &self,
+        node: Node,
+        source: &str,
+    ) -> Result<Expr, Box<dyn std::error::Error>> {
+        // raw_string has a "content" field containing raw_string_content
+        if let Some(content_node) = node.child_by_field_name("content") {
+            let content = content_node.utf8_text(source.as_bytes())?.to_string();
+            Ok(Expr::StringInterpolation(StringInterpolation {
+                leading_text: content,
+                segments: Vec::new(),
+            }))
+        } else {
+            // Empty raw string
+            Ok(Expr::StringInterpolation(StringInterpolation {
+                leading_text: String::new(),
+                segments: Vec::new(),
+            }))
+        }
+    }
+
     fn parse_interpolated_string(
         &self,
         node: Node,
@@ -1578,6 +1604,14 @@ impl TributeParser {
                             // String with interpolation
                             return Ok(LiteralPattern::StringInterpolation(interp));
                         }
+                    }
+                }
+                "raw_string" => {
+                    // Raw string pattern - no escape processing
+                    if let Ok(Expr::StringInterpolation(interp)) =
+                        self.parse_raw_string(child, source)
+                    {
+                        return Ok(LiteralPattern::String(interp.leading_text));
                     }
                 }
                 "keyword_true" => return Ok(LiteralPattern::Bool(true)),

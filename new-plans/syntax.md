@@ -128,9 +128,12 @@ s#"
     string
 "#                          // multiline
 r"\d+\.\d+"                 // raw (escape 없음)
-r#"she said "hello""#       // raw + 따옴표 포함
-r##"contains "#"##          // ## 로 감싸기
+r#"she said "hello""#       // raw + 따옴표 포함 (TODO: external scanner 필요)
+r##"contains "#"##          // ## 로 감싸기 (TODO: external scanner 필요)
 ```
+
+> **구현 노트**: `r#"..."#`, `r##"..."##` 등 hash delimiter가 있는 raw string은
+> tree-sitter external scanner로 구현해야 함. 현재는 `r"..."` 만 지원.
 
 **Bytes 리터럴 예시:**
 
