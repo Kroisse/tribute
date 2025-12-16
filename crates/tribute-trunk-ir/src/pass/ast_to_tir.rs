@@ -3,12 +3,38 @@
 //! This pass converts the parsed AST into TrunkIR operations.
 //! At this stage, names are unresolved (using `src` dialect ops).
 
+use std::collections::HashMap;
+
 use crate::{Attribute, BlockBuilder, Type, Value, arith, core, func, src};
 use tribute_ast::{
-    BinaryExpression, BinaryOperator, CallExpression, Expr, FunctionDefinition, ItemKind, Program,
-    Statement,
+    BinaryExpression, BinaryOperator, CallExpression, Expr, FunctionDefinition, ItemKind,
+    LetStatement, Pattern, Program, Statement,
 };
 use tribute_core::{Location, PathId, Span, Spanned};
+
+/// Context for lowering, tracking local variable bindings.
+struct LoweringCtx<'db> {
+    /// Map from variable names to their SSA values.
+    bindings: HashMap<String, Value<'db>>,
+}
+
+impl<'db> LoweringCtx<'db> {
+    fn new() -> Self {
+        Self {
+            bindings: HashMap::new(),
+        }
+    }
+
+    /// Bind a name to a value.
+    fn bind(&mut self, name: String, value: Value<'db>) {
+        self.bindings.insert(name, value);
+    }
+
+    /// Look up a binding by name.
+    fn lookup(&self, name: &str) -> Option<Value<'db>> {
+        self.bindings.get(name).copied()
+    }
+}
 
 /// Lower an AST program to a TrunkIR module.
 pub fn lower_program<'db>(
@@ -50,6 +76,7 @@ fn lower_function<'db>(
 
     func::Func::build(db, location, &name, params, results, |entry| {
         let body = func_def.body(db);
+        let mut ctx = LoweringCtx::new();
 
         // Lower each statement, keeping track of the last value
         let mut last_value: Option<Value<'db>> = None;
@@ -57,11 +84,11 @@ fn lower_function<'db>(
         for stmt in &body.statements {
             match stmt {
                 Statement::Expression(spanned_expr) => {
-                    last_value = Some(lower_expr(db, path, entry, spanned_expr));
+                    last_value = Some(lower_expr(db, path, &mut ctx, entry, spanned_expr));
                 }
-                Statement::Let(_let_stmt) => {
-                    // TODO: Handle let bindings
-                    todo!("let bindings not yet implemented")
+                Statement::Let(let_stmt) => {
+                    lower_let(db, path, &mut ctx, entry, let_stmt);
+                    // Let statements don't produce a value
                 }
             }
         }
@@ -75,10 +102,46 @@ fn lower_function<'db>(
     })
 }
 
+/// Lower a let statement, binding the pattern to the value.
+fn lower_let<'db>(
+    db: &'db dyn salsa::Database,
+    path: PathId<'db>,
+    ctx: &mut LoweringCtx<'db>,
+    block: &mut BlockBuilder<'db>,
+    let_stmt: &LetStatement,
+) {
+    let value = lower_expr(db, path, ctx, block, &let_stmt.value);
+    bind_pattern(ctx, &let_stmt.pattern, value);
+}
+
+/// Bind a pattern to a value, adding bindings to the context.
+fn bind_pattern<'db>(ctx: &mut LoweringCtx<'db>, pattern: &Pattern, value: Value<'db>) {
+    match pattern {
+        Pattern::Identifier(name) => {
+            ctx.bind(name.clone(), value);
+        }
+        Pattern::Wildcard => {
+            // Discard the value, no binding
+        }
+        Pattern::As(inner, name) => {
+            // Bind the whole value to the name, then recurse on inner pattern
+            ctx.bind(name.clone(), value);
+            bind_pattern(ctx, inner, value);
+        }
+        // Patterns that require runtime matching - todo for now
+        Pattern::Literal(_) => todo!("literal pattern matching"),
+        Pattern::Constructor(_) => todo!("constructor pattern matching"),
+        Pattern::Tuple(_, _) => todo!("tuple pattern destructuring"),
+        Pattern::List(_) => todo!("list pattern matching"),
+        Pattern::Handler(_) => todo!("handler patterns"),
+    }
+}
+
 /// Lower an expression to TrunkIR operations.
 fn lower_expr<'db>(
     db: &'db dyn salsa::Database,
     path: PathId<'db>,
+    ctx: &mut LoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     spanned: &Spanned<Expr>,
 ) -> Value<'db> {
@@ -115,15 +178,21 @@ fn lower_expr<'db>(
             op.result(db)
         }
 
-        // Variable reference → src.var
+        // Variable reference: check local bindings first, then emit src.var for unresolved
         Expr::Identifier(name) => {
-            let op = block.op(src::Var::new(
-                db,
-                location,
-                Type::Unit, // Unknown until resolution
-                Attribute::String(name.clone()),
-            ));
-            op.result(db)
+            if let Some(value) = ctx.lookup(name) {
+                // Found in local bindings - use the SSA value directly
+                value
+            } else {
+                // Unresolved - emit src.var for later resolution
+                let op = block.op(src::Var::new(
+                    db,
+                    location,
+                    Type::Unit, // Unknown until resolution
+                    Attribute::String(name.clone()),
+                ));
+                op.result(db)
+            }
         }
 
         // Function call → src.call
@@ -134,7 +203,7 @@ fn lower_expr<'db>(
             // Lower arguments first
             let args: Vec<Value<'db>> = arguments
                 .iter()
-                .map(|arg| lower_expr(db, path, block, arg))
+                .map(|arg| lower_expr(db, path, ctx, block, arg))
                 .collect();
 
             let op = block.op(src::Call::new(
@@ -154,8 +223,8 @@ fn lower_expr<'db>(
             qualifier: _, // TODO: Handle qualified operators
             right,
         }) => {
-            let lhs = lower_expr(db, path, block, left);
-            let rhs = lower_expr(db, path, block, right);
+            let lhs = lower_expr(db, path, ctx, block, left);
+            let rhs = lower_expr(db, path, ctx, block, right);
             lower_binary_op(db, location, block, operator.clone(), lhs, rhs)
         }
 
@@ -388,6 +457,64 @@ mod tests {
             // Verify the add operation
             let add_op = arith::Add::from_operation(db, ops[2]).unwrap();
             assert!(add_op.lhs(db) != add_op.rhs(db)); // lhs and rhs should be different values
+        });
+    }
+
+    /// Helper to create AST with let binding: fn main() { let x = 42; x }
+    #[salsa::tracked]
+    fn lower_let_binding_helper(db: &dyn salsa::Database) -> crate::Operation<'_> {
+        let path = PathId::new(db, PathBuf::from("test.tr"));
+
+        // Create AST: fn main() { let x = 42; x }
+        let let_stmt = Statement::Let(LetStatement {
+            pattern: Pattern::Identifier("x".to_string()),
+            value: (Expr::Nat(42), Span::new(12, 14)),
+        });
+        let ref_expr =
+            Statement::Expression((Expr::Identifier("x".to_string()), Span::new(16, 17)));
+
+        let body = tribute_ast::Block {
+            statements: vec![let_stmt, ref_expr],
+        };
+
+        let func_def =
+            FunctionDefinition::new(db, "main".to_string(), vec![], None, body, Span::new(0, 19));
+
+        let item = tribute_ast::Item::new(db, ItemKind::Function(func_def), Span::new(0, 19));
+        let program = Program::new(db, vec![item]);
+
+        lower_program(db, path, program).operation()
+    }
+
+    #[test]
+    fn test_lower_let_binding() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let op = lower_let_binding_helper(db);
+            let module = core::Module::from_operation(db, op).unwrap();
+
+            // Get the function
+            let body_region = module.body(db);
+            let blocks = body_region.blocks(db);
+            let func_op = func::Func::from_operation(db, blocks[0].operations(db)[0]).unwrap();
+
+            // Get the function's entry block
+            let func_body = func_op.body(db);
+            let func_blocks = func_body.blocks(db);
+            let entry_block = &func_blocks[0];
+            let ops = entry_block.operations(db);
+
+            // Should have: arith.const(42), func.return
+            // No src.var because 'x' is resolved to the const value directly
+            assert_eq!(ops.len(), 2);
+
+            // Verify first op is arith.const
+            let const_op = arith::Const::from_operation(db, ops[0]).unwrap();
+            let const_value = const_op.result(db);
+
+            // Verify return uses the same value
+            let ret_op = func::Return::from_operation(db, ops[1]).unwrap();
+            assert_eq!(ret_op.operands(db).len(), 1);
+            assert_eq!(ret_op.operands(db)[0], const_value);
         });
     }
 }
