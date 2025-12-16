@@ -8,15 +8,15 @@ use crate::dialect;
 dialect! {
     cont {
         /// `cont.push_prompt` operation: installs a prompt and executes body.
-        pub op push_prompt[tag]() -> result { body };
+        op push_prompt[tag]() -> result { body };
 
         /// `cont.shift` operation: captures continuation and jumps to handler.
-        pub op shift[tag]() { handler };
+        op shift[tag]() { handler };
 
         /// `cont.resume` operation: resumes a captured continuation.
-        pub op resume(continuation, value) -> result {};
+        op resume(continuation, value) -> result {};
 
         /// `cont.drop` operation: drops a continuation (satisfies linear type).
-        pub op drop(continuation) {};
+        op drop(continuation) {};
     }
 }

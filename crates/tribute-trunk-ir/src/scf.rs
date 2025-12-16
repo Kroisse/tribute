@@ -10,20 +10,20 @@ dialect! {
     scf {
         /// `scf.case` operation: pattern matching with branches.
         /// All branch regions must yield the same type.
-        pub op case(scrutinee) { branches };
+        op case(scrutinee) { branches };
 
         /// `scf.yield` operation: returns values from a region.
-        pub op r#yield(..values) {};
+        op r#yield(..values) {};
 
         // === Tail Call Optimization Results ===
 
         /// `scf.loop` operation: loop produced by tail recursion optimization.
-        pub op r#loop(..init) -> result { body };
+        op r#loop(..init) -> result { body };
 
         /// `scf.continue` operation: jump to loop start with new arguments.
-        pub op r#continue(..values) {};
+        op r#continue(..values) {};
 
         /// `scf.break` operation: exit loop with result value.
-        pub op r#break(value) {};
+        op r#break(value) {};
     }
 }

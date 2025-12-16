@@ -6,26 +6,26 @@ use tribute_core::Location;
 dialect! {
     func {
         /// `func.func` operation: defines a function.
-        pub op func[sym_name, r#type]() { body };
+        op func[sym_name, r#type]() { body };
 
         /// `func.call` operation: calls a function.
-        pub op call[callee](..args) -> result {};
+        op call[callee](..args) -> result {};
 
         /// `func.tail_call` operation: tail call (does not return).
-        pub op tail_call[callee](..args) {};
+        op tail_call[callee](..args) {};
 
         /// `func.return` operation: returns values from a function.
-        pub op r#return(..operands) {};
+        op r#return(..operands) {};
 
         /// `func.closure_new` operation: creates a closure with captured values.
-        pub op closure_new[func_ref](..captures) -> result {};
+        op closure_new[func_ref](..captures) -> result {};
 
         /// `func.closure_call` operation: calls a closure.
         /// First operand is the closure, rest are arguments.
-        pub op closure_call(..operands) -> result {};
+        op closure_call(..operands) -> result {};
 
         /// `func.unreachable` operation: marks unreachable code (trap).
-        pub op unreachable() {};
+        op unreachable() {};
     }
 }
 

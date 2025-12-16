@@ -6,11 +6,11 @@ use tribute_core::Location;
 dialect! {
     core {
         /// `core.module` operation: top-level module container.
-        pub op module[sym_name]() { body };
+        op module[sym_name]() { body };
 
         /// `core.unrealized_conversion_cast` operation: temporary cast during dialect conversion.
         /// Must be eliminated after lowering is complete.
-        pub op unrealized_conversion_cast(value) -> result {};
+        op unrealized_conversion_cast(value) -> result {};
     }
 }
 

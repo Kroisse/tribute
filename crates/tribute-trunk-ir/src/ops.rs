@@ -44,10 +44,10 @@ pub trait DialectOp<'db>: Sized + Copy {
 /// dialect! {
 ///     dialect_name {
 ///         /// Doc comment
-///         pub op name[attrs](operands) -> result {};
+///         op name[attrs](operands) -> result {};
 ///
 ///         /// Another op
-///         pub op other(a, b) -> result {};
+///         op other(a, b) -> result {};
 ///     }
 /// }
 /// ```
@@ -57,10 +57,10 @@ pub trait DialectOp<'db>: Sized + Copy {
 /// dialect! {
 ///     arith {
 ///         /// Constant value operation.
-///         pub op constant[value]() -> result {};
+///         op constant[value]() -> result {};
 ///
 ///         /// Addition operation.
-///         pub op add(lhs, rhs) -> result {};
+///         op add(lhs, rhs) -> result {};
 ///     }
 /// }
 /// ```
@@ -72,12 +72,12 @@ macro_rules! dialect {
     // Unified pattern: optional attrs, optional result
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        $vis:vis op $op:ident $([$($attrs:tt)*])? ($($operands:tt)*) $(-> $result:ident)? { $($region:tt)* };
+        op $op:ident $([$($attrs:tt)*])? ($($operands:tt)*) $(-> $result:ident)? { $($region:tt)* };
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            $vis op $dialect.$op $([$($attrs)*])? ($($operands)*) $(-> $result)? { $($region)* }
+            op $dialect.$op $([$($attrs)*])? ($($operands)*) $(-> $result)? { $($region)* }
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
@@ -99,7 +99,7 @@ macro_rules! dialect {
 /// # Syntax
 /// ```ignore
 /// define_op! {
-///     pub op dialect.name[attr1, attr2](operands...) -> result { region }
+///     op dialect.name[attr1, attr2](operands...) -> result { region }
 /// }
 /// ```
 ///
@@ -114,17 +114,17 @@ macro_rules! dialect {
 /// ```ignore
 /// define_op! {
 ///     /// Constant value operation.
-///     pub op arith.constant[value]() -> result {}
+///     op arith.constant[value]() -> result {}
 /// }
 ///
 /// define_op! {
 ///     /// Addition operation.
-///     pub op arith.add(lhs, rhs) -> result {}
+///     op arith.add(lhs, rhs) -> result {}
 /// }
 ///
 /// define_op! {
 ///     /// Function definition.
-///     pub op func.func[sym_name, r#type]() { body }
+///     op func.func[sym_name, r#type]() { body }
 /// }
 /// ```
 #[macro_export]
@@ -134,11 +134,10 @@ macro_rules! define_op {
     // ========================================================================
     (
         $(#[$meta:meta])*
-        $vis:vis op $dialect:ident.$op:ident $($rest:tt)*
+        op $dialect:ident.$op:ident $($rest:tt)*
     ) => {
         $crate::define_op!(@parse_attrs
             meta: [$(#[$meta])*],
-            vis: $vis,
             dialect: $dialect,
             op: $op,
             rest: [$($rest)*]
@@ -152,14 +151,12 @@ macro_rules! define_op {
     // Has attrs: [$attr, ...]
     (@parse_attrs
         meta: $meta:tt,
-        vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
         rest: [[$($attr:ident),* $(,)?] $($rest:tt)*]
     ) => {
         $crate::define_op!(@parse_operands
             meta: $meta,
-            vis: $vis,
             dialect: $dialect,
             op: $op,
             attrs: [$($attr),*],
@@ -170,14 +167,12 @@ macro_rules! define_op {
     // No attrs: starts with (
     (@parse_attrs
         meta: $meta:tt,
-        vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
         rest: [$($rest:tt)*]
     ) => {
         $crate::define_op!(@parse_operands
             meta: $meta,
-            vis: $vis,
             dialect: $dialect,
             op: $op,
             attrs: [],
@@ -192,7 +187,6 @@ macro_rules! define_op {
     // Variadic: (..$name)
     (@parse_operands
         meta: $meta:tt,
-        vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
@@ -200,7 +194,6 @@ macro_rules! define_op {
     ) => {
         $crate::define_op!(@parse_result
             meta: $meta,
-            vis: $vis,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
@@ -212,7 +205,6 @@ macro_rules! define_op {
     // Fixed: ($a, $b, ...)
     (@parse_operands
         meta: $meta:tt,
-        vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
@@ -220,7 +212,6 @@ macro_rules! define_op {
     ) => {
         $crate::define_op!(@parse_result
             meta: $meta,
-            vis: $vis,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
@@ -236,7 +227,6 @@ macro_rules! define_op {
     // Has result: -> result
     (@parse_result
         meta: $meta:tt,
-        vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
@@ -245,7 +235,6 @@ macro_rules! define_op {
     ) => {
         $crate::define_op!(@parse_region
             meta: $meta,
-            vis: $vis,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
@@ -258,7 +247,6 @@ macro_rules! define_op {
     // No result: starts with {
     (@parse_result
         meta: $meta:tt,
-        vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
@@ -267,7 +255,6 @@ macro_rules! define_op {
     ) => {
         $crate::define_op!(@parse_region
             meta: $meta,
-            vis: $vis,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
@@ -284,7 +271,6 @@ macro_rules! define_op {
     // Has region: { $name }
     (@parse_region
         meta: $meta:tt,
-        vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
@@ -294,7 +280,6 @@ macro_rules! define_op {
     ) => {
         $crate::define_op!(@impl
             meta: $meta,
-            vis: $vis,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
@@ -307,7 +292,6 @@ macro_rules! define_op {
     // No region: {}
     (@parse_region
         meta: $meta:tt,
-        vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
@@ -317,7 +301,6 @@ macro_rules! define_op {
     ) => {
         $crate::define_op!(@impl
             meta: $meta,
-            vis: $vis,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
@@ -333,7 +316,6 @@ macro_rules! define_op {
 
     (@impl
         meta: [$($meta:tt)*],
-        vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: [$($attr:ident),*],
@@ -344,7 +326,7 @@ macro_rules! define_op {
         $crate::paste::paste! {
             $($meta)*
             #[derive(Clone, Copy)]
-            $vis struct [<$op:camel>]<'db> {
+            pub struct [<$op:camel>]<'db> {
                 op: $crate::Operation<'db>,
             }
 
@@ -431,7 +413,6 @@ macro_rules! define_op {
 
     (@impl
         meta: [$($meta:tt)*],
-        vis: $vis:vis,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: [$($attr:ident),*],
@@ -442,7 +423,7 @@ macro_rules! define_op {
         $crate::paste::paste! {
             $($meta)*
             #[derive(Clone, Copy)]
-            $vis struct [<$op:camel>]<'db> {
+            pub struct [<$op:camel>]<'db> {
                 op: $crate::Operation<'db>,
             }
 

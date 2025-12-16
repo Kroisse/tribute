@@ -310,16 +310,16 @@ mod tests {
         dialect! {
             test {
                 /// Test binary operation.
-                pub op binary(lhs, rhs) -> result {};
+                op binary(lhs, rhs) -> result {};
 
                 /// Test constant operation.
-                pub op constant[value]() -> result {};
+                op constant[value]() -> result {};
 
                 /// Test variadic operation.
-                pub op variadic(..args) {};
+                op variadic(..args) {};
 
                 /// Test region operation.
-                pub op container[name]() { body };
+                op container[name]() { body };
             }
         }
 
