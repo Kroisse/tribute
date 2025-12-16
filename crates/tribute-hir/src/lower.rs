@@ -14,6 +14,7 @@ pub enum LowerError {
     InvalidMatchExpression(String),
     UnknownForm(String),
     InvalidPattern(String),
+    UnsupportedFeature(String),
 }
 
 impl std::fmt::Display for LowerError {
@@ -28,6 +29,7 @@ impl std::fmt::Display for LowerError {
             }
             LowerError::UnknownForm(form) => write!(f, "Unknown form: {}", form),
             LowerError::InvalidPattern(msg) => write!(f, "Invalid pattern: {}", msg),
+            LowerError::UnsupportedFeature(msg) => write!(f, "Unsupported feature: {}", msg),
         }
     }
 }
@@ -134,36 +136,91 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
         AstExpr::Bool(b) => Expr::Bool(*b),
         AstExpr::Nil => Expr::Nil,
         AstExpr::StringInterpolation(interp) => {
-            let segments: LowerResult<Vec<_>> = interp
-                .segments
-                .iter()
-                .map(|segment| {
-                    Ok(crate::hir::StringSegment {
-                        interpolation: Box::new(lower_expr(&segment.interpolation)?),
-                        trailing_text: segment.trailing_text.clone(),
-                    })
-                })
-                .collect();
-            Expr::StringInterpolation(crate::hir::StringInterpolation {
-                leading_text: interp.leading_text.clone(),
-                segments: segments?,
-            })
+            if interp.segments.is_empty() {
+                // Simple string without interpolation
+                Expr::StringLit(interp.leading.clone())
+            } else {
+                // String with interpolation: lower to concat chain
+                // "hello \{name}!" -> concat(concat("hello ", to_string(name)), "!")
+                let mut result: Spanned<Expr> = (Expr::StringLit(interp.leading.clone()), span);
+
+                for segment in &interp.segments {
+                    // Convert interpolation to string: to_string(expr)
+                    let interp_expr = lower_expr(&segment.interpolation)?;
+                    let to_string_call = Expr::Call {
+                        func: Box::new((Expr::Variable("to_string".to_string()), span)),
+                        args: vec![interp_expr],
+                    };
+
+                    // Concat current result with stringified interpolation
+                    result = (
+                        Expr::Call {
+                            func: Box::new((Expr::Variable("<>".to_string()), span)),
+                            args: vec![result, (to_string_call, span)],
+                        },
+                        span,
+                    );
+
+                    // Concat with trailing text if non-empty
+                    if !segment.trailing.is_empty() {
+                        result = (
+                            Expr::Call {
+                                func: Box::new((Expr::Variable("<>".to_string()), span)),
+                                args: vec![
+                                    result,
+                                    (Expr::StringLit(segment.trailing.clone()), span),
+                                ],
+                            },
+                            span,
+                        );
+                    }
+                }
+
+                result.0
+            }
         }
         AstExpr::BytesInterpolation(interp) => {
-            let segments: LowerResult<Vec<_>> = interp
-                .segments
-                .iter()
-                .map(|segment| {
-                    Ok(crate::hir::BytesSegment {
-                        interpolation: Box::new(lower_expr(&segment.interpolation)?),
-                        trailing_bytes: segment.trailing_bytes.clone(),
-                    })
-                })
-                .collect();
-            Expr::BytesInterpolation(crate::hir::BytesInterpolation {
-                leading_bytes: interp.leading_bytes.clone(),
-                segments: segments?,
-            })
+            if interp.segments.is_empty() {
+                // Simple bytes without interpolation
+                Expr::BytesLit(interp.leading.clone())
+            } else {
+                // Bytes with interpolation: lower to concat chain
+                let mut result: Spanned<Expr> = (Expr::BytesLit(interp.leading.clone()), span);
+
+                for segment in &interp.segments {
+                    // Convert interpolation to bytes: to_bytes(expr)
+                    let interp_expr = lower_expr(&segment.interpolation)?;
+                    let to_bytes_call = Expr::Call {
+                        func: Box::new((Expr::Variable("to_bytes".to_string()), span)),
+                        args: vec![interp_expr],
+                    };
+
+                    // Concat current result with byte-converted interpolation
+                    result = (
+                        Expr::Call {
+                            func: Box::new((Expr::Variable("Bytes::<>".to_string()), span)),
+                            args: vec![result, (to_bytes_call, span)],
+                        },
+                        span,
+                    );
+
+                    // Concat with trailing bytes if non-empty
+                    if !segment.trailing.is_empty() {
+                        result = (
+                            Expr::Call {
+                                func: Box::new((Expr::Variable("Bytes::<>".to_string()), span)),
+                                args: vec![
+                                    result,
+                                    (Expr::BytesLit(segment.trailing.clone()), span),
+                                ],
+                            },
+                            span,
+                        );
+                    }
+                }
+
+                result.0
+            }
         }
         AstExpr::Identifier(id) => Expr::Variable(id.clone()),
         AstExpr::Binary(bin_expr) => {
@@ -298,51 +355,27 @@ fn lower_pattern(pattern: &AstPattern) -> LowerResult<Pattern> {
                 LiteralPattern::Rune(ch) => Ok(Pattern::Literal(Literal::Rune(*ch))),
                 LiteralPattern::Bool(b) => Ok(Pattern::Literal(Literal::Bool(*b))),
                 LiteralPattern::Nil => Ok(Pattern::Literal(Literal::Nil)),
-                LiteralPattern::String(s) => {
-                    // Convert simple string to StringInterpolation without segments
-                    Ok(Pattern::Literal(Literal::StringInterpolation(
-                        crate::hir::StringInterpolation {
-                            leading_text: s.clone(),
-                            segments: Vec::new(),
-                        },
-                    )))
-                }
+                LiteralPattern::String(s) => Ok(Pattern::Literal(Literal::StringPat(s.clone()))),
                 LiteralPattern::StringInterpolation(interp) => {
-                    let segments: LowerResult<Vec<_>> = interp
-                        .segments
-                        .iter()
-                        .map(|segment| {
-                            Ok(crate::hir::StringSegment {
-                                interpolation: Box::new(lower_expr(&segment.interpolation)?),
-                                trailing_text: segment.trailing_text.clone(),
-                            })
-                        })
-                        .collect();
-                    Ok(Pattern::Literal(Literal::StringInterpolation(
-                        crate::hir::StringInterpolation {
-                            leading_text: interp.leading_text.clone(),
-                            segments: segments?,
-                        },
-                    )))
+                    // String patterns with interpolation: only support simple strings
+                    if interp.segments.is_empty() {
+                        Ok(Pattern::Literal(Literal::StringPat(interp.leading.clone())))
+                    } else {
+                        Err(LowerError::UnsupportedFeature(
+                            "String interpolation in patterns is not supported".to_string(),
+                        ))
+                    }
                 }
-                LiteralPattern::Bytes(b) => Ok(Pattern::Literal(Literal::Bytes(b.clone()))),
+                LiteralPattern::Bytes(b) => Ok(Pattern::Literal(Literal::BytesPat(b.clone()))),
                 LiteralPattern::BytesInterpolation(interp) => {
-                    let segments: LowerResult<Vec<_>> = interp
-                        .segments
-                        .iter()
-                        .map(|segment| {
-                            Ok(crate::hir::BytesSegment {
-                                interpolation: Box::new(lower_expr(&segment.interpolation)?),
-                                trailing_bytes: segment.trailing_bytes.clone(),
-                            })
-                        })
-                        .collect();
-                    Ok(Pattern::Literal(Literal::BytesInterpolation(
-                        crate::hir::BytesInterpolation {
-                            leading_bytes: interp.leading_bytes.clone(),
-                            segments: segments?,
-                        },
-                    )))
+                    // Bytes patterns with interpolation: only support simple bytes
+                    if interp.segments.is_empty() {
+                        Ok(Pattern::Literal(Literal::BytesPat(interp.leading.clone())))
+                    } else {
+                        Err(LowerError::UnsupportedFeature(
+                            "Bytes interpolation in patterns is not supported".to_string(),
+                        ))
+                    }
                 }
             }
         }

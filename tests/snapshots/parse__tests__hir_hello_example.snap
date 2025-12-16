@@ -24,11 +24,8 @@ HirProgram {
                         ),
                         args: [
                             (
-                                StringInterpolation(
-                                    StringInterpolation {
-                                        leading_text: "Hello, world!",
-                                        segments: [],
-                                    },
+                                StringLit(
+                                    "Hello, world!",
                                 ),
                                 Span {
                                     start: 51,

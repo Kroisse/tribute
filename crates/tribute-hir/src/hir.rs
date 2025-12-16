@@ -42,9 +42,10 @@ pub enum Expr {
     Rune(char),
     Bool(bool),
     Nil,
-    StringInterpolation(StringInterpolation),
-    /// Bytes literal: b"hello", b"\x00\x01", rb"raw"
-    BytesInterpolation(BytesInterpolation),
+    /// String literal: "hello"
+    StringLit(String),
+    /// Bytes literal: b"hello", rb"raw"
+    BytesLit(Vec<u8>),
 
     /// Variable reference
     Variable(Identifier),
@@ -100,8 +101,8 @@ impl std::hash::Hash for Expr {
             Expr::Rune(c) => c.hash(state),
             Expr::Bool(b) => b.hash(state),
             Expr::Nil => {}
-            Expr::StringInterpolation(s) => s.hash(state),
-            Expr::BytesInterpolation(b) => b.hash(state),
+            Expr::StringLit(s) => s.hash(state),
+            Expr::BytesLit(b) => b.hash(state),
             Expr::Variable(id) => id.hash(state),
             Expr::Call { func, args } => {
                 func.hash(state);
@@ -219,34 +220,6 @@ pub enum HandlerPattern {
     },
 }
 
-/// String interpolation in HIR
-#[derive(Clone, Debug, PartialEq, Hash, Serialize, Deserialize)]
-pub struct StringInterpolation {
-    pub leading_text: String,
-    pub segments: Vec<StringSegment>,
-}
-
-/// String segment for interpolation
-#[derive(Clone, Debug, PartialEq, Hash, Serialize, Deserialize)]
-pub struct StringSegment {
-    pub interpolation: Box<Spanned<Expr>>,
-    pub trailing_text: String,
-}
-
-/// Bytes with interpolation: b"hello \{name}"
-#[derive(Clone, Debug, PartialEq, Hash, Serialize, Deserialize)]
-pub struct BytesInterpolation {
-    pub leading_bytes: Vec<u8>,
-    pub segments: Vec<BytesSegment>,
-}
-
-/// Bytes segment for interpolation
-#[derive(Clone, Debug, PartialEq, Hash, Serialize, Deserialize)]
-pub struct BytesSegment {
-    pub interpolation: Box<Spanned<Expr>>,
-    pub trailing_bytes: Vec<u8>,
-}
-
 /// Literal values for patterns
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Literal {
@@ -260,10 +233,10 @@ pub enum Literal {
     Rune(char),
     Bool(bool),
     Nil,
-    StringInterpolation(StringInterpolation),
-    /// Bytes: b"hello", rb"raw"
-    Bytes(Vec<u8>),
-    BytesInterpolation(BytesInterpolation),
+    /// String pattern: "hello"
+    StringPat(String),
+    /// Bytes pattern: b"hello", rb"raw"
+    BytesPat(Vec<u8>),
 }
 
 // Manual Hash implementation for Literal because f64 doesn't implement Hash
@@ -277,9 +250,8 @@ impl std::hash::Hash for Literal {
             Literal::Rune(c) => c.hash(state),
             Literal::Bool(b) => b.hash(state),
             Literal::Nil => {}
-            Literal::StringInterpolation(s) => s.hash(state),
-            Literal::Bytes(b) => b.hash(state),
-            Literal::BytesInterpolation(b) => b.hash(state),
+            Literal::StringPat(s) => s.hash(state),
+            Literal::BytesPat(b) => b.hash(state),
         }
     }
 }

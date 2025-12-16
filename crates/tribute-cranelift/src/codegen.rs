@@ -168,13 +168,9 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
     ) -> CompilationResult<()> {
         let expr_data = expr.expr(db);
         match &expr_data {
-            Expr::StringInterpolation(s) => {
-                if s.segments.is_empty() {
-                    // Simple string literal
-                    let offset = self.add_string_literal(&s.leading_text);
-                    literals.insert(s.leading_text.clone(), offset);
-                }
-                // TODO: Handle complex interpolation
+            Expr::StringLit(s) => {
+                let offset = self.add_string_literal(s);
+                literals.insert(s.clone(), offset);
             }
             Expr::Call { args, .. } => {
                 for arg in args {
@@ -206,13 +202,9 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
         literals: &mut HashMap<String, u32>,
     ) -> CompilationResult<()> {
         match expr {
-            Expr::StringInterpolation(s) => {
-                if s.segments.is_empty() {
-                    // Simple string literal
-                    let offset = self.add_string_literal(&s.leading_text);
-                    literals.insert(s.leading_text.clone(), offset);
-                }
-                // TODO: Handle complex interpolation
+            Expr::StringLit(s) => {
+                let offset = self.add_string_literal(s);
+                literals.insert(s.clone(), offset);
             }
             Expr::Call { args, .. } => {
                 for arg in args {
@@ -530,7 +522,8 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
             Expr::Rune(_) => Err(CompilationError::unsupported_feature("Rune literals")),
             Expr::Bool(_) => Err(CompilationError::unsupported_feature("Bool literals")),
             Expr::Nil => Err(CompilationError::unsupported_feature("Nil literal")),
-            Expr::StringInterpolation(s) => self.lower_string_interpolation(db, s),
+            Expr::StringLit(s) => self.lower_string_literal(s),
+            Expr::BytesLit(_) => Err(CompilationError::unsupported_feature("Bytes literals")),
             Expr::Variable(name) => self.use_variable(name),
             Expr::Call { func, args } => self.lower_call(db, func, args),
             Expr::Let { pattern, value } => self.lower_let(db, pattern, value),
@@ -540,9 +533,6 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
             Expr::List(_) => Err(CompilationError::unsupported_feature("List literals")),
             Expr::Tuple(..) => Err(CompilationError::unsupported_feature("Tuple literals")),
             Expr::Record { .. } => Err(CompilationError::unsupported_feature("Record expressions")),
-            Expr::BytesInterpolation(_) => {
-                Err(CompilationError::unsupported_feature("Bytes literals"))
-            }
         }
     }
 
@@ -568,23 +558,6 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
         let value = self.builder.ins().call(value_from_number, &[float_val]);
 
         Ok(self.builder.inst_results(value)[0])
-    }
-
-    /// Lower string interpolation
-    fn lower_string_interpolation(
-        &mut self,
-        _db: &dyn Db,
-        s: &tribute_hir::hir::StringInterpolation,
-    ) -> CompilationResult<Value> {
-        if s.segments.is_empty() {
-            // Simple string constant
-            self.lower_string_literal(&s.leading_text)
-        } else {
-            // Complex interpolation - not yet implemented
-            Err(CompilationError::unsupported_feature(
-                "string interpolation",
-            ))
-        }
     }
 
     /// Lower a string literal
@@ -954,25 +927,16 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
             Literal::Rune(_) => Err(CompilationError::unsupported_feature("Rune patterns")),
             Literal::Bool(_) => Err(CompilationError::unsupported_feature("Bool patterns")),
             Literal::Nil => Err(CompilationError::unsupported_feature("Nil patterns")),
-            Literal::StringInterpolation(s) => {
-                if s.segments.is_empty() {
-                    let literal_value = self.lower_string_literal(&s.leading_text)?;
-                    let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
-                    let comparison = self
-                        .builder
-                        .ins()
-                        .call(equals_func, &[match_value, literal_value]);
-                    Ok(self.builder.inst_results(comparison)[0])
-                } else {
-                    Err(CompilationError::unsupported_feature(
-                        "string interpolation in patterns",
-                    ))
-                }
+            Literal::StringPat(s) => {
+                let literal_value = self.lower_string_literal(s)?;
+                let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
+                let comparison = self
+                    .builder
+                    .ins()
+                    .call(equals_func, &[match_value, literal_value]);
+                Ok(self.builder.inst_results(comparison)[0])
             }
-            Literal::Bytes(_) => Err(CompilationError::unsupported_feature("Bytes patterns")),
-            Literal::BytesInterpolation(_) => Err(CompilationError::unsupported_feature(
-                "Bytes interpolation patterns",
-            )),
+            Literal::BytesPat(_) => Err(CompilationError::unsupported_feature("Bytes patterns")),
         }
     }
 

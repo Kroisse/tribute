@@ -483,6 +483,107 @@ fn concat(args: &[Value]) -> Result<Value, Error> {
     }
 }
 
+/// Converts a value to its string representation.
+///
+/// # Arguments
+/// * `args` - Must be exactly 1 argument: the value to convert
+///
+/// # Returns
+/// Returns a `Value::String` with the string representation.
+///
+/// # Errors
+/// * Returns an error if not exactly 1 argument is provided.
+fn to_string_builtin(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 1 {
+        return Err("to_string requires exactly 1 argument".into());
+    }
+    let s = match &args[0] {
+        Value::Nat(n) => n.to_string(),
+        Value::Int(n) => n.to_string(),
+        Value::Float(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => b.to_string(),
+        Value::Unit => "unit".to_string(),
+        Value::List(items) => {
+            let elements: Vec<String> = items.iter().map(|v| format!("{:?}", v)).collect();
+            format!("[{}]", elements.join(", "))
+        }
+        Value::Tuple(elements) => {
+            let element_strs: Vec<String> = elements.iter().map(|v| format!("{:?}", v)).collect();
+            format!("#({})", element_strs.join(", "))
+        }
+        Value::Bytes(b) => format!("b{:?}", String::from_utf8_lossy(b)),
+        Value::Rune(c) => c.to_string(),
+        Value::BuiltinFn(name, _) => format!("<builtin: {}>", name),
+        Value::Lambda(params, _) => format!("<lambda({})>", params.join(", ")),
+        Value::Fn(name, _, _) => format!("<function: {}>", name),
+        Value::Record(name, fields) => {
+            let field_strs: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| format!("{}: {:?}", k, v))
+                .collect();
+            format!("{} {{ {} }}", name, field_strs.join(", "))
+        }
+    };
+    Ok(Value::String(s))
+}
+
+/// Converts a value to its bytes representation.
+///
+/// # Arguments
+/// * `args` - Must be exactly 1 argument: the value to convert
+///
+/// # Returns
+/// Returns a `Value::Bytes` with the bytes representation.
+///
+/// # Errors
+/// * Returns an error if not exactly 1 argument is provided.
+fn to_bytes_builtin(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 1 {
+        return Err("to_bytes requires exactly 1 argument".into());
+    }
+    let bytes = match &args[0] {
+        Value::Bytes(b) => b.clone(),
+        Value::String(s) => s.as_bytes().to_vec(),
+        Value::Nat(n) => n.to_string().into_bytes(),
+        Value::Int(n) => n.to_string().into_bytes(),
+        Value::Float(n) => n.to_string().into_bytes(),
+        Value::Bool(b) => b.to_string().into_bytes(),
+        Value::Unit => b"unit".to_vec(),
+        Value::Rune(c) => {
+            let mut buf = [0; 4];
+            c.encode_utf8(&mut buf).as_bytes().to_vec()
+        }
+        _ => return Err("to_bytes: cannot convert this value type to bytes".into()),
+    };
+    Ok(Value::Bytes(bytes))
+}
+
+/// Concatenates two bytes values.
+///
+/// # Arguments
+/// * `args` - Must be exactly 2 arguments: the byte slices to concatenate
+///
+/// # Returns
+/// Returns a `Value::Bytes` with the concatenated bytes.
+///
+/// # Errors
+/// * Returns an error if not exactly 2 arguments are provided.
+/// * Returns an error if arguments are not bytes.
+fn bytes_concat(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("Bytes::<> requires exactly 2 arguments".into());
+    }
+    match (&args[0], &args[1]) {
+        (Value::Bytes(a), Value::Bytes(b)) => {
+            let mut result = a.clone();
+            result.extend(b);
+            Ok(Value::Bytes(result))
+        }
+        _ => Err("Bytes::<> requires two bytes values".into()),
+    }
+}
+
 /// Splits a string into a list of substrings using the given delimiter.
 ///
 /// # Arguments
@@ -680,6 +781,9 @@ pub static BUILTINS: LazyLock<HashMap<String, Value>> = LazyLock::new(|| {
         ("split", split),
         ("trim_right", trim_right),
         ("to_number", to_number),
+        ("to_string", to_string_builtin),
+        ("to_bytes", to_bytes_builtin),
+        ("Bytes::<>", bytes_concat),
         // List
         ("get", get),
     ];

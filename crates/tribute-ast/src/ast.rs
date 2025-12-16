@@ -262,30 +262,28 @@ pub enum BinaryOperator {
     Concat,
 }
 
+/// Generic interpolation structure for strings and bytes
 #[derive(Clone, Debug, PartialEq, Hash)]
-pub struct StringInterpolation {
-    pub leading_text: String,
-    pub segments: Vec<StringSegment>,
+pub struct Interpolation<T> {
+    pub leading: T,
+    pub segments: Vec<InterpolationSegment<T>>,
 }
 
+/// Segment in an interpolation sequence
 #[derive(Clone, Debug, PartialEq, Hash)]
-pub struct StringSegment {
+pub struct InterpolationSegment<T> {
     pub interpolation: Box<Spanned<Expr>>,
-    pub trailing_text: String,
+    pub trailing: T,
 }
 
-/// Bytes with interpolation support: b"hello \{name}"
-#[derive(Clone, Debug, PartialEq, Hash)]
-pub struct BytesInterpolation {
-    pub leading_bytes: Vec<u8>,
-    pub segments: Vec<BytesSegment>,
-}
-
-#[derive(Clone, Debug, PartialEq, Hash)]
-pub struct BytesSegment {
-    pub interpolation: Box<Spanned<Expr>>,
-    pub trailing_bytes: Vec<u8>,
-}
+/// String interpolation: "hello \{name}"
+pub type StringInterpolation = Interpolation<String>;
+/// String segment for interpolation
+pub type StringSegment = InterpolationSegment<String>;
+/// Bytes with interpolation: b"hello \{name}"
+pub type BytesInterpolation = Interpolation<Vec<u8>>;
+/// Bytes segment for interpolation
+pub type BytesSegment = InterpolationSegment<Vec<u8>>;
 
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub struct CallExpression {

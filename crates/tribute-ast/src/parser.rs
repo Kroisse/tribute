@@ -1499,13 +1499,13 @@ impl TributeParser {
             let text = literal_node.utf8_text(source.as_bytes())?;
             let content = extract_raw_string_content(text)?;
             Ok(Expr::StringInterpolation(StringInterpolation {
-                leading_text: content,
+                leading: content,
                 segments: Vec::new(),
             }))
         } else {
             // Empty raw string
             Ok(Expr::StringInterpolation(StringInterpolation {
-                leading_text: String::new(),
+                leading: String::new(),
                 segments: Vec::new(),
             }))
         }
@@ -1519,7 +1519,7 @@ impl TributeParser {
     ) -> Result<Expr, Box<dyn std::error::Error>> {
         let mut cursor = node.walk();
         let mut segments: Vec<BytesSegment> = Vec::new();
-        let mut leading_bytes = Vec::new();
+        let mut leading = Vec::new();
         let mut current_bytes = Vec::new();
         let mut expecting_bytes = true;
 
@@ -1529,7 +1529,7 @@ impl TributeParser {
                     let text = child.utf8_text(source.as_bytes())?;
                     let processed = process_bytes_escape_sequences(text)?;
                     if expecting_bytes {
-                        leading_bytes.extend(processed);
+                        leading.extend(processed);
                         expecting_bytes = false;
                     } else {
                         current_bytes.extend(processed);
@@ -1543,11 +1543,11 @@ impl TributeParser {
                             end: expr_node.end_byte(),
                         };
                         if let Some(last) = segments.last_mut() {
-                            last.trailing_bytes = std::mem::take(&mut current_bytes);
+                            last.trailing = std::mem::take(&mut current_bytes);
                         }
                         segments.push(BytesSegment {
                             interpolation: Box::new((expr, span)),
-                            trailing_bytes: Vec::new(),
+                            trailing: Vec::new(),
                         });
                     }
                 }
@@ -1557,11 +1557,11 @@ impl TributeParser {
 
         // Handle trailing bytes after last interpolation
         if let Some(last) = segments.last_mut() {
-            last.trailing_bytes = current_bytes;
+            last.trailing = current_bytes;
         }
 
         Ok(Expr::BytesInterpolation(BytesInterpolation {
-            leading_bytes,
+            leading,
             segments,
         }))
     }
@@ -1577,12 +1577,12 @@ impl TributeParser {
             let text = literal_node.utf8_text(source.as_bytes())?;
             let content = extract_raw_bytes_content(text)?;
             Ok(Expr::BytesInterpolation(BytesInterpolation {
-                leading_bytes: content.into_bytes(),
+                leading: content.into_bytes(),
                 segments: Vec::new(),
             }))
         } else {
             Ok(Expr::BytesInterpolation(BytesInterpolation {
-                leading_bytes: Vec::new(),
+                leading: Vec::new(),
                 segments: Vec::new(),
             }))
         }
@@ -1595,9 +1595,9 @@ impl TributeParser {
     ) -> Result<Expr, Box<dyn std::error::Error>> {
         let mut cursor = node.walk();
         let mut segments: Vec<StringSegment> = Vec::new();
-        let mut leading_text = String::new();
+        let mut leading = String::new();
         let mut current_text = String::new();
-        let mut expecting_text = true; // Start expecting text (leading_text)
+        let mut expecting_text = true; // Start expecting text (leading)
 
         for child in node.named_children(&mut cursor) {
             match child.kind() {
@@ -1611,20 +1611,20 @@ impl TributeParser {
                         let expr = self.node_to_expr_with_span(expr_node, source)?;
 
                         if expecting_text {
-                            // This is the first interpolation, current_text is leading_text
-                            leading_text = std::mem::take(&mut current_text);
+                            // This is the first interpolation, current_text is leading
+                            leading = std::mem::take(&mut current_text);
                             expecting_text = false;
                         } else {
-                            // Update the trailing_text of the previous segment
+                            // Update the trailing of the previous segment
                             if let Some(last_segment) = segments.last_mut() {
-                                last_segment.trailing_text = std::mem::take(&mut current_text);
+                                last_segment.trailing = std::mem::take(&mut current_text);
                             }
                         }
 
-                        // Create new segment with empty trailing_text (will be filled later)
+                        // Create new segment with empty trailing (will be filled later)
                         segments.push(StringSegment {
                             interpolation: Box::new(expr),
-                            trailing_text: String::new(),
+                            trailing: String::new(),
                         });
                     } else {
                         return Err("Interpolation missing expression".into());
@@ -1637,17 +1637,17 @@ impl TributeParser {
         if segments.is_empty() {
             // Simple string without interpolation
             Ok(Expr::StringInterpolation(StringInterpolation {
-                leading_text: current_text,
+                leading: current_text,
                 segments: Vec::new(),
             }))
         } else {
             // Set trailing text for the last segment
             if let Some(last_segment) = segments.last_mut() {
-                last_segment.trailing_text = current_text;
+                last_segment.trailing = current_text;
             }
 
             Ok(Expr::StringInterpolation(StringInterpolation {
-                leading_text,
+                leading,
                 segments,
             }))
         }
@@ -1688,7 +1688,7 @@ impl TributeParser {
                     {
                         if interp.segments.is_empty() {
                             // Simple string without interpolation
-                            return Ok(LiteralPattern::String(interp.leading_text));
+                            return Ok(LiteralPattern::String(interp.leading));
                         } else {
                             // String with interpolation
                             return Ok(LiteralPattern::StringInterpolation(interp));
@@ -1700,7 +1700,7 @@ impl TributeParser {
                     if let Ok(Expr::StringInterpolation(interp)) =
                         self.parse_raw_string(child, source)
                     {
-                        return Ok(LiteralPattern::String(interp.leading_text));
+                        return Ok(LiteralPattern::String(interp.leading));
                     }
                 }
                 "bytes_string" => {
@@ -1709,7 +1709,7 @@ impl TributeParser {
                         self.parse_bytes_string(child, source)
                     {
                         if interp.segments.is_empty() {
-                            return Ok(LiteralPattern::Bytes(interp.leading_bytes));
+                            return Ok(LiteralPattern::Bytes(interp.leading));
                         } else {
                             return Ok(LiteralPattern::BytesInterpolation(interp));
                         }
@@ -1720,7 +1720,7 @@ impl TributeParser {
                     if let Ok(Expr::BytesInterpolation(interp)) =
                         self.parse_raw_bytes(child, source)
                     {
-                        return Ok(LiteralPattern::Bytes(interp.leading_bytes));
+                        return Ok(LiteralPattern::Bytes(interp.leading));
                     }
                 }
                 "keyword_true" => return Ok(LiteralPattern::Bool(true)),
@@ -2367,7 +2367,7 @@ fn test() {
             if let Statement::Expression((Expr::StringInterpolation(interp), _)) =
                 &func.body(db).statements[0]
             {
-                assert_eq!(interp.leading_text, "Hello \"World\"");
+                assert_eq!(interp.leading, "Hello \"World\"");
             } else {
                 panic!("Expected string expression");
             }
@@ -2391,7 +2391,7 @@ fn test() {
             if let Statement::Expression((Expr::StringInterpolation(interp), _)) =
                 &func.body(db).statements[0]
             {
-                assert_eq!(interp.leading_text, "Line1\nTab\tQuote\"");
+                assert_eq!(interp.leading, "Line1\nTab\tQuote\"");
             } else {
                 panic!("Expected string expression");
             }
