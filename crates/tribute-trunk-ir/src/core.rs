@@ -15,12 +15,12 @@ impl<'db> Module<'db> {
     /// Create a new module.
     pub fn new(
         db: &'db dyn salsa::Database,
+        location: Location<'db>,
         name: &str,
         body: Region<'db>,
-        location: Location<'db>,
     ) -> Self {
         let op_name = OpNameId::new(db, "core", "module");
-        let op = Operation::of(db, op_name, location)
+        let op = Operation::of(db, location, op_name)
             .attr("sym_name", Attribute::String(name.to_string()))
             .region(body)
             .build();
@@ -30,14 +30,14 @@ impl<'db> Module<'db> {
     /// Build a module with a closure that constructs the top-level block.
     pub fn build(
         db: &'db dyn salsa::Database,
-        name: &str,
         location: Location<'db>,
+        name: &str,
         f: impl FnOnce(&mut crate::BlockBuilder<'db>),
     ) -> Self {
         let mut top = crate::BlockBuilder::new(db, location);
         f(&mut top);
-        let body = Region::new(db, vec![top.build()], location);
-        Self::new(db, name, body, location)
+        let body = Region::new(db, location, vec![top.build()]);
+        Self::new(db, location, name, body)
     }
 
     /// Get the module name.

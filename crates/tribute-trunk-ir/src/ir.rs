@@ -64,6 +64,7 @@ pub struct Value<'db> {
 
 #[salsa::tracked(debug)]
 pub struct Operation<'db> {
+    pub location: Location<'db>,
     /// Interned operation name (dialect.operation).
     pub name: OpNameId<'db>,
     #[returns(ref)]
@@ -77,27 +78,26 @@ pub struct Operation<'db> {
     pub regions: Vec<Region<'db>>,
     #[returns(ref)]
     pub successors: Vec<Block<'db>>,
-    pub location: Location<'db>,
 }
 
 impl<'db> Operation<'db> {
     /// Create a builder for an operation with the given name.
     pub fn of(
         db: &'db dyn salsa::Database,
-        name: OpNameId<'db>,
         location: Location<'db>,
+        name: OpNameId<'db>,
     ) -> OperationBuilder<'db> {
-        OperationBuilder::new(db, name, location)
+        OperationBuilder::new(db, location, name)
     }
 
     /// Create a builder, parsing "dialect.operation" string.
     pub fn of_name(
         db: &'db dyn salsa::Database,
-        name: &str,
         location: Location<'db>,
+        name: &str,
     ) -> OperationBuilder<'db> {
         let name = OpNameId::parse(db, name).expect("invalid operation name");
-        Self::of(db, name, location)
+        Self::of(db, location, name)
     }
 
     pub fn result(self, db: &'db dyn salsa::Database, index: u32) -> Value<'db> {
@@ -107,11 +107,11 @@ impl<'db> Operation<'db> {
 
 #[salsa::tracked(debug)]
 pub struct Block<'db> {
+    pub location: Location<'db>,
     #[returns(deref)]
     pub args: Vec<Type>,
     #[returns(deref)]
     pub operations: Vec<Operation<'db>>,
-    pub location: Location<'db>,
 }
 
 impl<'db> Block<'db> {
@@ -122,9 +122,9 @@ impl<'db> Block<'db> {
 
 #[salsa::tracked(debug)]
 pub struct Region<'db> {
+    pub location: Location<'db>,
     #[returns(ref)]
     pub blocks: Vec<Block<'db>>,
-    pub location: Location<'db>,
 }
 
 // ============================================================================
@@ -134,26 +134,26 @@ pub struct Region<'db> {
 /// Builder for constructing Operation instances.
 pub struct OperationBuilder<'db> {
     db: &'db dyn salsa::Database,
+    location: Location<'db>,
     name: OpNameId<'db>,
     operands: Vec<Value<'db>>,
     results: Vec<Type>,
     attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
     regions: Vec<Region<'db>>,
     successors: Vec<Block<'db>>,
-    location: Location<'db>,
 }
 
 impl<'db> OperationBuilder<'db> {
-    pub fn new(db: &'db dyn salsa::Database, name: OpNameId<'db>, location: Location<'db>) -> Self {
+    pub fn new(db: &'db dyn salsa::Database, location: Location<'db>, name: OpNameId<'db>) -> Self {
         Self {
             db,
+            location,
             name,
             operands: Vec::new(),
             results: Vec::new(),
             attributes: BTreeMap::new(),
             regions: Vec::new(),
             successors: Vec::new(),
-            location,
         }
     }
 
@@ -201,13 +201,13 @@ impl<'db> OperationBuilder<'db> {
     pub fn build(self) -> Operation<'db> {
         Operation::new(
             self.db,
+            self.location,
             self.name,
             self.operands,
             self.results,
             self.attributes,
             self.regions,
             self.successors,
-            self.location,
         )
     }
 }
@@ -215,18 +215,18 @@ impl<'db> OperationBuilder<'db> {
 /// Builder for constructing Block instances.
 pub struct BlockBuilder<'db> {
     db: &'db dyn salsa::Database,
+    location: Location<'db>,
     args: Vec<Type>,
     operations: Vec<Operation<'db>>,
-    location: Location<'db>,
 }
 
 impl<'db> BlockBuilder<'db> {
     pub fn new(db: &'db dyn salsa::Database, location: Location<'db>) -> Self {
         Self {
             db,
+            location,
             args: Vec::new(),
             operations: Vec::new(),
-            location,
         }
     }
 
@@ -247,7 +247,7 @@ impl<'db> BlockBuilder<'db> {
     }
 
     pub fn build(self) -> Block<'db> {
-        Block::new(self.db, self.args, self.operations, self.location)
+        Block::new(self.db, self.location, self.args, self.operations)
     }
 }
 
@@ -266,25 +266,25 @@ mod tests {
 
         let main_func = func::Func::build(
             db,
+            location,
             "main",
             vec![],
             vec![Type::I { bits: 32 }],
-            location,
             |entry| {
-                let c0 = entry.op(arith::Const::i32(db, 40, location));
-                let c1 = entry.op(arith::Const::i32(db, 2, location));
+                let c0 = entry.op(arith::Const::i32(db, location, 40));
+                let c1 = entry.op(arith::Const::i32(db, location, 2));
                 let add = entry.op(arith::Add::new(
                     db,
+                    location,
                     c0.result(db),
                     c1.result(db),
                     Type::I { bits: 32 },
-                    location,
                 ));
-                entry.op(func::Return::value(db, add.result(db), location));
+                entry.op(func::Return::value(db, location, add.result(db)));
             },
         );
 
-        core::Module::build(db, "main", location, |top| {
+        core::Module::build(db, location, "main", |top| {
             top.op(main_func);
         })
         .as_operation()

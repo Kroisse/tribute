@@ -16,15 +16,15 @@ impl<'db> Func<'db> {
     /// Create a new function definition.
     pub fn new(
         db: &'db dyn salsa::Database,
+        location: Location<'db>,
         name: &str,
         params: Vec<Type>,
         results: Vec<Type>,
         body: Region<'db>,
-        location: Location<'db>,
     ) -> Self {
         let op_name = OpNameId::new(db, "func", "func");
         let ty = Type::Function { params, results };
-        let op = Operation::of(db, op_name, location)
+        let op = Operation::of(db, location, op_name)
             .attr("sym_name", Attribute::String(name.to_string()))
             .attr("type", Attribute::Type(ty))
             .region(body)
@@ -35,16 +35,16 @@ impl<'db> Func<'db> {
     /// Build a function with a closure that constructs the entry block.
     pub fn build(
         db: &'db dyn salsa::Database,
+        location: Location<'db>,
         name: &str,
         params: Vec<Type>,
         results: Vec<Type>,
-        location: Location<'db>,
         f: impl FnOnce(&mut crate::BlockBuilder<'db>),
     ) -> Self {
         let mut entry = crate::BlockBuilder::new(db, location).args(params.clone());
         f(&mut entry);
-        let body = Region::new(db, vec![entry.build()], location);
-        Self::new(db, name, params, results, body, location)
+        let body = Region::new(db, location, vec![entry.build()]);
+        Self::new(db, location, name, params, results, body)
     }
 
     /// Get the function name.
@@ -79,26 +79,26 @@ define_dialect_op! {
 impl<'db> Return<'db> {
     /// Create a new return with no values.
     pub fn empty(db: &'db dyn salsa::Database, location: Location<'db>) -> Self {
-        Self::new(db, vec![], location)
+        Self::new(db, location, vec![])
     }
 
     /// Create a new return with a single value.
     pub fn value(
         db: &'db dyn salsa::Database,
-        value: crate::Value<'db>,
         location: Location<'db>,
+        value: crate::Value<'db>,
     ) -> Self {
-        Self::new(db, vec![value], location)
+        Self::new(db, location, vec![value])
     }
 
     /// Create a new return with multiple values.
     pub fn new(
         db: &'db dyn salsa::Database,
-        operands: Vec<crate::Value<'db>>,
         location: Location<'db>,
+        operands: Vec<crate::Value<'db>>,
     ) -> Self {
         let name = OpNameId::new(db, "func", "return");
-        let op = Operation::of(db, name, location).operands(operands).build();
+        let op = Operation::of(db, location, name).operands(operands).build();
         Self::wrap_unchecked(op)
     }
 

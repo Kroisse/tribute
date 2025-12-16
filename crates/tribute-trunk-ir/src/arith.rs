@@ -13,43 +13,43 @@ define_dialect_op! {
 
 impl<'db> Const<'db> {
     /// Create a new i32 constant.
-    pub fn i32(db: &'db dyn salsa::Database, value: i64, location: Location<'db>) -> Self {
-        Self::create(db, Type::I { bits: 32 }, Attribute::Int(value), location)
+    pub fn i32(db: &'db dyn salsa::Database, location: Location<'db>, value: i64) -> Self {
+        Self::create(db, location, Type::I { bits: 32 }, Attribute::Int(value))
     }
 
     /// Create a new i64 constant.
-    pub fn i64(db: &'db dyn salsa::Database, value: i64, location: Location<'db>) -> Self {
-        Self::create(db, Type::I { bits: 64 }, Attribute::Int(value), location)
+    pub fn i64(db: &'db dyn salsa::Database, location: Location<'db>, value: i64) -> Self {
+        Self::create(db, location, Type::I { bits: 64 }, Attribute::Int(value))
     }
 
     /// Create a new f32 constant.
-    pub fn f32(db: &'db dyn salsa::Database, value: f32, location: Location<'db>) -> Self {
+    pub fn f32(db: &'db dyn salsa::Database, location: Location<'db>, value: f32) -> Self {
         Self::create(
             db,
+            location,
             Type::F { bits: 32 },
             Attribute::FloatBits(value.to_bits() as u64),
-            location,
         )
     }
 
     /// Create a new f64 constant.
-    pub fn f64(db: &'db dyn salsa::Database, value: f64, location: Location<'db>) -> Self {
+    pub fn f64(db: &'db dyn salsa::Database, location: Location<'db>, value: f64) -> Self {
         Self::create(
             db,
+            location,
             Type::F { bits: 64 },
             Attribute::FloatBits(value.to_bits()),
-            location,
         )
     }
 
     fn create(
         db: &'db dyn salsa::Database,
+        location: Location<'db>,
         ty: Type,
         value: Attribute<'db>,
-        location: Location<'db>,
     ) -> Self {
         let name = OpNameId::new(db, "arith", "const");
-        let op = Operation::of(db, name, location)
+        let op = Operation::of(db, location, name)
             .result(ty)
             .attr("value", value)
             .build();
@@ -75,13 +75,13 @@ impl<'db> Add<'db> {
     /// Create a new add operation.
     pub fn new(
         db: &'db dyn salsa::Database,
+        location: Location<'db>,
         lhs: crate::Value<'db>,
         rhs: crate::Value<'db>,
         result_ty: Type,
-        location: Location<'db>,
     ) -> Self {
         let name = OpNameId::new(db, "arith", "add");
-        let op = Operation::of(db, name, location)
+        let op = Operation::of(db, location, name)
             .operands(vec![lhs, rhs])
             .result(result_ty)
             .build();
