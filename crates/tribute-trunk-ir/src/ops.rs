@@ -69,28 +69,15 @@ macro_rules! dialect {
     // Base case: no more ops to process
     (@parse $dialect:ident) => {};
 
-    // With attrs (optional result)
+    // Unified pattern: optional attrs, optional result
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        $vis:vis op $op:ident [$($attrs:tt)*] ($($operands:tt)*) $(-> $result:ident)? { $($region:tt)* };
+        $vis:vis op $op:ident $([$($attrs:tt)*])? ($($operands:tt)*) $(-> $result:ident)? { $($region:tt)* };
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            $vis op $dialect.$op [$($attrs)*] ($($operands)*) $(-> $result)? { $($region)* }
-        }
-        $crate::dialect!(@parse $dialect $($rest)*);
-    };
-
-    // No attrs (optional result)
-    (@parse $dialect:ident
-        $(#[$meta:meta])*
-        $vis:vis op $op:ident ($($operands:tt)*) $(-> $result:ident)? { $($region:tt)* };
-        $($rest:tt)*
-    ) => {
-        $crate::define_op! {
-            $(#[$meta])*
-            $vis op $dialect.$op ($($operands)*) $(-> $result)? { $($region)* }
+            $vis op $dialect.$op $([$($attrs)*])? ($($operands)*) $(-> $result)? { $($region)* }
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
