@@ -698,7 +698,8 @@ mod tests {
     fn test_hir_nested_arithmetic() {
         TributeDatabaseImpl::default().attach(|db| {
             // Test nested arithmetic wrapped in a main function
-            let source = r#"fn main() { (2 * 3) + (8 / 2) }"#;
+            // Note: Use {} for grouping, () is reserved for operator functions
+            let source = r#"fn main() { {2 * 3} + {8 / 2} }"#;
             match crate::eval_str(db, "test.trb", source) {
                 Ok(Value::Number(10)) => {}
                 Ok(other) => panic!("Expected Number(10), got {:?}", other),

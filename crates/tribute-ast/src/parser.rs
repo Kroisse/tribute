@@ -730,6 +730,15 @@ impl TributeParser {
             "tuple_expression" => self.parse_tuple_expression(node, source),
             "record_expression" => self.parse_record_expression(node, source),
             "block" => self.parse_block_as_expr(node, source),
+            "operator_fn" => {
+                // operator_fn has a field "operator" containing the operator token
+                if let Some(op_node) = node.child_by_field_name("operator") {
+                    let op = op_node.utf8_text(source.as_bytes())?.to_string();
+                    Ok(Expr::OperatorFn(op))
+                } else {
+                    Err("Missing operator in operator_fn".into())
+                }
+            }
             "primary_expression" => {
                 // primary_expression should have one child
                 if let Some(child) = node.child(0) {

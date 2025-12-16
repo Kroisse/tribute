@@ -178,6 +178,8 @@ pub enum Expr {
     Tuple(Box<Spanned<Expr>>, Vec<Spanned<Expr>>),
     /// Record expression: User { name: "Alice", age: 30 }
     Record(RecordExpression),
+    /// Operator as function: (+), (-), (<>), etc.
+    OperatorFn(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

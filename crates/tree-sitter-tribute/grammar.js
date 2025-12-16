@@ -110,14 +110,14 @@ module.exports = grammar({
     type_variable: $ => $.identifier,
 
     // Generic type like List(a) or Option(String)
-    generic_type: $ => seq(
+    generic_type: $ => prec(1, seq(
       $.type_identifier,
       '(',
       $._type,
       repeat(seq(',', $._type)),
       optional(','),
       ')'
-    ),
+    )),
 
     // Type names start with uppercase: User, String, List
     type_identifier: $ => /[A-Z][a-zA-Z0-9_]*/,
@@ -499,7 +499,23 @@ module.exports = grammar({
       $.identifier,
       $.list_expression,
       $.tuple_expression,
+      $.operator_fn,
       $.block  // { expr } for grouping
+    ),
+
+    // Operator as function: (+), (<>), (==), etc.
+    // Uses token.immediate to avoid conflicts with other uses of parentheses
+    operator_fn: $ => seq(
+      '(',
+      field('operator', alias(
+        token(choice(
+          '+', '-', '*', '/', '%',
+          '<>', '==', '!=', '<=', '>=', '<', '>',
+          '&&', '||'
+        )),
+        $.operator
+      )),
+      ')'
     ),
 
     // Record expression: User { name: "Alice", age: 30 }

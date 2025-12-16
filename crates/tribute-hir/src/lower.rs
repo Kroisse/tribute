@@ -254,6 +254,11 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
                 fields: fields?,
             }
         }
+        AstExpr::OperatorFn(op) => {
+            // Operator functions are just references to the operator as a variable
+            // e.g., (+) becomes Variable("+")
+            Expr::Variable(op.clone())
+        }
     };
 
     Ok((hir_expr, span))
