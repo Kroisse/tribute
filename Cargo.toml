@@ -28,7 +28,6 @@ tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-hir = { path = "crates/tribute-hir" }
 tribute-trunk-ir = { path = "crates/tribute-trunk-ir" }
-tribute-runtime = { path = "crates/tribute-runtime" }
 
 [package]
 name = "tribute"
