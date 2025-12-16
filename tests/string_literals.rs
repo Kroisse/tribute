@@ -1,3 +1,5 @@
+#![cfg(feature = "legacy-eval")]
+
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
 

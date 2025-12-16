@@ -33,6 +33,21 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+# Legacy HIR evaluator and related drivers/tests.
+legacy-eval = []
+
+[[bin]]
+name = "trbi"
+path = "src/bin/trbi.rs"
+required-features = ["legacy-eval"]
+
+[[bin]]
+name = "trbc"
+path = "src/bin/trbc.rs"
+required-features = ["legacy-eval"]
+
 [dependencies]
 clap.workspace = true
 insta.workspace = true

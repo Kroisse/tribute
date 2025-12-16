@@ -1,3 +1,5 @@
+#![cfg(feature = "legacy-eval")]
+
 use tribute::{Value, eval_str};
 use tribute_core::TributeDatabaseImpl;
 

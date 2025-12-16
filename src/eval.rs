@@ -1,3 +1,8 @@
+//! DEPRECATED: legacy HIR evaluator.
+//!
+//! This module is kept for backwards compatibility and is not compiled by
+//! default. Enable the Cargo feature `legacy-eval` to build and use it.
+
 use crate::builtins;
 use std::collections::HashMap;
 use tribute_ast::{Spanned, ast::Identifier};
