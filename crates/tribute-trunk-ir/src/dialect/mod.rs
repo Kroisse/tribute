@@ -5,8 +5,10 @@
 
 // === Infrastructure ===
 pub mod core;
+pub mod type_;
 
 // === High-level (pre-resolution) ===
+pub mod ability;
 pub mod src;
 
 // === Mid-level (target independent) ===
@@ -16,3 +18,6 @@ pub mod cont;
 pub mod func;
 pub mod mem;
 pub mod scf;
+
+// === Low-level (target specific) ===
+pub mod wasm;
