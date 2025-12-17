@@ -18,17 +18,27 @@ use tribute_trunk_ir::{
     idvec,
 };
 
-/// Context for lowering, tracking local variable bindings.
+/// Context for lowering, tracking local variable bindings and type variable generation.
 struct LoweringCtx<'db> {
     /// Map from variable names to their SSA values.
     bindings: HashMap<String, Value<'db>>,
+    /// Counter for generating unique type variable IDs.
+    next_type_var_id: u64,
 }
 
 impl<'db> LoweringCtx<'db> {
     fn new() -> Self {
         Self {
             bindings: HashMap::new(),
+            next_type_var_id: 0,
         }
+    }
+
+    /// Generate a fresh type variable with a unique ID.
+    fn fresh_type_var(&mut self, db: &'db dyn salsa::Database) -> Type<'db> {
+        let id = self.next_type_var_id;
+        self.next_type_var_id += 1;
+        type_::var(db, Attribute::IntBits(id))
     }
 
     /// Bind a name to a value.
@@ -78,18 +88,20 @@ fn lower_function<'db>(
     let name = func_def.name(db);
     let span = func_def.span(db);
     let location = Location::new(path, span);
-    let infer_ty = type_::var(db, Attribute::Unit);
+    let mut ctx = LoweringCtx::new();
 
-    // For now, assume no type annotations (all type.var)
-    let params: IdVec<Type> =
-        std::iter::repeat_n(infer_ty, func_def.parameters(db).len()).collect();
+    // For now, assume no type annotations (each param gets a fresh type var)
+    let params: IdVec<Type> = func_def
+        .parameters(db)
+        .iter()
+        .map(|_| ctx.fresh_type_var(db))
+        .collect();
 
     // Result type is also unknown until inference
-    let results = idvec![infer_ty];
+    let results = idvec![ctx.fresh_type_var(db)];
 
     func::Func::build(db, location, &name, params, results, |entry| {
         let body = func_def.body(db);
-        let mut ctx = LoweringCtx::new();
 
         // Lower each statement, keeping track of the last value
         let mut last_value: Option<Value<'db>> = None;
@@ -138,7 +150,7 @@ fn bind_pattern<'db>(
     value: Value<'db>,
     location: Location<'db>,
 ) {
-    let infer_ty = type_::var(db, Attribute::Unit);
+    let infer_ty = ctx.fresh_type_var(db);
     match pattern {
         Pattern::Identifier(name) => {
             ctx.bind(name.clone(), value);
@@ -280,7 +292,7 @@ fn lower_expr<'db>(
     let (expr, span) = spanned;
     let location = Location::new(path, *span);
     let unit_ty = Type::unit(db);
-    let infer_ty = type_::var(db, Attribute::Unit); // Type to be inferred
+    let infer_ty = ctx.fresh_type_var(db); // Type to be inferred
 
     match expr {
         // Literals → arith.const
@@ -354,7 +366,7 @@ fn lower_expr<'db>(
         }) => {
             let lhs = lower_expr(db, path, ctx, block, left);
             let rhs = lower_expr(db, path, ctx, block, right);
-            lower_binary_op(db, location, block, operator.clone(), lhs, rhs)
+            lower_binary_op(db, ctx, location, block, operator.clone(), lhs, rhs)
         }
 
         // Rune (Unicode codepoint) → arith.const i32
@@ -551,6 +563,7 @@ fn lower_statements<'db>(
 /// Lower a binary operation to the appropriate TrunkIR op.
 fn lower_binary_op<'db>(
     db: &'db dyn salsa::Database,
+    ctx: &mut LoweringCtx<'db>,
     location: Location<'db>,
     block: &mut BlockBuilder<'db>,
     operator: BinaryOperator,
@@ -558,7 +571,7 @@ fn lower_binary_op<'db>(
     rhs: Value<'db>,
 ) -> Value<'db> {
     // Result type is unknown until type inference
-    let infer_ty = type_::var(db, Attribute::Unit);
+    let infer_ty = ctx.fresh_type_var(db);
     let bool_ty = Type::i(db, 1);
 
     match operator {
@@ -847,7 +860,7 @@ fn bind_pattern_for_match<'db>(
     scrutinee: Value<'db>,
     location: Location<'db>,
 ) {
-    let infer_ty = type_::var(db, Attribute::Unit);
+    let infer_ty = ctx.fresh_type_var(db);
     match pattern {
         Pattern::Identifier(name) => {
             ctx.bind(name.clone(), scrutinee);
