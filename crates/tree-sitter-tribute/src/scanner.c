@@ -18,6 +18,8 @@ enum TokenType {
     MULTILINE_BYTES_START,     // b#"
     MULTILINE_BYTES_CONTENT,   // text between interpolations
     MULTILINE_BYTES_END,       // "#
+    // Newline token for field separators (Go/Swift style)
+    NEWLINE,
 
     ERROR_SENTINEL
 };
@@ -275,9 +277,44 @@ bool tree_sitter_tribute_external_scanner_scan(
         return false;
     }
 
-    // Skip whitespace (only when not inside a string)
-    while (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
-           lexer->lookahead == '\n' || lexer->lookahead == '\r') {
+    // Handle whitespace
+    // Skip spaces and tabs always
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
+        skip(lexer);
+    }
+
+    // If NEWLINE token is valid (e.g., in struct fields), emit it
+    // BUT only if followed by something that looks like another field (identifier)
+    if (valid_symbols[NEWLINE] && (lexer->lookahead == '\n' || lexer->lookahead == '\r')) {
+        // Mark position before consuming newline
+        lexer->mark_end(lexer);
+
+        // Consume newline(s) and whitespace
+        while (lexer->lookahead == '\n' || lexer->lookahead == '\r' ||
+               lexer->lookahead == ' ' || lexer->lookahead == '\t') {
+            advance(lexer);
+        }
+
+        // Check if next char looks like start of identifier or type name
+        // (lowercase letter, uppercase letter, or underscore)
+        // This prevents consuming newline when we're at the end of fields (before '}')
+        if ((lexer->lookahead >= 'a' && lexer->lookahead <= 'z') ||
+            (lexer->lookahead >= 'A' && lexer->lookahead <= 'Z') ||
+            lexer->lookahead == '_') {
+            lexer->result_symbol = NEWLINE;
+            lexer->mark_end(lexer);
+            return true;
+        }
+        // Not followed by identifier - don't emit NEWLINE, let normal whitespace skipping handle it
+        // But we've already consumed the whitespace, so just continue
+    }
+
+    // Otherwise skip newlines as normal whitespace
+    while (lexer->lookahead == '\n' || lexer->lookahead == '\r') {
+        skip(lexer);
+    }
+    // Skip any remaining spaces/tabs after newlines
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\t') {
         skip(lexer);
     }
 

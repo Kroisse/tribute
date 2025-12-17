@@ -29,6 +29,7 @@ module.exports = grammar({
     $._multiline_bytes_start,
     $._multiline_bytes_content,
     $._multiline_bytes_end,
+    $._newline,  // Newline token for field separators (Go/Swift style)
     $._error_sentinel,
   ],
 
@@ -114,9 +115,13 @@ module.exports = grammar({
       '}'
     ),
 
+    // Field separator: comma or newline (Go/Swift style)
+    // NEWLINE is only emitted by scanner when followed by identifier (lookahead)
+    _field_separator: $ => choice(',', $._newline),
+
     struct_fields: $ => seq(
       $.struct_field,
-      repeat(seq(optional(','), $.struct_field)),
+      repeat(seq($._field_separator, $.struct_field)),
       optional(',')
     ),
 
@@ -170,7 +175,7 @@ module.exports = grammar({
 
     enum_variants: $ => seq(
       $.enum_variant,
-      repeat(seq(optional(','), $.enum_variant)),
+      repeat(seq($._field_separator, $.enum_variant)),
       optional(',')
     ),
 

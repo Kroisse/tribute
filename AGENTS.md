@@ -32,9 +32,10 @@ This is a Rust Cargo workspace; the codebase is being incrementally aligned to t
 - `src/bin/trbc.rs`: (legacy/experimental) compiler driver
 - `crates/tree-sitter-tribute/`: Tree-sitter grammar and bindings
 - `crates/tribute-core/`: shared infra (Salsa DB `TributeDatabaseImpl`, `TargetInfo`, `Diagnostic`, etc.)
-- `crates/tribute-ast/`, `crates/tribute-hir/`: existing pipeline (may be reorganized toward TrunkIR)
+- `crates/tribute-ast/`: AST definitions and parsing
+- `crates/tribute-passes/`: compiler passes (AST → TrunkIR lowering)
+- `crates/tribute-trunk-ir/`: TrunkIR dialect system and IR definitions
 - `crates/tribute-cranelift/`: Cranelift backend (in progress)
-- `crates/tribute-runtime/`: native runtime (FFI/value representation, etc.)
 
 ## Commit Guidelines
 
@@ -53,7 +54,8 @@ cargo insta review
 # Package-specific tests
 cargo test -p tribute
 cargo test -p tree-sitter-tribute
-cargo test -p tribute-runtime
+cargo test -p tribute-passes
+cargo test -p tribute-trunk-ir
 
 # Legacy drivers (example inputs may still be .trb today)
 cargo run --bin trbi -- <file.trb>

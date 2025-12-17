@@ -2058,13 +2058,13 @@ fn process_bytes_escape_sequences(text: &str) -> Result<Vec<u8>, Box<dyn std::er
                     }
                 }
                 Some(other) => {
-                    // Unknown escape, keep as-is
-                    result.push(b'\\');
-                    if other.is_ascii() {
-                        result.push(other as u8);
-                    }
+                    // Unknown escape sequence is an error (consistent with string handling)
+                    return Err(format!("Unknown escape sequence: \\{}", other).into());
                 }
-                None => result.push(b'\\'),
+                None => {
+                    // Trailing backslash is an error
+                    return Err("Trailing backslash in bytes literal".into());
+                }
             }
         } else if c.is_ascii() {
             result.push(c as u8);
@@ -2167,7 +2167,26 @@ fn parse_int_literal(text: &str) -> Result<i64, Box<dyn std::error::Error>> {
         rest.parse::<u64>()?
     };
 
-    Ok(sign * (abs_value as i64))
+    // Handle potential overflow, especially for i64::MIN
+    // i64::MIN = -9223372036854775808, but i64::MAX = 9223372036854775807
+    // So |i64::MIN| = i64::MAX + 1
+    if sign == 1 {
+        if abs_value > i64::MAX as u64 {
+            return Err("Integer literal out of range for i64".into());
+        }
+        Ok(abs_value as i64)
+    } else {
+        // For negative numbers, we can represent up to i64::MAX + 1
+        if abs_value > (i64::MAX as u64) + 1 {
+            return Err("Integer literal out of range for i64".into());
+        }
+        if abs_value == (i64::MAX as u64) + 1 {
+            // Special case: i64::MIN
+            Ok(i64::MIN)
+        } else {
+            Ok(-(abs_value as i64))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2542,5 +2561,78 @@ fn test() {
                 panic!("Expected string expression");
             }
         });
+    }
+
+    #[test]
+    fn test_process_bytes_escape_sequences() {
+        // Valid escapes
+        assert_eq!(
+            process_bytes_escape_sequences(r"hello").unwrap(),
+            b"hello".to_vec()
+        );
+        assert_eq!(
+            process_bytes_escape_sequences(r"line\nbreak").unwrap(),
+            b"line\nbreak".to_vec()
+        );
+        assert_eq!(
+            process_bytes_escape_sequences(r"\t\r\n").unwrap(),
+            b"\t\r\n".to_vec()
+        );
+        assert_eq!(process_bytes_escape_sequences(r"\0").unwrap(), vec![0]);
+        assert_eq!(
+            process_bytes_escape_sequences(r#"\""#).unwrap(),
+            b"\"".to_vec()
+        );
+        assert_eq!(
+            process_bytes_escape_sequences(r"\\").unwrap(),
+            b"\\".to_vec()
+        );
+
+        // Hex escapes
+        assert_eq!(
+            process_bytes_escape_sequences(r"\x41\x42\x43").unwrap(),
+            b"ABC".to_vec()
+        );
+        assert_eq!(
+            process_bytes_escape_sequences(r"\x00\xff").unwrap(),
+            vec![0x00, 0xff]
+        );
+
+        // Unknown escape is an error (consistent with strings)
+        assert!(process_bytes_escape_sequences(r"\z").is_err());
+        assert!(process_bytes_escape_sequences(r"test\q").is_err());
+
+        // Trailing backslash is an error
+        assert!(process_bytes_escape_sequences(r"trailing\").is_err());
+
+        // Invalid hex escapes
+        assert!(process_bytes_escape_sequences(r"\x").is_err());
+        assert!(process_bytes_escape_sequences(r"\x4").is_err());
+        assert!(process_bytes_escape_sequences(r"\xGG").is_err());
+    }
+
+    #[test]
+    fn test_parse_int_literal() {
+        // Basic positive and negative numbers
+        assert_eq!(parse_int_literal("+42").unwrap(), 42);
+        assert_eq!(parse_int_literal("-42").unwrap(), -42);
+        assert_eq!(parse_int_literal("+0").unwrap(), 0);
+        assert_eq!(parse_int_literal("-0").unwrap(), 0);
+
+        // i64::MAX and i64::MIN
+        assert_eq!(parse_int_literal("+9223372036854775807").unwrap(), i64::MAX);
+        assert_eq!(parse_int_literal("-9223372036854775808").unwrap(), i64::MIN);
+
+        // Overflow cases
+        assert!(parse_int_literal("+9223372036854775808").is_err()); // i64::MAX + 1
+        assert!(parse_int_literal("-9223372036854775809").is_err()); // i64::MIN - 1
+
+        // Binary, octal, hex
+        assert_eq!(parse_int_literal("+0b1010").unwrap(), 10);
+        assert_eq!(parse_int_literal("-0xff").unwrap(), -255);
+        assert_eq!(parse_int_literal("+0o777").unwrap(), 511);
+
+        // Missing sign is an error
+        assert!(parse_int_literal("42").is_err());
     }
 }
