@@ -13,18 +13,23 @@ dialect! {
     mod src {
         /// `src.call` operation: unresolved function call.
         /// The callee name will be resolved to a concrete function reference.
-        #[attr(name)]
+        #[attr(name: SymbolRef)]
         fn call(#[rest] args) -> result;
 
-        /// `src.var` operation: unresolved variable reference.
-        /// The name will be resolved to a concrete value (parameter, local, etc.).
-        #[attr(name)]
+        /// `src.var` operation: unresolved variable reference (single name).
+        /// May resolve to local binding or module-level definition.
+        #[attr(name: Symbol)]
         fn var() -> result;
+
+        /// `src.path` operation: explicitly qualified path reference.
+        /// Always refers to a module-level or type-level definition, never local.
+        #[attr(path: SymbolRef)]
+        fn path() -> result;
 
         /// `src.binop` operation: unresolved binary operation.
         /// Used for operators that need type-directed resolution (e.g., `<>` concat).
         /// The `op` attribute holds the operator name.
-        #[attr(op)]
+        #[attr(op: Symbol)]
         fn binop(lhs, rhs) -> result;
 
         /// `src.block` operation: block expression.
@@ -42,7 +47,7 @@ dialect! {
         /// Represents an anonymous function before capture analysis.
         /// The `type` attribute holds the function type (params -> result).
         /// The body region contains the lambda body, ending with `src.yield`.
-        #[attr(r#type)]
+        #[attr(r#type: Type)]
         fn lambda() -> result {
             #[region(body)] {}
         };

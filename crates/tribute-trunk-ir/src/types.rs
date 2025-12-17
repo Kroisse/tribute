@@ -86,6 +86,7 @@ impl<'db> Type<'db> {
 /// IR attribute values.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum Attribute<'db> {
+    /// Unit/nil value (placeholder for absent or void attributes).
     Unit,
     Bool(bool),
     /// Integer constant stored as raw bits (signless).
@@ -95,6 +96,8 @@ pub enum Attribute<'db> {
     String(String),
     Bytes(Vec<u8>),
     Type(Type<'db>),
+    /// Single interned symbol (e.g., "foo").
+    Symbol(Symbol<'db>),
     /// Symbol reference path (e.g., ["module", "func_name"])
     SymbolRef(IdVec<Symbol<'db>>),
     /// List of attributes (for arrays of values like switch cases).

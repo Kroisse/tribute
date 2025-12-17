@@ -22,7 +22,7 @@ dialect! {
         // === Operations ===
 
         /// `core.module` operation: top-level module container.
-        #[attr(sym_name)]
+        #[attr(sym_name: Symbol)]
         fn module() {
             #[region(body)] {}
         };
@@ -70,7 +70,7 @@ impl<'db> Module<'db> {
         name: &str,
         body: Region<'db>,
     ) -> Self {
-        module(db, location, Attribute::String(name.to_string()), body)
+        module(db, location, Symbol::new(db, name), body)
     }
 
     /// Build a module with a closure that constructs the top-level block.
@@ -87,11 +87,8 @@ impl<'db> Module<'db> {
     }
 
     /// Get the module name.
-    pub fn name(&self, db: &'db dyn salsa::Database) -> &str {
-        let Attribute::String(name) = self.sym_name(db) else {
-            panic!("core.module missing sym_name attribute")
-        };
-        name
+    pub fn name(&self, db: &'db dyn salsa::Database) -> &'db str {
+        self.sym_name(db).text(db)
     }
 }
 

@@ -1,29 +1,29 @@
 //! Function dialect operations.
 use super::core;
-use crate::{Attribute, DialectType, IdVec, Region, Type, dialect, idvec, ir::BlockBuilder};
+use crate::{DialectType, IdVec, Region, Symbol, Type, dialect, idvec, ir::BlockBuilder};
 use tribute_core::Location;
 
 dialect! {
     mod func {
         /// `func.func` operation: defines a function.
-        #[attr(sym_name, r#type)]
+        #[attr(sym_name: Symbol, r#type: Type)]
         fn func() {
             #[region(body)] {}
         };
 
         /// `func.call` operation: calls a function.
-        #[attr(callee)]
+        #[attr(callee: SymbolRef)]
         fn call(#[rest] args) -> result;
 
         /// `func.tail_call` operation: tail call (does not return).
-        #[attr(callee)]
+        #[attr(callee: SymbolRef)]
         fn tail_call(#[rest] args);
 
         /// `func.return` operation: returns values from a function.
         fn r#return(#[rest] operands);
 
         /// `func.closure_new` operation: creates a closure with captured values.
-        #[attr(func_ref)]
+        #[attr(func_ref: SymbolRef)]
         fn closure_new(#[rest] captures) -> result;
 
         /// `func.closure_call` operation: calls a closure.
@@ -50,26 +50,20 @@ impl<'db> Func<'db> {
         func(
             db,
             location,
-            Attribute::String(name.to_string()),
-            Attribute::Type(core::Func::new(db, params, result).as_type()),
+            Symbol::new(db, name),
+            core::Func::new(db, params, result).as_type(),
             region,
         )
     }
 
     /// Get the function name.
-    pub fn name(&self, db: &'db dyn salsa::Database) -> &str {
-        let Attribute::String(name) = self.sym_name(db) else {
-            panic!("func.func missing sym_name attribute")
-        };
-        name
+    pub fn name(&self, db: &'db dyn salsa::Database) -> &'db str {
+        self.sym_name(db).text(db)
     }
 
     /// Get the function type.
-    pub fn ty(&self, db: &'db dyn salsa::Database) -> &'db Type<'db> {
-        let Attribute::Type(t) = self.r#type(db) else {
-            panic!("func.func missing type attribute")
-        };
-        t
+    pub fn ty(&self, db: &'db dyn salsa::Database) -> Type<'db> {
+        self.r#type(db)
     }
 }
 

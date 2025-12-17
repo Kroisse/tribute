@@ -11,13 +11,13 @@ dialect! {
         ///
         /// Invokes an operation from an ability, capturing the current continuation
         /// until a handler is found.
-        #[attr(ability_ref, op)]
+        #[attr(ability_ref: SymbolRef, op: Symbol)]
         fn perform(#[rest] args) -> result;
 
         /// `ability.handle` operation: installs a handler and executes the body.
         ///
         /// The handler catches ability operations performed within the body region.
-        #[attr(clauses)]
+        #[attr(clauses: any)]
         fn handle() -> result {
             #[region(body)] {}
         };

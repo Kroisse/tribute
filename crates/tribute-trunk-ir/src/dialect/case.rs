@@ -33,7 +33,7 @@ dialect! {
         /// The `pattern` attribute describes what to match.
         /// The body region contains the arm's expression (ends with `case.yield`).
         /// Guards are represented as nested `case.guard` operations within the body.
-        #[attr(pattern)]
+        #[attr(pattern: any)]
         fn arm() {
             #[region(body)] {}
         };
@@ -54,36 +54,36 @@ dialect! {
         /// `case.bind` operation: extracts a bound variable from pattern matching.
         /// The `name` attribute is the binding name.
         /// This is placed at the start of arm body to introduce bindings.
-        #[attr(name)]
+        #[attr(name: Symbol)]
         fn bind() -> result;
 
         // === Variant/Record Destructuring ===
 
         /// `case.destruct_variant` operation: extracts variant payload.
         /// Used when matching `Some(x)` to extract `x`.
-        #[attr(tag)]
+        #[attr(tag: Symbol)]
         fn destruct_variant(scrutinee) -> result;
 
         /// `case.destruct_field` operation: extracts a field from record/struct.
         /// Used when matching `User { name, age }` to extract fields.
-        #[attr(field)]
+        #[attr(field: Symbol)]
         fn destruct_field(scrutinee) -> result;
 
         /// `case.destruct_tuple` operation: extracts element from tuple.
         /// The `index` attribute specifies which element.
-        #[attr(index)]
+        #[attr(index: any)]
         fn destruct_tuple(scrutinee) -> result;
 
         // === List Destructuring ===
 
         /// `case.list_head` operation: extracts the head of a list.
         /// Used for `[head, ..tail]` patterns.
-        #[attr(elem_type)]
+        #[attr(elem_type: Type)]
         fn list_head(list) -> result;
 
         /// `case.list_tail` operation: extracts the tail of a list.
         /// Used for `[head, ..tail]` patterns.
-        #[attr(elem_type)]
+        #[attr(elem_type: Type)]
         fn list_tail(list) -> result;
 
         /// `case.list_len` operation: gets the length of a list.
@@ -102,7 +102,7 @@ dialect! {
         /// `case.handler_suspend` operation: checks if Request is Suspend for a specific effect op.
         /// If matched, extracts the operation arguments and continuation.
         /// The `effect_op` attribute identifies which ability operation to match.
-        #[attr(effect_op)]
+        #[attr(effect_op: Symbol)]
         fn handler_suspend(request) -> (args, continuation) {
             #[region(then)] {}
             #[region(r#else)] {}

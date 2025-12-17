@@ -8,13 +8,13 @@ use crate::dialect;
 dialect! {
     mod cont {
         /// `cont.push_prompt` operation: installs a prompt and executes body.
-        #[attr(tag)]
+        #[attr(tag: any)]
         fn push_prompt() -> result {
             #[region(body)] {}
         };
 
         /// `cont.shift` operation: captures continuation and jumps to handler.
-        #[attr(tag)]
+        #[attr(tag: any)]
         fn shift() {
             #[region(handler)] {}
         };

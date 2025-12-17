@@ -9,7 +9,7 @@ dialect! {
         // === Constants ===
 
         /// `arith.const` operation: produces a constant value.
-        #[attr(value)]
+        #[attr(value: any)]
         fn r#const() -> result;
 
         // === Arithmetic ===

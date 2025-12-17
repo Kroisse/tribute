@@ -9,6 +9,8 @@ use crate::Operation;
 /// - `bool` → `Attribute::Bool`
 /// - `Type` → `Attribute::Type`
 /// - `String` → `Attribute::String`
+/// - `Symbol` → `Attribute::Symbol`
+/// - `SymbolRef` → `Attribute::SymbolRef`
 #[macro_export]
 macro_rules! attr_type_helper {
     // Rust type for parameter
@@ -16,12 +18,16 @@ macro_rules! attr_type_helper {
     (@rust_type bool) => { bool };
     (@rust_type Type) => { $crate::Type<'db> };
     (@rust_type String) => { std::string::String };
+    (@rust_type Symbol) => { $crate::Symbol<'db> };
+    (@rust_type SymbolRef) => { $crate::IdVec<$crate::Symbol<'db>> };
 
     // Convert Rust value to Attribute
     (@to_attr any, $val:expr) => { $val };
     (@to_attr bool, $val:expr) => { $crate::Attribute::Bool($val) };
     (@to_attr Type, $val:expr) => { $crate::Attribute::Type($val) };
     (@to_attr String, $val:expr) => { $crate::Attribute::String($val) };
+    (@to_attr Symbol, $val:expr) => { $crate::Attribute::Symbol($val) };
+    (@to_attr SymbolRef, $val:expr) => { $crate::Attribute::SymbolRef($val) };
 
     // Convert Attribute to Rust value
     (@from_attr any, $attr:expr) => { $attr.clone() };
@@ -41,6 +47,18 @@ macro_rules! attr_type_helper {
         match $attr {
             $crate::Attribute::String(v) => v.clone(),
             _ => panic!("expected String attribute"),
+        }
+    };
+    (@from_attr Symbol, $attr:expr) => {
+        match $attr {
+            $crate::Attribute::Symbol(v) => *v,
+            _ => panic!("expected Symbol attribute"),
+        }
+    };
+    (@from_attr SymbolRef, $attr:expr) => {
+        match $attr {
+            $crate::Attribute::SymbolRef(v) => v.clone(),
+            _ => panic!("expected SymbolRef attribute"),
         }
     };
 }
@@ -159,10 +177,10 @@ macro_rules! dialect {
 
     // Operation with optional doc and optional typed attrs.
     // Note: doc comments must come before #[attr(...)] if both are present.
-    // Attributes can be optional: `#[attr(name: Type?)]` (? after type)
+    // Supports optional attributes: `#[attr(name?: Type)]`
     (@parse $dialect:ident
         [$(#[doc = $doc:literal])*
-         $(#[attr($($attr:ident $(: $attr_ty:ident $(?)?)?),* $(,)?)])?
+         $(#[attr($($attr_tokens:tt)*)])?
          fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
          $($rest:tt)*]
     ) => {
@@ -170,7 +188,7 @@ macro_rules! dialect {
             doc: [$($doc),*],
             dialect: $dialect,
             op: $op,
-            attrs: [$($($attr $(: $attr_ty $(?)?)?),*)?],
+            attr_tokens: [$($($attr_tokens)*)?],
             operands: ($($operands)*),
             result: [$($result)?],
             regions: [$($($region_body)*)?]
@@ -205,25 +223,190 @@ macro_rules! dialect {
 /// - Accessor methods based on the operation signature
 #[macro_export]
 macro_rules! define_op {
-    // Entry point - parse attributes into typed format
-    // Supports optional attributes: `name: Type?` returns Option<T>
+    // Entry point - parse attribute tokens into structured format
+    // Supports: `name`, `name: Type`, `name?: Type` (optional)
     (
         doc: [$($doc:literal),*],
         dialect: $dialect:ident,
         op: $op:ident,
-        attrs: [$($attr:ident $(: $attr_ty:ident $(?)?)?),*],
+        attr_tokens: [$($attr_tokens:tt)*],
         operands: ($($operand_tokens:tt)*),
         result: [$($result:tt)?],
         regions: [$($region_tokens:tt)*]
     ) => {
-        $crate::define_op!(@parse_operands
+        $crate::define_op!(@munch_attrs
             doc: [$($doc),*],
             dialect: $dialect,
             op: $op,
-            attrs: [$($attr $(: $attr_ty $(?)?)?),*],
+            attrs: [],
+            tokens: [$($attr_tokens)*],
             operand_tokens: [$($operand_tokens)*],
             result: [$($result)?],
             region_tokens: [$($region_tokens)*]
+        );
+    };
+
+    // ========================================================================
+    // @munch_attrs - Parse attribute tokens one by one
+    // ========================================================================
+
+    // Done parsing attrs
+    (@munch_attrs
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: [$($attrs:tt)*],
+        tokens: [],
+        operand_tokens: $operand_tokens:tt,
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
+    ) => {
+        $crate::define_op!(@parse_operands
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attrs)*],
+            operand_tokens: $operand_tokens,
+            result: $result,
+            region_tokens: $region_tokens
+        );
+    };
+
+    // Optional typed attr: `name?: Type, ...`
+    (@munch_attrs
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: [$($attrs:tt)*],
+        tokens: [$attr:ident ?: $attr_ty:ident, $($rest:tt)*],
+        operand_tokens: $operand_tokens:tt,
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
+    ) => {
+        $crate::define_op!(@munch_attrs
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attrs)* { $attr : ? $attr_ty }],
+            tokens: [$($rest)*],
+            operand_tokens: $operand_tokens,
+            result: $result,
+            region_tokens: $region_tokens
+        );
+    };
+
+    // Optional typed attr (last): `name?: Type`
+    (@munch_attrs
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: [$($attrs:tt)*],
+        tokens: [$attr:ident ?: $attr_ty:ident $(,)?],
+        operand_tokens: $operand_tokens:tt,
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
+    ) => {
+        $crate::define_op!(@munch_attrs
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attrs)* { $attr : ? $attr_ty }],
+            tokens: [],
+            operand_tokens: $operand_tokens,
+            result: $result,
+            region_tokens: $region_tokens
+        );
+    };
+
+    // Required typed attr: `name: Type, ...`
+    (@munch_attrs
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: [$($attrs:tt)*],
+        tokens: [$attr:ident : $attr_ty:ident, $($rest:tt)*],
+        operand_tokens: $operand_tokens:tt,
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
+    ) => {
+        $crate::define_op!(@munch_attrs
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attrs)* { $attr : $attr_ty }],
+            tokens: [$($rest)*],
+            operand_tokens: $operand_tokens,
+            result: $result,
+            region_tokens: $region_tokens
+        );
+    };
+
+    // Required typed attr (last): `name: Type`
+    (@munch_attrs
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: [$($attrs:tt)*],
+        tokens: [$attr:ident : $attr_ty:ident $(,)?],
+        operand_tokens: $operand_tokens:tt,
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
+    ) => {
+        $crate::define_op!(@munch_attrs
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attrs)* { $attr : $attr_ty }],
+            tokens: [],
+            operand_tokens: $operand_tokens,
+            result: $result,
+            region_tokens: $region_tokens
+        );
+    };
+
+    // Untyped attr: `name, ...`
+    (@munch_attrs
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: [$($attrs:tt)*],
+        tokens: [$attr:ident, $($rest:tt)*],
+        operand_tokens: $operand_tokens:tt,
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
+    ) => {
+        $crate::define_op!(@munch_attrs
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attrs)* { $attr }],
+            tokens: [$($rest)*],
+            operand_tokens: $operand_tokens,
+            result: $result,
+            region_tokens: $region_tokens
+        );
+    };
+
+    // Untyped attr (last): `name`
+    (@munch_attrs
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: [$($attrs:tt)*],
+        tokens: [$attr:ident $(,)?],
+        operand_tokens: $operand_tokens:tt,
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
+    ) => {
+        $crate::define_op!(@munch_attrs
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attrs)* { $attr }],
+            tokens: [],
+            operand_tokens: $operand_tokens,
+            result: $result,
+            region_tokens: $region_tokens
         );
     };
 
@@ -482,13 +665,12 @@ macro_rules! define_op {
     // @impl - Generate the actual code
     // ========================================================================
 
-    // @impl with typed attributes - need to process each attr individually
-    // Optional attributes use `name: Type?` syntax
+    // @impl with structured attributes: { name }, { name : Type }, { name : ? Type }
     (@impl
         doc: [$($doc:literal),*],
         dialect: $dialect:ident,
         op: $op:ident,
-        attrs: [$($attr:ident $(: $attr_ty:ident $(?)?)?),*],
+        attrs: [$($attr_block:tt)*],
         operands: [$($fixed:ident),*; $($var:ident)?],
         results: [$($result:ident),*],
         regions: [$($region:ident),*]
@@ -515,9 +697,7 @@ macro_rules! define_op {
                 $crate::define_op!(@gen_operand_accessors { 0 } $($fixed)* $(#[rest] $var)?);
 
                 // Attribute accessors
-                $(
-                    $crate::define_op!(@gen_attr_accessor $attr $(: $attr_ty $(?)?)?);
-                )*
+                $crate::define_op!(@gen_attr_accessors $($attr_block)*);
 
                 // Result accessors
                 $crate::define_op!(@gen_result_accessors { 0 } $($result)*);
@@ -546,10 +726,8 @@ macro_rules! define_op {
                             actual: op.full_name(db),
                         });
                     }
-                    // Attribute validation - only for required attributes (those without ?)
-                    $(
-                        $crate::define_op!(@validate_attr op, db, $attr $(: $attr_ty $(?)?)?);
-                    )*
+                    // Attribute validation
+                    $crate::define_op!(@validate_attrs op, db, $($attr_block)*);
                     // Result validation
                     $crate::define_op!(@maybe_result_validation [$($result),*]; op, db);
                     // Region validation
@@ -563,12 +741,12 @@ macro_rules! define_op {
             }
         }
 
-        // Generate constructor - need separate macro invocation to handle typed attrs
+        // Generate constructor
         $crate::define_op!(@gen_constructor
             doc: [$($doc),*],
             dialect: $dialect,
             op: $op,
-            attrs: [$($attr $(: $attr_ty $(?)?)?),*],
+            attrs: [$($attr_block)*],
             fixed: [$($fixed),*],
             var: [$($var)?],
             results: [$($result),*],
@@ -576,13 +754,135 @@ macro_rules! define_op {
         );
     };
 
-    // Generate constructor with proper parameter handling
-    // Supports optional attributes: `name: Type?` takes Option<T>
+    // Generate constructor - dispatch to munch attrs for proper expansion
     (@gen_constructor
         doc: [$($doc:literal),*],
         dialect: $dialect:ident,
         op: $op:ident,
-        attrs: [$($attr:ident $(: $attr_ty:ident $(?)?)?),*],
+        attrs: [$($attr_block:tt)*],
+        fixed: [$($fixed:ident),*],
+        var: [$($var:ident)?],
+        results: [$($result:ident),*],
+        regions: [$($region:ident),*]
+    ) => {
+        $crate::define_op!(@gen_constructor_munch
+            doc: [$($doc),*],
+            dialect: $dialect,
+            op: $op,
+            attr_params: [],
+            attr_blocks: [$($attr_block)*],
+            fixed: [$($fixed),*],
+            var: [$($var)?],
+            results: [$($result),*],
+            regions: [$($region),*]
+        );
+    };
+
+    // Munch through attr blocks to collect parameter list
+    (@gen_constructor_munch
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attr_params: [$($param:tt)*],
+        attr_blocks: [],
+        fixed: $fixed:tt,
+        var: $var:tt,
+        results: $results:tt,
+        regions: $regions:tt
+    ) => {
+        $crate::define_op!(@gen_constructor_final
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attr_params: [$($param)*],
+            fixed: $fixed,
+            var: $var,
+            results: $results,
+            regions: $regions
+        );
+    };
+
+    // Untyped attr - use [untyped] marker
+    (@gen_constructor_munch
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attr_params: [$($param:tt)*],
+        attr_blocks: [{ $attr:ident } $($rest:tt)*],
+        fixed: $fixed:tt,
+        var: $var:tt,
+        results: $results:tt,
+        regions: $regions:tt
+    ) => {
+        $crate::define_op!(@gen_constructor_munch
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attr_params: [$($param)* [untyped $attr]],
+            attr_blocks: [$($rest)*],
+            fixed: $fixed,
+            var: $var,
+            results: $results,
+            regions: $regions
+        );
+    };
+
+    // Required typed attr - use [required] marker
+    (@gen_constructor_munch
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attr_params: [$($param:tt)*],
+        attr_blocks: [{ $attr:ident : $attr_ty:ident } $($rest:tt)*],
+        fixed: $fixed:tt,
+        var: $var:tt,
+        results: $results:tt,
+        regions: $regions:tt
+    ) => {
+        $crate::define_op!(@gen_constructor_munch
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attr_params: [$($param)* [required $attr $attr_ty]],
+            attr_blocks: [$($rest)*],
+            fixed: $fixed,
+            var: $var,
+            results: $results,
+            regions: $regions
+        );
+    };
+
+    // Optional typed attr - use [optional] marker
+    (@gen_constructor_munch
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attr_params: [$($param:tt)*],
+        attr_blocks: [{ $attr:ident : ? $attr_ty:ident } $($rest:tt)*],
+        fixed: $fixed:tt,
+        var: $var:tt,
+        results: $results:tt,
+        regions: $regions:tt
+    ) => {
+        $crate::define_op!(@gen_constructor_munch
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attr_params: [$($param)* [optional $attr $attr_ty]],
+            attr_blocks: [$($rest)*],
+            fixed: $fixed,
+            var: $var,
+            results: $results,
+            regions: $regions
+        );
+    };
+
+    // Final constructor generation with collected params
+    (@gen_constructor_final
+        doc: [$($doc:literal),*],
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attr_params: [$([$kind:ident $attr:ident $($attr_ty:ident)?])*],
         fixed: [$($fixed:ident),*],
         var: [$($var:ident)?],
         results: [$($result:ident),*],
@@ -597,7 +897,7 @@ macro_rules! define_op {
                 $($fixed: $crate::Value<'db>,)*
                 $($var: impl IntoIterator<Item = $crate::Value<'db>>,)?
                 $($result: $crate::Type<'db>,)*
-                $($attr: $crate::define_op!(@attr_rust_type $($attr_ty $(?)?)?),)*
+                $($attr: $crate::define_op!(@attr_param_type $kind $($attr_ty)?),)*
                 $($region: $crate::Region<'db>,)*
             ) -> [<$op:camel>]<'db> {
                 let dialect = $crate::Symbol::new(db, stringify!($dialect));
@@ -610,9 +910,9 @@ macro_rules! define_op {
                     .operands(operands)
                     $(.result($result))*
                     $(.region($region))*;
-                // Add attributes (required and optional)
+                // Add attributes
                 $(
-                    $crate::define_op!(@add_attr builder, $attr, $($attr_ty $(?)?)?);
+                    $crate::define_op!(@add_attr_final builder, $attr, $kind $($attr_ty)?);
                 )*
                 let op = builder.build();
                 [<$op:camel>]::wrap_unchecked(op)
@@ -620,18 +920,39 @@ macro_rules! define_op {
         }
     };
 
-    // Add required attribute to builder
-    (@add_attr $builder:ident, $attr:ident,) => {
+    // Attribute parameter type
+    (@attr_param_type untyped) => { $crate::Attribute<'db> };
+    (@attr_param_type required $attr_ty:ident) => { $crate::attr_type_helper!(@rust_type $attr_ty) };
+    (@attr_param_type optional $attr_ty:ident) => { Option<$crate::attr_type_helper!(@rust_type $attr_ty)> };
+
+    // Add attribute to builder (final stage)
+    (@add_attr_final $builder:ident, $attr:ident, untyped) => {
         $builder = $builder.attr(stringify!($attr), $attr);
     };
-    (@add_attr $builder:ident, $attr:ident, $attr_ty:ident) => {
+    (@add_attr_final $builder:ident, $attr:ident, required $attr_ty:ident) => {
         $builder = $builder.attr(stringify!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, $attr));
     };
-    // Add optional attribute to builder (only if Some)
-    (@add_attr $builder:ident, $attr:ident, $attr_ty:ident ?) => {
+    (@add_attr_final $builder:ident, $attr:ident, optional $attr_ty:ident) => {
         if let Some(val) = $attr {
             $builder = $builder.attr(stringify!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, val));
         }
+    };
+
+    // Add attributes to builder from attr blocks
+    (@add_attrs $builder:ident,) => {};
+    (@add_attrs $builder:ident, { $attr:ident } $($rest:tt)*) => {
+        $builder = $builder.attr(stringify!($attr), $attr);
+        $crate::define_op!(@add_attrs $builder, $($rest)*);
+    };
+    (@add_attrs $builder:ident, { $attr:ident : $attr_ty:ident } $($rest:tt)*) => {
+        $builder = $builder.attr(stringify!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, $attr));
+        $crate::define_op!(@add_attrs $builder, $($rest)*);
+    };
+    (@add_attrs $builder:ident, { $attr:ident : ? $attr_ty:ident } $($rest:tt)*) => {
+        if let Some(val) = $attr {
+            $builder = $builder.attr(stringify!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, val));
+        }
+        $crate::define_op!(@add_attrs $builder, $($rest)*);
     };
 
     // ========================================================================
@@ -717,69 +1038,62 @@ macro_rules! define_op {
     (@count $first:tt $($rest:tt)*) => { 1 + $crate::define_op!(@count $($rest)*) };
 
     // ========================================================================
-    // Typed attribute helpers
+    // Typed attribute helpers (block-based)
     // ========================================================================
 
-    // Attribute accessor - untyped (returns &Attribute)
-    (@gen_attr_accessor $attr:ident) => {
+    // Generate attribute accessors from blocks
+    (@gen_attr_accessors) => {};
+    (@gen_attr_accessors { $attr:ident } $($rest:tt)*) => {
         #[allow(dead_code, clippy::should_implement_trait)]
         pub fn $attr(&self, db: &'db dyn salsa::Database) -> &'db $crate::Attribute<'db> {
             let key = $crate::Symbol::new(db, stringify!($attr));
             self.op.attributes(db).get(&key).expect(concat!("missing attribute: ", stringify!($attr)))
         }
+        $crate::define_op!(@gen_attr_accessors $($rest)*);
     };
-    // Attribute accessor - typed, required
-    (@gen_attr_accessor $attr:ident : $attr_ty:ident) => {
+    (@gen_attr_accessors { $attr:ident : $attr_ty:ident } $($rest:tt)*) => {
         #[allow(dead_code, clippy::should_implement_trait)]
-        pub fn $attr(&self, db: &'db dyn salsa::Database) -> $crate::define_op!(@rust_type $attr_ty) {
+        pub fn $attr(&self, db: &'db dyn salsa::Database) -> $crate::attr_type_helper!(@rust_type $attr_ty) {
             let attr = self.op.attributes(db)
                 .get(&$crate::Symbol::new(db, stringify!($attr)))
                 .expect(concat!("missing attribute: ", stringify!($attr)));
-            $crate::define_op!(@from_attr $attr_ty, attr)
+            $crate::attr_type_helper!(@from_attr $attr_ty, attr)
         }
+        $crate::define_op!(@gen_attr_accessors $($rest)*);
     };
-    // Attribute accessor - typed, optional (returns Option<T>)
-    (@gen_attr_accessor $attr:ident : $attr_ty:ident ?) => {
+    (@gen_attr_accessors { $attr:ident : ? $attr_ty:ident } $($rest:tt)*) => {
         #[allow(dead_code, clippy::should_implement_trait)]
-        pub fn $attr(&self, db: &'db dyn salsa::Database) -> Option<$crate::define_op!(@rust_type $attr_ty)> {
+        pub fn $attr(&self, db: &'db dyn salsa::Database) -> Option<$crate::attr_type_helper!(@rust_type $attr_ty)> {
             self.op.attributes(db)
                 .get(&$crate::Symbol::new(db, stringify!($attr)))
-                .map(|attr| $crate::define_op!(@from_attr $attr_ty, attr))
+                .map(|attr| $crate::attr_type_helper!(@from_attr $attr_ty, attr))
         }
+        $crate::define_op!(@gen_attr_accessors $($rest)*);
     };
 
-    // Attribute validation - required (no ?)
-    (@validate_attr $op:ident, $db:ident, $attr:ident) => {
+    // Validate attributes from blocks
+    (@validate_attrs $op:ident, $db:ident,) => {};
+    (@validate_attrs $op:ident, $db:ident, { $attr:ident } $($rest:tt)*) => {
         {
             let key = $crate::Symbol::new($db, stringify!($attr));
             if !$op.attributes($db).contains_key(&key) {
                 return Err($crate::ConversionError::MissingAttribute(stringify!($attr)));
             }
         }
+        $crate::define_op!(@validate_attrs $op, $db, $($rest)*);
     };
-    (@validate_attr $op:ident, $db:ident, $attr:ident : $attr_ty:ident) => {
+    (@validate_attrs $op:ident, $db:ident, { $attr:ident : $attr_ty:ident } $($rest:tt)*) => {
         {
             let key = $crate::Symbol::new($db, stringify!($attr));
             if !$op.attributes($db).contains_key(&key) {
                 return Err($crate::ConversionError::MissingAttribute(stringify!($attr)));
             }
         }
+        $crate::define_op!(@validate_attrs $op, $db, $($rest)*);
     };
-    // Attribute validation - optional (with ?) - skip validation
-    (@validate_attr $op:ident, $db:ident, $attr:ident : $attr_ty:ident ?) => {
+    (@validate_attrs $op:ident, $db:ident, { $attr:ident : ? $attr_ty:ident } $($rest:tt)*) => {
         // Optional attribute - no validation needed
-    };
-
-    // Rust type for constructor parameter - untyped defaults to Attribute
-    (@attr_rust_type) => { $crate::Attribute<'db> };
-    (@attr_rust_type $attr_ty:ident) => { $crate::attr_type_helper!(@rust_type $attr_ty) };
-    (@attr_rust_type $attr_ty:ident ?) => { Option<$crate::attr_type_helper!(@rust_type $attr_ty)> };
-
-    // Convert to Attribute for builder - untyped is identity
-    (@attr_to_attr , $val:expr) => { $val };
-    (@attr_to_attr $attr_ty:ident, $val:expr) => { $crate::attr_type_helper!(@to_attr $attr_ty, $val) };
-    (@attr_to_attr $attr_ty:ident ?, $val:expr) => {
-        $val.map(|v| $crate::attr_type_helper!(@to_attr $attr_ty, v))
+        $crate::define_op!(@validate_attrs $op, $db, $($rest)*);
     };
 
     // Delegate to attr_type_helper for type mappings

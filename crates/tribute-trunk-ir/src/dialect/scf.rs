@@ -34,7 +34,7 @@ dialect! {
         /// `scf.case` operation: a single case in a switch.
         /// The `value` attribute is the integer to match.
         /// The body region contains the case's code.
-        #[attr(value)]
+        #[attr(value: any)]
         fn r#case() {
             #[region(body)] {}
         };
