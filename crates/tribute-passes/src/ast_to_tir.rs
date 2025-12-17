@@ -13,7 +13,7 @@ use tribute_ast::{
 };
 use tribute_core::{Location, PathId, Span, Spanned};
 use tribute_trunk_ir::{
-    Attribute, BlockBuilder, IdVec, Region, Type, Value,
+    Attribute, BlockBuilder, DialectType, IdVec, Region, Type, Value,
     dialect::{adt, arith, case, core, func, list, src, ty},
     idvec,
 };
@@ -362,7 +362,7 @@ fn lower_expr<'db>(
             let op = block.op(arith::r#const(
                 db,
                 location,
-                core::I1::new(db).into(),
+                core::I1::new(db).as_type(),
                 (*b).into(),
             ));
             op.result(db)
@@ -428,7 +428,7 @@ fn lower_expr<'db>(
             let op = block.op(arith::r#const(
                 db,
                 location,
-                core::I32::new(db).into(),
+                core::I32::new(db).as_type(),
                 u64::from(u32::from(*c)).into(),
             ));
             op.result(db)
@@ -626,7 +626,7 @@ fn lower_binary_op<'db>(
 ) -> Value<'db> {
     // Result type is unknown until type inference
     let infer_ty = ctx.fresh_type_var(db);
-    let bool_ty = core::I1::new(db).into();
+    let bool_ty = core::I1::new(db).as_type();
 
     match operator {
         // Arithmetic operations → arith dialect
@@ -1778,7 +1778,7 @@ mod tests {
 
             // Verify first op is arith.const with i32 type
             let const_op = arith::Const::from_operation(db, ops[0]).unwrap();
-            assert_eq!(const_op.result_ty(db), core::I32::new(db).into());
+            assert_eq!(const_op.result_ty(db), core::I32::new(db).as_type());
 
             // Verify the value is 'a' (97)
             assert_eq!(const_op.value(db), &Attribute::IntBits(97));

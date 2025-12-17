@@ -4,6 +4,19 @@ use std::collections::BTreeMap;
 
 use crate::{IdVec, Symbol};
 
+/// Trait for dialect-specific type wrappers.
+///
+/// Similar to `DialectOp` for operations, this trait provides a common interface
+/// for type wrappers that wrap the generic `Type` with dialect-specific semantics.
+pub trait DialectType<'db>: Sized {
+    /// Get the underlying `Type`.
+    fn as_type(&self) -> Type<'db>;
+
+    /// Try to convert a `Type` to this dialect type wrapper.
+    /// Returns `None` if the type doesn't match this dialect type.
+    fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self>;
+}
+
 /// Attribute map type alias.
 pub type Attrs<'db> = BTreeMap<Symbol<'db>, Attribute<'db>>;
 

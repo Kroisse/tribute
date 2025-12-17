@@ -23,7 +23,7 @@ pub use tribute_core::Location;
 
 pub use ir::{Block, BlockBuilder, Operation, Region, Symbol, Value};
 pub use ops::{ConversionError, DialectOp};
-pub use types::*;
+pub use types::{Attribute, Attrs, DialectType, Type};
 
 /// Small vector for values tracked by Salsa framework.
 pub type IdVec<T> = smallvec::SmallVec<[T; 2]>;

@@ -11,7 +11,9 @@
 use std::collections::BTreeMap;
 use std::ops::Deref;
 
-use crate::{Attribute, IdVec, Region, Symbol, Type, dialect, idvec, ir::BlockBuilder};
+use crate::{
+    Attribute, DialectType, IdVec, Region, Symbol, Type, dialect, idvec, ir::BlockBuilder,
+};
 use tribute_core::Location;
 
 dialect! {
@@ -76,11 +78,6 @@ impl<'db, const BITS: u16> I<'db, BITS> {
     pub fn new(db: &'db dyn salsa::Database) -> Self {
         Self(i(db, BITS))
     }
-
-    /// Get the underlying `Type`.
-    pub fn as_type(self) -> Type<'db> {
-        self.0
-    }
 }
 
 impl<'db, const BITS: u16> Deref for I<'db, BITS> {
@@ -90,15 +87,12 @@ impl<'db, const BITS: u16> Deref for I<'db, BITS> {
     }
 }
 
-impl<'db, const BITS: u16> From<I<'db, BITS>> for Type<'db> {
-    fn from(value: I<'db, BITS>) -> Self {
-        value.0
+impl<'db, const BITS: u16> DialectType<'db> for I<'db, BITS> {
+    fn as_type(&self) -> Type<'db> {
+        self.0
     }
-}
 
-impl<'db, const BITS: u16> I<'db, BITS> {
-    /// Try to convert a `Type` to this integer type wrapper with validation.
-    pub fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
+    fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
         let expected_name = format!("i{BITS}");
         if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == expected_name {
             Some(Self(ty))
@@ -143,11 +137,6 @@ impl<'db, const BITS: u16> F<'db, BITS> {
     pub fn new(db: &'db dyn salsa::Database) -> Self {
         Self(f(db, BITS))
     }
-
-    /// Get the underlying `Type`.
-    pub fn as_type(self) -> Type<'db> {
-        self.0
-    }
 }
 
 impl<'db, const BITS: u16> Deref for F<'db, BITS> {
@@ -157,15 +146,12 @@ impl<'db, const BITS: u16> Deref for F<'db, BITS> {
     }
 }
 
-impl<'db, const BITS: u16> From<F<'db, BITS>> for Type<'db> {
-    fn from(value: F<'db, BITS>) -> Self {
-        value.0
+impl<'db, const BITS: u16> DialectType<'db> for F<'db, BITS> {
+    fn as_type(&self) -> Type<'db> {
+        self.0
     }
-}
 
-impl<'db, const BITS: u16> F<'db, BITS> {
-    /// Try to convert a `Type` to this floating-point type wrapper with validation.
-    pub fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
+    fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
         let expected_name = format!("f{BITS}");
         if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == expected_name {
             Some(Self(ty))
