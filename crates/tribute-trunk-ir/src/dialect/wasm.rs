@@ -15,9 +15,8 @@ dialect! {
         /// `wasm.loop` operation: loop construct.
         op r#loop[label]() -> result @body {};
 
-        /// `wasm.if` operation: conditional branch with then body.
-        /// Use `wasm.else` attribute for else branch encoding.
-        op r#if[else_region](cond) -> result @then_body {};
+        /// `wasm.if` operation: conditional branch with then/else bodies.
+        op r#if(cond) -> result @then {} @r#else {};
 
         /// `wasm.br` operation: unconditional branch to a label.
         op br[target]();
