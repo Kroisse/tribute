@@ -340,7 +340,7 @@ fn lower_expr<'db>(
 ) -> Value<'db> {
     let (expr, span) = spanned;
     let location = Location::new(path, *span);
-    let unit_ty = core::unit(db);
+    let unit_ty = core::nil(db);
     let infer_ty = ctx.fresh_type_var(db); // Type to be inferred
 
     match expr {
@@ -604,12 +604,7 @@ fn lower_statements<'db>(
 
     // Return the last expression value, or unit if empty/ends with let
     last_value.unwrap_or_else(|| {
-        let op = block.op(arith::r#const(
-            db,
-            location,
-            core::unit(db),
-            Attribute::Unit,
-        ));
+        let op = block.op(arith::r#const(db, location, core::nil(db), Attribute::Unit));
         op.result(db)
     })
 }
@@ -898,7 +893,7 @@ fn lower_match_expr<'db>(
         db,
         location,
         scrutinee,
-        core::unit(db),
+        core::nil(db),
         body_region,
     ));
     case_op.result(db)
@@ -1082,7 +1077,7 @@ fn lower_record_expr<'db>(
                     let var_op = block.op(src::var(
                         db,
                         location,
-                        core::unit(db),
+                        core::nil(db),
                         Attribute::String(name.clone()),
                     ));
                     field_values.push(var_op.result(db));
@@ -1105,7 +1100,7 @@ fn lower_record_expr<'db>(
         db,
         location,
         field_values,
-        core::unit(db),
+        core::nil(db),
         Attribute::String(type_name.to_string()),
     ));
     op.result(db)

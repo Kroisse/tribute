@@ -3,7 +3,8 @@
 //! This dialect provides fundamental types:
 //! - `core.i{bits}` - integer type (e.g., `core.i32`, `core.i64`)
 //! - `core.f{bits}` - floating-point type (e.g., `core.f32`, `core.f64`)
-//! - `core.unit` - unit type (void/empty)
+//! - `core.nil` - nil/unit type (empty tuple terminator)
+//! - `core.tuple` - tuple cons cell (head, tail)
 //! - `core.never` - never/bottom type (no values)
 //! - `core.string` - string type
 //! - `core.bytes` - byte sequence type
@@ -177,12 +178,12 @@ fn f(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     )
 }
 
-/// Create a unit type (`core.unit`).
-pub fn unit(db: &dyn salsa::Database) -> Type<'_> {
+/// Create a nil type (`core.nil`).
+pub fn nil(db: &dyn salsa::Database) -> Type<'_> {
     Type::new(
         db,
         Symbol::new(db, "core"),
-        Symbol::new(db, "unit"),
+        Symbol::new(db, "nil"),
         IdVec::new(),
         BTreeMap::new(),
     )
@@ -254,13 +255,18 @@ pub fn ref_<'db>(db: &'db dyn salsa::Database, pointee: Type<'db>, nullable: boo
     )
 }
 
-/// Create a tuple type (`core.tuple`).
-pub fn tuple<'db>(db: &'db dyn salsa::Database, elements: IdVec<Type<'db>>) -> Type<'db> {
+/// Create a tuple type (`core.tuple`) as a cons cell.
+///
+/// Layout: `params[0]` = head, `params[1]` = tail.
+/// Use `core::nil()` as the tail terminator for the last element.
+///
+/// Example: `(a, b, c)` → `tuple(a, tuple(b, tuple(c, nil)))`
+pub fn tuple<'db>(db: &'db dyn salsa::Database, head: Type<'db>, tail: Type<'db>) -> Type<'db> {
     Type::new(
         db,
         Symbol::new(db, "core"),
         Symbol::new(db, "tuple"),
-        elements,
+        idvec![head, tail],
         BTreeMap::new(),
     )
 }
