@@ -24,11 +24,12 @@ TrunkIR은 Tribute 소스 코드에서 Wasm/네이티브 바이너리로 내려�
 │ High-level (언어 의미론)                                 │
 │   src              미해소 호출, 추론 전 타입              │
 │   ability          handle, perform, resume, abort       │
+│   closure          new, func, env                       │
 │   adt              struct, variant, array, ref          │
 ├─────────────────────────────────────────────────────────┤
 │ Mid-level (lowered, 타겟 독립)                          │
 │   cont             push_prompt, shift, resume, drop     │
-│   func             func, call, tail_call, closure       │
+│   func             func, call, call_indirect, constant  │
 │   scf              case, yield, (loop, continue, break) │
 │   arith            산술, 비교, 비트 연산                  │
 │   mem              data, load, store                    │
@@ -144,6 +145,33 @@ ability.abort : (continuation: Continuation<T>) -> !
     Continuation 버림 (linear type 만족)
 ```
 
+### closure Dialect
+
+클로저 생성 및 분해 연산. 클로저는 함수 참조와 캡처된 환경의 조합이다.
+타겟별로 다르게 lowering된다 (wasm: funcref + struct, native: 함수 포인터 + 힙).
+
+```
+closure.new : @func_ref(captures...) -> Closure<T>
+    클로저 생성 (캡처된 변수들 명시)
+
+closure.func : (closure: Closure<T>) -> FuncRef
+    클로저에서 funcref 추출
+
+closure.env : (closure: Closure<T>) -> Env
+    클로저에서 environment 추출
+```
+
+#### 클로저 호출 패턴
+
+클로저는 분해 후 `func.call_indirect`로 호출:
+
+```
+%closure = closure.new @lambda_0, [%captured]
+%fn = closure.func %closure
+%env = closure.env %closure
+func.call_indirect %fn(%env, %args...)  // env가 첫 번째 인자
+```
+
 ### adt Dialect
 
 Algebraic Data Type 연산. 타겟 독립적.
@@ -237,33 +265,43 @@ cont.drop : (continuation: Continuation<T>) -> ()
 
 ### func Dialect
 
-함수 정의 및 호출.
+함수 정의 및 호출. MLIR 스타일을 따름.
 
 ```
-func.func : (name: String, params: [(String, Type)], result: Type,
-               effects: EffectRow, body: Region) -> FuncDef
+func.func : (name: Symbol, type: Type, body: Region) -> FuncDef
     함수 정의
 
-func.call : (callee: FuncRef, args...) -> T
-    일반 함수 호출
+func.call : @callee(args...) -> T
+    Direct call (callee는 symbol attribute)
 
-func.tail_call : (callee: FuncRef, args...) -> !
+func.call_indirect : (callee: Value, args...) -> T
+    Indirect call (callee는 SSA value, plain funcref만)
+
+func.constant : @func_ref -> FuncValue
+    함수 심볼에서 일급 함수 값 생성 (indirect call용)
+
+func.tail_call : @callee(args...) -> !
     Tail call (반환하지 않음)
 
 func.return : (value: T) -> !
     함수에서 반환
 
-func.closure_new : (func: FuncRef, captures: [Value]) -> Closure<T>
-    클로저 생성 (캡처된 변수들 명시)
-
-func.closure_call : (closure: Closure<T>, args...) -> U
-    클로저 호출
-
 func.unreachable : () -> !
     도달 불가 지점 (trap)
 ```
 
-#### 클로저 Lowering
+#### Direct vs Indirect Call
+
+```
+// Direct call: callee가 컴파일 타임에 알려진 경우
+func.call @add(%x, %y) : (i32, i32) -> i32
+
+// Indirect call: callee가 런타임 값인 경우 (plain funcref)
+%f = func.constant @add : fn(i32, i32) -> i32
+func.call_indirect %f(%x, %y) : (i32, i32) -> i32
+```
+
+#### 람다 Lowering
 
 람다는 세 단계로 lowering된다:
 
@@ -273,7 +311,7 @@ func.unreachable : () -> !
     arith.add %x, %y        // %y는 외부 변수 (캡처 대상인지 아직 모름)
 } -> src.unknown
 
-// 2. 캡처 분석 후 (src → func)
+// 2. 캡처 분석 후 (src → closure + func)
 //    별도 함수로 추출되고, 캡처 변수가 명시됨
 func.func @lambda_0(%env: ref<Env>, %x: i32) -> i32 {
     %y = adt.struct_get %env, 0 : i32
@@ -281,9 +319,14 @@ func.func @lambda_0(%env: ref<Env>, %x: i32) -> i32 {
     func.return %result
 }
 ...
-%f = func.closure_new @lambda_0, [%y] -> Closure<fn(i32) -> i32>
+%f = closure.new @lambda_0, [%y] -> Closure<fn(i32) -> i32>
 
-// 3. 타겟별 lowering (func → wasm/clif)
+// 클로저 호출 시 (closure dialect 사용)
+%fn = closure.func %f
+%env = closure.env %f
+func.call_indirect %fn(%env, %arg)
+
+// 3. 타겟별 lowering (closure → wasm/clif)
 //    Wasm: funcref + struct
 //    Cranelift: 함수 포인터 + 힙 환경
 ```

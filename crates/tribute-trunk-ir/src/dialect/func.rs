@@ -11,9 +11,13 @@ dialect! {
             #[region(body)] {}
         };
 
-        /// `func.call` operation: calls a function.
+        /// `func.call` operation: direct call to a function symbol.
         #[attr(callee: SymbolRef)]
         fn call(#[rest] args) -> result;
+
+        /// `func.call_indirect` operation: indirect call via function value.
+        /// Callee can be from `func.constant` or a closure.
+        fn call_indirect(callee, #[rest] args) -> result;
 
         /// `func.tail_call` operation: tail call (does not return).
         #[attr(callee: SymbolRef)]
@@ -22,12 +26,10 @@ dialect! {
         /// `func.return` operation: returns values from a function.
         fn r#return(#[rest] operands);
 
-        /// `func.closure_new` operation: creates a closure with captured values.
+        /// `func.constant` operation: creates a function value from symbol.
+        /// Used to get a first-class function reference for indirect calls.
         #[attr(func_ref: SymbolRef)]
-        fn closure_new(#[rest] captures) -> result;
-
-        /// `func.closure_call` operation: calls a closure.
-        fn closure_call(closure, #[rest] args) -> result;
+        fn constant() -> result;
 
         /// `func.unreachable` operation: marks unreachable code (trap).
         fn unreachable();
