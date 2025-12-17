@@ -11,10 +11,22 @@ pub struct Type<'db> {
 
 impl<'db> Type<'db> {
     pub fn i(db: &'db dyn salsa::Database, bits: u16) -> Self {
-        Type::new(db, TypeKind::I { bits })
+        Self::dialect(
+            db,
+            "core",
+            "i",
+            IdVec::new(),
+            Attribute::IntBits(u64::from(bits)),
+        )
     }
     pub fn f(db: &'db dyn salsa::Database, bits: u16) -> Self {
-        Type::new(db, TypeKind::F { bits })
+        Self::dialect(
+            db,
+            "core",
+            "f",
+            IdVec::new(),
+            Attribute::IntBits(u64::from(bits)),
+        )
     }
     pub fn string(db: &'db dyn salsa::Database) -> Self {
         Self::dialect(db, "core", "string", IdVec::new(), Attribute::Unit)
@@ -68,12 +80,6 @@ impl<'db> Type<'db> {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum TypeKind<'db> {
-    I {
-        bits: u16,
-    },
-    F {
-        bits: u16,
-    },
     Array(Type<'db>),
     Ref {
         ty: Type<'db>,

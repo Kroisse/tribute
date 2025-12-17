@@ -1,6 +1,8 @@
 //! Core dialect operations and types.
 //!
 //! This dialect provides fundamental types:
+//! - `core.i` - integer type (with bit width in attr)
+//! - `core.f` - floating-point type (with bit width in attr)
 //! - `core.unit` - unit type (void/empty)
 //! - `core.never` - never/bottom type (no values)
 //! - `core.string` - string type
@@ -58,6 +60,28 @@ impl<'db> Module<'db> {
 }
 
 // === Core type constructors ===
+
+/// Create an integer type (`core.i`) with the given bit width.
+pub fn i_type(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
+    Type::dialect(
+        db,
+        "core",
+        "i",
+        IdVec::new(),
+        Attribute::IntBits(u64::from(bits)),
+    )
+}
+
+/// Create a floating-point type (`core.f`) with the given bit width.
+pub fn f_type(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
+    Type::dialect(
+        db,
+        "core",
+        "f",
+        IdVec::new(),
+        Attribute::IntBits(u64::from(bits)),
+    )
+}
 
 /// Create a unit type (`core.unit`).
 pub fn unit_type(db: &dyn salsa::Database) -> Type<'_> {
