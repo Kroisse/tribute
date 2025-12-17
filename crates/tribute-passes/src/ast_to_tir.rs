@@ -2060,4 +2060,95 @@ mod tests {
             assert_eq!(var_op.name(db), &Attribute::String("Int::+".to_string()));
         });
     }
+
+    /// Helper to create AST with type variables: fn identity(x: t) -> t { x }
+    #[salsa::tracked]
+    fn lower_type_var_helper(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, PathBuf::from("test.tr"));
+
+        // Create AST: fn identity(x: t) -> t { x }
+        let body = tribute_ast::Block {
+            statements: vec![Statement::Expression((
+                Expr::Identifier("x".to_string()),
+                Span::new(28, 29),
+            ))],
+        };
+
+        let func_def = FunctionDefinition::new(
+            db,
+            "identity".to_string(),
+            vec![Parameter {
+                name: "x".to_string(),
+                ty: Some(TypeRef::Variable("t".to_string())),
+            }],
+            Some(TypeRef::Variable("t".to_string())),
+            body,
+            Span::new(0, 31),
+        );
+
+        let item = tribute_ast::Item::new(db, ItemKind::Function(func_def), Span::new(0, 31));
+        let program = Program::new(db, vec![item]);
+
+        lower_program(db, path, program)
+    }
+
+    #[test]
+    fn test_type_variable_consistency() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let module = lower_type_var_helper(db);
+
+            // Get the function
+            let body_region = module.body(db);
+            let blocks = body_region.blocks(db);
+            let func_op = func::Func::from_operation(db, blocks[0].operations(db)[0]).unwrap();
+
+            // Get function type and extract params/results
+            let func_ty = func_op.ty(db);
+            let TypeKind::Function { params, results } = func_ty.kind(db) else {
+                panic!("Expected function type");
+            };
+
+            assert_eq!(params.len(), 1);
+            assert_eq!(results.len(), 1);
+
+            let param_ty = params[0];
+            let result_ty = results[0];
+
+            // Both should be ty.var with the same ID
+            let param_kind = param_ty.kind(db);
+            let result_kind = result_ty.kind(db);
+
+            // Verify both are dialect types (ty.var)
+            match (param_kind, result_kind) {
+                (
+                    TypeKind::Dialect {
+                        dialect: p_dialect,
+                        name: p_name,
+                        attr: p_attr,
+                        ..
+                    },
+                    TypeKind::Dialect {
+                        dialect: r_dialect,
+                        name: r_name,
+                        attr: r_attr,
+                        ..
+                    },
+                ) => {
+                    assert_eq!(p_dialect.text(db), "type");
+                    assert_eq!(p_name.text(db), "var");
+                    assert_eq!(r_dialect.text(db), "type");
+                    assert_eq!(r_name.text(db), "var");
+                    // Same type variable name "t" should get the same ID
+                    assert_eq!(p_attr, r_attr, "Type variable t should have same ID");
+                }
+                _ => panic!("Expected ty.var types for param and result"),
+            }
+
+            // Additionally, verify they are the exact same Type (interned)
+            assert_eq!(
+                param_ty, result_ty,
+                "Same type variable name should produce identical Type"
+            );
+        });
+    }
 }
