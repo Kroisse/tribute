@@ -11,45 +11,57 @@
 use crate::dialect;
 
 dialect! {
-    scf {
+    mod scf {
         // === Conditional ===
 
         /// `scf.if` operation: conditional branch with then/else bodies.
         /// Both regions must yield the same type.
         /// Maps to wasm `if` instruction (or `select` for simple cases).
-        op r#if(cond) -> result @then {} @r#else {};
+        fn r#if(cond) -> result {
+            #[region(then)] {}
+            #[region(r#else)] {}
+        };
 
         // === Multi-way Branch ===
 
         /// `scf.switch` operation: multi-way branch on integer discriminant.
         /// The body region contains `scf.case` operations followed by `scf.default`.
         /// Maps to wasm `br_table` instruction.
-        op switch(discriminant) @body {};
+        fn switch(discriminant) {
+            #[region(body)] {}
+        };
 
         /// `scf.case` operation: a single case in a switch.
         /// The `value` attribute is the integer to match.
         /// The body region contains the case's code.
-        op r#case[value]() @body {};
+        #[attr(value)]
+        fn r#case() {
+            #[region(body)] {}
+        };
 
         /// `scf.default` operation: default case in a switch.
-        op default() @body {};
+        fn default() {
+            #[region(body)] {}
+        };
 
         // === Region Termination ===
 
         /// `scf.yield` operation: returns values from a region.
-        op r#yield(..values);
+        fn r#yield(#[rest] values);
 
         // === Tail Call Optimization Results ===
 
         /// `scf.loop` operation: loop produced by tail recursion optimization.
         /// The body region receives loop-carried values and must end with
         /// either `scf.continue` (loop back) or `scf.break` (exit).
-        op r#loop(..init) -> result @body {};
+        fn r#loop(#[rest] init) -> result {
+            #[region(body)] {}
+        };
 
         /// `scf.continue` operation: jump to loop start with new arguments.
-        op r#continue(..values);
+        fn r#continue(#[rest] values);
 
         /// `scf.break` operation: exit loop with result value.
-        op r#break(value);
+        fn r#break(value);
     }
 }

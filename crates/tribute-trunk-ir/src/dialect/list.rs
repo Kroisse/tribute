@@ -6,47 +6,56 @@
 use crate::dialect;
 
 dialect! {
-    list {
+    mod list {
         // === Creation ===
 
         /// `list.new` operation: creates a list from elements (empty if no elements).
-        op new[elem_type](..elements) -> result;
+        #[attr(elem_type)]
+        fn new(#[rest] elements) -> result;
 
         // === Access ===
 
         /// `list.get` operation: gets element at index.
-        op get[elem_type](list, index) -> result;
+        #[attr(elem_type)]
+        fn get(list, index) -> result;
 
         /// `list.len` operation: returns the length of the list.
-        op len(list) -> result;
+        fn len(list) -> result;
 
         // === View (multi-result for pattern matching) ===
 
         /// `list.view_front` operation: returns (head, tail).
         /// Used for `[head, ..tail] = xs` pattern.
-        op view_front[elem_type](list) -> head, tail;
+        #[attr(elem_type)]
+        fn view_front(list) -> (head, tail);
 
         /// `list.view_back` operation: returns (init, last).
         /// Used for `[..init, last] = xs` pattern.
-        op view_back[elem_type](list) -> init, last;
+        #[attr(elem_type)]
+        fn view_back(list) -> (init, last);
 
         // === Modification (persistent) ===
 
         /// `list.set` operation: returns a new list with element at index updated.
-        op set[elem_type](list, index, value) -> result;
+        #[attr(elem_type)]
+        fn set(list, index, value) -> result;
 
         /// `list.push_front` operation: returns a new list with element prepended.
-        op push_front[elem_type](list, value) -> result;
+        #[attr(elem_type)]
+        fn push_front(list, value) -> result;
 
         /// `list.push_back` operation: returns a new list with element appended.
-        op push_back[elem_type](list, value) -> result;
+        #[attr(elem_type)]
+        fn push_back(list, value) -> result;
 
         // === Split/Concat ===
 
         /// `list.concat` operation: concatenates two lists.
-        op concat[elem_type](left, right) -> result;
+        #[attr(elem_type)]
+        fn concat(left, right) -> result;
 
         /// `list.slice` operation: returns a sublist [start, end).
-        op slice[elem_type](list, start, end) -> result;
+        #[attr(elem_type)]
+        fn slice(list, start, end) -> result;
     }
 }

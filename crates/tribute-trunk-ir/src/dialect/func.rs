@@ -4,27 +4,33 @@ use crate::{Attribute, Region, Type, dialect};
 use tribute_core::Location;
 
 dialect! {
-    func {
+    mod func {
         /// `func.func` operation: defines a function.
-        op func[sym_name, r#type]() @body {};
+        #[attr(sym_name, r#type)]
+        fn func() {
+            #[region(body)] {}
+        };
 
         /// `func.call` operation: calls a function.
-        op call[callee](..args) -> result;
+        #[attr(callee)]
+        fn call(#[rest] args) -> result;
 
         /// `func.tail_call` operation: tail call (does not return).
-        op tail_call[callee](..args);
+        #[attr(callee)]
+        fn tail_call(#[rest] args);
 
         /// `func.return` operation: returns values from a function.
-        op r#return(..operands);
+        fn r#return(#[rest] operands);
 
         /// `func.closure_new` operation: creates a closure with captured values.
-        op closure_new[func_ref](..captures) -> result;
+        #[attr(func_ref)]
+        fn closure_new(#[rest] captures) -> result;
 
         /// `func.closure_call` operation: calls a closure.
-        op closure_call(closure, ..args) -> result;
+        fn closure_call(closure, #[rest] args) -> result;
 
         /// `func.unreachable` operation: marks unreachable code (trap).
-        op unreachable();
+        fn unreachable();
     }
 }
 
@@ -41,7 +47,7 @@ impl<'db> Func<'db> {
         let mut entry = crate::BlockBuilder::new(db, location).args(params.clone());
         f(&mut entry);
         let region = Region::new(db, location, vec![entry.build()]);
-        Self::new(
+        func(
             db,
             location,
             Attribute::String(name.to_string()),
@@ -70,7 +76,7 @@ impl<'db> Func<'db> {
 impl<'db> Return<'db> {
     /// Create a new return with no values.
     pub fn empty(db: &'db dyn salsa::Database, location: Location<'db>) -> Self {
-        Self::new(db, location, vec![])
+        r#return(db, location, vec![])
     }
 
     /// Create a new return with a single value.
@@ -79,6 +85,6 @@ impl<'db> Return<'db> {
         location: Location<'db>,
         value: crate::Value<'db>,
     ) -> Self {
-        Self::new(db, location, vec![value])
+        r#return(db, location, vec![value])
     }
 }

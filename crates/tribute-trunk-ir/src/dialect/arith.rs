@@ -4,107 +4,108 @@ use crate::{Attribute, Type, dialect};
 use tribute_core::Location;
 
 dialect! {
-    arith {
+    mod arith {
         // === Constants ===
 
         /// `arith.const` operation: produces a constant value.
-        op r#const[value]() -> result;
+        #[attr(value)]
+        fn r#const() -> result;
 
         // === Arithmetic ===
 
         /// `arith.add` operation: integer/float addition.
-        op add(lhs, rhs) -> result;
+        fn add(lhs, rhs) -> result;
 
         /// `arith.sub` operation: integer/float subtraction.
-        op sub(lhs, rhs) -> result;
+        fn sub(lhs, rhs) -> result;
 
         /// `arith.mul` operation: integer/float multiplication.
-        op mul(lhs, rhs) -> result;
+        fn mul(lhs, rhs) -> result;
 
         /// `arith.div` operation: integer/float division.
-        op div(lhs, rhs) -> result;
+        fn div(lhs, rhs) -> result;
 
         /// `arith.rem` operation: integer/float remainder.
-        op rem(lhs, rhs) -> result;
+        fn rem(lhs, rhs) -> result;
 
         /// `arith.neg` operation: integer/float negation.
-        op neg(operand) -> result;
+        fn neg(operand) -> result;
 
         // === Comparisons ===
 
         /// `arith.cmp_eq` operation: equality comparison.
-        op cmp_eq(lhs, rhs) -> result;
+        fn cmp_eq(lhs, rhs) -> result;
 
         /// `arith.cmp_ne` operation: inequality comparison.
-        op cmp_ne(lhs, rhs) -> result;
+        fn cmp_ne(lhs, rhs) -> result;
 
         /// `arith.cmp_lt` operation: less-than comparison.
-        op cmp_lt(lhs, rhs) -> result;
+        fn cmp_lt(lhs, rhs) -> result;
 
         /// `arith.cmp_le` operation: less-than-or-equal comparison.
-        op cmp_le(lhs, rhs) -> result;
+        fn cmp_le(lhs, rhs) -> result;
 
         /// `arith.cmp_gt` operation: greater-than comparison.
-        op cmp_gt(lhs, rhs) -> result;
+        fn cmp_gt(lhs, rhs) -> result;
 
         /// `arith.cmp_ge` operation: greater-than-or-equal comparison.
-        op cmp_ge(lhs, rhs) -> result;
+        fn cmp_ge(lhs, rhs) -> result;
 
         // === Bitwise ===
 
         /// `arith.and` operation: bitwise AND.
-        op and(lhs, rhs) -> result;
+        fn and(lhs, rhs) -> result;
 
         /// `arith.or` operation: bitwise OR.
-        op or(lhs, rhs) -> result;
+        fn or(lhs, rhs) -> result;
 
         /// `arith.xor` operation: bitwise XOR.
-        op xor(lhs, rhs) -> result;
+        fn xor(lhs, rhs) -> result;
 
         /// `arith.shl` operation: shift left.
-        op shl(value, amount) -> result;
+        fn shl(value, amount) -> result;
 
         /// `arith.shr` operation: arithmetic shift right (sign-extending).
-        op shr(value, amount) -> result;
+        fn shr(value, amount) -> result;
 
         /// `arith.shru` operation: logical shift right (zero-extending).
-        op shru(value, amount) -> result;
+        fn shru(value, amount) -> result;
 
         // === Type Conversions ===
 
         /// `arith.cast` operation: sign extension/truncation.
-        op cast(operand) -> result;
+        fn cast(operand) -> result;
 
         /// `arith.trunc` operation: truncation to smaller type.
-        op trunc(operand) -> result;
+        fn trunc(operand) -> result;
 
         /// `arith.extend` operation: extension to larger type.
-        op extend(operand) -> result;
+        fn extend(operand) -> result;
 
         /// `arith.convert` operation: int ↔ float conversion.
-        op convert(operand) -> result;
+        fn convert(operand) -> result;
     }
 }
 
 impl<'db> Const<'db> {
     /// Create a new i32 constant.
     pub fn i32(db: &'db dyn salsa::Database, location: Location<'db>, value: i32) -> Self {
-        Self::new(db, location, Type::I { bits: 32 }, (value as i64).into())
+        r#const(db, location, Type::I { bits: 32 }, (value as i64).into())
     }
 
     /// Create a new i64 constant.
     pub fn i64(db: &'db dyn salsa::Database, location: Location<'db>, value: i64) -> Self {
-        Self::new(db, location, Type::I { bits: 64 }, value.into())
+        r#const(db, location, Type::I { bits: 64 }, value.into())
     }
 
     /// Create a new u64 constant.
     pub fn u64(db: &'db dyn salsa::Database, location: Location<'db>, value: u64) -> Self {
-        Self::new(db, location, Type::I { bits: 64 }, value.into())
+        r#const(db, location, Type::I { bits: 64 }, value.into())
     }
 
     /// Create a new f32 constant.
     pub fn f32(db: &'db dyn salsa::Database, location: Location<'db>, value: f32) -> Self {
-        Self::new(
+        r#const(
             db,
             location,
             Type::F { bits: 32 },
@@ -114,7 +115,7 @@ impl<'db> Const<'db> {
 
     /// Create a new f64 constant.
     pub fn f64(db: &'db dyn salsa::Database, location: Location<'db>, value: f64) -> Self {
-        Self::new(
+        r#const(
             db,
             location,
             Type::F { bits: 64 },

@@ -162,7 +162,7 @@ fn bind_pattern<'db>(
                 ConstructorArgs::Positional(patterns) => {
                     for (i, pat) in patterns.iter().enumerate() {
                         let field_value = block
-                            .op(adt::VariantGet::new(
+                            .op(adt::variant_get(
                                 db,
                                 location,
                                 value,
@@ -176,7 +176,7 @@ fn bind_pattern<'db>(
                 ConstructorArgs::Named { fields, .. } => {
                     for (i, field) in fields.iter().enumerate() {
                         let field_value = block
-                            .op(adt::VariantGet::new(
+                            .op(adt::variant_get(
                                 db,
                                 location,
                                 value,
@@ -192,7 +192,7 @@ fn bind_pattern<'db>(
         Pattern::Tuple(first, rest) => {
             // Destructure tuple: let #(a, b, c) = tuple
             let first_value = block
-                .op(src::Call::new(
+                .op(src::call(
                     db,
                     location,
                     vec![value],
@@ -204,7 +204,7 @@ fn bind_pattern<'db>(
 
             for (i, pat) in rest.iter().enumerate() {
                 let elem_value = block
-                    .op(src::Call::new(
+                    .op(src::call(
                         db,
                         location,
                         vec![value],
@@ -222,7 +222,7 @@ fn bind_pattern<'db>(
                     .op(arith::Const::i64(db, location, i as i64))
                     .result(db);
                 let elem_value = block
-                    .op(list::Get::new(
+                    .op(list::get(
                         db,
                         location,
                         value,
@@ -240,10 +240,10 @@ fn bind_pattern<'db>(
                     .op(arith::Const::i64(db, location, elements.len() as i64))
                     .result(db);
                 let len_value = block
-                    .op(list::Len::new(db, location, value, Type::Unit))
+                    .op(list::len(db, location, value, Type::Unit))
                     .result(db);
                 let rest_value = block
-                    .op(list::Slice::new(
+                    .op(list::slice(
                         db,
                         location,
                         value,
@@ -290,7 +290,7 @@ fn lower_expr<'db>(
         }
         Expr::Bool(b) => {
             // Use i1 for booleans
-            let op = block.op(arith::Const::new(
+            let op = block.op(arith::r#const(
                 db,
                 location,
                 Type::I { bits: 1 },
@@ -300,7 +300,7 @@ fn lower_expr<'db>(
         }
         Expr::Nil => {
             // Nil as unit constant
-            let op = block.op(arith::Const::new(db, location, Type::Unit, Attribute::Unit));
+            let op = block.op(arith::r#const(db, location, Type::Unit, Attribute::Unit));
             op.result(db)
         }
 
@@ -311,7 +311,7 @@ fn lower_expr<'db>(
                 value
             } else {
                 // Unresolved - emit src.var for later resolution
-                let op = block.op(src::Var::new(
+                let op = block.op(src::var(
                     db,
                     location,
                     Type::Unit, // Unknown until resolution
@@ -332,7 +332,7 @@ fn lower_expr<'db>(
                 .map(|arg| lower_expr(db, path, ctx, block, arg))
                 .collect();
 
-            let op = block.op(src::Call::new(
+            let op = block.op(src::call(
                 db,
                 location,
                 args,
@@ -356,7 +356,7 @@ fn lower_expr<'db>(
 
         // Rune (Unicode codepoint) → arith.const i32
         Expr::Rune(c) => {
-            let op = block.op(arith::Const::new(
+            let op = block.op(arith::r#const(
                 db,
                 location,
                 Type::I { bits: 32 },
@@ -387,7 +387,7 @@ fn lower_expr<'db>(
                 args.push(lower_expr(db, path, ctx, block, arg));
             }
 
-            let op = block.op(src::Call::new(
+            let op = block.op(src::call(
                 db,
                 location,
                 args,
@@ -421,7 +421,7 @@ fn lower_expr<'db>(
                     // Create a placeholder - will be resolved when block is built
                     // For now, emit src.var for parameter references
                     // The block args will be connected during a later pass
-                    let param_value = body_block.op(src::Var::new(
+                    let param_value = body_block.op(src::var(
                         db,
                         location,
                         Type::Unit,
@@ -436,7 +436,7 @@ fn lower_expr<'db>(
             });
 
             // Add yield to return the lambda's result
-            body_block.op(src::Yield::new(db, location, result_value));
+            body_block.op(src::r#yield(db, location, result_value));
 
             // Create the function type for the lambda
             let func_type = Type::Function {
@@ -446,7 +446,7 @@ fn lower_expr<'db>(
 
             // Create the src.lambda operation
             let region = Region::new(db, location, vec![body_block.build()]);
-            let lambda_op = block.op(src::Lambda::new(
+            let lambda_op = block.op(src::lambda(
                 db,
                 location,
                 Type::Unit,
@@ -465,11 +465,11 @@ fn lower_expr<'db>(
             });
 
             // Add yield to return the value from the block
-            body_block.op(src::Yield::new(db, location, result_value));
+            body_block.op(src::r#yield(db, location, result_value));
 
             // Create the src.block operation
             let region = Region::new(db, location, vec![body_block.build()]);
-            let block_op = block.op(src::Block::new(db, location, Type::Unit, region));
+            let block_op = block.op(src::block(db, location, Type::Unit, region));
             block_op.result(db)
         }
         // List literal → list.new
@@ -480,7 +480,7 @@ fn lower_expr<'db>(
                 .map(|elem| lower_expr(db, path, ctx, block, elem))
                 .collect();
 
-            let op = block.op(list::New::new(
+            let op = block.op(list::new(
                 db,
                 location,
                 values,
@@ -498,7 +498,7 @@ fn lower_expr<'db>(
             }
 
             // Create the src.tuple operation
-            let tuple_op = block.op(src::Tuple::new(db, location, elements, Type::Unit));
+            let tuple_op = block.op(src::tuple(db, location, elements, Type::Unit));
             tuple_op.result(db)
         }
         // Record expression: User { name: "Alice", age: 30 }
@@ -514,12 +514,7 @@ fn lower_expr<'db>(
                 Some(q) => format!("{}::{}", q, op),
                 None => op.clone(),
             };
-            let op = block.op(src::Var::new(
-                db,
-                location,
-                Type::Unit,
-                Attribute::String(name),
-            ));
+            let op = block.op(src::var(db, location, Type::Unit, Attribute::String(name)));
             op.result(db)
         }
     }
@@ -550,7 +545,7 @@ fn lower_statements<'db>(
 
     // Return the last expression value, or unit if empty/ends with let
     last_value.unwrap_or_else(|| {
-        let op = block.op(arith::Const::new(db, location, Type::Unit, Attribute::Unit));
+        let op = block.op(arith::r#const(db, location, Type::Unit, Attribute::Unit));
         op.result(db)
     })
 }
@@ -570,88 +565,52 @@ fn lower_binary_op<'db>(
     match operator {
         // Arithmetic operations → arith dialect
         BinaryOperator::Add => block
-            .op(arith::Add::new(db, location, lhs, rhs, result_ty))
+            .op(arith::add(db, location, lhs, rhs, result_ty))
             .result(db),
         BinaryOperator::Subtract => block
-            .op(arith::Sub::new(db, location, lhs, rhs, result_ty))
+            .op(arith::sub(db, location, lhs, rhs, result_ty))
             .result(db),
         BinaryOperator::Multiply => block
-            .op(arith::Mul::new(db, location, lhs, rhs, result_ty))
+            .op(arith::mul(db, location, lhs, rhs, result_ty))
             .result(db),
         BinaryOperator::Divide => block
-            .op(arith::Div::new(db, location, lhs, rhs, result_ty))
+            .op(arith::div(db, location, lhs, rhs, result_ty))
             .result(db),
         BinaryOperator::Modulo => block
-            .op(arith::Rem::new(db, location, lhs, rhs, result_ty))
+            .op(arith::rem(db, location, lhs, rhs, result_ty))
             .result(db),
 
         // Comparison operations → arith dialect (result is i1)
         BinaryOperator::Equal => block
-            .op(arith::CmpEq::new(
-                db,
-                location,
-                lhs,
-                rhs,
-                Type::I { bits: 1 },
-            ))
+            .op(arith::cmp_eq(db, location, lhs, rhs, Type::I { bits: 1 }))
             .result(db),
         BinaryOperator::NotEqual => block
-            .op(arith::CmpNe::new(
-                db,
-                location,
-                lhs,
-                rhs,
-                Type::I { bits: 1 },
-            ))
+            .op(arith::cmp_ne(db, location, lhs, rhs, Type::I { bits: 1 }))
             .result(db),
         BinaryOperator::LessThan => block
-            .op(arith::CmpLt::new(
-                db,
-                location,
-                lhs,
-                rhs,
-                Type::I { bits: 1 },
-            ))
+            .op(arith::cmp_lt(db, location, lhs, rhs, Type::I { bits: 1 }))
             .result(db),
         BinaryOperator::LessEqual => block
-            .op(arith::CmpLe::new(
-                db,
-                location,
-                lhs,
-                rhs,
-                Type::I { bits: 1 },
-            ))
+            .op(arith::cmp_le(db, location, lhs, rhs, Type::I { bits: 1 }))
             .result(db),
         BinaryOperator::GreaterThan => block
-            .op(arith::CmpGt::new(
-                db,
-                location,
-                lhs,
-                rhs,
-                Type::I { bits: 1 },
-            ))
+            .op(arith::cmp_gt(db, location, lhs, rhs, Type::I { bits: 1 }))
             .result(db),
         BinaryOperator::GreaterEqual => block
-            .op(arith::CmpGe::new(
-                db,
-                location,
-                lhs,
-                rhs,
-                Type::I { bits: 1 },
-            ))
+            .op(arith::cmp_ge(db, location, lhs, rhs, Type::I { bits: 1 }))
             .result(db),
 
         // Logical operations → arith bitwise (works for i1 booleans)
         BinaryOperator::And => block
-            .op(arith::And::new(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .op(arith::and(db, location, lhs, rhs, Type::I { bits: 1 }))
             .result(db),
         BinaryOperator::Or => block
-            .op(arith::Or::new(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .op(arith::or(db, location, lhs, rhs, Type::I { bits: 1 }))
             .result(db),
 
         // Concat needs type-directed resolution → src.binop
         BinaryOperator::Concat => {
-            let op = block.op(src::Binop::new(
+            let op = block.op(src::binop(
                 db,
                 location,
                 lhs,
@@ -676,7 +635,7 @@ fn lower_string_interpolation<'db>(
 ) -> Value<'db> {
     // Start with the leading string part
     let mut result = block
-        .op(adt::StringConst::new(
+        .op(adt::string_const(
             db,
             location,
             Type::String,
@@ -691,7 +650,7 @@ fn lower_string_interpolation<'db>(
 
         // Call to_string on the expression (will be resolved later)
         let str_value = block
-            .op(src::Call::new(
+            .op(src::call(
                 db,
                 location,
                 vec![expr_value],
@@ -702,7 +661,7 @@ fn lower_string_interpolation<'db>(
 
         // Concat result with str_value
         result = block
-            .op(src::Binop::new(
+            .op(src::binop(
                 db,
                 location,
                 result,
@@ -715,7 +674,7 @@ fn lower_string_interpolation<'db>(
         // Concat with trailing string if non-empty
         if !segment.trailing.is_empty() {
             let trailing_value = block
-                .op(adt::StringConst::new(
+                .op(adt::string_const(
                     db,
                     location,
                     Type::String,
@@ -724,7 +683,7 @@ fn lower_string_interpolation<'db>(
                 .result(db);
 
             result = block
-                .op(src::Binop::new(
+                .op(src::binop(
                     db,
                     location,
                     result,
@@ -750,7 +709,7 @@ fn lower_bytes_interpolation<'db>(
 ) -> Value<'db> {
     // Start with the leading bytes part
     let mut result = block
-        .op(adt::BytesConst::new(
+        .op(adt::bytes_const(
             db,
             location,
             Type::Bytes,
@@ -765,7 +724,7 @@ fn lower_bytes_interpolation<'db>(
 
         // Call to_bytes on the expression (will be resolved later)
         let bytes_value = block
-            .op(src::Call::new(
+            .op(src::call(
                 db,
                 location,
                 vec![expr_value],
@@ -776,7 +735,7 @@ fn lower_bytes_interpolation<'db>(
 
         // Concat result with bytes_value
         result = block
-            .op(src::Binop::new(
+            .op(src::binop(
                 db,
                 location,
                 result,
@@ -789,7 +748,7 @@ fn lower_bytes_interpolation<'db>(
         // Concat with trailing bytes if non-empty
         if !segment.trailing.is_empty() {
             let trailing_value = block
-                .op(adt::BytesConst::new(
+                .op(adt::bytes_const(
                     db,
                     location,
                     Type::Bytes,
@@ -798,7 +757,7 @@ fn lower_bytes_interpolation<'db>(
                 .result(db);
 
             result = block
-                .op(src::Binop::new(
+                .op(src::binop(
                     db,
                     location,
                     result,
@@ -854,18 +813,18 @@ fn lower_match_expr<'db>(
         });
 
         // Yield the result from the arm
-        arm_block.op(case::Yield::new(db, location, result_value));
+        arm_block.op(case::r#yield(db, location, result_value));
         let arm_region = Region::new(db, location, vec![arm_block.build()]);
 
         // Create the case.arm operation with pattern attribute
         let pattern_attr = pattern_to_attribute(&arm.pattern);
-        body_block.op(case::Arm::new(db, location, pattern_attr, arm_region));
+        body_block.op(case::arm(db, location, pattern_attr, arm_region));
     }
 
     let body_region = Region::new(db, location, vec![body_block.build()]);
 
     // Create the case.case operation
-    let case_op = block.op(case::Case::new(
+    let case_op = block.op(case::r#case(
         db,
         location,
         scrutinee,
@@ -909,7 +868,7 @@ fn bind_pattern_for_match<'db>(
                     for (i, pat) in patterns.iter().enumerate() {
                         // Extract field i from the variant
                         let field_value = block
-                            .op(adt::VariantGet::new(
+                            .op(adt::variant_get(
                                 db,
                                 location,
                                 scrutinee,
@@ -923,7 +882,7 @@ fn bind_pattern_for_match<'db>(
                 ConstructorArgs::Named { fields, .. } => {
                     for (i, field) in fields.iter().enumerate() {
                         let field_value = block
-                            .op(adt::VariantGet::new(
+                            .op(adt::variant_get(
                                 db,
                                 location,
                                 scrutinee,
@@ -946,7 +905,7 @@ fn bind_pattern_for_match<'db>(
         Pattern::Tuple(first, rest) => {
             // Extract tuple elements
             let first_value = block
-                .op(src::Call::new(
+                .op(src::call(
                     db,
                     location,
                     vec![scrutinee],
@@ -958,7 +917,7 @@ fn bind_pattern_for_match<'db>(
 
             for (i, pat) in rest.iter().enumerate() {
                 let elem_value = block
-                    .op(src::Call::new(
+                    .op(src::call(
                         db,
                         location,
                         vec![scrutinee],
@@ -976,7 +935,7 @@ fn bind_pattern_for_match<'db>(
                     .op(arith::Const::i64(db, location, i as i64))
                     .result(db);
                 let elem_value = block
-                    .op(list::Get::new(
+                    .op(list::get(
                         db,
                         location,
                         scrutinee,
@@ -995,10 +954,10 @@ fn bind_pattern_for_match<'db>(
                     .op(arith::Const::i64(db, location, elements.len() as i64))
                     .result(db);
                 let len_value = block
-                    .op(list::Len::new(db, location, scrutinee, Type::Unit))
+                    .op(list::len(db, location, scrutinee, Type::Unit))
                     .result(db);
                 let rest_value = block
-                    .op(list::Slice::new(
+                    .op(list::slice(
                         db,
                         location,
                         scrutinee,
@@ -1045,7 +1004,7 @@ fn lower_record_expr<'db>(
                     field_values.push(value);
                 } else {
                     // Unresolved - emit src.var
-                    let var_op = block.op(src::Var::new(
+                    let var_op = block.op(src::var(
                         db,
                         location,
                         Type::Unit,
@@ -1067,7 +1026,7 @@ fn lower_record_expr<'db>(
 
     // Emit src.call with the type name as constructor
     // Field names are encoded in the attribute
-    let op = block.op(src::Call::new(
+    let op = block.op(src::call(
         db,
         location,
         field_values,

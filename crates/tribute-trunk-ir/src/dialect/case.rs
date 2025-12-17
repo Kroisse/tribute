@@ -19,73 +19,94 @@ use crate::{Attribute, dialect};
 use tribute_core::Location;
 
 dialect! {
-    case {
+    mod case {
         // === Main Pattern Matching ===
 
         /// `case.case` operation: pattern matching expression.
         /// Takes a scrutinee and has a body region containing `case.arm` operations.
         /// All arms must yield the same type.
-        op r#case(scrutinee) -> result @body {};
+        fn r#case(scrutinee) -> result {
+            #[region(body)] {}
+        };
 
         /// `case.arm` operation: a single pattern-matching arm.
         /// The `pattern` attribute describes what to match.
         /// The body region contains the arm's expression (ends with `case.yield`).
         /// Guards are represented as nested `case.guard` operations within the body.
-        op arm[pattern]() @body {};
+        #[attr(pattern)]
+        fn arm() {
+            #[region(body)] {}
+        };
 
         /// `case.guard` operation: conditional guard on a pattern arm.
         /// Executes the condition; if true, continues with the guarded body.
         /// The `else` region is for fallthrough to next arm/guard.
-        op guard(cond) @then {} @r#else {};
+        fn guard(cond) {
+            #[region(then)] {}
+            #[region(r#else)] {}
+        };
 
         /// `case.yield` operation: returns a value from a case arm.
-        op r#yield(value);
+        fn r#yield(value);
 
         // === Pattern Binding ===
 
         /// `case.bind` operation: extracts a bound variable from pattern matching.
         /// The `name` attribute is the binding name.
         /// This is placed at the start of arm body to introduce bindings.
-        op bind[name]() -> result;
+        #[attr(name)]
+        fn bind() -> result;
 
         // === Variant/Record Destructuring ===
 
         /// `case.destruct_variant` operation: extracts variant payload.
         /// Used when matching `Some(x)` to extract `x`.
-        op destruct_variant[tag](scrutinee) -> result;
+        #[attr(tag)]
+        fn destruct_variant(scrutinee) -> result;
 
         /// `case.destruct_field` operation: extracts a field from record/struct.
         /// Used when matching `User { name, age }` to extract fields.
-        op destruct_field[field](scrutinee) -> result;
+        #[attr(field)]
+        fn destruct_field(scrutinee) -> result;
 
         /// `case.destruct_tuple` operation: extracts element from tuple.
         /// The `index` attribute specifies which element.
-        op destruct_tuple[index](scrutinee) -> result;
+        #[attr(index)]
+        fn destruct_tuple(scrutinee) -> result;
 
         // === List Destructuring ===
 
         /// `case.list_head` operation: extracts the head of a list.
         /// Used for `[head, ..tail]` patterns.
-        op list_head[elem_type](list) -> result;
+        #[attr(elem_type)]
+        fn list_head(list) -> result;
 
         /// `case.list_tail` operation: extracts the tail of a list.
         /// Used for `[head, ..tail]` patterns.
-        op list_tail[elem_type](list) -> result;
+        #[attr(elem_type)]
+        fn list_tail(list) -> result;
 
         /// `case.list_len` operation: gets the length of a list.
         /// Used for checking list pattern length requirements.
-        op list_len(list) -> result;
+        fn list_len(list) -> result;
 
         // === Handler Patterns ===
 
         /// `case.handler_done` operation: checks if Request is Done.
         /// Returns the result value if Done, otherwise control flows to else.
-        op handler_done(request) -> result @then {} @r#else {};
+        fn handler_done(request) -> result {
+            #[region(then)] {}
+            #[region(r#else)] {}
+        };
 
         /// `case.handler_suspend` operation: checks if Request is Suspend for a specific effect op.
         /// If matched, extracts the operation arguments and continuation.
         /// The `effect_op` attribute identifies which ability operation to match.
-        op handler_suspend[effect_op](request) -> args, continuation @then {} @r#else {};
+        #[attr(effect_op)]
+        fn handler_suspend(request) -> (args, continuation) {
+            #[region(then)] {}
+            #[region(r#else)] {}
+        };
     }
 }
 
@@ -197,7 +218,7 @@ impl<'db> Arm<'db> {
         location: Location<'db>,
         body: crate::Region<'db>,
     ) -> Self {
-        Self::new(db, location, pattern::wildcard(), body)
+        arm(db, location, pattern::wildcard(), body)
     }
 
     /// Create an arm that binds the scrutinee to a name.
@@ -207,7 +228,7 @@ impl<'db> Arm<'db> {
         name: &str,
         body: crate::Region<'db>,
     ) -> Self {
-        Self::new(db, location, pattern::ident(name), body)
+        arm(db, location, pattern::ident(name), body)
     }
 
     /// Create an arm matching a unit variant (e.g., `None`).
@@ -217,6 +238,6 @@ impl<'db> Arm<'db> {
         variant_name: &str,
         body: crate::Region<'db>,
     ) -> Self {
-        Self::new(db, location, pattern::unit_variant(variant_name), body)
+        arm(db, location, pattern::unit_variant(variant_name), body)
     }
 }

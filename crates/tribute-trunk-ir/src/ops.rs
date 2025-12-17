@@ -36,55 +36,123 @@ pub trait DialectOp<'db>: Sized + Copy {
 
 /// Macro to define multiple operations in a dialect.
 ///
-/// This groups multiple operation definitions under a single dialect name,
-/// avoiding repetition.
+/// Uses Rust-like syntax for better IDE support and rustfmt compatibility.
 ///
 /// # Syntax
 /// ```ignore
 /// dialect! {
-///     dialect_name {
+///     mod dialect_name {
 ///         /// Doc comment
-///         op name[attrs](operands) -> result {};
-///
-///         /// Another op
-///         op other(a, b) -> result {};
+///         #[attr(attr1, attr2)]
+///         fn op_name(operand1, operand2) -> result {
+///             #[region(body)] {}
+///         };
 ///     }
 /// }
 /// ```
 ///
+/// # Features
+/// - `#[attr(...)]` - attributes
+/// - `(a, b)` - fixed operands
+/// - `(#[rest] args)` - variadic operands
+/// - `(a, #[rest] rest)` - mixed operands
+/// - `-> result` - single result
+/// - `-> (a, b)` - multiple results (tuple syntax)
+/// - `#[region(name)] {}` - regions inside body
+///
 /// # Example
 /// ```ignore
 /// dialect! {
-///     arith {
+///     mod arith {
 ///         /// Constant value operation.
-///         op constant[value]() -> result {};
+///         #[attr(value)]
+///         fn r#const() -> result;
 ///
 ///         /// Addition operation.
-///         op add(lhs, rhs) -> result {};
+///         fn add(lhs, rhs) -> result;
 ///     }
 /// }
 /// ```
 #[macro_export]
 macro_rules! dialect {
-    // Base case: no more ops to process
+    // Entry point
+    (mod $dialect:ident { $($body:tt)* }) => {
+        $crate::dialect!(@parse $dialect $($body)*);
+    };
+
+    // Base case: no more ops
     (@parse $dialect:ident) => {};
 
-    // Unified pattern: optional attrs, optional results
+    // Operation with doc + attrs
     (@parse $dialect:ident
-        $(#[$meta:meta])*
-        op $op:ident $([$($attrs:tt)*])? ($($operands:tt)*) $( -> $($result:ident),+ $(,)? )? $(@ $region:ident {})*;
+        $(#[doc = $doc:literal])+
+        #[attr($($attr:ident),* $(,)?)]
+        fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
         $($rest:tt)*
     ) => {
         $crate::define_op! {
-            $(#[$meta])*
-            op $dialect.$op $([$($attrs)*])? ($($operands)*) $(-> $($result),+)? $(@ $region {})*
+            doc: [$($doc),+],
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attr),*],
+            operands: ($($operands)*),
+            result: [$($result)?],
+            regions: [$($($region_body)*)?]
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
 
-    // Main entry point
-    ($dialect:ident { $($body:tt)* }) => {
-        $crate::dialect!(@parse $dialect $($body)*);
+    // Operation with attrs only (no doc)
+    (@parse $dialect:ident
+        #[attr($($attr:ident),* $(,)?)]
+        fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
+        $($rest:tt)*
+    ) => {
+        $crate::define_op! {
+            doc: [],
+            dialect: $dialect,
+            op: $op,
+            attrs: [$($attr),*],
+            operands: ($($operands)*),
+            result: [$($result)?],
+            regions: [$($($region_body)*)?]
+        }
+        $crate::dialect!(@parse $dialect $($rest)*);
+    };
+
+    // Operation with doc only (no attrs)
+    (@parse $dialect:ident
+        $(#[doc = $doc:literal])+
+        fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
+        $($rest:tt)*
+    ) => {
+        $crate::define_op! {
+            doc: [$($doc),+],
+            dialect: $dialect,
+            op: $op,
+            attrs: [],
+            operands: ($($operands)*),
+            result: [$($result)?],
+            regions: [$($($region_body)*)?]
+        }
+        $crate::dialect!(@parse $dialect $($rest)*);
+    };
+
+    // Operation without doc or attrs
+    (@parse $dialect:ident
+        fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
+        $($rest:tt)*
+    ) => {
+        $crate::define_op! {
+            doc: [],
+            dialect: $dialect,
+            op: $op,
+            attrs: [],
+            operands: ($($operands)*),
+            result: [$($result)?],
+            regions: [$($($region_body)*)?]
+        }
+        $crate::dialect!(@parse $dialect $($rest)*);
     };
 }
 
@@ -95,330 +163,295 @@ macro_rules! dialect {
 /// - `DialectOp` trait implementation
 /// - `new` constructor with appropriate parameters
 /// - Accessor methods based on the operation signature
-///
-/// # Syntax
-/// ```ignore
-/// define_op! {
-///     op dialect.name[attr1, attr2](operands...) -> result { region }
-/// }
-/// ```
-///
-/// - `[attr1, attr2]` - attributes (generates `Attribute<'db>` parameters)
-/// - `(lhs, rhs)` - fixed operands (generates `Value<'db>` parameters)
-/// - `(..operands)` - variable operands (generates `Vec<Value<'db>>` parameter)
-/// - `-> result` - single result (generates `Type` parameter and `result()` method)
-/// - `{ body }` - region (generates `Region<'db>` parameter)
-/// - `{}` - no region
-///
-/// # Examples
-/// ```ignore
-/// define_op! {
-///     /// Constant value operation.
-///     op arith.constant[value]() -> result {}
-/// }
-///
-/// define_op! {
-///     /// Addition operation.
-///     op arith.add(lhs, rhs) -> result {}
-/// }
-///
-/// define_op! {
-///     /// Function definition.
-///     op func.func[sym_name, r#type]() { body }
-/// }
-/// ```
 #[macro_export]
 macro_rules! define_op {
-    // ========================================================================
-    // Entry point - start TT munching
-    // ========================================================================
+    // Entry point
     (
-        $(#[$meta:meta])*
-        op $dialect:ident.$op:ident $($rest:tt)*
-    ) => {
-        $crate::define_op!(@parse_attrs
-            meta: [$(#[$meta])*],
-            dialect: $dialect,
-            op: $op,
-            rest: [$($rest)*]
-        );
-    };
-
-    // ========================================================================
-    // @parse_attrs - Extract [attrs] if present
-    // ========================================================================
-
-    // Has attrs: [$attr, ...]
-    (@parse_attrs
-        meta: $meta:tt,
+        doc: [$($doc:literal),*],
         dialect: $dialect:ident,
         op: $op:ident,
-        rest: [[$($attr:ident),* $(,)?] $($rest:tt)*]
+        attrs: [$($attr:ident),*],
+        operands: ($($operand_tokens:tt)*),
+        result: [$($result:tt)?],
+        regions: [$($region_tokens:tt)*]
     ) => {
         $crate::define_op!(@parse_operands
-            meta: $meta,
+            doc: [$($doc),*],
             dialect: $dialect,
             op: $op,
             attrs: [$($attr),*],
-            rest: [$($rest)*]
-        );
-    };
-
-    // No attrs: starts with (
-    (@parse_attrs
-        meta: $meta:tt,
-        dialect: $dialect:ident,
-        op: $op:ident,
-        rest: [$($rest:tt)*]
-    ) => {
-        $crate::define_op!(@parse_operands
-            meta: $meta,
-            dialect: $dialect,
-            op: $op,
-            attrs: [],
-            rest: [$($rest)*]
+            operand_tokens: [$($operand_tokens)*],
+            result: [$($result)?],
+            region_tokens: [$($region_tokens)*]
         );
     };
 
     // ========================================================================
-    // @parse_operands - Delegate to @parse_operand_list for TT munching
+    // @parse_operands - Parse operand list into fixed and variadic
     // ========================================================================
 
     (@parse_operands
-        meta: $meta:tt,
+        doc: $doc:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
-        rest: [($($operand_tokens:tt)*) $($rest:tt)*]
+        operand_tokens: [$($tokens:tt)*],
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
     ) => {
-        $crate::define_op!(@parse_operand_list
-            meta: $meta,
+        $crate::define_op!(@munch_operands
+            doc: $doc,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
             fixed: [],
-            tokens: [$($operand_tokens)*],
-            rest: [$($rest)*]
+            tokens: [$($tokens)*],
+            result: $result,
+            region_tokens: $region_tokens
         );
     };
 
-    // ========================================================================
-    // @parse_operand_list - TT munch operands: (a, b, ..rest) patterns
-    // Output format: [$($fixed),*; $($var)?]
-    // ========================================================================
-
-    // No operands left - fixed only (or empty)
-    (@parse_operand_list
-        meta: $meta:tt,
+    // Empty operands
+    (@munch_operands
+        doc: $doc:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
         fixed: [$($fixed:ident),*],
         tokens: [],
-        rest: $rest:tt
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
     ) => {
         $crate::define_op!(@parse_result
-            meta: $meta,
+            doc: $doc,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
             operands: [$($fixed),*;],
-            rest: $rest
+            result: $result,
+            region_tokens: $region_tokens
         );
     };
 
-    // Variadic (with or without fixed operands before)
-    (@parse_operand_list
-        meta: $meta:tt,
+    // Variadic only or at end
+    (@munch_operands
+        doc: $doc:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
         fixed: [$($fixed:ident),*],
-        tokens: [..$var:ident $(,)?],
-        rest: $rest:tt
+        tokens: [#[rest] $var:ident $(,)?],
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
     ) => {
         $crate::define_op!(@parse_result
-            meta: $meta,
+            doc: $doc,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
             operands: [$($fixed),*; $var],
-            rest: $rest
+            result: $result,
+            region_tokens: $region_tokens
         );
     };
 
-    // Fixed operand followed by comma and more tokens
-    (@parse_operand_list
-        meta: $meta:tt,
+    // Fixed operand followed by comma and more
+    (@munch_operands
+        doc: $doc:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
         fixed: [$($fixed:ident),*],
         tokens: [$next:ident, $($remaining:tt)+],
-        rest: $rest:tt
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
     ) => {
-        $crate::define_op!(@parse_operand_list
-            meta: $meta,
+        $crate::define_op!(@munch_operands
+            doc: $doc,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
             fixed: [$($fixed,)* $next],
             tokens: [$($remaining)+],
-            rest: $rest
+            result: $result,
+            region_tokens: $region_tokens
         );
     };
 
-    // Last fixed operand (with optional trailing comma)
-    (@parse_operand_list
-        meta: $meta:tt,
+    // Last fixed operand
+    (@munch_operands
+        doc: $doc:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
         fixed: [$($fixed:ident),*],
         tokens: [$last:ident $(,)?],
-        rest: $rest:tt
+        result: $result:tt,
+        region_tokens: $region_tokens:tt
     ) => {
         $crate::define_op!(@parse_result
-            meta: $meta,
+            doc: $doc,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
             operands: [$($fixed,)* $last;],
-            rest: $rest
+            result: $result,
+            region_tokens: $region_tokens
         );
     };
 
     // ========================================================================
-    // @parse_result - Extract -> result(s) if present
+    // @parse_result - Parse result type (single, tuple, or none)
     // ========================================================================
 
-    // Delegate to @parse_result_list for TT munching
+    // No result
     (@parse_result
-        meta: $meta:tt,
+        doc: $doc:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
         operands: $operands:tt,
-        rest: [-> $($rest:tt)*]
+        result: [],
+        region_tokens: $region_tokens:tt
     ) => {
-        $crate::define_op!(@parse_result_list
-            meta: $meta,
+        $crate::define_op!(@parse_regions
+            doc: $doc,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
             operands: $operands,
             results: [],
-            rest: [$($rest)*]
+            region_tokens: $region_tokens
         );
     };
 
-    // No result: starts with {
+    // Tuple result: (a, b, ...)
     (@parse_result
-        meta: $meta:tt,
+        doc: $doc:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
         operands: $operands:tt,
-        rest: [$($rest:tt)*]
+        result: [($($result:ident),+ $(,)?)],
+        region_tokens: $region_tokens:tt
     ) => {
-        $crate::define_op!(@parse_region
-            meta: $meta,
+        $crate::define_op!(@parse_regions
+            doc: $doc,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
             operands: $operands,
-            result: [],
-            rest: [$($rest)*]
+            results: [$($result),+],
+            region_tokens: $region_tokens
         );
     };
 
-    // ========================================================================
-    // @parse_result_list - TT munch result names until { is reached
-    // ========================================================================
-
-    // Result followed by comma - continue munching
-    (@parse_result_list
-        meta: $meta:tt,
+    // Single result
+    (@parse_result
+        doc: $doc:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
         operands: $operands:tt,
-        results: [$($results:ident),*],
-        rest: [$next:ident, $($remaining:tt)+]
+        result: [$result:ident],
+        region_tokens: $region_tokens:tt
     ) => {
-        $crate::define_op!(@parse_result_list
-            meta: $meta,
+        $crate::define_op!(@parse_regions
+            doc: $doc,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
             operands: $operands,
-            results: [$($results,)* $next],
-            rest: [$($remaining)+]
+            results: [$result],
+            region_tokens: $region_tokens
         );
     };
 
-    // Last result (followed by region)
-    (@parse_result_list
-        meta: $meta:tt,
+    // ========================================================================
+    // @parse_regions - Parse #[region(name)] {} patterns
+    // ========================================================================
+
+    (@parse_regions
+        doc: $doc:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
         operands: $operands:tt,
-        results: [$($results:ident),*],
-        rest: [$last:ident $($remaining:tt)*]
+        results: $results:tt,
+        region_tokens: [$($tokens:tt)*]
     ) => {
-        $crate::define_op!(@parse_region
-            meta: $meta,
+        $crate::define_op!(@munch_regions
+            doc: $doc,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
             operands: $operands,
-            result: [$($results,)* $last],
-            rest: [$($remaining)*]
+            results: $results,
+            regions: [],
+            tokens: [$($tokens)*]
         );
     };
 
-    // ========================================================================
-    // @parse_region - Extract { region } or {}
-    // ========================================================================
-
-    // Has regions: { $name }
-    (@parse_region
-        meta: $meta:tt,
+    // Empty regions
+    (@munch_regions
+        doc: $doc:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
         operands: $operands:tt,
-        result: $result:tt,
-        rest: [$( @ $region:ident { } )*]
+        results: $results:tt,
+        regions: [$($region:ident),*],
+        tokens: []
     ) => {
         $crate::define_op!(@impl
-            meta: $meta,
+            doc: $doc,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
             operands: $operands,
-            result: $result,
-            region: [$($region),*]
+            results: $results,
+            regions: [$($region),*]
+        );
+    };
+
+    // Region: #[region(name)] {}
+    (@munch_regions
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        operands: $operands:tt,
+        results: $results:tt,
+        regions: [$($region:ident),*],
+        tokens: [#[region($name:ident)] {} $($rest:tt)*]
+    ) => {
+        $crate::define_op!(@munch_regions
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
+            operands: $operands,
+            results: $results,
+            regions: [$($region,)* $name],
+            tokens: [$($rest)*]
         );
     };
 
     // ========================================================================
-    // Implementation rule - Unified operands handling
-    // Format: [$($fixed),*; $($var)?]
+    // @impl - Generate the actual code
     // ========================================================================
 
     (@impl
-        meta: [$($meta:tt)*],
+        doc: [$($doc:literal),*],
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: [$($attr:ident),*],
         operands: [$($fixed:ident),*; $($var:ident)?],
-        result: [$($result:ident),*],
-        region: [$($region:ident),*]
+        results: [$($result:ident),*],
+        regions: [$($region:ident),*]
     ) => {
         $crate::paste::paste! {
-            $($meta)*
+            #[doc = concat!($($doc, "\n",)*)]
             #[derive(Clone, Copy, PartialEq, Eq, salsa::Update)]
             pub struct [<$op:camel>]<'db> {
                 op: $crate::Operation<'db>,
@@ -435,31 +468,8 @@ macro_rules! define_op {
                     self.op
                 }
 
-                #[allow(clippy::too_many_arguments)]
-                pub fn new(
-                    db: &'db dyn salsa::Database,
-                    location: $crate::Location<'db>,
-                    $($fixed: $crate::Value<'db>,)*
-                    $($var: Vec<$crate::Value<'db>>,)?
-                    $($result: $crate::Type,)*
-                    $($attr: $crate::Attribute<'db>,)*
-                    $($region: $crate::Region<'db>,)*
-                ) -> Self {
-                    let name = $crate::OpNameId::new(db, stringify!($dialect), stringify!($op));
-                    #[allow(unused_mut)]
-                    let mut operands = vec![$($fixed),*];
-                    $(operands.extend($var);)?
-                    let op = $crate::Operation::of(db, location, name)
-                        .operands(operands)
-                        $(.result($result))*
-                        $(.attr(stringify!($attr), $attr))*
-                        $(.region($region))*
-                        .build();
-                    Self::wrap_unchecked(op)
-                }
-
-                // operand accessors (if any)
-                $crate::define_op!(@gen_operand_accessors { 0 } $($fixed)* $(..$var)?);
+                // operand accessors
+                $crate::define_op!(@gen_operand_accessors { 0 } $($fixed)* $(#[rest] $var)?);
 
                 // Attribute accessors
                 $(
@@ -470,10 +480,10 @@ macro_rules! define_op {
                     }
                 )*
 
-                // Result accessors (only if results exist)
+                // Result accessors
                 $crate::define_op!(@gen_result_accessors { 0 } $($result)*);
 
-                // Region accessor (only if region exists)
+                // Region accessors
                 $crate::define_op!(@gen_region_accessor { 0 } $($region)*);
             }
 
@@ -516,24 +526,49 @@ macro_rules! define_op {
                     self.op
                 }
             }
+
+            // Constructor function for `$dialect.$op`.
+            #[doc = concat!($($doc, "\n",)*)]
+            #[allow(clippy::too_many_arguments)]
+            pub fn $op<'db>(
+                db: &'db dyn salsa::Database,
+                location: $crate::Location<'db>,
+                $($fixed: $crate::Value<'db>,)*
+                $($var: Vec<$crate::Value<'db>>,)?
+                $($result: $crate::Type,)*
+                $($attr: $crate::Attribute<'db>,)*
+                $($region: $crate::Region<'db>,)*
+            ) -> [<$op:camel>]<'db> {
+                let name = $crate::OpNameId::new(db, stringify!($dialect), stringify!($op));
+                #[allow(unused_mut)]
+                let mut operands = vec![$($fixed),*];
+                $(operands.extend($var);)?
+                let op = $crate::Operation::of(db, location, name)
+                    .operands(operands)
+                    $(.result($result))*
+                    $(.attr(stringify!($attr), $attr))*
+                    $(.region($region))*
+                    .build();
+                [<$op:camel>]::wrap_unchecked(op)
+            }
         }
     };
 
     // ========================================================================
-    // Helper rules - Conditional code generation
+    // Helper rules
     // ========================================================================
 
-    // Generate operand accessors with index - base case
+    // Operand accessors - base case
     (@gen_operand_accessors { $idx:expr }) => {};
-    // Generate operand accessors with index - varadic case
-    (@gen_operand_accessors { $idx:expr } ..$var:ident) => {
+    // Operand accessors - variadic
+    (@gen_operand_accessors { $idx:expr } #[rest] $var:ident) => {
         #[allow(dead_code)]
         pub fn $var(&self, db: &'db dyn salsa::Database) -> &[$crate::Value<'db>] {
             const FIXED_COUNT: usize = $idx;
             &self.op.operands(db)[FIXED_COUNT..]
         }
     };
-    // Generate operand accessors with index - recursive case
+    // Operand accessors - fixed
     (@gen_operand_accessors { $idx:expr } $name:ident $($rest:tt)*) => {
         #[allow(dead_code)]
         pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
@@ -542,9 +577,9 @@ macro_rules! define_op {
         $crate::define_op!(@gen_operand_accessors { $idx + 1 } $($rest)*);
     };
 
-    // Generate result accessors with index - base case
+    // Result accessors - base case
     (@gen_result_accessors { $idx:expr }) => {};
-    // Generate result accessors with index - recursive case
+    // Result accessors - recursive
     (@gen_result_accessors { $idx:expr } $name:ident $($rest:ident)*) => {
         #[allow(dead_code)]
         pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
@@ -561,9 +596,9 @@ macro_rules! define_op {
         $crate::define_op!(@gen_result_accessors { $idx + 1 } $($rest)*);
     };
 
-    // Region accessor: empty case (no region)
+    // Region accessor - base case
     (@gen_region_accessor { $idx:expr }) => {};
-    // Region accessor: present case
+    // Region accessor - recursive
     (@gen_region_accessor { $idx:expr } $region:ident $($rest:ident)*) => {
         #[allow(dead_code)]
         pub fn $region(&self, db: &'db dyn salsa::Database) -> $crate::Region<'db> {
@@ -573,9 +608,9 @@ macro_rules! define_op {
         $crate::define_op!(@gen_region_accessor { $idx + 1 } $($rest)*);
     };
 
-    // Result validation: empty case (no result expected)
+    // Result validation - empty
     (@maybe_result_validation []; $op:ident, $db:ident) => {};
-    // Result validation: one or more results expected
+    // Result validation - present
     (@maybe_result_validation [$($result:ident),+]; $op:ident, $db:ident) => {
         {
             const EXPECTED_RESULTS: usize = $crate::define_op!(@count $($result)+);
@@ -585,9 +620,9 @@ macro_rules! define_op {
         }
     };
 
-    // Region validation: empty case (no region expected)
+    // Region validation - empty
     (@maybe_region_validation []; $op:ident, $db:ident) => {};
-    // Region validation: one or more regions expected
+    // Region validation - present
     (@maybe_region_validation [$($region:ident),+]; $op:ident, $db:ident) => {
         {
             const EXPECTED_REGIONS: usize = $crate::define_op!(@count $($region)+);
@@ -597,9 +632,7 @@ macro_rules! define_op {
         }
     };
 
-    // ========================================================================
-    // @count - Count tokens (used for fixed operand counts and result counts)
-    // ========================================================================
+    // Count tokens
     (@count) => { 0 };
     (@count $first:tt $($rest:tt)*) => { 1 + $crate::define_op!(@count $($rest)*) };
 }

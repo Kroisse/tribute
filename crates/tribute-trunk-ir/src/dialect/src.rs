@@ -6,37 +6,45 @@
 use crate::dialect;
 
 dialect! {
-    src {
+    mod src {
         /// `src.call` operation: unresolved function call.
         /// The callee name will be resolved to a concrete function reference.
-        op call[name](..args) -> result;
+        #[attr(name)]
+        fn call(#[rest] args) -> result;
 
         /// `src.var` operation: unresolved variable reference.
         /// The name will be resolved to a concrete value (parameter, local, etc.).
-        op var[name]() -> result;
+        #[attr(name)]
+        fn var() -> result;
 
         /// `src.binop` operation: unresolved binary operation.
         /// Used for operators that need type-directed resolution (e.g., `<>` concat).
         /// The `op` attribute holds the operator name.
-        op binop[op](lhs, rhs) -> result;
+        #[attr(op)]
+        fn binop(lhs, rhs) -> result;
 
         /// `src.block` operation: block expression.
         /// Preserves block structure for source mapping and analysis.
         /// The body region contains the statements, and the result is the block's value.
-        op block() -> result @body {};
+        fn block() -> result {
+            #[region(body)] {}
+        };
 
         /// `src.yield` operation: yields a value from a block.
         /// Used to specify the result value of a `src.block`.
-        op r#yield(value);
+        fn r#yield(value);
 
         /// `src.lambda` operation: lambda expression.
         /// Represents an anonymous function before capture analysis.
         /// The `type` attribute holds the function type (params -> result).
         /// The body region contains the lambda body, ending with `src.yield`.
-        op lambda[r#type]() -> result @body {};
+        #[attr(r#type)]
+        fn lambda() -> result {
+            #[region(body)] {}
+        };
 
         /// `src.tuple` operation: tuple construction.
         /// Takes variadic operands (tuple elements) and produces a tuple value.
-        op tuple(..elements) -> result;
+        fn tuple(#[rest] elements) -> result;
     }
 }

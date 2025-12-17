@@ -5,14 +5,17 @@
 use crate::dialect;
 
 dialect! {
-    mem {
+    mod mem {
         /// `mem.data` operation: places bytes in data section, returns pointer.
-        op data[bytes]() -> result;
+        #[attr(bytes)]
+        fn data() -> result;
 
         /// `mem.load` operation: reads from memory.
-        op load[offset](ptr) -> result;
+        #[attr(offset)]
+        fn load(ptr) -> result;
 
         /// `mem.store` operation: writes to memory.
-        op store[offset](ptr, value);
+        #[attr(offset)]
+        fn store(ptr, value);
     }
 }

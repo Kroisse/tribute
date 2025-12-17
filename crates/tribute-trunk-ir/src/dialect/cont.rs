@@ -6,17 +6,23 @@
 use crate::dialect;
 
 dialect! {
-    cont {
+    mod cont {
         /// `cont.push_prompt` operation: installs a prompt and executes body.
-        op push_prompt[tag]() -> result @body {};
+        #[attr(tag)]
+        fn push_prompt() -> result {
+            #[region(body)] {}
+        };
 
         /// `cont.shift` operation: captures continuation and jumps to handler.
-        op shift[tag]() @handler {};
+        #[attr(tag)]
+        fn shift() {
+            #[region(handler)] {}
+        };
 
         /// `cont.resume` operation: resumes a captured continuation.
-        op resume(continuation, value) -> result;
+        fn resume(continuation, value) -> result;
 
         /// `cont.drop` operation: drops a continuation (satisfies linear type).
-        op drop(continuation);
+        fn drop(continuation);
     }
 }

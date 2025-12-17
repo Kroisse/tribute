@@ -4,13 +4,16 @@ use crate::{Attribute, Region, dialect};
 use tribute_core::Location;
 
 dialect! {
-    core {
+    mod core {
         /// `core.module` operation: top-level module container.
-        op module[sym_name]() @body {};
+        #[attr(sym_name)]
+        fn module() {
+            #[region(body)] {}
+        };
 
         /// `core.unrealized_conversion_cast` operation: temporary cast during dialect conversion.
         /// Must be eliminated after lowering is complete.
-        op unrealized_conversion_cast(value) -> result;
+        fn unrealized_conversion_cast(value) -> result;
     }
 }
 
@@ -22,7 +25,7 @@ impl<'db> Module<'db> {
         name: &str,
         body: Region<'db>,
     ) -> Self {
-        Self::new(db, location, Attribute::String(name.to_string()), body)
+        module(db, location, Attribute::String(name.to_string()), body)
     }
 
     /// Build a module with a closure that constructs the top-level block.

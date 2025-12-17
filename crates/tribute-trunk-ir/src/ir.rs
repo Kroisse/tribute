@@ -295,7 +295,7 @@ mod tests {
             |entry| {
                 let c0 = entry.op(arith::Const::i32(db, location, 40));
                 let c1 = entry.op(arith::Const::i32(db, location, 2));
-                let add = entry.op(arith::Add::new(
+                let add = entry.op(arith::add(
                     db,
                     location,
                     c0.result(db),
@@ -323,36 +323,40 @@ mod tests {
 
     // Test the new define_op! macro
     mod define_op_tests {
-        use crate::{Attribute, DialectOp, Region, Type, dialect};
+        use crate::{Attribute, Region, Type, dialect};
         use salsa::Database;
         use std::path::PathBuf;
         use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
 
         // Test: dialect! macro for grouping ops
         dialect! {
-            test {
+            mod test {
                 /// Test binary operation.
-                op binary(lhs, rhs) -> result;
+                fn binary(lhs, rhs) -> result;
 
                 /// Test constant operation.
-                op constant[value]() -> result;
+                #[attr(value)]
+                fn constant() -> result;
 
                 /// Test variadic operation.
-                op variadic(..args);
+                fn variadic(#[rest] args);
 
                 /// Test region operation.
-                op container[name]() @body {};
+                #[attr(name)]
+                fn container() {
+                    #[region(body)] {}
+                };
 
                 /// Test mixed operands: fixed + variadic.
-                op mixed(first, second, ..rest) -> result;
+                fn mixed(first, second, #[rest] rest) -> result;
 
                 /// Test multi-result operation.
-                op multi_result(input) -> quotient, remainder;
+                fn multi_result(input) -> (quotient, remainder);
             }
         }
 
         #[salsa::tracked]
-        fn test_binary_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+        fn test_binary_op(db: &dyn salsa::Database) -> Binary<'_> {
             let path = PathId::new(db, PathBuf::from("test.tr"));
             let location = Location::new(path, Span::new(0, 0));
 
@@ -364,16 +368,13 @@ mod tests {
             let v0 = dummy_op.result(db, 0);
             let v1 = dummy_op.result(db, 1);
 
-            // Test Binary::new
-            let binary = Binary::new(db, location, v0, v1, Type::I { bits: 32 });
-            binary.as_operation()
+            binary(db, location, v0, v1, Type::I { bits: 32 })
         }
 
         #[test]
         fn test_define_op_binary() {
             TributeDatabaseImpl::default().attach(|db| {
-                let op = test_binary_op(db);
-                let binary = Binary::from_operation(db, op).unwrap();
+                let binary = test_binary_op(db);
                 assert_eq!(binary.result_ty(db), Type::I { bits: 32 });
 
                 // Test auto-generated named accessors
@@ -384,19 +385,17 @@ mod tests {
         }
 
         #[salsa::tracked]
-        fn test_constant_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+        fn test_constant_op(db: &dyn salsa::Database) -> Constant<'_> {
             let path = PathId::new(db, PathBuf::from("test.tr"));
             let location = Location::new(path, Span::new(0, 0));
 
-            let constant = Constant::new(db, location, Type::I { bits: 64 }, 42i64.into());
-            constant.as_operation()
+            constant(db, location, Type::I { bits: 64 }, 42i64.into())
         }
 
         #[test]
         fn test_define_op_constant() {
             TributeDatabaseImpl::default().attach(|db| {
-                let op = test_constant_op(db);
-                let constant = Constant::from_operation(db, op).unwrap();
+                let constant = test_constant_op(db);
                 assert_eq!(constant.result_ty(db), Type::I { bits: 64 });
 
                 // Test auto-generated attribute accessor
@@ -405,46 +404,43 @@ mod tests {
         }
 
         #[salsa::tracked]
-        fn test_variadic_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+        fn test_variadic_op(db: &dyn salsa::Database) -> Variadic<'_> {
             let path = PathId::new(db, PathBuf::from("test.tr"));
             let location = Location::new(path, Span::new(0, 0));
 
-            let variadic = Variadic::new(db, location, vec![]);
-            variadic.as_operation()
+            variadic(db, location, vec![])
         }
 
         #[test]
         fn test_define_op_variadic() {
             TributeDatabaseImpl::default().attach(|db| {
-                let op = test_variadic_op(db);
-                let variadic = Variadic::from_operation(db, op).unwrap();
+                let variadic = test_variadic_op(db);
                 assert!(variadic.args(db).is_empty());
             });
         }
 
         #[salsa::tracked]
-        fn test_container_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+        fn test_container_op(db: &dyn salsa::Database) -> Container<'_> {
             let path = PathId::new(db, PathBuf::from("test.tr"));
             let location = Location::new(path, Span::new(0, 0));
 
             let block = crate::Block::new(db, location, vec![], vec![]);
             let region = Region::new(db, location, vec![block]);
 
-            let container =
-                Container::new(db, location, Attribute::String("test".to_string()), region);
-            container.as_operation()
+            container(db, location, Attribute::String("test".to_string()), region)
         }
 
         #[test]
         fn test_define_op_container() {
             TributeDatabaseImpl::default().attach(|db| {
-                let op = test_container_op(db);
-                Container::from_operation(db, op).unwrap();
+                let container = test_container_op(db);
+                assert_eq!(container.body(db).blocks(db).len(), 1);
+                assert_eq!(container.regions(db).len(), 1);
             });
         }
 
         #[salsa::tracked]
-        fn test_mixed_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+        fn test_mixed_op(db: &dyn salsa::Database) -> Mixed<'_> {
             let path = PathId::new(db, PathBuf::from("test.tr"));
             let location = Location::new(path, Span::new(0, 0));
 
@@ -460,16 +456,13 @@ mod tests {
             let v2 = dummy_op.result(db, 2);
             let v3 = dummy_op.result(db, 3);
 
-            // Test Mixed::new with fixed operands + variadic rest
-            let mixed = Mixed::new(db, location, v0, v1, vec![v2, v3], Type::I { bits: 32 });
-            mixed.as_operation()
+            mixed(db, location, v0, v1, vec![v2, v3], Type::I { bits: 32 })
         }
 
         #[test]
         fn test_define_op_mixed() {
             TributeDatabaseImpl::default().attach(|db| {
-                let op = test_mixed_op(db);
-                let mixed = Mixed::from_operation(db, op).unwrap();
+                let mixed = test_mixed_op(db);
                 assert_eq!(mixed.result_ty(db), Type::I { bits: 32 });
 
                 // Test named accessors for fixed operands
@@ -484,7 +477,7 @@ mod tests {
         }
 
         #[salsa::tracked]
-        fn test_multi_result_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+        fn test_multi_result_op(db: &dyn salsa::Database) -> MultiResult<'_> {
             let path = PathId::new(db, PathBuf::from("test.tr"));
             let location = Location::new(path, Span::new(0, 0));
 
@@ -494,22 +487,19 @@ mod tests {
                 .build();
             let input = dummy_op.result(db, 0);
 
-            // Test MultiResult::new with two result types
-            let multi = MultiResult::new(
+            multi_result(
                 db,
                 location,
                 input,
                 Type::I { bits: 32 }, // quotient type
                 Type::I { bits: 32 }, // remainder type
-            );
-            multi.as_operation()
+            )
         }
 
         #[test]
         fn test_define_op_multi_result() {
             TributeDatabaseImpl::default().attach(|db| {
-                let op = test_multi_result_op(db);
-                let multi = MultiResult::from_operation(db, op).unwrap();
+                let multi = test_multi_result_op(db);
 
                 // Test named result accessors for each result
                 assert_eq!(multi.quotient_ty(db), Type::I { bits: 32 });
@@ -521,7 +511,7 @@ mod tests {
                 assert_ne!(q, r); // They should be different values (different indices)
 
                 // Verify the underlying operation has 2 results
-                assert_eq!(op.results(db).len(), 2);
+                assert_eq!(multi.results(db).len(), 2);
             });
         }
     }
