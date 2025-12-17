@@ -5,18 +5,26 @@
 //!
 //! ## Pipeline
 //!
-//! The compilation pipeline has two main stages:
+//! The compilation pipeline consists of four stages:
 //!
 //! 1. **Parsing**: `parse_cst` - Parse source to CST (Tree-sitter)
 //! 2. **Lowering**: `lower_cst` - Lower CST to TrunkIR
+//! 3. **Name Resolution**: `stage_resolve` - Resolve `src.*` operations
+//! 4. **Type Checking**: `stage_typecheck` - Infer and check types
 //!
-//! Both stages are Salsa-tracked for incremental compilation.
-//! The convenience function `lower_source_file` combines both stages.
+//! All stages are Salsa-tracked for incremental compilation.
+//! Use `compile` to run the full pipeline, or `compile_with_diagnostics`
+//! for detailed results including error messages.
 
 // === TrunkIR passes ===
 pub mod cst_to_tir;
+pub mod pipeline;
 pub mod typeck;
 
 // Re-exports
 pub use cst_to_tir::{ParsedCst, lower_cst, lower_source_file, parse_cst};
+pub use pipeline::{
+    CompilationDiagnostic, CompilationResult, DiagnosticSeverity, compile,
+    compile_with_diagnostics, stage_resolve, stage_typecheck,
+};
 pub use typeck::{Constraint, EffectRow, TypeChecker, TypeSolver, typecheck_module};
