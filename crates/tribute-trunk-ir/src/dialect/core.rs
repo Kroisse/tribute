@@ -55,6 +55,10 @@ dialect! {
         /// Use `Nil` as the tail terminator.
         /// Example: `(a, b, c)` → `Tuple(a, Tuple(b, Tuple(c, Nil)))`
         type tuple(head, tail);
+
+        /// `core.ref_` type: GC-managed reference.
+        #[attr(nullable: bool)]
+        type ref_(pointee);
     }
 }
 
@@ -202,17 +206,6 @@ fn f(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
         Symbol::new(db, format!("f{bits}")),
         IdVec::new(),
         BTreeMap::new(),
-    )
-}
-
-/// Create a reference type (`core.ref`).
-pub fn ref_<'db>(db: &'db dyn salsa::Database, pointee: Type<'db>, nullable: bool) -> Type<'db> {
-    Type::new(
-        db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, "ref"),
-        idvec![pointee],
-        BTreeMap::from([(Symbol::new(db, "nullable"), Attribute::Bool(nullable))]),
     )
 }
 

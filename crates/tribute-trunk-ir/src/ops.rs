@@ -69,6 +69,7 @@ pub trait DialectOp<'db>: Sized + Copy {
 /// # Type Features
 /// - `type name;` - type with no parameters
 /// - `type name(a, b);` - type with parameters (generates accessors)
+/// - `#[attr(name: Type)]` - typed attribute (bool, Type, String)
 ///
 /// # Example
 /// ```
@@ -92,9 +93,16 @@ pub trait DialectOp<'db>: Sized + Copy {
 ///     mod core {
 ///         /// Tuple cons cell.
 ///         type tuple(head, tail);
+///
+///         /// Reference type with nullable attribute.
+///         #[attr(nullable: bool)]
+///         type ref_(pointee);
 ///     }
 /// }
-/// // Usage: core::Tuple::new(db, head_ty, tail_ty)
+/// // Usage:
+/// // core::Tuple::new(db, head_ty, tail_ty)
+/// // core::Ref_::new(db, pointee_ty, true)  // nullable = true
+/// // ref_.nullable(db)  // -> bool
 /// ```
 #[macro_export]
 macro_rules! dialect {
@@ -126,10 +134,10 @@ macro_rules! dialect {
         $crate::dialect!(@parse $dialect [$($rest)*]);
     };
 
-    // Type with optional doc and optional attrs.
+    // Type with optional doc and optional typed attrs.
     (@parse $dialect:ident
         [$(#[doc = $doc:literal])*
-         $(#[attr($($attr:ident),* $(,)?)])?
+         $(#[attr($($attr:ident : $attr_ty:ident),* $(,)?)])?
          type $ty:ident $(($($params:ident),* $(,)?))?;
          $($rest:tt)*]
     ) => {
@@ -137,7 +145,7 @@ macro_rules! dialect {
             doc: [$($doc),*],
             dialect: $dialect,
             ty: $ty,
-            attrs: [$($($attr),*)?],
+            attrs: [$($($attr : $attr_ty),*)?],
             params: [$($($params),*)?]
         }
         $crate::dialect!(@parse $dialect [$($rest)*]);
@@ -631,17 +639,22 @@ macro_rules! define_op {
 ///
 /// This generates:
 /// - A struct wrapping `Type<'db>`
-/// - `new` constructor with type parameters
+/// - `new` constructor with type parameters and typed attributes
 /// - `DialectType` trait implementation
 /// - `Deref<Target = Type<'db>>` implementation
-/// - Accessor methods for type parameters
+/// - Accessor methods for type parameters and attributes
+///
+/// # Supported attribute types
+/// - `bool` - stored as `Attribute::Bool`
+/// - `Type` - stored as `Attribute::Type`
+/// - `String` - stored as `Attribute::String`
 #[macro_export]
 macro_rules! define_type {
     (
         doc: [$($doc:literal),*],
         dialect: $dialect:ident,
         ty: $ty:ident,
-        attrs: [$($attr:ident),*],
+        attrs: [$($attr:ident : $attr_ty:ident),*],
         params: [$($param:ident),*]
     ) => {
         $crate::paste::paste! {
@@ -655,18 +668,37 @@ macro_rules! define_type {
                 pub fn new(
                     db: &'db dyn salsa::Database,
                     $($param: $crate::Type<'db>,)*
+                    $($attr: $crate::define_type!(@rust_type $attr_ty),)*
                 ) -> Self {
+                    #[allow(unused_mut)]
+                    let mut attrs = std::collections::BTreeMap::new();
+                    $(
+                        attrs.insert(
+                            $crate::Symbol::new(db, stringify!($attr)),
+                            $crate::define_type!(@to_attr $attr_ty, $attr),
+                        );
+                    )*
                     Self($crate::Type::new(
                         db,
                         $crate::Symbol::new(db, stringify!($dialect)),
                         $crate::Symbol::new(db, stringify!($ty)),
                         $crate::idvec![$($param),*],
-                        std::collections::BTreeMap::new(),
+                        attrs,
                     ))
                 }
 
                 // Parameter accessors
                 $crate::define_type!(@gen_param_accessors { 0 } $($param)*);
+
+                // Attribute accessors
+                $(
+                    #[allow(dead_code)]
+                    pub fn $attr(&self, db: &'db dyn salsa::Database) -> $crate::define_type!(@rust_type $attr_ty) {
+                        let attr = self.0.get_attr(db, stringify!($attr))
+                            .expect(concat!("missing attribute: ", stringify!($attr)));
+                        $crate::define_type!(@from_attr $attr_ty, attr)
+                    }
+                )*
             }
 
             impl<'db> std::ops::Deref for [<$ty:camel>]<'db> {
@@ -691,6 +723,38 @@ macro_rules! define_type {
                     }
                 }
             }
+        }
+    };
+
+    // === Type mappings ===
+
+    // Rust type for constructor parameter
+    (@rust_type bool) => { bool };
+    (@rust_type Type) => { $crate::Type<'db> };
+    (@rust_type String) => { std::string::String };
+
+    // Convert Rust value to Attribute
+    (@to_attr bool, $val:expr) => { $crate::Attribute::Bool($val) };
+    (@to_attr Type, $val:expr) => { $crate::Attribute::Type($val) };
+    (@to_attr String, $val:expr) => { $crate::Attribute::String($val) };
+
+    // Convert Attribute to Rust value
+    (@from_attr bool, $attr:expr) => {
+        match $attr {
+            $crate::Attribute::Bool(v) => *v,
+            _ => panic!("expected Bool attribute"),
+        }
+    };
+    (@from_attr Type, $attr:expr) => {
+        match $attr {
+            $crate::Attribute::Type(v) => *v,
+            _ => panic!("expected Type attribute"),
+        }
+    };
+    (@from_attr String, $attr:expr) => {
+        match $attr {
+            $crate::Attribute::String(v) => v.clone(),
+            _ => panic!("expected String attribute"),
         }
     };
 
