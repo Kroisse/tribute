@@ -2612,6 +2612,73 @@ fn test() {
     }
 
     #[test]
+    fn test_bytes_interpolation_segments() {
+        // Test that bytes interpolation correctly captures all segments:
+        // b"a\{x}b\{y}c" should produce:
+        // - leading: [a]
+        // - segments: [{interpolation: x, trailing: [b]}, {interpolation: y, trailing: [c]}]
+        let db = tribute_core::TributeDatabaseImpl::default();
+        use salsa::Database;
+
+        db.attach(|db| {
+            let source_file = tribute_core::SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.trb"),
+                r#"
+fn test() {
+    b"a\{x}b\{y}c"
+}
+"#
+                .to_string(),
+            );
+            let result = parse_source_file(db, source_file);
+            assert_eq!(result.items(db).len(), 1);
+            let ItemKind::Function(func) = result.items(db)[0].kind(db) else {
+                panic!("Expected function")
+            };
+            if let Statement::Expression((Expr::BytesInterpolation(interp), _)) =
+                &func.body(db).statements[0]
+            {
+                // Verify leading bytes
+                assert_eq!(interp.leading, b"a".to_vec(), "leading should be 'a'");
+
+                // Verify we have 2 interpolation segments
+                assert_eq!(
+                    interp.segments.len(),
+                    2,
+                    "should have 2 interpolation segments"
+                );
+
+                // Verify first segment: interpolation x, trailing "b"
+                if let Expr::Identifier(name) = &interp.segments[0].interpolation.0 {
+                    assert_eq!(name, "x", "first interpolation should be 'x'");
+                } else {
+                    panic!("Expected identifier 'x' in first interpolation");
+                }
+                assert_eq!(
+                    interp.segments[0].trailing,
+                    b"b".to_vec(),
+                    "first segment trailing should be 'b'"
+                );
+
+                // Verify second segment: interpolation y, trailing "c"
+                if let Expr::Identifier(name) = &interp.segments[1].interpolation.0 {
+                    assert_eq!(name, "y", "second interpolation should be 'y'");
+                } else {
+                    panic!("Expected identifier 'y' in second interpolation");
+                }
+                assert_eq!(
+                    interp.segments[1].trailing,
+                    b"c".to_vec(),
+                    "second segment trailing should be 'c'"
+                );
+            } else {
+                panic!("Expected bytes interpolation expression");
+            }
+        });
+    }
+
+    #[test]
     fn test_parse_int_literal() {
         // Basic positive and negative numbers
         assert_eq!(parse_int_literal("+42").unwrap(), 42);
