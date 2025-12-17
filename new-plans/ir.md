@@ -529,18 +529,42 @@ func.func @sum(%xs: ref<List>, %acc: i32) -> i32 {
 ```
 Tribute Source
     │
-    ▼ Parse
+    ▼ Parse (CST)
+    │
+    ▼ Lower (CST → TrunkIR)
     │
 TrunkIR [src, type, adt, ability, func, scf, arith]
-    │   (src.unknown, src.infer 타입 포함)
+    │   (src.var, src.path, src.call, src.type 포함)
+    │   (type.var 타입 변수 포함)
     │   (src.lambda 포함)
     │
-    ▼ Type Inference + Name Resolution + Capture Analysis
-    │   src.unknown, src.infer 제거
-    │   src.dot_call, src.call → func.call
-    │   src.lambda → func.closure_new (캡처 변수 명시)
+    ▼ Name Resolution + Type Inference (interleaved)
+    │   ┌─────────────────────────────────────────────┐
+    │   │ 1. Basic Name Resolution                    │
+    │   │    - qualified paths (List::empty)          │
+    │   │    - constructors (Some, None)              │
+    │   │    - unambiguous function names             │
+    │   │    → src.path, 일부 src.var 해소            │
+    │   │                                             │
+    │   │ 2. First-pass Type Inference                │
+    │   │    - constraint 수집                        │
+    │   │    - type.var 해소 시작                     │
+    │   │                                             │
+    │   │ 3. Type-directed Name Resolution (UFCS)     │
+    │   │    - xs.map(f) → List::map(xs, f)          │
+    │   │    - 첫 번째 인자 타입으로 함수 선택        │
+    │   │    → 나머지 src.var, src.call 해소          │
+    │   │                                             │
+    │   │ 4. Complete Type Inference                  │
+    │   │    - UFCS 해소 후 추가 constraint 수집      │
+    │   │    - 모든 type.var 해소                     │
+    │   │    - effect row 통합                        │
+    │   └─────────────────────────────────────────────┘
     │
-TrunkIR [type, adt, ability, func, scf, arith]
+    ▼ Capture Analysis
+    │   src.lambda → closure.new (캡처 변수 명시)
+    │
+TrunkIR [type, adt, ability, closure, func, scf, arith]
     │
     ▼ Ability Lowering (Evidence Passing)
     │   ability.* → cont.* + func.call
@@ -564,21 +588,50 @@ TrunkIR [wasm.*]                     TrunkIR [clif.*]
 .wasm                                native binary
 ```
 
+### Name Resolution + Type Inference 상세
+
+Name resolution과 type inference가 interleaved되는 이유:
+
+1. **UFCS 해소에 타입 필요**: `xs.map(f)`에서 `map`이 `List::map`인지 `Option::map`인지는 `xs`의 타입에 따라 결정됨
+2. **타입 추론에 해소된 이름 필요**: `List::map`의 타입 시그니처를 알아야 결과 타입 추론 가능
+
+따라서 두 pass가 순차적으로 완전히 분리될 수 없고, 상호작용하면서 진행된다.
+
+```
+┌────────────────┐     ┌────────────────┐
+│ Name Resolution│ ←─→ │ Type Inference │
+└────────────────┘     └────────────────┘
+        ↓                      ↓
+   src.* 해소            type.var 해소
+```
+
+**기본 해소 (타입 불필요)**:
+- `List::empty` → qualified path, 바로 해소
+- `Some(x)` → constructor, 바로 해소
+- `foo(x)` → 스코프에 `foo`가 하나만 있으면 바로 해소
+
+**타입 기반 해소 (타입 필요)**:
+- `xs.map(f)` → `xs`의 타입이 `List(a)`이면 `List::map` 선택
+- `x + y` → `x`, `y`의 타입이 `Int`이면 `arith.add`, `String`이면 `String::concat`
+
 ---
 
 ## Pass Invariants
 
 각 pass가 완료된 후 만족해야 하는 조건:
 
-| Pass               | Invariant                            |
-| ------------------ | ------------------------------------ |
-| Parse              | 유효한 TrunkIR 구조                  |
-| Type Inference     | src.unknown, src.infer 없음          |
-| Name Resolution    | src.dot_call, src.call 없음          |
-| Capture Analysis   | src.lambda 없음                      |
-| Ability Lowering   | ability.\* 없음                      |
-| Wasm Lowering      | wasm.\* 만 존재 (타겟이 Wasm일 때)   |
-| Cranelift Lowering | clif.\* 만 존재 (타겟이 native일 때) |
+| Pass                     | Invariant                                    |
+| ------------------------ | -------------------------------------------- |
+| Parse                    | 유효한 CST 구조                              |
+| Lower                    | 유효한 TrunkIR 구조                          |
+| Basic Name Resolution    | src.path 없음, 일부 src.var 해소             |
+| Type Inference (1차)     | 대부분의 type.var에 constraint 존재          |
+| Type-directed Resolution | src.var, src.call 없음 (UFCS 포함)           |
+| Type Inference (완료)    | type.var 없음, 모든 타입 구체화              |
+| Capture Analysis         | src.lambda 없음, closure.new로 대체          |
+| Ability Lowering         | ability.\* 없음                              |
+| Wasm Lowering            | wasm.\* 만 존재 (타겟이 Wasm일 때)           |
+| Cranelift Lowering       | clif.\* 만 존재 (타겟이 native일 때)         |
 
 ---
 

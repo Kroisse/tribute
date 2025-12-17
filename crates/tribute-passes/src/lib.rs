@@ -19,6 +19,7 @@
 // === TrunkIR passes ===
 pub mod cst_to_tir;
 pub mod pipeline;
+pub mod resolve;
 pub mod typeck;
 
 // Re-exports
@@ -27,4 +28,5 @@ pub use pipeline::{
     CompilationDiagnostic, CompilationResult, DiagnosticSeverity, compile,
     compile_with_diagnostics, stage_resolve, stage_typecheck,
 };
+pub use resolve::{ModuleEnv, Resolver, resolve_module};
 pub use typeck::{Constraint, EffectRow, TypeChecker, TypeSolver, typecheck_module};
