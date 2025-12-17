@@ -1,14 +1,71 @@
 //! IR type definitions.
 
-use crate::Symbol;
-use serde::{Deserialize, Serialize};
+use crate::{Symbol, TrackedVec};
 
 /// IR type representation.
-///
-/// Note: Uses `Vec` instead of `SmallVec` because the recursive nature
-/// (Type containing Vec<Type>) would cause infinite size with inline storage.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Type {
+#[salsa::interned(debug)]
+pub struct Type<'db> {
+    #[returns(ref)]
+    pub kind: TypeKind<'db>,
+}
+
+impl<'db> Type<'db> {
+    pub fn i(db: &'db dyn salsa::Database, bits: u16) -> Self {
+        Type::new(db, TypeKind::I { bits })
+    }
+    pub fn f(db: &'db dyn salsa::Database, bits: u16) -> Self {
+        Type::new(db, TypeKind::F { bits })
+    }
+    pub fn string(db: &'db dyn salsa::Database) -> Self {
+        Type::new(db, TypeKind::String)
+    }
+    pub fn bytes(db: &'db dyn salsa::Database) -> Self {
+        Type::new(db, TypeKind::Bytes)
+    }
+    pub fn ptr(db: &'db dyn salsa::Database) -> Self {
+        Type::new(db, TypeKind::Ptr)
+    }
+    pub fn never(db: &'db dyn salsa::Database) -> Self {
+        Type::new(db, TypeKind::Never)
+    }
+    pub fn unit(db: &'db dyn salsa::Database) -> Self {
+        Type::new(db, TypeKind::Unit)
+    }
+    pub fn array(db: &'db dyn salsa::Database, ty: Type<'db>) -> Self {
+        Type::new(db, TypeKind::Array(ty))
+    }
+    pub fn ref_(db: &'db dyn salsa::Database, ty: Type<'db>, nullable: bool) -> Self {
+        Type::new(db, TypeKind::Ref { ty, nullable })
+    }
+    pub fn tuple(db: &'db dyn salsa::Database, tys: TrackedVec<Type<'db>>) -> Self {
+        Type::new(db, TypeKind::Tuple(tys))
+    }
+    pub fn function(
+        db: &'db dyn salsa::Database,
+        params: TrackedVec<Type<'db>>,
+        results: TrackedVec<Type<'db>>,
+    ) -> Self {
+        Type::new(db, TypeKind::Function { params, results })
+    }
+    pub fn dialect(
+        db: &'db dyn salsa::Database,
+        dialect: String,
+        name: String,
+        params: TrackedVec<Type<'db>>,
+    ) -> Self {
+        Type::new(
+            db,
+            TypeKind::Dialect {
+                dialect,
+                name,
+                params,
+            },
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum TypeKind<'db> {
     I {
         bits: u16,
     },
@@ -20,20 +77,20 @@ pub enum Type {
     Ptr,
     Never,
     Unit,
-    Array(Box<Type>),
+    Array(Type<'db>),
     Ref {
-        ty: Box<Type>,
+        ty: Type<'db>,
         nullable: bool,
     },
-    Tuple(Vec<Type>),
+    Tuple(TrackedVec<Type<'db>>),
     Function {
-        params: Vec<Type>,
-        results: Vec<Type>,
+        params: TrackedVec<Type<'db>>,
+        results: TrackedVec<Type<'db>>,
     },
     Dialect {
         dialect: String,
         name: String,
-        params: Vec<Type>,
+        params: TrackedVec<Type<'db>>,
     },
 }
 
@@ -48,9 +105,9 @@ pub enum Attribute<'db> {
     FloatBits(u64),
     String(String),
     Bytes(Vec<u8>),
-    Type(Type),
+    Type(Type<'db>),
     /// Symbol reference path (e.g., ["module", "func_name"])
-    SymbolRef(Vec<Symbol<'db>>),
+    SymbolRef(TrackedVec<Symbol<'db>>),
     /// List of attributes (for arrays of values like switch cases).
     List(Vec<Attribute<'db>>),
 }

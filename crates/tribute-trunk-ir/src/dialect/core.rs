@@ -1,6 +1,6 @@
 //! Core dialect operations.
 
-use crate::{Attribute, Region, dialect, ir::BlockBuilder};
+use crate::{Attribute, Region, dialect, ir::BlockBuilder, smallvec::smallvec};
 use tribute_core::Location;
 
 dialect! {
@@ -37,7 +37,7 @@ impl<'db> Module<'db> {
     ) -> Self {
         let mut top = BlockBuilder::new(db, location);
         f(&mut top);
-        let region = Region::new(db, location, vec![top.build()]);
+        let region = Region::new(db, location, smallvec![top.build()]);
         Self::create(db, location, name, region)
     }
 

@@ -1,6 +1,6 @@
 //! Function dialect operations.
 
-use crate::{Attribute, Region, Type, dialect, ir::BlockBuilder};
+use crate::{Attribute, Region, TrackedVec, Type, dialect, ir::BlockBuilder, smallvec::smallvec};
 use tribute_core::Location;
 
 dialect! {
@@ -40,18 +40,18 @@ impl<'db> Func<'db> {
         db: &'db dyn salsa::Database,
         location: Location<'db>,
         name: &str,
-        params: Vec<Type>,
-        results: Vec<Type>,
+        params: TrackedVec<Type<'db>>,
+        results: TrackedVec<Type<'db>>,
         f: impl FnOnce(&mut BlockBuilder<'db>),
     ) -> Self {
         let mut entry = BlockBuilder::new(db, location).args(params.clone());
         f(&mut entry);
-        let region = Region::new(db, location, vec![entry.build()]);
+        let region = Region::new(db, location, smallvec![entry.build()]);
         func(
             db,
             location,
             Attribute::String(name.to_string()),
-            Attribute::Type(Type::Function { params, results }),
+            Attribute::Type(Type::function(db, params, results)),
             region,
         )
     }
@@ -65,7 +65,7 @@ impl<'db> Func<'db> {
     }
 
     /// Get the function type.
-    pub fn ty(&self, db: &'db dyn salsa::Database) -> &'db Type {
+    pub fn ty(&self, db: &'db dyn salsa::Database) -> &'db Type<'db> {
         let Attribute::Type(t) = self.r#type(db) else {
             panic!("func.func missing type attribute")
         };

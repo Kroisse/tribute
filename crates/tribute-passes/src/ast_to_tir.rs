@@ -12,8 +12,11 @@ use tribute_ast::{
     RecordExpression, RecordField, Statement, StringInterpolation,
 };
 use tribute_core::{Location, PathId, Span, Spanned};
-use tribute_trunk_ir::dialect::{adt, arith, case, core, func, list, src};
-use tribute_trunk_ir::{Attribute, BlockBuilder, Region, Type, Value};
+use tribute_trunk_ir::{
+    Attribute, BlockBuilder, Region, TrackedVec, Type, Value,
+    dialect::{adt, arith, case, core, func, list, src},
+    smallvec::smallvec,
+};
 
 /// Context for lowering, tracking local variable bindings.
 struct LoweringCtx<'db> {
@@ -75,16 +78,14 @@ fn lower_function<'db>(
     let name = func_def.name(db);
     let span = func_def.span(db);
     let location = Location::new(path, span);
+    let unit_ty = Type::unit(db);
 
     // For now, assume no type annotations (all Unknown)
-    let params: Vec<Type> = func_def
-        .parameters(db)
-        .iter()
-        .map(|_| Type::Unit) // Placeholder until type inference
-        .collect();
+    let params: TrackedVec<Type> =
+        std::iter::repeat_n(unit_ty, func_def.parameters(db).len()).collect();
 
     // Result type is also unknown until inference
-    let results = vec![Type::Unit];
+    let results = smallvec![unit_ty];
 
     func::Func::build(db, location, &name, params, results, |entry| {
         let body = func_def.body(db);
@@ -137,6 +138,7 @@ fn bind_pattern<'db>(
     value: Value<'db>,
     location: Location<'db>,
 ) {
+    let unit_ty = Type::unit(db);
     match pattern {
         Pattern::Identifier(name) => {
             ctx.bind(name.clone(), value);
@@ -166,7 +168,7 @@ fn bind_pattern<'db>(
                                 db,
                                 location,
                                 value,
-                                Type::Unit,
+                                unit_ty,
                                 (i as u64).into(),
                             ))
                             .result(db);
@@ -180,7 +182,7 @@ fn bind_pattern<'db>(
                                 db,
                                 location,
                                 value,
-                                Type::Unit,
+                                unit_ty,
                                 (i as u64).into(),
                             ))
                             .result(db);
@@ -196,7 +198,7 @@ fn bind_pattern<'db>(
                     db,
                     location,
                     vec![value],
-                    Type::Unit,
+                    unit_ty,
                     Attribute::String("tuple_get_0".to_string()),
                 ))
                 .result(db);
@@ -208,7 +210,7 @@ fn bind_pattern<'db>(
                         db,
                         location,
                         vec![value],
-                        Type::Unit,
+                        unit_ty,
                         Attribute::String(format!("tuple_get_{}", i + 1)),
                     ))
                     .result(db);
@@ -227,7 +229,7 @@ fn bind_pattern<'db>(
                         location,
                         value,
                         index_value,
-                        Type::Unit,
+                        unit_ty,
                         Attribute::Unit, // elem_type to be inferred
                     ))
                     .result(db);
@@ -239,9 +241,7 @@ fn bind_pattern<'db>(
                 let start_value = block
                     .op(arith::Const::i64(db, location, elements.len() as i64))
                     .result(db);
-                let len_value = block
-                    .op(list::len(db, location, value, Type::Unit))
-                    .result(db);
+                let len_value = block.op(list::len(db, location, value, unit_ty)).result(db);
                 let rest_value = block
                     .op(list::slice(
                         db,
@@ -249,7 +249,7 @@ fn bind_pattern<'db>(
                         value,
                         start_value,
                         len_value,
-                        Type::Unit,
+                        unit_ty,
                         Attribute::Unit, // elem_type to be inferred
                     ))
                     .result(db);
@@ -273,6 +273,7 @@ fn lower_expr<'db>(
 ) -> Value<'db> {
     let (expr, span) = spanned;
     let location = Location::new(path, *span);
+    let unit_ty = Type::unit(db);
 
     match expr {
         // Literals → arith.const
@@ -290,17 +291,12 @@ fn lower_expr<'db>(
         }
         Expr::Bool(b) => {
             // Use i1 for booleans
-            let op = block.op(arith::r#const(
-                db,
-                location,
-                Type::I { bits: 1 },
-                (*b).into(),
-            ));
+            let op = block.op(arith::r#const(db, location, Type::i(db, 1), (*b).into()));
             op.result(db)
         }
         Expr::Nil => {
             // Nil as unit constant
-            let op = block.op(arith::r#const(db, location, Type::Unit, Attribute::Unit));
+            let op = block.op(arith::r#const(db, location, unit_ty, Attribute::Unit));
             op.result(db)
         }
 
@@ -314,7 +310,7 @@ fn lower_expr<'db>(
                 let op = block.op(src::var(
                     db,
                     location,
-                    Type::Unit, // Unknown until resolution
+                    unit_ty, // Unknown until resolution
                     Attribute::String(name.clone()),
                 ));
                 op.result(db)
@@ -336,7 +332,7 @@ fn lower_expr<'db>(
                 db,
                 location,
                 args,
-                Type::Unit, // Unknown until resolution
+                unit_ty, // Unknown until resolution
                 Attribute::String(function.clone()),
             ));
             op.result(db)
@@ -359,7 +355,7 @@ fn lower_expr<'db>(
             let op = block.op(arith::r#const(
                 db,
                 location,
-                Type::I { bits: 32 },
+                Type::i(db, 32),
                 (*c as u32 as u64).into(),
             ));
             op.result(db)
@@ -391,7 +387,7 @@ fn lower_expr<'db>(
                 db,
                 location,
                 args,
-                Type::Unit, // Unknown until resolution
+                unit_ty, // Unknown until resolution
                 Attribute::String(method.clone()),
             ));
             op.result(db)
@@ -407,10 +403,9 @@ fn lower_expr<'db>(
             body,
         }) => {
             // Parameter types are unknown until type inference
-            let param_types: Vec<Type> = parameters.iter().map(|_| Type::Unit).collect();
-            let result_type = Type::Unit;
-
-            // Create body block with parameters as block arguments
+            let param_types: TrackedVec<Type<'_>> =
+                std::iter::repeat_n(unit_ty, parameters.len()).collect();
+            let result_type = unit_ty; // Create body block with parameters as block arguments
             let mut body_block = BlockBuilder::new(db, location).args(param_types.clone());
 
             // Lower body in a new scope with parameters bound to block arguments
@@ -424,7 +419,7 @@ fn lower_expr<'db>(
                     let param_value = body_block.op(src::var(
                         db,
                         location,
-                        Type::Unit,
+                        unit_ty,
                         Attribute::String(param.name.clone()),
                     ));
                     ctx.bind(param.name.clone(), param_value.result(db));
@@ -439,17 +434,14 @@ fn lower_expr<'db>(
             body_block.op(src::r#yield(db, location, result_value));
 
             // Create the function type for the lambda
-            let func_type = Type::Function {
-                params: param_types,
-                results: vec![result_type],
-            };
+            let func_type = Type::function(db, param_types, smallvec![result_type]);
 
             // Create the src.lambda operation
-            let region = Region::new(db, location, vec![body_block.build()]);
+            let region = Region::new(db, location, smallvec![body_block.build()]);
             let lambda_op = block.op(src::lambda(
                 db,
                 location,
-                Type::Unit,
+                unit_ty,
                 Attribute::Type(func_type),
                 region,
             ));
@@ -468,8 +460,8 @@ fn lower_expr<'db>(
             body_block.op(src::r#yield(db, location, result_value));
 
             // Create the src.block operation
-            let region = Region::new(db, location, vec![body_block.build()]);
-            let block_op = block.op(src::block(db, location, Type::Unit, region));
+            let region = Region::new(db, location, smallvec![body_block.build()]);
+            let block_op = block.op(src::block(db, location, unit_ty, region));
             block_op.result(db)
         }
         // List literal → list.new
@@ -484,7 +476,7 @@ fn lower_expr<'db>(
                 db,
                 location,
                 values,
-                Type::Unit, // Element type to be inferred
+                unit_ty, // Element type to be inferred
                 Attribute::Unit,
             ));
             op.result(db)
@@ -498,7 +490,7 @@ fn lower_expr<'db>(
             }
 
             // Create the src.tuple operation
-            let tuple_op = block.op(src::tuple(db, location, elements, Type::Unit));
+            let tuple_op = block.op(src::tuple(db, location, elements, unit_ty));
             tuple_op.result(db)
         }
         // Record expression: User { name: "Alice", age: 30 }
@@ -514,7 +506,7 @@ fn lower_expr<'db>(
                 Some(q) => format!("{}::{}", q, op),
                 None => op.clone(),
             };
-            let op = block.op(src::var(db, location, Type::Unit, Attribute::String(name)));
+            let op = block.op(src::var(db, location, unit_ty, Attribute::String(name)));
             op.result(db)
         }
     }
@@ -545,7 +537,12 @@ fn lower_statements<'db>(
 
     // Return the last expression value, or unit if empty/ends with let
     last_value.unwrap_or_else(|| {
-        let op = block.op(arith::r#const(db, location, Type::Unit, Attribute::Unit));
+        let op = block.op(arith::r#const(
+            db,
+            location,
+            Type::unit(db),
+            Attribute::Unit,
+        ));
         op.result(db)
     })
 }
@@ -560,52 +557,53 @@ fn lower_binary_op<'db>(
     rhs: Value<'db>,
 ) -> Value<'db> {
     // Result type is unknown until type inference
-    let result_ty = Type::Unit;
+    let unit_ty = Type::unit(db);
+    let bool_ty = Type::i(db, 1);
 
     match operator {
         // Arithmetic operations → arith dialect
         BinaryOperator::Add => block
-            .op(arith::add(db, location, lhs, rhs, result_ty))
+            .op(arith::add(db, location, lhs, rhs, unit_ty))
             .result(db),
         BinaryOperator::Subtract => block
-            .op(arith::sub(db, location, lhs, rhs, result_ty))
+            .op(arith::sub(db, location, lhs, rhs, unit_ty))
             .result(db),
         BinaryOperator::Multiply => block
-            .op(arith::mul(db, location, lhs, rhs, result_ty))
+            .op(arith::mul(db, location, lhs, rhs, unit_ty))
             .result(db),
         BinaryOperator::Divide => block
-            .op(arith::div(db, location, lhs, rhs, result_ty))
+            .op(arith::div(db, location, lhs, rhs, unit_ty))
             .result(db),
         BinaryOperator::Modulo => block
-            .op(arith::rem(db, location, lhs, rhs, result_ty))
+            .op(arith::rem(db, location, lhs, rhs, unit_ty))
             .result(db),
 
         // Comparison operations → arith dialect (result is i1)
         BinaryOperator::Equal => block
-            .op(arith::cmp_eq(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .op(arith::cmp_eq(db, location, lhs, rhs, bool_ty))
             .result(db),
         BinaryOperator::NotEqual => block
-            .op(arith::cmp_ne(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .op(arith::cmp_ne(db, location, lhs, rhs, bool_ty))
             .result(db),
         BinaryOperator::LessThan => block
-            .op(arith::cmp_lt(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .op(arith::cmp_lt(db, location, lhs, rhs, bool_ty))
             .result(db),
         BinaryOperator::LessEqual => block
-            .op(arith::cmp_le(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .op(arith::cmp_le(db, location, lhs, rhs, bool_ty))
             .result(db),
         BinaryOperator::GreaterThan => block
-            .op(arith::cmp_gt(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .op(arith::cmp_gt(db, location, lhs, rhs, bool_ty))
             .result(db),
         BinaryOperator::GreaterEqual => block
-            .op(arith::cmp_ge(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .op(arith::cmp_ge(db, location, lhs, rhs, bool_ty))
             .result(db),
 
         // Logical operations → arith bitwise (works for i1 booleans)
         BinaryOperator::And => block
-            .op(arith::and(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .op(arith::and(db, location, lhs, rhs, bool_ty))
             .result(db),
         BinaryOperator::Or => block
-            .op(arith::or(db, location, lhs, rhs, Type::I { bits: 1 }))
+            .op(arith::or(db, location, lhs, rhs, bool_ty))
             .result(db),
 
         // Concat needs type-directed resolution → src.binop
@@ -615,7 +613,7 @@ fn lower_binary_op<'db>(
                 location,
                 lhs,
                 rhs,
-                result_ty,
+                unit_ty,
                 Attribute::String("concat".to_string()),
             ));
             op.result(db)
@@ -633,12 +631,14 @@ fn lower_string_interpolation<'db>(
     interp: &StringInterpolation,
     location: Location<'db>,
 ) -> Value<'db> {
+    let string_ty = Type::string(db);
+
     // Start with the leading string part
     let mut result = block
         .op(adt::string_const(
             db,
             location,
-            Type::String,
+            string_ty,
             Attribute::String(interp.leading.clone()),
         ))
         .result(db);
@@ -654,7 +654,7 @@ fn lower_string_interpolation<'db>(
                 db,
                 location,
                 vec![expr_value],
-                Type::String,
+                string_ty,
                 Attribute::String("to_string".to_string()),
             ))
             .result(db);
@@ -666,7 +666,7 @@ fn lower_string_interpolation<'db>(
                 location,
                 result,
                 str_value,
-                Type::String,
+                string_ty,
                 Attribute::String("concat".to_string()),
             ))
             .result(db);
@@ -677,7 +677,7 @@ fn lower_string_interpolation<'db>(
                 .op(adt::string_const(
                     db,
                     location,
-                    Type::String,
+                    string_ty,
                     Attribute::String(segment.trailing.clone()),
                 ))
                 .result(db);
@@ -688,7 +688,7 @@ fn lower_string_interpolation<'db>(
                     location,
                     result,
                     trailing_value,
-                    Type::String,
+                    string_ty,
                     Attribute::String("concat".to_string()),
                 ))
                 .result(db);
@@ -707,12 +707,14 @@ fn lower_bytes_interpolation<'db>(
     interp: &BytesInterpolation,
     location: Location<'db>,
 ) -> Value<'db> {
+    let bytes_ty = Type::bytes(db);
+
     // Start with the leading bytes part
     let mut result = block
         .op(adt::bytes_const(
             db,
             location,
-            Type::Bytes,
+            bytes_ty,
             Attribute::Bytes(interp.leading.clone()),
         ))
         .result(db);
@@ -728,7 +730,7 @@ fn lower_bytes_interpolation<'db>(
                 db,
                 location,
                 vec![expr_value],
-                Type::Bytes,
+                bytes_ty,
                 Attribute::String("to_bytes".to_string()),
             ))
             .result(db);
@@ -740,7 +742,7 @@ fn lower_bytes_interpolation<'db>(
                 location,
                 result,
                 bytes_value,
-                Type::Bytes,
+                bytes_ty,
                 Attribute::String("concat".to_string()),
             ))
             .result(db);
@@ -751,7 +753,7 @@ fn lower_bytes_interpolation<'db>(
                 .op(adt::bytes_const(
                     db,
                     location,
-                    Type::Bytes,
+                    bytes_ty,
                     Attribute::Bytes(segment.trailing.clone()),
                 ))
                 .result(db);
@@ -762,7 +764,7 @@ fn lower_bytes_interpolation<'db>(
                     location,
                     result,
                     trailing_value,
-                    Type::Bytes,
+                    bytes_ty,
                     Attribute::String("concat".to_string()),
                 ))
                 .result(db);
@@ -814,21 +816,21 @@ fn lower_match_expr<'db>(
 
         // Yield the result from the arm
         arm_block.op(case::r#yield(db, location, result_value));
-        let arm_region = Region::new(db, location, vec![arm_block.build()]);
+        let arm_region = Region::new(db, location, smallvec![arm_block.build()]);
 
         // Create the case.arm operation with pattern attribute
         let pattern_attr = pattern_to_attribute(&arm.pattern);
         body_block.op(case::arm(db, location, pattern_attr, arm_region));
     }
 
-    let body_region = Region::new(db, location, vec![body_block.build()]);
+    let body_region = Region::new(db, location, smallvec![body_block.build()]);
 
     // Create the case.case operation
     let case_op = block.op(case::r#case(
         db,
         location,
         scrutinee,
-        Type::Unit,
+        Type::unit(db),
         body_region,
     ));
     case_op.result(db)
@@ -844,6 +846,7 @@ fn bind_pattern_for_match<'db>(
     scrutinee: Value<'db>,
     location: Location<'db>,
 ) {
+    let unit_ty = Type::unit(db);
     match pattern {
         Pattern::Identifier(name) => {
             ctx.bind(name.clone(), scrutinee);
@@ -872,7 +875,7 @@ fn bind_pattern_for_match<'db>(
                                 db,
                                 location,
                                 scrutinee,
-                                Type::Unit,
+                                unit_ty,
                                 (i as u64).into(),
                             ))
                             .result(db);
@@ -886,7 +889,7 @@ fn bind_pattern_for_match<'db>(
                                 db,
                                 location,
                                 scrutinee,
-                                Type::Unit,
+                                unit_ty,
                                 (i as u64).into(),
                             ))
                             .result(db);
@@ -909,7 +912,7 @@ fn bind_pattern_for_match<'db>(
                     db,
                     location,
                     vec![scrutinee],
-                    Type::Unit,
+                    unit_ty,
                     Attribute::String("tuple_get_0".to_string()),
                 ))
                 .result(db);
@@ -921,7 +924,7 @@ fn bind_pattern_for_match<'db>(
                         db,
                         location,
                         vec![scrutinee],
-                        Type::Unit,
+                        unit_ty,
                         Attribute::String(format!("tuple_get_{}", i + 1)),
                     ))
                     .result(db);
@@ -940,7 +943,7 @@ fn bind_pattern_for_match<'db>(
                         location,
                         scrutinee,
                         index_value,
-                        Type::Unit,
+                        unit_ty,
                         Attribute::Unit, // elem_type to be inferred
                     ))
                     .result(db);
@@ -954,7 +957,7 @@ fn bind_pattern_for_match<'db>(
                     .op(arith::Const::i64(db, location, elements.len() as i64))
                     .result(db);
                 let len_value = block
-                    .op(list::len(db, location, scrutinee, Type::Unit))
+                    .op(list::len(db, location, scrutinee, unit_ty))
                     .result(db);
                 let rest_value = block
                     .op(list::slice(
@@ -963,7 +966,7 @@ fn bind_pattern_for_match<'db>(
                         scrutinee,
                         start_value,
                         len_value,
-                        Type::Unit,
+                        unit_ty,
                         Attribute::Unit, // elem_type to be inferred
                     ))
                     .result(db);
@@ -1007,7 +1010,7 @@ fn lower_record_expr<'db>(
                     let var_op = block.op(src::var(
                         db,
                         location,
-                        Type::Unit,
+                        Type::unit(db),
                         Attribute::String(name.clone()),
                     ));
                     field_values.push(var_op.result(db));
@@ -1030,7 +1033,7 @@ fn lower_record_expr<'db>(
         db,
         location,
         field_values,
-        Type::Unit,
+        Type::unit(db),
         Attribute::String(type_name.to_string()),
     ));
     op.result(db)
@@ -1108,7 +1111,7 @@ mod tests {
     use std::path::PathBuf;
     use tribute_ast::{BinaryExpression, Parameter};
     use tribute_core::TributeDatabaseImpl;
-    use tribute_trunk_ir::DialectOp;
+    use tribute_trunk_ir::{DialectOp, TypeKind};
 
     /// Helper tracked function to create AST and lower it.
     #[salsa::tracked]
@@ -1411,7 +1414,10 @@ mod tests {
 
             // Verify lambda has the type attribute
             let ty = lambda_op.r#type(db);
-            assert!(matches!(ty, Attribute::Type(Type::Function { .. })));
+            let Attribute::Type(func_ty) = ty else {
+                panic!("expected type attribute");
+            };
+            assert!(matches!(func_ty.kind(db), TypeKind::Function { .. }));
 
             // Get the lambda's body region
             let lambda_body = lambda_op.body(db);
@@ -1529,12 +1535,13 @@ mod tests {
 
             // Verify lambda has two parameters
             let ty = lambda_op.r#type(db);
-            match ty {
-                Attribute::Type(Type::Function { params, .. }) => {
-                    assert_eq!(params.len(), 2);
-                }
-                _ => panic!("expected function type"),
-            }
+            let Attribute::Type(func_ty) = ty else {
+                panic!("expected type attribute");
+            };
+            let TypeKind::Function { params, .. } = func_ty.kind(db) else {
+                panic!("expected function type");
+            };
+            assert_eq!(params.len(), 2);
 
             // Get the lambda's body region
             let lambda_body = lambda_op.body(db);
@@ -1701,7 +1708,7 @@ mod tests {
 
             // Verify first op is arith.const with i32 type
             let const_op = arith::Const::from_operation(db, ops[0]).unwrap();
-            assert_eq!(const_op.result_ty(db), Type::I { bits: 32 });
+            assert_eq!(const_op.result_ty(db), Type::i(db, 32));
 
             // Verify the value is 'a' (97)
             assert_eq!(const_op.value(db), &Attribute::IntBits(97));

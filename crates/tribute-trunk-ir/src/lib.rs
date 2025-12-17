@@ -16,11 +16,14 @@ pub mod types;
 pub use paste;
 
 // Re-export smallvec for use in macros and external crates
-pub use smallvec::{self, SmallVec};
+pub use smallvec;
 
 // Re-export Location for use in macros
 pub use tribute_core::Location;
 
-pub use ir::{Block, BlockBuilder, OpNameId, Operation, Region, Symbol, TrackedVec, Value};
+pub use ir::{Block, BlockBuilder, OpNameId, Operation, Region, Symbol, Value};
 pub use ops::{ConversionError, DialectOp};
 pub use types::*;
+
+/// Small vector for values tracked by Salsa framework.
+pub type TrackedVec<T> = smallvec::SmallVec<[T; 2]>;

@@ -535,7 +535,7 @@ macro_rules! define_op {
                 location: $crate::Location<'db>,
                 $($fixed: $crate::Value<'db>,)*
                 $($var: impl IntoIterator<Item = $crate::Value<'db>>,)?
-                $($result: $crate::Type,)*
+                $($result: $crate::Type<'db>,)*
                 $($attr: $crate::Attribute<'db>,)*
                 $($region: $crate::Region<'db>,)*
             ) -> [<$op:camel>]<'db> {
@@ -588,7 +588,7 @@ macro_rules! define_op {
 
         $crate::paste::paste! {
             #[allow(dead_code)]
-            pub fn [<$name _ty>](&self, db: &'db dyn salsa::Database) -> $crate::Type {
+            pub fn [<$name _ty>](&self, db: &'db dyn salsa::Database) -> $crate::Type<'db> {
                 self.op.results(db)[$idx].clone()
             }
         }

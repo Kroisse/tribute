@@ -2,16 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::{Attribute, Type};
-use smallvec::SmallVec;
+use crate::{Attribute, TrackedVec, Type};
 use tribute_core::Location;
-
-// ============================================================================
-// Small Vector Type Aliases
-// ============================================================================
-
-/// Small vector for values tracked by Salsa framework.
-pub type TrackedVec<T> = SmallVec<[T; 2]>;
 
 // ============================================================================
 // Interned Types
@@ -78,7 +70,7 @@ pub struct Operation<'db> {
     #[returns(deref)]
     pub operands: TrackedVec<Value<'db>>,
     #[returns(deref)]
-    pub results: Vec<Type>,
+    pub results: TrackedVec<Type<'db>>,
     #[returns(ref)]
     pub attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
     #[tracked]
@@ -117,9 +109,9 @@ impl<'db> Operation<'db> {
 pub struct Block<'db> {
     pub location: Location<'db>,
     #[returns(deref)]
-    pub args: Vec<Type>,
+    pub args: TrackedVec<Type<'db>>,
     #[returns(deref)]
-    pub operations: Vec<Operation<'db>>,
+    pub operations: TrackedVec<Operation<'db>>,
 }
 
 impl<'db> Block<'db> {
@@ -132,7 +124,7 @@ impl<'db> Block<'db> {
 pub struct Region<'db> {
     pub location: Location<'db>,
     #[returns(deref)]
-    pub blocks: Vec<Block<'db>>,
+    pub blocks: TrackedVec<Block<'db>>,
 }
 
 // ============================================================================
@@ -145,7 +137,7 @@ pub struct OperationBuilder<'db> {
     location: Location<'db>,
     name: OpNameId<'db>,
     operands: TrackedVec<Value<'db>>,
-    results: Vec<Type>,
+    results: TrackedVec<Type<'db>>,
     attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
     regions: TrackedVec<Region<'db>>,
     successors: TrackedVec<Block<'db>>,
@@ -157,11 +149,11 @@ impl<'db> OperationBuilder<'db> {
             db,
             location,
             name,
-            operands: TrackedVec::new(),
-            results: Vec::new(),
-            attributes: BTreeMap::new(),
-            regions: TrackedVec::new(),
-            successors: TrackedVec::new(),
+            operands: Default::default(),
+            results: Default::default(),
+            attributes: Default::default(),
+            regions: Default::default(),
+            successors: Default::default(),
         }
     }
 
@@ -175,12 +167,12 @@ impl<'db> OperationBuilder<'db> {
         self
     }
 
-    pub fn results(mut self, results: Vec<Type>) -> Self {
+    pub fn results(mut self, results: TrackedVec<Type<'db>>) -> Self {
         self.results = results;
         self
     }
 
-    pub fn result(mut self, ty: Type) -> Self {
+    pub fn result(mut self, ty: Type<'db>) -> Self {
         self.results.push(ty);
         self
     }
@@ -224,8 +216,8 @@ impl<'db> OperationBuilder<'db> {
 pub struct BlockBuilder<'db> {
     db: &'db dyn salsa::Database,
     location: Location<'db>,
-    args: Vec<Type>,
-    operations: Vec<Operation<'db>>,
+    args: TrackedVec<Type<'db>>,
+    operations: TrackedVec<Operation<'db>>,
 }
 
 impl<'db> BlockBuilder<'db> {
@@ -233,17 +225,17 @@ impl<'db> BlockBuilder<'db> {
         Self {
             db,
             location,
-            args: Vec::new(),
-            operations: Vec::new(),
+            args: Default::default(),
+            operations: Default::default(),
         }
     }
 
-    pub fn args(mut self, args: Vec<Type>) -> Self {
+    pub fn args(mut self, args: TrackedVec<Type<'db>>) -> Self {
         self.args = args;
         self
     }
 
-    pub fn arg(mut self, ty: Type) -> Self {
+    pub fn arg(mut self, ty: Type<'db>) -> Self {
         self.args.push(ty);
         self
     }
@@ -262,8 +254,11 @@ impl<'db> BlockBuilder<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DialectOp;
-    use crate::dialect::{arith, core, func};
+    use crate::{
+        DialectOp,
+        dialect::{arith, core, func},
+        smallvec::smallvec,
+    };
     use salsa::Database;
     use std::path::PathBuf;
     use tribute_core::{PathId, Span, TributeDatabaseImpl};
@@ -277,8 +272,8 @@ mod tests {
             db,
             location,
             "main",
-            vec![],
-            vec![Type::I { bits: 32 }],
+            smallvec![],
+            smallvec![Type::i(db, 32)],
             |entry| {
                 let c0 = entry.op(arith::Const::i32(db, location, 40));
                 let c1 = entry.op(arith::Const::i32(db, location, 2));
@@ -287,7 +282,7 @@ mod tests {
                     location,
                     c0.result(db),
                     c1.result(db),
-                    Type::I { bits: 32 },
+                    Type::i(db, 32),
                 ));
                 entry.op(func::Return::value(db, location, add.result(db)));
             },
@@ -310,7 +305,7 @@ mod tests {
 
     // Test the new define_op! macro
     mod define_op_tests {
-        use crate::{Attribute, Region, Type, dialect};
+        use crate::{Attribute, Region, Type, dialect, smallvec::smallvec};
         use salsa::Database;
         use std::path::PathBuf;
         use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
@@ -349,20 +344,20 @@ mod tests {
 
             // Create dummy values using a helper op
             let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
-                .result(Type::I { bits: 32 })
-                .result(Type::I { bits: 32 })
+                .result(Type::i(db, 32))
+                .result(Type::i(db, 32))
                 .build();
             let v0 = dummy_op.result(db, 0);
             let v1 = dummy_op.result(db, 1);
 
-            binary(db, location, v0, v1, Type::I { bits: 32 })
+            binary(db, location, v0, v1, Type::i(db, 32))
         }
 
         #[test]
         fn test_define_op_binary() {
             TributeDatabaseImpl::default().attach(|db| {
                 let binary = test_binary_op(db);
-                assert_eq!(binary.result_ty(db), Type::I { bits: 32 });
+                assert_eq!(binary.result_ty(db), Type::i(db, 32));
 
                 // Test auto-generated named accessors
                 let lhs = binary.lhs(db);
@@ -376,14 +371,14 @@ mod tests {
             let path = PathId::new(db, PathBuf::from("test.tr"));
             let location = Location::new(path, Span::new(0, 0));
 
-            constant(db, location, Type::I { bits: 64 }, 42i64.into())
+            constant(db, location, Type::i(db, 64), 42i64.into())
         }
 
         #[test]
         fn test_define_op_constant() {
             TributeDatabaseImpl::default().attach(|db| {
                 let constant = test_constant_op(db);
-                assert_eq!(constant.result_ty(db), Type::I { bits: 64 });
+                assert_eq!(constant.result_ty(db), Type::i(db, 64));
 
                 // Test auto-generated attribute accessor
                 assert_eq!(constant.value(db), &Attribute::IntBits(42));
@@ -411,8 +406,8 @@ mod tests {
             let path = PathId::new(db, PathBuf::from("test.tr"));
             let location = Location::new(path, Span::new(0, 0));
 
-            let block = crate::Block::new(db, location, vec![], vec![]);
-            let region = Region::new(db, location, vec![block]);
+            let block = crate::Block::new(db, location, smallvec![], smallvec![]);
+            let region = Region::new(db, location, smallvec![block]);
 
             container(db, location, Attribute::String("test".to_string()), region)
         }
@@ -433,24 +428,24 @@ mod tests {
 
             // Create dummy values
             let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
-                .result(Type::I { bits: 32 })
-                .result(Type::I { bits: 32 })
-                .result(Type::I { bits: 32 })
-                .result(Type::I { bits: 32 })
+                .result(Type::i(db, 32))
+                .result(Type::i(db, 32))
+                .result(Type::i(db, 32))
+                .result(Type::i(db, 32))
                 .build();
             let v0 = dummy_op.result(db, 0);
             let v1 = dummy_op.result(db, 1);
             let v2 = dummy_op.result(db, 2);
             let v3 = dummy_op.result(db, 3);
 
-            mixed(db, location, v0, v1, vec![v2, v3], Type::I { bits: 32 })
+            mixed(db, location, v0, v1, vec![v2, v3], Type::i(db, 32))
         }
 
         #[test]
         fn test_define_op_mixed() {
             TributeDatabaseImpl::default().attach(|db| {
                 let mixed = test_mixed_op(db);
-                assert_eq!(mixed.result_ty(db), Type::I { bits: 32 });
+                assert_eq!(mixed.result_ty(db), Type::i(db, 32));
 
                 // Test named accessors for fixed operands
                 let first = mixed.first(db);
@@ -470,7 +465,7 @@ mod tests {
 
             // Create a dummy input value
             let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
-                .result(Type::I { bits: 32 })
+                .result(Type::i(db, 32))
                 .build();
             let input = dummy_op.result(db, 0);
 
@@ -478,8 +473,8 @@ mod tests {
                 db,
                 location,
                 input,
-                Type::I { bits: 32 }, // quotient type
-                Type::I { bits: 32 }, // remainder type
+                Type::i(db, 32), // quotient type
+                Type::i(db, 32), // remainder type
             )
         }
 
@@ -489,8 +484,8 @@ mod tests {
                 let multi = test_multi_result_op(db);
 
                 // Test named result accessors for each result
-                assert_eq!(multi.quotient_ty(db), Type::I { bits: 32 });
-                assert_eq!(multi.remainder_ty(db), Type::I { bits: 32 });
+                assert_eq!(multi.quotient_ty(db), Type::i(db, 32));
+                assert_eq!(multi.remainder_ty(db), Type::i(db, 32));
 
                 // Test that we get different Value handles for each result
                 let q = multi.quotient(db);
