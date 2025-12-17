@@ -72,12 +72,12 @@ macro_rules! dialect {
     // Unified pattern: optional attrs, optional results
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        op $op:ident $([$($attrs:tt)*])? ($($operands:tt)*) $( -> $($result:ident),+ $(,)? )? { $($region:tt)* };
+        op $op:ident $([$($attrs:tt)*])? ($($operands:tt)*) $( -> $($result:ident),+ $(,)? )? $(@ $region:ident {})*;
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            op $dialect.$op $([$($attrs)*])? ($($operands)*) $(-> $($result),+)? { $($region)* }
+            op $dialect.$op $([$($attrs)*])? ($($operands)*) $(-> $($result),+)? $(@ $region {})*
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
@@ -382,7 +382,7 @@ macro_rules! define_op {
     // @parse_region - Extract { region } or {}
     // ========================================================================
 
-    // Has region: { $name }
+    // Has regions: { $name }
     (@parse_region
         meta: $meta:tt,
         dialect: $dialect:ident,
@@ -390,7 +390,7 @@ macro_rules! define_op {
         attrs: $attrs:tt,
         operands: $operands:tt,
         result: $result:tt,
-        rest: [{ $region:ident }]
+        rest: [$( @ $region:ident { } )*]
     ) => {
         $crate::define_op!(@impl
             meta: $meta,
@@ -399,28 +399,7 @@ macro_rules! define_op {
             attrs: $attrs,
             operands: $operands,
             result: $result,
-            region: [$region]
-        );
-    };
-
-    // No region: {}
-    (@parse_region
-        meta: $meta:tt,
-        dialect: $dialect:ident,
-        op: $op:ident,
-        attrs: $attrs:tt,
-        operands: $operands:tt,
-        result: $result:tt,
-        rest: [{}]
-    ) => {
-        $crate::define_op!(@impl
-            meta: $meta,
-            dialect: $dialect,
-            op: $op,
-            attrs: $attrs,
-            operands: $operands,
-            result: $result,
-            region: []
+            region: [$($region),*]
         );
     };
 
@@ -436,7 +415,7 @@ macro_rules! define_op {
         attrs: [$($attr:ident),*],
         operands: [$($fixed:ident),*; $($var:ident)?],
         result: [$($result:ident),*],
-        region: [$($region:ident)?]
+        region: [$($region:ident),*]
     ) => {
         $crate::paste::paste! {
             $($meta)*
@@ -463,7 +442,7 @@ macro_rules! define_op {
                     $($var: Vec<$crate::Value<'db>>,)?
                     $($result: $crate::Type,)*
                     $($attr: $crate::Attribute<'db>,)*
-                    $($region: $crate::Region<'db>,)?
+                    $($region: $crate::Region<'db>,)*
                 ) -> Self {
                     let name = $crate::OpNameId::new(db, stringify!($dialect), stringify!($op));
                     #[allow(unused_mut)]
@@ -473,7 +452,7 @@ macro_rules! define_op {
                         .operands(operands)
                         $(.result($result))*
                         $(.attr(stringify!($attr), $attr))*
-                        $(.region($region))?
+                        $(.region($region))*
                         .build();
                     Self::wrap_unchecked(op)
                 }
@@ -494,7 +473,7 @@ macro_rules! define_op {
                 $crate::define_op!(@gen_result_accessors { 0 } $($result)*);
 
                 // Region accessor (only if region exists)
-                $crate::define_op!(@maybe_region_accessor [$($region)?]);
+                $crate::define_op!(@gen_region_accessor { 0 } $($region)*);
             }
 
             impl<'db> std::ops::Deref for [<$op:camel>]<'db> {
@@ -528,7 +507,7 @@ macro_rules! define_op {
                     // Result validation
                     $crate::define_op!(@maybe_result_validation [$($result),*]; op, db);
                     // Region validation
-                    $crate::define_op!(@maybe_region_validation [$($region)?]; op, db);
+                    $crate::define_op!(@maybe_region_validation [$($region),*]; op, db);
                     Ok(Self { op })
                 }
 
@@ -582,13 +561,15 @@ macro_rules! define_op {
     };
 
     // Region accessor: empty case (no region)
-    (@maybe_region_accessor []) => {};
+    (@gen_region_accessor { $idx:expr }) => {};
     // Region accessor: present case
-    (@maybe_region_accessor [$region:ident]) => {
+    (@gen_region_accessor { $idx:expr } $region:ident $($rest:ident)*) => {
         #[allow(dead_code)]
         pub fn $region(&self, db: &'db dyn salsa::Database) -> $crate::Region<'db> {
-            self.op.regions(db)[0]
+            self.op.regions(db)[$idx]
         }
+
+        $crate::define_op!(@gen_region_accessor { $idx + 1 } $($rest)*);
     };
 
     // Result validation: empty case (no result expected)
@@ -605,10 +586,13 @@ macro_rules! define_op {
 
     // Region validation: empty case (no region expected)
     (@maybe_region_validation []; $op:ident, $db:ident) => {};
-    // Region validation: present case
-    (@maybe_region_validation [$_region:ident]; $op:ident, $db:ident) => {
-        if $op.regions($db).is_empty() {
-            return Err($crate::ConversionError::MissingRegion);
+    // Region validation: one or more regions expected
+    (@maybe_region_validation [$($region:ident),+]; $op:ident, $db:ident) => {
+        {
+            const EXPECTED_REGIONS: usize = $crate::define_op!(@count $($region)+);
+            if $op.regions($db).len() < EXPECTED_REGIONS {
+                return Err($crate::ConversionError::MissingRegion);
+            }
         }
     };
 

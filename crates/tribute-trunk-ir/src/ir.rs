@@ -332,22 +332,22 @@ mod tests {
         dialect! {
             test {
                 /// Test binary operation.
-                op binary(lhs, rhs) -> result {};
+                op binary(lhs, rhs) -> result;
 
                 /// Test constant operation.
-                op constant[value]() -> result {};
+                op constant[value]() -> result;
 
                 /// Test variadic operation.
-                op variadic(..args) {};
+                op variadic(..args);
 
                 /// Test region operation.
-                op container[name]() { body };
+                op container[name]() @body {};
 
                 /// Test mixed operands: fixed + variadic.
-                op mixed(first, second, ..rest) -> result {};
+                op mixed(first, second, ..rest) -> result;
 
                 /// Test multi-result operation.
-                op multi_result(input) -> quotient, remainder {};
+                op multi_result(input) -> quotient, remainder;
             }
         }
 

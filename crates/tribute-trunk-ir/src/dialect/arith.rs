@@ -8,81 +8,81 @@ dialect! {
         // === Constants ===
 
         /// `arith.const` operation: produces a constant value.
-        op r#const[value]() -> result {};
+        op r#const[value]() -> result;
 
         // === Arithmetic ===
 
         /// `arith.add` operation: integer/float addition.
-        op add(lhs, rhs) -> result {};
+        op add(lhs, rhs) -> result;
 
         /// `arith.sub` operation: integer/float subtraction.
-        op sub(lhs, rhs) -> result {};
+        op sub(lhs, rhs) -> result;
 
         /// `arith.mul` operation: integer/float multiplication.
-        op mul(lhs, rhs) -> result {};
+        op mul(lhs, rhs) -> result;
 
         /// `arith.div` operation: integer/float division.
-        op div(lhs, rhs) -> result {};
+        op div(lhs, rhs) -> result;
 
         /// `arith.rem` operation: integer/float remainder.
-        op rem(lhs, rhs) -> result {};
+        op rem(lhs, rhs) -> result;
 
         /// `arith.neg` operation: integer/float negation.
-        op neg(operand) -> result {};
+        op neg(operand) -> result;
 
         // === Comparisons ===
 
         /// `arith.cmp_eq` operation: equality comparison.
-        op cmp_eq(lhs, rhs) -> result {};
+        op cmp_eq(lhs, rhs) -> result;
 
         /// `arith.cmp_ne` operation: inequality comparison.
-        op cmp_ne(lhs, rhs) -> result {};
+        op cmp_ne(lhs, rhs) -> result;
 
         /// `arith.cmp_lt` operation: less-than comparison.
-        op cmp_lt(lhs, rhs) -> result {};
+        op cmp_lt(lhs, rhs) -> result;
 
         /// `arith.cmp_le` operation: less-than-or-equal comparison.
-        op cmp_le(lhs, rhs) -> result {};
+        op cmp_le(lhs, rhs) -> result;
 
         /// `arith.cmp_gt` operation: greater-than comparison.
-        op cmp_gt(lhs, rhs) -> result {};
+        op cmp_gt(lhs, rhs) -> result;
 
         /// `arith.cmp_ge` operation: greater-than-or-equal comparison.
-        op cmp_ge(lhs, rhs) -> result {};
+        op cmp_ge(lhs, rhs) -> result;
 
         // === Bitwise ===
 
         /// `arith.and` operation: bitwise AND.
-        op and(lhs, rhs) -> result {};
+        op and(lhs, rhs) -> result;
 
         /// `arith.or` operation: bitwise OR.
-        op or(lhs, rhs) -> result {};
+        op or(lhs, rhs) -> result;
 
         /// `arith.xor` operation: bitwise XOR.
-        op xor(lhs, rhs) -> result {};
+        op xor(lhs, rhs) -> result;
 
         /// `arith.shl` operation: shift left.
-        op shl(value, amount) -> result {};
+        op shl(value, amount) -> result;
 
         /// `arith.shr` operation: arithmetic shift right (sign-extending).
-        op shr(value, amount) -> result {};
+        op shr(value, amount) -> result;
 
         /// `arith.shru` operation: logical shift right (zero-extending).
-        op shru(value, amount) -> result {};
+        op shru(value, amount) -> result;
 
         // === Type Conversions ===
 
         /// `arith.cast` operation: sign extension/truncation.
-        op cast(operand) -> result {};
+        op cast(operand) -> result;
 
         /// `arith.trunc` operation: truncation to smaller type.
-        op trunc(operand) -> result {};
+        op trunc(operand) -> result;
 
         /// `arith.extend` operation: extension to larger type.
-        op extend(operand) -> result {};
+        op extend(operand) -> result;
 
         /// `arith.convert` operation: int ↔ float conversion.
-        op convert(operand) -> result {};
+        op convert(operand) -> result;
     }
 }
 

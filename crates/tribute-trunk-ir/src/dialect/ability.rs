@@ -15,7 +15,7 @@ dialect! {
         /// Attributes:
         /// - `ability`: Reference to the ability type
         /// - `op`: The operation name within the ability
-        op perform[ability_ref, op](..args) -> result {};
+        op perform[ability_ref, op](..args) -> result;
 
         /// `ability.handle` operation: installs a handler and executes the body.
         ///
@@ -23,17 +23,17 @@ dialect! {
         ///
         /// Attributes:
         /// - `clauses`: Handler clauses for each operation
-        op handle[clauses]() -> result { body };
+        op handle[clauses]() -> result @body {};
 
         /// `ability.resume` operation: resumes a captured continuation.
         ///
         /// Continues execution from where `perform` was called, providing a value.
-        op resume(continuation, value) -> result {};
+        op resume(continuation, value) -> result;
 
         /// `ability.abort` operation: discards a continuation without resuming.
         ///
         /// Satisfies the linear type requirement for continuations by explicitly
         /// dropping them.
-        op abort(continuation) {};
+        op abort(continuation);
     }
 }
