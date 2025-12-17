@@ -1,6 +1,7 @@
 //! Arithmetic dialect operations.
 
-use crate::{Attribute, Type, dialect};
+use super::core;
+use crate::{Attribute, dialect};
 use tribute_core::Location;
 
 dialect! {
@@ -90,17 +91,17 @@ dialect! {
 impl<'db> Const<'db> {
     /// Create a new i32 constant.
     pub fn i32(db: &'db dyn salsa::Database, location: Location<'db>, value: i32) -> Self {
-        r#const(db, location, Type::i(db, 32), (value as i64).into())
+        r#const(db, location, core::i(db, 32), i64::from(value).into())
     }
 
     /// Create a new i64 constant.
     pub fn i64(db: &'db dyn salsa::Database, location: Location<'db>, value: i64) -> Self {
-        r#const(db, location, Type::i(db, 64), value.into())
+        r#const(db, location, core::i(db, 64), value.into())
     }
 
     /// Create a new u64 constant.
     pub fn u64(db: &'db dyn salsa::Database, location: Location<'db>, value: u64) -> Self {
-        r#const(db, location, Type::i(db, 64), value.into())
+        r#const(db, location, core::i(db, 64), value.into())
     }
 
     /// Create a new f32 constant.
@@ -108,8 +109,8 @@ impl<'db> Const<'db> {
         r#const(
             db,
             location,
-            Type::f(db, 32),
-            Attribute::FloatBits(value.to_bits() as u64),
+            core::f(db, 32),
+            Attribute::FloatBits(u64::from(value.to_bits())),
         )
     }
 
@@ -118,7 +119,7 @@ impl<'db> Const<'db> {
         r#const(
             db,
             location,
-            Type::f(db, 64),
+            core::f(db, 64),
             Attribute::FloatBits(value.to_bits()),
         )
     }

@@ -5,8 +5,9 @@
 //!
 //! Additionally, this module provides type constructors for unresolved types:
 //! - `src.type` - an unresolved type reference that needs name resolution
+use std::collections::BTreeMap;
 
-use crate::{Attribute, IdVec, Type, dialect};
+use crate::{Attribute, IdVec, Symbol, Type, dialect};
 
 dialect! {
     mod src {
@@ -64,11 +65,11 @@ pub fn unresolved_type<'db>(
     name: &str,
     params: IdVec<Type<'db>>,
 ) -> Type<'db> {
-    Type::dialect(
+    Type::new(
         db,
-        "src",
-        "type",
+        Symbol::new(db, "src"),
+        Symbol::new(db, "type"),
         params,
-        Attribute::String(name.to_string()),
+        BTreeMap::from([(Symbol::new(db, "name"), Attribute::String(name.to_string()))]),
     )
 }

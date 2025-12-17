@@ -6,8 +6,9 @@
 //! Additionally, this module provides type constructors for inference-related types:
 //! - `type.var` - a type variable to be resolved during type inference
 //! - `type.error` - an error type indicating type resolution failed
+use std::collections::BTreeMap;
 
-use crate::{Attribute, IdVec, Type, TypeKind, dialect};
+use crate::{Attribute, Attrs, IdVec, Symbol, Type, dialect};
 
 dialect! {
     mod r#type {
@@ -41,32 +42,44 @@ dialect! {
 
 /// Create a type variable (`type.var`) to be resolved during type inference.
 ///
-/// The attribute can carry metadata such as a unique variable ID or constraints.
-pub fn var<'db>(db: &'db dyn salsa::Database, attr: Attribute<'db>) -> Type<'db> {
-    Type::dialect(db, "type", "var", IdVec::new(), attr)
+/// The `attrs` can carry metadata such as a unique variable ID or constraints.
+pub fn var<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> Type<'db> {
+    Type::new(
+        db,
+        Symbol::new(db, "type"),
+        Symbol::new(db, "var"),
+        IdVec::new(),
+        attrs,
+    )
+}
+
+/// Create a type variable with a numeric ID.
+pub fn var_with_id<'db>(db: &'db dyn salsa::Database, id: u64) -> Type<'db> {
+    var(
+        db,
+        BTreeMap::from([(Symbol::new(db, "id"), Attribute::IntBits(id))]),
+    )
 }
 
 /// Create an error type (`type.error`) indicating type resolution failed.
 ///
-/// The attribute can carry error information or source location.
-pub fn error<'db>(db: &'db dyn salsa::Database, attr: Attribute<'db>) -> Type<'db> {
-    Type::dialect(db, "type", "error", IdVec::new(), attr)
+/// The `attrs` can carry error information or source location.
+pub fn error<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> Type<'db> {
+    Type::new(
+        db,
+        Symbol::new(db, "type"),
+        Symbol::new(db, "error"),
+        IdVec::new(),
+        attrs,
+    )
 }
 
 /// Check if a type is a type variable (`type.var`).
 pub fn is_var(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    matches!(
-        ty.kind(db),
-        TypeKind::Dialect { dialect, name, .. }
-            if dialect.text(db) == "type" && name.text(db) == "var"
-    )
+    ty.is_dialect(db, "type", "var")
 }
 
 /// Check if a type is an error type (`type.error`).
 pub fn is_error(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    matches!(
-        ty.kind(db),
-        TypeKind::Dialect { dialect, name, .. }
-            if dialect.text(db) == "type" && name.text(db) == "error"
-    )
+    ty.is_dialect(db, "type", "error")
 }

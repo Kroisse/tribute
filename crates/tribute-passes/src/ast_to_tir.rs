@@ -41,7 +41,7 @@ impl<'db> LoweringCtx<'db> {
     fn fresh_type_var(&mut self, db: &'db dyn salsa::Database) -> Type<'db> {
         let id = self.next_type_var_id;
         self.next_type_var_id += 1;
-        ty::var(db, Attribute::IntBits(id))
+        ty::var_with_id(db, id)
     }
 
     /// Get or create a named type variable.
@@ -143,15 +143,13 @@ fn lower_function<'db>(
         .collect();
 
     // Resolve return type from annotation, or create fresh type var
-    let results = idvec![
-        func_def
-            .return_type(db)
-            .as_ref()
-            .map(|ty| ctx.resolve_type_ref(db, ty))
-            .unwrap_or_else(|| ctx.fresh_type_var(db))
-    ];
+    let result = func_def
+        .return_type(db)
+        .as_ref()
+        .map(|ty| ctx.resolve_type_ref(db, ty))
+        .unwrap_or_else(|| ctx.fresh_type_var(db));
 
-    func::Func::build(db, location, &name, params, results, |entry| {
+    func::Func::build(db, location, &name, params, result, |entry| {
         let body = func_def.body(db);
 
         // Lower each statement, keeping track of the last value
@@ -342,7 +340,7 @@ fn lower_expr<'db>(
 ) -> Value<'db> {
     let (expr, span) = spanned;
     let location = Location::new(path, *span);
-    let unit_ty = Type::unit(db);
+    let unit_ty = core::unit(db);
     let infer_ty = ctx.fresh_type_var(db); // Type to be inferred
 
     match expr {
@@ -361,7 +359,7 @@ fn lower_expr<'db>(
         }
         Expr::Bool(b) => {
             // Use i1 for booleans
-            let op = block.op(arith::r#const(db, location, Type::i(db, 1), (*b).into()));
+            let op = block.op(arith::r#const(db, location, core::i(db, 1), (*b).into()));
             op.result(db)
         }
         Expr::Nil => {
@@ -425,7 +423,7 @@ fn lower_expr<'db>(
             let op = block.op(arith::r#const(
                 db,
                 location,
-                Type::i(db, 32),
+                core::i(db, 32),
                 u64::from(u32::from(*c)).into(),
             ));
             op.result(db)
@@ -504,7 +502,7 @@ fn lower_expr<'db>(
             body_block.op(src::r#yield(db, location, result_value));
 
             // Create the function type for the lambda
-            let func_type = Type::function(db, param_types, idvec![result_type]);
+            let func_type = core::func(db, param_types, result_type);
 
             // Create the src.lambda operation
             let region = Region::new(db, location, idvec![body_block.build()]);
@@ -604,7 +602,7 @@ fn lower_statements<'db>(
         let op = block.op(arith::r#const(
             db,
             location,
-            Type::unit(db),
+            core::unit(db),
             Attribute::Unit,
         ));
         op.result(db)
@@ -623,7 +621,7 @@ fn lower_binary_op<'db>(
 ) -> Value<'db> {
     // Result type is unknown until type inference
     let infer_ty = ctx.fresh_type_var(db);
-    let bool_ty = Type::i(db, 1);
+    let bool_ty = core::i(db, 1);
 
     match operator {
         // Arithmetic operations → arith dialect
@@ -696,7 +694,7 @@ fn lower_string_interpolation<'db>(
     interp: &StringInterpolation,
     location: Location<'db>,
 ) -> Value<'db> {
-    let string_ty = Type::string(db);
+    let string_ty = core::string(db);
 
     // Start with the leading string part
     let mut result = block
@@ -772,7 +770,7 @@ fn lower_bytes_interpolation<'db>(
     interp: &BytesInterpolation,
     location: Location<'db>,
 ) -> Value<'db> {
-    let bytes_ty = Type::bytes(db);
+    let bytes_ty = core::bytes(db);
 
     // Start with the leading bytes part
     let mut result = block
@@ -895,7 +893,7 @@ fn lower_match_expr<'db>(
         db,
         location,
         scrutinee,
-        Type::unit(db),
+        core::unit(db),
         body_region,
     ));
     case_op.result(db)
@@ -1079,7 +1077,7 @@ fn lower_record_expr<'db>(
                     let var_op = block.op(src::var(
                         db,
                         location,
-                        Type::unit(db),
+                        core::unit(db),
                         Attribute::String(name.clone()),
                     ));
                     field_values.push(var_op.result(db));
@@ -1102,7 +1100,7 @@ fn lower_record_expr<'db>(
         db,
         location,
         field_values,
-        Type::unit(db),
+        core::unit(db),
         Attribute::String(type_name.to_string()),
     ));
     op.result(db)
@@ -1180,7 +1178,7 @@ mod tests {
     use std::path::PathBuf;
     use tribute_ast::{BinaryExpression, Parameter};
     use tribute_core::TributeDatabaseImpl;
-    use tribute_trunk_ir::{DialectOp, TypeKind};
+    use tribute_trunk_ir::DialectOp;
 
     /// Helper tracked function to create AST and lower it.
     #[salsa::tracked]
@@ -1486,7 +1484,7 @@ mod tests {
             let Attribute::Type(func_ty) = ty else {
                 panic!("expected type attribute");
             };
-            assert!(matches!(func_ty.kind(db), TypeKind::Function { .. }));
+            assert!(func_ty.is_function(db));
 
             // Get the lambda's body region
             let lambda_body = lambda_op.body(db);
@@ -1607,9 +1605,7 @@ mod tests {
             let Attribute::Type(func_ty) = ty else {
                 panic!("expected type attribute");
             };
-            let TypeKind::Function { params, .. } = func_ty.kind(db) else {
-                panic!("expected function type");
-            };
+            let params = func_ty.function_params(db).expect("expected function type");
             assert_eq!(params.len(), 2);
 
             // Get the lambda's body region
@@ -1777,7 +1773,7 @@ mod tests {
 
             // Verify first op is arith.const with i32 type
             let const_op = arith::Const::from_operation(db, ops[0]).unwrap();
-            assert_eq!(const_op.result_ty(db), Type::i(db, 32));
+            assert_eq!(const_op.result_ty(db), core::i(db, 32));
 
             // Verify the value is 'a' (97)
             assert_eq!(const_op.value(db), &Attribute::IntBits(97));
@@ -2102,47 +2098,26 @@ mod tests {
             let blocks = body_region.blocks(db);
             let func_op = func::Func::from_operation(db, blocks[0].operations(db)[0]).unwrap();
 
-            // Get function type and extract params/results
+            // Get function type and extract params/result
             let func_ty = func_op.ty(db);
-            let TypeKind::Function { params, results } = func_ty.kind(db) else {
-                panic!("Expected function type");
-            };
+            let params = func_ty.function_params(db).expect("Expected function type");
+            let result_ty = func_ty.function_result(db).expect("Expected function type");
 
             assert_eq!(params.len(), 1);
-            assert_eq!(results.len(), 1);
-
             let param_ty = params[0];
-            let result_ty = results[0];
 
             // Both should be ty.var with the same ID
-            let param_kind = param_ty.kind(db);
-            let result_kind = result_ty.kind(db);
-
-            // Verify both are dialect types (ty.var)
-            match (param_kind, result_kind) {
-                (
-                    TypeKind::Dialect {
-                        dialect: p_dialect,
-                        name: p_name,
-                        attr: p_attr,
-                        ..
-                    },
-                    TypeKind::Dialect {
-                        dialect: r_dialect,
-                        name: r_name,
-                        attr: r_attr,
-                        ..
-                    },
-                ) => {
-                    assert_eq!(p_dialect.text(db), "type");
-                    assert_eq!(p_name.text(db), "var");
-                    assert_eq!(r_dialect.text(db), "type");
-                    assert_eq!(r_name.text(db), "var");
-                    // Same type variable name "t" should get the same ID
-                    assert_eq!(p_attr, r_attr, "Type variable t should have same ID");
-                }
-                _ => panic!("Expected ty.var types for param and result"),
-            }
+            // Verify both are ty.var dialect types
+            assert_eq!(param_ty.dialect(db).text(db), "type");
+            assert_eq!(param_ty.name(db).text(db), "var");
+            assert_eq!(result_ty.dialect(db).text(db), "type");
+            assert_eq!(result_ty.name(db).text(db), "var");
+            // Same type variable name "t" should get the same ID
+            assert_eq!(
+                param_ty.attrs(db),
+                result_ty.attrs(db),
+                "Type variable t should have same ID"
+            );
 
             // Additionally, verify they are the exact same Type (interned)
             assert_eq!(

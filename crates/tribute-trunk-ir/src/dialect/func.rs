@@ -1,5 +1,5 @@
 //! Function dialect operations.
-
+use super::core;
 use crate::{Attribute, IdVec, Region, Type, dialect, idvec, ir::BlockBuilder};
 use tribute_core::Location;
 
@@ -41,7 +41,7 @@ impl<'db> Func<'db> {
         location: Location<'db>,
         name: &str,
         params: IdVec<Type<'db>>,
-        results: IdVec<Type<'db>>,
+        result: Type<'db>,
         f: impl FnOnce(&mut BlockBuilder<'db>),
     ) -> Self {
         let mut entry = BlockBuilder::new(db, location).args(params.clone());
@@ -51,7 +51,7 @@ impl<'db> Func<'db> {
             db,
             location,
             Attribute::String(name.to_string()),
-            Attribute::Type(Type::function(db, params, results)),
+            Attribute::Type(core::func(db, params, result)),
             region,
         )
     }

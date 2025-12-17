@@ -8,8 +8,9 @@
 //! - `core.string` - string type
 //! - `core.bytes` - byte sequence type
 //! - `core.ptr` - raw pointer type
+use std::collections::BTreeMap;
 
-use crate::{Attribute, IdVec, Region, Type, dialect, idvec, ir::BlockBuilder};
+use crate::{Attribute, IdVec, Region, Symbol, Type, dialect, idvec, ir::BlockBuilder};
 use tribute_core::Location;
 
 dialect! {
@@ -61,49 +62,149 @@ impl<'db> Module<'db> {
 
 // === Core type constructors ===
 
-/// Create an integer type (`core.i`) with the given bit width.
-pub fn i_type(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
-    Type::dialect(
+/// Create an integer type (`core.i{bits}`) with the given bit width.
+pub fn i(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
+    Type::new(
         db,
-        "core",
-        "i",
+        Symbol::new(db, "core"),
+        Symbol::new(db, format!("i{bits}")),
         IdVec::new(),
-        Attribute::IntBits(u64::from(bits)),
+        BTreeMap::new(),
     )
 }
 
-/// Create a floating-point type (`core.f`) with the given bit width.
-pub fn f_type(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
-    Type::dialect(
+/// Create a floating-point type (`core.f{bits}`) with the given bit width.
+pub fn f(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
+    Type::new(
         db,
-        "core",
-        "f",
+        Symbol::new(db, "core"),
+        Symbol::new(db, format!("f{bits}")),
         IdVec::new(),
-        Attribute::IntBits(u64::from(bits)),
+        BTreeMap::new(),
     )
 }
 
 /// Create a unit type (`core.unit`).
-pub fn unit_type(db: &dyn salsa::Database) -> Type<'_> {
-    Type::dialect(db, "core", "unit", IdVec::new(), Attribute::Unit)
+pub fn unit(db: &dyn salsa::Database) -> Type<'_> {
+    Type::new(
+        db,
+        Symbol::new(db, "core"),
+        Symbol::new(db, "unit"),
+        IdVec::new(),
+        BTreeMap::new(),
+    )
 }
 
 /// Create a never type (`core.never`).
-pub fn never_type(db: &dyn salsa::Database) -> Type<'_> {
-    Type::dialect(db, "core", "never", IdVec::new(), Attribute::Unit)
+pub fn never(db: &dyn salsa::Database) -> Type<'_> {
+    Type::new(
+        db,
+        Symbol::new(db, "core"),
+        Symbol::new(db, "never"),
+        IdVec::new(),
+        BTreeMap::new(),
+    )
 }
 
 /// Create a string type (`core.string`).
-pub fn string_type(db: &dyn salsa::Database) -> Type<'_> {
-    Type::dialect(db, "core", "string", IdVec::new(), Attribute::Unit)
+pub fn string(db: &dyn salsa::Database) -> Type<'_> {
+    Type::new(
+        db,
+        Symbol::new(db, "core"),
+        Symbol::new(db, "string"),
+        IdVec::new(),
+        BTreeMap::new(),
+    )
 }
 
 /// Create a bytes type (`core.bytes`).
-pub fn bytes_type(db: &dyn salsa::Database) -> Type<'_> {
-    Type::dialect(db, "core", "bytes", IdVec::new(), Attribute::Unit)
+pub fn bytes(db: &dyn salsa::Database) -> Type<'_> {
+    Type::new(
+        db,
+        Symbol::new(db, "core"),
+        Symbol::new(db, "bytes"),
+        IdVec::new(),
+        BTreeMap::new(),
+    )
 }
 
 /// Create a pointer type (`core.ptr`).
-pub fn ptr_type(db: &dyn salsa::Database) -> Type<'_> {
-    Type::dialect(db, "core", "ptr", IdVec::new(), Attribute::Unit)
+pub fn ptr(db: &dyn salsa::Database) -> Type<'_> {
+    Type::new(
+        db,
+        Symbol::new(db, "core"),
+        Symbol::new(db, "ptr"),
+        IdVec::new(),
+        BTreeMap::new(),
+    )
+}
+
+/// Create an array type (`core.array`).
+pub fn array<'db>(db: &'db dyn salsa::Database, element: Type<'db>) -> Type<'db> {
+    Type::new(
+        db,
+        Symbol::new(db, "core"),
+        Symbol::new(db, "array"),
+        idvec![element],
+        BTreeMap::new(),
+    )
+}
+
+/// Create a reference type (`core.ref`).
+pub fn ref_<'db>(db: &'db dyn salsa::Database, pointee: Type<'db>, nullable: bool) -> Type<'db> {
+    Type::new(
+        db,
+        Symbol::new(db, "core"),
+        Symbol::new(db, "ref"),
+        idvec![pointee],
+        BTreeMap::from([(Symbol::new(db, "nullable"), Attribute::Bool(nullable))]),
+    )
+}
+
+/// Create a tuple type (`core.tuple`).
+pub fn tuple<'db>(db: &'db dyn salsa::Database, elements: IdVec<Type<'db>>) -> Type<'db> {
+    Type::new(
+        db,
+        Symbol::new(db, "core"),
+        Symbol::new(db, "tuple"),
+        elements,
+        BTreeMap::new(),
+    )
+}
+
+/// Create a function type (`core.func`).
+///
+/// Layout: `params[0]` = return type, `params[1..]` = parameter types.
+pub fn func<'db>(
+    db: &'db dyn salsa::Database,
+    params: IdVec<Type<'db>>,
+    result: Type<'db>,
+) -> Type<'db> {
+    func_with_effect(db, params, result, None)
+}
+
+/// Create a function type with an explicit effect.
+///
+/// The `effect` parameter is the effect row type (abilities this function may perform).
+/// Pass `None` for pure functions or when the effect is not yet known.
+pub fn func_with_effect<'db>(
+    db: &'db dyn salsa::Database,
+    params: IdVec<Type<'db>>,
+    result: Type<'db>,
+    effect: Option<Type<'db>>,
+) -> Type<'db> {
+    let mut all_types = IdVec::with_capacity(params.len() + 1);
+    all_types.push(result);
+    all_types.extend(params.iter().copied());
+    let attrs = match effect {
+        Some(eff) => BTreeMap::from([(Symbol::new(db, "effect"), Attribute::Type(eff))]),
+        None => BTreeMap::new(),
+    };
+    Type::new(
+        db,
+        Symbol::new(db, "core"),
+        Symbol::new(db, "func"),
+        all_types,
+        attrs,
+    )
 }

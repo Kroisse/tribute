@@ -1,101 +1,73 @@
 //! IR type definitions.
 
+use std::collections::BTreeMap;
+
 use crate::{IdVec, Symbol};
 
+/// Attribute map type alias.
+pub type Attrs<'db> = BTreeMap<Symbol<'db>, Attribute<'db>>;
+
 /// IR type representation.
+///
+/// All types are dialect-defined with a `dialect.name` naming convention.
 #[salsa::interned(debug)]
 pub struct Type<'db> {
+    pub dialect: Symbol<'db>,
+    pub name: Symbol<'db>,
+    #[returns(deref)]
+    pub params: IdVec<Type<'db>>,
     #[returns(ref)]
-    pub kind: TypeKind<'db>,
+    pub attrs: Attrs<'db>,
 }
 
 impl<'db> Type<'db> {
-    pub fn i(db: &'db dyn salsa::Database, bits: u16) -> Self {
-        Self::dialect(
-            db,
-            "core",
-            "i",
-            IdVec::new(),
-            Attribute::IntBits(u64::from(bits)),
-        )
+    /// Check if this type matches the given dialect and name.
+    pub fn is_dialect(&self, db: &'db dyn salsa::Database, dialect: &str, name: &str) -> bool {
+        self.dialect(db).text(db) == dialect && self.name(db).text(db) == name
     }
-    pub fn f(db: &'db dyn salsa::Database, bits: u16) -> Self {
-        Self::dialect(
-            db,
-            "core",
-            "f",
-            IdVec::new(),
-            Attribute::IntBits(u64::from(bits)),
-        )
-    }
-    pub fn string(db: &'db dyn salsa::Database) -> Self {
-        Self::dialect(db, "core", "string", IdVec::new(), Attribute::Unit)
-    }
-    pub fn bytes(db: &'db dyn salsa::Database) -> Self {
-        Self::dialect(db, "core", "bytes", IdVec::new(), Attribute::Unit)
-    }
-    pub fn ptr(db: &'db dyn salsa::Database) -> Self {
-        Self::dialect(db, "core", "ptr", IdVec::new(), Attribute::Unit)
-    }
-    pub fn never(db: &'db dyn salsa::Database) -> Self {
-        Self::dialect(db, "core", "never", IdVec::new(), Attribute::Unit)
-    }
-    pub fn unit(db: &'db dyn salsa::Database) -> Self {
-        Self::dialect(db, "core", "unit", IdVec::new(), Attribute::Unit)
-    }
-    pub fn array(db: &'db dyn salsa::Database, ty: Type<'db>) -> Self {
-        Type::new(db, TypeKind::Array(ty))
-    }
-    pub fn ref_(db: &'db dyn salsa::Database, ty: Type<'db>, nullable: bool) -> Self {
-        Type::new(db, TypeKind::Ref { ty, nullable })
-    }
-    pub fn tuple(db: &'db dyn salsa::Database, tys: IdVec<Type<'db>>) -> Self {
-        Type::new(db, TypeKind::Tuple(tys))
-    }
-    pub fn function(
-        db: &'db dyn salsa::Database,
-        params: IdVec<Type<'db>>,
-        results: IdVec<Type<'db>>,
-    ) -> Self {
-        Type::new(db, TypeKind::Function { params, results })
-    }
-    pub fn dialect(
-        db: &'db dyn salsa::Database,
-        dialect: &str,
-        name: &str,
-        params: IdVec<Type<'db>>,
-        attr: Attribute<'db>,
-    ) -> Self {
-        Type::new(
-            db,
-            TypeKind::Dialect {
-                dialect: Symbol::new(db, dialect),
-                name: Symbol::new(db, name),
-                params,
-                attr,
-            },
-        )
-    }
-}
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum TypeKind<'db> {
-    Array(Type<'db>),
-    Ref {
-        ty: Type<'db>,
-        nullable: bool,
-    },
-    Tuple(IdVec<Type<'db>>),
-    Function {
-        params: IdVec<Type<'db>>,
-        results: IdVec<Type<'db>>,
-    },
-    Dialect {
-        dialect: Symbol<'db>,
-        name: Symbol<'db>,
-        params: IdVec<Type<'db>>,
-        attr: Attribute<'db>,
-    },
+    /// Check if this is a function type (`core.func`).
+    pub fn is_function(&self, db: &'db dyn salsa::Database) -> bool {
+        self.is_dialect(db, "core", "func")
+    }
+
+    /// Get function parameter types if this is a function type.
+    /// Returns `params[1..]` (skipping the return type at index 0).
+    pub fn function_params(&self, db: &'db dyn salsa::Database) -> Option<IdVec<Type<'db>>> {
+        if !self.is_function(db) {
+            return None;
+        }
+        let all = self.params(db);
+        if all.is_empty() {
+            return None;
+        }
+        Some(all.iter().skip(1).copied().collect())
+    }
+
+    /// Get function return type if this is a function type.
+    /// Returns `params[0]`.
+    pub fn function_result(&self, db: &'db dyn salsa::Database) -> Option<Type<'db>> {
+        if !self.is_function(db) {
+            return None;
+        }
+        self.params(db).first().copied()
+    }
+
+    /// Get function effect type if this is a function type.
+    pub fn function_effect(&self, db: &'db dyn salsa::Database) -> Option<Type<'db>> {
+        if !self.is_function(db) {
+            return None;
+        }
+        match self.get_attr(db, "effect") {
+            Some(Attribute::Type(ty)) => Some(*ty),
+            _ => None,
+        }
+    }
+
+    /// Get an attribute by key.
+    pub fn get_attr(&self, db: &'db dyn salsa::Database, key: &str) -> Option<&Attribute<'db>> {
+        self.attrs(db).get(&Symbol::new(db, key))
+    }
 }
 
 /// IR attribute values.
