@@ -397,6 +397,13 @@ fn lower_expr<'db>(
             }
         }
 
+        // Qualified path: foo::bar::baz → src.path
+        Expr::Path(segments) => {
+            let path: IdVec<_> = segments.iter().map(|s| sym(db, s)).collect();
+            let op = block.op(src::path(db, location, infer_ty, path));
+            op.result(db)
+        }
+
         // Function call → src.call
         Expr::Call(CallExpression {
             function,

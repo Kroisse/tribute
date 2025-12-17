@@ -753,6 +753,20 @@ impl TributeParser {
                 let text = node.utf8_text(source.as_bytes())?;
                 Ok(Expr::Identifier(text.to_string()))
             }
+            "path_expression" => {
+                // Qualified path: foo::bar::baz
+                let mut cursor = node.walk();
+                let mut segments = Vec::new();
+                for child in node.named_children(&mut cursor) {
+                    if child.kind() != "path_segment" {
+                        continue;
+                    }
+                    if let Some(inner) = child.child(0) {
+                        segments.push(inner.utf8_text(source.as_bytes())?.to_string());
+                    }
+                }
+                Ok(Expr::Path(segments))
+            }
             "keyword_true" => Ok(Expr::Bool(true)),
             "keyword_false" => Ok(Expr::Bool(false)),
             "keyword_nil" => Ok(Expr::Nil),

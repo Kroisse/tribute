@@ -212,6 +212,7 @@ fn lower_expr(expr: &Spanned<AstExpr>) -> LowerResult<Spanned<Expr>> {
             }
         }
         AstExpr::Identifier(id) => Expr::Variable(id.clone()),
+        AstExpr::Path(segments) => Expr::Variable(segments.join("::")),
         AstExpr::Binary(bin_expr) => {
             let left = Box::new(lower_expr(&bin_expr.left)?);
             let right = Box::new(lower_expr(&bin_expr.right)?);

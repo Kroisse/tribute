@@ -175,6 +175,8 @@ pub enum Expr {
     /// Bytes literal: b"hello", b"\x00\x01"
     BytesInterpolation(BytesInterpolation),
     Identifier(Identifier),
+    /// Qualified path: foo::bar::baz
+    Path(Vec<Identifier>),
     Binary(BinaryExpression),
     Call(CallExpression),
     MethodCall(MethodCallExpression),
@@ -205,6 +207,7 @@ impl std::hash::Hash for Expr {
             Expr::StringInterpolation(s) => s.hash(state),
             Expr::BytesInterpolation(b) => b.hash(state),
             Expr::Identifier(id) => id.hash(state),
+            Expr::Path(p) => p.hash(state),
             Expr::Binary(b) => b.hash(state),
             Expr::Call(c) => c.hash(state),
             Expr::MethodCall(m) => m.hash(state),
