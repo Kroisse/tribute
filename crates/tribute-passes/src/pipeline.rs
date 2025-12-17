@@ -36,7 +36,11 @@ use tribute_core::SourceFile;
 use tribute_trunk_ir::dialect::core::Module;
 
 use crate::cst_to_tir::{lower_cst, parse_cst};
+use crate::resolve::{Resolver, build_env};
 use crate::typeck::{TypeChecker, TypeSolver};
+
+// Re-export for convenience
+pub use crate::resolve::build_env as build_module_env;
 
 /// Result of the full compilation pipeline.
 pub struct CompilationResult<'db> {
@@ -80,12 +84,12 @@ pub use crate::cst_to_tir::lower_cst as stage_lower;
 /// Stage 3: Resolve names in the module.
 ///
 /// This pass resolves:
-/// - `src.var` → concrete variable references or function calls
-/// - `src.call` → resolved function references
+/// - `src.var` → `func.constant` or `adt.struct_new`/`adt.variant_new`
+/// - `src.call` → `func.call` with resolved callee
 /// - `src.path` → resolved module paths
-/// - `src.type` → concrete type references
 ///
-/// After this pass, all `src.*` operations should be eliminated.
+/// After this pass, all resolvable `src.*` operations are transformed.
+/// Some may remain for type-directed resolution (UFCS).
 #[salsa::tracked]
 pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
     // Get the lowered module from the previous stage
@@ -95,9 +99,15 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> M
         let location = tribute_core::Location::new(path, tribute_core::Span::new(0, 0));
         return Module::build(db, location, "main", |_| {});
     };
-    // TODO: Implement name resolution
-    // For now, pass through unchanged
-    lower_cst(db, source, cst)
+
+    let module = lower_cst(db, source, cst);
+
+    // Build module environment from declarations
+    let env = build_env(db, &module);
+
+    // Resolve names in the module
+    let mut resolver = Resolver::new(db, env);
+    resolver.resolve_module(&module)
 }
 
 /// Stage 4: Infer and check types.
@@ -152,8 +162,8 @@ pub fn compile_with_diagnostics<'db>(
 ) -> CompilationResult<'db> {
     let mut diagnostics = Vec::new();
 
-    // Stage 1: Parse
-    let Some(cst) = parse_cst(db, source) else {
+    // Stage 1: Check parse (early exit on failure)
+    let Some(_cst) = parse_cst(db, source) else {
         diagnostics.push(CompilationDiagnostic {
             severity: DiagnosticSeverity::Error,
             message: "Failed to parse source file".to_string(),
@@ -170,12 +180,8 @@ pub fn compile_with_diagnostics<'db>(
         };
     };
 
-    // Stage 2: Lower
-    let module = lower_cst(db, source, cst);
-
-    // Stage 3: Resolve names (currently passthrough)
-    // let module = stage_resolve(db, source);
-    // We skip the tracked function here to get more control over diagnostics
+    // Stage 2-3: Lower and resolve (uses tracked functions)
+    let module = stage_resolve(db, source);
 
     // Stage 4: Type check
     let mut checker = TypeChecker::new(db);
