@@ -49,15 +49,15 @@ impl<'db> Type<'db> {
     }
     pub fn dialect(
         db: &'db dyn salsa::Database,
-        dialect: String,
-        name: String,
+        dialect: &str,
+        name: &str,
         params: IdVec<Type<'db>>,
     ) -> Self {
         Type::new(
             db,
             TypeKind::Dialect {
-                dialect,
-                name,
+                dialect: Symbol::new(db, dialect),
+                name: Symbol::new(db, name),
                 params,
             },
         )
@@ -88,8 +88,8 @@ pub enum TypeKind<'db> {
         results: IdVec<Type<'db>>,
     },
     Dialect {
-        dialect: String,
-        name: String,
+        dialect: Symbol<'db>,
+        name: Symbol<'db>,
         params: IdVec<Type<'db>>,
     },
 }

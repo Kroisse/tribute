@@ -501,11 +501,12 @@ macro_rules! define_op {
                     db: &'db dyn salsa::Database,
                     op: $crate::Operation<'db>,
                 ) -> Result<Self, $crate::ConversionError> {
-                    let expected_name = $crate::OpNameId::new(db, stringify!($dialect), stringify!($op));
-                    if op.name(db) != expected_name {
+                    let expected_dialect = $crate::Symbol::new(db, stringify!($dialect));
+                    let expected_name = $crate::Symbol::new(db, stringify!($op));
+                    if op.dialect(db) != expected_dialect || op.name(db) != expected_name {
                         return Err($crate::ConversionError::WrongOperation {
                             expected: concat!(stringify!($dialect), ".", stringify!($op)),
-                            actual: op.name(db).to_string(db),
+                            actual: op.full_name(db),
                         });
                     }
                     // Attribute validation
@@ -541,11 +542,12 @@ macro_rules! define_op {
                 $($attr: $crate::Attribute<'db>,)*
                 $($region: $crate::Region<'db>,)*
             ) -> [<$op:camel>]<'db> {
-                let name = $crate::OpNameId::new(db, stringify!($dialect), stringify!($op));
+                let dialect = $crate::Symbol::new(db, stringify!($dialect));
+                let name = $crate::Symbol::new(db, stringify!($op));
                 #[allow(unused_mut)]
                 let mut operands = $crate::idvec![$($fixed),*];
                 $(operands.extend($var);)?
-                let op = $crate::Operation::of(db, location, name)
+                let op = $crate::Operation::of(db, location, dialect, name)
                     .operands(operands)
                     $(.result($result))*
                     $(.attr(stringify!($attr), $attr))*

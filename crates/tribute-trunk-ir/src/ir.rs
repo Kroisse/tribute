@@ -17,28 +17,6 @@ pub struct Symbol<'db> {
     pub text: String,
 }
 
-/// Interned operation name for efficient dialect.operation comparison.
-#[salsa::interned(debug)]
-pub struct OpNameId<'db> {
-    #[returns(deref)]
-    pub dialect: String,
-    #[returns(deref)]
-    pub operation: String,
-}
-
-impl<'db> OpNameId<'db> {
-    /// Parse "dialect.operation" format.
-    pub fn parse(db: &'db dyn salsa::Database, full: &str) -> Option<Self> {
-        let (dialect, operation) = full.split_once('.')?;
-        Some(Self::new(db, dialect, operation))
-    }
-
-    /// Format as "dialect.operation".
-    pub fn to_string(&self, db: &'db dyn salsa::Database) -> String {
-        format!("{}.{}", self.dialect(db), self.operation(db))
-    }
-}
-
 // ============================================================================
 // SSA Values
 // ============================================================================
@@ -65,8 +43,10 @@ pub struct Value<'db> {
 #[salsa::tracked(debug)]
 pub struct Operation<'db> {
     pub location: Location<'db>,
-    /// Interned operation name (dialect.operation).
-    pub name: OpNameId<'db>,
+    /// Dialect name (e.g., "arith", "func").
+    pub dialect: Symbol<'db>,
+    /// Operation name within the dialect (e.g., "add", "call").
+    pub name: Symbol<'db>,
     #[returns(deref)]
     pub operands: IdVec<Value<'db>>,
     #[returns(deref)]
@@ -81,23 +61,33 @@ pub struct Operation<'db> {
 }
 
 impl<'db> Operation<'db> {
-    /// Create a builder for an operation with the given name.
+    /// Create a builder for an operation with the given dialect and name.
     pub fn of(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: OpNameId<'db>,
+        dialect: Symbol<'db>,
+        name: Symbol<'db>,
     ) -> OperationBuilder<'db> {
-        OperationBuilder::new(db, location, name)
+        OperationBuilder::new(db, location, dialect, name)
     }
 
     /// Create a builder, parsing "dialect.operation" string.
     pub fn of_name(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &str,
+        full_name: &str,
     ) -> OperationBuilder<'db> {
-        let name = OpNameId::parse(db, name).expect("invalid operation name");
-        Self::of(db, location, name)
+        let (dialect, name) = full_name
+            .split_once('.')
+            .expect("invalid operation name: expected 'dialect.operation'");
+        let dialect = Symbol::new(db, dialect);
+        let name = Symbol::new(db, name);
+        Self::of(db, location, dialect, name)
+    }
+
+    /// Format as "dialect.operation".
+    pub fn full_name(&self, db: &'db dyn salsa::Database) -> String {
+        format!("{}.{}", self.dialect(db).text(db), self.name(db).text(db))
     }
 
     pub fn result(self, db: &'db dyn salsa::Database, index: usize) -> Value<'db> {
@@ -135,7 +125,8 @@ pub struct Region<'db> {
 pub struct OperationBuilder<'db> {
     db: &'db dyn salsa::Database,
     location: Location<'db>,
-    name: OpNameId<'db>,
+    dialect: Symbol<'db>,
+    name: Symbol<'db>,
     operands: IdVec<Value<'db>>,
     results: IdVec<Type<'db>>,
     attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
@@ -144,10 +135,16 @@ pub struct OperationBuilder<'db> {
 }
 
 impl<'db> OperationBuilder<'db> {
-    pub fn new(db: &'db dyn salsa::Database, location: Location<'db>, name: OpNameId<'db>) -> Self {
+    pub fn new(
+        db: &'db dyn salsa::Database,
+        location: Location<'db>,
+        dialect: Symbol<'db>,
+        name: Symbol<'db>,
+    ) -> Self {
         Self {
             db,
             location,
+            dialect,
             name,
             operands: Default::default(),
             results: Default::default(),
@@ -202,6 +199,7 @@ impl<'db> OperationBuilder<'db> {
         Operation::new(
             self.db,
             self.location,
+            self.dialect,
             self.name,
             self.operands,
             self.results,
