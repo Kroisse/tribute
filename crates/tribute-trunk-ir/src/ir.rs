@@ -266,8 +266,13 @@ mod tests {
         let path = PathId::new(db, PathBuf::from("test.tr"));
         let location = Location::new(path, Span::new(0, 0));
 
-        let main_func =
-            func::Func::build(db, location, "main", idvec![], core::i(db, 32), |entry| {
+        let main_func = func::Func::build(
+            db,
+            location,
+            "main",
+            idvec![],
+            core::I32::new(db).into(),
+            |entry| {
                 let c0 = entry.op(arith::Const::i32(db, location, 40));
                 let c1 = entry.op(arith::Const::i32(db, location, 2));
                 let add = entry.op(arith::add(
@@ -275,10 +280,11 @@ mod tests {
                     location,
                     c0.result(db),
                     c1.result(db),
-                    core::i(db, 32),
+                    core::I32::new(db).into(),
                 ));
                 entry.op(func::Return::value(db, location, add.result(db)));
-            });
+            },
+        );
 
         core::Module::build(db, location, "main", |top| {
             top.op(main_func);
@@ -336,20 +342,20 @@ mod tests {
 
             // Create dummy values using a helper op
             let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
-                .result(core::i(db, 32))
-                .result(core::i(db, 32))
+                .result(core::I32::new(db).into())
+                .result(core::I32::new(db).into())
                 .build();
             let v0 = dummy_op.result(db, 0);
             let v1 = dummy_op.result(db, 1);
 
-            binary(db, location, v0, v1, core::i(db, 32))
+            binary(db, location, v0, v1, core::I32::new(db).into())
         }
 
         #[test]
         fn test_define_op_binary() {
             TributeDatabaseImpl::default().attach(|db| {
                 let binary = test_binary_op(db);
-                assert_eq!(binary.result_ty(db), core::i(db, 32));
+                assert_eq!(binary.result_ty(db), core::I32::new(db).into());
 
                 // Test auto-generated named accessors
                 let lhs = binary.lhs(db);
@@ -363,14 +369,14 @@ mod tests {
             let path = PathId::new(db, PathBuf::from("test.tr"));
             let location = Location::new(path, Span::new(0, 0));
 
-            constant(db, location, core::i(db, 64), 42i64.into())
+            constant(db, location, core::I64::new(db).into(), 42i64.into())
         }
 
         #[test]
         fn test_define_op_constant() {
             TributeDatabaseImpl::default().attach(|db| {
                 let constant = test_constant_op(db);
-                assert_eq!(constant.result_ty(db), core::i(db, 64));
+                assert_eq!(constant.result_ty(db), core::I64::new(db).into());
 
                 // Test auto-generated attribute accessor
                 assert_eq!(constant.value(db), &Attribute::IntBits(42));
@@ -420,24 +426,31 @@ mod tests {
 
             // Create dummy values
             let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
-                .result(core::i(db, 32))
-                .result(core::i(db, 32))
-                .result(core::i(db, 32))
-                .result(core::i(db, 32))
+                .result(core::I32::new(db).into())
+                .result(core::I32::new(db).into())
+                .result(core::I32::new(db).into())
+                .result(core::I32::new(db).into())
                 .build();
             let v0 = dummy_op.result(db, 0);
             let v1 = dummy_op.result(db, 1);
             let v2 = dummy_op.result(db, 2);
             let v3 = dummy_op.result(db, 3);
 
-            mixed(db, location, v0, v1, vec![v2, v3], core::i(db, 32))
+            mixed(
+                db,
+                location,
+                v0,
+                v1,
+                vec![v2, v3],
+                core::I32::new(db).into(),
+            )
         }
 
         #[test]
         fn test_define_op_mixed() {
             TributeDatabaseImpl::default().attach(|db| {
                 let mixed = test_mixed_op(db);
-                assert_eq!(mixed.result_ty(db), core::i(db, 32));
+                assert_eq!(mixed.result_ty(db), core::I32::new(db).into());
 
                 // Test named accessors for fixed operands
                 let first = mixed.first(db);
@@ -457,7 +470,7 @@ mod tests {
 
             // Create a dummy input value
             let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
-                .result(core::i(db, 32))
+                .result(core::I32::new(db).into())
                 .build();
             let input = dummy_op.result(db, 0);
 
@@ -465,8 +478,8 @@ mod tests {
                 db,
                 location,
                 input,
-                core::i(db, 32), // quotient type
-                core::i(db, 32), // remainder type
+                core::I32::new(db).into(), // quotient type
+                core::I32::new(db).into(), // remainder type
             )
         }
 
@@ -476,8 +489,8 @@ mod tests {
                 let multi = test_multi_result_op(db);
 
                 // Test named result accessors for each result
-                assert_eq!(multi.quotient_ty(db), core::i(db, 32));
-                assert_eq!(multi.remainder_ty(db), core::i(db, 32));
+                assert_eq!(multi.quotient_ty(db), core::I32::new(db).into());
+                assert_eq!(multi.remainder_ty(db), core::I32::new(db).into());
 
                 // Test that we get different Value handles for each result
                 let q = multi.quotient(db);

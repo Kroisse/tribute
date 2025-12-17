@@ -359,7 +359,12 @@ fn lower_expr<'db>(
         }
         Expr::Bool(b) => {
             // Use i1 for booleans
-            let op = block.op(arith::r#const(db, location, core::i(db, 1), (*b).into()));
+            let op = block.op(arith::r#const(
+                db,
+                location,
+                core::I1::new(db).into(),
+                (*b).into(),
+            ));
             op.result(db)
         }
         Expr::Nil => {
@@ -423,7 +428,7 @@ fn lower_expr<'db>(
             let op = block.op(arith::r#const(
                 db,
                 location,
-                core::i(db, 32),
+                core::I32::new(db).into(),
                 u64::from(u32::from(*c)).into(),
             ));
             op.result(db)
@@ -621,7 +626,7 @@ fn lower_binary_op<'db>(
 ) -> Value<'db> {
     // Result type is unknown until type inference
     let infer_ty = ctx.fresh_type_var(db);
-    let bool_ty = core::i(db, 1);
+    let bool_ty = core::I1::new(db).into();
 
     match operator {
         // Arithmetic operations → arith dialect
@@ -1773,7 +1778,7 @@ mod tests {
 
             // Verify first op is arith.const with i32 type
             let const_op = arith::Const::from_operation(db, ops[0]).unwrap();
-            assert_eq!(const_op.result_ty(db), core::i(db, 32));
+            assert_eq!(const_op.result_ty(db), core::I32::new(db).into());
 
             // Verify the value is 'a' (97)
             assert_eq!(const_op.value(db), &Attribute::IntBits(97));

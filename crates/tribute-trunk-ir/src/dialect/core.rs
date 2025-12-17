@@ -1,14 +1,15 @@
 //! Core dialect operations and types.
 //!
 //! This dialect provides fundamental types:
-//! - `core.i` - integer type (with bit width in attr)
-//! - `core.f` - floating-point type (with bit width in attr)
+//! - `core.i{bits}` - integer type (e.g., `core.i32`, `core.i64`)
+//! - `core.f{bits}` - floating-point type (e.g., `core.f32`, `core.f64`)
 //! - `core.unit` - unit type (void/empty)
 //! - `core.never` - never/bottom type (no values)
 //! - `core.string` - string type
 //! - `core.bytes` - byte sequence type
 //! - `core.ptr` - raw pointer type
 use std::collections::BTreeMap;
+use std::ops::Deref;
 
 use crate::{Attribute, IdVec, Region, Symbol, Type, dialect, idvec, ir::BlockBuilder};
 use tribute_core::Location;
@@ -62,8 +63,64 @@ impl<'db> Module<'db> {
 
 // === Core type constructors ===
 
+// === Integer type wrapper ===
+
+/// Integer type wrapper (`core.i{BITS}`).
+///
+/// Use `I::<32>::new(db)` or the type alias `I32::new(db)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct I<'db, const BITS: u16>(Type<'db>);
+
+impl<'db, const BITS: u16> I<'db, BITS> {
+    /// Create a new integer type with the specified bit width.
+    pub fn new(db: &'db dyn salsa::Database) -> Self {
+        Self(i(db, BITS))
+    }
+
+    /// Get the underlying `Type`.
+    pub fn as_type(self) -> Type<'db> {
+        self.0
+    }
+}
+
+impl<'db, const BITS: u16> Deref for I<'db, BITS> {
+    type Target = Type<'db>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'db, const BITS: u16> From<I<'db, BITS>> for Type<'db> {
+    fn from(value: I<'db, BITS>) -> Self {
+        value.0
+    }
+}
+
+impl<'db, const BITS: u16> I<'db, BITS> {
+    /// Try to convert a `Type` to this integer type wrapper with validation.
+    pub fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
+        let expected_name = format!("i{BITS}");
+        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == expected_name {
+            Some(Self(ty))
+        } else {
+            None
+        }
+    }
+}
+
+/// 1-bit integer type (boolean).
+pub type I1<'db> = I<'db, 1>;
+/// 8-bit integer type.
+pub type I8<'db> = I<'db, 8>;
+/// 16-bit integer type.
+pub type I16<'db> = I<'db, 16>;
+/// 32-bit integer type.
+pub type I32<'db> = I<'db, 32>;
+/// 64-bit integer type.
+pub type I64<'db> = I<'db, 64>;
+
 /// Create an integer type (`core.i{bits}`) with the given bit width.
-pub fn i(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
+fn i(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     Type::new(
         db,
         Symbol::new(db, "core"),
@@ -73,8 +130,58 @@ pub fn i(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     )
 }
 
+// === Floating-point type wrapper ===
+
+/// Floating-point type wrapper (`core.f{BITS}`).
+///
+/// Use `F::<32>::new(db)` or the type alias `F32::new(db)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct F<'db, const BITS: u16>(Type<'db>);
+
+impl<'db, const BITS: u16> F<'db, BITS> {
+    /// Create a new floating-point type with the specified bit width.
+    pub fn new(db: &'db dyn salsa::Database) -> Self {
+        Self(f(db, BITS))
+    }
+
+    /// Get the underlying `Type`.
+    pub fn as_type(self) -> Type<'db> {
+        self.0
+    }
+}
+
+impl<'db, const BITS: u16> Deref for F<'db, BITS> {
+    type Target = Type<'db>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'db, const BITS: u16> From<F<'db, BITS>> for Type<'db> {
+    fn from(value: F<'db, BITS>) -> Self {
+        value.0
+    }
+}
+
+impl<'db, const BITS: u16> F<'db, BITS> {
+    /// Try to convert a `Type` to this floating-point type wrapper with validation.
+    pub fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
+        let expected_name = format!("f{BITS}");
+        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == expected_name {
+            Some(Self(ty))
+        } else {
+            None
+        }
+    }
+}
+
+/// 32-bit floating-point type.
+pub type F32<'db> = F<'db, 32>;
+/// 64-bit floating-point type.
+pub type F64<'db> = F<'db, 64>;
+
 /// Create a floating-point type (`core.f{bits}`) with the given bit width.
-pub fn f(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
+fn f(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     Type::new(
         db,
         Symbol::new(db, "core"),

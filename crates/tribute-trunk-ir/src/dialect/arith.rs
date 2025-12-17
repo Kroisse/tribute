@@ -91,17 +91,22 @@ dialect! {
 impl<'db> Const<'db> {
     /// Create a new i32 constant.
     pub fn i32(db: &'db dyn salsa::Database, location: Location<'db>, value: i32) -> Self {
-        r#const(db, location, core::i(db, 32), i64::from(value).into())
+        r#const(
+            db,
+            location,
+            core::I32::new(db).into(),
+            i64::from(value).into(),
+        )
     }
 
     /// Create a new i64 constant.
     pub fn i64(db: &'db dyn salsa::Database, location: Location<'db>, value: i64) -> Self {
-        r#const(db, location, core::i(db, 64), value.into())
+        r#const(db, location, core::I64::new(db).into(), value.into())
     }
 
     /// Create a new u64 constant.
     pub fn u64(db: &'db dyn salsa::Database, location: Location<'db>, value: u64) -> Self {
-        r#const(db, location, core::i(db, 64), value.into())
+        r#const(db, location, core::I64::new(db).into(), value.into())
     }
 
     /// Create a new f32 constant.
@@ -109,7 +114,7 @@ impl<'db> Const<'db> {
         r#const(
             db,
             location,
-            core::f(db, 32),
+            core::F32::new(db).into(),
             Attribute::FloatBits(u64::from(value.to_bits())),
         )
     }
@@ -119,7 +124,7 @@ impl<'db> Const<'db> {
         r#const(
             db,
             location,
-            core::f(db, 64),
+            core::F64::new(db).into(),
             Attribute::FloatBits(value.to_bits()),
         )
     }
