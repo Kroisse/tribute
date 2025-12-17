@@ -8,6 +8,8 @@ description = "Compiler passes for Tribute (AST to TrunkIR lowering, type infere
 [dependencies]
 salsa.workspace = true
 serde.workspace = true
+tree-sitter.workspace = true
+tree-sitter-tribute.workspace = true
 tribute-ast.workspace = true
 tribute-core.workspace = true
 tribute-trunk-ir.workspace = true

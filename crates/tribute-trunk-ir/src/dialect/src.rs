@@ -55,6 +55,13 @@ dialect! {
         /// `src.tuple` operation: tuple construction.
         /// Takes variadic operands (tuple elements) and produces a tuple value.
         fn tuple(#[rest] elements) -> result;
+
+        /// `src.const` operation: constant definition.
+        /// Represents a named constant value before resolution.
+        /// Unlike functions, constants are evaluated once and their value is inlined at use sites.
+        /// The `value` attribute holds the literal value (IntBits, FloatBits, String, etc.).
+        #[attr(name: Symbol, value: any)]
+        fn r#const() -> result;
     }
 }
 
