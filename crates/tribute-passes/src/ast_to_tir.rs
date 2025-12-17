@@ -507,7 +507,7 @@ fn lower_expr<'db>(
             body_block.op(src::r#yield(db, location, result_value));
 
             // Create the function type for the lambda
-            let func_type = core::func(db, param_types, result_type);
+            let func_type = core::Func::new(db, param_types, result_type).as_type();
 
             // Create the src.lambda operation
             let region = Region::new(db, location, idvec![body_block.build()]);

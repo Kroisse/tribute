@@ -1,6 +1,6 @@
 //! Function dialect operations.
 use super::core;
-use crate::{Attribute, IdVec, Region, Type, dialect, idvec, ir::BlockBuilder};
+use crate::{Attribute, DialectType, IdVec, Region, Type, dialect, idvec, ir::BlockBuilder};
 use tribute_core::Location;
 
 dialect! {
@@ -51,7 +51,7 @@ impl<'db> Func<'db> {
             db,
             location,
             Attribute::String(name.to_string()),
-            Attribute::Type(core::func(db, params, result)),
+            Attribute::Type(core::Func::new(db, params, result).as_type()),
             region,
         )
     }

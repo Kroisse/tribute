@@ -70,7 +70,7 @@ impl<'db> Module<'db> {
 /// Integer type wrapper (`core.i{BITS}`).
 ///
 /// Use `I::<32>::new(db)` or the type alias `I32::new(db)`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct I<'db, const BITS: u16>(Type<'db>);
 
 impl<'db, const BITS: u16> I<'db, BITS> {
@@ -129,7 +129,7 @@ fn i(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
 /// Floating-point type wrapper (`core.f{BITS}`).
 ///
 /// Use `F::<32>::new(db)` or the type alias `F32::new(db)`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct F<'db, const BITS: u16>(Type<'db>);
 
 impl<'db, const BITS: u16> F<'db, BITS> {
@@ -265,39 +265,79 @@ pub fn tuple<'db>(db: &'db dyn salsa::Database, elements: IdVec<Type<'db>>) -> T
     )
 }
 
-/// Create a function type (`core.func`).
+// === Function type wrapper ===
+
+/// Function type wrapper (`core.func`).
 ///
 /// Layout: `params[0]` = return type, `params[1..]` = parameter types.
-pub fn func<'db>(
-    db: &'db dyn salsa::Database,
-    params: IdVec<Type<'db>>,
-    result: Type<'db>,
-) -> Type<'db> {
-    func_with_effect(db, params, result, None)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct Func<'db>(Type<'db>);
+
+impl<'db> Func<'db> {
+    /// Create a pure function type (no effects).
+    pub fn new(db: &'db dyn salsa::Database, params: IdVec<Type<'db>>, result: Type<'db>) -> Self {
+        Self::with_effect(db, params, result, None)
+    }
+
+    /// Create a function type with an explicit effect.
+    pub fn with_effect(
+        db: &'db dyn salsa::Database,
+        params: IdVec<Type<'db>>,
+        result: Type<'db>,
+        effect: Option<Type<'db>>,
+    ) -> Self {
+        let mut all_types = IdVec::with_capacity(params.len() + 1);
+        all_types.push(result);
+        all_types.extend(params.iter().copied());
+        let attrs = match effect {
+            Some(eff) => BTreeMap::from([(Symbol::new(db, "effect"), Attribute::Type(eff))]),
+            None => BTreeMap::new(),
+        };
+        Self(Type::new(
+            db,
+            Symbol::new(db, "core"),
+            Symbol::new(db, "func"),
+            all_types,
+            attrs,
+        ))
+    }
+
+    /// Get the return type.
+    pub fn result(&self, db: &'db dyn salsa::Database) -> Type<'db> {
+        self.0.params(db)[0]
+    }
+
+    /// Get the parameter types.
+    pub fn params(&self, db: &'db dyn salsa::Database) -> IdVec<Type<'db>> {
+        self.0.params(db).iter().skip(1).copied().collect()
+    }
+
+    /// Get the effect type, if any.
+    pub fn effect(&self, db: &'db dyn salsa::Database) -> Option<Type<'db>> {
+        match self.0.get_attr(db, "effect") {
+            Some(Attribute::Type(ty)) => Some(*ty),
+            _ => None,
+        }
+    }
 }
 
-/// Create a function type with an explicit effect.
-///
-/// The `effect` parameter is the effect row type (abilities this function may perform).
-/// Pass `None` for pure functions or when the effect is not yet known.
-pub fn func_with_effect<'db>(
-    db: &'db dyn salsa::Database,
-    params: IdVec<Type<'db>>,
-    result: Type<'db>,
-    effect: Option<Type<'db>>,
-) -> Type<'db> {
-    let mut all_types = IdVec::with_capacity(params.len() + 1);
-    all_types.push(result);
-    all_types.extend(params.iter().copied());
-    let attrs = match effect {
-        Some(eff) => BTreeMap::from([(Symbol::new(db, "effect"), Attribute::Type(eff))]),
-        None => BTreeMap::new(),
-    };
-    Type::new(
-        db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, "func"),
-        all_types,
-        attrs,
-    )
+impl<'db> Deref for Func<'db> {
+    type Target = Type<'db>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'db> DialectType<'db> for Func<'db> {
+    fn as_type(&self) -> Type<'db> {
+        self.0
+    }
+
+    fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
+        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == "func" {
+            Some(Self(ty))
+        } else {
+            None
+        }
+    }
 }
