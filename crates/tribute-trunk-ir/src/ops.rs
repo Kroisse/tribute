@@ -79,82 +79,30 @@ pub trait DialectOp<'db>: Sized + Copy {
 macro_rules! dialect {
     // Entry point
     (mod $dialect:ident { $($body:tt)* }) => {
-        $crate::dialect!(@parse $dialect $($body)*);
+        $crate::dialect!(@parse $dialect [$($body)*]);
     };
 
     // Base case: no more ops
-    (@parse $dialect:ident) => {};
+    (@parse $dialect:ident []) => {};
 
-    // Operation with doc + attrs
+    // Operation with optional doc and optional attrs.
+    // Note: doc comments must come before #[attr(...)] if both are present.
     (@parse $dialect:ident
-        $(#[doc = $doc:literal])+
-        #[attr($($attr:ident),* $(,)?)]
-        fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
-        $($rest:tt)*
+        [$(#[doc = $doc:literal])*
+         $(#[attr($($attr:ident),* $(,)?)])?
+         fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
+         $($rest:tt)*]
     ) => {
         $crate::define_op! {
-            doc: [$($doc),+],
+            doc: [$($doc),*],
             dialect: $dialect,
             op: $op,
-            attrs: [$($attr),*],
+            attrs: [$($($attr),*)?],
             operands: ($($operands)*),
             result: [$($result)?],
             regions: [$($($region_body)*)?]
         }
-        $crate::dialect!(@parse $dialect $($rest)*);
-    };
-
-    // Operation with attrs only (no doc)
-    (@parse $dialect:ident
-        #[attr($($attr:ident),* $(,)?)]
-        fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
-        $($rest:tt)*
-    ) => {
-        $crate::define_op! {
-            doc: [],
-            dialect: $dialect,
-            op: $op,
-            attrs: [$($attr),*],
-            operands: ($($operands)*),
-            result: [$($result)?],
-            regions: [$($($region_body)*)?]
-        }
-        $crate::dialect!(@parse $dialect $($rest)*);
-    };
-
-    // Operation with doc only (no attrs)
-    (@parse $dialect:ident
-        $(#[doc = $doc:literal])+
-        fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
-        $($rest:tt)*
-    ) => {
-        $crate::define_op! {
-            doc: [$($doc),+],
-            dialect: $dialect,
-            op: $op,
-            attrs: [],
-            operands: ($($operands)*),
-            result: [$($result)?],
-            regions: [$($($region_body)*)?]
-        }
-        $crate::dialect!(@parse $dialect $($rest)*);
-    };
-
-    // Operation without doc or attrs
-    (@parse $dialect:ident
-        fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
-        $($rest:tt)*
-    ) => {
-        $crate::define_op! {
-            doc: [],
-            dialect: $dialect,
-            op: $op,
-            attrs: [],
-            operands: ($($operands)*),
-            result: [$($result)?],
-            regions: [$($($region_body)*)?]
-        }
-        $crate::dialect!(@parse $dialect $($rest)*);
+        $crate::dialect!(@parse $dialect [$($rest)*]);
     };
 }
 
