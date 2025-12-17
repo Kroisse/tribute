@@ -2,8 +2,11 @@
 //!
 //! The `src` dialect represents unresolved AST constructs before name resolution
 //! and type inference. All `src.*` operations should be eliminated after resolution.
+//!
+//! Additionally, this module provides type constructors for unresolved types:
+//! - `src.type` - an unresolved type reference that needs name resolution
 
-use crate::dialect;
+use crate::{Attribute, IdVec, Type, dialect};
 
 dialect! {
     mod src {
@@ -47,4 +50,25 @@ dialect! {
         /// Takes variadic operands (tuple elements) and produces a tuple value.
         fn tuple(#[rest] elements) -> result;
     }
+}
+
+// === Type constructors for unresolved types ===
+
+/// Create an unresolved type reference (`src.type`).
+///
+/// Represents a named type that needs name resolution (e.g., `Int`, `User`, `List(a)`).
+/// The `params` hold type arguments for generic types.
+/// After resolution, this will be replaced with the concrete type.
+pub fn unresolved_type<'db>(
+    db: &'db dyn salsa::Database,
+    name: &str,
+    params: IdVec<Type<'db>>,
+) -> Type<'db> {
+    Type::dialect(
+        db,
+        "src",
+        "type",
+        params,
+        Attribute::String(name.to_string()),
+    )
 }

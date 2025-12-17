@@ -61,7 +61,7 @@ impl<'db> LoweringCtx<'db> {
         match type_ref {
             TypeRef::Named(name) => {
                 // Concrete named types - emit src.type for later resolution
-                Type::dialect(db, "src", "type", idvec![], Attribute::String(name.clone()))
+                src::unresolved_type(db, name, idvec![])
             }
             TypeRef::Variable(name) => {
                 // Type variable - get or create with consistent ID
@@ -73,7 +73,7 @@ impl<'db> LoweringCtx<'db> {
                     .iter()
                     .map(|arg| self.resolve_type_ref(db, arg))
                     .collect();
-                Type::dialect(db, "src", "type", params, Attribute::String(name.clone()))
+                src::unresolved_type(db, name, params)
             }
         }
     }
