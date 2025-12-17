@@ -16,6 +16,7 @@ pub mod adt;
 pub mod arith;
 pub mod cont;
 pub mod func;
+pub mod list;
 pub mod mem;
 pub mod scf;
 

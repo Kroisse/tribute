@@ -418,7 +418,7 @@ mod tests {
             TributeDatabaseImpl::default().attach(|db| {
                 let op = test_variadic_op(db);
                 let variadic = Variadic::from_operation(db, op).unwrap();
-                assert!(variadic.operands(db).is_empty());
+                assert!(variadic.args(db).is_empty());
             });
         }
 

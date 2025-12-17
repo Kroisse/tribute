@@ -12,7 +12,7 @@ use tribute_ast::{
     RecordExpression, RecordField, Statement, StringInterpolation,
 };
 use tribute_core::{Location, PathId, Span, Spanned};
-use tribute_trunk_ir::dialect::{adt, arith, core, func, scf, src};
+use tribute_trunk_ir::dialect::{adt, arith, core, func, list, scf, src};
 use tribute_trunk_ir::{Attribute, BlockBuilder, Region, Type, Value};
 
 /// Context for lowering, tracking local variable bindings.
@@ -222,29 +222,35 @@ fn bind_pattern<'db>(
                     .op(arith::Const::i64(db, location, i as i64))
                     .result(db);
                 let elem_value = block
-                    .op(adt::ArrayGet::new(
+                    .op(list::Get::new(
                         db,
                         location,
                         value,
                         index_value,
                         Type::Unit,
+                        Attribute::Unit, // elem_type to be inferred
                     ))
                     .result(db);
                 bind_pattern(db, ctx, block, pat, elem_value, location);
             }
 
-            // Handle rest pattern
+            // Handle rest pattern: ..rest binds to list[n..]
             if let Some(Some(rest_name)) = rest {
-                let len_value = block
+                let start_value = block
                     .op(arith::Const::i64(db, location, elements.len() as i64))
                     .result(db);
+                let len_value = block
+                    .op(list::Len::new(db, location, value, Type::Unit))
+                    .result(db);
                 let rest_value = block
-                    .op(src::Call::new(
+                    .op(list::Slice::new(
                         db,
                         location,
-                        vec![value, len_value],
+                        value,
+                        start_value,
+                        len_value,
                         Type::Unit,
-                        Attribute::String("list_drop".to_string()),
+                        Attribute::Unit, // elem_type to be inferred
                     ))
                     .result(db);
                 ctx.bind(rest_name.clone(), rest_value);
@@ -466,7 +472,7 @@ fn lower_expr<'db>(
             let block_op = block.op(src::Block::new(db, location, Type::Unit, region));
             block_op.result(db)
         }
-        // List literal → adt.array_new with elements
+        // List literal → list.new
         Expr::List(elements) => {
             // Lower all elements
             let values: Vec<Value<'db>> = elements
@@ -474,14 +480,12 @@ fn lower_expr<'db>(
                 .map(|elem| lower_expr(db, path, ctx, block, elem))
                 .collect();
 
-            // Create array with elements via src.call to a constructor function
-            // At this stage, we emit src.call("list", elements) for later resolution
-            let op = block.op(src::Call::new(
+            let op = block.op(list::New::new(
                 db,
                 location,
                 values,
-                Type::Unit, // Unknown element type
-                Attribute::String("list".to_string()),
+                Type::Unit, // Element type to be inferred
+                Attribute::Unit,
             ));
             op.result(db)
         }
@@ -972,12 +976,13 @@ fn bind_pattern_for_match<'db>(
                     .op(arith::Const::i64(db, location, i as i64))
                     .result(db);
                 let elem_value = block
-                    .op(adt::ArrayGet::new(
+                    .op(list::Get::new(
                         db,
                         location,
                         scrutinee,
                         index_value,
                         Type::Unit,
+                        Attribute::Unit, // elem_type to be inferred
                     ))
                     .result(db);
                 bind_pattern_for_match(db, ctx, block, pat, elem_value, location);
@@ -986,16 +991,21 @@ fn bind_pattern_for_match<'db>(
             // Handle rest pattern (..tail or ..)
             if let Some(Some(rest_name)) = rest {
                 // Bind the rest of the list to the name
-                let len_value = block
+                let start_value = block
                     .op(arith::Const::i64(db, location, elements.len() as i64))
                     .result(db);
+                let len_value = block
+                    .op(list::Len::new(db, location, scrutinee, Type::Unit))
+                    .result(db);
                 let rest_value = block
-                    .op(src::Call::new(
+                    .op(list::Slice::new(
                         db,
                         location,
-                        vec![scrutinee, len_value],
+                        scrutinee,
+                        start_value,
+                        len_value,
                         Type::Unit,
-                        Attribute::String("list_drop".to_string()),
+                        Attribute::Unit, // elem_type to be inferred
                     ))
                     .result(db);
                 ctx.bind(rest_name.clone(), rest_value);
@@ -1613,7 +1623,7 @@ mod tests {
 
             // Verify the tuple operation
             let tuple_op = src::Tuple::from_operation(db, ops[3]).unwrap();
-            let elements = tuple_op.operands(db);
+            let elements = tuple_op.elements(db);
             assert_eq!(elements.len(), 3);
             assert_eq!(elements[0], const_1.result(db));
             assert_eq!(elements[1], const_2.result(db));
@@ -1777,13 +1787,12 @@ mod tests {
             let entry_block = &func_blocks[0];
             let ops = entry_block.operations(db);
 
-            // Should have: arith.const(1), arith.const(2), arith.const(3), src.call(list, [1,2,3]), func.return
+            // Should have: arith.const(1), arith.const(2), arith.const(3), list.new([1,2,3]), func.return
             assert_eq!(ops.len(), 5);
 
-            // Verify the list constructor call
-            let list_call = src::Call::from_operation(db, ops[3]).unwrap();
-            assert_eq!(list_call.name(db), &Attribute::String("list".to_string()));
-            assert_eq!(list_call.operands(db).len(), 3);
+            // Verify the list.new operation
+            let list_new = list::New::from_operation(db, ops[3]).unwrap();
+            assert_eq!(list_new.elements(db).len(), 3);
         });
     }
 
