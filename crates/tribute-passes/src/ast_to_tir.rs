@@ -169,7 +169,7 @@ fn bind_pattern<'db>(
                                 location,
                                 value,
                                 infer_ty,
-                                (i as u64).into(),
+                                u64::try_from(i).unwrap().into(),
                             ))
                             .result(db);
                         bind_pattern(db, ctx, block, pat, field_value, location);
@@ -183,7 +183,7 @@ fn bind_pattern<'db>(
                                 location,
                                 value,
                                 infer_ty,
-                                (i as u64).into(),
+                                u64::try_from(i).unwrap().into(),
                             ))
                             .result(db);
                         bind_pattern(db, ctx, block, &field.pattern, field_value, location);
@@ -221,7 +221,7 @@ fn bind_pattern<'db>(
             // Destructure list: let [a, b, ..rest] = list
             for (i, pat) in elements.iter().enumerate() {
                 let index_value = block
-                    .op(arith::Const::i64(db, location, i as i64))
+                    .op(arith::Const::i64(db, location, i64::try_from(i).unwrap()))
                     .result(db);
                 let elem_value = block
                     .op(list::get(
@@ -239,7 +239,11 @@ fn bind_pattern<'db>(
             // Handle rest pattern: ..rest binds to list[n..]
             if let Some(Some(rest_name)) = rest {
                 let start_value = block
-                    .op(arith::Const::i64(db, location, elements.len() as i64))
+                    .op(arith::Const::i64(
+                        db,
+                        location,
+                        i64::try_from(elements.len()).unwrap(),
+                    ))
                     .result(db);
                 let len_value = block
                     .op(list::len(db, location, value, infer_ty))
@@ -359,7 +363,7 @@ fn lower_expr<'db>(
                 db,
                 location,
                 Type::i(db, 32),
-                (*c as u32 as u64).into(),
+                u64::from(u32::from(*c)).into(),
             ));
             op.result(db)
         }
@@ -873,7 +877,7 @@ fn bind_pattern_for_match<'db>(
                                 location,
                                 scrutinee,
                                 infer_ty,
-                                (i as u64).into(),
+                                u64::try_from(i).unwrap().into(),
                             ))
                             .result(db);
                         bind_pattern_for_match(db, ctx, block, pat, field_value, location);
@@ -887,7 +891,7 @@ fn bind_pattern_for_match<'db>(
                                 location,
                                 scrutinee,
                                 infer_ty,
-                                (i as u64).into(),
+                                u64::try_from(i).unwrap().into(),
                             ))
                             .result(db);
                         bind_pattern_for_match(
@@ -932,7 +936,7 @@ fn bind_pattern_for_match<'db>(
             // Extract list elements
             for (i, pat) in elements.iter().enumerate() {
                 let index_value = block
-                    .op(arith::Const::i64(db, location, i as i64))
+                    .op(arith::Const::i64(db, location, i64::try_from(i).unwrap()))
                     .result(db);
                 let elem_value = block
                     .op(list::get(
@@ -951,7 +955,11 @@ fn bind_pattern_for_match<'db>(
             if let Some(Some(rest_name)) = rest {
                 // Bind the rest of the list to the name
                 let start_value = block
-                    .op(arith::Const::i64(db, location, elements.len() as i64))
+                    .op(arith::Const::i64(
+                        db,
+                        location,
+                        i64::try_from(elements.len()).unwrap(),
+                    ))
                     .result(db);
                 let len_value = block
                     .op(list::len(db, location, scrutinee, infer_ty))
@@ -1046,7 +1054,7 @@ fn pattern_to_attribute<'db>(pattern: &Pattern) -> Attribute<'db> {
         Pattern::Literal(lit) => {
             use tribute_ast::LiteralPattern;
             match lit {
-                LiteralPattern::Nat(n) => pat::int(*n as i64),
+                LiteralPattern::Nat(n) => pat::int(i64::try_from(*n).unwrap()),
                 LiteralPattern::Int(n) => pat::int(*n),
                 LiteralPattern::Float(_) => Attribute::String(format!("lit:{:?}", lit)),
                 LiteralPattern::String(s) => pat::string(s),
