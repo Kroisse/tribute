@@ -1,6 +1,6 @@
 //! Function dialect operations.
 
-use crate::{Attribute, Region, Type, dialect};
+use crate::{Attribute, Region, Type, dialect, ir::BlockBuilder};
 use tribute_core::Location;
 
 dialect! {
@@ -42,9 +42,9 @@ impl<'db> Func<'db> {
         name: &str,
         params: Vec<Type>,
         results: Vec<Type>,
-        f: impl FnOnce(&mut crate::BlockBuilder<'db>),
+        f: impl FnOnce(&mut BlockBuilder<'db>),
     ) -> Self {
-        let mut entry = crate::BlockBuilder::new(db, location).args(params.clone());
+        let mut entry = BlockBuilder::new(db, location).args(params.clone());
         f(&mut entry);
         let region = Region::new(db, location, vec![entry.build()]);
         func(

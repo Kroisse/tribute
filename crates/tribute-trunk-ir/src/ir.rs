@@ -10,21 +10,8 @@ use tribute_core::Location;
 // Small Vector Type Aliases
 // ============================================================================
 
-/// Small vector for SSA values (operands, results).
-/// Most operations have ≤4 operands.
-pub type ValueVec<'db> = SmallVec<[Value<'db>; 4]>;
-
-/// Small vector for blocks (successors, region blocks).
-/// Most regions have 1-2 blocks.
-pub type BlockVec<'db> = SmallVec<[Block<'db>; 2]>;
-
-/// Small vector for regions.
-/// Most operations have 0-1 regions.
-pub type RegionVec<'db> = SmallVec<[Region<'db>; 1]>;
-
-/// Small vector for operations.
-/// Entry blocks often have few operations.
-pub type OpVec<'db> = SmallVec<[Operation<'db>; 8]>;
+/// Small vector for values tracked by Salsa framework.
+pub type TrackedVec<T> = SmallVec<[T; 2]>;
 
 // ============================================================================
 // Interned Types
@@ -89,16 +76,16 @@ pub struct Operation<'db> {
     /// Interned operation name (dialect.operation).
     pub name: OpNameId<'db>,
     #[returns(deref)]
-    pub operands: Vec<Value<'db>>,
+    pub operands: TrackedVec<Value<'db>>,
     #[returns(deref)]
     pub results: Vec<Type>,
     #[returns(ref)]
     pub attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
     #[tracked]
     #[returns(deref)]
-    pub regions: Vec<Region<'db>>,
+    pub regions: TrackedVec<Region<'db>>,
     #[returns(deref)]
-    pub successors: Vec<Block<'db>>,
+    pub successors: TrackedVec<Block<'db>>,
 }
 
 impl<'db> Operation<'db> {
@@ -157,11 +144,11 @@ pub struct OperationBuilder<'db> {
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     name: OpNameId<'db>,
-    operands: Vec<Value<'db>>,
+    operands: TrackedVec<Value<'db>>,
     results: Vec<Type>,
     attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
-    regions: Vec<Region<'db>>,
-    successors: Vec<Block<'db>>,
+    regions: TrackedVec<Region<'db>>,
+    successors: TrackedVec<Block<'db>>,
 }
 
 impl<'db> OperationBuilder<'db> {
@@ -170,15 +157,15 @@ impl<'db> OperationBuilder<'db> {
             db,
             location,
             name,
-            operands: Vec::new(),
+            operands: TrackedVec::new(),
             results: Vec::new(),
             attributes: BTreeMap::new(),
-            regions: Vec::new(),
-            successors: Vec::new(),
+            regions: TrackedVec::new(),
+            successors: TrackedVec::new(),
         }
     }
 
-    pub fn operands(mut self, operands: Vec<Value<'db>>) -> Self {
+    pub fn operands(mut self, operands: TrackedVec<Value<'db>>) -> Self {
         self.operands = operands;
         self
     }
@@ -204,7 +191,7 @@ impl<'db> OperationBuilder<'db> {
         self
     }
 
-    pub fn regions(mut self, regions: Vec<Region<'db>>) -> Self {
+    pub fn regions(mut self, regions: TrackedVec<Region<'db>>) -> Self {
         self.regions = regions;
         self
     }
@@ -214,7 +201,7 @@ impl<'db> OperationBuilder<'db> {
         self
     }
 
-    pub fn successors(mut self, successors: Vec<Block<'db>>) -> Self {
+    pub fn successors(mut self, successors: TrackedVec<Block<'db>>) -> Self {
         self.successors = successors;
         self
     }

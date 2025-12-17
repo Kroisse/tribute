@@ -21,6 +21,6 @@ pub use smallvec::{self, SmallVec};
 // Re-export Location for use in macros
 pub use tribute_core::Location;
 
-pub use ir::*;
+pub use ir::{Block, BlockBuilder, OpNameId, Operation, Region, Symbol, TrackedVec, Value};
 pub use ops::{ConversionError, DialectOp};
 pub use types::*;

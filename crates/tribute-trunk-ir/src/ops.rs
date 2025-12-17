@@ -534,14 +534,14 @@ macro_rules! define_op {
                 db: &'db dyn salsa::Database,
                 location: $crate::Location<'db>,
                 $($fixed: $crate::Value<'db>,)*
-                $($var: Vec<$crate::Value<'db>>,)?
+                $($var: impl IntoIterator<Item = $crate::Value<'db>>,)?
                 $($result: $crate::Type,)*
                 $($attr: $crate::Attribute<'db>,)*
                 $($region: $crate::Region<'db>,)*
             ) -> [<$op:camel>]<'db> {
                 let name = $crate::OpNameId::new(db, stringify!($dialect), stringify!($op));
                 #[allow(unused_mut)]
-                let mut operands = vec![$($fixed),*];
+                let mut operands = $crate::smallvec::smallvec![$($fixed),*];
                 $(operands.extend($var);)?
                 let op = $crate::Operation::of(db, location, name)
                     .operands(operands)

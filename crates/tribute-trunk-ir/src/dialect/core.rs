@@ -1,6 +1,6 @@
 //! Core dialect operations.
 
-use crate::{Attribute, Region, dialect};
+use crate::{Attribute, Region, dialect, ir::BlockBuilder};
 use tribute_core::Location;
 
 dialect! {
@@ -33,9 +33,9 @@ impl<'db> Module<'db> {
         db: &'db dyn salsa::Database,
         location: Location<'db>,
         name: &str,
-        f: impl FnOnce(&mut crate::BlockBuilder<'db>),
+        f: impl FnOnce(&mut BlockBuilder<'db>),
     ) -> Self {
-        let mut top = crate::BlockBuilder::new(db, location);
+        let mut top = BlockBuilder::new(db, location);
         f(&mut top);
         let region = Region::new(db, location, vec![top.build()]);
         Self::create(db, location, name, region)
