@@ -1,7 +1,11 @@
-// Example showing how to use the Salsa database for the Tribute language
+//! Example showing how to use the Salsa database for the Tribute language.
+//!
+//! This example demonstrates the CST→TrunkIR lowering pipeline.
 
 use salsa::Setter;
-use tribute::{SourceFile, TributeDatabaseImpl, parse_source_file, parse_str};
+use tribute::{SourceFile, TributeDatabaseImpl, lower_source_file, lower_str};
+use tribute_trunk_ir::DialectOp;
+use tribute_trunk_ir::dialect::func;
 
 fn main() {
     // Example 1: Basic database usage
@@ -9,9 +13,6 @@ fn main() {
 
     // Example 2: Incremental compilation demonstration
     incremental_compilation_demo();
-
-    // Example 3: Error handling with diagnostics
-    error_handling_demo();
 }
 
 fn basic_database_usage() {
@@ -28,15 +29,25 @@ fn basic_database_usage() {
         }
     "#;
 
-    // Method 1: Using the convenience function
-    let (program, diagnostics) = parse_str(&db, "example.trb", source_code);
+    // Lower to TrunkIR using the convenience function
+    let module = lower_str(&db, "example.tr", source_code);
 
-    println!("Parsed {} functions", program.items(&db).len());
-    println!("Found {} diagnostics", diagnostics.len());
+    // Get the operations from the module
+    let body = module.body(&db);
+    let blocks = body.blocks(&db);
 
-    // Display the parsed functions
-    for (i, item) in program.items(&db).iter().enumerate() {
-        println!("  Item {}: {:?}", i + 1, item);
+    if !blocks.is_empty() {
+        let ops = blocks[0].operations(&db);
+        println!("Lowered {} top-level operations", ops.len());
+
+        // Display the lowered functions
+        for (i, op) in ops.iter().enumerate() {
+            if let Ok(func_op) = func::Func::from_operation(&db, *op) {
+                println!("  Operation {}: func.func \"{}\"", i + 1, func_op.name(&db));
+            } else {
+                println!("  Operation {}: {:?}", i + 1, op);
+            }
+        }
     }
 
     println!();
@@ -48,12 +59,16 @@ fn incremental_compilation_demo() {
     let mut db = TributeDatabaseImpl::default();
 
     // Create a source file
-    let source_file = SourceFile::new(&db, "math.trb".into(), "fn main() { 1 + 2 }".to_string());
+    let source_file = SourceFile::new(&db, "math.tr".into(), "fn main() { 1 + 2 }".to_string());
 
-    // Parse it
-    println!("Initial parsing...");
-    let program1 = parse_source_file(&db, source_file);
-    println!("Parsed {} functions", program1.items(&db).len());
+    // Lower it
+    println!("Initial lowering...");
+    let module1 = lower_source_file(&db, source_file);
+    let body1 = module1.body(&db);
+    let blocks1 = body1.blocks(&db);
+    if !blocks1.is_empty() {
+        println!("Lowered {} operations", blocks1[0].operations(&db).len());
+    }
 
     // Modify the source file
     println!("Modifying source...");
@@ -61,45 +76,23 @@ fn incremental_compilation_demo() {
         .set_text(&mut db)
         .to("fn main() { 3 * (1 + 2) }".to_string());
 
-    // Parse again - Salsa will automatically detect the change and recompute
-    let program2 = parse_source_file(&db, source_file);
-    println!(
-        "Parsed {} functions after modification",
-        program2.items(&db).len()
-    );
-
-    // Parse again without changes - this should use the cached result
-    let program3 = parse_source_file(&db, source_file);
-    println!("Cached result identical: {}", program2 == program3);
-
-    println!();
-}
-
-fn error_handling_demo() {
-    println!("=== Error Handling Demo ===");
-
-    let db = TributeDatabaseImpl::default();
-
-    // Try to parse some invalid syntax
-    let invalid_code = "fn invalid { this is not valid syntax }";
-    let _source_file = SourceFile::new(&db, "invalid.trb".into(), invalid_code.to_string());
-
-    let (program, diagnostics) = parse_str(&db, "invalid.trb", invalid_code);
-
-    println!(
-        "Parsed {} functions from invalid code",
-        program.items(&db).len()
-    );
-
-    if !diagnostics.is_empty() {
-        println!("Diagnostics found:");
-        for diagnostic in &diagnostics {
-            println!(
-                "  [{}] {} (at {}..{})",
-                diagnostic.severity, diagnostic.message, diagnostic.span.start, diagnostic.span.end
-            );
-        }
+    // Lower again - Salsa will automatically detect the change and recompute
+    let module2 = lower_source_file(&db, source_file);
+    let body2 = module2.body(&db);
+    let blocks2 = body2.blocks(&db);
+    if !blocks2.is_empty() {
+        println!(
+            "Lowered {} operations after modification",
+            blocks2[0].operations(&db).len()
+        );
     }
+
+    // Lower again without changes - this should use the cached result
+    let module3 = lower_source_file(&db, source_file);
+    println!(
+        "Cached result identical: {}",
+        module2.body(&db).blocks(&db).len() == module3.body(&db).blocks(&db).len()
+    );
 
     println!();
 }

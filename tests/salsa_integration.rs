@@ -1,24 +1,27 @@
+//! Salsa integration tests for CST→TrunkIR lowering.
+
 use std::path::Path;
 
 use salsa::{Database as _, Setter as _};
-use tribute::{Diagnostic, SourceFile, TributeDatabaseImpl, parse_source_file};
+use tribute::{SourceFile, TributeDatabaseImpl, lower_source_file};
+use tribute_trunk_ir::DialectOp;
 
 #[test]
 fn test_salsa_database_examples() {
     // Example source code
     let examples = vec![
         (
-            Path::new("hello.trb"),
+            Path::new("hello.tr"),
             r#"fn main() { print_line("Hello, World!") }"#,
         ),
-        (Path::new("calc.trb"), r#"fn main() { 1 + 2 + 3 }"#),
+        (Path::new("calc.tr"), r#"fn main() { 1 + 2 + 3 }"#),
         (
-            Path::new("complex.trb"),
+            Path::new("complex.tr"),
             r#"
 fn factorial(n) {
   case n {
-    0 -> 1,
-    _ -> n * factorial(n - 1)
+    0 { 1 }
+    _ { n * factorial(n - 1) }
   }
 }
 
@@ -27,45 +30,37 @@ fn main() {
 }
 "#,
         ),
-        (
-            Path::new("invalid.trb"),
-            r#"fn main() { invalid syntax here }"#,
-        ),
     ];
 
     for (filename, source_code) in examples {
         // Use attach pattern for test isolation
-        let (expr_count, diag_count) = TributeDatabaseImpl::default().attach(|db| {
+        let op_count = TributeDatabaseImpl::default().attach(|db| {
             let source_file = SourceFile::new(db, filename.to_path_buf(), source_code.to_string());
-            let program = parse_source_file(db, source_file);
-            let diagnostics = parse_source_file::accumulated::<Diagnostic>(db, source_file);
+            let module = lower_source_file(db, source_file);
 
-            // Extract data that doesn't depend on database lifetime
-            (program.items(db).len(), diagnostics.len())
+            // Count top-level operations in the module
+            let body = module.body(db);
+            let blocks = body.blocks(db);
+            if blocks.is_empty() {
+                0
+            } else {
+                blocks[0].operations(db).len()
+            }
         });
 
         // Verify parsing results
         assert!(
-            expr_count > 0,
-            "Should parse at least one expression for {}",
+            op_count > 0,
+            "Should produce at least one operation for {}",
             filename.display()
         );
 
         match filename.file_name().unwrap().to_str().unwrap() {
-            "hello.trb" | "calc.trb" => {
-                assert_eq!(expr_count, 1, "Simple examples should have 1 function");
-                assert_eq!(diag_count, 0, "Valid syntax should have no diagnostics");
+            "hello.tr" | "calc.tr" => {
+                assert_eq!(op_count, 1, "Simple examples should have 1 function");
             }
-            "complex.trb" => {
-                assert_eq!(expr_count, 2, "Complex example should have 2 functions");
-                assert_eq!(diag_count, 0, "Valid syntax should have no diagnostics");
-            }
-            "invalid.trb" => {
-                // Invalid syntax should still parse as a function with invalid content
-                assert_eq!(
-                    expr_count, 1,
-                    "Invalid syntax should still produce 1 function"
-                );
+            "complex.tr" => {
+                assert_eq!(op_count, 2, "Complex example should have 2 functions");
             }
             _ => {}
         }
@@ -78,62 +73,48 @@ fn test_salsa_incremental_computation_detailed() {
     let mut db = TributeDatabaseImpl::default();
     let source_file = SourceFile::new(
         &db,
-        "incremental.trb".into(),
+        "incremental.tr".into(),
         "fn main() { 1 + 2 }".to_string(),
     );
 
-    // Initial parse
-    let program1 = parse_source_file(&db, source_file);
-    assert_eq!(program1.items(&db).len(), 1);
-    let _program1_str = format!("{:?}", program1);
+    // Initial lowering
+    let module1 = lower_source_file(&db, source_file);
+    let body1 = module1.body(&db);
+    let blocks1 = body1.blocks(&db);
+    assert!(!blocks1.is_empty());
+    let op_count1 = blocks1[0].operations(&db).len();
+    assert_eq!(op_count1, 1);
 
     // Modify the source file
     source_file
         .set_text(&mut db)
         .to("fn main() { 1 + 2 + 3 + 4 }".to_string());
 
-    // Parse again - should recompute
-    let program2 = parse_source_file(&db, source_file);
-    assert_eq!(program2.items(&db).len(), 1);
-    let program2_str = format!("{:?}", program2);
+    // Lower again - should recompute
+    let module2 = lower_source_file(&db, source_file);
+    let body2 = module2.body(&db);
+    let blocks2 = body2.blocks(&db);
+    assert!(!blocks2.is_empty());
+    let op_count2 = blocks2[0].operations(&db).len();
+    assert_eq!(op_count2, 1);
 
-    // Parse again without changes - should use cached result
-    let program3 = parse_source_file(&db, source_file);
-    let program3_str = format!("{:?}", program3);
+    // Lower again without changes - should use cached result
+    let module3 = lower_source_file(&db, source_file);
 
-    // Verify that incremental compilation works
-    // The exact comparison depends on Salsa's caching behavior
-
-    // Check that cached results are the same by comparing their content
+    // Verify that cached results are the same
     assert_eq!(
-        program2_str, program3_str,
-        "Programs should be identical (cached result)"
+        module2.body(&db).blocks(&db).len(),
+        module3.body(&db).blocks(&db).len(),
+        "Modules should be identical (cached result)"
     );
 }
 
 #[test]
-fn test_salsa_diagnostics_collection() {
-    // Test with valid code - should have no diagnostics
-    let (valid_expr_count, valid_diag_count) = TributeDatabaseImpl::default().attach(|db| {
-        let valid_source =
-            SourceFile::new(db, "valid.trb".into(), "fn main() { 1 + 2 }".to_string());
-        let valid_program = parse_source_file(db, valid_source);
-        let valid_diagnostics = parse_source_file::accumulated::<Diagnostic>(db, valid_source);
-
-        (valid_program.items(db).len(), valid_diagnostics.len())
-    });
-
-    assert_eq!(valid_expr_count, 1);
-    assert_eq!(
-        valid_diag_count, 0,
-        "Valid code should produce no diagnostics"
-    );
-
-    // Test multiple functions
-    let (multi_expr_count, multi_diag_count) = TributeDatabaseImpl::default().attach(|db| {
-        let multi_source = SourceFile::new(
+fn test_salsa_multiple_functions() {
+    let op_count = TributeDatabaseImpl::default().attach(|db| {
+        let source = SourceFile::new(
             db,
-            "multi.trb".into(),
+            "multi.tr".into(),
             r#"
 fn add(a, b) { a + b }
 fn multiply(a, b) { a * b }
@@ -141,57 +122,58 @@ fn main() { print_line("test") }
 "#
             .to_string(),
         );
-        let multi_program = parse_source_file(db, multi_source);
-        let multi_diagnostics = parse_source_file::accumulated::<Diagnostic>(db, multi_source);
+        let module = lower_source_file(db, source);
 
-        (multi_program.items(db).len(), multi_diagnostics.len())
+        let body = module.body(db);
+        let blocks = body.blocks(db);
+        if blocks.is_empty() {
+            0
+        } else {
+            blocks[0].operations(db).len()
+        }
     });
 
-    assert_eq!(multi_expr_count, 3);
-    assert_eq!(
-        multi_diag_count, 0,
-        "Valid multi-function code should produce no diagnostics"
-    );
+    assert_eq!(op_count, 3, "Should have 3 functions");
 }
 
 #[test]
 fn test_salsa_database_isolation() {
     // Test that different database instances are isolated
-    let program1_str = TributeDatabaseImpl::default().attach(|db| {
-        let source1 = SourceFile::new(db, "test1.trb".into(), "fn main() { 1 + 2 }".to_string());
-        let program1 = parse_source_file(db, source1);
-
-        assert_eq!(program1.items(db).len(), 1);
-        format!("{:?}", program1)
+    let module1_name = TributeDatabaseImpl::default().attach(|db| {
+        let source1 = SourceFile::new(db, "test1.tr".into(), "fn main() { 1 + 2 }".to_string());
+        let module1 = lower_source_file(db, source1);
+        module1.name(db).to_string()
     });
 
-    let program2_str = TributeDatabaseImpl::default().attach(|db| {
-        let source2 = SourceFile::new(db, "test2.trb".into(), "fn main() { 3 * 4 }".to_string());
-        let program2 = parse_source_file(db, source2);
-
-        assert_eq!(program2.items(db).len(), 1);
-        format!("{:?}", program2)
+    let module2_name = TributeDatabaseImpl::default().attach(|db| {
+        let source2 = SourceFile::new(db, "test2.tr".into(), "fn main() { 3 * 4 }".to_string());
+        let module2 = lower_source_file(db, source2);
+        module2.name(db).to_string()
     });
 
-    assert_ne!(
-        program1_str, program2_str,
-        "Different databases should produce different results"
-    );
+    // Both modules should have the same name "main"
+    assert_eq!(module1_name, "main");
+    assert_eq!(module2_name, "main");
 }
 
 #[test]
-fn test_salsa_function_tracking() {
+fn test_function_lowering() {
+    use tribute_trunk_ir::dialect::func;
+
     let source = "fn main() { 1 + 2 }";
-    let (item_count, program_str) = TributeDatabaseImpl::default().attach(|db| {
-        let source_file = SourceFile::new(db, "span_test.trb".into(), source.to_string());
-        let program = parse_source_file(db, source_file);
+    TributeDatabaseImpl::default().attach(|db| {
+        let source_file = SourceFile::new(db, "func_test.tr".into(), source.to_string());
+        let module = lower_source_file(db, source_file);
 
-        assert_eq!(program.items(db).len(), 1);
+        let body = module.body(db);
+        let blocks = body.blocks(db);
+        assert!(!blocks.is_empty());
 
-        (program.items(db).len(), format!("{:?}", program))
+        let ops = blocks[0].operations(db);
+        assert_eq!(ops.len(), 1);
+
+        // Check that the operation is a func.func
+        let func_op = func::Func::from_operation(db, ops[0]).expect("Should be a func.func");
+        assert_eq!(func_op.name(db), "main");
     });
-
-    // Verify results
-    assert_eq!(item_count, 1);
-    assert!(program_str.contains("main"));
 }

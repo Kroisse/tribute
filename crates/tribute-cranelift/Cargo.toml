@@ -3,23 +3,10 @@ name = "tribute-cranelift"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "Cranelift-based native code compiler for Tribute programming language"
+description = "Cranelift-based native code compiler for Tribute programming language (stub - pending TrunkIR backend)"
 
 [dependencies]
 cranelift-codegen.workspace = true
-cranelift-frontend.workspace = true
 cranelift-module.workspace = true
-cranelift-object.workspace = true
-target-lexicon.workspace = true
 object.workspace = true
-tribute-ast.workspace = true
-tribute-core.workspace = true
-tribute-passes.workspace = true
-tribute-trunk-ir.workspace = true
-salsa.workspace = true
 derive_more.workspace = true
-
-[dev-dependencies]
-insta.workspace = true
-tempfile.workspace = true
-tribute = { path = "../../" }

@@ -23,7 +23,6 @@ target-lexicon = "0.13"
 tempfile = "3.8"
 tree-sitter = "0.25.6"
 tree-sitter-tribute = { path = "crates/tree-sitter-tribute" }
-tribute-ast = { path = "crates/tribute-ast" }
 tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-passes = { path = "crates/tribute-passes" }
@@ -35,27 +34,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 
-[features]
-default = []
-# Legacy HIR evaluator and related drivers/tests.
-legacy-eval = []
-
-[[bin]]
-name = "trbi"
-path = "src/bin/trbi.rs"
-required-features = ["legacy-eval"]
-
-[[bin]]
-name = "trbc"
-path = "src/bin/trbc.rs"
-required-features = ["legacy-eval"]
-
 [dependencies]
-clap.workspace = true
-insta.workspace = true
 salsa.workspace = true
-tribute-ast.workspace = true
-tribute-cranelift.workspace = true
 tribute-core.workspace = true
 tribute-passes.workspace = true
 tribute-trunk-ir.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
