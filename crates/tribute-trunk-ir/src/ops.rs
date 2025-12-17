@@ -478,11 +478,8 @@ macro_rules! define_op {
                     Self::wrap_unchecked(op)
                 }
 
-                // Fixed operand accessors (if any)
-                $crate::define_op!(@maybe_operand_accessors [$($fixed),*]);
-
-                // Variadic operand accessor (only if variadic exists)
-                $crate::define_op!(@maybe_variadic_accessor [$($fixed),*] [$($var)?]);
+                // operand accessors (if any)
+                $crate::define_op!(@gen_operand_accessors { 0 } $($fixed)* $(..$var)?);
 
                 // Attribute accessors
                 $(
@@ -494,7 +491,7 @@ macro_rules! define_op {
                 )*
 
                 // Result accessors (only if results exist)
-                $crate::define_op!(@maybe_result_accessors [], $($result),*);
+                $crate::define_op!(@gen_result_accessors { 0 } $($result)*);
 
                 // Region accessor (only if region exists)
                 $crate::define_op!(@maybe_region_accessor [$($region)?]);
@@ -546,92 +543,42 @@ macro_rules! define_op {
     // Helper rules - Conditional code generation
     // ========================================================================
 
-    // Operand accessors: empty case
-    (@maybe_operand_accessors []) => {};
-    // Operand accessors: non-empty case - delegate to recursive generator
-    (@maybe_operand_accessors [$($operand:ident),+]) => {
-        $crate::define_op!(@gen_operand_accessors [], $($operand),+);
-    };
-
-    // Generate operand accessors with counter - base case
-    (@gen_operand_accessors [$($counter:tt)*], $name:ident) => {
-        #[allow(dead_code)]
-        pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
-            self.op.operands(db)[$crate::define_op!(@count $($counter)*)]
-        }
-    };
-    // Generate operand accessors with counter - recursive case
-    (@gen_operand_accessors [$($counter:tt)*], $name:ident, $($rest:ident),+) => {
-        #[allow(dead_code)]
-        pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
-            self.op.operands(db)[$crate::define_op!(@count $($counter)*)]
-        }
-        $crate::define_op!(@gen_operand_accessors [$($counter)* _], $($rest),+);
-    };
-
-    // Count tokens helper
-    (@count) => { 0usize };
-    (@count $_:tt $($rest:tt)*) => { 1usize + $crate::define_op!(@count $($rest)*) };
-
-    // Variadic accessor: no variadic
-    (@maybe_variadic_accessor [$($fixed:ident),*] []) => {};
-    // Variadic accessor: with variadic
-    (@maybe_variadic_accessor [$($fixed:ident),*] [$var:ident]) => {
+    // Generate operand accessors with index - base case
+    (@gen_operand_accessors { $idx:expr }) => {};
+    // Generate operand accessors with index - varadic case
+    (@gen_operand_accessors { $idx:expr } ..$var:ident) => {
         #[allow(dead_code)]
         pub fn $var(&self, db: &'db dyn salsa::Database) -> &[$crate::Value<'db>] {
-            const FIXED_COUNT: usize = $crate::define_op!(@count $($fixed)*);
+            const FIXED_COUNT: usize = $idx;
             &self.op.operands(db)[FIXED_COUNT..]
         }
     };
-
-    // Result accessors: empty case (no results)
-    (@maybe_result_accessors [$($counter:tt)*],) => {};
-
-    // Result accessors: single result - generates result() and result_ty() for backward compat
-    (@maybe_result_accessors [], $name:ident) => {
+    // Generate operand accessors with index - recursive case
+    (@gen_operand_accessors { $idx:expr } $name:ident $($rest:tt)*) => {
         #[allow(dead_code)]
         pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
-            self.op.result(db, 0)
+            self.op.operands(db)[$idx]
         }
-
-        $crate::paste::paste! {
-            #[allow(dead_code)]
-            pub fn [<$name _ty>](&self, db: &'db dyn salsa::Database) -> $crate::Type {
-                self.op.results(db)[0].clone()
-            }
-        }
+        $crate::define_op!(@gen_operand_accessors { $idx + 1 } $($rest)*);
     };
 
-    // Result accessors: multiple results - base case (last result)
-    (@maybe_result_accessors [$($counter:tt)*], $name:ident) => {
+    // Generate result accessors with index - base case
+    (@gen_result_accessors { $idx:expr }) => {};
+    // Generate result accessors with index - recursive case
+    (@gen_result_accessors { $idx:expr } $name:ident $($rest:ident)*) => {
         #[allow(dead_code)]
         pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
-            self.op.result(db, $crate::define_op!(@count $($counter)*))
+            self.op.result(db, $idx)
         }
 
         $crate::paste::paste! {
             #[allow(dead_code)]
             pub fn [<$name _ty>](&self, db: &'db dyn salsa::Database) -> $crate::Type {
-                self.op.results(db)[$crate::define_op!(@count $($counter)*)].clone()
-            }
-        }
-    };
-
-    // Result accessors: multiple results - recursive case
-    (@maybe_result_accessors [$($counter:tt)*], $name:ident, $($rest:ident),+) => {
-        #[allow(dead_code)]
-        pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
-            self.op.result(db, $crate::define_op!(@count $($counter)*))
-        }
-
-        $crate::paste::paste! {
-            #[allow(dead_code)]
-            pub fn [<$name _ty>](&self, db: &'db dyn salsa::Database) -> $crate::Type {
-                self.op.results(db)[$crate::define_op!(@count $($counter)*)].clone()
+                self.op.results(db)[$idx].clone()
             }
         }
 
-        $crate::define_op!(@maybe_result_accessors [$($counter)* _], $($rest),+);
+        $crate::define_op!(@gen_result_accessors { $idx + 1 } $($rest)*);
     };
 
     // Region accessor: empty case (no region)
@@ -664,4 +611,10 @@ macro_rules! define_op {
             return Err($crate::ConversionError::MissingRegion);
         }
     };
+
+    // ========================================================================
+    // @count - Count tokens (used for fixed operand counts and result counts)
+    // ========================================================================
+    (@count) => { 0 };
+    (@count $first:tt $($rest:tt)*) => { 1 + $crate::define_op!(@count $($rest)*) };
 }
