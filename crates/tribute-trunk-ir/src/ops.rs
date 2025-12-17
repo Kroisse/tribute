@@ -34,7 +34,7 @@ pub trait DialectOp<'db>: Sized + Copy {
     fn as_operation(&self) -> Operation<'db>;
 }
 
-/// Macro to define multiple operations in a dialect.
+/// Macro to define operations and types in a dialect.
 ///
 /// Uses Rust-like syntax for better IDE support and rustfmt compatibility.
 ///
@@ -43,16 +43,21 @@ pub trait DialectOp<'db>: Sized + Copy {
 /// # use tribute_trunk_ir::dialect;
 /// dialect! {
 ///     mod dialect_name {
+///         // Operations
 ///         /// Doc comment
 ///         #[attr(attr1, attr2)]
 ///         fn op_name(operand1, operand2) -> result {
 ///             #[region(body)] {}
 ///         };
+///
+///         // Types
+///         /// Doc comment
+///         type type_name(param1, param2);
 ///     }
 /// }
 /// ```
 ///
-/// # Features
+/// # Operation Features
 /// - `#[attr(...)]` - attributes
 /// - `(a, b)` - fixed operands
 /// - `(#[rest] args)` - variadic operands
@@ -60,6 +65,10 @@ pub trait DialectOp<'db>: Sized + Copy {
 /// - `-> result` - single result
 /// - `-> (a, b)` - multiple results (tuple syntax)
 /// - `#[region(name)] {}` - regions inside body
+///
+/// # Type Features
+/// - `type name;` - type with no parameters
+/// - `type name(a, b);` - type with parameters (generates accessors)
 ///
 /// # Example
 /// ```
@@ -75,6 +84,18 @@ pub trait DialectOp<'db>: Sized + Copy {
 ///     }
 /// }
 /// ```
+///
+/// Types generate wrapper structs with `new()` constructors and `DialectType` impl:
+/// ```
+/// # use tribute_trunk_ir::dialect;
+/// dialect! {
+///     mod core {
+///         /// Tuple cons cell.
+///         type tuple(head, tail);
+///     }
+/// }
+/// // Usage: core::Tuple::new(db, head_ty, tail_ty)
+/// ```
 #[macro_export]
 macro_rules! dialect {
     // Entry point
@@ -82,7 +103,7 @@ macro_rules! dialect {
         $crate::dialect!(@parse $dialect [$($body)*]);
     };
 
-    // Base case: no more ops
+    // Base case: no more items
     (@parse $dialect:ident []) => {};
 
     // Operation with optional doc and optional attrs.
@@ -101,6 +122,23 @@ macro_rules! dialect {
             operands: ($($operands)*),
             result: [$($result)?],
             regions: [$($($region_body)*)?]
+        }
+        $crate::dialect!(@parse $dialect [$($rest)*]);
+    };
+
+    // Type with optional doc and optional attrs.
+    (@parse $dialect:ident
+        [$(#[doc = $doc:literal])*
+         $(#[attr($($attr:ident),* $(,)?)])?
+         type $ty:ident $(($($params:ident),* $(,)?))?;
+         $($rest:tt)*]
+    ) => {
+        $crate::define_type! {
+            doc: [$($doc),*],
+            dialect: $dialect,
+            ty: $ty,
+            attrs: [$($($attr),*)?],
+            params: [$($($params),*)?]
         }
         $crate::dialect!(@parse $dialect [$($rest)*]);
     };
@@ -587,4 +625,85 @@ macro_rules! define_op {
     // Count tokens
     (@count) => { 0 };
     (@count $first:tt $($rest:tt)*) => { 1 + $crate::define_op!(@count $($rest)*) };
+}
+
+/// Macro to define a dialect type wrapper.
+///
+/// This generates:
+/// - A struct wrapping `Type<'db>`
+/// - `new` constructor with type parameters
+/// - `DialectType` trait implementation
+/// - `Deref<Target = Type<'db>>` implementation
+/// - Accessor methods for type parameters
+#[macro_export]
+macro_rules! define_type {
+    (
+        doc: [$($doc:literal),*],
+        dialect: $dialect:ident,
+        ty: $ty:ident,
+        attrs: [$($attr:ident),*],
+        params: [$($param:ident),*]
+    ) => {
+        $crate::paste::paste! {
+            #[doc = concat!($($doc, "\n",)*)]
+            #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+            pub struct [<$ty:camel>]<'db>($crate::Type<'db>);
+
+            impl<'db> [<$ty:camel>]<'db> {
+                /// Create a new instance of this type.
+                #[allow(clippy::new_without_default)]
+                pub fn new(
+                    db: &'db dyn salsa::Database,
+                    $($param: $crate::Type<'db>,)*
+                ) -> Self {
+                    Self($crate::Type::new(
+                        db,
+                        $crate::Symbol::new(db, stringify!($dialect)),
+                        $crate::Symbol::new(db, stringify!($ty)),
+                        $crate::idvec![$($param),*],
+                        std::collections::BTreeMap::new(),
+                    ))
+                }
+
+                // Parameter accessors
+                $crate::define_type!(@gen_param_accessors { 0 } $($param)*);
+            }
+
+            impl<'db> std::ops::Deref for [<$ty:camel>]<'db> {
+                type Target = $crate::Type<'db>;
+                fn deref(&self) -> &Self::Target {
+                    &self.0
+                }
+            }
+
+            impl<'db> $crate::DialectType<'db> for [<$ty:camel>]<'db> {
+                fn as_type(&self) -> $crate::Type<'db> {
+                    self.0
+                }
+
+                fn from_type(db: &'db dyn salsa::Database, ty: $crate::Type<'db>) -> Option<Self> {
+                    if ty.dialect(db).text(db) == stringify!($dialect)
+                        && ty.name(db).text(db) == stringify!($ty)
+                    {
+                        Some(Self(ty))
+                    } else {
+                        None
+                    }
+                }
+            }
+        }
+    };
+
+    // Parameter accessors - base case
+    (@gen_param_accessors { $idx:expr }) => {};
+
+    // Parameter accessors - recursive
+    (@gen_param_accessors { $idx:expr } $name:ident $($rest:ident)*) => {
+        #[allow(dead_code)]
+        pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Type<'db> {
+            self.0.params(db)[$idx]
+        }
+
+        $crate::define_type!(@gen_param_accessors { $idx + 1 } $($rest)*);
+    };
 }

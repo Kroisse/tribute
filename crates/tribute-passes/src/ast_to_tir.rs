@@ -340,7 +340,7 @@ fn lower_expr<'db>(
 ) -> Value<'db> {
     let (expr, span) = spanned;
     let location = Location::new(path, *span);
-    let unit_ty = core::nil(db);
+    let unit_ty = core::Nil::new(db).as_type();
     let infer_ty = ctx.fresh_type_var(db); // Type to be inferred
 
     match expr {
@@ -604,7 +604,12 @@ fn lower_statements<'db>(
 
     // Return the last expression value, or unit if empty/ends with let
     last_value.unwrap_or_else(|| {
-        let op = block.op(arith::r#const(db, location, core::nil(db), Attribute::Unit));
+        let op = block.op(arith::r#const(
+            db,
+            location,
+            core::Nil::new(db).as_type(),
+            Attribute::Unit,
+        ));
         op.result(db)
     })
 }
@@ -694,7 +699,7 @@ fn lower_string_interpolation<'db>(
     interp: &StringInterpolation,
     location: Location<'db>,
 ) -> Value<'db> {
-    let string_ty = core::string(db);
+    let string_ty = core::String::new(db).as_type();
 
     // Start with the leading string part
     let mut result = block
@@ -770,7 +775,7 @@ fn lower_bytes_interpolation<'db>(
     interp: &BytesInterpolation,
     location: Location<'db>,
 ) -> Value<'db> {
-    let bytes_ty = core::bytes(db);
+    let bytes_ty = core::Bytes::new(db).as_type();
 
     // Start with the leading bytes part
     let mut result = block
@@ -893,7 +898,7 @@ fn lower_match_expr<'db>(
         db,
         location,
         scrutinee,
-        core::nil(db),
+        core::Nil::new(db).as_type(),
         body_region,
     ));
     case_op.result(db)
@@ -1077,7 +1082,7 @@ fn lower_record_expr<'db>(
                     let var_op = block.op(src::var(
                         db,
                         location,
-                        core::nil(db),
+                        core::Nil::new(db).as_type(),
                         Attribute::String(name.clone()),
                     ));
                     field_values.push(var_op.result(db));
@@ -1100,7 +1105,7 @@ fn lower_record_expr<'db>(
         db,
         location,
         field_values,
-        core::nil(db),
+        core::Nil::new(db).as_type(),
         Attribute::String(type_name.to_string()),
     ));
     op.result(db)

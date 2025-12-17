@@ -19,6 +19,8 @@ use tribute_core::Location;
 
 dialect! {
     mod core {
+        // === Operations ===
+
         /// `core.module` operation: top-level module container.
         #[attr(sym_name)]
         fn module() {
@@ -28,6 +30,31 @@ dialect! {
         /// `core.unrealized_conversion_cast` operation: temporary cast during dialect conversion.
         /// Must be eliminated after lowering is complete.
         fn unrealized_conversion_cast(value) -> result;
+
+        // === Types ===
+
+        /// `core.nil` type: empty tuple terminator / unit type.
+        type nil;
+
+        /// `core.never` type: bottom type with no values.
+        type never;
+
+        /// `core.string` type: string type.
+        type string;
+
+        /// `core.bytes` type: byte sequence type.
+        type bytes;
+
+        /// `core.ptr` type: raw pointer type.
+        type ptr;
+
+        /// `core.array` type: array with element type.
+        type array(element);
+
+        /// `core.tuple` type: cons cell (head, tail).
+        /// Use `Nil` as the tail terminator.
+        /// Example: `(a, b, c)` → `Tuple(a, Tuple(b, Tuple(c, Nil)))`
+        type tuple(head, tail);
     }
 }
 
@@ -178,72 +205,6 @@ fn f(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     )
 }
 
-/// Create a nil type (`core.nil`).
-pub fn nil(db: &dyn salsa::Database) -> Type<'_> {
-    Type::new(
-        db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, "nil"),
-        IdVec::new(),
-        BTreeMap::new(),
-    )
-}
-
-/// Create a never type (`core.never`).
-pub fn never(db: &dyn salsa::Database) -> Type<'_> {
-    Type::new(
-        db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, "never"),
-        IdVec::new(),
-        BTreeMap::new(),
-    )
-}
-
-/// Create a string type (`core.string`).
-pub fn string(db: &dyn salsa::Database) -> Type<'_> {
-    Type::new(
-        db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, "string"),
-        IdVec::new(),
-        BTreeMap::new(),
-    )
-}
-
-/// Create a bytes type (`core.bytes`).
-pub fn bytes(db: &dyn salsa::Database) -> Type<'_> {
-    Type::new(
-        db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, "bytes"),
-        IdVec::new(),
-        BTreeMap::new(),
-    )
-}
-
-/// Create a pointer type (`core.ptr`).
-pub fn ptr(db: &dyn salsa::Database) -> Type<'_> {
-    Type::new(
-        db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, "ptr"),
-        IdVec::new(),
-        BTreeMap::new(),
-    )
-}
-
-/// Create an array type (`core.array`).
-pub fn array<'db>(db: &'db dyn salsa::Database, element: Type<'db>) -> Type<'db> {
-    Type::new(
-        db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, "array"),
-        idvec![element],
-        BTreeMap::new(),
-    )
-}
-
 /// Create a reference type (`core.ref`).
 pub fn ref_<'db>(db: &'db dyn salsa::Database, pointee: Type<'db>, nullable: bool) -> Type<'db> {
     Type::new(
@@ -252,22 +213,6 @@ pub fn ref_<'db>(db: &'db dyn salsa::Database, pointee: Type<'db>, nullable: boo
         Symbol::new(db, "ref"),
         idvec![pointee],
         BTreeMap::from([(Symbol::new(db, "nullable"), Attribute::Bool(nullable))]),
-    )
-}
-
-/// Create a tuple type (`core.tuple`) as a cons cell.
-///
-/// Layout: `params[0]` = head, `params[1]` = tail.
-/// Use `core::nil()` as the tail terminator for the last element.
-///
-/// Example: `(a, b, c)` → `tuple(a, tuple(b, tuple(c, nil)))`
-pub fn tuple<'db>(db: &'db dyn salsa::Database, head: Type<'db>, tail: Type<'db>) -> Type<'db> {
-    Type::new(
-        db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, "tuple"),
-        idvec![head, tail],
-        BTreeMap::new(),
     )
 }
 
