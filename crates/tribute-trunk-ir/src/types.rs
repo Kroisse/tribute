@@ -51,6 +51,8 @@ pub enum Attribute<'db> {
     Type(Type),
     /// Symbol reference path (e.g., ["module", "func_name"])
     SymbolRef(Vec<Symbol<'db>>),
+    /// List of attributes (for arrays of values like switch cases).
+    List(Vec<Attribute<'db>>),
 }
 
 impl From<i64> for Attribute<'_> {
@@ -68,5 +70,11 @@ impl From<u64> for Attribute<'_> {
 impl From<bool> for Attribute<'_> {
     fn from(value: bool) -> Self {
         Attribute::IntBits(if value { 1 } else { 0 })
+    }
+}
+
+impl<'db> From<Vec<Attribute<'db>>> for Attribute<'db> {
+    fn from(value: Vec<Attribute<'db>>) -> Self {
+        Attribute::List(value)
     }
 }

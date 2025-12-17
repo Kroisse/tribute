@@ -9,6 +9,7 @@ pub mod type_;
 
 // === High-level (pre-resolution) ===
 pub mod ability;
+pub mod case;
 pub mod src;
 
 // === Mid-level (target independent) ===

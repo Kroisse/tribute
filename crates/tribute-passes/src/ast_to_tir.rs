@@ -12,7 +12,7 @@ use tribute_ast::{
     RecordExpression, RecordField, Statement, StringInterpolation,
 };
 use tribute_core::{Location, PathId, Span, Spanned};
-use tribute_trunk_ir::dialect::{adt, arith, core, func, list, scf, src};
+use tribute_trunk_ir::dialect::{adt, arith, case, core, func, list, src};
 use tribute_trunk_ir::{Attribute, BlockBuilder, Region, Type, Value};
 
 /// Context for lowering, tracking local variable bindings.
@@ -826,30 +826,23 @@ fn lower_match_expr<'db>(
     // Lower the scrutinee
     let scrutinee = lower_expr(db, path, ctx, block, value);
 
-    // Build branch regions for each arm
-    let mut branch_blocks = Vec::new();
+    // Build the body region containing case.arm operations
+    let mut body_block = BlockBuilder::new(db, location);
 
     for arm in arms {
-        // Each arm becomes a branch region
+        // Each arm becomes a case.arm operation with its own body region
         // For now, we handle only the first guarded branch (no guards support yet)
         let branch = arm
             .branches
             .first()
             .expect("match arm should have at least one branch");
 
-        let mut branch_block = BlockBuilder::new(db, location);
+        let mut arm_block = BlockBuilder::new(db, location);
 
         // Lower the branch body in a new scope with pattern bindings
         let result_value = ctx.scoped(|ctx| {
             // Bind pattern variables (simplified - actual pattern matching happens later)
-            bind_pattern_for_match(
-                db,
-                ctx,
-                &mut branch_block,
-                &arm.pattern,
-                scrutinee,
-                location,
-            );
+            bind_pattern_for_match(db, ctx, &mut arm_block, &arm.pattern, scrutinee, location);
 
             // Handle guard if present
             if branch.guard.is_some() {
@@ -857,22 +850,29 @@ fn lower_match_expr<'db>(
                 // A proper implementation would emit conditional branching
             }
 
-            lower_expr(db, path, ctx, &mut branch_block, &branch.value)
+            lower_expr(db, path, ctx, &mut arm_block, &branch.value)
         });
 
-        // Yield the result
-        branch_block.op(scf::Yield::new(db, location, vec![result_value]));
-        branch_blocks.push(branch_block.build());
+        // Yield the result from the arm
+        arm_block.op(case::Yield::new(db, location, result_value));
+        let arm_region = Region::new(db, location, vec![arm_block.build()]);
+
+        // Create the case.arm operation with pattern attribute
+        let pattern_attr = pattern_to_attribute(&arm.pattern);
+        body_block.op(case::Arm::new(db, location, pattern_attr, arm_region));
     }
 
-    // Create the scf.case operation
-    let branches_region = Region::new(db, location, branch_blocks);
-    let _case_op = block.op(scf::Case::new(db, location, scrutinee, branches_region));
+    let body_region = Region::new(db, location, vec![body_block.build()]);
 
-    // scf.case doesn't have a result in the current definition, so we need to
-    // get the value from somewhere. For now, return the scrutinee as placeholder.
-    // TODO: scf.case should produce a result
-    scrutinee
+    // Create the case.case operation
+    let case_op = block.op(case::Case::new(
+        db,
+        location,
+        scrutinee,
+        Type::Unit,
+        body_region,
+    ));
+    case_op.result(db)
 }
 
 /// Bind pattern variables for match expressions.
@@ -1075,6 +1075,71 @@ fn lower_record_expr<'db>(
         Attribute::String(type_name.to_string()),
     ));
     op.result(db)
+}
+
+/// Convert an AST pattern to an IR attribute representation.
+fn pattern_to_attribute<'db>(pattern: &Pattern) -> Attribute<'db> {
+    use case::pattern as pat;
+
+    match pattern {
+        Pattern::Wildcard => pat::wildcard(),
+        Pattern::Identifier(name) => pat::ident(name),
+        Pattern::Literal(lit) => {
+            use tribute_ast::LiteralPattern;
+            match lit {
+                LiteralPattern::Nat(n) => pat::int(*n as i64),
+                LiteralPattern::Int(n) => pat::int(*n),
+                LiteralPattern::Float(_) => Attribute::String(format!("lit:{:?}", lit)),
+                LiteralPattern::String(s) => pat::string(s),
+                LiteralPattern::StringInterpolation(_) => {
+                    Attribute::String(format!("lit:{:?}", lit))
+                }
+                LiteralPattern::Bytes(_) => Attribute::String(format!("lit:{:?}", lit)),
+                LiteralPattern::BytesInterpolation(_) => {
+                    Attribute::String(format!("lit:{:?}", lit))
+                }
+                LiteralPattern::Rune(c) => Attribute::String(format!("lit:?{}", c)),
+                LiteralPattern::Bool(b) => pat::bool(*b),
+                LiteralPattern::Nil => Attribute::String("Nil".to_string()),
+            }
+        }
+        Pattern::Constructor(ctor) => match &ctor.args {
+            ConstructorArgs::None => pat::unit_variant(&ctor.name),
+            ConstructorArgs::Positional(pats) => {
+                let fields: Vec<_> = pats.iter().map(pattern_to_attribute).collect();
+                pat::variant(&ctor.name, &fields)
+            }
+            ConstructorArgs::Named { fields, .. } => {
+                // Named fields: encode as "Name { f1: p1, f2: p2 }"
+                let fs: Vec<_> = fields
+                    .iter()
+                    .map(|f| {
+                        let inner = pattern_to_attribute(&f.pattern);
+                        let inner_str = match &inner {
+                            Attribute::String(s) => s.clone(),
+                            _ => format!("{:?}", inner),
+                        };
+                        format!("{}: {}", f.name, inner_str)
+                    })
+                    .collect();
+                Attribute::String(format!("{} {{ {} }}", ctor.name, fs.join(", ")))
+            }
+        },
+        Pattern::Tuple(first, rest) => {
+            let mut elems = vec![pattern_to_attribute(first)];
+            elems.extend(rest.iter().map(pattern_to_attribute));
+            pat::tuple(&elems)
+        }
+        Pattern::List(ListPattern { elements, rest }) => {
+            let head: Vec<_> = elements.iter().map(pattern_to_attribute).collect();
+            match rest {
+                Some(rest_name) => pat::list_rest(&head, rest_name.as_deref()),
+                None => pat::list(&head),
+            }
+        }
+        Pattern::Handler(hp) => Attribute::String(format!("handler:{:?}", hp)),
+        Pattern::As(inner, name) => pat::as_pattern(pattern_to_attribute(inner), name),
+    }
 }
 
 #[cfg(test)]

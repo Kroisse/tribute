@@ -435,6 +435,7 @@ macro_rules! define_op {
                     self.op
                 }
 
+                #[allow(clippy::too_many_arguments)]
                 pub fn new(
                     db: &'db dyn salsa::Database,
                     location: $crate::Location<'db>,
