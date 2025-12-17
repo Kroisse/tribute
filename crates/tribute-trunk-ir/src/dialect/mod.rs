@@ -5,7 +5,7 @@
 
 // === Infrastructure ===
 pub mod core;
-pub mod type_;
+pub mod ty;
 
 // === High-level (pre-resolution) ===
 pub mod ability;

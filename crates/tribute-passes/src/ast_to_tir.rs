@@ -14,7 +14,7 @@ use tribute_ast::{
 use tribute_core::{Location, PathId, Span, Spanned};
 use tribute_trunk_ir::{
     Attribute, BlockBuilder, IdVec, Region, Type, Value,
-    dialect::{adt, arith, case, core, func, list, src, type_},
+    dialect::{adt, arith, case, core, func, list, src, ty},
     idvec,
 };
 
@@ -38,7 +38,7 @@ impl<'db> LoweringCtx<'db> {
     fn fresh_type_var(&mut self, db: &'db dyn salsa::Database) -> Type<'db> {
         let id = self.next_type_var_id;
         self.next_type_var_id += 1;
-        type_::var(db, Attribute::IntBits(id))
+        ty::var(db, Attribute::IntBits(id))
     }
 
     /// Bind a name to a value.
