@@ -14,7 +14,7 @@ use tribute_ast::{
 use tribute_core::{Location, PathId, Span, Spanned};
 use tribute_trunk_ir::{
     Attribute, BlockBuilder, IdVec, Region, Type, Value,
-    dialect::{adt, arith, case, core, func, list, src},
+    dialect::{adt, arith, case, core, func, list, src, type_},
     idvec,
 };
 
@@ -78,13 +78,14 @@ fn lower_function<'db>(
     let name = func_def.name(db);
     let span = func_def.span(db);
     let location = Location::new(path, span);
-    let unit_ty = Type::unit(db);
+    let infer_ty = type_::var(db);
 
-    // For now, assume no type annotations (all Unknown)
-    let params: IdVec<Type> = std::iter::repeat_n(unit_ty, func_def.parameters(db).len()).collect();
+    // For now, assume no type annotations (all type.var)
+    let params: IdVec<Type> =
+        std::iter::repeat_n(infer_ty, func_def.parameters(db).len()).collect();
 
     // Result type is also unknown until inference
-    let results = idvec![unit_ty];
+    let results = idvec![infer_ty];
 
     func::Func::build(db, location, &name, params, results, |entry| {
         let body = func_def.body(db);
@@ -137,7 +138,7 @@ fn bind_pattern<'db>(
     value: Value<'db>,
     location: Location<'db>,
 ) {
-    let unit_ty = Type::unit(db);
+    let infer_ty = type_::var(db);
     match pattern {
         Pattern::Identifier(name) => {
             ctx.bind(name.clone(), value);
@@ -167,7 +168,7 @@ fn bind_pattern<'db>(
                                 db,
                                 location,
                                 value,
-                                unit_ty,
+                                infer_ty,
                                 (i as u64).into(),
                             ))
                             .result(db);
@@ -181,7 +182,7 @@ fn bind_pattern<'db>(
                                 db,
                                 location,
                                 value,
-                                unit_ty,
+                                infer_ty,
                                 (i as u64).into(),
                             ))
                             .result(db);
@@ -197,7 +198,7 @@ fn bind_pattern<'db>(
                     db,
                     location,
                     vec![value],
-                    unit_ty,
+                    infer_ty,
                     Attribute::String("tuple_get_0".to_string()),
                 ))
                 .result(db);
@@ -209,7 +210,7 @@ fn bind_pattern<'db>(
                         db,
                         location,
                         vec![value],
-                        unit_ty,
+                        infer_ty,
                         Attribute::String(format!("tuple_get_{}", i + 1)),
                     ))
                     .result(db);
@@ -228,8 +229,8 @@ fn bind_pattern<'db>(
                         location,
                         value,
                         index_value,
-                        unit_ty,
-                        Attribute::Unit, // elem_type to be inferred
+                        infer_ty,
+                        Attribute::Unit,
                     ))
                     .result(db);
                 bind_pattern(db, ctx, block, pat, elem_value, location);
@@ -240,7 +241,9 @@ fn bind_pattern<'db>(
                 let start_value = block
                     .op(arith::Const::i64(db, location, elements.len() as i64))
                     .result(db);
-                let len_value = block.op(list::len(db, location, value, unit_ty)).result(db);
+                let len_value = block
+                    .op(list::len(db, location, value, infer_ty))
+                    .result(db);
                 let rest_value = block
                     .op(list::slice(
                         db,
@@ -248,8 +251,8 @@ fn bind_pattern<'db>(
                         value,
                         start_value,
                         len_value,
-                        unit_ty,
-                        Attribute::Unit, // elem_type to be inferred
+                        infer_ty,
+                        Attribute::Unit,
                     ))
                     .result(db);
                 ctx.bind(rest_name.clone(), rest_value);
@@ -273,6 +276,7 @@ fn lower_expr<'db>(
     let (expr, span) = spanned;
     let location = Location::new(path, *span);
     let unit_ty = Type::unit(db);
+    let infer_ty = type_::var(db); // Type to be inferred
 
     match expr {
         // Literals → arith.const
@@ -309,7 +313,7 @@ fn lower_expr<'db>(
                 let op = block.op(src::var(
                     db,
                     location,
-                    unit_ty, // Unknown until resolution
+                    infer_ty,
                     Attribute::String(name.clone()),
                 ));
                 op.result(db)
@@ -331,7 +335,7 @@ fn lower_expr<'db>(
                 db,
                 location,
                 args,
-                unit_ty, // Unknown until resolution
+                infer_ty,
                 Attribute::String(function.clone()),
             ));
             op.result(db)
@@ -386,7 +390,7 @@ fn lower_expr<'db>(
                 db,
                 location,
                 args,
-                unit_ty, // Unknown until resolution
+                infer_ty,
                 Attribute::String(method.clone()),
             ));
             op.result(db)
@@ -403,8 +407,8 @@ fn lower_expr<'db>(
         }) => {
             // Parameter types are unknown until type inference
             let param_types: IdVec<Type<'_>> =
-                std::iter::repeat_n(unit_ty, parameters.len()).collect();
-            let result_type = unit_ty; // Create body block with parameters as block arguments
+                std::iter::repeat_n(infer_ty, parameters.len()).collect();
+            let result_type = infer_ty;
             let mut body_block = BlockBuilder::new(db, location).args(param_types.clone());
 
             // Lower body in a new scope with parameters bound to block arguments
@@ -418,7 +422,7 @@ fn lower_expr<'db>(
                     let param_value = body_block.op(src::var(
                         db,
                         location,
-                        unit_ty,
+                        infer_ty,
                         Attribute::String(param.name.clone()),
                     ));
                     ctx.bind(param.name.clone(), param_value.result(db));
@@ -440,7 +444,7 @@ fn lower_expr<'db>(
             let lambda_op = block.op(src::lambda(
                 db,
                 location,
-                unit_ty,
+                infer_ty,
                 Attribute::Type(func_type),
                 region,
             ));
@@ -460,7 +464,7 @@ fn lower_expr<'db>(
 
             // Create the src.block operation
             let region = Region::new(db, location, idvec![body_block.build()]);
-            let block_op = block.op(src::block(db, location, unit_ty, region));
+            let block_op = block.op(src::block(db, location, infer_ty, region));
             block_op.result(db)
         }
         // List literal → list.new
@@ -471,13 +475,7 @@ fn lower_expr<'db>(
                 .map(|elem| lower_expr(db, path, ctx, block, elem))
                 .collect();
 
-            let op = block.op(list::new(
-                db,
-                location,
-                values,
-                unit_ty, // Element type to be inferred
-                Attribute::Unit,
-            ));
+            let op = block.op(list::new(db, location, values, infer_ty, Attribute::Unit));
             op.result(db)
         }
         Expr::Tuple(first, rest) => {
@@ -489,7 +487,7 @@ fn lower_expr<'db>(
             }
 
             // Create the src.tuple operation
-            let tuple_op = block.op(src::tuple(db, location, elements, unit_ty));
+            let tuple_op = block.op(src::tuple(db, location, elements, infer_ty));
             tuple_op.result(db)
         }
         // Record expression: User { name: "Alice", age: 30 }
@@ -505,7 +503,7 @@ fn lower_expr<'db>(
                 Some(q) => format!("{}::{}", q, op),
                 None => op.clone(),
             };
-            let op = block.op(src::var(db, location, unit_ty, Attribute::String(name)));
+            let op = block.op(src::var(db, location, infer_ty, Attribute::String(name)));
             op.result(db)
         }
     }
@@ -556,25 +554,25 @@ fn lower_binary_op<'db>(
     rhs: Value<'db>,
 ) -> Value<'db> {
     // Result type is unknown until type inference
-    let unit_ty = Type::unit(db);
+    let infer_ty = type_::var(db);
     let bool_ty = Type::i(db, 1);
 
     match operator {
         // Arithmetic operations → arith dialect
         BinaryOperator::Add => block
-            .op(arith::add(db, location, lhs, rhs, unit_ty))
+            .op(arith::add(db, location, lhs, rhs, infer_ty))
             .result(db),
         BinaryOperator::Subtract => block
-            .op(arith::sub(db, location, lhs, rhs, unit_ty))
+            .op(arith::sub(db, location, lhs, rhs, infer_ty))
             .result(db),
         BinaryOperator::Multiply => block
-            .op(arith::mul(db, location, lhs, rhs, unit_ty))
+            .op(arith::mul(db, location, lhs, rhs, infer_ty))
             .result(db),
         BinaryOperator::Divide => block
-            .op(arith::div(db, location, lhs, rhs, unit_ty))
+            .op(arith::div(db, location, lhs, rhs, infer_ty))
             .result(db),
         BinaryOperator::Modulo => block
-            .op(arith::rem(db, location, lhs, rhs, unit_ty))
+            .op(arith::rem(db, location, lhs, rhs, infer_ty))
             .result(db),
 
         // Comparison operations → arith dialect (result is i1)
@@ -612,7 +610,7 @@ fn lower_binary_op<'db>(
                 location,
                 lhs,
                 rhs,
-                unit_ty,
+                infer_ty,
                 Attribute::String("concat".to_string()),
             ));
             op.result(db)
@@ -845,7 +843,7 @@ fn bind_pattern_for_match<'db>(
     scrutinee: Value<'db>,
     location: Location<'db>,
 ) {
-    let unit_ty = Type::unit(db);
+    let infer_ty = type_::var(db);
     match pattern {
         Pattern::Identifier(name) => {
             ctx.bind(name.clone(), scrutinee);
@@ -874,7 +872,7 @@ fn bind_pattern_for_match<'db>(
                                 db,
                                 location,
                                 scrutinee,
-                                unit_ty,
+                                infer_ty,
                                 (i as u64).into(),
                             ))
                             .result(db);
@@ -888,7 +886,7 @@ fn bind_pattern_for_match<'db>(
                                 db,
                                 location,
                                 scrutinee,
-                                unit_ty,
+                                infer_ty,
                                 (i as u64).into(),
                             ))
                             .result(db);
@@ -911,7 +909,7 @@ fn bind_pattern_for_match<'db>(
                     db,
                     location,
                     vec![scrutinee],
-                    unit_ty,
+                    infer_ty,
                     Attribute::String("tuple_get_0".to_string()),
                 ))
                 .result(db);
@@ -923,7 +921,7 @@ fn bind_pattern_for_match<'db>(
                         db,
                         location,
                         vec![scrutinee],
-                        unit_ty,
+                        infer_ty,
                         Attribute::String(format!("tuple_get_{}", i + 1)),
                     ))
                     .result(db);
@@ -942,8 +940,8 @@ fn bind_pattern_for_match<'db>(
                         location,
                         scrutinee,
                         index_value,
-                        unit_ty,
-                        Attribute::Unit, // elem_type to be inferred
+                        infer_ty,
+                        Attribute::Unit,
                     ))
                     .result(db);
                 bind_pattern_for_match(db, ctx, block, pat, elem_value, location);
@@ -956,7 +954,7 @@ fn bind_pattern_for_match<'db>(
                     .op(arith::Const::i64(db, location, elements.len() as i64))
                     .result(db);
                 let len_value = block
-                    .op(list::len(db, location, scrutinee, unit_ty))
+                    .op(list::len(db, location, scrutinee, infer_ty))
                     .result(db);
                 let rest_value = block
                     .op(list::slice(
@@ -965,8 +963,8 @@ fn bind_pattern_for_match<'db>(
                         scrutinee,
                         start_value,
                         len_value,
-                        unit_ty,
-                        Attribute::Unit, // elem_type to be inferred
+                        infer_ty,
+                        Attribute::Unit,
                     ))
                     .result(db);
                 ctx.bind(rest_name.clone(), rest_value);
