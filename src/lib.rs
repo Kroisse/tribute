@@ -1,12 +1,19 @@
 //! Tribute programming language compiler library.
 //!
 //! This crate provides the main API for compiling Tribute programs.
-//! The compilation pipeline is: CST (Tree-sitter) → TrunkIR → (backend)
+//!
+//! ## Pipeline
+//!
+//! The compilation pipeline has two Salsa-tracked stages:
+//! 1. **Parsing**: `parse_cst` - Parse source to CST (Tree-sitter)
+//! 2. **Lowering**: `lower_cst` - Lower CST to TrunkIR
+//!
+//! For convenience, `lower_source_file` combines both stages.
 
 use std::path::Path;
 
 pub use tribute_core::{Diagnostic, DiagnosticSeverity, SourceFile, TributeDatabaseImpl};
-pub use tribute_passes::lower_source_file;
+pub use tribute_passes::{ParsedCst, lower_cst, lower_source_file, parse_cst};
 pub use tribute_trunk_ir::dialect::core::Module;
 
 /// Lower a Tribute source string to TrunkIR module.

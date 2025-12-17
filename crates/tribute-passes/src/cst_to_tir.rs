@@ -3,16 +3,69 @@
 //! This pass converts Tree-sitter CST directly to TrunkIR operations,
 //! bypassing the AST intermediate representation.
 //! At this stage, names are unresolved (using `src` dialect ops).
+//!
+//! ## Pipeline
+//!
+//! The lowering is split into two Salsa-tracked stages:
+//! 1. `parse_cst` - Parse source to CST (cached by Salsa)
+//! 2. `lower_cst` - Lower CST to TrunkIR module
+//!
+//! This allows Salsa to cache the CST independently from the TrunkIR output.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Node, Parser, Tree};
 use tribute_core::{Location, PathId, SourceFile, Span};
 use tribute_trunk_ir::{
     Attribute, BlockBuilder, DialectType, IdVec, Region, Symbol, Type, Value,
     dialect::{ability, adt, arith, case, core, func, list, src, ty},
     idvec,
 };
+
+// =============================================================================
+// Parsed CST (Salsa-cacheable)
+// =============================================================================
+
+/// A parsed CST tree, wrapped for Salsa caching.
+///
+/// Tree-sitter's `Tree` is internally reference-counted (`ts_tree_copy` is O(1)),
+/// so cloning is cheap and we can use it directly without additional wrapping.
+#[derive(Clone, Debug)]
+pub struct ParsedCst(Tree);
+
+impl ParsedCst {
+    /// Create a new ParsedCst from a tree-sitter Tree.
+    pub fn new(tree: Tree) -> Self {
+        Self(tree)
+    }
+
+    /// Get a reference to the underlying tree.
+    pub fn tree(&self) -> &Tree {
+        &self.0
+    }
+
+    /// Get the root node of the CST.
+    pub fn root_node(&self) -> Node<'_> {
+        self.0.root_node()
+    }
+}
+
+impl PartialEq for ParsedCst {
+    fn eq(&self, other: &Self) -> bool {
+        // Trees from the same parse are equal if they have the same root node id
+        self.0.root_node().id() == other.0.root_node().id()
+    }
+}
+
+impl Eq for ParsedCst {}
+
+impl Hash for ParsedCst {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Hash by root node id
+        self.0.root_node().id().hash(state);
+    }
+}
 
 /// Create a symbol from a string.
 fn sym<'db>(db: &'db dyn salsa::Database, name: &str) -> Symbol<'db> {
@@ -163,36 +216,74 @@ impl<'db, 'src> CstLoweringCtx<'db, 'src> {
 }
 
 // =============================================================================
-// Entry Point
+// Entry Points (Salsa-tracked)
 // =============================================================================
 
+/// Parse a source file to CST.
+///
+/// This is the first stage of the compilation pipeline. The resulting
+/// `ParsedCst` is cached by Salsa and will only be recomputed when
+/// the source file changes.
+#[salsa::tracked]
+pub fn parse_cst(db: &dyn salsa::Database, source: SourceFile) -> Option<ParsedCst> {
+    let text = source.text(db);
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::language())
+        .expect("Failed to set language");
+
+    parser.parse(text, None).map(ParsedCst::new)
+}
+
+/// Lower a parsed CST to TrunkIR module.
+///
+/// This is the second stage of the compilation pipeline. It takes
+/// the parsed CST and source file (for text extraction) and produces
+/// a TrunkIR module.
+#[salsa::tracked]
+pub fn lower_cst<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceFile,
+    cst: ParsedCst,
+) -> core::Module<'db> {
+    let path = PathId::new(db, source.path(db));
+    let text = source.text(db);
+    let root = cst.root_node();
+    let location = Location::new(path, span_from_node(&root));
+
+    lower_cst_impl(db, path, text, root, location)
+}
+
 /// Lower a source file directly from CST to TrunkIR module.
+///
+/// This is a convenience function that combines `parse_cst` and `lower_cst`.
+/// For fine-grained caching control, use the two functions separately.
 #[salsa::tracked]
 pub fn lower_source_file<'db>(
     db: &'db dyn salsa::Database,
     source: SourceFile,
 ) -> core::Module<'db> {
     let path = PathId::new(db, source.path(db));
-    let text = source.text(db);
 
-    // Parse with tree-sitter
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_tribute::language())
-        .expect("Failed to set language");
-
-    let tree = match parser.parse(text, None) {
-        Some(t) => t,
+    match parse_cst(db, source) {
+        Some(cst) => lower_cst(db, source, cst),
         None => {
             // Return empty module on parse failure
             let location = Location::new(path, Span::new(0, 0));
-            return core::Module::build(db, location, "main", |_| {});
+            core::Module::build(db, location, "main", |_| {})
         }
-    };
+    }
+}
 
-    let root = tree.root_node();
-    let location = Location::new(path, span_from_node(&root));
-
+/// Internal implementation of CST lowering.
+fn lower_cst_impl<'db>(
+    db: &'db dyn salsa::Database,
+    path: PathId<'db>,
+    text: &str,
+    root: Node<'_>,
+    location: Location<'db>,
+) -> core::Module<'db> {
     core::Module::build(db, location, "main", |top| {
         let mut cursor = root.walk();
         let mut ctx = CstLoweringCtx::new(db, path, text);
