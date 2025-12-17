@@ -17,19 +17,19 @@ impl<'db> Type<'db> {
         Type::new(db, TypeKind::F { bits })
     }
     pub fn string(db: &'db dyn salsa::Database) -> Self {
-        Type::new(db, TypeKind::String)
+        Self::dialect(db, "core", "string", IdVec::new(), Attribute::Unit)
     }
     pub fn bytes(db: &'db dyn salsa::Database) -> Self {
-        Type::new(db, TypeKind::Bytes)
+        Self::dialect(db, "core", "bytes", IdVec::new(), Attribute::Unit)
     }
     pub fn ptr(db: &'db dyn salsa::Database) -> Self {
-        Type::new(db, TypeKind::Ptr)
+        Self::dialect(db, "core", "ptr", IdVec::new(), Attribute::Unit)
     }
     pub fn never(db: &'db dyn salsa::Database) -> Self {
-        Type::new(db, TypeKind::Never)
+        Self::dialect(db, "core", "never", IdVec::new(), Attribute::Unit)
     }
     pub fn unit(db: &'db dyn salsa::Database) -> Self {
-        Type::new(db, TypeKind::Unit)
+        Self::dialect(db, "core", "unit", IdVec::new(), Attribute::Unit)
     }
     pub fn array(db: &'db dyn salsa::Database, ty: Type<'db>) -> Self {
         Type::new(db, TypeKind::Array(ty))
@@ -74,11 +74,6 @@ pub enum TypeKind<'db> {
     F {
         bits: u16,
     },
-    String,
-    Bytes,
-    Ptr,
-    Never,
-    Unit,
     Array(Type<'db>),
     Ref {
         ty: Type<'db>,

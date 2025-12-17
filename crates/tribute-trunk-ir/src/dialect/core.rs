@@ -1,6 +1,13 @@
-//! Core dialect operations.
+//! Core dialect operations and types.
+//!
+//! This dialect provides fundamental types:
+//! - `core.unit` - unit type (void/empty)
+//! - `core.never` - never/bottom type (no values)
+//! - `core.string` - string type
+//! - `core.bytes` - byte sequence type
+//! - `core.ptr` - raw pointer type
 
-use crate::{Attribute, Region, dialect, idvec, ir::BlockBuilder};
+use crate::{Attribute, IdVec, Region, Type, dialect, idvec, ir::BlockBuilder};
 use tribute_core::Location;
 
 dialect! {
@@ -48,4 +55,31 @@ impl<'db> Module<'db> {
         };
         name
     }
+}
+
+// === Core type constructors ===
+
+/// Create a unit type (`core.unit`).
+pub fn unit_type(db: &dyn salsa::Database) -> Type<'_> {
+    Type::dialect(db, "core", "unit", IdVec::new(), Attribute::Unit)
+}
+
+/// Create a never type (`core.never`).
+pub fn never_type(db: &dyn salsa::Database) -> Type<'_> {
+    Type::dialect(db, "core", "never", IdVec::new(), Attribute::Unit)
+}
+
+/// Create a string type (`core.string`).
+pub fn string_type(db: &dyn salsa::Database) -> Type<'_> {
+    Type::dialect(db, "core", "string", IdVec::new(), Attribute::Unit)
+}
+
+/// Create a bytes type (`core.bytes`).
+pub fn bytes_type(db: &dyn salsa::Database) -> Type<'_> {
+    Type::dialect(db, "core", "bytes", IdVec::new(), Attribute::Unit)
+}
+
+/// Create a pointer type (`core.ptr`).
+pub fn ptr_type(db: &dyn salsa::Database) -> Type<'_> {
+    Type::dialect(db, "core", "ptr", IdVec::new(), Attribute::Unit)
 }
