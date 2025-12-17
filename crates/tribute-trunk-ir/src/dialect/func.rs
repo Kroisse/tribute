@@ -1,6 +1,6 @@
 //! Function dialect operations.
 
-use crate::{Attribute, Region, TrackedVec, Type, dialect, ir::BlockBuilder, smallvec::smallvec};
+use crate::{Attribute, IdVec, Region, Type, dialect, idvec, ir::BlockBuilder};
 use tribute_core::Location;
 
 dialect! {
@@ -40,13 +40,13 @@ impl<'db> Func<'db> {
         db: &'db dyn salsa::Database,
         location: Location<'db>,
         name: &str,
-        params: TrackedVec<Type<'db>>,
-        results: TrackedVec<Type<'db>>,
+        params: IdVec<Type<'db>>,
+        results: IdVec<Type<'db>>,
         f: impl FnOnce(&mut BlockBuilder<'db>),
     ) -> Self {
         let mut entry = BlockBuilder::new(db, location).args(params.clone());
         f(&mut entry);
-        let region = Region::new(db, location, smallvec![entry.build()]);
+        let region = Region::new(db, location, idvec![entry.build()]);
         func(
             db,
             location,

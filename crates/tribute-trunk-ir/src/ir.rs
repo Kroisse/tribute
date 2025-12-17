@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{Attribute, TrackedVec, Type};
+use crate::{Attribute, IdVec, Type};
 use tribute_core::Location;
 
 // ============================================================================
@@ -68,16 +68,16 @@ pub struct Operation<'db> {
     /// Interned operation name (dialect.operation).
     pub name: OpNameId<'db>,
     #[returns(deref)]
-    pub operands: TrackedVec<Value<'db>>,
+    pub operands: IdVec<Value<'db>>,
     #[returns(deref)]
-    pub results: TrackedVec<Type<'db>>,
+    pub results: IdVec<Type<'db>>,
     #[returns(ref)]
     pub attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
     #[tracked]
     #[returns(deref)]
-    pub regions: TrackedVec<Region<'db>>,
+    pub regions: IdVec<Region<'db>>,
     #[returns(deref)]
-    pub successors: TrackedVec<Block<'db>>,
+    pub successors: IdVec<Block<'db>>,
 }
 
 impl<'db> Operation<'db> {
@@ -109,9 +109,9 @@ impl<'db> Operation<'db> {
 pub struct Block<'db> {
     pub location: Location<'db>,
     #[returns(deref)]
-    pub args: TrackedVec<Type<'db>>,
+    pub args: IdVec<Type<'db>>,
     #[returns(deref)]
-    pub operations: TrackedVec<Operation<'db>>,
+    pub operations: IdVec<Operation<'db>>,
 }
 
 impl<'db> Block<'db> {
@@ -124,7 +124,7 @@ impl<'db> Block<'db> {
 pub struct Region<'db> {
     pub location: Location<'db>,
     #[returns(deref)]
-    pub blocks: TrackedVec<Block<'db>>,
+    pub blocks: IdVec<Block<'db>>,
 }
 
 // ============================================================================
@@ -136,11 +136,11 @@ pub struct OperationBuilder<'db> {
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     name: OpNameId<'db>,
-    operands: TrackedVec<Value<'db>>,
-    results: TrackedVec<Type<'db>>,
+    operands: IdVec<Value<'db>>,
+    results: IdVec<Type<'db>>,
     attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
-    regions: TrackedVec<Region<'db>>,
-    successors: TrackedVec<Block<'db>>,
+    regions: IdVec<Region<'db>>,
+    successors: IdVec<Block<'db>>,
 }
 
 impl<'db> OperationBuilder<'db> {
@@ -157,7 +157,7 @@ impl<'db> OperationBuilder<'db> {
         }
     }
 
-    pub fn operands(mut self, operands: TrackedVec<Value<'db>>) -> Self {
+    pub fn operands(mut self, operands: IdVec<Value<'db>>) -> Self {
         self.operands = operands;
         self
     }
@@ -167,7 +167,7 @@ impl<'db> OperationBuilder<'db> {
         self
     }
 
-    pub fn results(mut self, results: TrackedVec<Type<'db>>) -> Self {
+    pub fn results(mut self, results: IdVec<Type<'db>>) -> Self {
         self.results = results;
         self
     }
@@ -183,7 +183,7 @@ impl<'db> OperationBuilder<'db> {
         self
     }
 
-    pub fn regions(mut self, regions: TrackedVec<Region<'db>>) -> Self {
+    pub fn regions(mut self, regions: IdVec<Region<'db>>) -> Self {
         self.regions = regions;
         self
     }
@@ -193,7 +193,7 @@ impl<'db> OperationBuilder<'db> {
         self
     }
 
-    pub fn successors(mut self, successors: TrackedVec<Block<'db>>) -> Self {
+    pub fn successors(mut self, successors: IdVec<Block<'db>>) -> Self {
         self.successors = successors;
         self
     }
@@ -216,8 +216,8 @@ impl<'db> OperationBuilder<'db> {
 pub struct BlockBuilder<'db> {
     db: &'db dyn salsa::Database,
     location: Location<'db>,
-    args: TrackedVec<Type<'db>>,
-    operations: TrackedVec<Operation<'db>>,
+    args: IdVec<Type<'db>>,
+    operations: IdVec<Operation<'db>>,
 }
 
 impl<'db> BlockBuilder<'db> {
@@ -230,7 +230,7 @@ impl<'db> BlockBuilder<'db> {
         }
     }
 
-    pub fn args(mut self, args: TrackedVec<Type<'db>>) -> Self {
+    pub fn args(mut self, args: IdVec<Type<'db>>) -> Self {
         self.args = args;
         self
     }
@@ -257,7 +257,7 @@ mod tests {
     use crate::{
         DialectOp,
         dialect::{arith, core, func},
-        smallvec::smallvec,
+        idvec,
     };
     use salsa::Database;
     use std::path::PathBuf;
@@ -272,8 +272,8 @@ mod tests {
             db,
             location,
             "main",
-            smallvec![],
-            smallvec![Type::i(db, 32)],
+            idvec![],
+            idvec![Type::i(db, 32)],
             |entry| {
                 let c0 = entry.op(arith::Const::i32(db, location, 40));
                 let c1 = entry.op(arith::Const::i32(db, location, 2));
@@ -305,7 +305,7 @@ mod tests {
 
     // Test the new define_op! macro
     mod define_op_tests {
-        use crate::{Attribute, Region, Type, dialect, smallvec::smallvec};
+        use crate::{Attribute, Region, Type, dialect, idvec};
         use salsa::Database;
         use std::path::PathBuf;
         use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
@@ -406,8 +406,8 @@ mod tests {
             let path = PathId::new(db, PathBuf::from("test.tr"));
             let location = Location::new(path, Span::new(0, 0));
 
-            let block = crate::Block::new(db, location, smallvec![], smallvec![]);
-            let region = Region::new(db, location, smallvec![block]);
+            let block = crate::Block::new(db, location, idvec![], idvec![]);
+            let region = Region::new(db, location, idvec![block]);
 
             container(db, location, Attribute::String("test".to_string()), region)
         }

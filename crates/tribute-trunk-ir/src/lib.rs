@@ -26,4 +26,5 @@ pub use ops::{ConversionError, DialectOp};
 pub use types::*;
 
 /// Small vector for values tracked by Salsa framework.
-pub type TrackedVec<T> = smallvec::SmallVec<[T; 2]>;
+pub type IdVec<T> = smallvec::SmallVec<[T; 2]>;
+pub use smallvec::smallvec as idvec;

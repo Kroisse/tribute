@@ -1,6 +1,6 @@
 //! IR type definitions.
 
-use crate::{Symbol, TrackedVec};
+use crate::{IdVec, Symbol};
 
 /// IR type representation.
 #[salsa::interned(debug)]
@@ -37,13 +37,13 @@ impl<'db> Type<'db> {
     pub fn ref_(db: &'db dyn salsa::Database, ty: Type<'db>, nullable: bool) -> Self {
         Type::new(db, TypeKind::Ref { ty, nullable })
     }
-    pub fn tuple(db: &'db dyn salsa::Database, tys: TrackedVec<Type<'db>>) -> Self {
+    pub fn tuple(db: &'db dyn salsa::Database, tys: IdVec<Type<'db>>) -> Self {
         Type::new(db, TypeKind::Tuple(tys))
     }
     pub fn function(
         db: &'db dyn salsa::Database,
-        params: TrackedVec<Type<'db>>,
-        results: TrackedVec<Type<'db>>,
+        params: IdVec<Type<'db>>,
+        results: IdVec<Type<'db>>,
     ) -> Self {
         Type::new(db, TypeKind::Function { params, results })
     }
@@ -51,7 +51,7 @@ impl<'db> Type<'db> {
         db: &'db dyn salsa::Database,
         dialect: String,
         name: String,
-        params: TrackedVec<Type<'db>>,
+        params: IdVec<Type<'db>>,
     ) -> Self {
         Type::new(
             db,
@@ -82,15 +82,15 @@ pub enum TypeKind<'db> {
         ty: Type<'db>,
         nullable: bool,
     },
-    Tuple(TrackedVec<Type<'db>>),
+    Tuple(IdVec<Type<'db>>),
     Function {
-        params: TrackedVec<Type<'db>>,
-        results: TrackedVec<Type<'db>>,
+        params: IdVec<Type<'db>>,
+        results: IdVec<Type<'db>>,
     },
     Dialect {
         dialect: String,
         name: String,
-        params: TrackedVec<Type<'db>>,
+        params: IdVec<Type<'db>>,
     },
 }
 
@@ -107,7 +107,7 @@ pub enum Attribute<'db> {
     Bytes(Vec<u8>),
     Type(Type<'db>),
     /// Symbol reference path (e.g., ["module", "func_name"])
-    SymbolRef(TrackedVec<Symbol<'db>>),
+    SymbolRef(IdVec<Symbol<'db>>),
     /// List of attributes (for arrays of values like switch cases).
     List(Vec<Attribute<'db>>),
 }

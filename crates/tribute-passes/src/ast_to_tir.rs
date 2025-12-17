@@ -13,9 +13,9 @@ use tribute_ast::{
 };
 use tribute_core::{Location, PathId, Span, Spanned};
 use tribute_trunk_ir::{
-    Attribute, BlockBuilder, Region, TrackedVec, Type, Value,
+    Attribute, BlockBuilder, IdVec, Region, Type, Value,
     dialect::{adt, arith, case, core, func, list, src},
-    smallvec::smallvec,
+    idvec,
 };
 
 /// Context for lowering, tracking local variable bindings.
@@ -81,11 +81,10 @@ fn lower_function<'db>(
     let unit_ty = Type::unit(db);
 
     // For now, assume no type annotations (all Unknown)
-    let params: TrackedVec<Type> =
-        std::iter::repeat_n(unit_ty, func_def.parameters(db).len()).collect();
+    let params: IdVec<Type> = std::iter::repeat_n(unit_ty, func_def.parameters(db).len()).collect();
 
     // Result type is also unknown until inference
-    let results = smallvec![unit_ty];
+    let results = idvec![unit_ty];
 
     func::Func::build(db, location, &name, params, results, |entry| {
         let body = func_def.body(db);
@@ -403,7 +402,7 @@ fn lower_expr<'db>(
             body,
         }) => {
             // Parameter types are unknown until type inference
-            let param_types: TrackedVec<Type<'_>> =
+            let param_types: IdVec<Type<'_>> =
                 std::iter::repeat_n(unit_ty, parameters.len()).collect();
             let result_type = unit_ty; // Create body block with parameters as block arguments
             let mut body_block = BlockBuilder::new(db, location).args(param_types.clone());
@@ -434,10 +433,10 @@ fn lower_expr<'db>(
             body_block.op(src::r#yield(db, location, result_value));
 
             // Create the function type for the lambda
-            let func_type = Type::function(db, param_types, smallvec![result_type]);
+            let func_type = Type::function(db, param_types, idvec![result_type]);
 
             // Create the src.lambda operation
-            let region = Region::new(db, location, smallvec![body_block.build()]);
+            let region = Region::new(db, location, idvec![body_block.build()]);
             let lambda_op = block.op(src::lambda(
                 db,
                 location,
@@ -460,7 +459,7 @@ fn lower_expr<'db>(
             body_block.op(src::r#yield(db, location, result_value));
 
             // Create the src.block operation
-            let region = Region::new(db, location, smallvec![body_block.build()]);
+            let region = Region::new(db, location, idvec![body_block.build()]);
             let block_op = block.op(src::block(db, location, unit_ty, region));
             block_op.result(db)
         }
@@ -816,14 +815,14 @@ fn lower_match_expr<'db>(
 
         // Yield the result from the arm
         arm_block.op(case::r#yield(db, location, result_value));
-        let arm_region = Region::new(db, location, smallvec![arm_block.build()]);
+        let arm_region = Region::new(db, location, idvec![arm_block.build()]);
 
         // Create the case.arm operation with pattern attribute
         let pattern_attr = pattern_to_attribute(&arm.pattern);
         body_block.op(case::arm(db, location, pattern_attr, arm_region));
     }
 
-    let body_region = Region::new(db, location, smallvec![body_block.build()]);
+    let body_region = Region::new(db, location, idvec![body_block.build()]);
 
     // Create the case.case operation
     let case_op = block.op(case::r#case(

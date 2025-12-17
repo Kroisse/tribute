@@ -39,7 +39,8 @@ pub trait DialectOp<'db>: Sized + Copy {
 /// Uses Rust-like syntax for better IDE support and rustfmt compatibility.
 ///
 /// # Syntax
-/// ```ignore
+/// ```
+/// # use tribute_trunk_ir::dialect;
 /// dialect! {
 ///     mod dialect_name {
 ///         /// Doc comment
@@ -61,7 +62,8 @@ pub trait DialectOp<'db>: Sized + Copy {
 /// - `#[region(name)] {}` - regions inside body
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// # use tribute_trunk_ir::dialect;
 /// dialect! {
 ///     mod arith {
 ///         /// Constant value operation.
@@ -541,7 +543,7 @@ macro_rules! define_op {
             ) -> [<$op:camel>]<'db> {
                 let name = $crate::OpNameId::new(db, stringify!($dialect), stringify!($op));
                 #[allow(unused_mut)]
-                let mut operands = $crate::smallvec::smallvec![$($fixed),*];
+                let mut operands = $crate::idvec![$($fixed),*];
                 $(operands.extend($var);)?
                 let op = $crate::Operation::of(db, location, name)
                     .operands(operands)
