@@ -1,0 +1,21 @@
+//! Memory dialect operations.
+//!
+//! Low-level memory operations for FFI and runtime support.
+
+use crate::dialect;
+
+dialect! {
+    mod mem {
+        /// `mem.data` operation: places bytes in data section, returns pointer.
+        #[attr(bytes)]
+        fn data() -> result;
+
+        /// `mem.load` operation: reads from memory.
+        #[attr(offset)]
+        fn load(ptr) -> result;
+
+        /// `mem.store` operation: writes to memory.
+        #[attr(offset)]
+        fn store(ptr, value);
+    }
+}

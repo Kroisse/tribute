@@ -5,6 +5,7 @@ fn main() {
     // Run tree-sitter generate to ensure parser.c is up to date
     println!("cargo:rerun-if-changed=grammar.js");
     println!("cargo:rerun-if-changed=src/parser.c");
+    println!("cargo:rerun-if-changed=src/scanner.c");
     println!("cargo:rerun-if-changed=build.rs");
 
     // Check if tree-sitter CLI is available and run generate
@@ -32,8 +33,15 @@ fn main() {
 
     let dir: PathBuf = ["src"].iter().collect();
 
-    cc::Build::new()
-        .include(&dir)
-        .file(dir.join("parser.c"))
-        .compile("tree-sitter-tribute");
+    let mut build = cc::Build::new();
+    build.include(&dir);
+    build.file(dir.join("parser.c"));
+
+    // Include external scanner if it exists
+    let scanner_path = dir.join("scanner.c");
+    if scanner_path.exists() {
+        build.file(&scanner_path);
+    }
+
+    build.compile("tree-sitter-tribute");
 }

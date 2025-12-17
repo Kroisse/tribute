@@ -1,3 +1,5 @@
+#![cfg(feature = "legacy-eval")]
+
 use tribute::{Value, eval_str};
 use tribute_core::TributeDatabaseImpl;
 
@@ -8,8 +10,9 @@ fn eval_calc_expr(op: &str, a: i64, b: i64) -> i64 {
 
     let result = eval_str(&db, "test.trb", &source).unwrap();
     match result {
-        Value::Number(n) => n,
-        _ => panic!("Expected number result"),
+        Value::Nat(n) => n as i64,
+        Value::Int(n) => n,
+        _ => panic!("Expected number result, got {:?}", result),
     }
 }
 
@@ -91,8 +94,9 @@ fn test_to_number_function() {
     let db = TributeDatabaseImpl::default();
     let source = r#"fn main() { to_number("42") }"#;
 
+    // to_number returns Int (since parsing a string gives signed integer)
     let result = eval_str(&db, "test.trb", source).unwrap();
-    assert!(matches!(result, Value::Number(42)));
+    assert!(matches!(result, Value::Int(42)));
 }
 
 #[test]
@@ -100,13 +104,13 @@ fn test_match_case_with_operators() {
     let db = TributeDatabaseImpl::default();
     let source = r#"
         fn main() {
-          match "+" {
-            "+" => 5 + 3,
-            "-" => 5 - 3
+          case "+" {
+            "+" -> 5 + 3,
+            "-" -> 5 - 3
           }
         }
     "#;
 
     let result = eval_str(&db, "test.trb", source).unwrap();
-    assert!(matches!(result, Value::Number(8)));
+    assert!(matches!(result, Value::Nat(8)));
 }

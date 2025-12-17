@@ -24,11 +24,8 @@ HirProgram {
                         ),
                         args: [
                             (
-                                StringInterpolation(
-                                    StringInterpolation {
-                                        leading_text: "Hello, Tribute!",
-                                        segments: [],
-                                    },
+                                StringLit(
+                                    "Hello, Tribute!",
                                 ),
                                 Span {
                                     start: 273,
@@ -68,7 +65,7 @@ HirProgram {
                                     ),
                                     args: [
                                         (
-                                            Number(
+                                            Nat(
                                                 10,
                                             ),
                                             Span {
@@ -77,7 +74,7 @@ HirProgram {
                                             },
                                         ),
                                         (
-                                            Number(
+                                            Nat(
                                                 5,
                                             ),
                                             Span {
@@ -113,7 +110,7 @@ HirProgram {
                         ),
                         args: [
                             (
-                                Number(
+                                Nat(
                                     6,
                                 ),
                                 Span {
@@ -122,7 +119,7 @@ HirProgram {
                                 },
                             ),
                             (
-                                Number(
+                                Nat(
                                     7,
                                 ),
                                 Span {

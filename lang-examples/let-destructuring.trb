@@ -1,0 +1,38 @@
+// Test let destructuring
+
+fn main() {
+    // Tuple destructuring
+    let #(a, b) = #(1, 2)
+    print_line(a)
+    print_line(b)
+
+    // Nested tuple destructuring
+    let #(x, #(y, z)) = #(10, #(20, 30))
+    print_line(x)
+    print_line(y)
+    print_line(z)
+
+    // List destructuring
+    let [first, second, third] = [100, 200, 300]
+    print_line(first)
+    print_line(second)
+    print_line(third)
+
+    // List with rest pattern
+    let [head, ..tail] = [1, 2, 3, 4, 5]
+    print_line(head)
+    print_line(tail)
+
+    // Record destructuring
+    let User { name, age } = User { name: "Alice", age: 30 }
+    print_line(name)
+    print_line(age)
+
+    // Record with rest (..)
+    let User { name: n, .. } = User { name: "Bob", age: 25 }
+    print_line(n)
+
+    // Wildcard in pattern
+    let #(keep, _) = #(42, 999)
+    print_line(keep)
+}

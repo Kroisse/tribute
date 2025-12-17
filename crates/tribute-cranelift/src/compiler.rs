@@ -7,7 +7,7 @@ use cranelift_codegen::settings::{self, Configurable};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use target_lexicon::Triple;
 
-use tribute_hir::hir::HirProgram;
+use tribute_passes::hir::HirProgram;
 
 use crate::codegen::CodeGenerator;
 use crate::errors::CompilationResult;

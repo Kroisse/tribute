@@ -11,7 +11,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 
 use tribute_ast::{Identifier, Spanned};
-use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, MatchCase, Pattern};
+use tribute_passes::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, MatchCase, Pattern};
 
 use crate::CompilationError;
 use crate::errors::{CompilationErrorKind, CompilationResult};
@@ -168,13 +168,9 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
     ) -> CompilationResult<()> {
         let expr_data = expr.expr(db);
         match &expr_data {
-            Expr::StringInterpolation(s) => {
-                if s.segments.is_empty() {
-                    // Simple string literal
-                    let offset = self.add_string_literal(&s.leading_text);
-                    literals.insert(s.leading_text.clone(), offset);
-                }
-                // TODO: Handle complex interpolation
+            Expr::StringLit(s) => {
+                let offset = self.add_string_literal(s);
+                literals.insert(s.clone(), offset);
             }
             Expr::Call { args, .. } => {
                 for arg in args {
@@ -206,13 +202,9 @@ impl<'m, M: Module> CodeGenerator<'m, M> {
         literals: &mut HashMap<String, u32>,
     ) -> CompilationResult<()> {
         match expr {
-            Expr::StringInterpolation(s) => {
-                if s.segments.is_empty() {
-                    // Simple string literal
-                    let offset = self.add_string_literal(&s.leading_text);
-                    literals.insert(s.leading_text.clone(), offset);
-                }
-                // TODO: Handle complex interpolation
+            Expr::StringLit(s) => {
+                let offset = self.add_string_literal(s);
+                literals.insert(s.clone(), offset);
             }
             Expr::Call { args, .. } => {
                 for arg in args {
@@ -524,17 +516,27 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
     /// Lower an expression
     fn lower_expr(&mut self, db: &dyn Db, expr: &Expr) -> CompilationResult<Value> {
         match expr {
-            Expr::Number(n) => self.lower_number(*n),
-            Expr::StringInterpolation(s) => self.lower_string_interpolation(db, s),
+            Expr::Nat(n) => self.lower_number(*n as i64),
+            Expr::Int(n) => self.lower_number(*n),
+            Expr::Float(n) => self.lower_float(*n),
+            Expr::Rune(_) => Err(CompilationError::unsupported_feature("Rune literals")),
+            Expr::Bool(_) => Err(CompilationError::unsupported_feature("Bool literals")),
+            Expr::Nil => Err(CompilationError::unsupported_feature("Nil literal")),
+            Expr::StringLit(s) => self.lower_string_literal(s),
+            Expr::BytesLit(_) => Err(CompilationError::unsupported_feature("Bytes literals")),
             Expr::Variable(name) => self.use_variable(name),
             Expr::Call { func, args } => self.lower_call(db, func, args),
-            Expr::Let { var, value } => self.lower_let(db, var, value),
+            Expr::Let { pattern, value } => self.lower_let(db, pattern, value),
             Expr::Block(exprs) => self.lower_block(db, exprs),
             Expr::Match { expr, cases } => self.lower_match(db, expr, cases),
+            Expr::Lambda { .. } => Err(CompilationError::unsupported_feature("Lambda expressions")),
+            Expr::List(_) => Err(CompilationError::unsupported_feature("List literals")),
+            Expr::Tuple(..) => Err(CompilationError::unsupported_feature("Tuple literals")),
+            Expr::Record { .. } => Err(CompilationError::unsupported_feature("Record expressions")),
         }
     }
 
-    /// Lower a number literal
+    /// Lower a number literal (integer)
     fn lower_number(&mut self, n: i64) -> CompilationResult<Value> {
         // Create f64 constant
         let float_val = self.builder.ins().f64const(n as f64);
@@ -546,21 +548,16 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
         Ok(self.builder.inst_results(value)[0])
     }
 
-    /// Lower string interpolation
-    fn lower_string_interpolation(
-        &mut self,
-        _db: &dyn Db,
-        s: &tribute_hir::hir::StringInterpolation,
-    ) -> CompilationResult<Value> {
-        if s.segments.is_empty() {
-            // Simple string constant
-            self.lower_string_literal(&s.leading_text)
-        } else {
-            // Complex interpolation - not yet implemented
-            Err(CompilationError::unsupported_feature(
-                "string interpolation",
-            ))
-        }
+    /// Lower a float literal
+    fn lower_float(&mut self, n: f64) -> CompilationResult<Value> {
+        // Create f64 constant directly
+        let float_val = self.builder.ins().f64const(n);
+
+        // Call runtime to create number value
+        let value_from_number = self.import_runtime_func(self.runtime.value_from_number)?;
+        let value = self.builder.ins().call(value_from_number, &[float_val]);
+
+        Ok(self.builder.inst_results(value)[0])
     }
 
     /// Lower a string literal
@@ -721,12 +718,20 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
     fn lower_let(
         &mut self,
         db: &dyn Db,
-        var: &str,
+        pattern: &Pattern,
         value: &Spanned<Expr>,
     ) -> CompilationResult<Value> {
         let val = self.lower_expr(db, &value.0)?;
-        self.define_variable(var, val);
-        Ok(val)
+        // For now, only support simple identifier patterns
+        match pattern {
+            Pattern::Variable(name) => {
+                self.define_variable(name, val);
+                Ok(val)
+            }
+            _ => Err(CompilationError::unsupported_feature(
+                "Pattern destructuring in let bindings",
+            )),
+        }
     }
 
     /// Lower a block expression
@@ -755,6 +760,13 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
             return Err(CompilationError::type_error(
                 "Match expression must have at least one case".to_string(),
             ));
+        }
+
+        // Check for guards (not yet supported in codegen)
+        for case in cases {
+            if case.guard.is_some() {
+                return Err(CompilationError::unsupported_feature("pattern guards"));
+            }
         }
 
         // Evaluate the match expression value
@@ -885,7 +897,16 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
         literal: &Literal,
     ) -> CompilationResult<Value> {
         match literal {
-            Literal::Number(n) => {
+            Literal::Nat(n) => {
+                let literal_value = self.lower_number(*n as i64)?;
+                let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
+                let comparison = self
+                    .builder
+                    .ins()
+                    .call(equals_func, &[match_value, literal_value]);
+                Ok(self.builder.inst_results(comparison)[0])
+            }
+            Literal::Int(n) => {
                 let literal_value = self.lower_number(*n)?;
                 let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
                 let comparison = self
@@ -894,21 +915,28 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
                     .call(equals_func, &[match_value, literal_value]);
                 Ok(self.builder.inst_results(comparison)[0])
             }
-            Literal::StringInterpolation(s) => {
-                if s.segments.is_empty() {
-                    let literal_value = self.lower_string_literal(&s.leading_text)?;
-                    let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
-                    let comparison = self
-                        .builder
-                        .ins()
-                        .call(equals_func, &[match_value, literal_value]);
-                    Ok(self.builder.inst_results(comparison)[0])
-                } else {
-                    Err(CompilationError::unsupported_feature(
-                        "string interpolation in patterns",
-                    ))
-                }
+            Literal::Float(n) => {
+                let literal_value = self.lower_float(*n)?;
+                let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
+                let comparison = self
+                    .builder
+                    .ins()
+                    .call(equals_func, &[match_value, literal_value]);
+                Ok(self.builder.inst_results(comparison)[0])
             }
+            Literal::Rune(_) => Err(CompilationError::unsupported_feature("Rune patterns")),
+            Literal::Bool(_) => Err(CompilationError::unsupported_feature("Bool patterns")),
+            Literal::Nil => Err(CompilationError::unsupported_feature("Nil patterns")),
+            Literal::StringPat(s) => {
+                let literal_value = self.lower_string_literal(s)?;
+                let equals_func = self.import_runtime_func(self.runtime.value_equals)?;
+                let comparison = self
+                    .builder
+                    .ins()
+                    .call(equals_func, &[match_value, literal_value]);
+                Ok(self.builder.inst_results(comparison)[0])
+            }
+            Literal::BytesPat(_) => Err(CompilationError::unsupported_feature("Bytes patterns")),
         }
     }
 
@@ -924,7 +952,12 @@ impl<'a, 'b, 'db, M: Module> FunctionLowerer<'a, 'b, 'db, M> {
                 // No variables to bind
                 Ok(())
             }
-            Pattern::List(_) | Pattern::Rest(_) => {
+            Pattern::List { .. }
+            | Pattern::Rest(_)
+            | Pattern::Constructor { .. }
+            | Pattern::Tuple(..)
+            | Pattern::As(..)
+            | Pattern::Handler(_) => {
                 // TODO: Implement in future iterations
                 Err(CompilationError::unsupported_feature(
                     "complex pattern variable binding",

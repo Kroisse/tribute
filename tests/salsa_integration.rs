@@ -16,9 +16,9 @@ fn test_salsa_database_examples() {
             Path::new("complex.trb"),
             r#"
 fn factorial(n) {
-  match n {
-    0 => 1,
-    _ => n * factorial(n - 1)
+  case n {
+    0 -> 1,
+    _ -> n * factorial(n - 1)
   }
 }
 
@@ -136,7 +136,7 @@ fn test_salsa_diagnostics_collection() {
             "multi.trb".into(),
             r#"
 fn add(a, b) { a + b }
-fn multiply(a, b) { a * b }  
+fn multiply(a, b) { a * b }
 fn main() { print_line("test") }
 "#
             .to_string(),

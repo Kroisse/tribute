@@ -2,7 +2,7 @@ use insta::assert_debug_snapshot;
 use salsa::{Database as Db, Setter};
 use std::path::Path;
 use tribute::{SourceFile, TributeDatabaseImpl, parse_source_file};
-use tribute_hir::{HirProgram, lower_source_to_hir};
+use tribute_passes::{HirProgram, lower_source_to_hir};
 
 pub fn parse_file_to_hir<'db>(db: &'db dyn Db, path: &Path) -> HirProgram<'db> {
     let source = std::fs::read_to_string(path).expect("Failed to read file");

@@ -13,9 +13,11 @@ HirProgram {
                 HirExpr {
                     [salsa id]: Id(1000),
                     expr: Let {
-                        var: "x",
+                        pattern: Variable(
+                            "x",
+                        ),
                         value: (
-                            Number(
+                            Nat(
                                 10,
                             ),
                             Span {
@@ -32,9 +34,11 @@ HirProgram {
                 HirExpr {
                     [salsa id]: Id(1001),
                     expr: Let {
-                        var: "y",
+                        pattern: Variable(
+                            "y",
+                        ),
                         value: (
-                            Number(
+                            Nat(
                                 20,
                             ),
                             Span {
@@ -51,7 +55,9 @@ HirProgram {
                 HirExpr {
                     [salsa id]: Id(1002),
                     expr: Let {
-                        var: "sum",
+                        pattern: Variable(
+                            "sum",
+                        ),
                         value: (
                             Call {
                                 func: (
@@ -109,11 +115,8 @@ HirProgram {
                         ),
                         args: [
                             (
-                                StringInterpolation(
-                                    StringInterpolation {
-                                        leading_text: "Testing advanced let bindings:",
-                                        segments: [],
-                                    },
+                                StringLit(
+                                    "Testing advanced let bindings:",
                                 ),
                                 Span {
                                     start: 263,

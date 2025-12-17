@@ -1,15 +1,15 @@
 fn test_string_patterns(s) {
-    match s {
-        "hello" => "greeting found",
-        "world" => "world found", 
-        name => name
+    case s {
+        "hello" -> "greeting found",
+        "world" -> "world found",
+        name -> name
     }
 }
 
 fn test_number_with_variable(x) {
-    match x {
-        0 => "zero value",
-        value => value
+    case x {
+        0 -> "zero value",
+        value -> value
     }
 }
 

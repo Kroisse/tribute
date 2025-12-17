@@ -24,11 +24,8 @@ HirProgram {
                         ),
                         args: [
                             (
-                                StringInterpolation(
-                                    StringInterpolation {
-                                        leading_text: "Calculator example - to be implemented",
-                                        segments: [],
-                                    },
+                                StringLit(
+                                    "Calculator example - to be implemented",
                                 ),
                                 Span {
                                     start: 212,
@@ -56,11 +53,8 @@ HirProgram {
                         ),
                         args: [
                             (
-                                StringInterpolation(
-                                    StringInterpolation {
-                                        leading_text: "Requires pattern matching and string operations",
-                                        segments: [],
-                                    },
+                                StringLit(
+                                    "Requires pattern matching and string operations",
                                 ),
                                 Span {
                                     start: 269,

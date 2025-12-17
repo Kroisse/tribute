@@ -1,0 +1,38 @@
+// Test tuple expressions and patterns
+
+fn swap(pair) {
+    case pair {
+        #(a, b) -> #(b, a)
+    }
+}
+
+fn first(triple) {
+    case triple {
+        #(x, _, _) -> x
+    }
+}
+
+fn main() {
+    // Tuple expression
+    let pair = #(1, "hello")
+    print_line(pair)
+
+    // Tuple pattern matching
+    case #(10, 20, 30) {
+        #(a, b, c) -> print_line(a + b + c)
+    }
+
+    // Nested tuple
+    let nested = #(1, #(2, 3))
+    print_line(nested)
+
+    // Swap function
+    print_line(swap(#("first", "second")))
+
+    // Wildcard in tuple pattern
+    print_line(first(#(100, 200, 300)))
+
+    // Tuple with different types
+    let mixed = #(42, "answer", True)
+    print_line(mixed)
+}

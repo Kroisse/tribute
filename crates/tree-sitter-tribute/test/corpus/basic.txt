@@ -80,9 +80,11 @@ fn add(a, b) {
   (function_definition
     (keyword_fn)
     name: (identifier)
-    (parameter_list
-      (identifier)
-      (identifier))
+    params: (parameter_list
+      (parameter
+        name: (identifier))
+      (parameter
+        name: (identifier)))
     body: (block
       (expression_statement
         (binary_expression
@@ -254,15 +256,15 @@ fn test() {
           (identifier))))))
 
 ================================================================================
-Match expression with literal patterns
+Case expression with literal patterns
 ================================================================================
 
 fn test_number(n) {
-    match n {
-        0 => "zero",
-        1 => "one",
-        2 => "two",
-        _ => "other"
+    case n {
+        0 -> "zero",
+        1 -> "one",
+        2 -> "two",
+        _ -> "other"
     }
 }
 
@@ -272,38 +274,2328 @@ fn test_number(n) {
   (function_definition
     (keyword_fn)
     name: (identifier)
-    (parameter_list
-      (identifier))
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
     body: (block
       (expression_statement
-        (match_expression
-          (keyword_match)
+        (case_expression
+          (keyword_case)
           value: (primary_expression
             (identifier))
-          (match_arm
+          (case_arm
             pattern: (pattern
-              (literal_pattern
-                (number)))
+              (simple_pattern
+                (literal_pattern
+                  (number))))
             value: (primary_expression
               (string
                 (string_segment))))
-          (match_arm
+          (case_arm
             pattern: (pattern
-              (literal_pattern
-                (number)))
+              (simple_pattern
+                (literal_pattern
+                  (number))))
             value: (primary_expression
               (string
                 (string_segment))))
-          (match_arm
+          (case_arm
             pattern: (pattern
-              (literal_pattern
-                (number)))
+              (simple_pattern
+                (literal_pattern
+                  (number))))
             value: (primary_expression
               (string
                 (string_segment))))
-          (match_arm
+          (case_arm
             pattern: (pattern
-              (wildcard_pattern))
+              (simple_pattern
+                (wildcard_pattern)))
             value: (primary_expression
               (string
                 (string_segment)))))))))
+
+================================================================================
+UFCS method call with arguments
+================================================================================
+
+fn test() {
+    list.map(fn_double)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (method_call_expression
+          receiver: (primary_expression
+            (identifier))
+          method: (identifier)
+          (argument_list
+            (primary_expression
+              (identifier))))))))
+
+================================================================================
+UFCS method call without arguments
+================================================================================
+
+fn test() {
+    list.len
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (method_call_expression
+          receiver: (primary_expression
+            (identifier))
+          method: (identifier))))))
+
+================================================================================
+Chained UFCS method calls
+================================================================================
+
+fn test() {
+    data.filter(is_valid).map(double).sum
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (method_call_expression
+          receiver: (method_call_expression
+            receiver: (method_call_expression
+              receiver: (primary_expression
+                (identifier))
+              method: (identifier)
+              (argument_list
+                (primary_expression
+                  (identifier))))
+            method: (identifier)
+            (argument_list
+              (primary_expression
+                (identifier))))
+          method: (identifier))))))
+
+================================================================================
+Simple struct declaration
+================================================================================
+
+struct User {
+    name: String,
+    age: Nat
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (keyword_struct)
+    name: (type_identifier)
+    body: (struct_body
+      (struct_fields
+        (struct_field
+          name: (identifier)
+          type: (type_identifier))
+        (struct_field
+          name: (identifier)
+          type: (type_identifier))))))
+
+================================================================================
+Generic struct declaration
+================================================================================
+
+struct Box(a) {
+    value: a
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (keyword_struct)
+    name: (type_identifier)
+    type_params: (type_parameters
+      (identifier))
+    body: (struct_body
+      (struct_fields
+        (struct_field
+          name: (identifier)
+          type: (type_variable
+            (identifier)))))))
+
+================================================================================
+Pub struct with generic type field
+================================================================================
+
+pub struct Container(a) {
+    items: List(a)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (struct_declaration
+    (keyword_pub)
+    (keyword_struct)
+    name: (type_identifier)
+    type_params: (type_parameters
+      (identifier))
+    body: (struct_body
+      (struct_fields
+        (struct_field
+          name: (identifier)
+          type: (generic_type
+            (type_identifier)
+            (type_variable
+              (identifier))))))))
+
+================================================================================
+Simple enum declaration
+================================================================================
+
+enum Status {
+    Active,
+    Inactive
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (keyword_enum)
+    name: (type_identifier)
+    body: (enum_body
+      (enum_variants
+        (enum_variant
+          name: (type_identifier))
+        (enum_variant
+          name: (type_identifier))))))
+
+================================================================================
+Generic enum with tuple variant
+================================================================================
+
+enum Option(a) {
+    None,
+    Some(a)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (keyword_enum)
+    name: (type_identifier)
+    type_params: (type_parameters
+      (identifier))
+    body: (enum_body
+      (enum_variants
+        (enum_variant
+          name: (type_identifier))
+        (enum_variant
+          name: (type_identifier)
+          fields: (variant_fields
+            (tuple_fields
+              (type_variable
+                (identifier)))))))))
+
+================================================================================
+Enum with struct variant fields
+================================================================================
+
+enum Result(a, e) {
+    Ok { value: a },
+    Err { error: e }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (keyword_enum)
+    name: (type_identifier)
+    type_params: (type_parameters
+      (identifier)
+      (identifier))
+    body: (enum_body
+      (enum_variants
+        (enum_variant
+          name: (type_identifier)
+          fields: (variant_fields
+            (struct_fields_block
+              (struct_fields
+                (struct_field
+                  name: (identifier)
+                  type: (type_variable
+                    (identifier)))))))
+        (enum_variant
+          name: (type_identifier)
+          fields: (variant_fields
+            (struct_fields_block
+              (struct_fields
+                (struct_field
+                  name: (identifier)
+                  type: (type_variable
+                    (identifier)))))))))))
+
+================================================================================
+Simple const declaration
+================================================================================
+
+const max_size = 1000
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (const_declaration
+    (keyword_const)
+    name: (identifier)
+    value: (primary_expression
+      (number))))
+
+================================================================================
+Const with type annotation
+================================================================================
+
+const pi: Float = 3.14159
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (const_declaration
+    (keyword_const)
+    name: (identifier)
+    type: (type_identifier)
+    value: (primary_expression
+      (number))))
+
+================================================================================
+Pub const with string value
+================================================================================
+
+pub const version = "0.1.0"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (const_declaration
+    (keyword_pub)
+    (keyword_const)
+    name: (identifier)
+    value: (primary_expression
+      (string
+        (string_segment)))))
+
+================================================================================
+Simple use declaration
+================================================================================
+
+use std
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (use_declaration
+    (keyword_use)
+    path: (use_path
+      (identifier))))
+
+================================================================================
+Use declaration with path
+================================================================================
+
+use std::io
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (use_declaration
+    (keyword_use)
+    path: (use_path
+      (identifier)
+      (use_path_segment
+        (identifier)))))
+
+================================================================================
+Use declaration with deep path
+================================================================================
+
+use std::collections::HashMap
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (use_declaration
+    (keyword_use)
+    path: (use_path
+      (identifier)
+      (use_path_segment
+        (identifier))
+      (use_path_segment
+        (type_identifier)))))
+
+================================================================================
+Use declaration with group
+================================================================================
+
+use std::collections::{List, Map, Set}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (use_declaration
+    (keyword_use)
+    path: (use_path
+      (identifier)
+      (use_path_segment
+        (identifier))
+      (use_group
+        (type_identifier)
+        (type_identifier)
+        (type_identifier)))))
+
+================================================================================
+Pub use declaration
+================================================================================
+
+pub use internal::api
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (use_declaration
+    (keyword_pub)
+    (keyword_use)
+    path: (use_path
+      (identifier)
+      (use_path_segment
+        (identifier)))))
+
+================================================================================
+Simple mod declaration
+================================================================================
+
+mod foo
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (mod_declaration
+    (keyword_mod)
+    name: (identifier)))
+
+================================================================================
+Pub mod declaration
+================================================================================
+
+pub mod api
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (mod_declaration
+    (keyword_pub)
+    (keyword_mod)
+    name: (identifier)))
+
+================================================================================
+Mod with inline body
+================================================================================
+
+mod utils {
+    fn helper() {
+        42
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (mod_declaration
+    (keyword_mod)
+    name: (identifier)
+    body: (mod_body
+      (function_definition
+        (keyword_fn)
+        name: (identifier)
+        body: (block
+          (expression_statement
+            (primary_expression
+              (number))))))))
+
+================================================================================
+Nested mod declarations
+================================================================================
+
+mod outer {
+    mod inner {
+        const value = 100
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (mod_declaration
+    (keyword_mod)
+    name: (identifier)
+    body: (mod_body
+      (mod_declaration
+        (keyword_mod)
+        name: (identifier)
+        body: (mod_body
+          (const_declaration
+            (keyword_const)
+            name: (identifier)
+            value: (primary_expression
+              (number))))))))
+
+================================================================================
+True literal
+================================================================================
+
+fn test() {
+    True
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (keyword_true))))))
+
+================================================================================
+False literal
+================================================================================
+
+fn test() {
+    False
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (keyword_false))))))
+
+================================================================================
+Nil literal
+================================================================================
+
+fn test() {
+    Nil
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (keyword_nil))))))
+
+================================================================================
+Case expression with True/False patterns
+================================================================================
+
+fn test(b) {
+    case b {
+        True -> "yes",
+        False -> "no"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (literal_pattern
+                  (keyword_true))))
+            value: (primary_expression
+              (string
+                (string_segment))))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (literal_pattern
+                  (keyword_false))))
+            value: (primary_expression
+              (string
+                (string_segment)))))))))
+
+================================================================================
+Case expression with Nil pattern
+================================================================================
+
+fn test(x) {
+    case x {
+        Nil -> "nothing",
+        _ -> "something"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (literal_pattern
+                  (keyword_nil))))
+            value: (primary_expression
+              (string
+                (string_segment))))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (wildcard_pattern)))
+            value: (primary_expression
+              (string
+                (string_segment)))))))))
+
+================================================================================
+Path expression with identifier
+================================================================================
+
+fn test() {
+    std::io::print
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (primary_expression
+          (path_expression
+            (path_segment
+              (identifier))
+            (path_segment
+              (identifier))
+            (path_segment
+              (identifier))))))))
+
+================================================================================
+Path expression with type
+================================================================================
+
+fn test() {
+    Int::to_string(42)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (path_expression
+            (path_segment
+              (type_identifier))
+            (path_segment
+              (identifier)))
+          (argument_list
+            (primary_expression
+              (number))))))))
+
+================================================================================
+Case with single guard
+================================================================================
+
+fn test(n) {
+    case n {
+        x if x > 0 -> "positive",
+        _ -> "non-positive"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (identifier_pattern
+                  (identifier))))
+            (guarded_branch
+              (keyword_if)
+              guard: (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (number)))
+              value: (primary_expression
+                (string
+                  (string_segment)))))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (wildcard_pattern)))
+            value: (primary_expression
+              (string
+                (string_segment)))))))))
+
+================================================================================
+Case with multiple guards
+================================================================================
+
+fn test(n) {
+    case n {
+        x if x > 0 -> "positive"
+          if x < 0 -> "negative",
+        _ -> "zero"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (identifier_pattern
+                  (identifier))))
+            (guarded_branch
+              (keyword_if)
+              guard: (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (number)))
+              value: (primary_expression
+                (string
+                  (string_segment))))
+            (guarded_branch
+              (keyword_if)
+              guard: (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (number)))
+              value: (primary_expression
+                (string
+                  (string_segment)))))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (wildcard_pattern)))
+            value: (primary_expression
+              (string
+                (string_segment)))))))))
+
+================================================================================
+Simple ability declaration
+================================================================================
+
+ability Console {
+    fn print(msg: String) -> Nil
+    fn read() -> String
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ability_declaration
+    (keyword_ability)
+    name: (type_identifier)
+    body: (ability_body
+      (ability_operation
+        (keyword_fn)
+        name: (identifier)
+        (typed_parameter_list
+          (typed_parameter
+            name: (identifier)
+            type: (type_identifier)))
+        return_type: (type_identifier))
+      (ability_operation
+        (keyword_fn)
+        name: (identifier)
+        return_type: (type_identifier)))))
+
+================================================================================
+Generic ability declaration
+================================================================================
+
+ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ability_declaration
+    (keyword_ability)
+    name: (type_identifier)
+    type_params: (type_parameters
+      (identifier))
+    body: (ability_body
+      (ability_operation
+        (keyword_fn)
+        name: (identifier)
+        return_type: (type_variable
+          (identifier)))
+      (ability_operation
+        (keyword_fn)
+        name: (identifier)
+        (typed_parameter_list
+          (typed_parameter
+            name: (identifier)
+            type: (type_variable
+              (identifier))))
+        return_type: (type_identifier)))))
+
+================================================================================
+Pub ability declaration
+================================================================================
+
+pub ability Http {
+    fn get(url: String) -> Response
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (ability_declaration
+    (keyword_pub)
+    (keyword_ability)
+    name: (type_identifier)
+    body: (ability_body
+      (ability_operation
+        (keyword_fn)
+        name: (identifier)
+        (typed_parameter_list
+          (typed_parameter
+            name: (identifier)
+            type: (type_identifier)))
+        return_type: (type_identifier)))))
+
+================================================================================
+Handle expression
+================================================================================
+
+fn test() {
+    handle comp()
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (handle_expression
+          (keyword_handle)
+          expr: (call_expression
+            function: (identifier)))))))
+
+================================================================================
+Handle with case expression
+================================================================================
+
+fn test() {
+    case handle comp() {
+        _ -> result
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (handle_expression
+            (keyword_handle)
+            expr: (call_expression
+              function: (identifier)))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (wildcard_pattern)))
+            value: (primary_expression
+              (identifier))))))))
+
+================================================================================
+Simple lambda expression
+================================================================================
+
+fn test() {
+    fn(x) x + 1
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          params: (parameter_list
+            (parameter
+              name: (identifier)))
+          body: (binary_expression
+            (primary_expression
+              (identifier))
+            (primary_expression
+              (number))))))))
+
+================================================================================
+Lambda with multiple parameters
+================================================================================
+
+fn test() {
+    fn(x, y) x + y
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          params: (parameter_list
+            (parameter
+              name: (identifier))
+            (parameter
+              name: (identifier)))
+          body: (binary_expression
+            (primary_expression
+              (identifier))
+            (primary_expression
+              (identifier))))))))
+
+================================================================================
+Lambda with block body
+================================================================================
+
+fn test() {
+    fn(x) {
+        let y = x + 1
+        y * 2
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          params: (parameter_list
+            (parameter
+              name: (identifier)))
+          body: (primary_expression
+            (block
+              (let_statement
+                (keyword_let)
+                name: (identifier)
+                value: (binary_expression
+                  (primary_expression
+                    (identifier))
+                  (primary_expression
+                    (number))))
+              (expression_statement
+                (binary_expression
+                  (primary_expression
+                    (identifier))
+                  (primary_expression
+                    (number)))))))))))
+
+================================================================================
+Lambda without parameters
+================================================================================
+
+fn test() {
+    fn() 42
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          body: (primary_expression
+            (number)))))))
+
+================================================================================
+Lambda as function argument
+================================================================================
+
+fn test() {
+    list.map(fn(x) x * 2)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (method_call_expression
+          receiver: (primary_expression
+            (identifier))
+          method: (identifier)
+          (argument_list
+            (lambda_expression
+              (keyword_fn)
+              params: (parameter_list
+                (parameter
+                  name: (identifier)))
+              body: (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (number))))))))))
+
+================================================================================
+Function with return type annotation
+================================================================================
+
+fn add(x, y) -> Int {
+    x + y
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier))
+      (parameter
+        name: (identifier)))
+    return_type: (return_type_annotation
+      (type_identifier))
+    body: (block
+      (expression_statement
+        (binary_expression
+          (primary_expression
+            (identifier))
+          (primary_expression
+            (identifier)))))))
+
+================================================================================
+Function with generic return type
+================================================================================
+
+fn wrap(value) -> Option(Int) {
+    value
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    return_type: (return_type_annotation
+      (generic_type
+        (type_identifier)
+        (type_identifier)))
+    body: (block
+      (expression_statement
+        (primary_expression
+          (identifier))))))
+
+================================================================================
+Lambda with return type annotation
+================================================================================
+
+fn test() {
+    fn(x) -> Int x + 1
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          params: (parameter_list
+            (parameter
+              name: (identifier)))
+          return_type: (return_type_annotation
+            (type_identifier))
+          body: (binary_expression
+            (primary_expression
+              (identifier))
+            (primary_expression
+              (number))))))))
+
+================================================================================
+Function with typed parameters
+================================================================================
+
+fn add(x: Int, y: Int) -> Int {
+    x + y
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (type_identifier))
+      (parameter
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (return_type_annotation
+      (type_identifier))
+    body: (block
+      (expression_statement
+        (binary_expression
+          (primary_expression
+            (identifier))
+          (primary_expression
+            (identifier)))))))
+
+================================================================================
+Function with generic typed parameter
+================================================================================
+
+fn wrap(value: a) -> Option(a) {
+    value
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (type_variable
+          (identifier))))
+    return_type: (return_type_annotation
+      (generic_type
+        (type_identifier)
+        (type_variable
+          (identifier))))
+    body: (block
+      (expression_statement
+        (primary_expression
+          (identifier))))))
+
+================================================================================
+Lambda with typed parameter
+================================================================================
+
+fn test() {
+    fn(x: Int) -> Int x * 2
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (lambda_expression
+          (keyword_fn)
+          params: (parameter_list
+            (parameter
+              name: (identifier)
+              type: (type_identifier)))
+          return_type: (return_type_annotation
+            (type_identifier))
+          body: (binary_expression
+            (primary_expression
+              (identifier))
+            (primary_expression
+              (number))))))))
+
+================================================================================
+Mixed typed and untyped parameters
+================================================================================
+
+fn bar(x: a, y) -> a {
+    x
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)
+        type: (type_variable
+          (identifier)))
+      (parameter
+        name: (identifier)))
+    return_type: (return_type_annotation
+      (type_variable
+        (identifier)))
+    body: (block
+      (expression_statement
+        (primary_expression
+          (identifier))))))
+
+================================================================================
+Constructor pattern without arguments
+================================================================================
+
+fn test(opt) {
+    case opt {
+        None -> "nothing",
+        _ -> "something"
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier))))
+            value: (primary_expression
+              (string
+                (string_segment))))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (wildcard_pattern)))
+            value: (primary_expression
+              (string
+                (string_segment)))))))))
+
+================================================================================
+Constructor pattern with single argument
+================================================================================
+
+fn test(opt) {
+    case opt {
+        Some(x) -> x,
+        None -> 0
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  args: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))))))
+            value: (primary_expression
+              (identifier)))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier))))
+            value: (primary_expression
+              (number))))))))
+
+================================================================================
+Constructor pattern with multiple arguments
+================================================================================
+
+fn test(pair) {
+    case pair {
+        Pair(a, b) -> a + b,
+        _ -> 0
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  args: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))))))
+            value: (binary_expression
+              (primary_expression
+                (identifier))
+              (primary_expression
+                (identifier))))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (wildcard_pattern)))
+            value: (primary_expression
+              (number))))))))
+
+================================================================================
+Nested constructor patterns
+================================================================================
+
+fn test(opt) {
+    case opt {
+        Some(Some(x)) -> x,
+        Some(None) -> 0,
+        None -> 0
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  args: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (constructor_pattern
+                          name: (type_identifier)
+                          args: (pattern_list
+                            (pattern
+                              (simple_pattern
+                                (identifier_pattern
+                                  (identifier))))))))))))
+            value: (primary_expression
+              (identifier)))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  args: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (constructor_pattern
+                          name: (type_identifier))))))))
+            value: (primary_expression
+              (number)))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier))))
+            value: (primary_expression
+              (number))))))))
+
+================================================================================
+Constructor pattern with struct fields
+================================================================================
+
+fn test(result) {
+    case result {
+        Ok { value: x } -> x,
+        Err { error: e } -> e
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  fields: (pattern_fields
+                    (pattern_field
+                      name: (identifier)
+                      pattern: (pattern
+                        (simple_pattern
+                          (identifier_pattern
+                            (identifier)))))))))
+            value: (primary_expression
+              (identifier)))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  fields: (pattern_fields
+                    (pattern_field
+                      name: (identifier)
+                      pattern: (pattern
+                        (simple_pattern
+                          (identifier_pattern
+                            (identifier)))))))))
+            value: (primary_expression
+              (identifier))))))))
+
+================================================================================
+Tuple pattern with two elements
+================================================================================
+
+fn test(pair) {
+    case pair {
+        #(a, b) -> a + b,
+        _ -> 0
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (tuple_pattern
+                  elements: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))))))
+            value: (binary_expression
+              (primary_expression
+                (identifier))
+              (primary_expression
+                (identifier))))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (wildcard_pattern)))
+            value: (primary_expression
+              (number))))))))
+
+================================================================================
+Tuple pattern with three elements
+================================================================================
+
+fn test(triple) {
+    case triple {
+        #(x, y, z) -> x + y + z
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (tuple_pattern
+                  elements: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))))))
+            value: (binary_expression
+              (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (identifier)))
+              (primary_expression
+                (identifier)))))))))
+
+================================================================================
+Nested tuple pattern
+================================================================================
+
+fn test(nested) {
+    case nested {
+        #(#(a, b), c) -> a + b + c
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (tuple_pattern
+                  elements: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (tuple_pattern
+                          elements: (pattern_list
+                            (pattern
+                              (simple_pattern
+                                (identifier_pattern
+                                  (identifier))))
+                            (pattern
+                              (simple_pattern
+                                (identifier_pattern
+                                  (identifier))))))))
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))))))
+            value: (binary_expression
+              (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (identifier)))
+              (primary_expression
+                (identifier)))))))))
+
+================================================================================
+Tuple pattern with wildcard
+================================================================================
+
+fn test(pair) {
+    case pair {
+        #(x, _) -> x
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (tuple_pattern
+                  elements: (pattern_list
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (pattern
+                      (simple_pattern
+                        (wildcard_pattern)))))))
+            value: (primary_expression
+              (identifier))))))))
+
+================================================================================
+Empty list pattern
+================================================================================
+
+fn test(xs) {
+    case xs {
+        [] -> 0
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (list_pattern)))
+            value: (primary_expression
+              (number))))))))
+
+================================================================================
+List pattern with elements
+================================================================================
+
+fn test(xs) {
+    case xs {
+        [a, b, c] -> a + b + c
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (list_pattern
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier))))
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier))))
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier)))))))
+            value: (binary_expression
+              (binary_expression
+                (primary_expression
+                  (identifier))
+                (primary_expression
+                  (identifier)))
+              (primary_expression
+                (identifier)))))))))
+
+================================================================================
+List pattern with rest
+================================================================================
+
+fn test(xs) {
+    case xs {
+        [head, ..tail] -> head
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (list_pattern
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier))))
+                  (rest_pattern
+                    (spread)
+                    name: (identifier)))))
+            value: (primary_expression
+              (identifier))))))))
+
+================================================================================
+List pattern with anonymous rest
+================================================================================
+
+fn test(xs) {
+    case xs {
+        [first, second, ..] -> first + second
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (list_pattern
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier))))
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier))))
+                  (rest_pattern
+                    (spread)))))
+            value: (binary_expression
+              (primary_expression
+                (identifier))
+              (primary_expression
+                (identifier)))))))))
+
+================================================================================
+List pattern rest only
+================================================================================
+
+fn test(xs) {
+    case xs {
+        [..all] -> all
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (list_pattern
+                  (rest_pattern
+                    (spread)
+                    name: (identifier)))))
+            value: (primary_expression
+              (identifier))))))))
+
+================================================================================
+Constructor pattern with shorthand fields
+================================================================================
+
+fn test(user) {
+    case user {
+        User { name, age } -> name
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  fields: (pattern_fields
+                    (pattern_field
+                      name: (identifier))
+                    (pattern_field
+                      name: (identifier))))))
+            value: (primary_expression
+              (identifier))))))))
+
+================================================================================
+Constructor pattern with rest
+================================================================================
+
+fn test(user) {
+    case user {
+        User { name, .. } -> name
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (simple_pattern
+                (constructor_pattern
+                  name: (type_identifier)
+                  fields: (pattern_fields
+                    (pattern_field
+                      name: (identifier))
+                    (spread)))))
+            value: (primary_expression
+              (identifier))))))))
+
+================================================================================
+As pattern
+================================================================================
+
+fn test(opt) {
+    case opt {
+        Some(x) as whole -> whole
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (as_pattern
+                pattern: (simple_pattern
+                  (constructor_pattern
+                    name: (type_identifier)
+                    args: (pattern_list
+                      (pattern
+                        (simple_pattern
+                          (identifier_pattern
+                            (identifier)))))))
+                (keyword_as)
+                binding: (identifier)))
+            value: (primary_expression
+              (identifier))))))))
+
+================================================================================
+As pattern with list
+================================================================================
+
+fn test(xs) {
+    case xs {
+        [head, ..tail] as list -> list
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    params: (parameter_list
+      (parameter
+        name: (identifier)))
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (primary_expression
+            (identifier))
+          (case_arm
+            pattern: (pattern
+              (as_pattern
+                pattern: (simple_pattern
+                  (list_pattern
+                    (pattern
+                      (simple_pattern
+                        (identifier_pattern
+                          (identifier))))
+                    (rest_pattern
+                      (spread)
+                      name: (identifier))))
+                (keyword_as)
+                binding: (identifier)))
+            value: (primary_expression
+              (identifier))))))))
+
+================================================================================
+Handler pattern completion
+================================================================================
+
+fn test() {
+    case handle comp() {
+        { result } -> result
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (handle_expression
+            (keyword_handle)
+            expr: (call_expression
+              function: (identifier)))
+          (case_arm
+            pattern: (pattern
+              (handler_pattern
+                result: (identifier)))
+            value: (primary_expression
+              (identifier))))))))
+
+================================================================================
+Handler pattern suspend
+================================================================================
+
+fn test() {
+    case handle comp() {
+        { State::get() -> k } -> k(42)
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (handle_expression
+            (keyword_handle)
+            expr: (call_expression
+              function: (identifier)))
+          (case_arm
+            pattern: (pattern
+              (handler_pattern
+                operation: (path_expression
+                  (path_segment
+                    (type_identifier))
+                  (path_segment
+                    (identifier)))
+                continuation: (identifier)))
+            value: (call_expression
+              function: (identifier)
+              (argument_list
+                (primary_expression
+                  (number))))))))))
+
+================================================================================
+Handler pattern suspend with args
+================================================================================
+
+fn test() {
+    case handle comp() {
+        { Logger::log(msg) -> k } -> k(Nil)
+    }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (case_expression
+          (keyword_case)
+          value: (handle_expression
+            (keyword_handle)
+            expr: (call_expression
+              function: (identifier)))
+          (case_arm
+            pattern: (pattern
+              (handler_pattern
+                operation: (path_expression
+                  (path_segment
+                    (type_identifier))
+                  (path_segment
+                    (identifier)))
+                args: (pattern_list
+                  (pattern
+                    (simple_pattern
+                      (identifier_pattern
+                        (identifier)))))
+                continuation: (identifier)))
+            value: (call_expression
+              function: (identifier)
+              (argument_list
+                (primary_expression
+                  (keyword_nil))))))))))
+
+================================================================================
+Record expression with fields
+================================================================================
+
+fn test() {
+    User { name: "Alice", age: 30 }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (record_expression
+          type: (type_identifier)
+          fields: (record_fields
+            (record_field
+              name: (identifier)
+              value: (primary_expression
+                (string
+                  (string_segment))))
+            (record_field
+              name: (identifier)
+              value: (primary_expression
+                (number)))))))))
+
+================================================================================
+Record expression with shorthand
+================================================================================
+
+fn test() {
+    User { name, age }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (record_expression
+          type: (type_identifier)
+          fields: (record_fields
+            (record_field
+              name: (identifier))
+            (record_field
+              name: (identifier))))))))
+
+================================================================================
+Record expression with spread
+================================================================================
+
+fn test() {
+    User { ..user, age: 31 }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (record_expression
+          type: (type_identifier)
+          fields: (record_fields
+            (record_field
+              (spread)
+              value: (primary_expression
+                (identifier)))
+            (record_field
+              name: (identifier)
+              value: (primary_expression
+                (number)))))))))
+
+================================================================================
+Record expression mixed
+================================================================================
+
+fn test() {
+    User { ..base, name: "Bob", age }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (keyword_fn)
+    name: (identifier)
+    body: (block
+      (expression_statement
+        (record_expression
+          type: (type_identifier)
+          fields: (record_fields
+            (record_field
+              (spread)
+              value: (primary_expression
+                (identifier)))
+            (record_field
+              name: (identifier)
+              value: (primary_expression
+                (string
+                  (string_segment))))
+            (record_field
+              name: (identifier))))))))

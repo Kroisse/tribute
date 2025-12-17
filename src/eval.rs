@@ -1,7 +1,12 @@
+//! DEPRECATED: legacy HIR evaluator.
+//!
+//! This module is kept for backwards compatibility and is not compiled by
+//! default. Enable the Cargo feature `legacy-eval` to build and use it.
+
 use crate::builtins;
 use std::collections::HashMap;
 use tribute_ast::{Spanned, ast::Identifier};
-use tribute_hir::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, Pattern};
+use tribute_passes::hir::{Expr, HirExpr, HirFunction, HirProgram, Literal, Pattern};
 
 type Error = Box<dyn std::error::Error + 'static>;
 
@@ -10,23 +15,67 @@ pub type BuiltinFn = for<'a> fn(&'a [Value]) -> Result<Value, Error>;
 #[derive(Clone, Debug)]
 pub enum Value {
     Unit,
-    Number(i64),
+    Bool(bool),
+    /// Natural number (non-negative): 0, 42, 0b1010
+    Nat(u64),
+    /// Integer (signed): +1, -1
+    Int(i64),
+    /// Float: 1.0, -3.14
+    Float(f64),
+    /// Rune (Unicode codepoint): ?a, ?\n, ?\x41
+    Rune(char),
     String(String),
+    /// Bytes: b"hello", rb"raw"
+    Bytes(Vec<u8>),
     List(Vec<Value>),
+    /// Tuple value: #(a, b, c)
+    Tuple(Vec<Value>),
+    /// Record value: type name, fields (name -> value)
+    Record(Identifier, HashMap<Identifier, Value>),
     Fn(
         Identifier,
         Vec<Identifier>,
         Vec<Spanned<tribute_ast::ast::Expr>>,
     ),
+    /// Lambda closure: params, body, captured environment
+    Lambda(Vec<Identifier>, Box<Spanned<Expr>>),
     BuiltinFn(&'static str, BuiltinFn),
 }
 
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Value::Unit => f.write_str("()"),
-            Value::Number(n) => write!(f, "{}", n),
+            Value::Unit => f.write_str("Nil"),
+            Value::Bool(true) => f.write_str("True"),
+            Value::Bool(false) => f.write_str("False"),
+            Value::Nat(n) => write!(f, "{}", n),
+            Value::Int(n) => write!(f, "{}", n),
+            Value::Float(n) => write!(f, "{}", n),
+            Value::Rune(ch) => {
+                // Display rune with ? prefix, using escape for special chars
+                match ch {
+                    '\n' => write!(f, "?\\n"),
+                    '\r' => write!(f, "?\\r"),
+                    '\t' => write!(f, "?\\t"),
+                    '\0' => write!(f, "?\\0"),
+                    '\\' => write!(f, "?\\\\"),
+                    c if c.is_ascii_graphic() || *c == ' ' => write!(f, "?{}", c),
+                    c => write!(f, "?\\u{:04X}", *c as u32),
+                }
+            }
             Value::String(s) => write!(f, "\"{}\"", s),
+            Value::Bytes(bytes) => {
+                // Display bytes as b"..." with hex escapes for non-printable bytes
+                f.write_str("b\"")?;
+                for &byte in bytes {
+                    if byte.is_ascii_graphic() || byte == b' ' {
+                        write!(f, "{}", byte as char)?;
+                    } else {
+                        write!(f, "\\x{:02x}", byte)?;
+                    }
+                }
+                f.write_str("\"")
+            }
             Value::List(items) => {
                 f.write_str("[")?;
                 for (i, item) in items.iter().enumerate() {
@@ -37,7 +86,28 @@ impl std::fmt::Display for Value {
                 }
                 f.write_str("]")
             }
+            Value::Tuple(items) => {
+                f.write_str("#(")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{}", item)?;
+                }
+                f.write_str(")")
+            }
+            Value::Record(type_name, fields) => {
+                write!(f, "{} {{ ", type_name)?;
+                for (i, (name, value)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{}: {}", name, value)?;
+                }
+                f.write_str(" }")
+            }
             Value::Fn(name, _, _) => write!(f, "<fn '{}'>", name),
+            Value::Lambda(params, _) => write!(f, "<lambda({})>", params.join(", ")),
             Value::BuiltinFn(name, _) => write!(f, "<builtin fn '{}'>", name),
         }
     }
@@ -231,25 +301,14 @@ fn eval_spanned_expr<'db>(
     use Expr::*;
 
     match expr {
-        Number(n) => Ok(Value::Number(n)),
-        StringInterpolation(interp) => {
-            if interp.segments.is_empty() {
-                // Simple string without interpolation
-                Ok(Value::String(interp.leading_text.clone()))
-            } else {
-                // String with interpolation
-                let mut result = std::string::String::new();
-                result.push_str(&interp.leading_text);
-                for segment in &interp.segments {
-                    // Evaluate the interpolation expression
-                    let value = eval_spanned_expr(context, env, (*segment.interpolation).clone())?;
-                    let value_str = value_to_string(&value)?;
-                    result.push_str(&value_str);
-                    result.push_str(&segment.trailing_text);
-                }
-                Ok(Value::String(result))
-            }
-        }
+        Nat(n) => Ok(Value::Nat(n)),
+        Int(n) => Ok(Value::Int(n)),
+        Float(n) => Ok(Value::Float(n)),
+        Rune(ch) => Ok(Value::Rune(ch)),
+        Bool(b) => Ok(Value::Bool(b)),
+        Nil => Ok(Value::Unit),
+        StringLit(s) => Ok(Value::String(s)),
+        BytesLit(b) => Ok(Value::Bytes(b)),
         Variable(name) => env.lookup(&name).cloned(),
         Call { func, args } => {
             let func_expr = eval_spanned_expr(context, env, *func)?;
@@ -285,6 +344,28 @@ fn eval_spanned_expr<'db>(
                         Err(format!("Function '{}' not found", name).into())
                     }
                 }
+                Value::Lambda(params, body) => {
+                    let arg_values: Result<Vec<Value>, Error> = args
+                        .into_iter()
+                        .map(|arg| eval_spanned_expr(context, env, arg))
+                        .collect();
+                    let arg_values = arg_values?;
+
+                    if params.len() != arg_values.len() {
+                        return Err(format!(
+                            "lambda expects {} arguments, got {}",
+                            params.len(),
+                            arg_values.len()
+                        )
+                        .into());
+                    }
+
+                    let bindings: Vec<(Identifier, Value)> =
+                        params.into_iter().zip(arg_values).collect();
+
+                    let mut child_env = env.child(bindings);
+                    eval_spanned_expr(context, &mut child_env, *body)
+                }
                 Value::BuiltinFn(_, f) => {
                     let arg_values: Result<Vec<Value>, Error> = args
                         .into_iter()
@@ -295,16 +376,31 @@ fn eval_spanned_expr<'db>(
                 _ => Err(format!("not a function: {:?}", func_expr).into()),
             }
         }
-        Let { var, value } => {
+        Let { pattern, value } => {
             let val = eval_spanned_expr(context, env, *value)?;
-            env.bind(var, val.clone());
-            Ok(val)
+            if let Some(bindings) = match_pattern(&val, &pattern) {
+                for (name, bound_value) in bindings {
+                    env.bind(name, bound_value);
+                }
+                Ok(val)
+            } else {
+                Err("pattern match failed in let binding".to_string().into())
+            }
         }
         Match { expr, cases } => {
             let value = eval_spanned_expr(context, env, *expr)?;
             for case in cases {
                 if let Some(bindings) = match_pattern(&value, &case.pattern) {
                     let mut child_env = env.child(bindings);
+                    // Check guard condition if present
+                    if let Some(guard) = case.guard {
+                        let guard_result = eval_spanned_expr(context, &mut child_env, guard)?;
+                        match guard_result {
+                            Value::Bool(true) => {}         // Guard passed
+                            Value::Bool(false) => continue, // Guard failed, try next case
+                            _ => return Err("guard expression must evaluate to Bool".into()),
+                        }
+                    }
                     return eval_spanned_expr(context, &mut child_env, case.body);
                 }
             }
@@ -317,23 +413,57 @@ fn eval_spanned_expr<'db>(
             }
             Ok(result)
         }
-    }
-}
-
-/// Convert a Value to its string representation for interpolation
-fn value_to_string(value: &Value) -> Result<String, Error> {
-    match value {
-        Value::Unit => Ok("()".to_string()),
-        Value::Number(n) => Ok(n.to_string()),
-        Value::String(s) => Ok(s.clone()),
-        Value::List(items) => {
-            let item_strings: Result<Vec<String>, Error> =
-                items.iter().map(value_to_string).collect();
-            let item_strings = item_strings?;
-            Ok(format!("[{}]", item_strings.join(", ")))
+        List(elements) => {
+            let values: Result<Vec<Value>, Error> = elements
+                .into_iter()
+                .map(|elem| eval_spanned_expr(context, env, elem))
+                .collect();
+            Ok(Value::List(values?))
         }
-        Value::Fn(name, _, _) => Ok(format!("<fn '{}'>", name)),
-        Value::BuiltinFn(name, _) => Ok(format!("<builtin fn '{}'>", name)),
+        Tuple(first, rest) => {
+            let first_value = eval_spanned_expr(context, env, *first)?;
+            let rest_values: Result<Vec<Value>, Error> = rest
+                .into_iter()
+                .map(|elem| eval_spanned_expr(context, env, elem))
+                .collect();
+            let mut values = vec![first_value];
+            values.extend(rest_values?);
+            Ok(Value::Tuple(values))
+        }
+        Lambda { params, body } => {
+            // Create a lambda value with the body
+            Ok(Value::Lambda(params, body))
+        }
+        Record { type_name, fields } => {
+            use tribute_passes::hir::RecordField;
+            let mut field_map = HashMap::new();
+            for field in fields {
+                match field {
+                    RecordField::Spread(spread_expr) => {
+                        // Spread: ..expr - merge fields from another record
+                        let spread_value = eval_spanned_expr(context, env, spread_expr)?;
+                        match spread_value {
+                            Value::Record(_, spread_fields) => {
+                                for (name, value) in spread_fields {
+                                    field_map.insert(name, value);
+                                }
+                            }
+                            _ => return Err("spread must be a record".into()),
+                        }
+                    }
+                    RecordField::Field { name, value } => {
+                        let field_value = eval_spanned_expr(context, env, value)?;
+                        field_map.insert(name, field_value);
+                    }
+                    RecordField::Shorthand(name) => {
+                        // Shorthand: name - get value from variable with same name
+                        let value = env.lookup(&name).cloned()?;
+                        field_map.insert(name, value);
+                    }
+                }
+            }
+            Ok(Value::Record(type_name, field_map))
+        }
     }
 }
 
@@ -342,21 +472,19 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
         Pattern::Literal(lit) => {
             // Compare literal values
             match (lit, value) {
-                (Literal::Number(a), Value::Number(b)) if a == b => Some(vec![]),
-                (Literal::StringInterpolation(interp), Value::String(s)) => {
-                    if interp.segments.is_empty() {
-                        // Simple string pattern
-                        if &interp.leading_text == s {
-                            Some(vec![])
-                        } else {
-                            None
-                        }
-                    } else {
-                        // For now, string interpolation in patterns is not supported
-                        // This would require complex pattern matching logic
-                        None
-                    }
+                (Literal::Nat(a), Value::Nat(b)) if a == b => Some(vec![]),
+                (Literal::Int(a), Value::Int(b)) if a == b => Some(vec![]),
+                // Allow Nat patterns to match Int values when the value is non-negative
+                (Literal::Nat(a), Value::Int(b)) if *b >= 0 && *a == (*b as u64) => Some(vec![]),
+                // Allow Float pattern matching with tolerance for equality
+                (Literal::Float(a), Value::Float(b)) if (a - b).abs() < f64::EPSILON => {
+                    Some(vec![])
                 }
+                (Literal::Rune(a), Value::Rune(b)) if a == b => Some(vec![]),
+                (Literal::Bool(a), Value::Bool(b)) if a == b => Some(vec![]),
+                (Literal::Nil, Value::Unit) => Some(vec![]),
+                (Literal::StringPat(pattern), Value::String(s)) if pattern == s => Some(vec![]),
+                (Literal::BytesPat(pattern), Value::Bytes(b)) if pattern == b => Some(vec![]),
                 _ => None,
             }
         }
@@ -368,24 +496,134 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
             // Wildcard always matches without binding
             Some(vec![])
         }
-        Pattern::List(patterns) => {
+        Pattern::List { elements, rest } => {
             // List pattern matching
             match value {
                 Value::List(values) => {
-                    // Check if we have a rest pattern
-                    if let Some(last_pattern) = patterns.last() {
-                        if matches!(last_pattern, Pattern::Rest(_)) {
-                            return match_list_with_rest(values, patterns);
+                    // Handle rest pattern
+                    match rest {
+                        Some(rest_binding) => {
+                            // [a, b, ..tail] or [a, b, ..]
+                            if values.len() < elements.len() {
+                                return None;
+                            }
+                            let mut bindings = Vec::new();
+                            // Match element patterns
+                            for (value, pattern) in
+                                values.iter().take(elements.len()).zip(elements.iter())
+                            {
+                                if let Some(mut pattern_bindings) = match_pattern(value, pattern) {
+                                    bindings.append(&mut pattern_bindings);
+                                } else {
+                                    return None;
+                                }
+                            }
+                            // Bind rest if named
+                            if let Some(name) = rest_binding {
+                                let rest_values = values[elements.len()..].to_vec();
+                                bindings.push((name.clone(), Value::List(rest_values)));
+                            }
+                            Some(bindings)
+                        }
+                        None => {
+                            // Exact length matching: [a, b, c]
+                            if values.len() != elements.len() {
+                                return None;
+                            }
+                            let mut bindings = Vec::new();
+                            for (value, pattern) in values.iter().zip(elements.iter()) {
+                                if let Some(mut pattern_bindings) = match_pattern(value, pattern) {
+                                    bindings.append(&mut pattern_bindings);
+                                } else {
+                                    return None;
+                                }
+                            }
+                            Some(bindings)
                         }
                     }
-
-                    // Exact length matching
-                    if values.len() != patterns.len() {
+                }
+                _ => None,
+            }
+        }
+        Pattern::Rest(_) => {
+            // Rest patterns should only appear in list contexts
+            None
+        }
+        Pattern::Constructor { name, args } => {
+            // Constructor patterns can match Record values
+            match value {
+                Value::Record(type_name, fields) => {
+                    // Type name must match
+                    if name != type_name {
                         return None;
                     }
-
+                    match args {
+                        tribute_passes::hir::ConstructorArgs::None => {
+                            // Match only if record has no fields
+                            if fields.is_empty() {
+                                Some(Vec::new())
+                            } else {
+                                None
+                            }
+                        }
+                        tribute_passes::hir::ConstructorArgs::Positional(_) => {
+                            // Positional args don't make sense for records
+                            None
+                        }
+                        tribute_passes::hir::ConstructorArgs::Named {
+                            fields: pattern_fields,
+                            rest,
+                        } => {
+                            // Match each pattern field against the record field
+                            let mut bindings = Vec::new();
+                            for pattern_field in pattern_fields {
+                                if let Some(field_value) = fields.get(&pattern_field.name) {
+                                    if let Some(mut field_bindings) =
+                                        match_pattern(field_value, &pattern_field.pattern)
+                                    {
+                                        bindings.append(&mut field_bindings);
+                                    } else {
+                                        return None;
+                                    }
+                                } else {
+                                    // Field not found in record
+                                    return None;
+                                }
+                            }
+                            // If rest is false, ensure all fields are accounted for
+                            if !rest {
+                                let matched_fields: std::collections::HashSet<_> =
+                                    pattern_fields.iter().map(|f| &f.name).collect();
+                                for field_name in fields.keys() {
+                                    if !matched_fields.contains(field_name) {
+                                        return None;
+                                    }
+                                }
+                            }
+                            Some(bindings)
+                        }
+                    }
+                }
+                _ => None,
+            }
+        }
+        Pattern::Tuple(first, rest) => {
+            // Tuple patterns match against tuple values
+            match value {
+                Value::Tuple(values) => {
+                    let pattern_count = 1 + rest.len();
+                    if values.len() != pattern_count {
+                        return None;
+                    }
                     let mut bindings = Vec::new();
-                    for (value, pattern) in values.iter().zip(patterns.iter()) {
+                    // Match first pattern
+                    if let Some(mut first_bindings) = match_pattern(&values[0], first) {
+                        bindings.append(&mut first_bindings);
+                    } else {
+                        return None;
+                    }
+                    // Match rest patterns
+                    for (value, pattern) in values[1..].iter().zip(rest.iter()) {
                         if let Some(mut pattern_bindings) = match_pattern(value, pattern) {
                             bindings.append(&mut pattern_bindings);
                         } else {
@@ -397,51 +635,19 @@ fn match_pattern(value: &Value, pattern: &Pattern) -> Option<Vec<(std::string::S
                 _ => None,
             }
         }
-        Pattern::Rest(_) => {
-            // Rest patterns should only appear in list contexts
-            None
-        }
-    }
-}
-
-fn match_list_with_rest(
-    values: &[Value],
-    patterns: &[Pattern],
-) -> Option<Vec<(std::string::String, Value)>> {
-    if patterns.is_empty() {
-        return None;
-    }
-
-    let (rest_pattern, head_patterns) = patterns.split_last().unwrap();
-
-    if let Pattern::Rest(rest_name) = rest_pattern {
-        // Must have at least as many values as head patterns
-        if values.len() < head_patterns.len() {
-            return None;
-        }
-
-        let mut bindings = Vec::new();
-
-        // Match head patterns
-        for (value, pattern) in values
-            .iter()
-            .take(head_patterns.len())
-            .zip(head_patterns.iter())
-        {
-            if let Some(mut pattern_bindings) = match_pattern(value, pattern) {
-                bindings.append(&mut pattern_bindings);
+        Pattern::As(inner_pattern, binding) => {
+            // As pattern: match inner and also bind the whole value
+            if let Some(mut bindings) = match_pattern(value, inner_pattern) {
+                bindings.push((binding.clone(), value.clone()));
+                Some(bindings)
             } else {
-                return None;
+                None
             }
         }
-
-        // Bind rest values
-        let rest_values = values[head_patterns.len()..].to_vec();
-        bindings.push((rest_name.clone(), Value::List(rest_values)));
-
-        Some(bindings)
-    } else {
-        None
+        Pattern::Handler(_) => {
+            // TODO: Handler pattern matching requires effect handling infrastructure
+            None
+        }
     }
 }
 
@@ -457,7 +663,7 @@ mod tests {
             // Test simple arithmetic expression wrapped in a main function
             let source = r#"fn main() { 1 + 2 }"#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(3)) => {}
+                Ok(Value::Nat(3)) => {}
                 Ok(other) => panic!("Expected Number(3), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -481,9 +687,10 @@ mod tests {
     fn test_hir_nested_arithmetic() {
         TributeDatabaseImpl::default().attach(|db| {
             // Test nested arithmetic wrapped in a main function
-            let source = r#"fn main() { (2 * 3) + (8 / 2) }"#;
+            // Note: Use {} for grouping, () is reserved for operator functions
+            let source = r#"fn main() { {2 * 3} + {8 / 2} }"#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(10)) => {}
+                Ok(Value::Nat(10)) => {}
                 Ok(other) => panic!("Expected Number(10), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -496,7 +703,7 @@ mod tests {
             // Test let binding without body
             let source = r#"fn main() { let x = 42; x }"#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(42)) => {}
+                Ok(Value::Nat(42)) => {}
                 Ok(other) => panic!("Expected Number(42), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -509,10 +716,10 @@ mod tests {
             // Test pattern matching
             let source = r#"
                 fn test_number(n) {
-                  match n {
-                    0 => "zero",
-                    1 => "one",
-                    _ => "other"
+                  case n {
+                    0 -> "zero",
+                    1 -> "one",
+                    _ -> "other"
                   }
                 }
                 fn main() { test_number(0) }
@@ -534,7 +741,7 @@ mod tests {
                 fn main() { add(10, 20) }
             "#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(30)) => {}
+                Ok(Value::Nat(30)) => {}
                 Ok(other) => panic!("Expected Number(30), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -551,7 +758,7 @@ mod tests {
                 fn main() { add_and_double(5, 10) }
             "#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(30)) => {}
+                Ok(Value::Nat(30)) => {}
                 Ok(other) => panic!("Expected Number(30), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
@@ -562,18 +769,124 @@ mod tests {
     fn test_hir_recursive_function() {
         TributeDatabaseImpl::default().attach(|db| {
             // Test recursive function (factorial)
+            // Note: Result is Int because subtraction (n - 1) returns Int
             let source = r#"
                 fn factorial(n) {
-                  match n {
-                    0 => 1,
-                    _ => n * factorial(n - 1)
+                  case n {
+                    0 -> 1,
+                    _ -> n * factorial(n - 1)
                   }
                 }
                 fn main() { factorial(5) }
             "#;
             match crate::eval_str(db, "test.trb", source) {
-                Ok(Value::Number(120)) => {}
-                Ok(other) => panic!("Expected Number(120), got {:?}", other),
+                Ok(Value::Nat(120)) | Ok(Value::Int(120)) => {}
+                Ok(other) => panic!("Expected 120, got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_lambda_expression() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test simple lambda expression
+            let source = r#"
+                fn main() {
+                    let add = fn(x, y) x + y
+                    add(3, 4)
+                }
+            "#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Nat(7)) => {}
+                Ok(other) => panic!("Expected Number(7), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_lambda_with_block() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test lambda with block body
+            let source = r#"
+                fn main() {
+                    let double_plus_one = fn(x) {
+                        let doubled = x * 2
+                        doubled + 1
+                    }
+                    double_plus_one(5)
+                }
+            "#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Nat(11)) => {}
+                Ok(other) => panic!("Expected Number(11), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_lambda_no_params() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test lambda without parameters
+            let source = r#"
+                fn main() {
+                    let constant = fn() 42
+                    constant()
+                }
+            "#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Nat(42)) => {}
+                Ok(other) => panic!("Expected Number(42), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_rune_literals() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test simple rune literal
+            let source = r#"fn main() { ?A }"#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Rune('A')) => {}
+                Ok(other) => panic!("Expected Rune('A'), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_rune_escape_sequences() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test rune with escape sequence
+            let source = r#"fn main() { ?\n }"#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::Rune('\n')) => {}
+                Ok(other) => panic!("Expected Rune('\\n'), got {:?}", other),
+                Err(e) => panic!("HIR evaluation failed: {}", e),
+            }
+        });
+    }
+
+    #[test]
+    fn test_hir_rune_pattern_matching() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Test rune in pattern matching
+            let source = r#"
+                fn classify(ch) {
+                    case ch {
+                        ?A -> "letter A",
+                        ?B -> "letter B",
+                        _ -> "other"
+                    }
+                }
+                fn main() { classify(?A) }
+            "#;
+            match crate::eval_str(db, "test.trb", source) {
+                Ok(Value::String(s)) if s == "letter A" => {}
+                Ok(other) => panic!("Expected String(\"letter A\"), got {:?}", other),
                 Err(e) => panic!("HIR evaluation failed: {}", e),
             }
         });

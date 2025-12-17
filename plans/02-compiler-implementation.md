@@ -1,9 +1,20 @@
 # Compiler Implementation Plan
 
-**Status**: 🚧 **IN PROGRESS** - Cranelift-based implementation active  
-**Prerequisites**: ✅ Modern Syntax (Plan 01), ✅ String Interpolation (Plan 01.01), ✅ Handle-based Runtime (completed), ❌ MLIR (abandoned)  
-**Estimated Timeline**: 5 weeks (Cranelift approach)  
-**Complexity**: Medium (simplified with Cranelift)
+**Status**: 🔄 **TRANSITIONING** - Current Cranelift work continues, new design underway
+**Prerequisites**: ✅ Modern Syntax (Plan 01), ✅ String Interpolation (Plan 01.01), ✅ Handle-based Runtime (completed)
+**See Also**: [../new-plans/tribute-design.md](../new-plans/tribute-design.md), [../new-plans/tribute-implementation.md](../new-plans/tribute-implementation.md)
+
+> ⚠️ **Note**: This plan documents the current Cranelift-based compiler work (Plan 02.02).
+> A new comprehensive language design in `new-plans/` introduces:
+> - **Ability System** (algebraic effects) with evidence passing
+> - **Dual-Target Compilation**: Cranelift (native) + WasmGC
+> - **Multi-Level IR** with Surface → Typed → Core → Effect dialects
+> - **Row Polymorphic Effect Types** for ability tracking
+>
+> The current Cranelift work remains valid as a foundation, but the new design
+> significantly expands the scope to include effect handlers and WasmGC support.
+
+---
 
 ## Overview
 

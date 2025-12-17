@@ -1,15 +1,19 @@
 {
-  "permissions": {
-    "allow": [
-      "WebFetch(domain:crates.io)",
-      "WebFetch(domain:docs.rs)",
-      "Bash(cargo build)",
-      "Bash(cargo run)",
-      "Bash(cargo test)",
-      "Bash(cargo test:*)",
-      "Bash(cargo check:*)",
-      "Bash(cargo clippy:*)"
-    ],
-    "deny": []
-  }
+    "permissions": {
+        "allow": [
+            "WebFetch(domain:crates.io)",
+            "WebFetch(domain:docs.rs)",
+            "Bash(cargo build)",
+            "Bash(cargo run)",
+            "Bash(cargo test)",
+            "Bash(cargo test:*)",
+            "Bash(cargo check:*)",
+            "Bash(cargo clippy:*)",
+            "Bash(cargo fmt:*)",
+            "Bash(tree-sitter test:*)",
+            "Bash(tree-sitter generate:*)",
+            "Bash(tree-sitter parse:*)"
+        ],
+        "deny": []
+    }
 }

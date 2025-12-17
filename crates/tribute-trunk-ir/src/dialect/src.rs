@@ -1,0 +1,80 @@
+//! Source dialect operations.
+//!
+//! The `src` dialect represents unresolved AST constructs before name resolution
+//! and type inference. All `src.*` operations should be eliminated after resolution.
+//!
+//! Additionally, this module provides type constructors for unresolved types:
+//! - `src.type` - an unresolved type reference that needs name resolution
+use std::collections::BTreeMap;
+
+use crate::{Attribute, IdVec, Symbol, Type, dialect};
+
+dialect! {
+    mod src {
+        /// `src.call` operation: unresolved function call.
+        /// The callee name will be resolved to a concrete function reference.
+        #[attr(name: SymbolRef)]
+        fn call(#[rest] args) -> result;
+
+        /// `src.var` operation: unresolved variable reference (single name).
+        /// May resolve to local binding or module-level definition.
+        #[attr(name: Symbol)]
+        fn var() -> result;
+
+        /// `src.path` operation: explicitly qualified path reference.
+        /// Always refers to a module-level or type-level definition, never local.
+        #[attr(path: SymbolRef)]
+        fn path() -> result;
+
+        /// `src.binop` operation: unresolved binary operation.
+        /// Used for operators that need type-directed resolution (e.g., `<>` concat).
+        /// The `op` attribute holds the operator name.
+        #[attr(op: Symbol)]
+        fn binop(lhs, rhs) -> result;
+
+        /// `src.block` operation: block expression.
+        /// Preserves block structure for source mapping and analysis.
+        /// The body region contains the statements, and the result is the block's value.
+        fn block() -> result {
+            #[region(body)] {}
+        };
+
+        /// `src.yield` operation: yields a value from a block.
+        /// Used to specify the result value of a `src.block`.
+        fn r#yield(value);
+
+        /// `src.lambda` operation: lambda expression.
+        /// Represents an anonymous function before capture analysis.
+        /// The `type` attribute holds the function type (params -> result).
+        /// The body region contains the lambda body, ending with `src.yield`.
+        #[attr(r#type: Type)]
+        fn lambda() -> result {
+            #[region(body)] {}
+        };
+
+        /// `src.tuple` operation: tuple construction.
+        /// Takes variadic operands (tuple elements) and produces a tuple value.
+        fn tuple(#[rest] elements) -> result;
+    }
+}
+
+// === Type constructors for unresolved types ===
+
+/// Create an unresolved type reference (`src.type`).
+///
+/// Represents a named type that needs name resolution (e.g., `Int`, `User`, `List(a)`).
+/// The `params` hold type arguments for generic types.
+/// After resolution, this will be replaced with the concrete type.
+pub fn unresolved_type<'db>(
+    db: &'db dyn salsa::Database,
+    name: &str,
+    params: IdVec<Type<'db>>,
+) -> Type<'db> {
+    Type::new(
+        db,
+        Symbol::new(db, "src"),
+        Symbol::new(db, "type"),
+        params,
+        BTreeMap::from([(Symbol::new(db, "name"), Attribute::String(name.to_string()))]),
+    )
+}

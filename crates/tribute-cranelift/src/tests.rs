@@ -2,7 +2,7 @@
 
 use tribute_ast::parse_source_file;
 use tribute_core::{SourceFile, TributeDatabaseImpl};
-use tribute_hir::lower_program_to_hir;
+use tribute_passes::lower_program_to_hir;
 
 use crate::compile_to_object;
 

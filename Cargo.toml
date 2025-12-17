@@ -15,8 +15,10 @@ cranelift-object = "0.120"
 derive_more = { version = "2.0", features = ["display", "error", "from"] }
 insta = "1.43.1"
 object = { version = "0.36", features = ["write_core"] }
-salsa = "0.22.0"
+paste = "1.0"
+salsa = "0.24.0"
 serde = { version = "1.0", features = ["derive"] }
+smallvec = { version = "1.13", features = ["union", "const_generics", "serde"] }
 target-lexicon = "0.13"
 tempfile = "3.8"
 tree-sitter = "0.25.6"
@@ -24,14 +26,29 @@ tree-sitter-tribute = { path = "crates/tree-sitter-tribute" }
 tribute-ast = { path = "crates/tribute-ast" }
 tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-core = { path = "crates/tribute-core" }
-tribute-hir = { path = "crates/tribute-hir" }
-tribute-runtime = { path = "crates/tribute-runtime" }
+tribute-passes = { path = "crates/tribute-passes" }
+tribute-trunk-ir = { path = "crates/tribute-trunk-ir" }
 
 [package]
 name = "tribute"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+
+[features]
+default = []
+# Legacy HIR evaluator and related drivers/tests.
+legacy-eval = []
+
+[[bin]]
+name = "trbi"
+path = "src/bin/trbi.rs"
+required-features = ["legacy-eval"]
+
+[[bin]]
+name = "trbc"
+path = "src/bin/trbc.rs"
+required-features = ["legacy-eval"]
 
 [dependencies]
 clap.workspace = true
@@ -40,4 +57,5 @@ salsa.workspace = true
 tribute-ast.workspace = true
 tribute-cranelift.workspace = true
 tribute-core.workspace = true
-tribute-hir.workspace = true
+tribute-passes.workspace = true
+tribute-trunk-ir.workspace = true

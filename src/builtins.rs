@@ -65,7 +65,7 @@ fn input_line(_args: &[Value]) -> Result<Value, Error> {
 /// * `args` - Must be exactly 2 arguments, both numbers.
 ///
 /// # Returns
-/// Returns the sum as a `Value::Number`.
+/// Returns the sum. Type promotion: Float > Int > Nat
 ///
 /// # Errors
 /// * Returns an error if not exactly 2 arguments are provided.
@@ -80,7 +80,18 @@ fn add(args: &[Value]) -> Result<Value, Error> {
         return Err("+ requires exactly 2 arguments".into());
     }
     match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
+        // Float operations
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+        (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a + (*b as f64))),
+        (Value::Float(a), Value::Nat(b)) => Ok(Value::Float(a + (*b as f64))),
+        (Value::Int(a), Value::Float(b)) => Ok(Value::Float((*a as f64) + b)),
+        (Value::Nat(a), Value::Float(b)) => Ok(Value::Float((*a as f64) + b)),
+        // Int operations
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+        (Value::Int(a), Value::Nat(b)) => Ok(Value::Int(a + (*b as i64))),
+        (Value::Nat(a), Value::Int(b)) => Ok(Value::Int((*a as i64) + b)),
+        // Nat operations
+        (Value::Nat(a), Value::Nat(b)) => Ok(Value::Nat(a + b)),
         _ => Err("+ requires two numbers".into()),
     }
 }
@@ -91,7 +102,8 @@ fn add(args: &[Value]) -> Result<Value, Error> {
 /// * `args` - Must be exactly 2 arguments, both numbers.
 ///
 /// # Returns
-/// Returns the difference as a `Value::Number`.
+/// Returns the difference. Type promotion: Float > Int > Nat
+/// Note: Nat - Nat always returns Int since result may be negative
 ///
 /// # Errors
 /// * Returns an error if not exactly 2 arguments are provided.
@@ -106,7 +118,18 @@ fn subtract(args: &[Value]) -> Result<Value, Error> {
         return Err("- requires exactly 2 arguments".into());
     }
     match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a - b)),
+        // Float operations
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+        (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a - (*b as f64))),
+        (Value::Float(a), Value::Nat(b)) => Ok(Value::Float(a - (*b as f64))),
+        (Value::Int(a), Value::Float(b)) => Ok(Value::Float((*a as f64) - b)),
+        (Value::Nat(a), Value::Float(b)) => Ok(Value::Float((*a as f64) - b)),
+        // Int operations
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+        (Value::Int(a), Value::Nat(b)) => Ok(Value::Int(a - (*b as i64))),
+        (Value::Nat(a), Value::Int(b)) => Ok(Value::Int((*a as i64) - b)),
+        // Nat - Nat returns Int since result may be negative
+        (Value::Nat(a), Value::Nat(b)) => Ok(Value::Int((*a as i64) - (*b as i64))),
         _ => Err("- requires two numbers".into()),
     }
 }
@@ -117,7 +140,7 @@ fn subtract(args: &[Value]) -> Result<Value, Error> {
 /// * `args` - Must be exactly 2 arguments, both numbers.
 ///
 /// # Returns
-/// Returns the product as a `Value::Number`.
+/// Returns the product. Type promotion: Float > Int > Nat
 ///
 /// # Errors
 /// * Returns an error if not exactly 2 arguments are provided.
@@ -132,18 +155,30 @@ fn multiply(args: &[Value]) -> Result<Value, Error> {
         return Err("* requires exactly 2 arguments".into());
     }
     match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * b)),
+        // Float operations
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+        (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * (*b as f64))),
+        (Value::Float(a), Value::Nat(b)) => Ok(Value::Float(a * (*b as f64))),
+        (Value::Int(a), Value::Float(b)) => Ok(Value::Float((*a as f64) * b)),
+        (Value::Nat(a), Value::Float(b)) => Ok(Value::Float((*a as f64) * b)),
+        // Int operations
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+        (Value::Int(a), Value::Nat(b)) => Ok(Value::Int(a * (*b as i64))),
+        (Value::Nat(a), Value::Int(b)) => Ok(Value::Int((*a as i64) * b)),
+        // Nat operations
+        (Value::Nat(a), Value::Nat(b)) => Ok(Value::Nat(a * b)),
         _ => Err("* requires two numbers".into()),
     }
 }
 
-/// Divides the first number by the second (integer division).
+/// Divides the first number by the second.
 ///
 /// # Arguments
 /// * `args` - Must be exactly 2 arguments, both numbers.
 ///
 /// # Returns
-/// Returns the quotient as a `Value::Number`.
+/// Returns the quotient. Type promotion: Float > Int > Nat
+/// For integers, performs integer division.
 ///
 /// # Errors
 /// * Returns an error if not exactly 2 arguments are provided.
@@ -160,14 +195,392 @@ fn divide(args: &[Value]) -> Result<Value, Error> {
         return Err("/ requires exactly 2 arguments".into());
     }
     match (&args[0], &args[1]) {
-        (Value::Number(a), Value::Number(b)) => {
+        // Float operations (no division by zero check needed, returns infinity or NaN)
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
+        (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a / (*b as f64))),
+        (Value::Float(a), Value::Nat(b)) => Ok(Value::Float(a / (*b as f64))),
+        (Value::Int(a), Value::Float(b)) => Ok(Value::Float((*a as f64) / b)),
+        (Value::Nat(a), Value::Float(b)) => Ok(Value::Float((*a as f64) / b)),
+        // Int operations
+        (Value::Int(a), Value::Int(b)) => {
             if *b == 0 {
                 Err("division by zero".into())
             } else {
-                Ok(Value::Number(a / b))
+                Ok(Value::Int(a / b))
+            }
+        }
+        (Value::Int(a), Value::Nat(b)) => {
+            if *b == 0 {
+                Err("division by zero".into())
+            } else {
+                Ok(Value::Int(a / (*b as i64)))
+            }
+        }
+        (Value::Nat(a), Value::Int(b)) => {
+            if *b == 0 {
+                Err("division by zero".into())
+            } else {
+                Ok(Value::Int((*a as i64) / b))
+            }
+        }
+        // Nat operations
+        (Value::Nat(a), Value::Nat(b)) => {
+            if *b == 0 {
+                Err("division by zero".into())
+            } else {
+                Ok(Value::Nat(a / b))
             }
         }
         _ => Err("/ requires two numbers".into()),
+    }
+}
+
+/// Returns the remainder of division.
+fn modulo(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("% requires exactly 2 arguments".into());
+    }
+    match (&args[0], &args[1]) {
+        // Float operations
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a % b)),
+        (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a % (*b as f64))),
+        (Value::Float(a), Value::Nat(b)) => Ok(Value::Float(a % (*b as f64))),
+        (Value::Int(a), Value::Float(b)) => Ok(Value::Float((*a as f64) % b)),
+        (Value::Nat(a), Value::Float(b)) => Ok(Value::Float((*a as f64) % b)),
+        // Int operations
+        (Value::Int(a), Value::Int(b)) => {
+            if *b == 0 {
+                Err("modulo by zero".into())
+            } else {
+                Ok(Value::Int(a % b))
+            }
+        }
+        (Value::Int(a), Value::Nat(b)) => {
+            if *b == 0 {
+                Err("modulo by zero".into())
+            } else {
+                Ok(Value::Int(a % (*b as i64)))
+            }
+        }
+        (Value::Nat(a), Value::Int(b)) => {
+            if *b == 0 {
+                Err("modulo by zero".into())
+            } else {
+                Ok(Value::Int((*a as i64) % b))
+            }
+        }
+        // Nat operations
+        (Value::Nat(a), Value::Nat(b)) => {
+            if *b == 0 {
+                Err("modulo by zero".into())
+            } else {
+                Ok(Value::Nat(a % b))
+            }
+        }
+        _ => Err("% requires two numbers".into()),
+    }
+}
+
+/// Checks if two values are equal.
+fn equal(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("== requires exactly 2 arguments".into());
+    }
+    let result = match (&args[0], &args[1]) {
+        // Numeric comparisons with type coercion
+        (Value::Nat(a), Value::Nat(b)) => *a == *b,
+        (Value::Int(a), Value::Int(b)) => *a == *b,
+        (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
+        (Value::Nat(a), Value::Int(b)) => (*a as i64) == *b,
+        (Value::Int(a), Value::Nat(b)) => *a == (*b as i64),
+        (Value::Nat(a), Value::Float(b)) => ((*a as f64) - b).abs() < f64::EPSILON,
+        (Value::Float(a), Value::Nat(b)) => (a - (*b as f64)).abs() < f64::EPSILON,
+        (Value::Int(a), Value::Float(b)) => ((*a as f64) - b).abs() < f64::EPSILON,
+        (Value::Float(a), Value::Int(b)) => (a - (*b as f64)).abs() < f64::EPSILON,
+        // Other types
+        (Value::String(a), Value::String(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Rune(a), Value::Rune(b)) => a == b,
+        (Value::Unit, Value::Unit) => true,
+        _ => false,
+    };
+    Ok(Value::Bool(result))
+}
+
+/// Checks if two values are not equal.
+fn not_equal(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("!= requires exactly 2 arguments".into());
+    }
+    let result = match (&args[0], &args[1]) {
+        // Numeric comparisons with type coercion
+        (Value::Nat(a), Value::Nat(b)) => *a != *b,
+        (Value::Int(a), Value::Int(b)) => *a != *b,
+        (Value::Float(a), Value::Float(b)) => (a - b).abs() >= f64::EPSILON,
+        (Value::Nat(a), Value::Int(b)) => (*a as i64) != *b,
+        (Value::Int(a), Value::Nat(b)) => *a != (*b as i64),
+        (Value::Nat(a), Value::Float(b)) => ((*a as f64) - b).abs() >= f64::EPSILON,
+        (Value::Float(a), Value::Nat(b)) => (a - (*b as f64)).abs() >= f64::EPSILON,
+        (Value::Int(a), Value::Float(b)) => ((*a as f64) - b).abs() >= f64::EPSILON,
+        (Value::Float(a), Value::Int(b)) => (a - (*b as f64)).abs() >= f64::EPSILON,
+        // Other types
+        (Value::String(a), Value::String(b)) => a != b,
+        (Value::Bool(a), Value::Bool(b)) => a != b,
+        (Value::Rune(a), Value::Rune(b)) => a != b,
+        (Value::Unit, Value::Unit) => false,
+        _ => true,
+    };
+    Ok(Value::Bool(result))
+}
+
+/// Checks if the first number is less than the second.
+fn less_than(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("< requires exactly 2 arguments".into());
+    }
+    let result = match (&args[0], &args[1]) {
+        (Value::Nat(a), Value::Nat(b)) => *a < *b,
+        (Value::Int(a), Value::Int(b)) => *a < *b,
+        (Value::Float(a), Value::Float(b)) => *a < *b,
+        (Value::Nat(a), Value::Int(b)) => (*a as i64) < *b,
+        (Value::Int(a), Value::Nat(b)) => *a < (*b as i64),
+        (Value::Nat(a), Value::Float(b)) => (*a as f64) < *b,
+        (Value::Float(a), Value::Nat(b)) => *a < (*b as f64),
+        (Value::Int(a), Value::Float(b)) => (*a as f64) < *b,
+        (Value::Float(a), Value::Int(b)) => *a < (*b as f64),
+        _ => return Err("< requires two numbers".into()),
+    };
+    Ok(Value::Bool(result))
+}
+
+/// Checks if the first number is greater than the second.
+fn greater_than(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("> requires exactly 2 arguments".into());
+    }
+    let result = match (&args[0], &args[1]) {
+        (Value::Nat(a), Value::Nat(b)) => *a > *b,
+        (Value::Int(a), Value::Int(b)) => *a > *b,
+        (Value::Float(a), Value::Float(b)) => *a > *b,
+        (Value::Nat(a), Value::Int(b)) => (*a as i64) > *b,
+        (Value::Int(a), Value::Nat(b)) => *a > (*b as i64),
+        (Value::Nat(a), Value::Float(b)) => (*a as f64) > *b,
+        (Value::Float(a), Value::Nat(b)) => *a > (*b as f64),
+        (Value::Int(a), Value::Float(b)) => (*a as f64) > *b,
+        (Value::Float(a), Value::Int(b)) => *a > (*b as f64),
+        _ => return Err("> requires two numbers".into()),
+    };
+    Ok(Value::Bool(result))
+}
+
+/// Checks if the first number is less than or equal to the second.
+fn less_equal(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("<= requires exactly 2 arguments".into());
+    }
+    let result = match (&args[0], &args[1]) {
+        (Value::Nat(a), Value::Nat(b)) => *a <= *b,
+        (Value::Int(a), Value::Int(b)) => *a <= *b,
+        (Value::Float(a), Value::Float(b)) => *a <= *b,
+        (Value::Nat(a), Value::Int(b)) => (*a as i64) <= *b,
+        (Value::Int(a), Value::Nat(b)) => *a <= (*b as i64),
+        (Value::Nat(a), Value::Float(b)) => (*a as f64) <= *b,
+        (Value::Float(a), Value::Nat(b)) => *a <= (*b as f64),
+        (Value::Int(a), Value::Float(b)) => (*a as f64) <= *b,
+        (Value::Float(a), Value::Int(b)) => *a <= (*b as f64),
+        _ => return Err("<= requires two numbers".into()),
+    };
+    Ok(Value::Bool(result))
+}
+
+/// Checks if the first number is greater than or equal to the second.
+fn greater_equal(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err(">= requires exactly 2 arguments".into());
+    }
+    let result = match (&args[0], &args[1]) {
+        (Value::Nat(a), Value::Nat(b)) => *a >= *b,
+        (Value::Int(a), Value::Int(b)) => *a >= *b,
+        (Value::Float(a), Value::Float(b)) => *a >= *b,
+        (Value::Nat(a), Value::Int(b)) => (*a as i64) >= *b,
+        (Value::Int(a), Value::Nat(b)) => *a >= (*b as i64),
+        (Value::Nat(a), Value::Float(b)) => (*a as f64) >= *b,
+        (Value::Float(a), Value::Nat(b)) => *a >= (*b as f64),
+        (Value::Int(a), Value::Float(b)) => (*a as f64) >= *b,
+        (Value::Float(a), Value::Int(b)) => *a >= (*b as f64),
+        _ => return Err(">= requires two numbers".into()),
+    };
+    Ok(Value::Bool(result))
+}
+
+/// Logical AND - returns true if both values are truthy, false otherwise.
+fn logical_and(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("&& requires exactly 2 arguments".into());
+    }
+    let is_truthy = |v: &Value| -> bool {
+        match v {
+            Value::Nat(n) => *n != 0,
+            Value::Int(n) => *n != 0,
+            Value::Float(n) => *n != 0.0,
+            Value::Rune(_) => true, // Runes are always truthy
+            Value::Bool(b) => *b,
+            Value::String(s) => !s.is_empty(),
+            Value::Bytes(bytes) => !bytes.is_empty(),
+            Value::List(items) => !items.is_empty(),
+            Value::Tuple(items) => !items.is_empty(),
+            Value::Record(_, fields) => !fields.is_empty(),
+            Value::Unit => false,
+            Value::Fn(_, _, _) => true,
+            Value::Lambda(_, _) => true,
+            Value::BuiltinFn(_, _) => true,
+        }
+    };
+    let result = is_truthy(&args[0]) && is_truthy(&args[1]);
+    Ok(Value::Bool(result))
+}
+
+/// Logical OR - returns true if either value is truthy, false otherwise.
+fn logical_or(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("|| requires exactly 2 arguments".into());
+    }
+    let is_truthy = |v: &Value| -> bool {
+        match v {
+            Value::Nat(n) => *n != 0,
+            Value::Int(n) => *n != 0,
+            Value::Float(n) => *n != 0.0,
+            Value::Rune(_) => true, // Runes are always truthy
+            Value::Bool(b) => *b,
+            Value::String(s) => !s.is_empty(),
+            Value::Bytes(bytes) => !bytes.is_empty(),
+            Value::List(items) => !items.is_empty(),
+            Value::Tuple(items) => !items.is_empty(),
+            Value::Record(_, fields) => !fields.is_empty(),
+            Value::Unit => false,
+            Value::Fn(_, _, _) => true,
+            Value::Lambda(_, _) => true,
+            Value::BuiltinFn(_, _) => true,
+        }
+    };
+    let result = is_truthy(&args[0]) || is_truthy(&args[1]);
+    Ok(Value::Bool(result))
+}
+
+/// Concatenates two values (String or List).
+fn concat(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("<> requires exactly 2 arguments".into());
+    }
+    match (&args[0], &args[1]) {
+        (Value::String(a), Value::String(b)) => Ok(Value::String(format!("{}{}", a, b))),
+        (Value::List(a), Value::List(b)) => {
+            let mut result = a.clone();
+            result.extend(b.iter().cloned());
+            Ok(Value::List(result))
+        }
+        _ => Err("<> requires two strings or two lists".into()),
+    }
+}
+
+/// Converts a value to its string representation.
+///
+/// # Arguments
+/// * `args` - Must be exactly 1 argument: the value to convert
+///
+/// # Returns
+/// Returns a `Value::String` with the string representation.
+///
+/// # Errors
+/// * Returns an error if not exactly 1 argument is provided.
+fn to_string_builtin(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 1 {
+        return Err("to_string requires exactly 1 argument".into());
+    }
+    let s = match &args[0] {
+        Value::Nat(n) => n.to_string(),
+        Value::Int(n) => n.to_string(),
+        Value::Float(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => b.to_string(),
+        Value::Unit => "unit".to_string(),
+        Value::List(items) => {
+            let elements: Vec<String> = items.iter().map(|v| format!("{:?}", v)).collect();
+            format!("[{}]", elements.join(", "))
+        }
+        Value::Tuple(elements) => {
+            let element_strs: Vec<String> = elements.iter().map(|v| format!("{:?}", v)).collect();
+            format!("#({})", element_strs.join(", "))
+        }
+        Value::Bytes(b) => format!("b{:?}", String::from_utf8_lossy(b)),
+        Value::Rune(c) => c.to_string(),
+        Value::BuiltinFn(name, _) => format!("<builtin: {}>", name),
+        Value::Lambda(params, _) => format!("<lambda({})>", params.join(", ")),
+        Value::Fn(name, _, _) => format!("<function: {}>", name),
+        Value::Record(name, fields) => {
+            let field_strs: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| format!("{}: {:?}", k, v))
+                .collect();
+            format!("{} {{ {} }}", name, field_strs.join(", "))
+        }
+    };
+    Ok(Value::String(s))
+}
+
+/// Converts a value to its bytes representation.
+///
+/// # Arguments
+/// * `args` - Must be exactly 1 argument: the value to convert
+///
+/// # Returns
+/// Returns a `Value::Bytes` with the bytes representation.
+///
+/// # Errors
+/// * Returns an error if not exactly 1 argument is provided.
+fn to_bytes_builtin(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 1 {
+        return Err("to_bytes requires exactly 1 argument".into());
+    }
+    let bytes = match &args[0] {
+        Value::Bytes(b) => b.clone(),
+        Value::String(s) => s.as_bytes().to_vec(),
+        Value::Nat(n) => n.to_string().into_bytes(),
+        Value::Int(n) => n.to_string().into_bytes(),
+        Value::Float(n) => n.to_string().into_bytes(),
+        Value::Bool(b) => b.to_string().into_bytes(),
+        Value::Unit => b"unit".to_vec(),
+        Value::Rune(c) => {
+            let mut buf = [0; 4];
+            c.encode_utf8(&mut buf).as_bytes().to_vec()
+        }
+        _ => return Err("to_bytes: cannot convert this value type to bytes".into()),
+    };
+    Ok(Value::Bytes(bytes))
+}
+
+/// Concatenates two bytes values.
+///
+/// # Arguments
+/// * `args` - Must be exactly 2 arguments: the byte slices to concatenate
+///
+/// # Returns
+/// Returns a `Value::Bytes` with the concatenated bytes.
+///
+/// # Errors
+/// * Returns an error if not exactly 2 arguments are provided.
+/// * Returns an error if arguments are not bytes.
+fn bytes_concat(args: &[Value]) -> Result<Value, Error> {
+    if args.len() != 2 {
+        return Err("Bytes::<> requires exactly 2 arguments".into());
+    }
+    match (&args[0], &args[1]) {
+        (Value::Bytes(a), Value::Bytes(b)) => {
+            let mut result = a.clone();
+            result.extend(b);
+            Ok(Value::Bytes(result))
+        }
+        _ => Err("Bytes::<> requires two bytes values".into()),
     }
 }
 
@@ -233,13 +646,13 @@ fn trim_right(args: &[Value]) -> Result<Value, Error> {
     }
 }
 
-/// Converts a string to a number.
+/// Converts a string to an integer.
 ///
 /// # Arguments
 /// * `args` - Must be exactly 1 argument, a string containing a valid integer.
 ///
 /// # Returns
-/// Returns the parsed number as a `Value::Number`.
+/// Returns the parsed number as a `Value::Int`.
 ///
 /// # Errors
 /// * Returns an error if not exactly 1 argument is provided.
@@ -258,7 +671,7 @@ fn to_number(args: &[Value]) -> Result<Value, Error> {
     match &args[0] {
         Value::String(s) => s
             .parse::<i64>()
-            .map(Value::Number)
+            .map(Value::Int)
             .map_err(|_| "failed to parse string as number".into()),
         _ => Err("to_number requires a string".into()),
     }
@@ -277,7 +690,7 @@ fn to_number(args: &[Value]) -> Result<Value, Error> {
 /// # Errors
 /// * Returns an error if not exactly 2 arguments are provided.
 /// * Returns an error if the first argument is not a number or the second is not a list.
-/// * Returns an error if the index is out of bounds.
+/// * Returns an error if the index is out of bounds or negative.
 ///
 /// # Example
 /// ```tribute
@@ -288,11 +701,26 @@ fn get(args: &[Value]) -> Result<Value, Error> {
     if args.len() != 2 {
         return Err("get requires exactly 2 arguments".into());
     }
-    match (&args[0], &args[1]) {
-        (Value::Number(index), Value::List(items)) => {
-            let idx = *index as usize;
-            if idx < items.len() {
-                Ok(items[idx].clone())
+    let index = match &args[0] {
+        Value::Nat(n) => *n as usize,
+        Value::Int(n) => {
+            if *n < 0 {
+                return Err("index cannot be negative".into());
+            }
+            *n as usize
+        }
+        Value::Float(n) => {
+            if *n < 0.0 {
+                return Err("index cannot be negative".into());
+            }
+            *n as usize
+        }
+        _ => return Err("get requires a number and a list".into()),
+    };
+    match &args[1] {
+        Value::List(items) => {
+            if index < items.len() {
+                Ok(items[index].clone())
             } else {
                 Err("index out of bounds".into())
             }
@@ -328,15 +756,35 @@ fn get(args: &[Value]) -> Result<Value, Error> {
 /// - `get`: Get element by index
 pub static BUILTINS: LazyLock<HashMap<String, Value>> = LazyLock::new(|| {
     let temp: &[(&str, BuiltinFn)] = &[
+        // I/O
         ("print_line", print_line),
         ("input_line", input_line),
+        // Arithmetic
         ("+", add),
         ("-", subtract),
         ("*", multiply),
         ("/", divide),
+        ("%", modulo),
+        // Comparison
+        ("==", equal),
+        ("!=", not_equal),
+        ("<", less_than),
+        (">", greater_than),
+        ("<=", less_equal),
+        (">=", greater_equal),
+        // Logical
+        ("&&", logical_and),
+        ("||", logical_or),
+        // Concatenation
+        ("<>", concat),
+        // String
         ("split", split),
         ("trim_right", trim_right),
         ("to_number", to_number),
+        ("to_string", to_string_builtin),
+        ("to_bytes", to_bytes_builtin),
+        ("Bytes::<>", bytes_concat),
+        // List
         ("get", get),
     ];
     temp.iter()
