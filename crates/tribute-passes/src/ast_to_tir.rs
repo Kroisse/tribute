@@ -9,7 +9,7 @@ use tribute_ast::{
     BinaryExpression, BinaryOperator, BytesInterpolation, CallExpression, ConstructorArgs, Expr,
     FunctionDefinition, ItemKind, LambdaExpression, LetStatement, ListPattern, MatchArm,
     MatchExpression, MethodCallExpression, OperatorFnExpression, Pattern, Program,
-    RecordExpression, RecordField, Statement, StringInterpolation,
+    RecordExpression, RecordField, Statement, StringInterpolation, TypeRef,
 };
 use tribute_core::{Location, PathId, Span, Spanned};
 use tribute_trunk_ir::{
@@ -22,6 +22,8 @@ use tribute_trunk_ir::{
 struct LoweringCtx<'db> {
     /// Map from variable names to their SSA values.
     bindings: HashMap<String, Value<'db>>,
+    /// Map from type variable names to their Type representations.
+    type_var_bindings: HashMap<String, Type<'db>>,
     /// Counter for generating unique type variable IDs.
     next_type_var_id: u64,
 }
@@ -30,6 +32,7 @@ impl<'db> LoweringCtx<'db> {
     fn new() -> Self {
         Self {
             bindings: HashMap::new(),
+            type_var_bindings: HashMap::new(),
             next_type_var_id: 0,
         }
     }
@@ -39,6 +42,40 @@ impl<'db> LoweringCtx<'db> {
         let id = self.next_type_var_id;
         self.next_type_var_id += 1;
         ty::var(db, Attribute::IntBits(id))
+    }
+
+    /// Get or create a named type variable.
+    /// Same name always returns the same type variable within a scope.
+    fn named_type_var(&mut self, db: &'db dyn salsa::Database, name: &str) -> Type<'db> {
+        if let Some(&ty) = self.type_var_bindings.get(name) {
+            ty
+        } else {
+            let ty = self.fresh_type_var(db);
+            self.type_var_bindings.insert(name.to_string(), ty);
+            ty
+        }
+    }
+
+    /// Resolve a TypeRef to an IR Type.
+    fn resolve_type_ref(&mut self, db: &'db dyn salsa::Database, type_ref: &TypeRef) -> Type<'db> {
+        match type_ref {
+            TypeRef::Named(name) => {
+                // Concrete named types - emit src.type for later resolution
+                Type::dialect(db, "src", "type", idvec![], Attribute::String(name.clone()))
+            }
+            TypeRef::Variable(name) => {
+                // Type variable - get or create with consistent ID
+                self.named_type_var(db, name)
+            }
+            TypeRef::Generic { name, args } => {
+                // Generic type - resolve args and emit src.type with params
+                let params: IdVec<Type<'db>> = args
+                    .iter()
+                    .map(|arg| self.resolve_type_ref(db, arg))
+                    .collect();
+                Type::dialect(db, "src", "type", params, Attribute::String(name.clone()))
+            }
+        }
     }
 
     /// Bind a name to a value.
@@ -53,9 +90,11 @@ impl<'db> LoweringCtx<'db> {
 
     /// Execute a closure in a new scope. Bindings created inside are discarded after.
     fn scoped<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        let saved = self.bindings.clone();
+        let saved_bindings = self.bindings.clone();
+        let saved_type_vars = self.type_var_bindings.clone();
         let result = f(self);
-        self.bindings = saved;
+        self.bindings = saved_bindings;
+        self.type_var_bindings = saved_type_vars;
         result
     }
 }
@@ -90,15 +129,27 @@ fn lower_function<'db>(
     let location = Location::new(path, span);
     let mut ctx = LoweringCtx::new();
 
-    // For now, assume no type annotations (each param gets a fresh type var)
+    // Resolve parameter types from annotations, or create fresh type vars
     let params: IdVec<Type> = func_def
         .parameters(db)
         .iter()
-        .map(|_| ctx.fresh_type_var(db))
+        .map(|param| {
+            param
+                .ty
+                .as_ref()
+                .map(|ty| ctx.resolve_type_ref(db, ty))
+                .unwrap_or_else(|| ctx.fresh_type_var(db))
+        })
         .collect();
 
-    // Result type is also unknown until inference
-    let results = idvec![ctx.fresh_type_var(db)];
+    // Resolve return type from annotation, or create fresh type var
+    let results = idvec![
+        func_def
+            .return_type(db)
+            .as_ref()
+            .map(|ty| ctx.resolve_type_ref(db, ty))
+            .unwrap_or_else(|| ctx.fresh_type_var(db))
+    ];
 
     func::Func::build(db, location, &name, params, results, |entry| {
         let body = func_def.body(db);
