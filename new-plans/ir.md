@@ -572,3 +572,21 @@ text.to_string()
 2. **Effect row 표현**: IR에서 effect polymorphism 표현 방식
 3. **디버그 정보**: Source map 생성 방식
 4. **Wasm Stack Switching**: cont dialect의 wasm lowering 전략
+
+## Future Considerations
+
+### AST 제거하고 Tree-sitter CST에서 직접 TrunkIR로 lowering
+
+현재 파이프라인: `Tree-sitter CST → AST (tribute-ast) → TrunkIR`
+
+고려 사항:
+- AST가 상당히 thin함 (대부분 concrete syntax 제거 정도)
+- TrunkIR이 이미 `Location`으로 소스 위치 보존
+- 중간 표현 하나 제거 시 코드/메모리 절약 가능
+
+Trade-off:
+- Tree-sitter CST는 더 verbose하고 cursor 관리 필요
+- AST가 다른 도구들 (formatter, linter, IDE)에 유용할 수 있음
+- 에러 리포팅이 AST 수준에서 더 쉬울 수 있음
+
+결정 시점: AST의 다른 용도가 명확해지면 재검토
