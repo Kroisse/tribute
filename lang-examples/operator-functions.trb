@@ -21,7 +21,7 @@ fn main() {
     print_line(concat("Hello, ", "World!"))
 
     // Using operator functions in higher-order style
-    apply_op((+), 10, 20)
+    print_line(apply_op((+), 10, 20))  // 30
 }
 
 fn apply_op(op, a, b) {

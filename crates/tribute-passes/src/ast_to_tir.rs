@@ -1128,7 +1128,15 @@ fn pattern_to_attribute<'db>(pattern: &Pattern) -> Attribute<'db> {
         Pattern::Literal(lit) => {
             use tribute_ast::LiteralPattern;
             match lit {
-                LiteralPattern::Nat(n) => pat::int(i64::try_from(*n).unwrap()),
+                LiteralPattern::Nat(n) => {
+                    // Handle large unsigned values that don't fit in i64
+                    if let Ok(signed) = i64::try_from(*n) {
+                        pat::int(signed)
+                    } else {
+                        // Fallback for values > i64::MAX - store as raw bits
+                        Attribute::IntBits(*n)
+                    }
+                }
                 LiteralPattern::Int(n) => pat::int(*n),
                 LiteralPattern::Float(_) => Attribute::String(format!("lit:{:?}", lit)),
                 LiteralPattern::String(s) => pat::string(s),
