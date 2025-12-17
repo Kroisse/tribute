@@ -15,6 +15,8 @@
 
 // === TrunkIR passes ===
 pub mod cst_to_tir;
+pub mod typeck;
 
 // Re-exports
 pub use cst_to_tir::{ParsedCst, lower_cst, lower_source_file, parse_cst};
+pub use typeck::{Constraint, EffectRow, TypeChecker, TypeSolver, typecheck_module};
