@@ -78,7 +78,7 @@ fn lower_function<'db>(
     let name = func_def.name(db);
     let span = func_def.span(db);
     let location = Location::new(path, span);
-    let infer_ty = type_::var(db);
+    let infer_ty = type_::var(db, Attribute::Unit);
 
     // For now, assume no type annotations (all type.var)
     let params: IdVec<Type> =
@@ -138,7 +138,7 @@ fn bind_pattern<'db>(
     value: Value<'db>,
     location: Location<'db>,
 ) {
-    let infer_ty = type_::var(db);
+    let infer_ty = type_::var(db, Attribute::Unit);
     match pattern {
         Pattern::Identifier(name) => {
             ctx.bind(name.clone(), value);
@@ -280,7 +280,7 @@ fn lower_expr<'db>(
     let (expr, span) = spanned;
     let location = Location::new(path, *span);
     let unit_ty = Type::unit(db);
-    let infer_ty = type_::var(db); // Type to be inferred
+    let infer_ty = type_::var(db, Attribute::Unit); // Type to be inferred
 
     match expr {
         // Literals → arith.const
@@ -558,7 +558,7 @@ fn lower_binary_op<'db>(
     rhs: Value<'db>,
 ) -> Value<'db> {
     // Result type is unknown until type inference
-    let infer_ty = type_::var(db);
+    let infer_ty = type_::var(db, Attribute::Unit);
     let bool_ty = Type::i(db, 1);
 
     match operator {
@@ -847,7 +847,7 @@ fn bind_pattern_for_match<'db>(
     scrutinee: Value<'db>,
     location: Location<'db>,
 ) {
-    let infer_ty = type_::var(db);
+    let infer_ty = type_::var(db, Attribute::Unit);
     match pattern {
         Pattern::Identifier(name) => {
             ctx.bind(name.clone(), scrutinee);
@@ -877,7 +877,7 @@ fn bind_pattern_for_match<'db>(
                                 location,
                                 scrutinee,
                                 infer_ty,
-                                u64::try_from(i).unwrap().into(),
+                                u64::try_from(i).expect("unexpected index").into(),
                             ))
                             .result(db);
                         bind_pattern_for_match(db, ctx, block, pat, field_value, location);
@@ -891,7 +891,7 @@ fn bind_pattern_for_match<'db>(
                                 location,
                                 scrutinee,
                                 infer_ty,
-                                u64::try_from(i).unwrap().into(),
+                                u64::try_from(i).expect("unexpected index").into(),
                             ))
                             .result(db);
                         bind_pattern_for_match(

@@ -52,6 +52,7 @@ impl<'db> Type<'db> {
         dialect: &str,
         name: &str,
         params: IdVec<Type<'db>>,
+        attr: Attribute<'db>,
     ) -> Self {
         Type::new(
             db,
@@ -59,6 +60,7 @@ impl<'db> Type<'db> {
                 dialect: Symbol::new(db, dialect),
                 name: Symbol::new(db, name),
                 params,
+                attr,
             },
         )
     }
@@ -91,6 +93,7 @@ pub enum TypeKind<'db> {
         dialect: Symbol<'db>,
         name: Symbol<'db>,
         params: IdVec<Type<'db>>,
+        attr: Attribute<'db>,
     },
 }
 

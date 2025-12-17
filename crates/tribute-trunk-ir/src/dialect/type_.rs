@@ -7,7 +7,7 @@
 //! - `type.var` - a type variable to be resolved during type inference
 //! - `type.error` - an error type indicating type resolution failed
 
-use crate::{IdVec, Type, TypeKind, dialect};
+use crate::{Attribute, IdVec, Type, TypeKind, dialect};
 
 dialect! {
     mod r#type {
@@ -40,13 +40,17 @@ dialect! {
 // === Type constructors for inference-related types ===
 
 /// Create a type variable (`type.var`) to be resolved during type inference.
-pub fn var(db: &dyn salsa::Database) -> Type<'_> {
-    Type::dialect(db, "type", "var", IdVec::new())
+///
+/// The attribute can carry metadata such as a unique variable ID or constraints.
+pub fn var<'db>(db: &'db dyn salsa::Database, attr: Attribute<'db>) -> Type<'db> {
+    Type::dialect(db, "type", "var", IdVec::new(), attr)
 }
 
 /// Create an error type (`type.error`) indicating type resolution failed.
-pub fn error(db: &dyn salsa::Database) -> Type<'_> {
-    Type::dialect(db, "type", "error", IdVec::new())
+///
+/// The attribute can carry error information or source location.
+pub fn error<'db>(db: &'db dyn salsa::Database, attr: Attribute<'db>) -> Type<'db> {
+    Type::dialect(db, "type", "error", IdVec::new(), attr)
 }
 
 /// Check if a type is a type variable (`type.var`).
