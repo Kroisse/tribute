@@ -69,15 +69,15 @@ macro_rules! dialect {
     // Base case: no more ops to process
     (@parse $dialect:ident) => {};
 
-    // Unified pattern: optional attrs, optional result
+    // Unified pattern: optional attrs, optional results
     (@parse $dialect:ident
         $(#[$meta:meta])*
-        op $op:ident $([$($attrs:tt)*])? ($($operands:tt)*) $(-> $result:ident)? { $($region:tt)* };
+        op $op:ident $([$($attrs:tt)*])? ($($operands:tt)*) $( -> $($result:ident),+ $(,)? )? { $($region:tt)* };
         $($rest:tt)*
     ) => {
         $crate::define_op! {
             $(#[$meta])*
-            op $dialect.$op $([$($attrs)*])? ($($operands)*) $(-> $result)? { $($region)* }
+            op $dialect.$op $([$($attrs)*])? ($($operands)*) $(-> $($result),+)? { $($region)* }
         }
         $crate::dialect!(@parse $dialect $($rest)*);
     };
@@ -308,25 +308,25 @@ macro_rules! define_op {
     };
 
     // ========================================================================
-    // @parse_result - Extract -> result if present
+    // @parse_result - Extract -> result(s) if present
     // ========================================================================
 
-    // Has result: -> result
+    // Delegate to @parse_result_list for TT munching
     (@parse_result
         meta: $meta:tt,
         dialect: $dialect:ident,
         op: $op:ident,
         attrs: $attrs:tt,
         operands: $operands:tt,
-        rest: [-> result $($rest:tt)*]
+        rest: [-> $($rest:tt)*]
     ) => {
-        $crate::define_op!(@parse_region
+        $crate::define_op!(@parse_result_list
             meta: $meta,
             dialect: $dialect,
             op: $op,
             attrs: $attrs,
             operands: $operands,
-            result: [result_ty],
+            results: [],
             rest: [$($rest)*]
         );
     };
@@ -348,6 +348,52 @@ macro_rules! define_op {
             operands: $operands,
             result: [],
             rest: [$($rest)*]
+        );
+    };
+
+    // ========================================================================
+    // @parse_result_list - TT munch result names until { is reached
+    // ========================================================================
+
+    // Result followed by comma - continue munching
+    (@parse_result_list
+        meta: $meta:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        operands: $operands:tt,
+        results: [$($results:ident),*],
+        rest: [$next:ident, $($remaining:tt)+]
+    ) => {
+        $crate::define_op!(@parse_result_list
+            meta: $meta,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
+            operands: $operands,
+            results: [$($results,)* $next],
+            rest: [$($remaining)+]
+        );
+    };
+
+    // Last result (followed by region)
+    (@parse_result_list
+        meta: $meta:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        operands: $operands:tt,
+        results: [$($results:ident),*],
+        rest: [$last:ident $($remaining:tt)*]
+    ) => {
+        $crate::define_op!(@parse_region
+            meta: $meta,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
+            operands: $operands,
+            result: [$($results,)* $last],
+            rest: [$($remaining)*]
         );
     };
 
@@ -407,7 +453,7 @@ macro_rules! define_op {
         op: $op:ident,
         attrs: [$($attr:ident),*],
         operands: [fixed: $($operand:ident),*],
-        result: [$($result_ty:ident)?],
+        result: [$($result:ident),*],
         region: [$($region:ident)?]
     ) => {
         $crate::paste::paste! {
@@ -432,14 +478,14 @@ macro_rules! define_op {
                     db: &'db dyn salsa::Database,
                     location: $crate::Location<'db>,
                     $($operand: $crate::Value<'db>,)*
-                    $($result_ty: $crate::Type,)?
+                    $($result: $crate::Type,)*
                     $($attr: $crate::Attribute<'db>,)*
                     $($region: $crate::Region<'db>,)?
                 ) -> Self {
                     let name = $crate::OpNameId::new(db, stringify!($dialect), stringify!($op));
                     let op = $crate::Operation::of(db, location, name)
                         .operands(vec![$($operand),*])
-                        $(.result($result_ty))?
+                        $(.result($result))*
                         $(.attr(stringify!($attr), $attr))*
                         $(.region($region))?
                         .build();
@@ -451,15 +497,15 @@ macro_rules! define_op {
 
                 // Attribute accessors
                 $(
-                    #[allow(dead_code)]
+                    #[allow(dead_code, clippy::should_implement_trait)]
                     pub fn $attr(&self, db: &'db dyn salsa::Database) -> &'db $crate::Attribute<'db> {
                         let key = $crate::Symbol::new(db, stringify!($attr));
                         self.op.attributes(db).get(&key).expect(concat!("missing attribute: ", stringify!($attr)))
                     }
                 )*
 
-                // Result accessors (only if result exists)
-                $crate::define_op!(@maybe_result_accessors [$($result_ty)?]);
+                // Result accessors (only if results exist)
+                $crate::define_op!(@maybe_result_accessors [], $($result),*);
 
                 // Region accessor (only if region exists)
                 $crate::define_op!(@maybe_region_accessor [$($region)?]);
@@ -487,7 +533,7 @@ macro_rules! define_op {
                         }
                     )*
                     // Result validation
-                    $crate::define_op!(@maybe_result_validation [$($result_ty)?]; op, db);
+                    $crate::define_op!(@maybe_result_validation [$($result),*]; op, db);
                     // Region validation
                     $crate::define_op!(@maybe_region_validation [$($region)?]; op, db);
                     Ok(Self { op })
@@ -510,7 +556,7 @@ macro_rules! define_op {
         op: $op:ident,
         attrs: [$($attr:ident),*],
         operands: [variadic: $operands:ident],
-        result: [$($result_ty:ident)?],
+        result: [$($result:ident),*],
         region: [$($region:ident)?]
     ) => {
         $crate::paste::paste! {
@@ -535,14 +581,14 @@ macro_rules! define_op {
                     db: &'db dyn salsa::Database,
                     location: $crate::Location<'db>,
                     $operands: Vec<$crate::Value<'db>>,
-                    $($result_ty: $crate::Type,)?
+                    $($result: $crate::Type,)*
                     $($attr: $crate::Attribute<'db>,)*
                     $($region: $crate::Region<'db>,)?
                 ) -> Self {
                     let name = $crate::OpNameId::new(db, stringify!($dialect), stringify!($op));
                     let op = $crate::Operation::of(db, location, name)
                         .operands($operands)
-                        $(.result($result_ty))?
+                        $(.result($result))*
                         $(.attr(stringify!($attr), $attr))*
                         $(.region($region))?
                         .build();
@@ -556,15 +602,15 @@ macro_rules! define_op {
 
                 // Attribute accessors
                 $(
-                    #[allow(dead_code)]
+                    #[allow(dead_code, clippy::should_implement_trait)]
                     pub fn $attr(&self, db: &'db dyn salsa::Database) -> &'db $crate::Attribute<'db> {
                         let key = $crate::Symbol::new(db, stringify!($attr));
                         self.op.attributes(db).get(&key).expect(concat!("missing attribute: ", stringify!($attr)))
                     }
                 )*
 
-                // Result accessors (only if result exists)
-                $crate::define_op!(@maybe_result_accessors [$($result_ty)?]);
+                // Result accessors (only if results exist)
+                $crate::define_op!(@maybe_result_accessors [], $($result),*);
 
                 // Region accessor (only if region exists)
                 $crate::define_op!(@maybe_region_accessor [$($region)?]);
@@ -592,7 +638,7 @@ macro_rules! define_op {
                         }
                     )*
                     // Result validation
-                    $crate::define_op!(@maybe_result_validation [$($result_ty)?]; op, db);
+                    $crate::define_op!(@maybe_result_validation [$($result),*]; op, db);
                     // Region validation
                     $crate::define_op!(@maybe_region_validation [$($region)?]; op, db);
                     Ok(Self { op })
@@ -615,7 +661,7 @@ macro_rules! define_op {
         op: $op:ident,
         attrs: [$($attr:ident),*],
         operands: [mixed: $($fixed:ident),+; $var:ident],
-        result: [$($result_ty:ident)?],
+        result: [$($result:ident),*],
         region: [$($region:ident)?]
     ) => {
         $crate::paste::paste! {
@@ -641,7 +687,7 @@ macro_rules! define_op {
                     location: $crate::Location<'db>,
                     $($fixed: $crate::Value<'db>,)+
                     $var: Vec<$crate::Value<'db>>,
-                    $($result_ty: $crate::Type,)?
+                    $($result: $crate::Type,)*
                     $($attr: $crate::Attribute<'db>,)*
                     $($region: $crate::Region<'db>,)?
                 ) -> Self {
@@ -650,7 +696,7 @@ macro_rules! define_op {
                     operands.extend($var);
                     let op = $crate::Operation::of(db, location, name)
                         .operands(operands)
-                        $(.result($result_ty))?
+                        $(.result($result))*
                         $(.attr(stringify!($attr), $attr))*
                         $(.region($region))?
                         .build();
@@ -669,15 +715,15 @@ macro_rules! define_op {
 
                 // Attribute accessors
                 $(
-                    #[allow(dead_code)]
+                    #[allow(dead_code, clippy::should_implement_trait)]
                     pub fn $attr(&self, db: &'db dyn salsa::Database) -> &'db $crate::Attribute<'db> {
                         let key = $crate::Symbol::new(db, stringify!($attr));
                         self.op.attributes(db).get(&key).expect(concat!("missing attribute: ", stringify!($attr)))
                     }
                 )*
 
-                // Result accessors (only if result exists)
-                $crate::define_op!(@maybe_result_accessors [$($result_ty)?]);
+                // Result accessors (only if results exist)
+                $crate::define_op!(@maybe_result_accessors [], $($result),*);
 
                 // Region accessor (only if region exists)
                 $crate::define_op!(@maybe_region_accessor [$($region)?]);
@@ -705,7 +751,7 @@ macro_rules! define_op {
                         }
                     )*
                     // Result validation
-                    $crate::define_op!(@maybe_result_validation [$($result_ty)?]; op, db);
+                    $crate::define_op!(@maybe_result_validation [$($result),*]; op, db);
                     // Region validation
                     $crate::define_op!(@maybe_region_validation [$($region)?]; op, db);
                     Ok(Self { op })
@@ -749,19 +795,54 @@ macro_rules! define_op {
     (@count) => { 0usize };
     (@count $_:tt $($rest:tt)*) => { 1usize + $crate::define_op!(@count $($rest)*) };
 
-    // Result accessors: empty case (no result)
-    (@maybe_result_accessors []) => {};
-    // Result accessors: present case
-    (@maybe_result_accessors [$_marker:ident]) => {
+    // Result accessors: empty case (no results)
+    (@maybe_result_accessors [$($counter:tt)*],) => {};
+
+    // Result accessors: single result - generates result() and result_ty() for backward compat
+    (@maybe_result_accessors [], $name:ident) => {
         #[allow(dead_code)]
-        pub fn result(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
+        pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
             self.op.result(db, 0)
         }
 
-        #[allow(dead_code)]
-        pub fn result_ty(&self, db: &'db dyn salsa::Database) -> $crate::Type {
-            self.op.results(db)[0].clone()
+        $crate::paste::paste! {
+            #[allow(dead_code)]
+            pub fn [<$name _ty>](&self, db: &'db dyn salsa::Database) -> $crate::Type {
+                self.op.results(db)[0].clone()
+            }
         }
+    };
+
+    // Result accessors: multiple results - base case (last result)
+    (@maybe_result_accessors [$($counter:tt)*], $name:ident) => {
+        #[allow(dead_code)]
+        pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
+            self.op.result(db, $crate::define_op!(@count $($counter)*))
+        }
+
+        $crate::paste::paste! {
+            #[allow(dead_code)]
+            pub fn [<$name _ty>](&self, db: &'db dyn salsa::Database) -> $crate::Type {
+                self.op.results(db)[$crate::define_op!(@count $($counter)*)].clone()
+            }
+        }
+    };
+
+    // Result accessors: multiple results - recursive case
+    (@maybe_result_accessors [$($counter:tt)*], $name:ident, $($rest:ident),+) => {
+        #[allow(dead_code)]
+        pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
+            self.op.result(db, $crate::define_op!(@count $($counter)*))
+        }
+
+        $crate::paste::paste! {
+            #[allow(dead_code)]
+            pub fn [<$name _ty>](&self, db: &'db dyn salsa::Database) -> $crate::Type {
+                self.op.results(db)[$crate::define_op!(@count $($counter)*)].clone()
+            }
+        }
+
+        $crate::define_op!(@maybe_result_accessors [$($counter)* _], $($rest),+);
     };
 
     // Region accessor: empty case (no region)
@@ -776,10 +857,13 @@ macro_rules! define_op {
 
     // Result validation: empty case (no result expected)
     (@maybe_result_validation []; $op:ident, $db:ident) => {};
-    // Result validation: present case
-    (@maybe_result_validation [$_marker:ident]; $op:ident, $db:ident) => {
-        if $op.results($db).is_empty() {
-            return Err($crate::ConversionError::MissingResult);
+    // Result validation: one or more results expected
+    (@maybe_result_validation [$($result:ident),+]; $op:ident, $db:ident) => {
+        {
+            const EXPECTED_RESULTS: usize = $crate::define_op!(@count $($result)+);
+            if $op.results($db).len() < EXPECTED_RESULTS {
+                return Err($crate::ConversionError::MissingResult);
+            }
         }
     };
 

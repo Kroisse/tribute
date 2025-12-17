@@ -34,16 +34,16 @@ pub type OpVec<'db> = SmallVec<[Operation<'db>; 8]>;
 #[salsa::interned(debug)]
 #[derive(Ord, PartialOrd)]
 pub struct Symbol<'db> {
-    #[returns(ref)]
+    #[returns(deref)]
     pub text: String,
 }
 
 /// Interned operation name for efficient dialect.operation comparison.
 #[salsa::interned(debug)]
 pub struct OpNameId<'db> {
-    #[returns(ref)]
+    #[returns(deref)]
     pub dialect: String,
-    #[returns(ref)]
+    #[returns(deref)]
     pub operation: String,
 }
 
@@ -76,7 +76,7 @@ pub enum ValueDef<'db> {
 #[salsa::interned(debug)]
 pub struct Value<'db> {
     pub def: ValueDef<'db>,
-    pub index: u32,
+    pub index: usize,
 }
 
 // ============================================================================
@@ -88,16 +88,16 @@ pub struct Operation<'db> {
     pub location: Location<'db>,
     /// Interned operation name (dialect.operation).
     pub name: OpNameId<'db>,
-    #[returns(ref)]
+    #[returns(deref)]
     pub operands: Vec<Value<'db>>,
-    #[returns(ref)]
+    #[returns(deref)]
     pub results: Vec<Type>,
     #[returns(ref)]
     pub attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
     #[tracked]
-    #[returns(ref)]
+    #[returns(deref)]
     pub regions: Vec<Region<'db>>,
-    #[returns(ref)]
+    #[returns(deref)]
     pub successors: Vec<Block<'db>>,
 }
 
@@ -121,7 +121,7 @@ impl<'db> Operation<'db> {
         Self::of(db, location, name)
     }
 
-    pub fn result(self, db: &'db dyn salsa::Database, index: u32) -> Value<'db> {
+    pub fn result(self, db: &'db dyn salsa::Database, index: usize) -> Value<'db> {
         Value::new(db, ValueDef::OpResult(self), index)
     }
 }
@@ -136,7 +136,7 @@ pub struct Block<'db> {
 }
 
 impl<'db> Block<'db> {
-    pub fn arg(self, db: &'db dyn salsa::Database, index: u32) -> Value<'db> {
+    pub fn arg(self, db: &'db dyn salsa::Database, index: usize) -> Value<'db> {
         Value::new(db, ValueDef::BlockArg(self), index)
     }
 }
@@ -144,7 +144,7 @@ impl<'db> Block<'db> {
 #[salsa::tracked(debug)]
 pub struct Region<'db> {
     pub location: Location<'db>,
-    #[returns(ref)]
+    #[returns(deref)]
     pub blocks: Vec<Block<'db>>,
 }
 
@@ -345,6 +345,9 @@ mod tests {
 
                 /// Test mixed operands: fixed + variadic.
                 op mixed(first, second, ..rest) -> result {};
+
+                /// Test multi-result operation.
+                op multi_result(input) -> quotient, remainder {};
             }
         }
 
@@ -477,6 +480,48 @@ mod tests {
                 // Test variadic accessor
                 let rest = mixed.rest(db);
                 assert_eq!(rest.len(), 2);
+            });
+        }
+
+        #[salsa::tracked]
+        fn test_multi_result_op(db: &dyn salsa::Database) -> crate::Operation<'_> {
+            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let location = Location::new(path, Span::new(0, 0));
+
+            // Create a dummy input value
+            let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
+                .result(Type::I { bits: 32 })
+                .build();
+            let input = dummy_op.result(db, 0);
+
+            // Test MultiResult::new with two result types
+            let multi = MultiResult::new(
+                db,
+                location,
+                input,
+                Type::I { bits: 32 }, // quotient type
+                Type::I { bits: 32 }, // remainder type
+            );
+            multi.as_operation()
+        }
+
+        #[test]
+        fn test_define_op_multi_result() {
+            TributeDatabaseImpl::default().attach(|db| {
+                let op = test_multi_result_op(db);
+                let multi = MultiResult::from_operation(db, op).unwrap();
+
+                // Test named result accessors for each result
+                assert_eq!(multi.quotient_ty(db), Type::I { bits: 32 });
+                assert_eq!(multi.remainder_ty(db), Type::I { bits: 32 });
+
+                // Test that we get different Value handles for each result
+                let q = multi.quotient(db);
+                let r = multi.remainder(db);
+                assert_ne!(q, r); // They should be different values (different indices)
+
+                // Verify the underlying operation has 2 results
+                assert_eq!(op.results(db).len(), 2);
             });
         }
     }
