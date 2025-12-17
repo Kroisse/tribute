@@ -13,12 +13,12 @@
 use std::collections::HashMap;
 
 use tribute_trunk_ir::{
-    Operation, Region, Type, Value,
+    Attribute, DialectType, Operation, Region, Symbol, Type, Value,
     dialect::{core, ty},
 };
 
 use super::constraint::ConstraintSet;
-use super::effect_row::{EffectRow, RowVar};
+use super::effect_row::{AbilityRef, EffectRow, RowVar};
 use super::solver::{SolveResult, TypeSolver};
 
 /// Type checking mode: infer or check.
@@ -31,11 +31,152 @@ pub enum Mode<'db> {
     Check(Type<'db>),
 }
 
+/// Cached symbols for efficient operation dispatch.
+///
+/// Pre-interned symbols avoid repeated `Symbol::new` calls during type checking.
+struct OpSymbols<'db> {
+    // Dialects
+    func: Symbol<'db>,
+    arith: Symbol<'db>,
+    src: Symbol<'db>,
+    adt: Symbol<'db>,
+    list: Symbol<'db>,
+    case: Symbol<'db>,
+    ability: Symbol<'db>,
+    r#type: Symbol<'db>,
+    core: Symbol<'db>,
+
+    // func dialect ops
+    func_func: Symbol<'db>,
+    func_return: Symbol<'db>,
+    func_call: Symbol<'db>,
+    func_call_indirect: Symbol<'db>,
+    func_constant: Symbol<'db>,
+
+    // arith dialect ops
+    arith_const: Symbol<'db>,
+    arith_add: Symbol<'db>,
+    arith_sub: Symbol<'db>,
+    arith_mul: Symbol<'db>,
+    arith_div: Symbol<'db>,
+    arith_neg: Symbol<'db>,
+    arith_cmp: Symbol<'db>,
+
+    // src dialect ops
+    src_var: Symbol<'db>,
+    src_call: Symbol<'db>,
+    src_binop: Symbol<'db>,
+    src_lambda: Symbol<'db>,
+    src_block: Symbol<'db>,
+    src_yield: Symbol<'db>,
+    src_tuple: Symbol<'db>,
+    src_const: Symbol<'db>,
+
+    // adt dialect ops
+    adt_string_const: Symbol<'db>,
+
+    // list dialect ops
+    list_new: Symbol<'db>,
+
+    // case dialect ops
+    case_case: Symbol<'db>,
+
+    // ability dialect ops
+    ability_perform: Symbol<'db>,
+    ability_handle: Symbol<'db>,
+    ability_resume: Symbol<'db>,
+    ability_abort: Symbol<'db>,
+
+    // type dialect ops
+    type_struct: Symbol<'db>,
+    type_enum: Symbol<'db>,
+    type_ability: Symbol<'db>,
+
+    // core dialect ops
+    core_module: Symbol<'db>,
+    core_unrealized_conversion_cast: Symbol<'db>,
+
+    // Attribute keys
+    attr_ability_ref: Symbol<'db>,
+}
+
+impl<'db> OpSymbols<'db> {
+    fn new(db: &'db dyn salsa::Database) -> Self {
+        Self {
+            // Dialects
+            func: Symbol::new(db, "func"),
+            arith: Symbol::new(db, "arith"),
+            src: Symbol::new(db, "src"),
+            adt: Symbol::new(db, "adt"),
+            list: Symbol::new(db, "list"),
+            case: Symbol::new(db, "case"),
+            ability: Symbol::new(db, "ability"),
+            r#type: Symbol::new(db, "type"),
+            core: Symbol::new(db, "core"),
+
+            // func dialect ops
+            func_func: Symbol::new(db, "func"),
+            func_return: Symbol::new(db, "return"),
+            func_call: Symbol::new(db, "call"),
+            func_call_indirect: Symbol::new(db, "call_indirect"),
+            func_constant: Symbol::new(db, "constant"),
+
+            // arith dialect ops
+            arith_const: Symbol::new(db, "const"),
+            arith_add: Symbol::new(db, "add"),
+            arith_sub: Symbol::new(db, "sub"),
+            arith_mul: Symbol::new(db, "mul"),
+            arith_div: Symbol::new(db, "div"),
+            arith_neg: Symbol::new(db, "neg"),
+            arith_cmp: Symbol::new(db, "cmp"),
+
+            // src dialect ops
+            src_var: Symbol::new(db, "var"),
+            src_call: Symbol::new(db, "call"),
+            src_binop: Symbol::new(db, "binop"),
+            src_lambda: Symbol::new(db, "lambda"),
+            src_block: Symbol::new(db, "block"),
+            src_yield: Symbol::new(db, "yield"),
+            src_tuple: Symbol::new(db, "tuple"),
+            src_const: Symbol::new(db, "const"),
+
+            // adt dialect ops
+            adt_string_const: Symbol::new(db, "string_const"),
+
+            // list dialect ops
+            list_new: Symbol::new(db, "new"),
+
+            // case dialect ops
+            case_case: Symbol::new(db, "case"),
+
+            // ability dialect ops
+            ability_perform: Symbol::new(db, "perform"),
+            ability_handle: Symbol::new(db, "handle"),
+            ability_resume: Symbol::new(db, "resume"),
+            ability_abort: Symbol::new(db, "abort"),
+
+            // type dialect ops
+            type_struct: Symbol::new(db, "struct"),
+            type_enum: Symbol::new(db, "enum"),
+            type_ability: Symbol::new(db, "ability"),
+
+            // core dialect ops
+            core_module: Symbol::new(db, "module"),
+            core_unrealized_conversion_cast: Symbol::new(db, "unrealized_conversion_cast"),
+
+            // Attribute keys
+            attr_ability_ref: Symbol::new(db, "ability_ref"),
+        }
+    }
+}
+
 /// Type checking context.
 ///
 /// Tracks the current environment (bindings) and generates constraints.
 pub struct TypeChecker<'db> {
     db: &'db dyn salsa::Database,
+    /// Cached symbols for efficient dispatch.
+    syms: OpSymbols<'db>,
     /// Map from SSA values to their types.
     value_types: HashMap<Value<'db>, Type<'db>>,
     /// Constraint set being built.
@@ -53,6 +194,7 @@ impl<'db> TypeChecker<'db> {
     pub fn new(db: &'db dyn salsa::Database) -> Self {
         Self {
             db,
+            syms: OpSymbols::new(db),
             value_types: HashMap::new(),
             constraints: ConstraintSet::new(),
             next_type_var: 0,
@@ -136,70 +278,122 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Check a single operation.
+    ///
+    /// Uses cached symbols for efficient O(1) dispatch via symbol ID comparison.
     pub fn check_operation(&mut self, op: &Operation<'db>) {
-        let dialect = op.dialect(self.db).text(self.db);
-        let name = op.name(self.db).text(self.db);
+        let dialect = op.dialect(self.db);
+        let name = op.name(self.db);
+        let s = &self.syms;
 
-        match (dialect, name) {
-            // === func dialect ===
-            ("func", "func") => self.check_func_def(op),
-            ("func", "return") => self.check_return(op),
-
-            // === arith dialect ===
-            ("arith", "const") => self.check_arith_const(op),
-            ("arith", "add") | ("arith", "sub") | ("arith", "mul") | ("arith", "div") => {
-                self.check_arith_binop(op)
+        // Dispatch by dialect first, then by operation name
+        if dialect == s.func {
+            if name == s.func_func {
+                self.check_func_def(op);
+            } else if name == s.func_return {
+                self.check_return(op);
+            } else if name == s.func_call {
+                self.check_func_call(op);
+            } else if name == s.func_call_indirect {
+                self.check_func_call_indirect(op);
+            } else if name == s.func_constant {
+                self.check_func_constant(op);
+            } else {
+                self.check_unknown_op(op);
             }
-            ("arith", "neg") => self.check_arith_neg(op),
-            ("arith", "cmp") => self.check_arith_cmp(op),
-
-            // === src dialect (unresolved) ===
-            ("src", "var") => self.check_src_var(op),
-            ("src", "call") => self.check_src_call(op),
-            ("src", "binop") => self.check_src_binop(op),
-            ("src", "lambda") => self.check_src_lambda(op),
-            ("src", "block") => self.check_src_block(op),
-            ("src", "yield") => self.check_src_yield(op),
-            ("src", "tuple") => self.check_src_tuple(op),
-            ("src", "const") => self.check_src_const(op),
-
-            // === adt dialect ===
-            ("adt", "string_const") => self.check_string_const(op),
-
-            // === list dialect ===
-            ("list", "new") => self.check_list_new(op),
-
-            // === case dialect ===
-            ("case", "case") => self.check_case(op),
-
-            // === type dialect ===
-            ("type", "struct") | ("type", "enum") | ("type", "ability") => {
-                // Type declarations don't need type checking
+        } else if dialect == s.arith {
+            if name == s.arith_const {
+                self.check_arith_const(op);
+            } else if name == s.arith_add
+                || name == s.arith_sub
+                || name == s.arith_mul
+                || name == s.arith_div
+            {
+                self.check_arith_binop(op);
+            } else if name == s.arith_neg {
+                self.check_arith_neg(op);
+            } else if name == s.arith_cmp {
+                self.check_arith_cmp(op);
+            } else {
+                self.check_unknown_op(op);
             }
-
-            // === core dialect ===
-            ("core", "module") => {
+        } else if dialect == s.src {
+            if name == s.src_var {
+                self.check_src_var(op);
+            } else if name == s.src_call {
+                self.check_src_call(op);
+            } else if name == s.src_binop {
+                self.check_src_binop(op);
+            } else if name == s.src_lambda {
+                self.check_src_lambda(op);
+            } else if name == s.src_block {
+                self.check_src_block(op);
+            } else if name == s.src_yield {
+                self.check_src_yield(op);
+            } else if name == s.src_tuple {
+                self.check_src_tuple(op);
+            } else if name == s.src_const {
+                self.check_src_const(op);
+            } else {
+                self.check_unknown_op(op);
+            }
+        } else if dialect == s.adt {
+            if name == s.adt_string_const {
+                self.check_string_const(op);
+            } else {
+                self.check_unknown_op(op);
+            }
+        } else if dialect == s.list {
+            if name == s.list_new {
+                self.check_list_new(op);
+            } else {
+                self.check_unknown_op(op);
+            }
+        } else if dialect == s.case {
+            if name == s.case_case {
+                self.check_case(op);
+            } else {
+                self.check_unknown_op(op);
+            }
+        } else if dialect == s.ability {
+            if name == s.ability_perform {
+                self.check_ability_perform(op);
+            } else if name == s.ability_handle {
+                self.check_ability_handle(op);
+            } else if name == s.ability_resume {
+                self.check_ability_resume(op);
+            } else if name == s.ability_abort {
+                self.check_ability_abort(op);
+            } else {
+                self.check_unknown_op(op);
+            }
+        } else if dialect == s.r#type {
+            // Type declarations (struct, enum, ability) don't need type checking
+            if name == s.type_struct || name == s.type_enum || name == s.type_ability {
+                // No-op
+            } else {
+                self.check_unknown_op(op);
+            }
+        } else if dialect == s.core {
+            if name == s.core_module {
                 // Module is checked via check_module
+            } else if name == s.core_unrealized_conversion_cast {
+                // Pass through - assign fresh type var to result
+                self.check_unknown_op(op);
+            } else {
+                self.check_unknown_op(op);
             }
-            ("core", "unrealized_conversion_cast") => {
-                // Pass through for now - assign fresh type var to result
-                let results = op.results(self.db);
-                for (i, _result_ty) in results.iter().enumerate() {
-                    let value = op.result(self.db, i);
-                    let ty = self.fresh_type_var();
-                    self.record_type(value, ty);
-                }
-            }
+        } else {
+            self.check_unknown_op(op);
+        }
+    }
 
-            _ => {
-                // Unknown operation - assign fresh type vars to results
-                let results = op.results(self.db);
-                for (i, _result_ty) in results.iter().enumerate() {
-                    let value = op.result(self.db, i);
-                    let ty = self.fresh_type_var();
-                    self.record_type(value, ty);
-                }
-            }
+    /// Handle unknown operations by assigning fresh type vars to results.
+    fn check_unknown_op(&mut self, op: &Operation<'db>) {
+        let results = op.results(self.db);
+        for (i, _result_ty) in results.iter().enumerate() {
+            let value = op.result(self.db, i);
+            let ty = self.fresh_type_var();
+            self.record_type(value, ty);
         }
     }
 
@@ -227,6 +421,81 @@ impl<'db> TypeChecker<'db> {
         // Return doesn't have a result value
         // The operand should be checked against the function return type
         // (This requires function context tracking, simplified for now)
+    }
+
+    fn check_func_call(&mut self, op: &Operation<'db>) {
+        // func.call: direct call to a function symbol
+        // The effect of the call is the effect declared in the function type
+        let results = op.results(self.db);
+        let result_type = results
+            .first()
+            .copied()
+            .unwrap_or_else(|| self.fresh_type_var());
+
+        // Record the result type
+        let value = op.result(self.db, 0);
+        self.record_type(value, result_type);
+
+        // TODO: Look up the function by its callee symbol to get the function type
+        // and propagate its effect. For now, we assign a fresh effect row variable
+        // to represent the potential effects of the call.
+        let call_effect = EffectRow::var(self.fresh_row_var());
+        self.merge_effect(call_effect);
+    }
+
+    fn check_func_call_indirect(&mut self, op: &Operation<'db>) {
+        // func.call_indirect: indirect call via function value
+        // The callee is the first operand (function value)
+        let operands = op.operands(self.db);
+        let results = op.results(self.db);
+        let result_type = results
+            .first()
+            .copied()
+            .unwrap_or_else(|| self.fresh_type_var());
+
+        // Get the callee type and extract its effect
+        if let Some(&callee) = operands.first()
+            && let Some(callee_type) = self.get_type(callee)
+            && let Some(func_type) = core::Func::from_type(self.db, callee_type)
+        {
+            // Constrain result type
+            let func_result = func_type.result(self.db);
+            self.constrain_eq(result_type, func_result);
+
+            // Propagate the function's effect
+            if let Some(effect_ty) = func_type.effect(self.db)
+                && let Some(effect_row) = EffectRow::from_type(self.db, effect_ty)
+            {
+                self.merge_effect(effect_row);
+            }
+
+            // Constrain argument types
+            let param_types = func_type.params(self.db);
+            for (i, &param_ty) in param_types.iter().enumerate() {
+                // Arguments start after the callee (index 0)
+                if let Some(&arg) = operands.get(i + 1)
+                    && let Some(arg_ty) = self.get_type(arg)
+                {
+                    self.constrain_eq(arg_ty, param_ty);
+                }
+            }
+        }
+
+        let value = op.result(self.db, 0);
+        self.record_type(value, result_type);
+    }
+
+    fn check_func_constant(&mut self, op: &Operation<'db>) {
+        // func.constant: creates a function value from a symbol reference
+        // The result type should be a function type
+        let results = op.results(self.db);
+        let result_type = results
+            .first()
+            .copied()
+            .unwrap_or_else(|| self.fresh_type_var());
+
+        let value = op.result(self.db, 0);
+        self.record_type(value, result_type);
     }
 
     // === arith dialect checking ===
@@ -434,6 +703,100 @@ impl<'db> TypeChecker<'db> {
 
         let value = op.result(self.db, 0);
         self.record_type(value, result_type);
+    }
+
+    // === ability dialect checking ===
+
+    fn check_ability_perform(&mut self, op: &Operation<'db>) {
+        // ability.perform: performs an ability operation
+        // This adds the ability to the current effect row
+
+        let results = op.results(self.db);
+        let result_type = results
+            .first()
+            .copied()
+            .unwrap_or_else(|| self.fresh_type_var());
+
+        // Get the ability reference from attributes
+        // attr: ability_ref: SymbolRef (path to ability)
+        // attr: op: Symbol (operation name)
+        if let Some(Attribute::SymbolRef(ability_path)) =
+            op.attributes(self.db).get(&self.syms.attr_ability_ref)
+        {
+            // Extract ability name from the path (last component)
+            let ability_name = ability_path
+                .last()
+                .copied()
+                .unwrap_or_else(|| Symbol::new(self.db, "unknown"));
+
+            // Create ability reference (with no type params for now)
+            // TODO: Extract type parameters from the ability definition
+            let ability = AbilityRef::simple(ability_name);
+
+            // Create an effect row with this ability and merge it
+            let effect = EffectRow::concrete([ability]);
+            self.merge_effect(effect);
+        }
+
+        let value = op.result(self.db, 0);
+        self.record_type(value, result_type);
+    }
+
+    fn check_ability_handle(&mut self, op: &Operation<'db>) {
+        // ability.handle: installs a handler and executes the body
+        // The handler eliminates certain effects from the body's effect row
+
+        let results = op.results(self.db);
+        let result_type = results
+            .first()
+            .copied()
+            .unwrap_or_else(|| self.fresh_type_var());
+
+        // Save current effect
+        let outer_effect = std::mem::take(&mut self.current_effect);
+
+        // Check the body region
+        let regions = op.regions(self.db);
+        if let Some(body) = regions.first() {
+            self.check_region(body);
+        }
+
+        // The body's effect is now in self.current_effect
+        // In a full implementation, we would:
+        // 1. Extract which abilities are handled from the clauses
+        // 2. Remove those abilities from the body's effect
+        // 3. Union the remaining effects with the outer effect
+
+        // For now, we just preserve the body's effect minus any handled abilities
+        // TODO: Extract handled abilities from the `clauses` attribute
+
+        // Merge remaining effects with outer effect
+        let body_effect = std::mem::replace(&mut self.current_effect, outer_effect);
+        self.merge_effect(body_effect);
+
+        let value = op.result(self.db, 0);
+        self.record_type(value, result_type);
+    }
+
+    fn check_ability_resume(&mut self, op: &Operation<'db>) {
+        // ability.resume: resumes a captured continuation
+        // The result type depends on what the continuation expects
+
+        let results = op.results(self.db);
+        let result_type = results
+            .first()
+            .copied()
+            .unwrap_or_else(|| self.fresh_type_var());
+
+        // The continuation operand should have a continuation type
+        // For now, just record the result type
+        let value = op.result(self.db, 0);
+        self.record_type(value, result_type);
+    }
+
+    fn check_ability_abort(&mut self, _op: &Operation<'db>) {
+        // ability.abort: discards a continuation without resuming
+        // No result value, just consumes the continuation
     }
 
     /// Solve all accumulated constraints and return the solved substitution.

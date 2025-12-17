@@ -19,8 +19,12 @@
 
 use std::collections::HashMap;
 
+use tribute_trunk_ir::dialect::adt;
 use tribute_trunk_ir::dialect::core::Module;
-use tribute_trunk_ir::{Attribute, Block, IdVec, Operation, Region, Symbol, Type};
+use tribute_trunk_ir::dialect::func;
+use tribute_trunk_ir::{
+    Attribute, Block, DialectOp, IdVec, Operation, Region, Symbol, Type, Value,
+};
 
 // =============================================================================
 // Module Environment
@@ -248,15 +252,23 @@ fn collect_enum_constructors<'db>(
 // =============================================================================
 
 /// Name resolver context.
+///
+/// Transforms `src.*` operations into resolved operations (`func.*`, `adt.*`).
 pub struct Resolver<'db> {
     db: &'db dyn salsa::Database,
     env: ModuleEnv<'db>,
+    /// Maps old values to their replacements during transformation.
+    value_map: HashMap<Value<'db>, Value<'db>>,
 }
 
 impl<'db> Resolver<'db> {
     /// Create a new resolver with the given environment.
     pub fn new(db: &'db dyn salsa::Database, env: ModuleEnv<'db>) -> Self {
-        Self { db, env }
+        Self {
+            db,
+            env,
+            value_map: HashMap::new(),
+        }
     }
 
     /// Get the environment.
@@ -264,98 +276,213 @@ impl<'db> Resolver<'db> {
         &self.env
     }
 
+    /// Look up a mapped value, or return the original if not mapped.
+    fn lookup_value(&self, old: Value<'db>) -> Value<'db> {
+        self.value_map.get(&old).copied().unwrap_or(old)
+    }
+
+    /// Map a value from old to new.
+    fn map_value(&mut self, old: Value<'db>, new: Value<'db>) {
+        self.value_map.insert(old, new);
+    }
+
     /// Resolve names in a module.
     ///
-    /// Returns the module with `src.*` operations transformed.
-    /// Note: Full transformation requires IR rewriting which is complex.
-    /// For now, this performs validation and returns the module unchanged.
-    /// UFCS resolution happens during type checking.
+    /// Returns the module with `src.*` operations transformed to resolved forms.
     pub fn resolve_module(&mut self, module: &Module<'db>) -> Module<'db> {
-        // Walk the module and validate/resolve what we can
         let body = module.body(self.db);
-        for block in body.blocks(self.db).iter() {
-            self.resolve_block(block);
-        }
+        let new_body = self.resolve_region(&body);
 
-        // TODO: Actually rewrite the IR with resolved operations
-        // For now, return unchanged - type checker will handle src.* ops
-        *module
-    }
-
-    /// Resolve names in a block.
-    fn resolve_block(&self, block: &Block<'db>) {
-        for op in block.operations(self.db).iter() {
-            self.resolve_operation(op);
-        }
-    }
-
-    /// Resolve names in an operation.
-    fn resolve_operation(&self, op: &Operation<'db>) {
-        let dialect = op.dialect(self.db).text(self.db);
-        let op_name = op.name(self.db).text(self.db);
-
-        match (dialect, op_name) {
-            ("src", "var") => {
-                // Try to resolve the variable
-                if let Some(_resolved) = self.resolve_var(op) {
-                    // TODO: Replace op with resolved reference
-                }
-            }
-            ("src", "path") => {
-                // Try to resolve the path
-                if let Some(_resolved) = self.resolve_path(op) {
-                    // TODO: Replace op with resolved reference
-                }
-            }
-            ("src", "call") => {
-                // Try to resolve the call target
-                // The callee might be a qualified path or unqualified name
-            }
-            _ => {
-                // Recurse into regions
-                for region in op.regions(self.db).iter() {
-                    self.resolve_region(region);
-                }
-            }
-        }
+        Module::create(
+            self.db,
+            module.location(self.db),
+            module.name(self.db),
+            new_body,
+        )
     }
 
     /// Resolve names in a region.
-    fn resolve_region(&self, region: &Region<'db>) {
-        for block in region.blocks(self.db).iter() {
-            self.resolve_block(block);
+    fn resolve_region(&mut self, region: &Region<'db>) -> Region<'db> {
+        let new_blocks: IdVec<Block<'db>> = region
+            .blocks(self.db)
+            .iter()
+            .map(|block| self.resolve_block(block))
+            .collect();
+
+        Region::new(self.db, region.location(self.db), new_blocks)
+    }
+
+    /// Resolve names in a block.
+    fn resolve_block(&mut self, block: &Block<'db>) -> Block<'db> {
+        let new_ops: IdVec<Operation<'db>> = block
+            .operations(self.db)
+            .iter()
+            .flat_map(|op| self.resolve_operation(op))
+            .collect();
+
+        Block::new(
+            self.db,
+            block.location(self.db),
+            block.args(self.db).clone(),
+            new_ops,
+        )
+    }
+
+    /// Resolve a single operation.
+    ///
+    /// Returns the resolved operation(s). May return empty vec if erased,
+    /// or multiple ops if expanded.
+    fn resolve_operation(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
+        // First, remap operands from previous transformations
+        let remapped_op = self.remap_operands(op);
+
+        let dialect = remapped_op.dialect(self.db).text(self.db);
+        let op_name = remapped_op.name(self.db).text(self.db);
+
+        match (dialect, op_name) {
+            ("src", "var") => {
+                if let Some(resolved) = self.try_resolve_var(&remapped_op) {
+                    vec![resolved]
+                } else {
+                    // Unresolved - keep for later (UFCS resolution)
+                    vec![self.resolve_op_regions(&remapped_op)]
+                }
+            }
+            ("src", "path") => {
+                if let Some(resolved) = self.try_resolve_path(&remapped_op) {
+                    vec![resolved]
+                } else {
+                    // Unresolved - keep for later
+                    vec![self.resolve_op_regions(&remapped_op)]
+                }
+            }
+            ("src", "call") => {
+                if let Some(resolved) = self.try_resolve_call(&remapped_op) {
+                    vec![resolved]
+                } else {
+                    // Unresolved - keep for later
+                    vec![self.resolve_op_regions(&remapped_op)]
+                }
+            }
+            _ => {
+                // Not a src.* operation - recursively process regions
+                vec![self.resolve_op_regions(&remapped_op)]
+            }
         }
     }
 
-    /// Resolve a `src.var` operation.
-    fn resolve_var(&self, op: &Operation<'db>) -> Option<ResolvedRef<'db>> {
+    /// Remap operands using the current value map.
+    fn remap_operands(&self, op: &Operation<'db>) -> Operation<'db> {
+        let operands = op.operands(self.db);
+        let mut new_operands: IdVec<Value<'db>> = IdVec::new();
+        let mut changed = false;
+
+        for &operand in operands.iter() {
+            let mapped = self.lookup_value(operand);
+            new_operands.push(mapped);
+            if mapped != operand {
+                changed = true;
+            }
+        }
+
+        if !changed {
+            return *op;
+        }
+
+        Operation::new(
+            self.db,
+            op.location(self.db),
+            op.dialect(self.db),
+            op.name(self.db),
+            new_operands,
+            op.results(self.db).clone(),
+            op.attributes(self.db).clone(),
+            op.regions(self.db).clone(),
+            op.successors(self.db).clone(),
+        )
+    }
+
+    /// Recursively resolve regions within an operation.
+    fn resolve_op_regions(&mut self, op: &Operation<'db>) -> Operation<'db> {
+        let regions = op.regions(self.db);
+        if regions.is_empty() {
+            return *op;
+        }
+
+        let new_regions: IdVec<Region<'db>> = regions
+            .iter()
+            .map(|region| self.resolve_region(region))
+            .collect();
+
+        Operation::new(
+            self.db,
+            op.location(self.db),
+            op.dialect(self.db),
+            op.name(self.db),
+            op.operands(self.db).clone(),
+            op.results(self.db).clone(),
+            op.attributes(self.db).clone(),
+            new_regions,
+            op.successors(self.db).clone(),
+        )
+    }
+
+    /// Try to resolve a `src.var` operation.
+    ///
+    /// Returns the resolved operation if successful, None if unresolved.
+    fn try_resolve_var(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let name_key = Symbol::new(self.db, "name");
         let Attribute::Symbol(sym) = attrs.get(&name_key)? else {
             return None;
         };
         let name = sym.text(self.db);
+        let location = op.location(self.db);
 
         // Look up in environment
         match self.env.lookup(name)? {
-            Binding::Function { path, ty } => Some(ResolvedRef::Function {
-                path: path.clone(),
-                ty: *ty,
-            }),
-            Binding::Constructor { ty, tag, params } => Some(ResolvedRef::Constructor {
-                ty: *ty,
-                tag: *tag,
-                params: params.clone(),
-            }),
+            Binding::Function { path, ty } => {
+                // Create func.constant operation
+                // func::constant(db, location, result_type, func_ref)
+                let new_op = func::constant(self.db, location, *ty, path.clone());
+                let new_operation = new_op.as_operation();
+
+                // Map old result to new result
+                let old_result = op.result(self.db, 0);
+                let new_result = new_operation.result(self.db, 0);
+                self.map_value(old_result, new_result);
+
+                Some(new_operation)
+            }
+            Binding::Constructor { ty, tag, .. } => {
+                // Create adt.struct_new or adt.variant_new
+                // No args here since src.var is just a reference (not a call)
+                let new_operation = if let Some(tag) = tag {
+                    // Enum variant constructor (with tag)
+                    // variant_new(db, location, fields, result_type, ty, tag)
+                    adt::variant_new(self.db, location, vec![], *ty, *ty, *tag).as_operation()
+                } else {
+                    // Struct constructor (no tag)
+                    // struct_new(db, location, fields, result_type, ty)
+                    adt::struct_new(self.db, location, vec![], *ty, *ty).as_operation()
+                };
+
+                // Map old result to new result
+                let old_result = op.result(self.db, 0);
+                let new_result = new_operation.result(self.db, 0);
+                self.map_value(old_result, new_result);
+
+                Some(new_operation)
+            }
             Binding::TypeDef { .. } => {
-                // Type used in value position - error
+                // Type used in value position - error (leave unresolved for diagnostics)
                 None
             }
         }
     }
 
-    /// Resolve a `src.path` operation.
-    fn resolve_path(&self, op: &Operation<'db>) -> Option<ResolvedRef<'db>> {
+    /// Try to resolve a `src.path` operation.
+    fn try_resolve_path(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let path_key = Symbol::new(self.db, "path");
         let Attribute::SymbolRef(segments) = attrs.get(&path_key)? else {
@@ -366,39 +493,100 @@ impl<'db> Resolver<'db> {
             return None;
         }
 
+        let location = op.location(self.db);
+
         // For now, only support 2-segment paths (Namespace::name)
         let namespace = segments[0].text(self.db);
         let name = segments[1].text(self.db);
 
         match self.env.lookup_qualified(namespace, name)? {
-            Binding::Function { path, ty } => Some(ResolvedRef::Function {
-                path: path.clone(),
-                ty: *ty,
-            }),
-            Binding::Constructor { ty, tag, params } => Some(ResolvedRef::Constructor {
-                ty: *ty,
-                tag: *tag,
-                params: params.clone(),
-            }),
+            Binding::Function { path, ty } => {
+                let new_op = func::constant(self.db, location, *ty, path.clone());
+                let new_operation = new_op.as_operation();
+
+                let old_result = op.result(self.db, 0);
+                let new_result = new_operation.result(self.db, 0);
+                self.map_value(old_result, new_result);
+
+                Some(new_operation)
+            }
+            Binding::Constructor { ty, tag, .. } => {
+                let new_operation = if let Some(tag) = tag {
+                    // variant_new(db, location, fields, result_type, ty, tag)
+                    adt::variant_new(self.db, location, vec![], *ty, *ty, *tag).as_operation()
+                } else {
+                    // struct_new(db, location, fields, result_type, ty)
+                    adt::struct_new(self.db, location, vec![], *ty, *ty).as_operation()
+                };
+
+                let old_result = op.result(self.db, 0);
+                let new_result = new_operation.result(self.db, 0);
+                self.map_value(old_result, new_result);
+
+                Some(new_operation)
+            }
             Binding::TypeDef { .. } => None,
         }
     }
-}
 
-/// Result of resolving a name reference.
-#[derive(Clone, Debug)]
-pub enum ResolvedRef<'db> {
-    /// Resolved to a function.
-    Function {
-        path: IdVec<Symbol<'db>>,
-        ty: Type<'db>,
-    },
-    /// Resolved to a constructor.
-    Constructor {
-        ty: Type<'db>,
-        tag: Option<Symbol<'db>>,
-        params: IdVec<Type<'db>>,
-    },
+    /// Try to resolve a `src.call` operation.
+    fn try_resolve_call(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
+        let attrs = op.attributes(self.db);
+        let name_key = Symbol::new(self.db, "name");
+        let Attribute::SymbolRef(path_segments) = attrs.get(&name_key)? else {
+            return None;
+        };
+
+        if path_segments.is_empty() {
+            return None;
+        }
+
+        let location = op.location(self.db);
+        let result_ty = op.results(self.db).first().copied()?;
+        let args: Vec<Value<'db>> = op.operands(self.db).iter().copied().collect();
+
+        // Try to resolve the callee
+        let callee_name = if path_segments.len() == 1 {
+            // Unqualified name
+            path_segments[0].text(self.db)
+        } else {
+            // Qualified path - for now just use the last segment
+            // TODO: Proper qualified lookup
+            path_segments.last()?.text(self.db)
+        };
+
+        match self.env.lookup(callee_name)? {
+            Binding::Function { path, .. } => {
+                // Direct function call
+                // func::call(db, location, args, result_type, callee)
+                let new_op = func::call(self.db, location, args, result_ty, path.clone());
+                let new_operation = new_op.as_operation();
+
+                let old_result = op.result(self.db, 0);
+                let new_result = new_operation.result(self.db, 0);
+                self.map_value(old_result, new_result);
+
+                Some(new_operation)
+            }
+            Binding::Constructor { ty, tag, .. } => {
+                // Constructor application
+                let new_operation = if let Some(tag) = tag {
+                    // variant_new(db, location, fields, result_type, ty, tag)
+                    adt::variant_new(self.db, location, args, *ty, *ty, *tag).as_operation()
+                } else {
+                    // struct_new(db, location, fields, result_type, ty)
+                    adt::struct_new(self.db, location, args, *ty, *ty).as_operation()
+                };
+
+                let old_result = op.result(self.db, 0);
+                let new_result = new_operation.result(self.db, 0);
+                self.map_value(old_result, new_result);
+
+                Some(new_operation)
+            }
+            Binding::TypeDef { .. } => None,
+        }
+    }
 }
 
 // =============================================================================

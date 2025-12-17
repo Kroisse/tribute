@@ -47,16 +47,16 @@ pub struct Operation<'db> {
     pub dialect: Symbol<'db>,
     /// Operation name within the dialect (e.g., "add", "call").
     pub name: Symbol<'db>,
-    #[returns(deref)]
+    #[returns(ref)]
     pub operands: IdVec<Value<'db>>,
-    #[returns(deref)]
+    #[returns(ref)]
     pub results: IdVec<Type<'db>>,
     #[returns(ref)]
     pub attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
     #[tracked]
-    #[returns(deref)]
+    #[returns(ref)]
     pub regions: IdVec<Region<'db>>,
-    #[returns(deref)]
+    #[returns(ref)]
     pub successors: IdVec<Block<'db>>,
 }
 
@@ -98,9 +98,9 @@ impl<'db> Operation<'db> {
 #[salsa::tracked(debug)]
 pub struct Block<'db> {
     pub location: Location<'db>,
-    #[returns(deref)]
+    #[returns(ref)]
     pub args: IdVec<Type<'db>>,
-    #[returns(deref)]
+    #[returns(ref)]
     pub operations: IdVec<Operation<'db>>,
 }
 
@@ -113,7 +113,7 @@ impl<'db> Block<'db> {
 #[salsa::tracked(debug)]
 pub struct Region<'db> {
     pub location: Location<'db>,
-    #[returns(deref)]
+    #[returns(ref)]
     pub blocks: IdVec<Block<'db>>,
 }
 

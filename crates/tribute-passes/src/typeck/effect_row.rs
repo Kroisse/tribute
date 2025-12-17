@@ -9,10 +9,15 @@
 //!       | {A₁, ..., Aₙ, e}      -- concrete + row variable
 //!       | {e₁, e₂}              -- row variable union
 //! ```
+//!
+//! This module provides:
+//! - `EffectRow<'db>`: Type checker's internal representation
+//! - Conversion to/from `core::EffectRowType<'db>` (IR type)
 
 use std::collections::BTreeSet;
 
-use tribute_trunk_ir::{IdVec, Symbol, Type};
+use tribute_trunk_ir::dialect::core::{AbilityRefType, EffectRowType};
+use tribute_trunk_ir::{DialectType, IdVec, Symbol, Type};
 
 /// A row variable identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -64,6 +69,25 @@ impl<'db> AbilityRef<'db> {
         Self {
             name,
             params: IdVec::new(),
+        }
+    }
+
+    /// Convert from an IR type to an AbilityRef.
+    ///
+    /// Returns `None` if the type is not a `core.ability_ref`.
+    pub fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
+        let ability_ref = AbilityRefType::from_type(db, ty)?;
+        let name = ability_ref.name(db)?;
+        let params: IdVec<Type<'db>> = ability_ref.params(db).iter().copied().collect();
+        Some(Self { name, params })
+    }
+
+    /// Convert this AbilityRef to an IR type.
+    pub fn to_type(&self, db: &'db dyn salsa::Database) -> Type<'db> {
+        if self.params.is_empty() {
+            AbilityRefType::simple(db, self.name).as_type()
+        } else {
+            AbilityRefType::with_params(db, self.name, self.params.clone()).as_type()
         }
     }
 }
@@ -182,6 +206,47 @@ impl<'db> EffectRow<'db> {
         // if any ability appears with different type parameters
         // This is already prevented by the AbilityRef Eq implementation
         None
+    }
+}
+
+impl<'db> EffectRow<'db> {
+    /// Convert from an IR type to an EffectRow.
+    ///
+    /// Returns `None` if the type is not a `core.effect_row`.
+    pub fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
+        let effect_row = EffectRowType::from_type(db, ty)?;
+
+        // Convert abilities
+        let abilities: BTreeSet<AbilityRef<'db>> = effect_row
+            .abilities(db)
+            .iter()
+            .filter_map(|&ability_ty| AbilityRef::from_type(db, ability_ty))
+            .collect();
+
+        // Get tail variable
+        let tail = effect_row.tail_var(db).map(RowVar);
+
+        Some(Self { abilities, tail })
+    }
+
+    /// Convert this EffectRow to an IR type.
+    pub fn to_type(&self, db: &'db dyn salsa::Database) -> Type<'db> {
+        let abilities: IdVec<Type<'db>> = self
+            .abilities
+            .iter()
+            .map(|ability| ability.to_type(db))
+            .collect();
+
+        match self.tail {
+            Some(RowVar(id)) => EffectRowType::with_tail(db, abilities, id).as_type(),
+            None => {
+                if abilities.is_empty() {
+                    EffectRowType::empty(db).as_type()
+                } else {
+                    EffectRowType::concrete(db, abilities).as_type()
+                }
+            }
+        }
     }
 }
 

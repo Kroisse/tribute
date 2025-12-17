@@ -739,6 +739,57 @@ macro_rules! define_op {
                     self.op
                 }
             }
+
+            // Salsa traits - delegate to inner Operation for tracked function parameters
+            impl<'db> salsa::plumbing::AsId for [<$op:camel>]<'db> {
+                fn as_id(&self) -> salsa::Id {
+                    salsa::plumbing::AsId::as_id(&self.op)
+                }
+            }
+
+            impl<'db> salsa::plumbing::FromId for [<$op:camel>]<'db> {
+                fn from_id(id: salsa::Id) -> Self {
+                    Self { op: salsa::plumbing::FromId::from_id(id) }
+                }
+            }
+
+            impl<'db> salsa::plumbing::SalsaStructInDb for [<$op:camel>]<'db> {
+                type MemoIngredientMap =
+                    <$crate::Operation<'db> as salsa::plumbing::SalsaStructInDb>::MemoIngredientMap;
+
+                fn lookup_ingredient_index(
+                    zalsa: &salsa::plumbing::Zalsa,
+                ) -> salsa::plumbing::IngredientIndices {
+                    <$crate::Operation<'db> as salsa::plumbing::SalsaStructInDb>::lookup_ingredient_index(zalsa)
+                }
+
+                fn entries(
+                    zalsa: &salsa::plumbing::Zalsa,
+                ) -> impl Iterator<Item = salsa::plumbing::DatabaseKeyIndex> + '_ {
+                    <$crate::Operation<'db> as salsa::plumbing::SalsaStructInDb>::entries(zalsa)
+                }
+
+                fn cast(
+                    id: salsa::Id,
+                    type_id: std::any::TypeId,
+                ) -> Option<Self> {
+                    <$crate::Operation<'db> as salsa::plumbing::SalsaStructInDb>::cast(id, type_id)
+                        .map(|op| Self { op })
+                }
+
+                unsafe fn memo_table(
+                    zalsa: &salsa::plumbing::Zalsa,
+                    id: salsa::Id,
+                    current_revision: salsa::Revision,
+                ) -> salsa::plumbing::MemoTableWithTypes<'_> {
+                    // SAFETY: delegating to Operation's memo_table with same arguments
+                    unsafe {
+                        <$crate::Operation<'db> as salsa::plumbing::SalsaStructInDb>::memo_table(
+                            zalsa, id, current_revision,
+                        )
+                    }
+                }
+            }
         }
 
         // Generate constructor

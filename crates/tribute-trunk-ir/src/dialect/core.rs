@@ -282,3 +282,175 @@ impl<'db> DialectType<'db> for Func<'db> {
         }
     }
 }
+
+// === Effect Row type wrapper ===
+
+/// Effect row type wrapper (`core.effect_row`).
+///
+/// Represents an effect row for row-polymorphic effect typing.
+/// Layout:
+/// - `params`: Ability types (each ability is a type like `State(Int)`)
+/// - `attrs.tail`: Optional row variable ID for the tail (open row)
+///
+/// Examples:
+/// - `{}` - empty row (pure)
+/// - `{State(Int)}` - concrete row with one ability
+/// - `{Console | e}` - row with ability and tail variable
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct EffectRowType<'db>(Type<'db>);
+
+impl<'db> EffectRowType<'db> {
+    /// Create an empty effect row (pure function).
+    pub fn empty(db: &'db dyn salsa::Database) -> Self {
+        Self(Type::new(
+            db,
+            Symbol::new(db, "core"),
+            Symbol::new(db, "effect_row"),
+            IdVec::new(),
+            BTreeMap::new(),
+        ))
+    }
+
+    /// Create an effect row with abilities and no tail (closed row).
+    pub fn concrete(db: &'db dyn salsa::Database, abilities: IdVec<Type<'db>>) -> Self {
+        Self(Type::new(
+            db,
+            Symbol::new(db, "core"),
+            Symbol::new(db, "effect_row"),
+            abilities,
+            BTreeMap::new(),
+        ))
+    }
+
+    /// Create an effect row with a tail variable (open row).
+    pub fn with_tail(
+        db: &'db dyn salsa::Database,
+        abilities: IdVec<Type<'db>>,
+        tail_var_id: u64,
+    ) -> Self {
+        Self(Type::new(
+            db,
+            Symbol::new(db, "core"),
+            Symbol::new(db, "effect_row"),
+            abilities,
+            BTreeMap::from([(Symbol::new(db, "tail"), Attribute::IntBits(tail_var_id))]),
+        ))
+    }
+
+    /// Create an effect row with just a tail variable (polymorphic row).
+    pub fn var(db: &'db dyn salsa::Database, tail_var_id: u64) -> Self {
+        Self::with_tail(db, IdVec::new(), tail_var_id)
+    }
+
+    /// Check if this is an empty row (pure).
+    pub fn is_empty(&self, db: &'db dyn salsa::Database) -> bool {
+        self.0.params(db).is_empty() && self.tail_var(db).is_none()
+    }
+
+    /// Get the ability types in this row.
+    pub fn abilities(&self, db: &'db dyn salsa::Database) -> &[Type<'db>] {
+        self.0.params(db)
+    }
+
+    /// Get the tail variable ID, if any.
+    pub fn tail_var(&self, db: &'db dyn salsa::Database) -> Option<u64> {
+        match self.0.get_attr(db, "tail") {
+            Some(Attribute::IntBits(id)) => Some(*id),
+            _ => None,
+        }
+    }
+}
+
+impl<'db> Deref for EffectRowType<'db> {
+    type Target = Type<'db>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'db> DialectType<'db> for EffectRowType<'db> {
+    fn as_type(&self) -> Type<'db> {
+        self.0
+    }
+
+    fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
+        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == "effect_row" {
+            Some(Self(ty))
+        } else {
+            None
+        }
+    }
+}
+
+// === Ability type wrapper ===
+
+/// Ability type wrapper (`core.ability_ref`).
+///
+/// Represents an ability (effect) reference like `State(Int)` or `Console`.
+/// Layout:
+/// - `attrs.name`: The ability name as a symbol
+/// - `params`: Type parameters for the ability
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct AbilityRefType<'db>(Type<'db>);
+
+impl<'db> AbilityRefType<'db> {
+    /// Create an ability type with no type parameters.
+    pub fn simple(db: &'db dyn salsa::Database, name: Symbol<'db>) -> Self {
+        Self(Type::new(
+            db,
+            Symbol::new(db, "core"),
+            Symbol::new(db, "ability_ref"),
+            IdVec::new(),
+            BTreeMap::from([(Symbol::new(db, "name"), Attribute::Symbol(name))]),
+        ))
+    }
+
+    /// Create an ability type with type parameters.
+    pub fn with_params(
+        db: &'db dyn salsa::Database,
+        name: Symbol<'db>,
+        params: IdVec<Type<'db>>,
+    ) -> Self {
+        Self(Type::new(
+            db,
+            Symbol::new(db, "core"),
+            Symbol::new(db, "ability_ref"),
+            params,
+            BTreeMap::from([(Symbol::new(db, "name"), Attribute::Symbol(name))]),
+        ))
+    }
+
+    /// Get the ability name.
+    pub fn name(&self, db: &'db dyn salsa::Database) -> Option<Symbol<'db>> {
+        match self.0.get_attr(db, "name") {
+            Some(Attribute::Symbol(sym)) => Some(*sym),
+            _ => None,
+        }
+    }
+
+    /// Get the type parameters.
+    pub fn params(&self, db: &'db dyn salsa::Database) -> &[Type<'db>] {
+        self.0.params(db)
+    }
+}
+
+impl<'db> Deref for AbilityRefType<'db> {
+    type Target = Type<'db>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'db> DialectType<'db> for AbilityRefType<'db> {
+    fn as_type(&self) -> Type<'db> {
+        self.0
+    }
+
+    fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
+        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == "ability_ref" {
+            Some(Self(ty))
+        } else {
+            None
+        }
+    }
+}

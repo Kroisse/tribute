@@ -20,6 +20,7 @@
 pub mod cst_to_tir;
 pub mod pipeline;
 pub mod resolve;
+pub mod rewrite;
 pub mod typeck;
 
 // Re-exports
@@ -29,4 +30,5 @@ pub use pipeline::{
     compile_with_diagnostics, stage_resolve, stage_typecheck,
 };
 pub use resolve::{ModuleEnv, Resolver, resolve_module};
+pub use rewrite::{ApplyResult, PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
 pub use typeck::{Constraint, EffectRow, TypeChecker, TypeSolver, typecheck_module};

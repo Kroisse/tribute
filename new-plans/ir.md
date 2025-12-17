@@ -671,6 +671,27 @@ text.to_string()
 
 ## Future Considerations
 
+### Persistent Data Structure for Block Operations
+
+현재 `Block::operations`는 `SmallVec`을 사용하지만, `im::Vector` 같은 persistent data structure를 고려할 수 있다.
+
+**배경:**
+- TrunkIR은 Salsa tracked struct로 immutable
+- 현재 rewrite는 블록 전체를 재구축 (O(n) 복사)
+- 대부분의 rewrite pass에서 변경되는 op은 소수
+
+**im::Vector 사용 시 이점:**
+- 구조적 공유로 변경된 부분만 새 노드 생성
+- `update(index, new_op)` O(log n)
+- 1000개 op 중 10개 변경 시: SmallVec은 1000개 복사, im::Vector는 ~100개 노드
+
+**고려사항:**
+- 작은 블록에서는 SmallVec이 캐시 지역성 면에서 유리
+- Rewriter 설계를 surgical update 방식으로 변경해야 최대 이점
+- 추가 의존성 (im crate)
+
+**결정 시점:** 프로파일링에서 블록 복사가 병목으로 확인되면 재검토
+
 ### AST 제거하고 Tree-sitter CST에서 직접 TrunkIR로 lowering
 
 현재 파이프라인: `Tree-sitter CST → AST (tribute-ast) → TrunkIR`
