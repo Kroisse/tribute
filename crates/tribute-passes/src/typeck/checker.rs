@@ -83,7 +83,7 @@ struct OpSymbols<'db> {
 
     // ability dialect ops
     ability_perform: Symbol<'db>,
-    ability_handle: Symbol<'db>,
+    ability_prompt: Symbol<'db>,
     ability_resume: Symbol<'db>,
     ability_abort: Symbol<'db>,
 
@@ -151,7 +151,7 @@ impl<'db> OpSymbols<'db> {
 
             // ability dialect ops
             ability_perform: Symbol::new(db, "perform"),
-            ability_handle: Symbol::new(db, "handle"),
+            ability_prompt: Symbol::new(db, "prompt"),
             ability_resume: Symbol::new(db, "resume"),
             ability_abort: Symbol::new(db, "abort"),
 
@@ -357,8 +357,8 @@ impl<'db> TypeChecker<'db> {
         } else if dialect == s.ability {
             if name == s.ability_perform {
                 self.check_ability_perform(op);
-            } else if name == s.ability_handle {
-                self.check_ability_handle(op);
+            } else if name == s.ability_prompt {
+                self.check_ability_prompt(op);
             } else if name == s.ability_resume {
                 self.check_ability_resume(op);
             } else if name == s.ability_abort {
@@ -742,9 +742,11 @@ impl<'db> TypeChecker<'db> {
         self.record_type(value, result_type);
     }
 
-    fn check_ability_handle(&mut self, op: &Operation<'db>) {
-        // ability.handle: installs a handler and executes the body
-        // The handler eliminates certain effects from the body's effect row
+    fn check_ability_prompt(&mut self, op: &Operation<'db>) {
+        // ability.prompt: runs body in a delimited context, returns Request
+        //
+        // The body's effects are captured by the prompt. The resulting Request
+        // will be pattern-matched by case.case, which handles effect elimination.
 
         let results = op.results(self.db);
         let result_type = results
@@ -761,16 +763,13 @@ impl<'db> TypeChecker<'db> {
             self.check_region(body);
         }
 
-        // The body's effect is now in self.current_effect
-        // In a full implementation, we would:
-        // 1. Extract which abilities are handled from the clauses
-        // 2. Remove those abilities from the body's effect
-        // 3. Union the remaining effects with the outer effect
-
-        // For now, we just preserve the body's effect minus any handled abilities
-        // TODO: Extract handled abilities from the `clauses` attribute
-
-        // Merge remaining effects with outer effect
+        // The body's effects are "captured" by the prompt.
+        // Effect elimination happens in case.case pattern matching,
+        // where handler patterns remove handled abilities from the effect row.
+        //
+        // For now, propagate body's effects to outer context.
+        // TODO: In a full implementation, the case.case handler patterns
+        // determine which effects are eliminated.
         let body_effect = std::mem::replace(&mut self.current_effect, outer_effect);
         self.merge_effect(body_effect);
 

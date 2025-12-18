@@ -931,10 +931,10 @@ fn lower_let_statement<'db, 'src>(
         }
     }
 
-    if let (Some(pattern), Some(value)) = (pattern_node, value_node) {
-        if let Some(value) = lower_expr(ctx, block, value) {
-            bind_pattern(ctx, block, pattern, value);
-        }
+    if let (Some(pattern), Some(value)) = (pattern_node, value_node)
+        && let Some(value) = lower_expr(ctx, block, value)
+    {
+        bind_pattern(ctx, block, pattern, value);
     }
 }
 
@@ -1384,8 +1384,7 @@ fn parse_rune_literal(text: &str) -> Option<char> {
     // Format: ?c, ?\n, ?\xHH, ?\uHHHH
     let text = text.strip_prefix('?')?;
 
-    if text.starts_with('\\') {
-        let escape = &text[1..];
+    if let Some(escape) = text.strip_prefix('\\') {
         match escape.chars().next()? {
             'n' => Some('\n'),
             'r' => Some('\r'),
@@ -1492,10 +1491,10 @@ fn extract_string_content(text: &str) -> String {
                 Some('u') => {
                     // \uHHHH
                     let hex: String = chars.by_ref().take(4).collect();
-                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                        if let Some(c) = char::from_u32(code) {
-                            result.push(c);
-                        }
+                    if let Ok(code) = u32::from_str_radix(&hex, 16)
+                        && let Some(c) = char::from_u32(code)
+                    {
+                        result.push(c);
                     }
                 }
                 Some(other) => {
@@ -1522,10 +1521,10 @@ fn extract_raw_string_content(text: &str) -> String {
         let open = format!("{}\"", delimiter);
         let close = format!("\"{}", delimiter);
 
-        if let Some(start) = text.find(&open) {
-            if let Some(end) = text.rfind(&close) {
-                return text[start + open.len()..end].to_string();
-            }
+        if let Some(start) = text.find(&open)
+            && let Some(end) = text.rfind(&close)
+        {
+            return text[start + open.len()..end].to_string();
         }
         text.to_string()
     } else {
@@ -1544,10 +1543,10 @@ fn extract_multiline_string_content(text: &str) -> String {
     let open_delim = format!("{}\"", "#".repeat(hash_count));
     let close_delim = format!("\"{}", "#".repeat(hash_count));
 
-    if let Some(start) = text.find(&open_delim) {
-        if let Some(end) = text.rfind(&close_delim) {
-            return text[start + open_delim.len()..end].to_string();
-        }
+    if let Some(start) = text.find(&open_delim)
+        && let Some(end) = text.rfind(&close_delim)
+    {
+        return text[start + open_delim.len()..end].to_string();
     }
     text.to_string()
 }
@@ -1716,10 +1715,10 @@ fn lower_call_expr<'db, 'src>(
             "argument_list" => {
                 let mut arg_cursor = child.walk();
                 for arg_child in child.named_children(&mut arg_cursor) {
-                    if !is_comment(arg_child.kind()) {
-                        if let Some(value) = lower_expr(ctx, block, arg_child) {
-                            args.push(value);
-                        }
+                    if !is_comment(arg_child.kind())
+                        && let Some(value) = lower_expr(ctx, block, arg_child)
+                    {
+                        args.push(value);
                     }
                 }
             }
@@ -1769,10 +1768,10 @@ fn lower_method_call_expr<'db, 'src>(
             "argument_list" => {
                 let mut arg_cursor = child.walk();
                 for arg_child in child.named_children(&mut arg_cursor) {
-                    if !is_comment(arg_child.kind()) {
-                        if let Some(value) = lower_expr(ctx, block, arg_child) {
-                            args.push(value);
-                        }
+                    if !is_comment(arg_child.kind())
+                        && let Some(value) = lower_expr(ctx, block, arg_child)
+                    {
+                        args.push(value);
                     }
                 }
             }
@@ -1980,10 +1979,11 @@ fn pattern_to_attribute<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) 
         "literal_pattern" => {
             // Get the literal value
             let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                return pattern_to_attribute(ctx, child);
+            if let Some(child) = node.named_children(&mut cursor).next() {
+                pattern_to_attribute(ctx, child)
+            } else {
+                case::pattern::wildcard()
             }
-            case::pattern::wildcard()
         }
         "nat_literal" | "int_literal" => {
             if let Some(n) = parse_int_literal(node_text(&node, ctx.source)) {
@@ -2158,10 +2158,10 @@ fn lower_list_expr<'db, 'src>(
 
     let mut elements = Vec::new();
     for child in node.named_children(&mut cursor) {
-        if !is_comment(child.kind()) {
-            if let Some(value) = lower_expr(ctx, block, child) {
-                elements.push(value);
-            }
+        if !is_comment(child.kind())
+            && let Some(value) = lower_expr(ctx, block, child)
+        {
+            elements.push(value);
         }
     }
 
@@ -2181,10 +2181,10 @@ fn lower_tuple_expr<'db, 'src>(
 
     let mut elements = Vec::new();
     for child in node.named_children(&mut cursor) {
-        if !is_comment(child.kind()) {
-            if let Some(value) = lower_expr(ctx, block, child) {
-                elements.push(value);
-            }
+        if !is_comment(child.kind())
+            && let Some(value) = lower_expr(ctx, block, child)
+        {
+            elements.push(value);
         }
     }
 
@@ -2261,6 +2261,13 @@ fn lower_record_expr<'db, 'src>(
 }
 
 /// Lower a handle expression (ability handling).
+///
+/// Source: `case handle expr { arms... }`
+/// Lowers to:
+/// ```text
+/// %request = ability.prompt { expr }
+/// case.case(%request) { arms... }
+/// ```
 fn lower_handle_expr<'db, 'src>(
     ctx: &mut CstLoweringCtx<'db, 'src>,
     block: &mut BlockBuilder<'db>,
@@ -2269,6 +2276,7 @@ fn lower_handle_expr<'db, 'src>(
     let mut cursor = node.walk();
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
+    let request_ty = ctx.fresh_type_var(); // Type for Request value
 
     let mut expr_node = None;
     let mut handler_arms = Vec::new();
@@ -2297,35 +2305,162 @@ fn lower_handle_expr<'db, 'src>(
 
     let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
-    // Build handler clauses attribute from arms
-    // For now, use a simple representation
-    let clauses = if handler_arms.is_empty() {
-        Attribute::Unit
+    // Create ability.prompt to run body and get Request
+    let prompt_op = block.op(ability::prompt(ctx.db, location, request_ty, body_region));
+    let request_value = prompt_op.request(ctx.db);
+
+    // Build handler arms as case.case body
+    let case_body_region = if handler_arms.is_empty() {
+        // No handlers - just a single wildcard arm
+        let mut arm_block = BlockBuilder::new(ctx.db, location);
+        arm_block.op(case::r#yield(ctx.db, location, request_value));
+        Region::new(ctx.db, location, idvec![arm_block.build()])
     } else {
-        Attribute::List(
-            handler_arms
-                .iter()
-                .map(|arm| {
-                    let mut arm_cursor = arm.walk();
-                    for arm_child in arm.named_children(&mut arm_cursor) {
-                        if arm_child.kind() == "handler_pattern" {
-                            return handler_pattern_to_attribute(ctx, arm_child);
-                        }
-                    }
-                    Attribute::Unit
-                })
-                .collect(),
-        )
+        // Build case.arm operations for each handler
+        let mut arms_block = BlockBuilder::new(ctx.db, location);
+
+        for arm_node in &handler_arms {
+            // Lower handler arm (similar to case arm but with request as scrutinee)
+            if let Some(arm_op) = ctx.scoped(|ctx| lower_handler_arm(ctx, *arm_node, request_value))
+            {
+                arms_block.op(arm_op);
+            }
+        }
+
+        Region::new(ctx.db, location, idvec![arms_block.build()])
     };
 
-    let op = block.op(ability::handle(
+    // Create case.case to pattern match on the Request
+    let case_op = block.op(case::r#case(
         ctx.db,
         location,
+        request_value,
         infer_ty,
-        clauses,
-        body_region,
+        case_body_region,
     ));
-    Some(op.result(ctx.db))
+    Some(case_op.result(ctx.db))
+}
+
+/// Lower a handler arm (for ability handling).
+fn lower_handler_arm<'db, 'src>(
+    ctx: &mut CstLoweringCtx<'db, 'src>,
+    node: Node,
+    request: Value<'db>,
+) -> Option<case::Arm<'db>> {
+    let mut cursor = node.walk();
+    let location = ctx.location(&node);
+
+    let mut pattern_node = None;
+    let mut body_node = None;
+
+    for child in node.named_children(&mut cursor) {
+        if is_comment(child.kind()) {
+            continue;
+        }
+        if pattern_node.is_none() {
+            pattern_node = Some(child);
+        } else if body_node.is_none() {
+            body_node = Some(child);
+        }
+    }
+
+    let pattern_node = pattern_node?;
+    let body_node = body_node?;
+
+    // Create arm body
+    let mut body_block = BlockBuilder::new(ctx.db, location);
+
+    let result_value = ctx.scoped(|ctx| {
+        // Bind handler pattern (value binding, continuation binding, etc.)
+        bind_handler_pattern(ctx, &mut body_block, pattern_node, request);
+
+        // Lower body
+        lower_expr(ctx, &mut body_block, body_node)
+    });
+
+    let result_value = result_value?;
+    body_block.op(case::r#yield(ctx.db, location, result_value));
+
+    let pattern_attr = handler_pattern_to_attribute(ctx, pattern_node);
+    let region = Region::new(ctx.db, location, idvec![body_block.build()]);
+
+    Some(case::arm(ctx.db, location, pattern_attr, region))
+}
+
+/// Bind handler pattern variables.
+fn bind_handler_pattern<'db, 'src>(
+    ctx: &mut CstLoweringCtx<'db, 'src>,
+    block: &mut BlockBuilder<'db>,
+    node: Node,
+    request: Value<'db>,
+) {
+    let location = ctx.location(&node);
+    let mut cursor = node.walk();
+
+    match node.kind() {
+        "handler_pattern" => {
+            // Handler patterns: { value } or { Op(args) -> k }
+            let mut value_name = None;
+            let mut op_name = None;
+            let mut continuation_name = None;
+
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                match child.kind() {
+                    "identifier" if op_name.is_none() && value_name.is_none() => {
+                        // Could be value binding or operation name
+                        let name = node_text(&child, ctx.source);
+                        // Check if this is followed by -> (continuation)
+                        // For now, treat single identifier as value binding
+                        value_name = Some(name);
+                    }
+                    "type_identifier" => {
+                        // This is an ability operation name
+                        op_name = Some(node_text(&child, ctx.source));
+                    }
+                    "identifier" if op_name.is_some() => {
+                        // This is the continuation binding
+                        continuation_name = Some(node_text(&child, ctx.source));
+                    }
+                    _ => {}
+                }
+            }
+
+            // Bind the value (for { result } pattern)
+            if let Some(name) = value_name
+                && op_name.is_none()
+            {
+                // Simple value binding: { result }
+                // The request's Done payload is bound to name
+                let bind_op = block.op(case::bind(
+                    ctx.db,
+                    location,
+                    ctx.fresh_type_var(),
+                    Symbol::new(ctx.db, name),
+                ));
+                ctx.bind(name.to_string(), bind_op.result(ctx.db));
+            }
+
+            // Bind continuation (for { Op(args) -> k } pattern)
+            if let Some(cont_name) = continuation_name {
+                let cont_bind = block.op(case::bind(
+                    ctx.db,
+                    location,
+                    ctx.fresh_type_var(),
+                    Symbol::new(ctx.db, cont_name),
+                ));
+                ctx.bind(cont_name.to_string(), cont_bind.result(ctx.db));
+            }
+
+            // TODO: Bind operation arguments
+            let _ = request; // Will be used for extracting payload
+        }
+        _ => {
+            // Unknown pattern type
+        }
+    }
 }
 
 /// Convert a handler pattern to an attribute.
@@ -2400,7 +2535,7 @@ fn lower_string_interpolation<'db, 'src>(
 
                 // Convert to string using to_string
                 expr_value.map(|v| {
-                    let str_value = block
+                    block
                         .op(src::call(
                             ctx.db,
                             location,
@@ -2408,8 +2543,7 @@ fn lower_string_interpolation<'db, 'src>(
                             string_ty,
                             sym_ref(ctx.db, "to_string"),
                         ))
-                        .result(ctx.db);
-                    str_value
+                        .result(ctx.db)
                 })
             }
             _ => lower_expr(ctx, block, child),
@@ -2487,7 +2621,7 @@ fn lower_bytes_interpolation<'db, 'src>(
 
                 // Convert to bytes using to_bytes
                 expr_value.map(|v| {
-                    let bytes_value = block
+                    block
                         .op(src::call(
                             ctx.db,
                             location,
@@ -2495,8 +2629,7 @@ fn lower_bytes_interpolation<'db, 'src>(
                             bytes_ty,
                             sym_ref(ctx.db, "to_bytes"),
                         ))
-                        .result(ctx.db);
-                    bytes_value
+                        .result(ctx.db)
                 })
             }
             _ => lower_expr(ctx, block, child),

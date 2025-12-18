@@ -15,10 +15,13 @@
 //! lower_cst ─► Module (src.* ops, type.var)
 //!     │
 //!     ▼
-//! resolve_names ─► Module (resolved references)
+//! stage_resolve ─► Module (resolved references, some src.call for UFCS)
 //!     │
 //!     ▼
-//! infer_types ─► Module (concrete types)
+//! stage_typecheck ─► Module (concrete types)
+//!     │
+//!     ▼
+//! stage_tdnr ─► Module (UFCS method calls resolved)
 //! ```
 //!
 //! ## Incremental Compilation
@@ -26,8 +29,9 @@
 //! Salsa tracks dependencies between queries. If a source file changes:
 //! - `parse_cst` re-runs for that file
 //! - `lower_cst` re-runs if the CST changed
-//! - `resolve_names` re-runs if the module changed
-//! - `infer_types` re-runs if resolved module changed
+//! - `stage_resolve` re-runs if the module changed
+//! - `stage_typecheck` re-runs if resolved module changed
+//! - `stage_tdnr` re-runs if typed module changed
 //!
 //! If only a type annotation changes in file A, but file B's code hasn't changed,
 //! file B won't be re-parsed or re-lowered.
@@ -37,6 +41,7 @@ use tribute_trunk_ir::dialect::core::Module;
 
 use crate::cst_to_tir::{lower_cst, parse_cst};
 use crate::resolve::{Resolver, build_env};
+use crate::tdnr::resolve_tdnr;
 use crate::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 
 // Re-export for convenience
@@ -138,6 +143,20 @@ pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceFile) ->
     }
 }
 
+/// Stage 5: Type-Directed Name Resolution (TDNR).
+///
+/// This pass resolves UFCS method calls that couldn't be resolved during
+/// initial name resolution because they required type information.
+///
+/// For example:
+/// - `list.len()` → `List::len(list)` (based on list's type being `List(a)`)
+/// - `x.map(f)` → `Type::map(x, f)` (based on x's inferred type)
+#[salsa::tracked]
+pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
+    let module = stage_typecheck(db, source);
+    resolve_tdnr(db, module)
+}
+
 // =============================================================================
 // Full Pipeline
 // =============================================================================
@@ -149,9 +168,10 @@ pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceFile) ->
 /// 2. Lower to TrunkIR
 /// 3. Resolve names
 /// 4. Infer types
+/// 5. TDNR (Type-Directed Name Resolution)
 #[salsa::tracked]
 pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
-    stage_typecheck(db, source)
+    stage_tdnr(db, source)
 }
 
 /// Run compilation and return detailed results including diagnostics.

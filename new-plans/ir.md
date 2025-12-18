@@ -130,19 +130,30 @@ src.infer<$N>   // 추론 변수 ($0, $1, ...)
 ### ability Dialect
 
 언어 수준의 ability (algebraic effect) 연산.
+Handler 패턴 매칭은 `case` dialect에서 처리된다.
 
 ```
 ability.perform : (ability: AbilityRef, op: String, args...) -> T
     Ability operation 수행
 
-ability.handle : (body: Region, clauses: [Clause]) -> T
-    Handler 설치, body 실행
+ability.prompt : (body: Region) -> Request
+    Body를 delimited context에서 실행, Request 반환
+    (Handler 패턴 매칭은 case.case에서 수행)
 
 ability.resume : (continuation: Continuation<T>, value: T) -> U
     Continuation resume
 
 ability.abort : (continuation: Continuation<T>) -> !
     Continuation 버림 (linear type 만족)
+```
+
+Handler 구문 `case handle expr { ... }`는 다음과 같이 lowering된다:
+```
+%request = ability.prompt { expr }
+case.case(%request) {
+    { value } -> ...
+    { Op(args) -> k } -> ...
+}
 ```
 
 ### closure Dialect
