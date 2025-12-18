@@ -6,7 +6,7 @@ EXT_NAME="tribute"
 
 # Determine Zed extensions directory
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    ZED_EXT_DIR="$HOME/.config/zed/extensions/installed"
+    ZED_EXT_DIR="$HOME/Library/Application Support/Zed/extensions/installed"
 else
     ZED_EXT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zed/extensions/installed"
 fi
