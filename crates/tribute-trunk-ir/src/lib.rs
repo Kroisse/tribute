@@ -26,6 +26,10 @@ pub use ir::{Block, BlockBuilder, Operation, Region, Symbol, Value, ValueDef};
 pub use ops::{ConversionError, DialectOp};
 pub use types::{Attribute, Attrs, DialectType, Type};
 
+// Re-export for use in dialect! macro
+#[doc(hidden)]
+pub use ops::strip_raw_prefix;
+
 /// Small vector for values tracked by Salsa framework.
 pub type IdVec<T> = smallvec::SmallVec<[T; 2]>;
 pub use smallvec::smallvec as idvec;

@@ -167,7 +167,7 @@ fn collect_definition<'db>(
             // Function definition
             let attrs = op.attributes(db);
             let sym_key = Symbol::new(db, "sym_name");
-            let type_key = Symbol::new(db, "r#type"); // Note: r#type because 'type' is reserved
+            let type_key = Symbol::new(db, "type");
 
             if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
                 (attrs.get(&sym_key), attrs.get(&type_key))
@@ -181,7 +181,7 @@ fn collect_definition<'db>(
             // Struct definition → creates constructor
             let attrs = op.attributes(db);
             let name_key = Symbol::new(db, "name");
-            let type_key = Symbol::new(db, "r#type"); // Note: r#type because 'type' is reserved
+            let type_key = Symbol::new(db, "type");
 
             if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
                 (attrs.get(&name_key), attrs.get(&type_key))
@@ -198,7 +198,7 @@ fn collect_definition<'db>(
             // Enum definition → creates constructors for each variant
             let attrs = op.attributes(db);
             let name_key = Symbol::new(db, "name");
-            let type_key = Symbol::new(db, "r#type"); // Note: r#type because 'type' is reserved
+            let type_key = Symbol::new(db, "type");
 
             if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
                 (attrs.get(&name_key), attrs.get(&type_key))

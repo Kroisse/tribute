@@ -20,6 +20,7 @@ pub struct TypeEntry<'db> {
 
 /// Kind of type entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum EntryKind {
     /// Function parameter or block argument.
     Parameter,
@@ -62,16 +63,10 @@ impl<'db> TypeIndex<'db> {
         block: &Block<'db>,
         entries: &mut Vec<TypeEntry<'db>>,
     ) {
-        let span = block.location(db).span;
-
-        // Block arguments (function parameters)
-        for &arg_ty in block.args(db).iter() {
-            entries.push(TypeEntry {
-                span,
-                ty: arg_ty,
-                kind: EntryKind::Parameter,
-            });
-        }
+        // Note: Block arguments (function parameters) are intentionally not added here
+        // because we don't have accurate individual spans for them. Adding them with
+        // the block's span would cause the entire function to be highlighted on hover.
+        // Individual operations have their own spans and will be found properly.
 
         // Operations
         for op in block.operations(db).iter() {
@@ -84,14 +79,30 @@ impl<'db> TypeIndex<'db> {
         op: &Operation<'db>,
         entries: &mut Vec<TypeEntry<'db>>,
     ) {
+        use tribute_trunk_ir::Attribute;
+
         let span = op.location(db).span;
+        let dialect = op.dialect(db).text(db);
+        let name = op.name(db).text(db);
 
         // Determine the kind based on operation type
-        let kind = if op.dialect(db).text(db) == "func" && op.name(db).text(db) == "func" {
+        let kind = if dialect == "func" && name == "func" {
             EntryKind::Function
         } else {
             EntryKind::Expression
         };
+
+        // Special case for func.func: use the 'type' attribute since it has no results
+        if dialect == "func" && name == "func" {
+            let type_key = tribute_trunk_ir::Symbol::new(db, "type");
+            if let Some(Attribute::Type(func_ty)) = op.attributes(db).get(&type_key) {
+                entries.push(TypeEntry {
+                    span,
+                    ty: *func_ty,
+                    kind,
+                });
+            }
+        }
 
         // Add entries for each result type
         for &result_ty in op.results(db).iter() {

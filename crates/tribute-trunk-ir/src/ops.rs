@@ -2,6 +2,17 @@
 
 use crate::Operation;
 
+/// Strip `r#` prefix from raw identifier names.
+///
+/// Rust requires the `r#` prefix for reserved keywords like `type` or `yield`
+/// when used as identifiers. This function strips that prefix so the IR stores
+/// clean names like "type" instead of "r#type".
+#[doc(hidden)]
+#[inline]
+pub fn strip_raw_prefix(s: &str) -> &str {
+    s.strip_prefix("r#").unwrap_or(s)
+}
+
 /// Helper macro for attribute type mappings.
 ///
 /// Provides conversions between Rust types and `Attribute` variants:
@@ -736,8 +747,8 @@ macro_rules! define_op {
                     db: &'db dyn salsa::Database,
                     op: $crate::Operation<'db>,
                 ) -> Result<Self, $crate::ConversionError> {
-                    let expected_dialect = $crate::Symbol::new(db, stringify!($dialect));
-                    let expected_name = $crate::Symbol::new(db, stringify!($op));
+                    let expected_dialect = $crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($dialect)));
+                    let expected_name = $crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($op)));
                     if op.dialect(db) != expected_dialect || op.name(db) != expected_name {
                         return Err($crate::ConversionError::WrongOperation {
                             expected: concat!(stringify!($dialect), ".", stringify!($op)),
@@ -969,8 +980,8 @@ macro_rules! define_op {
                 $($attr: $crate::define_op!(@attr_param_type $kind $($attr_ty)?),)*
                 $($region: $crate::Region<'db>,)*
             ) -> [<$op:camel>]<'db> {
-                let dialect = $crate::Symbol::new(db, stringify!($dialect));
-                let name = $crate::Symbol::new(db, stringify!($op));
+                let dialect = $crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($dialect)));
+                let name = $crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($op)));
                 #[allow(unused_mut)]
                 let mut operands = $crate::idvec![$($fixed),*];
                 $(operands.extend($var);)?
@@ -996,30 +1007,30 @@ macro_rules! define_op {
 
     // Add attribute to builder (final stage)
     (@add_attr_final $builder:ident, $attr:ident, untyped) => {
-        $builder = $builder.attr(stringify!($attr), $attr);
+        $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $attr);
     };
     (@add_attr_final $builder:ident, $attr:ident, required $attr_ty:ident) => {
-        $builder = $builder.attr(stringify!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, $attr));
+        $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $crate::attr_type_helper!(@to_attr $attr_ty, $attr));
     };
     (@add_attr_final $builder:ident, $attr:ident, optional $attr_ty:ident) => {
         if let Some(val) = $attr {
-            $builder = $builder.attr(stringify!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, val));
+            $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $crate::attr_type_helper!(@to_attr $attr_ty, val));
         }
     };
 
     // Add attributes to builder from attr blocks
     (@add_attrs $builder:ident,) => {};
     (@add_attrs $builder:ident, { $attr:ident } $($rest:tt)*) => {
-        $builder = $builder.attr(stringify!($attr), $attr);
+        $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $attr);
         $crate::define_op!(@add_attrs $builder, $($rest)*);
     };
     (@add_attrs $builder:ident, { $attr:ident : $attr_ty:ident } $($rest:tt)*) => {
-        $builder = $builder.attr(stringify!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, $attr));
+        $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $crate::attr_type_helper!(@to_attr $attr_ty, $attr));
         $crate::define_op!(@add_attrs $builder, $($rest)*);
     };
     (@add_attrs $builder:ident, { $attr:ident : ? $attr_ty:ident } $($rest:tt)*) => {
         if let Some(val) = $attr {
-            $builder = $builder.attr(stringify!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, val));
+            $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $crate::attr_type_helper!(@to_attr $attr_ty, val));
         }
         $crate::define_op!(@add_attrs $builder, $($rest)*);
     };
@@ -1115,7 +1126,7 @@ macro_rules! define_op {
     (@gen_attr_accessors { $attr:ident } $($rest:tt)*) => {
         #[allow(dead_code, clippy::should_implement_trait)]
         pub fn $attr(&self, db: &'db dyn salsa::Database) -> &'db $crate::Attribute<'db> {
-            let key = $crate::Symbol::new(db, stringify!($attr));
+            let key = $crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($attr)));
             self.op.attributes(db).get(&key).expect(concat!("missing attribute: ", stringify!($attr)))
         }
         $crate::define_op!(@gen_attr_accessors $($rest)*);
@@ -1124,7 +1135,7 @@ macro_rules! define_op {
         #[allow(dead_code, clippy::should_implement_trait)]
         pub fn $attr(&self, db: &'db dyn salsa::Database) -> $crate::attr_type_helper!(@rust_type $attr_ty) {
             let attr = self.op.attributes(db)
-                .get(&$crate::Symbol::new(db, stringify!($attr)))
+                .get(&$crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($attr))))
                 .expect(concat!("missing attribute: ", stringify!($attr)));
             $crate::attr_type_helper!(@from_attr $attr_ty, attr)
         }
@@ -1134,7 +1145,7 @@ macro_rules! define_op {
         #[allow(dead_code, clippy::should_implement_trait)]
         pub fn $attr(&self, db: &'db dyn salsa::Database) -> Option<$crate::attr_type_helper!(@rust_type $attr_ty)> {
             self.op.attributes(db)
-                .get(&$crate::Symbol::new(db, stringify!($attr)))
+                .get(&$crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($attr))))
                 .map(|attr| $crate::attr_type_helper!(@from_attr $attr_ty, attr))
         }
         $crate::define_op!(@gen_attr_accessors $($rest)*);
@@ -1144,7 +1155,7 @@ macro_rules! define_op {
     (@validate_attrs $op:ident, $db:ident,) => {};
     (@validate_attrs $op:ident, $db:ident, { $attr:ident } $($rest:tt)*) => {
         {
-            let key = $crate::Symbol::new($db, stringify!($attr));
+            let key = $crate::Symbol::new($db, $crate::strip_raw_prefix(stringify!($attr)));
             if !$op.attributes($db).contains_key(&key) {
                 return Err($crate::ConversionError::MissingAttribute(stringify!($attr)));
             }
@@ -1153,7 +1164,7 @@ macro_rules! define_op {
     };
     (@validate_attrs $op:ident, $db:ident, { $attr:ident : $attr_ty:ident } $($rest:tt)*) => {
         {
-            let key = $crate::Symbol::new($db, stringify!($attr));
+            let key = $crate::Symbol::new($db, $crate::strip_raw_prefix(stringify!($attr)));
             if !$op.attributes($db).contains_key(&key) {
                 return Err($crate::ConversionError::MissingAttribute(stringify!($attr)));
             }
@@ -1211,14 +1222,14 @@ macro_rules! define_type {
                     let mut attrs = std::collections::BTreeMap::new();
                     $(
                         attrs.insert(
-                            $crate::Symbol::new(db, stringify!($attr)),
+                            $crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($attr))),
                             $crate::define_type!(@to_attr $attr_ty, $attr),
                         );
                     )*
                     Self($crate::Type::new(
                         db,
-                        $crate::Symbol::new(db, stringify!($dialect)),
-                        $crate::Symbol::new(db, stringify!($ty)),
+                        $crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($dialect))),
+                        $crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($ty))),
                         $crate::idvec![$($param),*],
                         attrs,
                     ))
@@ -1231,7 +1242,7 @@ macro_rules! define_type {
                 $(
                     #[allow(dead_code)]
                     pub fn $attr(&self, db: &'db dyn salsa::Database) -> $crate::define_type!(@rust_type $attr_ty) {
-                        let attr = self.0.get_attr(db, stringify!($attr))
+                        let attr = self.0.get_attr(db, $crate::strip_raw_prefix(stringify!($attr)))
                             .expect(concat!("missing attribute: ", stringify!($attr)));
                         $crate::define_type!(@from_attr $attr_ty, attr)
                     }
@@ -1251,8 +1262,8 @@ macro_rules! define_type {
                 }
 
                 fn from_type(db: &'db dyn salsa::Database, ty: $crate::Type<'db>) -> Option<Self> {
-                    if ty.dialect(db).text(db) == stringify!($dialect)
-                        && ty.name(db).text(db) == stringify!($ty)
+                    if ty.dialect(db).text(db) == $crate::strip_raw_prefix(stringify!($dialect))
+                        && ty.name(db).text(db) == $crate::strip_raw_prefix(stringify!($ty))
                     {
                         Some(Self(ty))
                     } else {
@@ -1288,14 +1299,14 @@ macro_rules! define_type {
                     let mut attrs = std::collections::BTreeMap::new();
                     $(
                         attrs.insert(
-                            $crate::Symbol::new(db, stringify!($attr)),
+                            $crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($attr))),
                             $crate::define_type!(@to_attr $attr_ty, $attr),
                         );
                     )*
                     Self($crate::Type::new(
                         db,
-                        $crate::Symbol::new(db, stringify!($dialect)),
-                        $crate::Symbol::new(db, stringify!($ty)),
+                        $crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($dialect))),
+                        $crate::Symbol::new(db, $crate::strip_raw_prefix(stringify!($ty))),
                         $variadic,
                         attrs,
                     ))
@@ -1311,7 +1322,7 @@ macro_rules! define_type {
                 $(
                     #[allow(dead_code)]
                     pub fn $attr(&self, db: &'db dyn salsa::Database) -> $crate::define_type!(@rust_type $attr_ty) {
-                        let attr = self.0.get_attr(db, stringify!($attr))
+                        let attr = self.0.get_attr(db, $crate::strip_raw_prefix(stringify!($attr)))
                             .expect(concat!("missing attribute: ", stringify!($attr)));
                         $crate::define_type!(@from_attr $attr_ty, attr)
                     }
@@ -1331,8 +1342,8 @@ macro_rules! define_type {
                 }
 
                 fn from_type(db: &'db dyn salsa::Database, ty: $crate::Type<'db>) -> Option<Self> {
-                    if ty.dialect(db).text(db) == stringify!($dialect)
-                        && ty.name(db).text(db) == stringify!($ty)
+                    if ty.dialect(db).text(db) == $crate::strip_raw_prefix(stringify!($dialect))
+                        && ty.name(db).text(db) == $crate::strip_raw_prefix(stringify!($ty))
                     {
                         Some(Self(ty))
                     } else {
