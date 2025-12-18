@@ -6,7 +6,6 @@ Zed editor extension providing syntax highlighting for the Tribute language.
 
 ```bash
 cd contrib/zed
-./build.sh    # Build tree-sitter WASM
 ./develop.sh  # Symlink to Zed extensions directory
 ```
 
@@ -24,21 +23,17 @@ Then restart Zed or run `zed: reload extensions`.
 
 ## Development
 
-To update syntax highlighting:
+The tree-sitter grammar is fetched from the external repository:
+https://github.com/Kroisse/tree-sitter-tribute
 
-1. Edit `crates/tree-sitter-tribute/queries/highlights.scm`
-2. Copy to `contrib/zed/languages/tribute/highlights.scm`
-3. Run `./build.sh` and reload the extension in Zed
+To update syntax highlighting queries, edit `languages/tribute/highlights.scm`.
 
 ## Structure
 
 ```
 contrib/zed/
-├── extension.toml           # Extension metadata
-├── build.sh                 # Build WASM from tree-sitter grammar
+├── extension.toml           # Extension metadata (references external grammar)
 ├── develop.sh               # Symlink extension for development
-├── grammars/
-│   └── tribute.wasm         # Tree-sitter WASM (built, not committed)
 └── languages/
     └── tribute/
         ├── config.toml      # Language configuration

@@ -11,12 +11,6 @@ else
     ZED_EXT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zed/extensions/installed"
 fi
 
-# Check if WASM exists
-if [[ ! -f "$SCRIPT_DIR/grammars/tribute.wasm" ]]; then
-    echo "Error: tribute.wasm not found. Run ./build.sh first."
-    exit 1
-fi
-
 # Create extensions directory if needed
 mkdir -p "$ZED_EXT_DIR"
 
