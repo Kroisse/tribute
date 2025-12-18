@@ -1,153 +1,71 @@
 # Testing Framework Plan
 
 ## Overview
-Build a comprehensive testing framework for Tribute with unit testing, property-based testing, benchmarking, and code coverage.
+
+Testing framework for Tribute. Design is still evolving, but will be deeply integrated with the ability system.
 
 ## Priority: Medium (7/8)
-Essential for language quality and ecosystem confidence, can be developed alongside other features.
 
-## Core Features
+Essential for language quality and ecosystem confidence.
 
-### Unit Testing
-```tribute
-// Built-in test syntax
-test "addition works correctly" {
-  assert_eq(add(2, 3), 5)
-  assert_ne(add(2, 3), 6)
-  assert(add(2, 3) > 0)
+## Core Concepts
+
+### Using Exception for Tests
+
+Tests can use the `Exception` ability for failures:
+
+```rust
+fn assert(cond: Bool) ->{Exception} Nil {
+    if cond { Nil } else { Exception::raise("assertion failed") }
 }
+```
 
-test "error handling" {
-  assert_error(divide_by_zero(), DivisionByZero)
+Test declaration syntax is TBD. Possibilities include:
+- Annotation/decorator style: `@test fn addition_works() { ... }`
+- Explicit registration via module-level list
+- Special file/module naming convention
+
+Semantics of annotations (metadata vs transformation) need careful design.
+
+### Effect Mocking
+
+The ability system naturally supports mocking - just provide a test handler:
+
+```rust
+test "fetch_user calls the API" {
+    let calls = ref([])
+    
+    case handle fetch_user("123") {
+        { value } -> value
+        { IO::http_get(url) -> k } -> {
+            calls := List::push_back(!calls, url)
+            k(mock_response())
+        }
+    }
+    
+    Test::assert(!calls == ["/users/123"])
 }
 ```
 
 ### Property-Based Testing
-```tribute
-// Generative testing
-property "addition is commutative" {
-  forall x: Int, y: Int in {
-    assert_eq(add(x, y), add(y, x))
-  }
-}
 
-property "reverse twice is identity" {
-  forall list: Vec<Int> in {
-    assert_eq(list.reverse().reverse(), list)
-  }
-}
+Property-based testing requires exploration of multiple values. Since we use one-shot continuations (no backtracking), this will likely use a functional random generator approach rather than an ability:
+
+```rust
+fn forall(gen: Gen(a), prop: fn(a) ->{Test} Nil) -> TestResult
 ```
 
-### Benchmarking
-```tribute
-// Performance testing
-benchmark "list sorting" {
-  let data = generate_random_list(1000)
-  measure {
-    data.sort()
-  }
-}
-```
+Design details TBD.
 
-## Implementation Strategy
+## Open Questions
 
-### Phase 1: Core Test Runner
-1. Test discovery and execution engine
-2. Basic assertion macros
-3. Test result reporting
-4. Integration with `trb test` command
-
-### Phase 2: Advanced Assertions
-1. Rich assertion library with clear error messages
-2. Custom assertion macros
-3. Async test support
-4. Test fixtures and setup/teardown
-
-### Phase 3: Property-Based Testing
-1. Random data generation for built-in types
-2. Shrinking algorithm for minimal failing cases
-3. Custom generator definitions
-4. Stateful property testing
-
-### Phase 4: Performance Testing
-1. Microbenchmarking framework
-2. Statistical analysis of results
-3. Regression detection
-4. Performance CI integration
-
-### Phase 5: Code Coverage
-1. Instrumentation-based coverage
-2. Line and branch coverage metrics
-3. HTML and text reports
-4. Coverage thresholds and CI integration
-
-## Technical Design
-
-### Test Discovery
-- Automatic discovery of test functions
-- Module-based test organization
-- Tag-based test filtering
-- Parallel test execution
-
-### Assertion Framework
-```tribute
-// Rich assertions with helpful error messages
-assert_eq(actual, expected)  // Shows diff on failure
-assert_almost_eq(3.14, pi, 0.01)  // Floating point comparison
-assert_contains(list, item)  // Collection membership
-assert_matches(result, Ok(_))  // Pattern matching assertions
-```
-
-### Property Testing Engine
-- QuickCheck-inspired API
-- Configurable test case generation
-- Deterministic replay with seeds
-- Integration with type system for automatic generators
-
-### Test Output
-```
-Running 15 tests...
-✓ addition works correctly
-✓ error handling
-✗ division by zero (line 42)
-  Expected: DivisionByZero
-  Actual:   Panic("divide by zero")
-
-Property tests:
-✓ addition is commutative (100 cases)
-✗ list reverse (failed after 23 cases)
-  Failing input: [1, 2, -2147483648]
-  Shrunk to: [-2147483648]
-
-Results: 13 passed, 2 failed
-```
-
-## Integration Points
-
-### Package Manager
-- Test dependencies separate from runtime dependencies
-- Test-only imports and modules
-- CI/CD integration hooks
-
-### LSP Support
-- Test result annotations in editor
-- Run individual tests from IDE
-- Test coverage visualization
-
-### Compiler Integration
-- Test compilation in parallel
-- Dead code elimination for test code
-- Debug symbol generation for coverage
-
-## Dependencies
-- Standard library (for core utilities)
-- Random number generation
-- File I/O for test discovery
-- Network for CI integration
+- Exact syntax for test declarations
+- Integration with build system / test runner
+- Shrinking strategy for property tests
+- Code coverage instrumentation approach
 
 ## Success Criteria
-- Fast test execution (< 100ms startup overhead)
+
+- Clean integration with ability system
+- Natural mocking via effect handlers
 - Clear and actionable error messages
-- Reliable property-based test generation
-- Accurate code coverage reporting
-- Seamless CI/CD integration
