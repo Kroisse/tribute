@@ -1,19 +1,11 @@
 /target
 .claude/settings.local.json
 CLAUDE.local.md
-# Tree-sitter generated files (scanner.c is manually maintained)
-crates/tree-sitter-tribute/src/parser.c
-crates/tree-sitter-tribute/src/grammar.json
-crates/tree-sitter-tribute/src/node-types.json
-crates/tree-sitter-tribute/src/tree_sitter/
 node_modules/
 .envrc
 
 # Compiled object files
 *.o
-
-# Built WASM files
-contrib/zed/grammars/*.wasm
 
 # Performance test artifacts
 perf_test*
