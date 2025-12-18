@@ -196,7 +196,7 @@ macro_rules! dialect {
         $crate::dialect!(@parse $dialect [$($rest)*]);
     };
 
-    // Type with optional doc and optional typed attrs.
+    // Type with optional doc and optional typed attrs (fixed params).
     (@parse $dialect:ident
         [$(#[doc = $doc:literal])*
          $(#[attr($($attr:ident : $attr_ty:ident),* $(,)?)])?
@@ -209,6 +209,24 @@ macro_rules! dialect {
             ty: $ty,
             attrs: [$($($attr : $attr_ty),*)?],
             params: [$($($params),*)?]
+        }
+        $crate::dialect!(@parse $dialect [$($rest)*]);
+    };
+
+    // Type with variadic params (#[rest] syntax, like operations).
+    (@parse $dialect:ident
+        [$(#[doc = $doc:literal])*
+         $(#[attr($($attr:ident : $attr_ty:ident),* $(,)?)])?
+         type $ty:ident(#[rest] $variadic:ident);
+         $($rest:tt)*]
+    ) => {
+        $crate::define_type! {
+            @variadic
+            doc: [$($doc),*],
+            dialect: $dialect,
+            ty: $ty,
+            attrs: [$($($attr : $attr_ty),*)?],
+            variadic: $variadic
         }
         $crate::dialect!(@parse $dialect [$($rest)*]);
     };
@@ -1208,6 +1226,86 @@ macro_rules! define_type {
 
                 // Parameter accessors
                 $crate::define_type!(@gen_param_accessors { 0 } $($param)*);
+
+                // Attribute accessors
+                $(
+                    #[allow(dead_code)]
+                    pub fn $attr(&self, db: &'db dyn salsa::Database) -> $crate::define_type!(@rust_type $attr_ty) {
+                        let attr = self.0.get_attr(db, stringify!($attr))
+                            .expect(concat!("missing attribute: ", stringify!($attr)));
+                        $crate::define_type!(@from_attr $attr_ty, attr)
+                    }
+                )*
+            }
+
+            impl<'db> std::ops::Deref for [<$ty:camel>]<'db> {
+                type Target = $crate::Type<'db>;
+                fn deref(&self) -> &Self::Target {
+                    &self.0
+                }
+            }
+
+            impl<'db> $crate::DialectType<'db> for [<$ty:camel>]<'db> {
+                fn as_type(&self) -> $crate::Type<'db> {
+                    self.0
+                }
+
+                fn from_type(db: &'db dyn salsa::Database, ty: $crate::Type<'db>) -> Option<Self> {
+                    if ty.dialect(db).text(db) == stringify!($dialect)
+                        && ty.name(db).text(db) == stringify!($ty)
+                    {
+                        Some(Self(ty))
+                    } else {
+                        None
+                    }
+                }
+            }
+        }
+    };
+
+    // Variadic params variant - constructor takes IdVec<Type>
+    (@variadic
+        doc: [$($doc:literal),*],
+        dialect: $dialect:ident,
+        ty: $ty:ident,
+        attrs: [$($attr:ident : $attr_ty:ident),*],
+        variadic: $variadic:ident
+    ) => {
+        $crate::paste::paste! {
+            #[doc = concat!($($doc, "\n",)*)]
+            #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+            pub struct [<$ty:camel>]<'db>($crate::Type<'db>);
+
+            impl<'db> [<$ty:camel>]<'db> {
+                /// Create a new instance of this type with variadic type parameters.
+                #[allow(clippy::new_without_default)]
+                pub fn new(
+                    db: &'db dyn salsa::Database,
+                    $variadic: $crate::IdVec<$crate::Type<'db>>,
+                    $($attr: $crate::define_type!(@rust_type $attr_ty),)*
+                ) -> Self {
+                    #[allow(unused_mut)]
+                    let mut attrs = std::collections::BTreeMap::new();
+                    $(
+                        attrs.insert(
+                            $crate::Symbol::new(db, stringify!($attr)),
+                            $crate::define_type!(@to_attr $attr_ty, $attr),
+                        );
+                    )*
+                    Self($crate::Type::new(
+                        db,
+                        $crate::Symbol::new(db, stringify!($dialect)),
+                        $crate::Symbol::new(db, stringify!($ty)),
+                        $variadic,
+                        attrs,
+                    ))
+                }
+
+                /// Get all type parameters.
+                #[allow(dead_code)]
+                pub fn $variadic(&self, db: &'db dyn salsa::Database) -> &[$crate::Type<'db>] {
+                    self.0.params(db)
+                }
 
                 // Attribute accessors
                 $(

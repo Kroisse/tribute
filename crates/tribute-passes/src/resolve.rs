@@ -20,10 +20,10 @@
 use std::collections::HashMap;
 
 use tribute_trunk_ir::dialect::adt;
-use tribute_trunk_ir::dialect::core::Module;
+use tribute_trunk_ir::dialect::core::{self, Module};
 use tribute_trunk_ir::dialect::func;
 use tribute_trunk_ir::{
-    Attribute, Block, DialectOp, IdVec, Operation, Region, Symbol, Type, Value,
+    Attribute, Attrs, Block, DialectOp, IdVec, Operation, Region, Symbol, Type, Value, ValueDef,
 };
 
 // =============================================================================
@@ -251,6 +251,25 @@ fn collect_enum_constructors<'db>(
 // Resolver
 // =============================================================================
 
+/// Local binding for function parameters and let bindings.
+#[derive(Clone, Debug)]
+pub enum LocalBinding<'db> {
+    /// A function parameter or block argument.
+    Parameter {
+        /// The value (block argument)
+        value: Value<'db>,
+        /// The parameter type
+        ty: Type<'db>,
+    },
+    /// A let-bound variable.
+    LetBinding {
+        /// The value from the let binding
+        value: Value<'db>,
+        /// The binding type
+        ty: Type<'db>,
+    },
+}
+
 /// Name resolver context.
 ///
 /// Transforms `src.*` operations into resolved operations (`func.*`, `adt.*`).
@@ -259,6 +278,9 @@ pub struct Resolver<'db> {
     env: ModuleEnv<'db>,
     /// Maps old values to their replacements during transformation.
     value_map: HashMap<Value<'db>, Value<'db>>,
+    /// Local scope stack (for function parameters, let bindings).
+    /// Each entry is a scope level mapping names to local bindings.
+    local_scopes: Vec<HashMap<String, LocalBinding<'db>>>,
 }
 
 impl<'db> Resolver<'db> {
@@ -268,6 +290,7 @@ impl<'db> Resolver<'db> {
             db,
             env,
             value_map: HashMap::new(),
+            local_scopes: Vec::new(),
         }
     }
 
@@ -284,6 +307,99 @@ impl<'db> Resolver<'db> {
     /// Map a value from old to new.
     fn map_value(&mut self, old: Value<'db>, new: Value<'db>) {
         self.value_map.insert(old, new);
+    }
+
+    /// Push a new local scope.
+    fn push_scope(&mut self) {
+        self.local_scopes.push(HashMap::new());
+    }
+
+    /// Pop the current local scope.
+    fn pop_scope(&mut self) {
+        self.local_scopes.pop();
+    }
+
+    /// Add a local binding to the current scope.
+    fn add_local(&mut self, name: String, binding: LocalBinding<'db>) {
+        if let Some(scope) = self.local_scopes.last_mut() {
+            scope.insert(name, binding);
+        }
+    }
+
+    /// Look up a name in local scopes (innermost first).
+    fn lookup_local(&self, name: &str) -> Option<&LocalBinding<'db>> {
+        for scope in self.local_scopes.iter().rev() {
+            if let Some(binding) = scope.get(name) {
+                return Some(binding);
+            }
+        }
+        None
+    }
+
+    /// Resolve a type.
+    ///
+    /// Converts `src.type` to concrete types:
+    /// - `Int` → `core.i64`
+    /// - `Bool` → `core.i1`
+    /// - `String` → `core.string`
+    /// - User-defined types are looked up in the environment
+    fn resolve_type(&self, ty: Type<'db>) -> Type<'db> {
+        // Check if this is an unresolved type (src.type)
+        if ty.dialect(self.db).text(self.db) == "src" && ty.name(self.db).text(self.db) == "type" {
+            // Get the type name from the name attribute (stored as Symbol)
+            if let Some(Attribute::Symbol(name_sym)) = ty.get_attr(self.db, "name") {
+                return self.resolve_type_name(name_sym.text(self.db));
+            }
+        }
+
+        // For non-src types, recursively resolve type parameters
+        let params = ty.params(self.db);
+        if params.is_empty() {
+            return ty;
+        }
+
+        let new_params: IdVec<Type<'db>> = params.iter().map(|&t| self.resolve_type(t)).collect();
+        if new_params.as_slice() == params {
+            return ty;
+        }
+
+        // Create a new type with resolved parameters, preserving attrs
+        Type::new(
+            self.db,
+            ty.dialect(self.db),
+            ty.name(self.db),
+            new_params,
+            ty.attrs(self.db).clone(),
+        )
+    }
+
+    /// Resolve a type name to a concrete type.
+    fn resolve_type_name(&self, name: &str) -> Type<'db> {
+        match name {
+            // Primitive types
+            "Int" => *core::I64::new(self.db),
+            "Bool" => *core::I1::new(self.db),
+            "Float" => *core::F64::new(self.db),
+            "Nat" => *core::I64::new(self.db), // Nat is implemented as i64 for now
+            // TODO: String type - for now, leave unresolved
+            // "String" => ...,
+
+            // Look up user-defined types in the environment
+            _ => {
+                if let Some(Binding::TypeDef { ty }) = self.env.lookup(name) {
+                    *ty
+                } else {
+                    // Leave unresolved - will be caught by type checker
+                    Type::new(
+                        self.db,
+                        Symbol::new(self.db, "src"),
+                        Symbol::new(self.db, "type"),
+                        IdVec::new(),
+                        Attrs::new(),
+                    )
+                }
+            }
+        }
     }
 
     /// Resolve names in a module.
@@ -314,18 +430,20 @@ impl<'db> Resolver<'db> {
 
     /// Resolve names in a block.
     fn resolve_block(&mut self, block: &Block<'db>) -> Block<'db> {
+        // Resolve block argument types
+        let new_args: IdVec<Type<'db>> = block
+            .args(self.db)
+            .iter()
+            .map(|&ty| self.resolve_type(ty))
+            .collect();
+
         let new_ops: IdVec<Operation<'db>> = block
             .operations(self.db)
             .iter()
             .flat_map(|op| self.resolve_operation(op))
             .collect();
 
-        Block::new(
-            self.db,
-            block.location(self.db),
-            block.args(self.db).clone(),
-            new_ops,
-        )
+        Block::new(self.db, block.location(self.db), new_args, new_ops)
     }
 
     /// Resolve a single operation.
@@ -340,9 +458,13 @@ impl<'db> Resolver<'db> {
         let op_name = remapped_op.name(self.db).text(self.db);
 
         match (dialect, op_name) {
+            ("func", "func") => {
+                // Handle function with local scope for parameters
+                vec![self.resolve_func(&remapped_op)]
+            }
             ("src", "var") => {
                 if let Some(resolved) = self.try_resolve_var(&remapped_op) {
-                    vec![resolved]
+                    resolved
                 } else {
                     // Unresolved - keep for later (UFCS resolution)
                     vec![self.resolve_op_regions(&remapped_op)]
@@ -369,6 +491,133 @@ impl<'db> Resolver<'db> {
                 vec![self.resolve_op_regions(&remapped_op)]
             }
         }
+    }
+
+    /// Resolve a func.func operation with local scope for parameters.
+    fn resolve_func(&mut self, op: &Operation<'db>) -> Operation<'db> {
+        let regions = op.regions(self.db);
+        if regions.is_empty() {
+            return *op;
+        }
+
+        // Push a new scope for function parameters
+        self.push_scope();
+
+        // Process the body region
+        let body_region = &regions[0];
+        let new_body = self.resolve_func_region(body_region);
+
+        // Pop the function scope
+        self.pop_scope();
+
+        // Create new regions vector with resolved body
+        let mut new_regions: IdVec<Region<'db>> = IdVec::new();
+        new_regions.push(new_body);
+        for region in regions.iter().skip(1) {
+            new_regions.push(self.resolve_region(region));
+        }
+
+        Operation::new(
+            self.db,
+            op.location(self.db),
+            op.dialect(self.db),
+            op.name(self.db),
+            op.operands(self.db).clone(),
+            op.results(self.db).clone(),
+            op.attributes(self.db).clone(),
+            new_regions,
+            op.successors(self.db).clone(),
+        )
+    }
+
+    /// Resolve a function body region, handling parameter bindings.
+    fn resolve_func_region(&mut self, region: &Region<'db>) -> Region<'db> {
+        let blocks = region.blocks(self.db);
+        if blocks.is_empty() {
+            return *region;
+        }
+
+        // Process entry block specially (it has the parameter declarations)
+        let entry_block = &blocks[0];
+        let new_entry = self.resolve_func_entry_block(entry_block);
+
+        // Process remaining blocks normally
+        let mut new_blocks: IdVec<Block<'db>> = IdVec::new();
+        new_blocks.push(new_entry);
+        for block in blocks.iter().skip(1) {
+            new_blocks.push(self.resolve_block(block));
+        }
+
+        Region::new(self.db, region.location(self.db), new_blocks)
+    }
+
+    /// Resolve a function's entry block, binding parameters.
+    ///
+    /// The entry block starts with src.var operations that declare parameter names.
+    /// These are mapped to block arguments and erased from output.
+    fn resolve_func_entry_block(&mut self, block: &Block<'db>) -> Block<'db> {
+        let block_args = block.args(self.db);
+        let operations = block.operations(self.db);
+
+        // Scan for initial src.var operations that declare parameters
+        let mut param_declarations = Vec::new();
+        for op in operations.iter() {
+            if op.dialect(self.db).text(self.db) == "src" && op.name(self.db).text(self.db) == "var"
+            {
+                // This is a potential parameter declaration
+                let attrs = op.attributes(self.db);
+                let name_key = Symbol::new(self.db, "name");
+                if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
+                    param_declarations.push((sym.text(self.db).to_string(), *op));
+                } else {
+                    break; // Not a proper src.var, stop scanning
+                }
+            } else {
+                break; // No more parameter declarations
+            }
+
+            // Stop once we've found as many as block arguments
+            if param_declarations.len() >= block_args.len() {
+                break;
+            }
+        }
+
+        // Map parameter names to block argument values
+        for (i, (name, op)) in param_declarations.iter().enumerate() {
+            if i < block_args.len() {
+                // Create block argument value
+                let block_arg = Value::new(self.db, ValueDef::BlockArg(*block), i);
+                let param_ty = block_args[i];
+
+                // Add to local scope
+                self.add_local(
+                    name.clone(),
+                    LocalBinding::Parameter {
+                        value: block_arg,
+                        ty: param_ty,
+                    },
+                );
+
+                // Map the src.var result to the block argument
+                let old_result = op.result(self.db, 0);
+                self.map_value(old_result, block_arg);
+            }
+        }
+
+        // Resolve block argument types
+        let new_args: IdVec<Type<'db>> =
+            block_args.iter().map(|&ty| self.resolve_type(ty)).collect();
+
+        // Now resolve the block, skipping parameter declaration src.var ops
+        let num_param_decls = param_declarations.len();
+        let new_ops: IdVec<Operation<'db>> = operations
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i >= num_param_decls) // Skip parameter declarations
+            .flat_map(|(_, op)| self.resolve_operation(op))
+            .collect();
+
+        Block::new(self.db, block.location(self.db), new_args, new_ops)
     }
 
     /// Remap operands using the current value map.
@@ -402,17 +651,25 @@ impl<'db> Resolver<'db> {
         )
     }
 
-    /// Recursively resolve regions within an operation.
+    /// Recursively resolve regions and types within an operation.
     fn resolve_op_regions(&mut self, op: &Operation<'db>) -> Operation<'db> {
-        let regions = op.regions(self.db);
-        if regions.is_empty() {
-            return *op;
-        }
+        // Resolve result types
+        let results = op.results(self.db);
+        let new_results: IdVec<Type<'db>> =
+            results.iter().map(|&ty| self.resolve_type(ty)).collect();
+        let results_changed = new_results.as_slice() != results.as_slice();
 
+        // Resolve nested regions
+        let regions = op.regions(self.db);
         let new_regions: IdVec<Region<'db>> = regions
             .iter()
             .map(|region| self.resolve_region(region))
             .collect();
+        let regions_changed = !regions.is_empty();
+
+        if !results_changed && !regions_changed {
+            return *op;
+        }
 
         Operation::new(
             self.db,
@@ -420,7 +677,7 @@ impl<'db> Resolver<'db> {
             op.dialect(self.db),
             op.name(self.db),
             op.operands(self.db).clone(),
-            op.results(self.db).clone(),
+            new_results,
             op.attributes(self.db).clone(),
             new_regions,
             op.successors(self.db).clone(),
@@ -429,8 +686,11 @@ impl<'db> Resolver<'db> {
 
     /// Try to resolve a `src.var` operation.
     ///
-    /// Returns the resolved operation if successful, None if unresolved.
-    fn try_resolve_var(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
+    /// Returns:
+    /// - Some(vec![]) if resolved to a local binding (erased, value already mapped)
+    /// - Some(vec![op]) if resolved to a function/constructor (replaced)
+    /// - None if unresolved
+    fn try_resolve_var(&mut self, op: &Operation<'db>) -> Option<Vec<Operation<'db>>> {
         let attrs = op.attributes(self.db);
         let name_key = Symbol::new(self.db, "name");
         let Attribute::Symbol(sym) = attrs.get(&name_key)? else {
@@ -439,7 +699,19 @@ impl<'db> Resolver<'db> {
         let name = sym.text(self.db);
         let location = op.location(self.db);
 
-        // Look up in environment
+        // First, check local scopes (function parameters, let bindings)
+        if let Some(local) = self.lookup_local(name) {
+            // Local binding found - map the result and erase the operation
+            let old_result = op.result(self.db, 0);
+            match local {
+                LocalBinding::Parameter { value, .. } | LocalBinding::LetBinding { value, .. } => {
+                    self.map_value(old_result, *value);
+                }
+            }
+            return Some(vec![]); // Erase - value is now mapped
+        }
+
+        // Then check module environment
         match self.env.lookup(name)? {
             Binding::Function { path, ty } => {
                 // Create func.constant operation
@@ -452,7 +724,7 @@ impl<'db> Resolver<'db> {
                 let new_result = new_operation.result(self.db, 0);
                 self.map_value(old_result, new_result);
 
-                Some(new_operation)
+                Some(vec![new_operation])
             }
             Binding::Constructor { ty, tag, .. } => {
                 // Create adt.struct_new or adt.variant_new
@@ -472,7 +744,7 @@ impl<'db> Resolver<'db> {
                 let new_result = new_operation.result(self.db, 0);
                 self.map_value(old_result, new_result);
 
-                Some(new_operation)
+                Some(vec![new_operation])
             }
             Binding::TypeDef { .. } => {
                 // Type used in value position - error (leave unresolved for diagnostics)

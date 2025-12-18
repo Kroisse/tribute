@@ -5,9 +5,7 @@
 //!
 //! Additionally, this module provides type constructors for unresolved types:
 //! - `src.type` - an unresolved type reference that needs name resolution
-use std::collections::BTreeMap;
-
-use crate::{Attribute, IdVec, Symbol, Type, dialect};
+use crate::{IdVec, Symbol, dialect};
 
 dialect! {
     mod src {
@@ -62,26 +60,25 @@ dialect! {
         /// The `value` attribute holds the literal value (IntBits, FloatBits, String, etc.).
         #[attr(name: Symbol, value: any)]
         fn r#const() -> result;
+
+        /// `src.type`: an unresolved type reference that needs name resolution.
+        /// The `name` attribute holds the type name (e.g., "Int", "List").
+        /// The `params` hold type arguments for generic types (e.g., `List(a)`).
+        #[attr(name: Symbol)]
+        type r#type(#[rest] params);
     }
 }
 
-// === Type constructors for unresolved types ===
+// === Convenience function for creating unresolved types ===
 
 /// Create an unresolved type reference (`src.type`).
 ///
-/// Represents a named type that needs name resolution (e.g., `Int`, `User`, `List(a)`).
-/// The `params` hold type arguments for generic types.
-/// After resolution, this will be replaced with the concrete type.
+/// This is a convenience wrapper around `Type::new` that takes a string name.
 pub fn unresolved_type<'db>(
     db: &'db dyn salsa::Database,
     name: &str,
-    params: IdVec<Type<'db>>,
-) -> Type<'db> {
-    Type::new(
-        db,
-        Symbol::new(db, "src"),
-        Symbol::new(db, "type"),
-        params,
-        BTreeMap::from([(Symbol::new(db, "name"), Attribute::String(name.to_string()))]),
-    )
+    params: IdVec<crate::Type<'db>>,
+) -> crate::Type<'db> {
+    // Use the macro-generated Type struct
+    *Type::new(db, params, Symbol::new(db, name))
 }

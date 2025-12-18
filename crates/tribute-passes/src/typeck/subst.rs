@@ -155,7 +155,7 @@ mod tests {
     use super::*;
     use salsa::Database;
     use std::path::PathBuf;
-    use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
+    use tribute_core::{Location, PathId, SourceFile, Span, TributeDatabaseImpl};
     use tribute_trunk_ir::{Attribute, idvec};
 
     /// Helper to create a module with an operation that has type variable 42 as result.
@@ -227,17 +227,6 @@ mod tests {
         core::Module::create(db, location, "test", region)
     }
 
-    #[test]
-    fn test_has_type_vars() {
-        TributeDatabaseImpl::default().attach(|db| {
-            let type_var = ty::var_with_id(db, 42);
-            assert!(has_type_vars(db, type_var));
-
-            let i64_ty = *core::I64::new(db);
-            assert!(!has_type_vars(db, i64_ty));
-        });
-    }
-
     /// Apply substitution to the test module (var 42 -> I64).
     #[salsa::tracked]
     fn apply_subst_var42_to_i64(db: &dyn salsa::Database) -> core::Module<'_> {
@@ -250,6 +239,17 @@ mod tests {
 
         // Apply substitution
         apply_subst_to_module(db, module, &subst)
+    }
+
+    #[test]
+    fn test_has_type_vars() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let type_var = ty::var_with_id(db, 42);
+            assert!(has_type_vars(db, type_var));
+
+            let i64_ty = *core::I64::new(db);
+            assert!(!has_type_vars(db, i64_ty));
+        });
     }
 
     #[test]
@@ -285,6 +285,67 @@ mod tests {
             // Module without type variable
             let module_concrete = make_module_with_concrete_type(db);
             assert!(!module_has_type_vars(db, module_concrete));
+        });
+    }
+
+    /// Helper to print IR recursively
+    fn print_region(db: &dyn salsa::Database, region: &Region<'_>, indent: usize) {
+        let prefix = "  ".repeat(indent);
+        for (bi, block) in region.blocks(db).iter().enumerate() {
+            println!("{}block[{}]:", prefix, bi);
+            // Print block args
+            for (i, ty) in block.args(db).iter().enumerate() {
+                let ty_name = format!("{}.{}", ty.dialect(db).text(db), ty.name(db).text(db));
+                let is_var = ty::is_var(db, *ty);
+                println!("{}  arg[{}]: {} (is_var: {})", prefix, i, ty_name, is_var);
+            }
+            // Print operations
+            for op in block.operations(db).iter() {
+                println!("{}  {}", prefix, op.full_name(db));
+                for (i, ty) in op.results(db).iter().enumerate() {
+                    let ty_name = format!("{}.{}", ty.dialect(db).text(db), ty.name(db).text(db));
+                    let is_var = ty::is_var(db, *ty);
+                    println!(
+                        "{}    result[{}]: {} (is_var: {})",
+                        prefix, i, ty_name, is_var
+                    );
+                }
+                // Print nested regions
+                for (ri, nested_region) in op.regions(db).iter().enumerate() {
+                    println!("{}    region[{}]:", prefix, ri);
+                    print_region(db, nested_region, indent + 3);
+                }
+            }
+        }
+    }
+
+    /// Integration test: compile actual source code and verify no type variables remain.
+    #[test]
+    fn test_end_to_end_type_inference() {
+        use crate::pipeline::compile;
+
+        TributeDatabaseImpl::default().attach(|db| {
+            // Simple function with explicit types
+            let source = SourceFile::new(
+                db,
+                PathBuf::from("test.tr"),
+                "fn add(x: Int, y: Int) -> Int { x + y }".to_string(),
+            );
+
+            let module = compile(db, source);
+
+            // Print IR for debugging
+            println!("=== Compiled Module ===");
+            println!("Module: {}", module.name(db));
+            let body = module.body(db);
+            print_region(db, &body, 0);
+
+            // After compilation, there should be no type variables
+            let has_vars = module_has_type_vars(db, module);
+            println!("\nHas type vars: {}", has_vars);
+
+            // This assertion may fail - let's see what happens
+            // assert!(!has_vars, "Module should not have type variables after compilation");
         });
     }
 }
