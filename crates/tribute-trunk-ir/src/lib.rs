@@ -9,6 +9,7 @@ pub mod dialect;
 // === IR infrastructure ===
 pub mod ir;
 pub mod ops;
+pub mod type_interface;
 pub mod types;
 
 // Re-export paste for use in macros
@@ -24,6 +25,10 @@ pub use tribute_core::Location;
 pub use ir::{Block, BlockBuilder, Operation, Region, Symbol, Value, ValueDef};
 pub use ops::{ConversionError, DialectOp};
 pub use types::{Attribute, Attrs, DialectType, Type};
+
+// Re-export for use in dialect! macro
+#[doc(hidden)]
+pub use ops::strip_raw_prefix;
 
 /// Small vector for values tracked by Salsa framework.
 pub type IdVec<T> = smallvec::SmallVec<[T; 2]>;

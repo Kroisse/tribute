@@ -454,3 +454,243 @@ impl<'db> DialectType<'db> for AbilityRefType<'db> {
         }
     }
 }
+
+// === Printable interface registrations ===
+
+use std::fmt::{self, Formatter, Write};
+
+use crate::type_interface::Printable;
+
+// nil -> "()"
+inventory::submit! { Printable::implement("core", "nil", |_, _, f| f.write_str("()")) }
+
+// never -> "Never"
+inventory::submit! { Printable::implement("core", "never", |_, _, f| f.write_str("Never")) }
+
+// string -> "String"
+inventory::submit! { Printable::implement("core", "string", |_, _, f| f.write_str("String")) }
+
+// bytes -> "Bytes"
+inventory::submit! { Printable::implement("core", "bytes", |_, _, f| f.write_str("Bytes")) }
+
+// ptr -> "Ptr"
+inventory::submit! { Printable::implement("core", "ptr", |_, _, f| f.write_str("Ptr")) }
+
+// Integer types: i1 -> "Bool", i64 -> "Int", i{N} -> "I{N}"
+inventory::submit! {
+    Printable::implement_prefix("core", "i", |db, ty, f| {
+        match ty.name(db).text(db) {
+            "i1" => f.write_str("Bool"),
+            "i64" => f.write_str("Int"),
+            name => write!(f, "I{}", &name[1..]),
+        }
+    })
+}
+
+// Floating-point types: f64 -> "Float", f{N} -> "F{N}"
+inventory::submit! {
+    Printable::implement_prefix("core", "f", |db, ty, f| {
+        match ty.name(db).text(db) {
+            "f64" => f.write_str("Float"),
+            name => write!(f, "F{}", &name[1..]),
+        }
+    })
+}
+
+// func -> "fn(a, b) ->{eff} c"
+inventory::submit! { Printable::implement("core", "func", print_func) }
+
+fn print_func(db: &dyn salsa::Database, ty: Type<'_>, f: &mut Formatter<'_>) -> fmt::Result {
+    let Some(func) = Func::from_type(db, ty) else {
+        return f.write_str("fn(?)");
+    };
+
+    let params = func.params(db);
+    let result = func.result(db);
+    let effect = func.effect(db);
+
+    // Format parameters
+    f.write_str("fn(")?;
+    for (i, p) in params.iter().enumerate() {
+        if i > 0 {
+            f.write_str(", ")?;
+        }
+        Printable::print_type(db, *p, f)?;
+    }
+    f.write_char(')')?;
+
+    // Format arrow with effect
+    if let Some(eff) = effect {
+        if let Some(row) = EffectRowType::from_type(db, eff) {
+            if row.is_empty(db) {
+                f.write_str(" -> ")?;
+            } else {
+                f.write_str(" ->{")?;
+                print_effect_row_inner(db, &row, f)?;
+                f.write_str("} ")?;
+            }
+        } else {
+            f.write_str(" -> ")?;
+        }
+    } else {
+        f.write_str(" -> ")?;
+    }
+
+    Printable::print_type(db, result, f)
+}
+
+// tuple -> "(a, b, c)"
+inventory::submit! { Printable::implement("core", "tuple", print_tuple) }
+
+fn print_tuple(db: &dyn salsa::Database, ty: Type<'_>, f: &mut Formatter<'_>) -> fmt::Result {
+    let params = ty.params(db);
+    if params.is_empty() {
+        return f.write_str("()");
+    }
+
+    // Flatten cons cells into a list
+    let mut elements = Vec::new();
+    let mut current = ty;
+
+    while current.is_dialect(db, "core", "tuple") {
+        let params = current.params(db);
+        if params.len() >= 2 {
+            elements.push(params[0]); // head
+            current = params[1]; // tail
+        } else {
+            break;
+        }
+    }
+
+    // Check if tail is nil (complete tuple)
+    let has_tail = !current.is_dialect(db, "core", "nil");
+
+    f.write_char('(')?;
+    for (i, &elem) in elements.iter().enumerate() {
+        if i > 0 {
+            f.write_str(", ")?;
+        }
+        Printable::print_type(db, elem, f)?;
+    }
+    if has_tail {
+        if !elements.is_empty() {
+            f.write_str(", ")?;
+        }
+        Printable::print_type(db, current, f)?;
+    }
+    f.write_char(')')
+}
+
+// array -> "Array(elem)"
+inventory::submit! {
+    Printable::implement("core", "array", |db, ty, f| {
+        let params = ty.params(db);
+        if let Some(&elem) = params.first() {
+            f.write_str("Array(")?;
+            Printable::print_type(db, elem, f)?;
+            f.write_char(')')
+        } else {
+            f.write_str("Array(?)")
+        }
+    })
+}
+
+// effect_row -> "{Ability1, Ability2 | e}"
+inventory::submit! {
+    Printable::implement("core", "effect_row", |db, ty, f| {
+        if let Some(row) = EffectRowType::from_type(db, ty) {
+            f.write_char('{')?;
+            print_effect_row_inner(db, &row, f)?;
+            f.write_char('}')
+        } else {
+            f.write_str("{}")
+        }
+    })
+}
+
+fn print_effect_row_inner(
+    db: &dyn salsa::Database,
+    row: &EffectRowType<'_>,
+    f: &mut Formatter<'_>,
+) -> fmt::Result {
+    if row.is_empty(db) {
+        return Ok(());
+    }
+
+    let abilities = row.abilities(db);
+    for (i, &a) in abilities.iter().enumerate() {
+        if i > 0 {
+            f.write_str(", ")?;
+        }
+        Printable::print_type(db, a, f)?;
+    }
+
+    if let Some(var_id) = row.tail_var(db) {
+        if !abilities.is_empty() {
+            f.write_str(" | ")?;
+        }
+        fmt_var_id(f, var_id)?;
+    }
+
+    Ok(())
+}
+
+// ability_ref -> "Console" or "Console(Int)"
+inventory::submit! {
+    Printable::implement("core", "ability_ref", |db, ty, f| {
+        let Some(ability) = AbilityRefType::from_type(db, ty) else {
+            return f.write_str("?ability");
+        };
+
+        let Some(name) = ability.name(db) else {
+            return f.write_str("?ability");
+        };
+
+        let params = ability.params(db);
+        if params.is_empty() {
+            f.write_str(name.text(db))
+        } else {
+            f.write_str(name.text(db))?;
+            f.write_char('(')?;
+            for (i, &p) in params.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ")?;
+                }
+                Printable::print_type(db, p, f)?;
+            }
+            f.write_char(')')
+        }
+    })
+}
+
+// ref_ -> "Type?" (nullable) or "Type"
+inventory::submit! {
+    Printable::implement("core", "ref_", |db, ty, f| {
+        let params = ty.params(db);
+        let nullable = matches!(
+            ty.get_attr(db, "nullable"),
+            Some(Attribute::Bool(true))
+        );
+
+        if let Some(&pointee) = params.first() {
+            Printable::print_type(db, pointee, f)?;
+            if nullable {
+                f.write_char('?')?;
+            }
+            Ok(())
+        } else if nullable {
+            f.write_char('?')
+        } else {
+            f.write_str("Ref(?)")
+        }
+    })
+}
+
+/// Convert a variable ID to a readable name (a, b, c, ..., t0, t1, ...).
+fn fmt_var_id(f: &mut Formatter<'_>, id: u64) -> fmt::Result {
+    if id < 26 {
+        f.write_char((b'a' + id as u8) as char)
+    } else {
+        write!(f, "t{}", id - 26)
+    }
+}

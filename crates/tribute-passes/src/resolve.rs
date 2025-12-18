@@ -167,7 +167,7 @@ fn collect_definition<'db>(
             // Function definition
             let attrs = op.attributes(db);
             let sym_key = Symbol::new(db, "sym_name");
-            let type_key = Symbol::new(db, "r#type"); // Note: r#type because 'type' is reserved
+            let type_key = Symbol::new(db, "type");
 
             if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
                 (attrs.get(&sym_key), attrs.get(&type_key))
@@ -181,7 +181,7 @@ fn collect_definition<'db>(
             // Struct definition → creates constructor
             let attrs = op.attributes(db);
             let name_key = Symbol::new(db, "name");
-            let type_key = Symbol::new(db, "r#type"); // Note: r#type because 'type' is reserved
+            let type_key = Symbol::new(db, "type");
 
             if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
                 (attrs.get(&name_key), attrs.get(&type_key))
@@ -198,7 +198,7 @@ fn collect_definition<'db>(
             // Enum definition → creates constructors for each variant
             let attrs = op.attributes(db);
             let name_key = Symbol::new(db, "name");
-            let type_key = Symbol::new(db, "r#type"); // Note: r#type because 'type' is reserved
+            let type_key = Symbol::new(db, "type");
 
             if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
                 (attrs.get(&name_key), attrs.get(&type_key))
@@ -729,14 +729,22 @@ impl<'db> Resolver<'db> {
 
         // First, check local scopes (function parameters, let bindings)
         if let Some(local) = self.lookup_local(name) {
-            // Local binding found - map the result and erase the operation
+            // Local binding found - create an identity operation to preserve span for hover
+            let (value, ty) = match local {
+                LocalBinding::Parameter { value, ty } => (*value, *ty),
+                LocalBinding::LetBinding { value, ty } => (*value, *ty),
+            };
+
+            // Use unrealized_conversion_cast as identity to preserve location for hover
+            let new_op = core::unrealized_conversion_cast(self.db, location, value, ty);
+            let new_operation = new_op.as_operation();
+
+            // Map old result to new result
             let old_result = op.result(self.db, 0);
-            match local {
-                LocalBinding::Parameter { value, .. } | LocalBinding::LetBinding { value, .. } => {
-                    self.map_value(old_result, *value);
-                }
-            }
-            return Some(vec![]); // Erase - value is now mapped
+            let new_result = new_operation.result(self.db, 0);
+            self.map_value(old_result, new_result);
+
+            return Some(vec![new_operation]);
         }
 
         // Then check module environment

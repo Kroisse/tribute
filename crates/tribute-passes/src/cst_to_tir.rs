@@ -1255,13 +1255,12 @@ fn lower_expr<'db, 'src>(
 
         // === Identifiers and paths ===
         "identifier" => {
+            // Always create src.var for variable references, even for local bindings.
+            // This preserves the source span for hover. Resolution will transform
+            // local references to identity operations with the correct type.
             let name = node_text(&node, ctx.source);
-            if let Some(value) = ctx.lookup(name) {
-                Some(value)
-            } else {
-                let op = block.op(src::var(ctx.db, location, infer_ty, sym(ctx.db, name)));
-                Some(op.result(ctx.db))
-            }
+            let op = block.op(src::var(ctx.db, location, infer_ty, sym(ctx.db, name)));
+            Some(op.result(ctx.db))
         }
         "path_expression" => {
             let mut cursor = node.walk();

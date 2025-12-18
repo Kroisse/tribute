@@ -2,7 +2,10 @@
 //!
 //! Target-independent operations for structs, variants (enums), arrays, and references.
 
+use std::fmt::Write;
+
 use crate::dialect;
+use crate::type_interface::Printable;
 
 dialect! {
     mod adt {
@@ -75,4 +78,37 @@ dialect! {
         #[attr(value: any)]
         fn bytes_const() -> result;
     }
+}
+
+// === Printable interface registrations ===
+
+// adt.* types -> "Name" or "Name(params...)" with capitalized first letter
+// This uses Prefix("") as a catch-all for any adt type
+inventory::submit! {
+    Printable::implement_prefix("adt", "", |db, ty, f| {
+        let name = ty.name(db).text(db);
+        let params = ty.params(db);
+
+        // Capitalize first letter
+        let mut chars = name.chars();
+        if let Some(c) = chars.next() {
+            for ch in c.to_uppercase() {
+                f.write_char(ch)?;
+            }
+            f.write_str(chars.as_str())?;
+        }
+
+        if !params.is_empty() {
+            f.write_char('(')?;
+            for (i, &p) in params.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ")?;
+                }
+                Printable::print_type(db, p, f)?;
+            }
+            f.write_char(')')?;
+        }
+
+        Ok(())
+    })
 }
