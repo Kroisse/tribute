@@ -8,4 +8,4 @@ authors = ["Eunchong Yu <kroisse@gmail.com>"]
 
 [grammars.tribute]
 repository = "https://github.com/Kroisse/tree-sitter-tribute"
-rev = "0.1.0"
+rev = "0aebb1c88f0bcc36e5363aa13bee795f52df76b1"
