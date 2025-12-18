@@ -139,7 +139,6 @@
   "||"
   "="
   "->"
-  ".."
 ] @operator
 
 (operator) @operator
