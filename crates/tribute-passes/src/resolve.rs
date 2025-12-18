@@ -19,6 +19,8 @@
 
 use std::collections::HashMap;
 
+use salsa::Accumulator;
+use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_trunk_ir::dialect::adt;
 use tribute_trunk_ir::dialect::core::{self, Module};
 use tribute_trunk_ir::dialect::func;
@@ -281,6 +283,8 @@ pub struct Resolver<'db> {
     /// Local scope stack (for function parameters, let bindings).
     /// Each entry is a scope level mapping names to local bindings.
     local_scopes: Vec<HashMap<String, LocalBinding<'db>>>,
+    /// If true, emit diagnostics for unresolved references instead of passing through.
+    report_unresolved: bool,
 }
 
 impl<'db> Resolver<'db> {
@@ -291,6 +295,20 @@ impl<'db> Resolver<'db> {
             env,
             value_map: HashMap::new(),
             local_scopes: Vec::new(),
+            report_unresolved: false,
+        }
+    }
+
+    /// Create a resolver that reports unresolved references as errors.
+    ///
+    /// Use this for the final resolution pass after TDNR.
+    pub fn with_unresolved_reporting(db: &'db dyn salsa::Database, env: ModuleEnv<'db>) -> Self {
+        Self {
+            db,
+            env,
+            value_map: HashMap::new(),
+            local_scopes: Vec::new(),
+            report_unresolved: true,
         }
     }
 
@@ -466,7 +484,10 @@ impl<'db> Resolver<'db> {
                 if let Some(resolved) = self.try_resolve_var(&remapped_op) {
                     resolved
                 } else {
-                    // Unresolved - keep for later (UFCS resolution)
+                    // Unresolved
+                    if self.report_unresolved {
+                        self.emit_unresolved_var_diagnostic(&remapped_op);
+                    }
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
@@ -474,7 +495,10 @@ impl<'db> Resolver<'db> {
                 if let Some(resolved) = self.try_resolve_path(&remapped_op) {
                     vec![resolved]
                 } else {
-                    // Unresolved - keep for later
+                    // Unresolved
+                    if self.report_unresolved {
+                        self.emit_unresolved_path_diagnostic(&remapped_op);
+                    }
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
@@ -482,7 +506,10 @@ impl<'db> Resolver<'db> {
                 if let Some(resolved) = self.try_resolve_call(&remapped_op) {
                     vec![resolved]
                 } else {
-                    // Unresolved - keep for later
+                    // Unresolved
+                    if self.report_unresolved {
+                        self.emit_unresolved_call_diagnostic(&remapped_op);
+                    }
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
@@ -560,8 +587,14 @@ impl<'db> Resolver<'db> {
         let operations = block.operations(self.db);
 
         // Scan for initial src.var operations that declare parameters
+        // Only scan up to the number of block arguments
         let mut param_declarations = Vec::new();
         for op in operations.iter() {
+            // Stop early if we've found all expected parameters
+            if param_declarations.len() >= block_args.len() {
+                break;
+            }
+
             if op.dialect(self.db).text(self.db) == "src" && op.name(self.db).text(self.db) == "var"
             {
                 // This is a potential parameter declaration
@@ -574,11 +607,6 @@ impl<'db> Resolver<'db> {
                 }
             } else {
                 break; // No more parameter declarations
-            }
-
-            // Stop once we've found as many as block arguments
-            if param_declarations.len() >= block_args.len() {
-                break;
             }
         }
 
@@ -858,6 +886,94 @@ impl<'db> Resolver<'db> {
             }
             Binding::TypeDef { .. } => None,
         }
+    }
+
+    // === Diagnostic Helpers ===
+
+    /// Emit diagnostic for unresolved `src.var`.
+    fn emit_unresolved_var_diagnostic(&self, op: &Operation<'db>) {
+        let name_key = Symbol::new(self.db, "name");
+        let name = op
+            .attributes(self.db)
+            .get(&name_key)
+            .and_then(|a| {
+                if let Attribute::Symbol(s) = a {
+                    Some(s.text(self.db))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or("unknown");
+
+        Diagnostic {
+            message: format!("unresolved name: `{}`", name),
+            span: op.location(self.db).span,
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::NameResolution,
+        }
+        .accumulate(self.db);
+    }
+
+    /// Emit diagnostic for unresolved `src.path`.
+    fn emit_unresolved_path_diagnostic(&self, op: &Operation<'db>) {
+        let path_key = Symbol::new(self.db, "path");
+        let path = op
+            .attributes(self.db)
+            .get(&path_key)
+            .and_then(|a| {
+                if let Attribute::SymbolRef(segments) = a {
+                    Some(
+                        segments
+                            .iter()
+                            .map(|s| s.text(self.db))
+                            .collect::<Vec<_>>()
+                            .join("::"),
+                    )
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        Diagnostic {
+            message: format!("unresolved path: `{}`", path),
+            span: op.location(self.db).span,
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::NameResolution,
+        }
+        .accumulate(self.db);
+    }
+
+    /// Emit diagnostic for unresolved `src.call`.
+    fn emit_unresolved_call_diagnostic(&self, op: &Operation<'db>) {
+        let name_key = Symbol::new(self.db, "name");
+        let name = op
+            .attributes(self.db)
+            .get(&name_key)
+            .and_then(|a| {
+                if let Attribute::SymbolRef(segments) = a {
+                    Some(
+                        segments
+                            .iter()
+                            .map(|s| s.text(self.db))
+                            .collect::<Vec<_>>()
+                            .join("::"),
+                    )
+                } else if let Attribute::Symbol(s) = a {
+                    Some(s.text(self.db).to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        Diagnostic {
+            message: format!("unresolved function call: `{}`", name),
+            span: op.location(self.db).span,
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::NameResolution,
+        }
+        .accumulate(self.db);
     }
 }
 

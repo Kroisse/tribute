@@ -35,8 +35,15 @@
 //!
 //! If only a type annotation changes in file A, but file B's code hasn't changed,
 //! file B won't be re-parsed or re-lowered.
+//!
+//! ## Diagnostics
+//!
+//! Diagnostics are collected using Salsa accumulators. Each stage can emit
+//! diagnostics via `Diagnostic { ... }.accumulate(db)`, which are then
+//! collected at the end of compilation.
 
-use tribute_core::SourceFile;
+use salsa::Accumulator;
+use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity, SourceFile, Span};
 use tribute_trunk_ir::dialect::core::Module;
 
 use crate::cst_to_tir::{lower_cst, parse_cst};
@@ -54,22 +61,7 @@ pub struct CompilationResult<'db> {
     /// The type solver with final substitutions.
     pub solver: TypeSolver<'db>,
     /// Diagnostics collected during compilation.
-    pub diagnostics: Vec<CompilationDiagnostic>,
-}
-
-/// A compilation diagnostic (error or warning).
-#[derive(Clone, Debug)]
-pub struct CompilationDiagnostic {
-    pub severity: DiagnosticSeverity,
-    pub message: String,
-    // TODO: Add span/location
-}
-
-/// Severity of a diagnostic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DiagnosticSeverity {
-    Error,
-    Warning,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 // =============================================================================
@@ -169,57 +161,53 @@ pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Modu
 /// 3. Resolve names
 /// 4. Infer types
 /// 5. TDNR (Type-Directed Name Resolution)
+/// 6. Final resolution pass (reports unresolved references)
 #[salsa::tracked]
 pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
-    stage_tdnr(db, source)
+    let module = stage_tdnr(db, source);
+
+    // Final pass: resolve any remaining unresolved references and emit diagnostics
+    let env = build_env(db, &module);
+    let mut resolver = Resolver::with_unresolved_reporting(db, env);
+    resolver.resolve_module(&module)
 }
 
 /// Run compilation and return detailed results including diagnostics.
+///
+/// Diagnostics are collected using Salsa accumulators from all compilation stages.
 pub fn compile_with_diagnostics<'db>(
     db: &'db dyn salsa::Database,
     source: SourceFile,
 ) -> CompilationResult<'db> {
-    let mut diagnostics = Vec::new();
+    // Run the full compilation pipeline (which checks for unresolved references)
+    let module = compile(db, source);
 
-    // Stage 1: Check parse (early exit on failure)
-    let Some(_cst) = parse_cst(db, source) else {
-        diagnostics.push(CompilationDiagnostic {
-            severity: DiagnosticSeverity::Error,
-            message: "Failed to parse source file".to_string(),
-        });
-
-        let path = tribute_core::PathId::new(db, source.path(db));
-        let location = tribute_core::Location::new(path, tribute_core::Span::new(0, 0));
-        let module = Module::build(db, location, "main", |_| {});
-
-        return CompilationResult {
-            module,
-            solver: TypeSolver::new(db),
-            diagnostics,
-        };
-    };
-
-    // Stage 2-3: Lower and resolve (uses tracked functions)
+    // Re-run type checking to capture the solver for the result
+    // (compile already checked types, but we need the solver for diagnostics)
     let resolved_module = stage_resolve(db, source);
-
-    // Stage 4: Type check (to capture diagnostics)
     let mut checker = TypeChecker::new(db);
     checker.check_module(&resolved_module);
 
-    let (module, solver) = match checker.solve() {
-        Ok(solver) => {
-            // Use stage_typecheck for the module with substitution applied
-            let module = stage_typecheck(db, source);
-            (module, solver)
-        }
+    let solver = match checker.solve() {
+        Ok(solver) => solver,
         Err(err) => {
-            diagnostics.push(CompilationDiagnostic {
+            // Emit type error diagnostic via accumulator
+            Diagnostic {
+                message: format!("Type error: {err}"),
+                span: Span::new(0, 0), // TODO: Extract span from error
                 severity: DiagnosticSeverity::Error,
-                message: format!("Type error: {:?}", err),
-            });
-            (resolved_module, TypeSolver::new(db))
+                phase: CompilationPhase::TypeChecking,
+            }
+            .accumulate(db);
+            TypeSolver::new(db)
         }
     };
+
+    // Collect all accumulated diagnostics from the compilation
+    let diagnostics = compile::accumulated::<Diagnostic>(db, source)
+        .into_iter()
+        .cloned()
+        .collect();
 
     CompilationResult {
         module,
@@ -267,6 +255,37 @@ mod tests {
             assert!(
                 result.diagnostics.is_empty(),
                 "Expected no diagnostics, got: {:?}",
+                result.diagnostics
+            );
+        });
+    }
+
+    #[test]
+    fn test_unresolved_reference_diagnostic() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let source = SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.tr"),
+                // Reference to undefined variable `undefined_var`
+                "fn main() -> Int { undefined_var }".to_string(),
+            );
+
+            let result = compile_with_diagnostics(db, source);
+            // Should have an unresolved reference error
+            assert!(
+                !result.diagnostics.is_empty(),
+                "Expected diagnostic for unresolved reference"
+            );
+
+            // Check that the diagnostic message mentions the unresolved name
+            let has_unresolved_error = result.diagnostics.iter().any(|d| {
+                d.message.contains("unresolved")
+                    && d.severity == DiagnosticSeverity::Error
+                    && d.phase == CompilationPhase::NameResolution
+            });
+            assert!(
+                has_unresolved_error,
+                "Expected unresolved name error, got: {:?}",
                 result.diagnostics
             );
         });

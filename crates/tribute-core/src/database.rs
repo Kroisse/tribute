@@ -92,7 +92,8 @@ pub enum DiagnosticSeverity {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CompilationPhase {
     Parsing,
-    HirLowering,
+    TirGeneration,
+    NameResolution,
     TypeChecking,
     Optimization,
 }

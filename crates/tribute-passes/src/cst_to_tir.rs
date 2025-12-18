@@ -1329,6 +1329,17 @@ fn lower_expr<'db, 'src>(
             None
         }
 
+        // === Expression statement (expression as statement in a block) ===
+        "expression_statement" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if !is_comment(child.kind()) {
+                    return lower_expr(ctx, block, child);
+                }
+            }
+            None
+        }
+
         // === Handle expression (ability handling) ===
         "handle_expression" => lower_handle_expr(ctx, block, node),
 

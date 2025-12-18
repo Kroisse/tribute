@@ -28,10 +28,13 @@ pub mod typeck;
 // Re-exports
 pub use cst_to_tir::{ParsedCst, lower_cst, lower_source_file, parse_cst};
 pub use pipeline::{
-    CompilationDiagnostic, CompilationResult, DiagnosticSeverity, compile,
-    compile_with_diagnostics, stage_resolve, stage_tdnr, stage_typecheck,
+    CompilationResult, compile, compile_with_diagnostics, stage_resolve, stage_tdnr,
+    stage_typecheck,
 };
 pub use resolve::{ModuleEnv, Resolver, resolve_module};
 pub use rewrite::{ApplyResult, PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
 pub use tdnr::{MethodInfo, MethodRegistry, TdnrResolver, resolve_tdnr};
 pub use typeck::{Constraint, EffectRow, TypeChecker, TypeSolver, typecheck_module};
+
+// Re-export diagnostic types from tribute-core
+pub use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};

@@ -35,6 +35,41 @@ pub enum SolveError<'db> {
     ArityMismatch { expected: usize, found: usize },
 }
 
+impl<'db> std::fmt::Display for SolveError<'db> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SolveError::TypeMismatch { expected, found } => {
+                write!(
+                    f,
+                    "type mismatch: expected {:?}, found {:?}",
+                    expected, found
+                )
+            }
+            SolveError::OccursCheck { var, ty } => {
+                write!(f, "infinite type: {:?} occurs in {:?}", var, ty)
+            }
+            SolveError::RowOccursCheck { var, row } => {
+                write!(f, "infinite effect row: {:?} occurs in {:?}", var, row)
+            }
+            SolveError::DuplicateAbility { ability } => {
+                write!(f, "duplicate ability: {:?}", ability)
+            }
+            SolveError::MissingAbility { ability, row } => {
+                write!(f, "missing ability {:?} in effect row {:?}", ability, row)
+            }
+            SolveError::ArityMismatch { expected, found } => {
+                write!(
+                    f,
+                    "arity mismatch: expected {} type arguments, found {}",
+                    expected, found
+                )
+            }
+        }
+    }
+}
+
+impl<'db> std::error::Error for SolveError<'db> {}
+
 /// Result of solving constraints.
 pub type SolveResult<'db, T> = Result<T, SolveError<'db>>;
 
