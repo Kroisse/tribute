@@ -24,6 +24,7 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_trunk_ir::dialect::adt;
 use tribute_trunk_ir::dialect::core::{self, Module};
 use tribute_trunk_ir::dialect::func;
+use tribute_trunk_ir::dialect::src;
 use tribute_trunk_ir::{
     Attribute, Attrs, Block, DialectOp, IdVec, Operation, Region, Symbol, Type, Value, ValueDef,
 };
@@ -484,8 +485,19 @@ impl<'db> Resolver<'db> {
                 if let Some(resolved) = self.try_resolve_var(&remapped_op) {
                     resolved
                 } else {
-                    // Unresolved
-                    if self.report_unresolved {
+                    // Check if already resolved (has a concrete type, not src.type or type.var)
+                    // This happens when re-processing an already-resolved module:
+                    // - src.type: Not yet resolved
+                    // - type.var: Unresolved, with type variable from inference
+                    // - Concrete types (core.*, adt.*): Already resolved local var
+                    let is_already_resolved =
+                        remapped_op.results(self.db).first().is_some_and(|ty| {
+                            let dialect = ty.dialect(self.db).text(self.db);
+                            // Type is resolved if it's not a source type placeholder and not a type variable
+                            dialect != "src" && dialect != "type"
+                        });
+
+                    if self.report_unresolved && !is_already_resolved {
                         self.emit_unresolved_var_diagnostic(&remapped_op);
                     }
                     vec![self.resolve_op_regions(&remapped_op)]
@@ -588,6 +600,8 @@ impl<'db> Resolver<'db> {
 
         // Scan for initial src.var operations that declare parameters
         // Only scan up to the number of block arguments
+        // Parameter declarations have the function's overall span (from lower_function)
+        let func_span = block.location(self.db).span;
         let mut param_declarations = Vec::new();
         for op in operations.iter() {
             // Stop early if we've found all expected parameters
@@ -597,7 +611,14 @@ impl<'db> Resolver<'db> {
 
             if op.dialect(self.db).text(self.db) == "src" && op.name(self.db).text(self.db) == "var"
             {
-                // This is a potential parameter declaration
+                // Only consider as parameter declaration if span matches function span
+                // Body references have their own specific span, not the function span
+                let op_span = op.location(self.db).span;
+                if op_span != func_span {
+                    break; // Different span means it's a body reference, not a param decl
+                }
+
+                // This is a parameter declaration
                 let attrs = op.attributes(self.db);
                 let name_key = Symbol::new(self.db, "name");
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
@@ -638,6 +659,7 @@ impl<'db> Resolver<'db> {
 
         // Now resolve the block, skipping parameter declaration src.var ops
         let num_param_decls = param_declarations.len();
+
         let new_ops: IdVec<Operation<'db>> = operations
             .iter()
             .enumerate()
@@ -729,21 +751,25 @@ impl<'db> Resolver<'db> {
 
         // First, check local scopes (function parameters, let bindings)
         if let Some(local) = self.lookup_local(name) {
-            // Local binding found - create an identity operation to preserve span for hover
+            // Local binding found - keep src.var with resolved type for hover span
             let (value, ty) = match local {
                 LocalBinding::Parameter { value, ty } => (*value, *ty),
                 LocalBinding::LetBinding { value, ty } => (*value, *ty),
             };
 
-            // Use unrealized_conversion_cast as identity to preserve location for hover
-            let new_op = core::unrealized_conversion_cast(self.db, location, value, ty);
+            // Resolve the type (it may still be src.type at this point)
+            let resolved_ty = self.resolve_type(ty);
+
+            // Create new src.var with resolved type (keeps span for hover)
+            let new_op = src::var(self.db, location, resolved_ty, *sym);
             let new_operation = new_op.as_operation();
 
-            // Map old result to new result
+            // Map old result to the actual bound value (not the new src.var's result)
+            // This ensures use sites get the correct value
             let old_result = op.result(self.db, 0);
-            let new_result = new_operation.result(self.db, 0);
-            self.map_value(old_result, new_result);
+            self.map_value(old_result, value);
 
+            // Return the new src.var to keep it in IR for hover
             return Some(vec![new_operation]);
         }
 

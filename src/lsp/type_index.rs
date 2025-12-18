@@ -112,15 +112,17 @@ impl<'db> TypeIndex<'db> {
             }
         }
 
-        // NOTE: Expression hover is currently disabled.
-        // To re-enable, uncomment the following:
-        // for &result_ty in op.results(db).iter() {
-        //     entries.push(TypeEntry {
-        //         span,
-        //         ty: result_ty,
-        //         kind: EntryKind::Expression,
-        //     });
-        // }
+        // Only enable hover for source-level reference operations
+        let is_hoverable = dialect == "src" && (name == "var" || name == "path");
+        if is_hoverable {
+            for &result_ty in op.results(db).iter() {
+                entries.push(TypeEntry {
+                    span,
+                    ty: result_ty,
+                    kind: EntryKind::Expression,
+                });
+            }
+        }
 
         // Recurse into nested regions
         for region in op.regions(db).iter() {
@@ -176,7 +178,9 @@ mod tests {
     }
 
     #[test]
-    fn test_type_index_expression_hover_disabled() {
+    fn test_type_index_local_var() {
+        use crate::lsp::pretty::print_type;
+
         TributeDatabaseImpl::default().attach(|db| {
             //                    0         1         2         3
             //                    0123456789012345678901234567890123456
@@ -190,14 +194,20 @@ mod tests {
             let module = compile(db, source);
             let index = TypeIndex::build(db, &module);
 
-            // Expression hover is disabled, so no type at position of 'a' in body
+            // Position of 'a' in body "{ a }" should show type Int
             let a_pos = source_text.find("{ a }").unwrap() + 2;
-            assert!(
-                index.type_at(a_pos).is_none(),
-                "Expression hover should be disabled"
+
+            let entry = index
+                .type_at(a_pos)
+                .expect("Should find type for local variable 'a'");
+            let ty_str = print_type(db, entry.ty);
+            assert_eq!(
+                ty_str, "Int",
+                "Expected Int for variable 'a', got {}",
+                ty_str
             );
 
-            // But function name hover should still work (position 3 = "foo")
+            // Function name hover should also work (position 3 = "foo")
             assert!(
                 index.type_at(3).is_some(),
                 "Function name hover should work"
