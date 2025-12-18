@@ -1,7 +1,10 @@
 //! Function dialect operations.
 use super::core;
-use crate::{DialectType, IdVec, Region, Symbol, Type, dialect, idvec, ir::BlockBuilder};
-use tribute_core::Location;
+use crate::{
+    Attribute, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, dialect, idvec,
+    ir::BlockBuilder,
+};
+use tribute_core::{Location, Span};
 
 dialect! {
     mod func {
@@ -46,16 +49,36 @@ impl<'db> Func<'db> {
         result: Type<'db>,
         f: impl FnOnce(&mut BlockBuilder<'db>),
     ) -> Self {
+        Self::build_with_name_span(db, location, name, None, params, result, f)
+    }
+
+    /// Build a function with an explicit name span for hover support.
+    pub fn build_with_name_span(
+        db: &'db dyn salsa::Database,
+        location: Location<'db>,
+        name: &str,
+        name_span: Option<Span>,
+        params: IdVec<Type<'db>>,
+        result: Type<'db>,
+        f: impl FnOnce(&mut BlockBuilder<'db>),
+    ) -> Self {
         let mut entry = BlockBuilder::new(db, location).args(params.clone());
         f(&mut entry);
         let region = Region::new(db, location, idvec![entry.build()]);
-        func(
-            db,
-            location,
-            Symbol::new(db, name),
-            core::Func::new(db, params, result).as_type(),
-            region,
-        )
+
+        let mut builder = Operation::of_name(db, location, "func.func")
+            .attr("sym_name", Attribute::Symbol(Symbol::new(db, name)))
+            .attr(
+                "type",
+                Attribute::Type(core::Func::new(db, params, result).as_type()),
+            )
+            .region(region);
+
+        if let Some(span) = name_span {
+            builder = builder.attr("name_span", Attribute::Span(span));
+        }
+
+        Func::from_operation(db, builder.build()).expect("valid func.func operation")
     }
 
     /// Get the function name.
