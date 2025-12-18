@@ -20,8 +20,10 @@ mod checker;
 mod constraint;
 mod effect_row;
 mod solver;
+mod subst;
 
 pub use checker::{TypeChecker, typecheck_module};
 pub use constraint::Constraint;
 pub use effect_row::EffectRow;
 pub use solver::TypeSolver;
+pub use subst::{apply_subst_to_module, has_type_vars, module_has_type_vars};

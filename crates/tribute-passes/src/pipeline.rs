@@ -37,7 +37,7 @@ use tribute_trunk_ir::dialect::core::Module;
 
 use crate::cst_to_tir::{lower_cst, parse_cst};
 use crate::resolve::{Resolver, build_env};
-use crate::typeck::{TypeChecker, TypeSolver};
+use crate::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 
 // Re-export for convenience
 pub use crate::resolve::build_env as build_module_env;
@@ -127,10 +127,9 @@ pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceFile) ->
 
     // Solve constraints
     match checker.solve() {
-        Ok(_solver) => {
-            // TODO: Apply substitution back to module
-            // For now, return unchanged
-            module
+        Ok(solver) => {
+            // Apply substitution to replace type variables with concrete types
+            apply_subst_to_module(db, module, solver.type_subst())
         }
         Err(_err) => {
             // TODO: Report type error
@@ -181,20 +180,24 @@ pub fn compile_with_diagnostics<'db>(
     };
 
     // Stage 2-3: Lower and resolve (uses tracked functions)
-    let module = stage_resolve(db, source);
+    let resolved_module = stage_resolve(db, source);
 
-    // Stage 4: Type check
+    // Stage 4: Type check (to capture diagnostics)
     let mut checker = TypeChecker::new(db);
-    checker.check_module(&module);
+    checker.check_module(&resolved_module);
 
-    let solver = match checker.solve() {
-        Ok(solver) => solver,
+    let (module, solver) = match checker.solve() {
+        Ok(solver) => {
+            // Use stage_typecheck for the module with substitution applied
+            let module = stage_typecheck(db, source);
+            (module, solver)
+        }
         Err(err) => {
             diagnostics.push(CompilationDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 message: format!("Type error: {:?}", err),
             });
-            TypeSolver::new(db)
+            (resolved_module, TypeSolver::new(db))
         }
     };
 
