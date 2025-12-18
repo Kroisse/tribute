@@ -1,4 +1,4 @@
-fn foo(a: Int) -> Int { a }
+fn foo(bar: Int) -> Int { bar + 1 }
 
 fn add(a, b) {
     a + b
