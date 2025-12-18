@@ -22,7 +22,7 @@ smallvec = { version = "1.13", features = ["union", "const_generics", "serde"] }
 target-lexicon = "0.13"
 tempfile = "3.8"
 tree-sitter = "0.25.6"
-tree-sitter-tribute = { path = "crates/tree-sitter-tribute" }
+tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute.git" }
 tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-passes = { path = "crates/tribute-passes" }

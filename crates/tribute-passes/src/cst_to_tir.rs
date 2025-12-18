@@ -230,7 +230,7 @@ pub fn parse_cst(db: &dyn salsa::Database, source: SourceFile) -> Option<ParsedC
 
     let mut parser = Parser::new();
     parser
-        .set_language(&tree_sitter_tribute::language())
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
         .expect("Failed to set language");
 
     parser.parse(text, None).map(ParsedCst::new)

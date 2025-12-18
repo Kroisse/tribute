@@ -1,0 +1,11 @@
+id = "tribute-lang"
+name = "Tribute Language"
+version = "0.0.1"
+schema_version = 1
+description = "Tribute language support for Zed"
+repository = "https://github.com/Kroisse/tribute"
+authors = ["Eunchong Yu <kroisse@gmail.com>"]
+
+[grammars.tribute]
+repository = "file://./grammars"
+rev = "main"

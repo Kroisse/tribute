@@ -12,5 +12,8 @@ node_modules/
 # Compiled object files
 *.o
 
+# Built WASM files
+contrib/zed/grammars/*.wasm
+
 # Performance test artifacts
 perf_test*
