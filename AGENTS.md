@@ -21,7 +21,7 @@ Tribute targets a functional language with **static types, type inference, and a
 - **Effects/Abilities**: Unison-style abilities (delimited, one-shot continuations)
 - **IR**: TrunkIR multi-level dialect IR (`src`/`ability`/`adt` → `cont`/`func`/`scf` …)
 - **Targets**: Cranelift (native) + WasmGC
-- **File extension (spec)**: `.tr`
+- **File extension (spec)**: `.trb`
   - This repo may still contain legacy `.trb` examples (migration in progress).
 
 ## Repo Layout (Current Workspace)

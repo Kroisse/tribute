@@ -38,7 +38,7 @@ Gleam도 glob import를 지원하지 않으며, Rust/Haskell 커뮤니티에서�
 ### 모듈 선언과 Use
 
 ```rust
-// std/collections/list.tr
+// std/collections/list.trb
 
 pub enum List(a) {
     Empty
@@ -320,7 +320,7 @@ fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(
 ## Complete Example
 
 ```rust
-// app/main.tr
+// app/main.trb
 
 use std::collections::{List, Option}
 use std::io::Console
