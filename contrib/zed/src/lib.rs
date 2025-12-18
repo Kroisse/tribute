@@ -12,13 +12,13 @@ impl zed::Extension for TributeExtension {
         _language_server_id: &LanguageServerId,
         worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
-        // For development: use target/debug/tribute from worktree root
-        // For production: fall back to PATH lookup
-        let root = worktree.root_path();
-        let path = format!("{root}/target/debug/tribute");
+        // Try PATH first (for installed binary), then fall back to dev build
+        let command = worktree
+            .which("tribute")
+            .unwrap_or_else(|| format!("{}/target/debug/tribute", worktree.root_path()));
 
         Ok(zed::Command {
-            command: path,
+            command,
             args: vec!["lsp".to_string()],
             env: Default::default(),
         })
