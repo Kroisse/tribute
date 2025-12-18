@@ -82,3 +82,44 @@ pub fn unresolved_type<'db>(
     // Use the macro-generated Type struct
     *Type::new(db, params, Symbol::new(db, name))
 }
+
+// === Printable interface registrations ===
+
+use std::fmt::Write;
+
+use crate::Attribute;
+use crate::type_interface::Printable;
+
+// src.type -> "Name" or "Name(params...)"
+inventory::submit! {
+    Printable::implement("src", "type", |db, ty, f| {
+        let Some(Attribute::Symbol(name)) = ty.get_attr(db, "name") else {
+            return f.write_str("?unresolved");
+        };
+
+        let name_text = name.text(db);
+        let params = ty.params(db);
+
+        // Capitalize first letter
+        let mut chars = name_text.chars();
+        if let Some(c) = chars.next() {
+            for ch in c.to_uppercase() {
+                f.write_char(ch)?;
+            }
+            f.write_str(chars.as_str())?;
+        }
+
+        if !params.is_empty() {
+            f.write_char('(')?;
+            for (i, &p) in params.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ")?;
+                }
+                Printable::print_type(db, p, f)?;
+            }
+            f.write_char(')')?;
+        }
+
+        Ok(())
+    })
+}

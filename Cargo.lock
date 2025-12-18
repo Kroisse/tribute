@@ -1221,6 +1221,7 @@ dependencies = [
 name = "tribute-trunk-ir"
 version = "0.1.0"
 dependencies = [
+ "inventory",
  "paste",
  "salsa",
  "serde",

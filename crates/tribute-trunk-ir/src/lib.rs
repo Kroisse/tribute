@@ -9,6 +9,7 @@ pub mod dialect;
 // === IR infrastructure ===
 pub mod ir;
 pub mod ops;
+pub mod type_interface;
 pub mod types;
 
 // Re-export paste for use in macros

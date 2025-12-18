@@ -83,3 +83,32 @@ pub fn is_var(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
 pub fn is_error(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     ty.is_dialect(db, "type", "error")
 }
+
+// === Printable interface registrations ===
+
+use std::fmt::{Formatter, Write};
+
+use crate::type_interface::Printable;
+
+// type.var -> "a", "b", ..., "t0", "t1", ...
+inventory::submit! {
+    Printable::implement("type", "var", |db, ty, f| {
+        if let Some(Attribute::IntBits(id)) = ty.get_attr(db, "id") {
+            fmt_var_id(f, *id)
+        } else {
+            f.write_char('?')
+        }
+    })
+}
+
+// type.error -> "<error>"
+inventory::submit! { Printable::implement("type", "error", |_, _, f| f.write_str("<error>")) }
+
+/// Convert a variable ID to a readable name (a, b, c, ..., t0, t1, ...).
+fn fmt_var_id(f: &mut Formatter<'_>, id: u64) -> std::fmt::Result {
+    if id < 26 {
+        f.write_char((b'a' + id as u8) as char)
+    } else {
+        write!(f, "t{}", id - 26)
+    }
+}
