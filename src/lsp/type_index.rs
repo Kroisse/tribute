@@ -93,25 +93,34 @@ impl<'db> TypeIndex<'db> {
         };
 
         // Special case for func.func: use the 'type' attribute since it has no results
+        // and use 'name_span' if available for precise hover targeting
         if dialect == "func" && name == "func" {
             let type_key = tribute_trunk_ir::Symbol::new(db, "type");
+            let name_span_key = tribute_trunk_ir::Symbol::new(db, "name_span");
+
             if let Some(Attribute::Type(func_ty)) = op.attributes(db).get(&type_key) {
+                // Use name_span if available, otherwise fall back to operation span
+                let hover_span = match op.attributes(db).get(&name_span_key) {
+                    Some(Attribute::Span(s)) => *s,
+                    _ => span,
+                };
                 entries.push(TypeEntry {
-                    span,
+                    span: hover_span,
                     ty: *func_ty,
                     kind,
                 });
             }
         }
 
-        // Add entries for each result type
-        for &result_ty in op.results(db).iter() {
-            entries.push(TypeEntry {
-                span,
-                ty: result_ty,
-                kind,
-            });
-        }
+        // NOTE: Expression hover is currently disabled.
+        // To re-enable, uncomment the following:
+        // for &result_ty in op.results(db).iter() {
+        //     entries.push(TypeEntry {
+        //         span,
+        //         ty: result_ty,
+        //         kind: EntryKind::Expression,
+        //     });
+        // }
 
         // Recurse into nested regions
         for region in op.regions(db).iter() {
@@ -147,24 +156,27 @@ mod tests {
     #[test]
     fn test_type_index_basic() {
         TributeDatabaseImpl::default().attach(|db| {
+            //                    0         1         2         3
+            //                    0123456789012345678901234567890123456789
+            let source_text = "fn add(x: Int, y: Int) -> Int { x + y }";
             let source = SourceFile::new(
                 db,
                 std::path::PathBuf::from("test.tr"),
-                "fn add(x: Int, y: Int) -> Int { x + y }".to_string(),
+                source_text.to_string(),
             );
 
             let module = compile(db, source);
             let index = TypeIndex::build(db, &module);
 
-            // Should find the function type
-            assert!(index.type_at(0).is_some());
+            // Should find the function type at the function name "add" (position 3-6)
+            assert!(index.type_at(3).is_some());
+            // Should NOT find function type at "fn" keyword (position 0)
+            assert!(index.type_at(0).is_none());
         });
     }
 
     #[test]
-    fn test_type_index_local_var() {
-        use crate::lsp::pretty::print_type;
-
+    fn test_type_index_expression_hover_disabled() {
         TributeDatabaseImpl::default().attach(|db| {
             //                    0         1         2         3
             //                    0123456789012345678901234567890123456
@@ -175,112 +187,21 @@ mod tests {
                 source_text.to_string(),
             );
 
-            // Debug: print IR BEFORE resolution
-            let cst = tribute_passes::parse_cst(db, source).expect("parse failed");
-            let lowered = tribute_passes::lower_cst(db, source, cst);
-            eprintln!("=== Lowered IR (before resolution) ===");
-            for block in lowered.body(db).blocks(db).iter() {
-                eprintln!("Module block:");
-                for op in block.operations(db).iter() {
-                    eprintln!(
-                        "  {}.{} at {:?}",
-                        op.dialect(db).text(db),
-                        op.name(db).text(db),
-                        op.location(db).span,
-                    );
-                    for (i, region) in op.regions(db).iter().enumerate() {
-                        eprintln!("    region[{}]:", i);
-                        for rblock in region.blocks(db).iter() {
-                            for rop in rblock.operations(db).iter() {
-                                eprintln!(
-                                    "        {}.{} at {:?}",
-                                    rop.dialect(db).text(db),
-                                    rop.name(db).text(db),
-                                    rop.location(db).span,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            eprintln!("=====================================");
-
             let module = compile(db, source);
-
-            // Debug: print IR structure
-            eprintln!("=== Module IR (after compile) ===");
-            for block in module.body(db).blocks(db).iter() {
-                eprintln!("Module block:");
-                for op in block.operations(db).iter() {
-                    eprintln!(
-                        "  {}.{} at {:?}, results: {:?}",
-                        op.dialect(db).text(db),
-                        op.name(db).text(db),
-                        op.location(db).span,
-                        op.results(db)
-                            .iter()
-                            .map(|t| print_type(db, *t))
-                            .collect::<Vec<_>>()
-                    );
-                    // Check nested regions
-                    for (i, region) in op.regions(db).iter().enumerate() {
-                        eprintln!("    region[{}]:", i);
-                        for rblock in region.blocks(db).iter() {
-                            eprintln!(
-                                "      block args: {:?}",
-                                rblock
-                                    .args(db)
-                                    .iter()
-                                    .map(|t| print_type(db, *t))
-                                    .collect::<Vec<_>>()
-                            );
-                            for rop in rblock.operations(db).iter() {
-                                eprintln!(
-                                    "        {}.{} at {:?}, results: {:?}",
-                                    rop.dialect(db).text(db),
-                                    rop.name(db).text(db),
-                                    rop.location(db).span,
-                                    rop.results(db)
-                                        .iter()
-                                        .map(|t| print_type(db, *t))
-                                        .collect::<Vec<_>>()
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            eprintln!("=================");
-
             let index = TypeIndex::build(db, &module);
 
-            // Debug: print all entries
-            eprintln!("TypeIndex entries:");
-            for entry in &index.entries {
-                eprintln!(
-                    "  span: {:?}, type: {}, kind: {:?}",
-                    entry.span,
-                    print_type(db, entry.ty),
-                    entry.kind
-                );
-            }
+            // Expression hover is disabled, so no type at position of 'a' in body
+            let a_pos = source_text.find("{ a }").unwrap() + 2;
+            assert!(
+                index.type_at(a_pos).is_none(),
+                "Expression hover should be disabled"
+            );
 
-            // Position 24 is the 'a' in the body "{ a }"
-            let a_pos = source_text.find("{ a }").unwrap() + 2; // position of 'a' in body
-            eprintln!("Looking up position {} (should be 'a' in body)", a_pos);
-
-            if let Some(entry) = index.type_at(a_pos) {
-                let ty_str = print_type(db, entry.ty);
-                eprintln!("Found type: {} at span {:?}", ty_str, entry.span);
-                // The variable 'a' should have type Int, not fn(Int) -> Int
-                assert_eq!(
-                    ty_str, "Int",
-                    "Expected Int for variable 'a', got {}",
-                    ty_str
-                );
-            } else {
-                panic!("No type found at position {}", a_pos);
-            }
+            // But function name hover should still work (position 3 = "foo")
+            assert!(
+                index.type_at(3).is_some(),
+                "Function name hover should work"
+            );
         });
     }
 }

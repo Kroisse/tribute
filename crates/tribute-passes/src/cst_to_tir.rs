@@ -343,6 +343,7 @@ fn lower_function<'db, 'src>(
     let location = ctx.location(&node);
 
     let mut name = None;
+    let mut name_span = None;
     let mut param_names = Vec::new();
     let mut param_types = Vec::new();
     let mut return_type = None;
@@ -355,6 +356,10 @@ fn lower_function<'db, 'src>(
         match child.kind() {
             "identifier" if name.is_none() => {
                 name = Some(node_text(&child, ctx.source).to_string());
+                name_span = Some(Span {
+                    start: child.start_byte(),
+                    end: child.end_byte(),
+                });
             }
             "parameter_list" => {
                 let (names, types) = parse_parameter_list(ctx, child);
@@ -380,10 +385,11 @@ fn lower_function<'db, 'src>(
     // Resolve return type or create fresh type var
     let result = return_type.unwrap_or_else(|| ctx.fresh_type_var());
 
-    Some(func::Func::build(
+    Some(func::Func::build_with_name_span(
         ctx.db,
         location,
         &name,
+        name_span,
         params.clone(),
         result,
         |entry| {

@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::{IdVec, Symbol};
+use tribute_core::Span;
 
 /// Trait for dialect-specific type wrappers.
 ///
@@ -102,6 +103,8 @@ pub enum Attribute<'db> {
     SymbolRef(IdVec<Symbol<'db>>),
     /// List of attributes (for arrays of values like switch cases).
     List(Vec<Attribute<'db>>),
+    /// Source span (for tracking source locations in attributes).
+    Span(Span),
 }
 
 impl From<i64> for Attribute<'_> {
