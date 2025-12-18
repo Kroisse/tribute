@@ -105,6 +105,26 @@ dialect! {
         fn or() {
             #[region(alternatives)] {}
         };
+
+        // === Handler Patterns (for ability effect handling) ===
+
+        /// `pat.handler_done` operation: matches Done variant of Request.
+        /// Used for `{ result }` patterns in handle expressions.
+        /// The result region contains the pattern for the result value.
+        fn handler_done() {
+            #[region(result)] {}
+        };
+
+        /// `pat.handler_suspend` operation: matches Suspend variant for a specific ability operation.
+        /// Used for `{ Op(args) -> k }` patterns in handle expressions.
+        /// - `ability_ref`: path to the ability being handled
+        /// - `op`: the operation name within the ability
+        /// - `args`: region containing patterns for operation arguments
+        /// - `continuation`: name to bind the continuation (or empty for discard)
+        #[attr(ability_ref: SymbolRef, op: Symbol, continuation: Symbol)]
+        fn handler_suspend() {
+            #[region(args)] {}
+        };
     }
 }
 
@@ -226,5 +246,37 @@ pub mod helpers {
     ) -> Region<'db> {
         let block = Block::new(db, location, IdVec::new(), IdVec::from(vec![op]));
         Region::new(db, location, IdVec::from(vec![block]))
+    }
+
+    // === Handler Pattern Helpers ===
+
+    /// Create a handler_done pattern region for `{ result }` patterns.
+    pub fn handler_done_region<'db>(
+        db: &'db dyn salsa::Database,
+        location: Location<'db>,
+        result_pattern: Region<'db>,
+    ) -> Region<'db> {
+        let op = handler_done(db, location, result_pattern);
+        single_op_region(db, location, op.as_operation())
+    }
+
+    /// Create a handler_suspend pattern region for `{ Op(args) -> k }` patterns.
+    pub fn handler_suspend_region<'db>(
+        db: &'db dyn salsa::Database,
+        location: Location<'db>,
+        ability_ref: IdVec<Symbol<'db>>,
+        op_name: Symbol<'db>,
+        args_pattern: Region<'db>,
+        continuation_name: Symbol<'db>,
+    ) -> Region<'db> {
+        let op = handler_suspend(
+            db,
+            location,
+            ability_ref,
+            op_name,
+            continuation_name,
+            args_pattern,
+        );
+        single_op_region(db, location, op.as_operation())
     }
 }

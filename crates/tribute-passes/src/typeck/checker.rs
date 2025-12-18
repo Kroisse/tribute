@@ -96,8 +96,19 @@ struct OpSymbols<'db> {
     core_module: Symbol<'db>,
     core_unrealized_conversion_cast: Symbol<'db>,
 
+    // pat dialect
+    pat: Symbol<'db>,
+    pat_handler_suspend: Symbol<'db>,
+    #[allow(dead_code)] // Will be used for Done pattern handling
+    pat_handler_done: Symbol<'db>,
+
+    // case dialect arm
+    case_arm: Symbol<'db>,
+
     // Attribute keys
     attr_ability_ref: Symbol<'db>,
+    #[allow(dead_code)] // Will be used for operation name extraction
+    attr_op: Symbol<'db>,
 }
 
 impl<'db> OpSymbols<'db> {
@@ -164,8 +175,17 @@ impl<'db> OpSymbols<'db> {
             core_module: Symbol::new(db, "module"),
             core_unrealized_conversion_cast: Symbol::new(db, "unrealized_conversion_cast"),
 
+            // pat dialect
+            pat: Symbol::new(db, "pat"),
+            pat_handler_suspend: Symbol::new(db, "handler_suspend"),
+            pat_handler_done: Symbol::new(db, "handler_done"),
+
+            // case dialect arm
+            case_arm: Symbol::new(db, "arm"),
+
             // Attribute keys
             attr_ability_ref: Symbol::new(db, "ability_ref"),
+            attr_op: Symbol::new(db, "op"),
         }
     }
 }
@@ -695,14 +715,75 @@ impl<'db> TypeChecker<'db> {
             .copied()
             .unwrap_or_else(|| self.fresh_type_var());
 
-        // Check each branch region
+        // Check each branch region and collect handled abilities from handler patterns
         let regions = op.regions(self.db);
+        let mut handled_abilities = Vec::new();
+
         for region in regions.iter() {
-            self.check_region(region);
+            // Look for case.arm operations in the region
+            for block in region.blocks(self.db).iter() {
+                for arm_op in block.operations(self.db).iter() {
+                    if arm_op.dialect(self.db) == self.syms.case
+                        && arm_op.name(self.db) == self.syms.case_arm
+                    {
+                        // Extract handled abilities from the pattern region
+                        let arm_regions = arm_op.regions(self.db);
+                        if let Some(pattern_region) = arm_regions.first() {
+                            self.extract_handled_abilities(pattern_region, &mut handled_abilities);
+                        }
+
+                        // Check the body region (second region)
+                        if let Some(body_region) = arm_regions.get(1) {
+                            self.check_region(body_region);
+                        }
+                    } else {
+                        // Regular operation in case body
+                        self.check_operation(arm_op);
+                    }
+                }
+            }
+        }
+
+        // Remove handled abilities from the current effect row
+        for ability in handled_abilities {
+            self.current_effect.remove_ability(&ability);
         }
 
         let value = op.result(self.db, 0);
         self.record_type(value, result_type);
+    }
+
+    /// Extract abilities being handled from a pattern region.
+    fn extract_handled_abilities(
+        &self,
+        pattern_region: &Region<'db>,
+        handled: &mut Vec<AbilityRef<'db>>,
+    ) {
+        for block in pattern_region.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter() {
+                // Check for pat.handler_suspend
+                if op.dialect(self.db) == self.syms.pat
+                    && op.name(self.db) == self.syms.pat_handler_suspend
+                {
+                    // Extract ability reference from attributes
+                    let attrs = op.attributes(self.db);
+                    if let Some(Attribute::SymbolRef(ability_path)) =
+                        attrs.get(&self.syms.attr_ability_ref)
+                    {
+                        // Extract ability name from path
+                        let ability_name = ability_path
+                            .last()
+                            .copied()
+                            .unwrap_or_else(|| Symbol::new(self.db, "unknown"));
+
+                        let ability = AbilityRef::simple(ability_name);
+                        if !handled.contains(&ability) {
+                            handled.push(ability);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // === ability dialect checking ===
@@ -764,12 +845,9 @@ impl<'db> TypeChecker<'db> {
         }
 
         // The body's effects are "captured" by the prompt.
-        // Effect elimination happens in case.case pattern matching,
-        // where handler patterns remove handled abilities from the effect row.
-        //
-        // For now, propagate body's effects to outer context.
-        // TODO: In a full implementation, the case.case handler patterns
-        // determine which effects are eliminated.
+        // We propagate body's effects to outer context first, then case.case
+        // will eliminate handled abilities based on handler patterns
+        // (pat.handler_suspend in pattern regions).
         let body_effect = std::mem::replace(&mut self.current_effect, outer_effect);
         self.merge_effect(body_effect);
 

@@ -2508,33 +2508,127 @@ fn bind_handler_pattern<'db, 'src>(
 
 /// Convert a handler pattern to a pattern region.
 ///
-/// Handler patterns are for ability effect handling. For now, we create
-/// a simple binding pattern. Future work will add specialized handler
-/// pattern operations.
+/// Handler patterns are for ability effect handling:
+/// - `{ result }` - Done pattern, binds the result value
+/// - `{ Path::op(args) -> k }` - Suspend pattern, binds args and continuation
 fn handler_pattern_to_region<'db, 'src>(
     ctx: &CstLoweringCtx<'db, 'src>,
     node: Node,
 ) -> Region<'db> {
     let location = ctx.location(&node);
     let mut cursor = node.walk();
-    let mut value_name = None;
 
-    // Extract the first identifier as a binding
+    let mut result_name: Option<&str> = None;
+    let mut operation_path: Option<Node> = None;
+    let mut args_node: Option<Node> = None;
+    let mut continuation_name: Option<&str> = None;
+
+    // Parse handler pattern children
+    for child in node.named_children(&mut cursor) {
+        if is_comment(child.kind()) {
+            continue;
+        }
+        match child.kind() {
+            "identifier" => {
+                // Could be result binding or continuation
+                if operation_path.is_some() {
+                    // After operation, this is the continuation
+                    continuation_name = Some(node_text(&child, ctx.source));
+                } else if result_name.is_none() {
+                    // First identifier without operation is result binding
+                    result_name = Some(node_text(&child, ctx.source));
+                }
+            }
+            "path_expression" => {
+                // This is the operation path (e.g., State::get)
+                operation_path = Some(child);
+            }
+            "pattern_list" => {
+                // Arguments to the operation
+                args_node = Some(child);
+            }
+            _ => {}
+        }
+    }
+
+    // Determine pattern type: Done or Suspend
+    if let Some(op_path) = operation_path {
+        // Suspend pattern: { Path::op(args) -> k }
+        let (ability_ref, op_name) = parse_operation_path(ctx, op_path);
+
+        // Build args pattern region
+        let args_region = if let Some(args) = args_node {
+            let mut ops = Vec::new();
+            let mut args_cursor = args.walk();
+            for arg_child in args.named_children(&mut args_cursor) {
+                if is_comment(arg_child.kind()) {
+                    continue;
+                }
+                let pat_region = pattern_to_region(ctx, arg_child);
+                if let Some(op) = extract_pattern_op(ctx.db, &pat_region) {
+                    ops.push(op);
+                }
+            }
+            ops_to_region(ctx.db, location, ops)
+        } else {
+            pat::helpers::empty_region(ctx.db, location)
+        };
+
+        // Continuation name (empty Symbol for wildcard/discard)
+        let cont_symbol = Symbol::new(ctx.db, continuation_name.unwrap_or("_"));
+
+        pat::helpers::handler_suspend_region(
+            ctx.db,
+            location,
+            ability_ref,
+            op_name,
+            args_region,
+            cont_symbol,
+        )
+    } else {
+        // Done pattern: { result }
+        let result_region = match result_name {
+            Some(name) => pat::helpers::bind_region(ctx.db, location, name),
+            None => pat::helpers::wildcard_region(ctx.db, location),
+        };
+
+        pat::helpers::handler_done_region(ctx.db, location, result_region)
+    }
+}
+
+/// Parse an operation path like `State::get` into (ability_ref, op_name).
+fn parse_operation_path<'db, 'src>(
+    ctx: &CstLoweringCtx<'db, 'src>,
+    node: Node,
+) -> (IdVec<Symbol<'db>>, Symbol<'db>) {
+    let mut path_parts = Vec::new();
+    let mut cursor = node.walk();
+
+    // Collect all path components
     for child in node.named_children(&mut cursor) {
         if is_comment(child.kind()) {
             continue;
         }
         if child.kind() == "identifier" || child.kind() == "type_identifier" {
-            value_name = Some(node_text(&child, ctx.source));
-            break;
+            path_parts.push(node_text(&child, ctx.source));
         }
     }
 
-    // For now, create a simple bind pattern
-    // TODO: Add specialized handler pattern operations (handler_done, handler_suspend)
-    match value_name {
-        Some(name) => pat::helpers::bind_region(ctx.db, location, name),
-        None => pat::helpers::wildcard_region(ctx.db, location),
+    // If it's a single identifier, treat it as ability::op where ability is inferred
+    // Otherwise, the last part is the operation name, rest is the ability path
+    if path_parts.len() <= 1 {
+        let op_name = path_parts.first().copied().unwrap_or("unknown");
+        (
+            IdVec::new(), // Empty ability ref (to be inferred)
+            Symbol::new(ctx.db, op_name),
+        )
+    } else {
+        let op_name = path_parts.pop().unwrap();
+        let ability_ref: Vec<Symbol<'db>> = path_parts
+            .into_iter()
+            .map(|s| Symbol::new(ctx.db, s))
+            .collect();
+        (IdVec::from(ability_ref), Symbol::new(ctx.db, op_name))
     }
 }
 
