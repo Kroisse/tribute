@@ -11,6 +11,7 @@ pub mod ty;
 pub mod ability;
 pub mod case;
 pub mod closure;
+pub mod pat;
 pub mod src;
 
 // === Mid-level (target independent) ===

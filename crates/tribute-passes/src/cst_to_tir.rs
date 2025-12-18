@@ -18,8 +18,9 @@ use std::hash::{Hash, Hasher};
 use tree_sitter::{Node, Parser, Tree};
 use tribute_core::{Location, PathId, SourceFile, Span};
 use tribute_trunk_ir::{
-    Attribute, BlockBuilder, DialectType, IdVec, Region, Symbol, Type, Value,
-    dialect::{ability, adt, arith, case, core, func, list, src, ty},
+    Attribute, Block, BlockBuilder, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
+    Value,
+    dialect::{ability, adt, arith, case, core, func, list, pat, src, ty},
     idvec,
 };
 
@@ -1961,47 +1962,50 @@ fn lower_case_arm<'db, 'src>(
     let result_value = result_value?;
     body_block.op(case::r#yield(ctx.db, location, result_value));
 
-    let pattern_attr = pattern_to_attribute(ctx, pattern_node);
-    let region = Region::new(ctx.db, location, idvec![body_block.build()]);
+    let pattern_region = pattern_to_region(ctx, pattern_node);
+    let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
-    Some(case::arm(ctx.db, location, pattern_attr, region))
+    Some(case::arm(ctx.db, location, pattern_region, body_region))
 }
 
-/// Convert a pattern node to an attribute for case arms.
-fn pattern_to_attribute<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> Attribute<'db> {
+/// Convert a pattern node to a pattern region for case arms.
+///
+/// Creates a region containing pattern operations from the `pat` dialect.
+fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> Region<'db> {
+    let location = ctx.location(&node);
+
     match node.kind() {
         "identifier" | "identifier_pattern" => {
             let name = node_text(&node, ctx.source);
-            // Use case::pattern helper for proper formatting
-            case::pattern::ident(name)
+            pat::helpers::bind_region(ctx.db, location, name)
         }
-        "wildcard_pattern" => case::pattern::wildcard(),
+        "wildcard_pattern" => pat::helpers::wildcard_region(ctx.db, location),
         "literal_pattern" => {
             // Get the literal value
             let mut cursor = node.walk();
             if let Some(child) = node.named_children(&mut cursor).next() {
-                pattern_to_attribute(ctx, child)
+                pattern_to_region(ctx, child)
             } else {
-                case::pattern::wildcard()
+                pat::helpers::wildcard_region(ctx.db, location)
             }
         }
         "nat_literal" | "int_literal" => {
             if let Some(n) = parse_int_literal(node_text(&node, ctx.source)) {
-                case::pattern::int(n)
+                pat::helpers::int_region(ctx.db, location, n)
             } else {
-                case::pattern::wildcard()
+                pat::helpers::wildcard_region(ctx.db, location)
             }
         }
-        "true" => case::pattern::bool(true),
-        "false" => case::pattern::bool(false),
+        "true" => pat::helpers::bool_region(ctx.db, location, true),
+        "false" => pat::helpers::bool_region(ctx.db, location, false),
         "string" | "raw_string" | "multiline_string" => {
             let s = parse_string_literal(node, ctx.source);
-            case::pattern::string(&s)
+            pat::helpers::string_region(ctx.db, location, &s)
         }
         "constructor_pattern" => {
             let mut cursor = node.walk();
             let mut ctor_name = None;
-            let mut field_patterns = Vec::new();
+            let mut field_ops: Vec<Operation<'db>> = Vec::new();
 
             for child in node.named_children(&mut cursor) {
                 if is_comment(child.kind()) {
@@ -2015,7 +2019,11 @@ fn pattern_to_attribute<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) 
                         let mut list_cursor = child.walk();
                         for pat_child in child.named_children(&mut list_cursor) {
                             if !is_comment(pat_child.kind()) {
-                                field_patterns.push(pattern_to_attribute(ctx, pat_child));
+                                let pat_region = pattern_to_region(ctx, pat_child);
+                                // Extract the pattern operation from the region
+                                if let Some(op) = extract_pattern_op(ctx.db, &pat_region) {
+                                    field_ops.push(op);
+                                }
                             }
                         }
                     }
@@ -2027,7 +2035,10 @@ fn pattern_to_attribute<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) 
                                 let mut field_cursor = field_child.walk();
                                 for pat in field_child.named_children(&mut field_cursor) {
                                     if !is_comment(pat.kind()) {
-                                        field_patterns.push(pattern_to_attribute(ctx, pat));
+                                        let pat_region = pattern_to_region(ctx, pat);
+                                        if let Some(op) = extract_pattern_op(ctx.db, &pat_region) {
+                                            field_ops.push(op);
+                                        }
                                         break;
                                     }
                                 }
@@ -2039,15 +2050,13 @@ fn pattern_to_attribute<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) 
             }
 
             let name = ctor_name.unwrap_or("_");
-            if field_patterns.is_empty() {
-                case::pattern::unit_variant(name)
-            } else {
-                case::pattern::variant(name, &field_patterns)
-            }
+            let variant_path = idvec![Symbol::new(ctx.db, name)];
+            let fields_region = ops_to_region(ctx.db, location, field_ops);
+            pat::helpers::variant_region(ctx.db, location, variant_path, fields_region)
         }
         "tuple_pattern" => {
             let mut cursor = node.walk();
-            let mut elem_patterns = Vec::new();
+            let mut elem_ops: Vec<Operation<'db>> = Vec::new();
 
             for child in node.named_children(&mut cursor) {
                 if is_comment(child.kind()) {
@@ -2057,18 +2066,22 @@ fn pattern_to_attribute<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) 
                     let mut list_cursor = child.walk();
                     for pat_child in child.named_children(&mut list_cursor) {
                         if !is_comment(pat_child.kind()) {
-                            elem_patterns.push(pattern_to_attribute(ctx, pat_child));
+                            let pat_region = pattern_to_region(ctx, pat_child);
+                            if let Some(op) = extract_pattern_op(ctx.db, &pat_region) {
+                                elem_ops.push(op);
+                            }
                         }
                     }
                 }
             }
 
-            case::pattern::tuple(&elem_patterns)
+            let elements_region = ops_to_region(ctx.db, location, elem_ops);
+            pat::helpers::tuple_region(ctx.db, location, elements_region)
         }
         "list_pattern" => {
             let mut cursor = node.walk();
-            let mut elem_patterns = Vec::new();
-            let mut rest_name = None;
+            let mut elem_ops: Vec<Operation<'db>> = Vec::new();
+            let mut rest_name: Option<&str> = None;
 
             for child in node.named_children(&mut cursor) {
                 if is_comment(child.kind()) {
@@ -2083,23 +2096,29 @@ fn pattern_to_attribute<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) 
                         }
                     }
                 } else {
-                    elem_patterns.push(pattern_to_attribute(ctx, child));
+                    let pat_region = pattern_to_region(ctx, child);
+                    if let Some(op) = extract_pattern_op(ctx.db, &pat_region) {
+                        elem_ops.push(op);
+                    }
                 }
             }
 
-            if rest_name.is_some()
-                || elem_patterns
-                    .iter()
-                    .any(|p| matches!(p, Attribute::String(s) if s.starts_with("..")))
-            {
-                case::pattern::list_rest(&elem_patterns, rest_name)
+            if let Some(name) = rest_name {
+                let head_region = ops_to_region(ctx.db, location, elem_ops);
+                pat::helpers::list_rest_region(
+                    ctx.db,
+                    location,
+                    Symbol::new(ctx.db, name),
+                    head_region,
+                )
             } else {
-                case::pattern::list(&elem_patterns)
+                let elements_region = ops_to_region(ctx.db, location, elem_ops);
+                pat::helpers::list_region(ctx.db, location, elements_region)
             }
         }
         "as_pattern" => {
             let mut cursor = node.walk();
-            let mut inner_pattern = None;
+            let mut inner_region = None;
             let mut binding_name = None;
 
             for child in node.named_children(&mut cursor) {
@@ -2110,19 +2129,43 @@ fn pattern_to_attribute<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) 
                     "identifier" => {
                         binding_name = Some(node_text(&child, ctx.source));
                     }
-                    _ if inner_pattern.is_none() => {
-                        inner_pattern = Some(pattern_to_attribute(ctx, child));
+                    _ if inner_region.is_none() => {
+                        inner_region = Some(pattern_to_region(ctx, child));
                     }
                     _ => {}
                 }
             }
 
-            let inner = inner_pattern.unwrap_or_else(case::pattern::wildcard);
+            let inner =
+                inner_region.unwrap_or_else(|| pat::helpers::wildcard_region(ctx.db, location));
             let name = binding_name.unwrap_or("_");
-            case::pattern::as_pattern(inner, name)
+            // Create as_pat operation with inner region
+            let as_op = pat::as_pat(ctx.db, location, Symbol::new(ctx.db, name), inner);
+            pat::helpers::single_op_region(ctx.db, location, as_op.as_operation())
         }
-        _ => case::pattern::wildcard(),
+        _ => pat::helpers::wildcard_region(ctx.db, location),
     }
+}
+
+/// Extract the first pattern operation from a region.
+fn extract_pattern_op<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+) -> Option<Operation<'db>> {
+    let blocks = region.blocks(db);
+    let block = blocks.first()?;
+    let ops = block.operations(db);
+    ops.first().copied()
+}
+
+/// Create a region from a list of operations.
+fn ops_to_region<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    ops: Vec<Operation<'db>>,
+) -> Region<'db> {
+    let block = Block::new(db, location, IdVec::new(), IdVec::from(ops));
+    Region::new(db, location, IdVec::from(vec![block]))
 }
 
 /// Lower a block expression.
@@ -2381,10 +2424,10 @@ fn lower_handler_arm<'db, 'src>(
     let result_value = result_value?;
     body_block.op(case::r#yield(ctx.db, location, result_value));
 
-    let pattern_attr = handler_pattern_to_attribute(ctx, pattern_node);
-    let region = Region::new(ctx.db, location, idvec![body_block.build()]);
+    let pattern_region = handler_pattern_to_region(ctx, pattern_node);
+    let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
-    Some(case::arm(ctx.db, location, pattern_attr, region))
+    Some(case::arm(ctx.db, location, pattern_region, body_region))
 }
 
 /// Bind handler pattern variables.
@@ -2463,33 +2506,36 @@ fn bind_handler_pattern<'db, 'src>(
     }
 }
 
-/// Convert a handler pattern to an attribute.
-fn handler_pattern_to_attribute<'db, 'src>(
+/// Convert a handler pattern to a pattern region.
+///
+/// Handler patterns are for ability effect handling. For now, we create
+/// a simple binding pattern. Future work will add specialized handler
+/// pattern operations.
+fn handler_pattern_to_region<'db, 'src>(
     ctx: &CstLoweringCtx<'db, 'src>,
     node: Node,
-) -> Attribute<'db> {
+) -> Region<'db> {
+    let location = ctx.location(&node);
     let mut cursor = node.walk();
-    let mut op_name = None;
-    let mut continuation_name = None;
+    let mut value_name = None;
 
+    // Extract the first identifier as a binding
     for child in node.named_children(&mut cursor) {
         if is_comment(child.kind()) {
             continue;
         }
-        match child.kind() {
-            "type_identifier" | "identifier" if op_name.is_none() => {
-                op_name = Some(node_text(&child, ctx.source));
-            }
-            "identifier" if op_name.is_some() && continuation_name.is_none() => {
-                continuation_name = Some(node_text(&child, ctx.source));
-            }
-            _ => {}
+        if child.kind() == "identifier" || child.kind() == "type_identifier" {
+            value_name = Some(node_text(&child, ctx.source));
+            break;
         }
     }
 
-    let op = op_name.unwrap_or("_");
-    let cont = continuation_name.unwrap_or("_");
-    Attribute::String(format!("handler:{}:{}", op, cont))
+    // For now, create a simple bind pattern
+    // TODO: Add specialized handler pattern operations (handler_done, handler_suspend)
+    match value_name {
+        Some(name) => pat::helpers::bind_region(ctx.db, location, name),
+        None => pat::helpers::wildcard_region(ctx.db, location),
+    }
 }
 
 /// Lower a string interpolation expression.

@@ -14,8 +14,24 @@
 //! - Handler patterns (`{ result }`, `{ Op(x) -> k }`)
 //! - As patterns (`pat as x`)
 //! - Guards (`if condition`)
+//!
+//! ## Pattern Region
+//!
+//! Patterns are represented as a tree of `pat.*` operations in a region.
+//! See the `pat` dialect for pattern operations.
+//!
+//! ```text
+//! case.arm {
+//!     pattern {
+//!         pat.variant("Some") {
+//!             fields { pat.bind("x") }
+//!         }
+//!     }
+//!     body { ... }
+//! }
+//! ```
 
-use crate::{Attribute, dialect};
+use crate::dialect;
 use tribute_core::Location;
 
 dialect! {
@@ -30,11 +46,11 @@ dialect! {
         };
 
         /// `case.arm` operation: a single pattern-matching arm.
-        /// The `pattern` attribute describes what to match.
+        /// The pattern region contains a tree of `pat_*` operations.
         /// The body region contains the arm's expression (ends with `case.yield`).
         /// Guards are represented as nested `case.guard` operations within the body.
-        #[attr(pattern: any)]
         fn arm() {
+            #[region(pattern)] {}
             #[region(body)] {}
         };
 
@@ -110,106 +126,16 @@ dialect! {
     }
 }
 
-// === Pattern Attribute Builders ===
+// === Pattern Region Builders ===
 
-/// Pattern representation for case.arm attributes.
+/// Re-export pattern helpers from the `pat` dialect.
 ///
-/// Patterns are stored as `Attribute` values. This module provides
-/// builders for creating well-formed pattern attributes.
-pub mod pattern {
-    use super::*;
-
-    /// Create a wildcard pattern (`_`).
-    pub fn wildcard<'db>() -> Attribute<'db> {
-        Attribute::String("_".to_string())
-    }
-
-    /// Create an identifier/binding pattern (`x`).
-    pub fn ident<'db>(name: &str) -> Attribute<'db> {
-        Attribute::String(format!("${}", name))
-    }
-
-    /// Create a literal integer pattern.
-    pub fn int<'db>(value: i64) -> Attribute<'db> {
-        Attribute::String(format!("lit:{}", value))
-    }
-
-    /// Create a literal string pattern.
-    pub fn string<'db>(value: &str) -> Attribute<'db> {
-        Attribute::String(format!("lit:\"{}\"", value))
-    }
-
-    /// Create a literal boolean pattern.
-    pub fn bool<'db>(value: bool) -> Attribute<'db> {
-        Attribute::String(format!("lit:{}", if value { "True" } else { "False" }))
-    }
-
-    /// Create a unit variant pattern (e.g., `None`).
-    pub fn unit_variant<'db>(name: &str) -> Attribute<'db> {
-        Attribute::String(name.to_string())
-    }
-
-    /// Create a variant pattern with positional fields (e.g., `Some(x)`).
-    pub fn variant<'db>(name: &str, fields: &[Attribute<'db>]) -> Attribute<'db> {
-        let field_strs: Vec<_> = fields
-            .iter()
-            .map(|a| match a {
-                Attribute::String(s) => s.clone(),
-                _ => format!("{:?}", a),
-            })
-            .collect();
-        Attribute::String(format!("{}({})", name, field_strs.join(", ")))
-    }
-
-    /// Create a tuple pattern (e.g., `#(a, b)`).
-    pub fn tuple<'db>(elements: &[Attribute<'db>]) -> Attribute<'db> {
-        let elem_strs: Vec<_> = elements
-            .iter()
-            .map(|a| match a {
-                Attribute::String(s) => s.clone(),
-                _ => format!("{:?}", a),
-            })
-            .collect();
-        Attribute::String(format!("#({})", elem_strs.join(", ")))
-    }
-
-    /// Create a list pattern (e.g., `[a, b, c]`).
-    pub fn list<'db>(elements: &[Attribute<'db>]) -> Attribute<'db> {
-        let elem_strs: Vec<_> = elements
-            .iter()
-            .map(|a| match a {
-                Attribute::String(s) => s.clone(),
-                _ => format!("{:?}", a),
-            })
-            .collect();
-        Attribute::String(format!("[{}]", elem_strs.join(", ")))
-    }
-
-    /// Create a list pattern with rest (e.g., `[head, ..tail]`).
-    pub fn list_rest<'db>(head: &[Attribute<'db>], rest: Option<&str>) -> Attribute<'db> {
-        let mut parts: Vec<_> = head
-            .iter()
-            .map(|a| match a {
-                Attribute::String(s) => s.clone(),
-                _ => format!("{:?}", a),
-            })
-            .collect();
-        match rest {
-            Some(name) => parts.push(format!("..{}", name)),
-            None => parts.push("..".to_string()),
-        }
-        Attribute::String(format!("[{}]", parts.join(", ")))
-    }
-
-    /// Create an as pattern (e.g., `Some(x) as opt`).
-    pub fn as_pattern<'db>(inner: Attribute<'db>, name: &str) -> Attribute<'db> {
-        let inner_str = match &inner {
-            Attribute::String(s) => s.clone(),
-            _ => format!("{:?}", inner),
-        };
-        Attribute::String(format!("{} as {}", inner_str, name))
-    }
-}
+/// For building pattern regions, use `pat::helpers` directly:
+/// ```ignore
+/// use tribute_trunk_ir::dialect::pat::helpers;
+/// let pattern = helpers::wildcard_region(db, location);
+/// ```
+pub use super::pat::helpers as pattern;
 
 impl<'db> Arm<'db> {
     /// Create a wildcard arm that matches anything.
@@ -218,7 +144,8 @@ impl<'db> Arm<'db> {
         location: Location<'db>,
         body: crate::Region<'db>,
     ) -> Self {
-        arm(db, location, pattern::wildcard(), body)
+        let pattern_region = pattern::wildcard_region(db, location);
+        arm(db, location, pattern_region, body)
     }
 
     /// Create an arm that binds the scrutinee to a name.
@@ -228,7 +155,8 @@ impl<'db> Arm<'db> {
         name: &str,
         body: crate::Region<'db>,
     ) -> Self {
-        arm(db, location, pattern::ident(name), body)
+        let pattern_region = pattern::bind_region(db, location, name);
+        arm(db, location, pattern_region, body)
     }
 
     /// Create an arm matching a unit variant (e.g., `None`).
@@ -238,6 +166,10 @@ impl<'db> Arm<'db> {
         variant_name: &str,
         body: crate::Region<'db>,
     ) -> Self {
-        arm(db, location, pattern::unit_variant(variant_name), body)
+        use crate::{IdVec, Symbol};
+        let variant_path = IdVec::from(vec![Symbol::new(db, variant_name)]);
+        let fields = pattern::empty_region(db, location);
+        let pattern_region = pattern::variant_region(db, location, variant_path, fields);
+        arm(db, location, pattern_region, body)
     }
 }
