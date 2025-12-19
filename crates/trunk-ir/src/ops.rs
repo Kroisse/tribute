@@ -178,8 +178,12 @@ pub trait DialectOp<'db>: Sized + Copy {
 /// ```
 #[macro_export]
 macro_rules! dialect {
-    // Entry point
+    // Entry point - generate _NAME static and parse body
     (mod $dialect:ident { $($body:tt)* }) => {
+        // Generate _NAME static (cached dialect name, shared by all operations)
+        pub static _NAME: std::sync::LazyLock<$crate::Symbol> =
+            std::sync::LazyLock::new(|| $crate::Symbol::new($crate::strip_raw_prefix(stringify!($dialect))));
+
         $crate::dialect!(@parse $dialect [$($body)*]);
     };
 
@@ -195,6 +199,12 @@ macro_rules! dialect {
          fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
          $($rest:tt)*]
     ) => {
+        // Generate operation-specific static (cached operation name)
+        $crate::paste::paste! {
+            pub static [<$op:upper>]: std::sync::LazyLock<$crate::Symbol> =
+                std::sync::LazyLock::new(|| $crate::Symbol::new($crate::strip_raw_prefix(stringify!($op))));
+        }
+
         $crate::define_op! {
             doc: [$($doc),*],
             dialect: $dialect,
@@ -747,9 +757,8 @@ macro_rules! define_op {
                     db: &'db dyn salsa::Database,
                     op: $crate::Operation<'db>,
                 ) -> Result<Self, $crate::ConversionError> {
-                    let expected_dialect = $crate::Symbol::new($crate::strip_raw_prefix(stringify!($dialect)));
-                    let expected_name = $crate::Symbol::new($crate::strip_raw_prefix(stringify!($op)));
-                    if op.dialect(db) != expected_dialect || op.name(db) != expected_name {
+                    // Use cached symbols (lazy-initialized, no write lock after first access)
+                    if op.dialect(db) != *_NAME || op.name(db) != *[<$op:upper>] {
                         return Err($crate::ConversionError::WrongOperation {
                             expected: concat!(stringify!($dialect), ".", stringify!($op)),
                             actual: op.full_name(db),
