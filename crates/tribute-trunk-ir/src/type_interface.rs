@@ -132,9 +132,11 @@ impl Printable {
     /// Register a Printable implementation for an exact type name match.
     ///
     /// Use with `inventory::submit!`:
-    /// ```ignore
+    /// ```
+    /// # use std::fmt::Write;
+    /// # use tribute_trunk_ir::type_interface::Printable;
     /// inventory::submit! {
-    ///     Printable::implement("core", "nil", |_, _, f| f.write_str("()"))
+    ///     Printable::implement("demo", "unit", |_, _, f| f.write_str("()"))
     /// }
     /// ```
     pub const fn implement(
@@ -152,9 +154,14 @@ impl Printable {
     /// Register a Printable implementation for a prefix match.
     ///
     /// Use with `inventory::submit!`:
-    /// ```ignore
+    /// ```
+    /// # use std::fmt::Write;
+    /// # use tribute_trunk_ir::type_interface::Printable;
     /// inventory::submit! {
-    ///     Printable::implement_prefix("core", "i", |db, ty, f| { ... })
+    ///     Printable::implement_prefix("demo", "t", |db, ty, f| {
+    ///         let suffix = &ty.name(db).text(db)[1..];
+    ///         write!(f, "T{suffix}")
+    ///     })
     /// }
     /// ```
     pub const fn implement_prefix(
