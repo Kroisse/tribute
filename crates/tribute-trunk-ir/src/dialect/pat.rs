@@ -136,7 +136,7 @@ dialect! {
 ///
 /// ```
 /// # use salsa::Database;
-/// # use tribute_core::TributeDatabaseImpl;
+/// # use tribute_trunk_ir::test_db::TestDatabase;
 /// # use tribute_trunk_ir::{Location, PathId, Region, Span};
 /// # use tribute_trunk_ir::dialect::pat::helpers;
 /// # #[salsa::tracked]
@@ -145,7 +145,7 @@ dialect! {
 /// #     let location = Location::new(path, Span::new(0, 0));
 ///       helpers::wildcard_region(db, location)
 /// # }
-/// # TributeDatabaseImpl::default().attach(|db| {
+/// # TestDatabase::default().attach(|db| {
 /// #     let pattern = build_pattern(db);
 /// #     let _ = pattern;
 /// # });

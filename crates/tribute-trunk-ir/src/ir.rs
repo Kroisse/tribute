@@ -293,7 +293,7 @@ mod tests {
         idvec,
     };
     use salsa::Database;
-    use tribute_core::TributeDatabaseImpl;
+    use crate::test_db::TestDatabase;
 
     #[salsa::tracked]
     fn build_sample_module(db: &dyn salsa::Database) -> Operation<'_> {
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn can_model_basic_structure() {
-        TributeDatabaseImpl::default().attach(|db| {
+        TestDatabase::default().attach(|db| {
             let op = build_sample_module(db);
             let module = core::Module::from_operation(db, op).unwrap();
             assert_eq!(module.name(db), "main");
@@ -341,7 +341,7 @@ mod tests {
             Attribute, DialectType, Location, PathId, Region, Span, dialect, dialect::core, idvec,
         };
         use salsa::Database;
-        use tribute_core::TributeDatabaseImpl;
+        use crate::test_db::TestDatabase;
 
         // Test: dialect! macro for grouping ops
         dialect! {
@@ -388,7 +388,7 @@ mod tests {
 
         #[test]
         fn test_define_op_binary() {
-            TributeDatabaseImpl::default().attach(|db| {
+            TestDatabase::default().attach(|db| {
                 let binary = test_binary_op(db);
                 assert_eq!(binary.result_ty(db), core::I32::new(db).as_type());
 
@@ -409,7 +409,7 @@ mod tests {
 
         #[test]
         fn test_define_op_constant() {
-            TributeDatabaseImpl::default().attach(|db| {
+            TestDatabase::default().attach(|db| {
                 let constant = test_constant_op(db);
                 assert_eq!(constant.result_ty(db), core::I64::new(db).as_type());
 
@@ -428,7 +428,7 @@ mod tests {
 
         #[test]
         fn test_define_op_variadic() {
-            TributeDatabaseImpl::default().attach(|db| {
+            TestDatabase::default().attach(|db| {
                 let variadic = test_variadic_op(db);
                 assert!(variadic.args(db).is_empty());
             });
@@ -447,7 +447,7 @@ mod tests {
 
         #[test]
         fn test_define_op_container() {
-            TributeDatabaseImpl::default().attach(|db| {
+            TestDatabase::default().attach(|db| {
                 let container = test_container_op(db);
                 assert_eq!(container.body(db).blocks(db).len(), 1);
                 assert_eq!(container.regions(db).len(), 1);
@@ -483,7 +483,7 @@ mod tests {
 
         #[test]
         fn test_define_op_mixed() {
-            TributeDatabaseImpl::default().attach(|db| {
+            TestDatabase::default().attach(|db| {
                 let mixed = test_mixed_op(db);
                 assert_eq!(mixed.result_ty(db), core::I32::new(db).as_type());
 
@@ -520,7 +520,7 @@ mod tests {
 
         #[test]
         fn test_define_op_multi_result() {
-            TributeDatabaseImpl::default().attach(|db| {
+            TestDatabase::default().attach(|db| {
                 let multi = test_multi_result_op(db);
 
                 // Test named result accessors for each result

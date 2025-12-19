@@ -12,6 +12,3 @@ salsa.workspace = true
 serde.workspace = true
 smallvec.workspace = true
 
-[dev-dependencies]
-tribute-core.workspace = true
-

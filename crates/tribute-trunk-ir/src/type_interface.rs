@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```
-//! # use tribute_core::TributeDatabaseImpl;
+//! # use tribute_trunk_ir::test_db::TestDatabase;
 //! # use std::collections::BTreeMap;
 //! # use tribute_trunk_ir::{IdVec, Symbol, Type};
 //! # use tribute_trunk_ir::type_interface::Printable;
@@ -24,7 +24,7 @@
 //!     })
 //! }
 //!
-//! # let db = TributeDatabaseImpl::default();
+//! # let db = TestDatabase::default();
 //! # let some_type = Type::new(
 //! #     &db,
 //! #     Symbol::new(&db, "foobar"),
