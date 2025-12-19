@@ -319,9 +319,13 @@ fn lower_cst_impl<'db>(
                         top.op(ability_op);
                     }
                 }
-                // use_declaration and mod_declaration are handled differently
-                // They affect name resolution rather than generating IR
-                "use_declaration" | "mod_declaration" => {
+                "mod_declaration" => {
+                    if let Some(mod_op) = lower_mod_decl(&mut ctx, child) {
+                        top.op(mod_op);
+                    }
+                }
+                // use_declaration is handled in name resolution
+                "use_declaration" => {
                     // TODO: Track for name resolution
                 }
                 _ => {}
@@ -811,6 +815,106 @@ fn parse_ability_operations<'db, 'src>(
     }
 
     operations
+}
+
+// =============================================================================
+// Module Lowering
+// =============================================================================
+
+/// Lower a mod_declaration to a core.module operation.
+///
+/// Handles both inline modules (`mod foo { ... }`) and file-based module
+/// declarations (`mod foo`). Currently, only inline modules are fully lowered.
+fn lower_mod_decl<'db, 'src>(
+    ctx: &mut CstLoweringCtx<'db, 'src>,
+    node: Node,
+) -> Option<core::Module<'db>> {
+    let mut cursor = node.walk();
+    let location = ctx.location(&node);
+
+    let mut name = None;
+    let mut body_node = None;
+    let mut _is_pub = false;
+
+    for child in node.named_children(&mut cursor) {
+        if is_comment(child.kind()) {
+            continue;
+        }
+        match child.kind() {
+            "visibility_marker" => {
+                // visibility_marker contains keyword_pub and optional (pkg) or (super)
+                _is_pub = true;
+                // TODO: Parse visibility modifier (pub, pub(pkg), pub(super))
+            }
+            "identifier" | "type_identifier" if name.is_none() => {
+                name = Some(node_text(&child, ctx.source).to_string());
+            }
+            "mod_body" => {
+                body_node = Some(child);
+            }
+            _ => {}
+        }
+    }
+
+    let name = name?;
+
+    // Build the module with its body
+    let module = core::Module::build(ctx.db, location, &name, |mod_builder| {
+        if let Some(body) = body_node {
+            lower_mod_body(ctx, body, mod_builder);
+        }
+        // File-based modules (no body) will be handled later in the pipeline
+        // when we have package/file loading infrastructure
+    });
+
+    // TODO: Track visibility (_is_pub) for name resolution
+    Some(module)
+}
+
+/// Lower items within a mod_body into the module's block.
+fn lower_mod_body<'db, 'src>(
+    ctx: &mut CstLoweringCtx<'db, 'src>,
+    node: Node,
+    builder: &mut BlockBuilder<'db>,
+) {
+    let mut cursor = node.walk();
+
+    #[cfg(test)]
+    eprintln!("mod_body node kind: {}, children:", node.kind());
+    for child in node.named_children(&mut cursor) {
+        #[cfg(test)]
+        eprintln!("  child kind: {}", child.kind());
+        if is_comment(child.kind()) {
+            continue;
+        }
+        match child.kind() {
+            "function_definition" => {
+                if let Some(func) = lower_function(ctx, child) {
+                    builder.op(func);
+                }
+            }
+            "struct_declaration" => {
+                if let Some(struct_op) = lower_struct_decl(ctx, child) {
+                    builder.op(struct_op);
+                }
+            }
+            "enum_declaration" => {
+                if let Some(enum_op) = lower_enum_decl(ctx, child) {
+                    builder.op(enum_op);
+                }
+            }
+            "mod_declaration" => {
+                // Nested modules
+                if let Some(mod_op) = lower_mod_decl(ctx, child) {
+                    builder.op(mod_op);
+                }
+            }
+            "use_declaration" => {
+                // TODO: Track for name resolution
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Parse a parameter list node, returning (names, types).
@@ -3038,5 +3142,80 @@ mod tests {
         // The first op should be src.const
         let const_op = src::Const::from_operation(&db, ops[0]).expect("Should be a src.const");
         assert_eq!(const_op.name(&db).text(&db), "pi");
+    }
+
+    #[test]
+    fn test_inline_module() {
+        let db = TributeDatabaseImpl::default();
+        let source = r#"
+            pub mod math {
+                pub fn add(x: Int, y: Int) -> Int {
+                    x + y
+                }
+            }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        // Top-level module should contain a nested module
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        assert!(!blocks.is_empty());
+
+        let ops = blocks[0].operations(&db);
+        assert!(!ops.is_empty(), "Should have at least one operation");
+
+        // The first op should be core.module (the nested "math" module)
+        let nested_module =
+            core::Module::from_operation(&db, ops[0]).expect("Should be a core.module");
+        assert_eq!(nested_module.name(&db), "math");
+
+        // The nested module should contain the "add" function
+        let nested_body = nested_module.body(&db);
+        let nested_blocks = nested_body.blocks(&db);
+        assert!(!nested_blocks.is_empty());
+
+        let nested_ops = nested_blocks[0].operations(&db);
+        assert!(!nested_ops.is_empty(), "Nested module should have operations");
+
+        let func_op =
+            func::Func::from_operation(&db, nested_ops[0]).expect("Should be a func.func");
+        assert_eq!(func_op.name(&db), "add");
+    }
+
+    #[test]
+    fn test_nested_modules() {
+        let db = TributeDatabaseImpl::default();
+        let source = r#"
+            pub mod outer {
+                pub mod inner {
+                    pub fn value() -> Int { 42 }
+                }
+            }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        // Get the outer module
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        let ops = blocks[0].operations(&db);
+        let outer_module =
+            core::Module::from_operation(&db, ops[0]).expect("Should be a core.module");
+        assert_eq!(outer_module.name(&db), "outer");
+
+        // Get the inner module
+        let outer_body = outer_module.body(&db);
+        let outer_blocks = outer_body.blocks(&db);
+        let outer_ops = outer_blocks[0].operations(&db);
+        let inner_module =
+            core::Module::from_operation(&db, outer_ops[0]).expect("Should be a core.module");
+        assert_eq!(inner_module.name(&db), "inner");
+
+        // Check the function inside inner
+        let inner_body = inner_module.body(&db);
+        let inner_blocks = inner_body.blocks(&db);
+        let inner_ops = inner_blocks[0].operations(&db);
+        let func_op =
+            func::Func::from_operation(&db, inner_ops[0]).expect("Should be a func.func");
+        assert_eq!(func_op.name(&db), "value");
     }
 }

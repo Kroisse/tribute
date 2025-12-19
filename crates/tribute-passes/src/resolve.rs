@@ -213,6 +213,37 @@ fn collect_definition<'db>(
                 collect_enum_constructors(db, env, op, type_name, *ty);
             }
         }
+        ("core", "module") => {
+            // Nested module → collect definitions into a namespace
+            let attrs = op.attributes(db);
+            let sym_key = Symbol::new(db, "sym_name");
+
+            if let Some(Attribute::Symbol(sym)) = attrs.get(&sym_key) {
+                let mod_name = sym.text(db);
+
+                // Recursively collect definitions from the module's body
+                let mut mod_env = ModuleEnv::new();
+                for region in op.regions(db).iter() {
+                    for block in region.blocks(db).iter() {
+                        collect_definitions_from_block(db, &mut mod_env, block);
+                    }
+                }
+
+                // Add module's exported definitions to parent's namespace
+                // TODO: Handle visibility (only pub items should be accessible)
+                for (name, binding) in mod_env.definitions.iter() {
+                    env.add_to_namespace(mod_name, name, binding.clone());
+                }
+
+                // Also add nested namespaces (e.g., mod::submod::item)
+                for (nested_ns, nested_bindings) in mod_env.namespaces.iter() {
+                    let qualified_ns = format!("{}::{}", mod_name, nested_ns);
+                    for (name, binding) in nested_bindings.iter() {
+                        env.add_to_namespace(&qualified_ns, name, binding.clone());
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1065,6 +1096,80 @@ mod tests {
                 }
                 _ => panic!("Expected function binding"),
             }
+        });
+    }
+
+    #[test]
+    fn test_nested_module_resolution() {
+        TributeDatabaseImpl::default().attach(|db| {
+            use crate::cst_to_tir::{lower_cst, parse_cst};
+            use tribute_core::SourceFile;
+
+            let source = SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.tr"),
+                r#"
+                    pub mod math {
+                        pub fn add(x: Int, y: Int) -> Int { x + y }
+                        pub fn sub(x: Int, y: Int) -> Int { x - y }
+                    }
+                "#
+                .to_string(),
+            );
+
+            let cst = parse_cst(db, source).expect("parse should succeed");
+            let module = lower_cst(db, source, cst);
+
+            let env = build_env(db, &module);
+
+            // Should find math::add and math::sub
+            assert!(
+                env.lookup_qualified("math", "add").is_some(),
+                "should find math::add"
+            );
+            assert!(
+                env.lookup_qualified("math", "sub").is_some(),
+                "should find math::sub"
+            );
+
+            // Should not find 'add' at top level
+            assert!(env.lookup("add").is_none(), "add should not be at top level");
+        });
+    }
+
+    #[test]
+    fn test_deeply_nested_module_resolution() {
+        TributeDatabaseImpl::default().attach(|db| {
+            use crate::cst_to_tir::{lower_cst, parse_cst};
+            use tribute_core::SourceFile;
+
+            let source = SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.tr"),
+                r#"
+                    pub mod outer {
+                        pub mod inner {
+                            pub fn deep() -> Int { 42 }
+                        }
+                    }
+                "#
+                .to_string(),
+            );
+
+            let cst = parse_cst(db, source).expect("parse should succeed");
+            let module = lower_cst(db, source, cst);
+
+            let env = build_env(db, &module);
+
+            // Should find outer::inner::deep
+            assert!(
+                env.lookup_qualified("outer::inner", "deep").is_some(),
+                "should find outer::inner::deep"
+            );
+
+            // Should find outer::inner as a module
+            // (inner is in outer's namespace)
+            // Note: We don't track modules as bindings yet, so this tests the qualified path
         });
     }
 }
