@@ -1,0 +1,33 @@
+// math/basic.trb - Basic arithmetic operations
+
+pub fn add(x: Int, y: Int) -> Int {
+    x + y
+}
+
+pub fn subtract(x: Int, y: Int) -> Int {
+    x - y
+}
+
+pub fn multiply(x: Int, y: Int) -> Int {
+    x * y
+}
+
+pub fn divide(x: Int, y: Int) -> Int {
+    x / y
+}
+
+// Package-internal helper (visible within this package only)
+pub(pkg) fn abs(x: Int) -> Int {
+    case x {
+        n if n < 0 -> 0 - n
+        n -> n
+    }
+}
+
+// Private helper (only in this module)
+fn checked_divide(x: Int, y: Int) -> Int {
+    case y {
+        0 -> 0
+        _ -> x / y
+    }
+}

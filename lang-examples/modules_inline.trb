@@ -1,0 +1,67 @@
+// Modules Inline Example - demonstrates inline module definitions
+// - Inline `pub mod` blocks for organizing code
+// - Nested modules
+// - Public/private visibility
+// - Qualified path calls (module::function)
+// - Module names: lowercase (unless same as type name)
+
+// Inline module for utility functions
+pub mod utils {
+    pub fn double(x: Int) -> Int {
+        x * 2
+    }
+
+    pub fn square(x: Int) -> Int {
+        x * x
+    }
+
+    // Private helper (not accessible outside utils)
+    fn internal_helper(x: Int) -> Int {
+        x + 1
+    }
+}
+
+// Inline module for math operations
+pub mod math {
+    pub fn add(x: Int, y: Int) -> Int {
+        x + y
+    }
+
+    pub fn subtract(x: Int, y: Int) -> Int {
+        x - y
+    }
+
+    pub fn multiply(x: Int, y: Int) -> Int {
+        x * y
+    }
+}
+
+// Nested inline modules
+pub mod outer {
+    pub mod inner {
+        pub fn value() -> Int {
+            42
+        }
+    }
+
+    pub fn use_inner() -> Int {
+        inner::value()
+    }
+}
+
+fn main() {
+    print_line("Testing inline modules:")
+
+    // Using qualified paths
+    print_line(utils::double(5))        // 10
+    print_line(utils::square(4))        // 16
+
+    print_line("Math operations:")
+    print_line(math::add(10, 20))       // 30
+    print_line(math::subtract(20, 5))   // 15
+    print_line(math::multiply(3, 4))    // 12
+
+    print_line("Nested modules:")
+    print_line(outer::inner::value())   // 42
+    print_line(outer::use_inner())      // 42
+}

@@ -1,0 +1,85 @@
+// Modules Use Example - demonstrates use declarations and import patterns
+// - Single import: use path::to::Item
+// - Grouped import: use path::{A, B, C}
+// - Aliased import: use path::Item as Alias
+// - Package-relative paths: pkg::, super::, self::
+// - Module names: lowercase; type names: PascalCase
+
+// Define some modules to import from
+pub mod collections {
+    // Type names are PascalCase
+    pub enum List(a) {
+        Empty
+        Cons(a, List(a))
+    }
+
+    // Type-associated module shares the type's name (PascalCase)
+    pub mod List {
+        pub fn empty() -> List(a) {
+            Empty
+        }
+
+        pub fn singleton(x: a) -> List(a) {
+            Cons(x, Empty)
+        }
+    }
+
+    pub enum Option(a) {
+        None
+        Some(a)
+    }
+
+    pub mod Option {
+        pub fn some(x: a) -> Option(a) {
+            Some(x)
+        }
+
+        pub fn none() -> Option(a) {
+            None
+        }
+    }
+}
+
+pub mod helpers {
+    pub fn double(x: Int) -> Int {
+        x * 2
+    }
+
+    pub fn triple(x: Int) -> Int {
+        x * 3
+    }
+}
+
+// Single import (type-associated module keeps PascalCase)
+use collections::List
+
+// Grouped import (multiple items from same path)
+use collections::Option::{Some, None}
+
+// Aliased import
+use helpers::double as dbl
+
+fn main() {
+    print_line("Testing use declarations:")
+
+    // Using imported List
+    let xs = List::singleton(42)
+
+    // Using imported constructors directly
+    let opt = Some(10)
+    let empty = None
+
+    // Using aliased function
+    print_line(dbl(5))  // 10
+
+    // Can still use fully qualified paths
+    print_line(helpers::triple(3))  // 9
+
+    print_line("Import patterns work!")
+}
+
+// Example of package-relative imports (in a multi-file package):
+//
+// use pkg::utils::helper      // from package root
+// use super::sibling::func    // from parent module
+// use self::internal::detail  // from current module

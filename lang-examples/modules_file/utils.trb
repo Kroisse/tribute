@@ -1,0 +1,19 @@
+// utils.trb - Utility functions
+
+pub fn repeat(s: String, n: Int) -> String {
+    case n {
+        0 -> ""
+        1 -> s
+        _ -> s <> repeat(s, n - 1)
+    }
+}
+
+pub fn identity(x: a) -> a {
+    x
+}
+
+// Private helper not exported
+fn internal_debug(msg: String) -> Nil {
+    // For internal use only
+    Nil
+}

@@ -64,10 +64,9 @@ pub mod List {
     pub fn filter(xs: List(a), p: fn(a) -> Bool) -> List(a) {
         case xs {
             Empty -> Empty
-            Cons(h, t) -> if p(h) {
-                Cons(h, filter(t, p))
-            } else {
-                filter(t, p)
+            Cons(h, t) -> case p(h) {
+                True -> Cons(h, filter(t, p))
+                False -> filter(t, p)
             }
         }
     }
@@ -358,8 +357,169 @@ fn sort_and_print(items: List(String)) ->{Console} Nil {
 
 ---
 
+## File-Based Modules (Package System)
+
+### Package 개념
+
+**Package**는 Tribute의 컴파일 단위다:
+
+- 파일명이 모듈명이 됨 (`foo.trb` → `foo`)
+- 하위 모듈은 동명 디렉토리에 위치 (Rust 2018 스타일)
+
+### 최상위 모듈 (Root Module)
+
+패키지의 최상위 모듈은 관례적으로:
+
+| 파일 | 용도 |
+|------|------|
+| `lib.trb` | 라이브러리 패키지의 루트 |
+| `main.trb` | 실행 파일 패키지의 루트 |
+
+```
+my_library/
+  src/
+    lib.trb           // 라이브러리 루트 (pkg::)
+    utils.trb         // pkg::utils
+    utils/
+      math.trb        // pkg::utils::math
+
+my_app/
+  src/
+    main.trb          // 실행 파일 루트
+    config.trb        // pkg::config
+```
+
+`lib.trb`와 `main.trb`가 동시에 존재하면 라이브러리와 실행 파일을 모두 제공하는 패키지가 된다.
+
+### 모듈 이름 관례
+
+- **기본**: 소문자 (`math`, `utils`, `api`)
+- **타입과 동명일 때**: PascalCase (`List`, `Option`) — 타입이 암묵적으로 동명 네임스페이스 생성
+
+```rust
+mod utils              // 소문자 (일반 모듈)
+mod api                // 소문자
+
+pub enum List(a) { ... }   // PascalCase (타입)
+pub mod List { ... }       // 타입과 동명이므로 PascalCase
+```
+
+### 모듈 선언
+
+파일 기반 모듈은 명시적 `mod` 선언이 필요하다:
+
+```rust
+// src/lib.trb
+mod utils           // src/utils.trb 로드 (private)
+pub mod api         // src/api.trb 로드 (public)
+
+// src/utils.trb
+pub mod math        // src/utils/math.trb 로드
+pub mod string      // src/utils/string.trb 로드
+```
+
+인라인 모듈과 파일 기반 모듈의 차이:
+
+```rust
+// 인라인 모듈 (본문 있음)
+pub mod helpers {
+    pub fn double(x: Int) -> Int { x * 2 }
+}
+
+// 파일 기반 모듈 (본문 없음 → 파일에서 로드)
+mod utils
+pub mod api
+```
+
+### 경로 키워드
+
+| 키워드 | 설명 | 예시 |
+|--------|------|------|
+| `pkg` | 현재 패키지 루트 | `use pkg::utils::math` |
+| `super` | 부모 모듈 | `use super::sibling` |
+| `self` | 현재 모듈 | `use self::internal` |
+
+```rust
+// src/utils/math.trb
+use super::string::format    // utils::string::format
+use pkg::api::Response       // api::Response (패키지 루트에서)
+```
+
+### 가시성 (Visibility)
+
+| 수식자 | 범위 |
+|--------|------|
+| (없음) | 현재 모듈 내부만 |
+| `pub(super)` | 부모 모듈까지 |
+| `pub(pkg)` | 패키지 내부 전체 |
+| `pub` | 공개 (외부 패키지에서도 접근 가능) |
+
+```rust
+// src/internal/utils.trb
+
+fn private_helper() -> Int { 42 }           // 이 모듈에서만
+
+pub(super) fn parent_visible() -> Int { 42 } // internal/ 및 하위에서
+
+pub(pkg) fn package_internal() -> Int { 42 } // 이 패키지 내에서
+
+pub fn public_api() -> Int { 42 }            // 어디서든
+```
+
+### Re-export
+
+```rust
+// 내부 모듈의 타입을 공개 API로 노출
+pub use pkg::internal::PublicType
+pub use pkg::internal::{TypeA, TypeB}
+
+// 별칭으로 re-export
+pub use pkg::internal::LongTypeName as Short
+```
+
+### 완전한 예시
+
+```rust
+// src/lib.trb
+mod internal           // private 모듈
+pub mod api            // public 모듈
+
+// 주요 타입들을 루트에서 re-export
+pub use pkg::internal::Config
+pub use pkg::api::{Request, Response}
+
+
+// src/internal/mod.trb (또는 src/internal.trb)
+pub(pkg) struct Config {
+    debug: Bool
+    timeout: Int
+}
+
+
+// src/api.trb
+use pkg::internal::Config
+use super::internal    // 또는 pkg::internal
+
+pub struct Request {
+    path: String
+    config: Config
+}
+
+pub struct Response {
+    status: Int
+    body: String
+}
+
+pub fn handle(req: Request) -> Response {
+    // ...
+}
+```
+
+---
+
 ## Open Questions
 
-1. **Reexport 문법**: `pub use std::collections::List`?
-2. **모듈 내 가시성**: `pub`, `pub(crate)`, `pub(super)` 등 세분화 필요 여부
-3. **Prelude**: 자동 use되는 기본 타입/함수 범위
+1. **Prelude**: 자동 use되는 기본 타입/함수 범위
+2. **조건부 컴파일**: `#[cfg(...)] mod foo` 문법 및 지원 범위
+3. **매니페스트**: `Tribute.toml` 형식 및 필수 여부
+4. **lang-examples 구조**: 각 예제를 개별 폴더의 `main.trb`로 재구성

@@ -1,0 +1,39 @@
+// File-Based Modules Example - main.trb (entry point)
+// Demonstrates multi-file module structure with explicit mod declarations
+//
+// Directory structure:
+//   modules_file/
+//     main.trb          <- you are here
+//     math.trb          <- mod math
+//     math/
+//       basic.trb       <- mod basic (declared in math.trb)
+//       advanced.trb    <- mod advanced (declared in math.trb)
+//     utils.trb         <- mod utils
+
+// Declare file-based modules (loads from .trb files)
+mod math
+mod utils
+
+// Import from our modules
+use pkg::math::basic::{add, subtract}
+use pkg::math::advanced::power
+use pkg::utils::repeat
+
+fn main() {
+    print_line("Testing file-based modules:")
+
+    // Using basic math operations
+    print_line("Basic math:")
+    print_line(add(10, 5))         // 15
+    print_line(subtract(10, 5))    // 5
+
+    // Using advanced operations
+    print_line("Advanced math:")
+    print_line(power(2, 8))        // 256
+
+    // Using utilities
+    print_line("Utilities:")
+    print_line(repeat("ha", 3))  // "hahaha"
+
+    print_line("File-based modules work!")
+}

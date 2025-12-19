@@ -1,0 +1,23 @@
+// math.trb - Math module with submodules
+// Declares submodules: basic and advanced
+
+// Declare submodules (loads from math/basic.trb and math/advanced.trb)
+pub mod basic
+pub mod advanced
+
+// Re-export commonly used items at the math level
+pub use self::basic::{add, subtract, multiply}
+pub use self::advanced::power
+
+// Module-level constants
+pub mod constants {
+    pub fn pi() -> Int {
+        // Simplified: returning 3 for now (no floats in examples yet)
+        3
+    }
+
+    pub fn e() -> Int {
+        // Simplified: returning 2 for now
+        2
+    }
+}
