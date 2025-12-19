@@ -1,8 +1,8 @@
 //! Declaration lowering for functions, types, and modules.
 
 use tree_sitter::Node;
-use tribute_trunk_ir::Span;
-use tribute_trunk_ir::{
+use trunk_ir::Span;
+use trunk_ir::{
     Attribute, BlockBuilder, IdVec, Symbol, Type,
     dialect::{core, func, src, ty},
 };

@@ -3,7 +3,7 @@
 //! LSP uses 0-based (line, character) positions with UTF-16 encoding,
 //! while Tribute uses byte offsets. This module provides conversion utilities.
 
-use tribute_trunk_ir::Span;
+use trunk_ir::Span;
 
 /// Line index for a source file.
 ///

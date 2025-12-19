@@ -2,7 +2,7 @@
 //!
 //! Defines the possible outcomes of a pattern rewrite operation.
 
-use tribute_trunk_ir::{Operation, Value};
+use trunk_ir::{Operation, Value};
 
 /// Result of attempting to rewrite an operation.
 ///

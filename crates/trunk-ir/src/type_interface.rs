@@ -6,10 +6,10 @@
 //! # Example
 //!
 //! ```
-//! # use tribute_trunk_ir::test_db::TestDatabase;
+//! # use trunk_ir::test_db::TestDatabase;
 //! # use std::collections::BTreeMap;
-//! # use tribute_trunk_ir::{IdVec, Symbol, Type};
-//! # use tribute_trunk_ir::type_interface::Printable;
+//! # use trunk_ir::{IdVec, Symbol, Type};
+//! # use trunk_ir::type_interface::Printable;
 //! #
 //! // In dialect/core.rs - register how to print "Lorem" type
 //! inventory::submit! {
@@ -34,7 +34,7 @@
 //! # );
 //! // Usage
 //! # let printed =
-//! tribute_trunk_ir::type_interface::print_type(&db, some_type)
+//! trunk_ir::type_interface::print_type(&db, some_type)
 //! # ;
 //! # assert_eq!(printed, "Lorem");
 //! ```
@@ -134,7 +134,7 @@ impl Printable {
     /// Use with `inventory::submit!`:
     /// ```
     /// # use std::fmt::Write;
-    /// # use tribute_trunk_ir::type_interface::Printable;
+    /// # use trunk_ir::type_interface::Printable;
     /// inventory::submit! {
     ///     Printable::implement("demo", "unit", |_, _, f| f.write_str("()"))
     /// }
@@ -156,7 +156,7 @@ impl Printable {
     /// Use with `inventory::submit!`:
     /// ```
     /// # use std::fmt::Write;
-    /// # use tribute_trunk_ir::type_interface::Printable;
+    /// # use trunk_ir::type_interface::Printable;
     /// inventory::submit! {
     ///     Printable::implement_prefix("demo", "t", |db, ty, f| {
     ///         let suffix = &ty.name(db).text(db)[1..];

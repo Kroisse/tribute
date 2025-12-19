@@ -11,7 +11,7 @@
 //!     | C₁ ∧ C₂           -- conjunction
 //! ```
 
-use tribute_trunk_ir::Type;
+use trunk_ir::Type;
 
 use super::effect_row::{AbilityRef, EffectRow, RowVar};
 

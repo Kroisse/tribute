@@ -112,7 +112,7 @@ pub trait DialectOp<'db>: Sized + Copy {
 ///
 /// # Syntax
 /// ```
-/// # use tribute_trunk_ir::dialect;
+/// # use trunk_ir::dialect;
 /// dialect! {
 ///     mod dialect_name {
 ///         // Operations
@@ -145,7 +145,7 @@ pub trait DialectOp<'db>: Sized + Copy {
 ///
 /// # Example
 /// ```
-/// # use tribute_trunk_ir::dialect;
+/// # use trunk_ir::dialect;
 /// dialect! {
 ///     mod arith {
 ///         /// Constant value operation.
@@ -160,7 +160,7 @@ pub trait DialectOp<'db>: Sized + Copy {
 ///
 /// Types generate wrapper structs with `new()` constructors and `DialectType` impl:
 /// ```
-/// # use tribute_trunk_ir::dialect;
+/// # use trunk_ir::dialect;
 /// dialect! {
 ///     mod core {
 ///         /// Tuple cons cell.

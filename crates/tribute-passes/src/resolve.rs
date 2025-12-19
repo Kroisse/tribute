@@ -21,11 +21,11 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
-use tribute_trunk_ir::dialect::adt;
-use tribute_trunk_ir::dialect::core::{self, Module};
-use tribute_trunk_ir::dialect::func;
-use tribute_trunk_ir::dialect::src;
-use tribute_trunk_ir::{
+use trunk_ir::dialect::adt;
+use trunk_ir::dialect::core::{self, Module};
+use trunk_ir::dialect::func;
+use trunk_ir::dialect::src;
+use trunk_ir::{
     Attribute, Attrs, Block, DialectOp, IdVec, Operation, Region, Symbol, Type, Value, ValueDef,
 };
 
@@ -832,10 +832,8 @@ impl<'db> Resolver<'db> {
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
                     let name = sym.text(self.db).to_string();
                     // Pattern binding - value comes from pattern matching at runtime
-                    let infer_ty = tribute_trunk_ir::dialect::ty::var(
-                        self.db,
-                        std::collections::BTreeMap::new(),
-                    );
+                    let infer_ty =
+                        trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
                     self.add_local(name, LocalBinding::PatternBinding { ty: infer_ty });
                 }
             }
@@ -845,10 +843,8 @@ impl<'db> Resolver<'db> {
                 let name_key = Symbol::new(self.db, "name");
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
                     let name = sym.text(self.db).to_string();
-                    let infer_ty = tribute_trunk_ir::dialect::ty::var(
-                        self.db,
-                        std::collections::BTreeMap::new(),
-                    );
+                    let infer_ty =
+                        trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
                     self.add_local(name, LocalBinding::PatternBinding { ty: infer_ty });
                 }
                 // Also collect from inner pattern region
@@ -862,10 +858,8 @@ impl<'db> Resolver<'db> {
                 let name_key = Symbol::new(self.db, "rest_name");
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
                     let name = sym.text(self.db).to_string();
-                    let infer_ty = tribute_trunk_ir::dialect::ty::var(
-                        self.db,
-                        std::collections::BTreeMap::new(),
-                    );
+                    let infer_ty =
+                        trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
                     self.add_local(name, LocalBinding::PatternBinding { ty: infer_ty });
                 }
                 // Also collect from head pattern region

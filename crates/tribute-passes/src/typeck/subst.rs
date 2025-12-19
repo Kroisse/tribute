@@ -3,9 +3,9 @@
 //! After type inference, this module provides utilities for walking the IR
 //! and replacing type variables with their solved concrete types.
 
-use tribute_trunk_ir::dialect::core;
-use tribute_trunk_ir::dialect::ty;
-use tribute_trunk_ir::{Block, IdVec, Operation, Region, Type};
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::ty;
+use trunk_ir::{Block, IdVec, Operation, Region, Type};
 
 use super::solver::TypeSubst;
 
@@ -148,7 +148,7 @@ mod tests {
     use super::*;
     use salsa::Database;
     use tribute_core::{SourceFile, TributeDatabaseImpl};
-    use tribute_trunk_ir::{Attribute, Location, PathId, Span, idvec};
+    use trunk_ir::{Attribute, Location, PathId, Span, idvec};
 
     /// Helper to create a module with an operation that has type variable 42 as result.
     #[salsa::tracked]

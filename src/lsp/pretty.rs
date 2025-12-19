@@ -1,10 +1,10 @@
 //! Type pretty-printing for display in IDE hovers.
 //!
-//! This module provides a thin wrapper around `tribute_trunk_ir::type_interface::Printable`
+//! This module provides a thin wrapper around `trunk_ir::type_interface::Printable`
 //! for use in the LSP server.
 
-use tribute_trunk_ir::Type;
-use tribute_trunk_ir::type_interface;
+use trunk_ir::Type;
+use trunk_ir::type_interface;
 
 /// Pretty-print a type to a user-friendly string.
 pub fn print_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
@@ -16,8 +16,8 @@ mod tests {
     use super::*;
     use salsa::prelude::*;
     use tribute_core::TributeDatabaseImpl;
-    use tribute_trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func, I64, Nil};
-    use tribute_trunk_ir::{IdVec, Symbol, idvec};
+    use trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func, I64, Nil};
+    use trunk_ir::{IdVec, Symbol, idvec};
 
     #[test]
     fn test_print_basic_types() {
@@ -69,13 +69,13 @@ mod tests {
     #[test]
     fn test_print_type_var() {
         TributeDatabaseImpl::default().attach(|db| {
-            let var_a = tribute_trunk_ir::dialect::ty::var_with_id(db, 0);
+            let var_a = trunk_ir::dialect::ty::var_with_id(db, 0);
             assert_eq!(print_type(db, var_a), "a");
 
-            let var_z = tribute_trunk_ir::dialect::ty::var_with_id(db, 25);
+            let var_z = trunk_ir::dialect::ty::var_with_id(db, 25);
             assert_eq!(print_type(db, var_z), "z");
 
-            let var_t0 = tribute_trunk_ir::dialect::ty::var_with_id(db, 26);
+            let var_t0 = trunk_ir::dialect::ty::var_with_id(db, 26);
             assert_eq!(print_type(db, var_t0), "t0");
         });
     }

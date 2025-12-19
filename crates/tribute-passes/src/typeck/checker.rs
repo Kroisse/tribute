@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
-use tribute_trunk_ir::{
+use trunk_ir::{
     Attribute, DialectOp, DialectType, Operation, Region, Symbol, Type, Value,
     dialect::{core, func, ty},
 };
@@ -996,14 +996,14 @@ pub fn typecheck_function<'db>(
         Ok(solver) => {
             // Apply substitution to the function's regions
             let subst = solver.type_subst();
-            let new_regions: tribute_trunk_ir::IdVec<_> = func_op
+            let new_regions: trunk_ir::IdVec<_> = func_op
                 .regions(db)
                 .iter()
                 .map(|r| super::subst::apply_subst_to_region(db, r, subst))
                 .collect();
 
             // Create new operation with resolved types
-            let new_results: tribute_trunk_ir::IdVec<_> = func_op
+            let new_results: trunk_ir::IdVec<_> = func_op
                 .results(db)
                 .iter()
                 .map(|ty| subst.apply(db, *ty))
@@ -1091,7 +1091,7 @@ pub fn typecheck_module_per_function<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> core::Module<'db> {
-    use tribute_trunk_ir::{Block, IdVec, Region};
+    use trunk_ir::{Block, IdVec, Region};
 
     let body = module.body(db);
     let blocks = body.blocks(db);
@@ -1132,13 +1132,13 @@ mod tests {
     use super::*;
     use salsa::Database;
     use tribute_core::TributeDatabaseImpl;
-    use tribute_trunk_ir::dialect::arith;
-    use tribute_trunk_ir::{PathId, Span};
+    use trunk_ir::dialect::arith;
+    use trunk_ir::{PathId, Span};
 
     #[salsa::tracked]
     fn build_simple_module(db: &dyn salsa::Database) -> core::Module<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
-        let location = tribute_trunk_ir::Location::new(path, Span::new(0, 0));
+        let location = trunk_ir::Location::new(path, Span::new(0, 0));
 
         core::Module::build(db, location, "test", |entry| {
             let _ = entry.op(arith::Const::i64(db, location, 42));
@@ -1148,7 +1148,7 @@ mod tests {
     #[salsa::tracked]
     fn build_arith_module(db: &dyn salsa::Database) -> core::Module<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
-        let location = tribute_trunk_ir::Location::new(path, Span::new(0, 0));
+        let location = trunk_ir::Location::new(path, Span::new(0, 0));
         let i64_ty = *core::I64::new(db);
 
         core::Module::build(db, location, "test", |entry| {
@@ -1201,7 +1201,7 @@ mod tests {
 
     #[test]
     fn test_has_type_vars_detection() {
-        use tribute_trunk_ir::dialect::ty;
+        use trunk_ir::dialect::ty;
 
         TributeDatabaseImpl::default().attach(|db| {
             // Type variable should be detected

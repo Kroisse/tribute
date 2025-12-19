@@ -1,7 +1,7 @@
 //! Block and statement lowering.
 
 use tree_sitter::Node;
-use tribute_trunk_ir::{
+use trunk_ir::{
     BlockBuilder, Value,
     dialect::{adt, arith, list, src},
 };

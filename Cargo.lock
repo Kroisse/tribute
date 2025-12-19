@@ -1161,7 +1161,7 @@ dependencies = [
  "tracing",
  "tribute-core",
  "tribute-passes",
- "tribute-trunk-ir",
+ "trunk-ir",
 ]
 
 [[package]]
@@ -1194,11 +1194,11 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-tribute",
  "tribute-core",
- "tribute-trunk-ir",
+ "trunk-ir",
 ]
 
 [[package]]
-name = "tribute-trunk-ir"
+name = "trunk-ir"
 version = "0.1.0"
 dependencies = [
  "inventory",

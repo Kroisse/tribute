@@ -17,8 +17,8 @@
 //! ```
 //! # use salsa::Database;
 //! # use tribute_core::TributeDatabaseImpl;
-//! # use tribute_trunk_ir::{Block, Location, Operation, PathId, Region, Span, idvec};
-//! # use tribute_trunk_ir::dialect::core::Module;
+//! # use trunk_ir::{Block, Location, Operation, PathId, Region, Span, idvec};
+//! # use trunk_ir::dialect::core::Module;
 //! use tribute_passes::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
 //!
 //! struct RenamePattern;

@@ -2,9 +2,9 @@
 //!
 //! Builds an index from byte positions to types by walking the IR.
 
-use tribute_trunk_ir::Span;
-use tribute_trunk_ir::dialect::core::Module;
-use tribute_trunk_ir::{Block, Operation, Region, Type};
+use trunk_ir::Span;
+use trunk_ir::dialect::core::Module;
+use trunk_ir::{Block, Operation, Region, Type};
 
 /// Entry in the type index.
 #[derive(Clone, Debug)]
@@ -79,7 +79,7 @@ impl<'db> TypeIndex<'db> {
         op: &Operation<'db>,
         entries: &mut Vec<TypeEntry<'db>>,
     ) {
-        use tribute_trunk_ir::Attribute;
+        use trunk_ir::Attribute;
 
         let span = op.location(db).span;
         let dialect = op.dialect(db).text(db);
@@ -95,8 +95,8 @@ impl<'db> TypeIndex<'db> {
         // Special case for func.func: use the 'type' attribute since it has no results
         // and use 'name_span' if available for precise hover targeting
         if dialect == "func" && name == "func" {
-            let type_key = tribute_trunk_ir::Symbol::new(db, "type");
-            let name_span_key = tribute_trunk_ir::Symbol::new(db, "name_span");
+            let type_key = trunk_ir::Symbol::new(db, "type");
+            let name_span_key = trunk_ir::Symbol::new(db, "name_span");
 
             if let Some(Attribute::Type(func_ty)) = op.attributes(db).get(&type_key) {
                 // Use name_span if available, otherwise fall back to operation span

@@ -287,13 +287,13 @@ impl<'db> BlockBuilder<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_db::TestDatabase;
     use crate::{
         DialectOp, DialectType, Location, PathId, Span,
         dialect::{arith, core, func},
         idvec,
     };
     use salsa::Database;
-    use crate::test_db::TestDatabase;
 
     #[salsa::tracked]
     fn build_sample_module(db: &dyn salsa::Database) -> Operation<'_> {
@@ -337,11 +337,11 @@ mod tests {
 
     // Test the new define_op! macro
     mod define_op_tests {
+        use crate::test_db::TestDatabase;
         use crate::{
             Attribute, DialectType, Location, PathId, Region, Span, dialect, dialect::core, idvec,
         };
         use salsa::Database;
-        use crate::test_db::TestDatabase;
 
         // Test: dialect! macro for grouping ops
         dialect! {

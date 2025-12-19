@@ -19,11 +19,9 @@
 
 use std::collections::HashMap;
 
-use tribute_trunk_ir::dialect::core::Module;
-use tribute_trunk_ir::dialect::func;
-use tribute_trunk_ir::{
-    Attribute, Block, DialectOp, IdVec, Operation, Region, Symbol, Type, Value,
-};
+use trunk_ir::dialect::core::Module;
+use trunk_ir::dialect::func;
+use trunk_ir::{Attribute, Block, DialectOp, IdVec, Operation, Region, Symbol, Type, Value};
 
 // =============================================================================
 // Method Registry
@@ -298,7 +296,7 @@ impl<'db> TdnrResolver<'db> {
     /// For operation results, returns the result type.
     /// For block arguments, returns the block argument type.
     fn get_value_type(&self, value: Value<'db>) -> Option<Type<'db>> {
-        use tribute_trunk_ir::ValueDef;
+        use trunk_ir::ValueDef;
 
         match value.def(self.db) {
             ValueDef::OpResult(op) => {

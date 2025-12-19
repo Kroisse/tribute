@@ -16,8 +16,8 @@
 
 use std::collections::BTreeSet;
 
-use tribute_trunk_ir::dialect::core::{AbilityRefType, EffectRowType};
-use tribute_trunk_ir::{DialectType, IdVec, Symbol, Type};
+use trunk_ir::dialect::core::{AbilityRefType, EffectRowType};
+use trunk_ir::{DialectType, IdVec, Symbol, Type};
 
 /// A row variable identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

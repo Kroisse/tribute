@@ -21,8 +21,8 @@ mod statements;
 
 use tree_sitter::{Node, Parser};
 use tribute_core::SourceFile;
-use tribute_trunk_ir::dialect::core;
-use tribute_trunk_ir::{Location, PathId, Span};
+use trunk_ir::dialect::core;
+use trunk_ir::{Location, PathId, Span};
 
 pub use helpers::ParsedCst;
 
@@ -158,8 +158,8 @@ fn lower_cst_impl<'db>(
 mod tests {
     use super::*;
     use tribute_core::TributeDatabaseImpl;
-    use tribute_trunk_ir::DialectOp;
-    use tribute_trunk_ir::dialect::{func, src};
+    use trunk_ir::DialectOp;
+    use trunk_ir::dialect::{func, src};
 
     fn lower_and_get_module<'db>(db: &'db TributeDatabaseImpl, source: &str) -> core::Module<'db> {
         let file = SourceFile::from_path(db, "test.trb", source.to_string());

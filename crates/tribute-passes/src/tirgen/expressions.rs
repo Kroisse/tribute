@@ -1,7 +1,7 @@
 //! Expression lowering.
 
 use tree_sitter::Node;
-use tribute_trunk_ir::{
+use trunk_ir::{
     Attribute, Block, BlockBuilder, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
     Value,
     dialect::{ability, adt, arith, case, core, list, pat, src},
@@ -796,7 +796,7 @@ fn extract_pattern_op<'db>(
 /// Create a region from a list of operations.
 fn ops_to_region<'db>(
     db: &'db dyn salsa::Database,
-    location: tribute_trunk_ir::Location<'db>,
+    location: trunk_ir::Location<'db>,
     ops: Vec<Operation<'db>>,
 ) -> Region<'db> {
     let block = Block::new(db, location, IdVec::new(), IdVec::from(ops));

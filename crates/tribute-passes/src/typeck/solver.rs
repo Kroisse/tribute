@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use tribute_trunk_ir::{Attribute, IdVec, Type, dialect::ty};
+use trunk_ir::{Attribute, IdVec, Type, dialect::ty};
 
 use super::constraint::{Constraint, ConstraintSet, TypeVar};
 use super::effect_row::{AbilityRef, EffectRow, RowVar};
@@ -562,7 +562,7 @@ impl<'db> TypeSolver<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tribute_trunk_ir::dialect::core;
+    use trunk_ir::dialect::core;
 
     #[test]
     fn test_unify_same_type() {

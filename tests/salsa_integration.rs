@@ -2,7 +2,7 @@
 
 use salsa::{Database as _, Setter as _};
 use tribute::{SourceFile, TributeDatabaseImpl, lower_source_file};
-use tribute_trunk_ir::DialectOp;
+use trunk_ir::DialectOp;
 
 #[test]
 fn test_salsa_database_examples() {
@@ -150,7 +150,7 @@ fn test_salsa_database_isolation() {
 
 #[test]
 fn test_function_lowering() {
-    use tribute_trunk_ir::dialect::func;
+    use trunk_ir::dialect::func;
 
     let source = "fn main() { 1 + 2 }";
     TributeDatabaseImpl::default().attach(|db| {

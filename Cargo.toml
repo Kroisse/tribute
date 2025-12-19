@@ -33,7 +33,7 @@ tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute.gi
 tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-passes = { path = "crates/tribute-passes" }
-tribute-trunk-ir = { path = "crates/tribute-trunk-ir" }
+trunk-ir = { path = "crates/trunk-ir" }
 
 [package]
 name = "tribute"
@@ -50,7 +50,7 @@ serde_json.workspace = true
 tracing.workspace = true
 tribute-core.workspace = true
 tribute-passes.workspace = true
-tribute-trunk-ir.workspace = true
+trunk-ir.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

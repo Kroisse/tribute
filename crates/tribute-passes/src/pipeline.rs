@@ -44,9 +44,9 @@
 
 use salsa::Accumulator;
 use tribute_core::SourceFile;
-use tribute_trunk_ir::Span;
-use tribute_trunk_ir::dialect::core::Module;
-use tribute_trunk_ir::{Block, IdVec, Region};
+use trunk_ir::Span;
+use trunk_ir::dialect::core::Module;
+use trunk_ir::{Block, IdVec, Region};
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use crate::resolve::{Resolver, build_env};
@@ -168,8 +168,8 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> M
     // Get the lowered module from the previous stage
     let Some(cst) = parse_cst(db, source) else {
         // Parse failure - return empty module
-        let path = tribute_trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
-        let location = tribute_trunk_ir::Location::new(path, tribute_trunk_ir::Span::new(0, 0));
+        let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
+        let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
         return Module::build(db, location, "main", |_| {});
     };
 

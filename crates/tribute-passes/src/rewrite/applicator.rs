@@ -3,8 +3,8 @@
 //! The `PatternApplicator` manages a set of rewrite patterns and
 //! applies them to a module until fixpoint is reached.
 
-use tribute_trunk_ir::dialect::core::Module;
-use tribute_trunk_ir::{Block, IdVec, Operation, Region};
+use trunk_ir::dialect::core::Module;
+use trunk_ir::{Block, IdVec, Operation, Region};
 
 use super::context::RewriteContext;
 use super::pattern::RewritePattern;
@@ -29,8 +29,8 @@ pub struct ApplyResult<'db> {
 /// ```
 /// # use salsa::Database;
 /// # use tribute_core::TributeDatabaseImpl;
-/// # use tribute_trunk_ir::{Block, Location, Operation, PathId, Region, Span, idvec};
-/// # use tribute_trunk_ir::dialect::core::Module;
+/// # use trunk_ir::{Block, Location, Operation, PathId, Region, Span, idvec};
+/// # use trunk_ir::dialect::core::Module;
 /// use tribute_passes::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
 ///
 /// struct RenamePattern;
@@ -273,7 +273,7 @@ mod tests {
     use super::*;
     use salsa::Database;
     use tribute_core::TributeDatabaseImpl;
-    use tribute_trunk_ir::{Attribute, Location, PathId, Span, idvec};
+    use trunk_ir::{Attribute, Location, PathId, Span, idvec};
 
     /// A simple test pattern that rewrites `test.source` → `test.target`.
     struct TestRenamePattern;

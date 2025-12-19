@@ -3,7 +3,7 @@
 //! Defines the interface for IR transformation patterns,
 //! inspired by MLIR's RewritePattern.
 
-use tribute_trunk_ir::Operation;
+use trunk_ir::Operation;
 
 use super::context::RewriteContext;
 use super::result::RewriteResult;
@@ -19,7 +19,7 @@ use super::result::RewriteResult;
 /// ```
 /// # use salsa::Database;
 /// # use tribute_core::TributeDatabaseImpl;
-/// # use tribute_trunk_ir::{Location, Operation, PathId, Span};
+/// # use trunk_ir::{Location, Operation, PathId, Span};
 /// use tribute_passes::rewrite::{RewriteContext, RewritePattern, RewriteResult};
 ///
 /// struct RenamePattern;

@@ -3,11 +3,11 @@
 use std::collections::HashMap;
 
 use tree_sitter::Node;
-use tribute_trunk_ir::{
+use trunk_ir::{
     DialectType, IdVec, Type, Value,
     dialect::{core, ty},
 };
-use tribute_trunk_ir::{Location, PathId};
+use trunk_ir::{Location, PathId};
 
 use super::helpers::{node_text, span_from_node};
 
@@ -67,7 +67,7 @@ impl<'db, 'src> CstLoweringCtx<'db, 'src> {
 
     /// Resolve a type node to an IR Type.
     pub fn resolve_type_node(&mut self, node: Node) -> Type<'db> {
-        use tribute_trunk_ir::dialect::src;
+        use trunk_ir::dialect::src;
 
         let mut cursor = node.walk();
         match node.kind() {

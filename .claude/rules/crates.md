@@ -29,7 +29,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 
 **Location**: `crates/tribute-passes/`
 
-## tribute-trunk-ir
+## trunk-ir
 
 **Role**: Multi-level dialect IR system (central IR representation)
 
@@ -39,7 +39,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 - `types.rs` - Type system (interned types with attributes)
 - `dialect/` - All dialect definitions
 
-**Location**: `crates/tribute-trunk-ir/`
+**Location**: `crates/trunk-ir/`
 
 ## tribute-cranelift
 
@@ -66,9 +66,9 @@ tribute (main)
 ├── tribute-core
 ├── tribute-passes
 │   ├── tribute-core
-│   ├── tribute-trunk-ir
+│   ├── trunk-ir
 │   └── tree-sitter-tribute
-└── tribute-trunk-ir
+└── trunk-ir
 ```
 
-Note: `tribute-trunk-ir` is now fully independent with no dependencies on other tribute crates. It only depends on `tribute-core` as a dev-dependency for tests.
+Note: `trunk-ir` is now fully independent with no dependencies on other tribute crates (not even as dev-dependencies). It's a standalone IR system.

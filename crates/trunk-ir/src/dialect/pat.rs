@@ -136,9 +136,9 @@ dialect! {
 ///
 /// ```
 /// # use salsa::Database;
-/// # use tribute_trunk_ir::test_db::TestDatabase;
-/// # use tribute_trunk_ir::{Location, PathId, Region, Span};
-/// # use tribute_trunk_ir::dialect::pat::helpers;
+/// # use trunk_ir::test_db::TestDatabase;
+/// # use trunk_ir::{Location, PathId, Region, Span};
+/// # use trunk_ir::dialect::pat::helpers;
 /// # #[salsa::tracked]
 /// # fn build_pattern(db: &dyn salsa::Database) -> Region<'_> {
 /// #     let path = PathId::new(db, "file:///test.trb".to_owned());

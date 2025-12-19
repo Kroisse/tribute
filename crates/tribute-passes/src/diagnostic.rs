@@ -1,6 +1,6 @@
 //! Diagnostic messages emitted during compilation.
 
-use tribute_trunk_ir::Span;
+use trunk_ir::Span;
 
 /// A diagnostic message (error, warning, or info) with source location.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

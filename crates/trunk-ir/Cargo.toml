@@ -1,9 +1,9 @@
 [package]
-name = "tribute-trunk-ir"
+name = "trunk-ir"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "TrunkIR (multi-level dialect IR) for Tribute"
+description = "TrunkIR: A multi-level dialect IR system"
 
 [dependencies]
 inventory.workspace = true

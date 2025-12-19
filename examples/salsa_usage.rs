@@ -4,8 +4,8 @@
 
 use salsa::Setter;
 use tribute::{SourceFile, TributeDatabaseImpl, lower_source_file, lower_str};
-use tribute_trunk_ir::DialectOp;
-use tribute_trunk_ir::dialect::func;
+use trunk_ir::DialectOp;
+use trunk_ir::dialect::func;
 
 fn main() {
     // Example 1: Basic database usage
