@@ -42,14 +42,85 @@
 //! diagnostics via `Diagnostic { ... }.accumulate(db)`, which are then
 //! collected at the end of compilation.
 
+use std::path::PathBuf;
+
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity, SourceFile, Span};
 use tribute_trunk_ir::dialect::core::Module;
+use tribute_trunk_ir::{Block, IdVec, Region};
 
 use crate::cst_to_tir::{lower_cst, parse_cst};
 use crate::resolve::{Resolver, build_env};
 use crate::tdnr::resolve_tdnr;
 use crate::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
+
+// =============================================================================
+// Standard Library Prelude
+// =============================================================================
+
+/// The prelude source code, embedded at compile time.
+const PRELUDE_SOURCE: &str = include_str!("../../../lib/std/prelude.trb");
+
+/// Load and cache the prelude module.
+///
+/// This is a Salsa tracked function, so the prelude is parsed only once
+/// and cached for all subsequent compilations.
+#[salsa::tracked]
+pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
+    let source_file = SourceFile::new(db, PathBuf::from("<prelude>"), PRELUDE_SOURCE.to_string());
+    let cst = parse_cst(db, source_file)?;
+    Some(lower_cst(db, source_file, cst))
+}
+
+/// Merge prelude definitions into a user module.
+///
+/// This prepends all prelude operations (type definitions, etc.) to the
+/// user module's body, making prelude types available for name resolution.
+pub fn merge_with_prelude<'db>(
+    db: &'db dyn salsa::Database,
+    user_module: Module<'db>,
+) -> Module<'db> {
+    let Some(prelude) = prelude_module(db) else {
+        return user_module;
+    };
+
+    // Get operations from both modules
+    let prelude_body = prelude.body(db);
+    let user_body = user_module.body(db);
+
+    // Merge blocks: prepend prelude operations to user operations
+    let prelude_blocks = prelude_body.blocks(db);
+    let user_blocks = user_body.blocks(db);
+
+    // If both have a single block (common case), merge their operations
+    if prelude_blocks.len() == 1 && user_blocks.len() == 1 {
+        let prelude_block = &prelude_blocks[0];
+        let user_block = &user_blocks[0];
+
+        // Combine operations: prelude first, then user
+        let mut combined_ops: IdVec<_> = prelude_block.operations(db).iter().copied().collect();
+        combined_ops.extend(user_block.operations(db).iter().copied());
+
+        let merged_block = Block::new(
+            db,
+            user_block.location(db),
+            user_block.args(db).clone(),
+            combined_ops,
+        );
+
+        let merged_body = Region::new(db, user_body.location(db), IdVec::from(vec![merged_block]));
+
+        return Module::create(
+            db,
+            user_module.location(db),
+            user_module.name(db),
+            merged_body,
+        );
+    }
+
+    // Fallback: just use user module if structure doesn't match
+    user_module
+}
 
 // Re-export for convenience
 pub use crate::resolve::build_env as build_module_env;
@@ -87,6 +158,9 @@ pub use crate::cst_to_tir::lower_cst as stage_lower;
 ///
 /// After this pass, all resolvable `src.*` operations are transformed.
 /// Some may remain for type-directed resolution (UFCS).
+///
+/// The prelude is automatically merged into the module before resolution,
+/// making standard library types (Option, Result, etc.) available.
 #[salsa::tracked]
 pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
     // Get the lowered module from the previous stage
@@ -97,9 +171,12 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> M
         return Module::build(db, location, "main", |_| {});
     };
 
-    let module = lower_cst(db, source, cst);
+    let user_module = lower_cst(db, source, cst);
 
-    // Build module environment from declarations
+    // Merge prelude definitions into the user module
+    let module = merge_with_prelude(db, user_module);
+
+    // Build module environment from declarations (including prelude)
     let env = build_env(db, &module);
 
     // Resolve names in the module
@@ -286,6 +363,62 @@ mod tests {
             assert!(
                 has_unresolved_error,
                 "Expected unresolved name error, got: {:?}",
+                result.diagnostics
+            );
+        });
+    }
+
+    #[test]
+    fn test_prelude_loads() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let prelude = prelude_module(db);
+            assert!(prelude.is_some(), "Prelude should load successfully");
+        });
+    }
+
+    #[test]
+    fn test_prelude_option_type() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Use Option type from prelude
+            let source = SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.tr"),
+                "fn maybe() -> Option(Int) { None }".to_string(),
+            );
+
+            let result = compile_with_diagnostics(db, source);
+            // Should compile without "unresolved" errors for Option or None
+            let has_option_error = result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("Option") || d.message.contains("None"));
+            assert!(
+                !has_option_error,
+                "Option and None should be available from prelude, got: {:?}",
+                result.diagnostics
+            );
+        });
+    }
+
+    #[test]
+    fn test_prelude_result_type() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Use Result type from prelude
+            let source = SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.tr"),
+                "fn success() -> Result(Int, String) { Ok(42) }".to_string(),
+            );
+
+            let result = compile_with_diagnostics(db, source);
+            // Should compile without "unresolved" errors for Result or Ok
+            let has_result_error = result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("Result") || d.message.contains("Ok"));
+            assert!(
+                !has_result_error,
+                "Result and Ok should be available from prelude, got: {:?}",
                 result.diagnostics
             );
         });

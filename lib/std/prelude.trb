@@ -1,0 +1,16 @@
+// Tribute Standard Library - Prelude
+// These types are automatically available in all Tribute programs.
+
+/// A type that represents an optional value.
+/// Either contains `Some(value)` or `None`.
+enum Option(a) {
+    None,
+    Some(a),
+}
+
+/// A type that represents either success (`Ok`) or failure (`Err`).
+/// Used for operations that may fail.
+enum Result(a, e) {
+    Ok(a),
+    Err(e),
+}
