@@ -3,7 +3,7 @@
 //! Defines the interface for IR transformation patterns,
 //! inspired by MLIR's RewritePattern.
 
-use trunk_ir::Operation;
+use crate::Operation;
 
 use super::context::RewriteContext;
 use super::result::RewriteResult;
@@ -18,9 +18,9 @@ use super::result::RewriteResult;
 ///
 /// ```
 /// # use salsa::Database;
-/// # use tribute_core::TributeDatabaseImpl;
+/// # use trunk_ir::test_db::TestDatabase;
 /// # use trunk_ir::{Location, Operation, PathId, Span};
-/// use tribute_passes::rewrite::{RewriteContext, RewritePattern, RewriteResult};
+/// use trunk_ir::rewrite::{RewriteContext, RewritePattern, RewriteResult};
 ///
 /// struct RenamePattern;
 ///
@@ -53,7 +53,7 @@ use super::result::RewriteResult;
 /// #         _ => "unchanged".to_string(),
 /// #     }
 /// # }
-/// # TributeDatabaseImpl::default().attach(|db| {
+/// # TestDatabase::default().attach(|db| {
 /// #     let op = make_op(db);
 /// #     let result = rewrite_once(db, op);
 /// #     assert_eq!(result, "test.target");

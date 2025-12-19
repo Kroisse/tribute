@@ -23,7 +23,6 @@ pub mod diagnostic;
 // === TrunkIR passes ===
 pub mod pipeline;
 pub mod resolve;
-pub mod rewrite;
 pub mod tdnr;
 pub mod tirgen;
 pub mod typeck;
@@ -35,7 +34,9 @@ pub use pipeline::{
     stage_typecheck,
 };
 pub use resolve::{ModuleEnv, Resolver, resolve_module};
-pub use rewrite::{ApplyResult, PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
 pub use tdnr::{MethodInfo, MethodRegistry, TdnrResolver, resolve_tdnr};
 pub use tirgen::{ParsedCst, lower_cst, lower_source_file, parse_cst};
+pub use trunk_ir::rewrite::{
+    ApplyResult, PatternApplicator, RewriteContext, RewritePattern, RewriteResult,
+};
 pub use typeck::{Constraint, EffectRow, TypeChecker, TypeSolver, typecheck_module};

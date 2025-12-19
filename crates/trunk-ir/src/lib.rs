@@ -10,6 +10,7 @@ pub mod dialect;
 pub mod ir;
 pub mod location;
 pub mod ops;
+pub mod rewrite;
 pub mod type_interface;
 pub mod types;
 

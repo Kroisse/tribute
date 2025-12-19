@@ -2,7 +2,7 @@
 //!
 //! Defines the possible outcomes of a pattern rewrite operation.
 
-use trunk_ir::{Operation, Value};
+use crate::{Operation, Value};
 
 /// Result of attempting to rewrite an operation.
 ///

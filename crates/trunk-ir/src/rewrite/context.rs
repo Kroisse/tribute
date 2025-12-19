@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use trunk_ir::{IdVec, Operation, Value};
+use crate::{IdVec, Operation, Value};
 
 /// Context for IR rewriting.
 ///

@@ -16,10 +16,10 @@
 //!
 //! ```
 //! # use salsa::Database;
-//! # use tribute_core::TributeDatabaseImpl;
+//! # use trunk_ir::test_db::TestDatabase;
 //! # use trunk_ir::{Block, Location, Operation, PathId, Region, Span, idvec};
 //! # use trunk_ir::dialect::core::Module;
-//! use tribute_passes::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
+//! use trunk_ir::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
 //!
 //! struct RenamePattern;
 //!
@@ -54,7 +54,7 @@
 //! #     let result = applicator.apply(db, module);
 //! #     result.reached_fixpoint
 //! # }
-//! # TributeDatabaseImpl::default().attach(|db| {
+//! # TestDatabase::default().attach(|db| {
 //! #     let module = make_module(db);
 //! let reached = apply_rename(db, module);
 //! assert!(reached);
