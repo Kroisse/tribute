@@ -69,5 +69,6 @@ tribute (main)
 │   ├── tribute-trunk-ir
 │   └── tree-sitter-tribute
 └── tribute-trunk-ir
-    └── tribute-core
 ```
+
+Note: `tribute-trunk-ir` is now fully independent with no dependencies on other tribute crates. It only depends on `tribute-core` as a dev-dependency for tests.
