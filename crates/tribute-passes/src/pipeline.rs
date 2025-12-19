@@ -423,4 +423,35 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn test_case_expression_pattern_binding() {
+        TributeDatabaseImpl::default().attach(|db| {
+            // Simple case expression with identifier pattern binding
+            let source = SourceFile::new(
+                db,
+                std::path::PathBuf::from("test.tr"),
+                r#"
+                fn test(x: Int) -> Int {
+                    case x {
+                        y -> y
+                    }
+                }
+                "#
+                .to_string(),
+            );
+
+            let result = compile_with_diagnostics(db, source);
+            // Pattern binding `y` should be resolved in the case arm body
+            let has_unresolved_y = result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("unresolved") && d.message.contains("y"));
+            assert!(
+                !has_unresolved_y,
+                "Pattern binding `y` should be resolved, got: {:?}",
+                result.diagnostics
+            );
+        });
+    }
 }

@@ -505,30 +505,19 @@ fn lower_case_expr<'db, 'src>(
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
-    let mut cursor = node.walk();
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
 
-    let mut scrutinee_node = None;
-    let mut arms = Vec::new();
-
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        match child.kind() {
-            "case_arm" => {
-                arms.push(child);
-            }
-            _ if scrutinee_node.is_none() => {
-                scrutinee_node = Some(child);
-            }
-            _ => {}
-        }
-    }
-
-    let scrutinee_node = scrutinee_node?;
+    // Use field-based access for scrutinee
+    let scrutinee_node = node.child_by_field_name("value")?;
     let scrutinee = lower_expr(ctx, block, scrutinee_node)?;
+
+    // Collect case arms (need iteration)
+    let mut cursor = node.walk();
+    let arms: Vec<_> = node
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "case_arm")
+        .collect();
 
     // Build the body region containing case.arm operations
     let mut body_block = BlockBuilder::new(ctx.db, location);
@@ -604,8 +593,25 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
     let location = ctx.location(&node);
 
     match node.kind() {
+        // Wrapper nodes - unwrap and recurse
+        "pattern" | "simple_pattern" => {
+            let mut cursor = node.walk();
+            if let Some(child) = node.named_children(&mut cursor).next() {
+                return pattern_to_region(ctx, child);
+            }
+            pat::helpers::wildcard_region(ctx.db, location)
+        }
         "identifier" | "identifier_pattern" => {
-            let name = node_text(&node, ctx.source);
+            // Handle identifier_pattern which may have an inner identifier
+            let name = if node.kind() == "identifier_pattern" {
+                let mut cursor = node.walk();
+                node.named_children(&mut cursor)
+                    .next()
+                    .map(|child| node_text(&child, ctx.source))
+                    .unwrap_or_else(|| node_text(&node, ctx.source))
+            } else {
+                node_text(&node, ctx.source)
+            };
             pat::helpers::bind_region(ctx.db, location, name)
         }
         "wildcard_pattern" => pat::helpers::wildcard_region(ctx.db, location),

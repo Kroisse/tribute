@@ -314,6 +314,13 @@ pub enum LocalBinding<'db> {
         /// The binding type
         ty: Type<'db>,
     },
+    /// A pattern binding (from case arms).
+    /// The value is not available during name resolution;
+    /// it will be produced by pattern matching at runtime.
+    PatternBinding {
+        /// The binding type (usually inferred)
+        ty: Type<'db>,
+    },
 }
 
 /// Name resolver context.
@@ -714,6 +721,10 @@ impl<'db> Resolver<'db> {
                 self.pop_import_scope();
                 vec![resolved]
             }
+            ("case", "arm") => {
+                // Handle case arm with pattern bindings
+                vec![self.resolve_case_arm(&remapped_op)]
+            }
             _ => {
                 // Not a src.* operation - recursively process regions
                 vec![self.resolve_op_regions(&remapped_op)]
@@ -756,6 +767,118 @@ impl<'db> Resolver<'db> {
             new_regions,
             op.successors(self.db).clone(),
         )
+    }
+
+    /// Resolve a case.arm operation with pattern bindings.
+    ///
+    /// case.arm has two regions: pattern and body.
+    /// Pattern bindings are extracted and added to local scope before resolving body.
+    fn resolve_case_arm(&mut self, op: &Operation<'db>) -> Operation<'db> {
+        let regions = op.regions(self.db);
+        if regions.len() < 2 {
+            return *op;
+        }
+
+        let pattern_region = &regions[0];
+        let body_region = &regions[1];
+
+        // Push a new scope for pattern bindings
+        self.push_scope();
+
+        // Extract bindings from pattern region and add to scope
+        self.collect_pattern_bindings(pattern_region);
+
+        // Resolve body region with pattern bindings in scope
+        let new_body = self.resolve_region(body_region);
+
+        // Pop the pattern scope
+        self.pop_scope();
+
+        // Create new regions vector (pattern unchanged, body resolved)
+        let mut new_regions: IdVec<Region<'db>> = IdVec::new();
+        new_regions.push(*pattern_region);
+        new_regions.push(new_body);
+
+        Operation::new(
+            self.db,
+            op.location(self.db),
+            op.dialect(self.db),
+            op.name(self.db),
+            op.operands(self.db).clone(),
+            op.results(self.db).clone(),
+            op.attributes(self.db).clone(),
+            new_regions,
+            op.successors(self.db).clone(),
+        )
+    }
+
+    /// Collect pattern bindings from a pattern region.
+    ///
+    /// Recursively walks the pattern region to find pat.bind, pat.as_pat,
+    /// and pat.list_rest operations, adding their bindings to local scope.
+    fn collect_pattern_bindings(&mut self, region: &Region<'db>) {
+        for block in region.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter() {
+                self.collect_pattern_binding_from_op(op);
+            }
+        }
+    }
+
+    /// Collect bindings from a single pattern operation.
+    fn collect_pattern_binding_from_op(&mut self, op: &Operation<'db>) {
+        let dialect = op.dialect(self.db).text(self.db);
+        let op_name = op.name(self.db).text(self.db);
+
+        match (dialect, op_name) {
+            ("pat", "bind") => {
+                // pat.bind has a "name" attribute
+                let attrs = op.attributes(self.db);
+                let name_key = Symbol::new(self.db, "name");
+                if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
+                    let name = sym.text(self.db).to_string();
+                    // Pattern binding - value comes from pattern matching at runtime
+                    let infer_ty =
+                        tribute_trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
+                    self.add_local(name, LocalBinding::PatternBinding { ty: infer_ty });
+                }
+            }
+            ("pat", "as_pat") => {
+                // pat.as_pat has a "name" attribute and an inner pattern region
+                let attrs = op.attributes(self.db);
+                let name_key = Symbol::new(self.db, "name");
+                if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
+                    let name = sym.text(self.db).to_string();
+                    let infer_ty =
+                        tribute_trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
+                    self.add_local(name, LocalBinding::PatternBinding { ty: infer_ty });
+                }
+                // Also collect from inner pattern region
+                for region in op.regions(self.db).iter() {
+                    self.collect_pattern_bindings(region);
+                }
+            }
+            ("pat", "list_rest") => {
+                // pat.list_rest has a "rest_name" attribute
+                let attrs = op.attributes(self.db);
+                let name_key = Symbol::new(self.db, "rest_name");
+                if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
+                    let name = sym.text(self.db).to_string();
+                    let infer_ty =
+                        tribute_trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
+                    self.add_local(name, LocalBinding::PatternBinding { ty: infer_ty });
+                }
+                // Also collect from head pattern region
+                for region in op.regions(self.db).iter() {
+                    self.collect_pattern_bindings(region);
+                }
+            }
+            _ => {
+                // Other pattern ops may have nested regions with bindings
+                for region in op.regions(self.db).iter() {
+                    self.collect_pattern_bindings(region);
+                }
+            }
+        }
     }
 
     /// Resolve a function body region, handling parameter bindings.
@@ -938,28 +1061,33 @@ impl<'db> Resolver<'db> {
         let name = sym.text(self.db);
         let location = op.location(self.db);
 
-        // First, check local scopes (function parameters, let bindings)
+        // First, check local scopes (function parameters, let bindings, pattern bindings)
         if let Some(local) = self.lookup_local(name) {
-            // Local binding found - keep src.var with resolved type for hover span
-            let (value, ty) = match local {
-                LocalBinding::Parameter { value, ty } => (*value, *ty),
-                LocalBinding::LetBinding { value, ty } => (*value, *ty),
-            };
+            match local {
+                LocalBinding::Parameter { value, ty } | LocalBinding::LetBinding { value, ty } => {
+                    // Local binding found - keep src.var with resolved type for hover span
+                    let resolved_ty = self.resolve_type(*ty);
 
-            // Resolve the type (it may still be src.type at this point)
-            let resolved_ty = self.resolve_type(ty);
+                    // Create new src.var with resolved type (keeps span for hover)
+                    let new_op = src::var(self.db, location, resolved_ty, *sym);
+                    let new_operation = new_op.as_operation();
 
-            // Create new src.var with resolved type (keeps span for hover)
-            let new_op = src::var(self.db, location, resolved_ty, *sym);
-            let new_operation = new_op.as_operation();
+                    // Map old result to the actual bound value (not the new src.var's result)
+                    // This ensures use sites get the correct value
+                    let old_result = op.result(self.db, 0);
+                    self.map_value(old_result, *value);
 
-            // Map old result to the actual bound value (not the new src.var's result)
-            // This ensures use sites get the correct value
-            let old_result = op.result(self.db, 0);
-            self.map_value(old_result, value);
-
-            // Return the new src.var to keep it in IR for hover
-            return Some(vec![new_operation]);
+                    // Return the new src.var to keep it in IR for hover
+                    return Some(vec![new_operation]);
+                }
+                LocalBinding::PatternBinding { ty } => {
+                    // Pattern binding - value comes from pattern matching
+                    // Keep src.var as is with resolved type; no value remapping yet
+                    let resolved_ty = self.resolve_type(*ty);
+                    let new_op = src::var(self.db, location, resolved_ty, *sym);
+                    return Some(vec![new_op.as_operation()]);
+                }
+            }
         }
 
         // Then check module environment
