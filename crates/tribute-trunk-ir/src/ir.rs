@@ -93,6 +93,21 @@ impl<'db> Operation<'db> {
     pub fn result(self, db: &'db dyn salsa::Database, index: usize) -> Value<'db> {
         Value::new(db, ValueDef::OpResult(self), index)
     }
+
+    /// Create a builder initialized from an existing operation.
+    pub fn modify(&self, db: &'db dyn salsa::Database) -> OperationBuilder<'db> {
+        OperationBuilder {
+            db,
+            location: self.location(db),
+            dialect: self.dialect(db),
+            name: self.name(db),
+            operands: self.operands(db).clone(),
+            results: self.results(db).clone(),
+            attributes: self.attributes(db).clone(),
+            regions: self.regions(db).clone(),
+            successors: self.successors(db).clone(),
+        }
+    }
 }
 
 #[salsa::tracked(debug)]
@@ -156,6 +171,26 @@ impl<'db> OperationBuilder<'db> {
 
     pub fn operands(mut self, operands: IdVec<Value<'db>>) -> Self {
         self.operands = operands;
+        self
+    }
+
+    pub fn dialect(mut self, dialect: Symbol<'db>) -> Self {
+        self.dialect = dialect;
+        self
+    }
+
+    pub fn dialect_str(mut self, dialect: &str) -> Self {
+        self.dialect = Symbol::new(self.db, dialect);
+        self
+    }
+
+    pub fn name(mut self, name: Symbol<'db>) -> Self {
+        self.name = name;
+        self
+    }
+
+    pub fn name_str(mut self, name: &str) -> Self {
+        self.name = Symbol::new(self.db, name);
         self
     }
 

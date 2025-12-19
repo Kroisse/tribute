@@ -221,17 +221,7 @@ impl<'db> TdnrResolver<'db> {
             return *op;
         }
 
-        Operation::new(
-            self.db,
-            op.location(self.db),
-            op.dialect(self.db),
-            op.name(self.db),
-            new_operands,
-            op.results(self.db).clone(),
-            op.attributes(self.db).clone(),
-            op.regions(self.db).clone(),
-            op.successors(self.db).clone(),
-        )
+        op.modify(self.db).operands(new_operands).build()
     }
 
     /// Recursively resolve regions within an operation.
@@ -246,17 +236,7 @@ impl<'db> TdnrResolver<'db> {
             .map(|region| self.resolve_region(region))
             .collect();
 
-        Operation::new(
-            self.db,
-            op.location(self.db),
-            op.dialect(self.db),
-            op.name(self.db),
-            op.operands(self.db).clone(),
-            op.results(self.db).clone(),
-            op.attributes(self.db).clone(),
-            new_regions,
-            op.successors(self.db).clone(),
-        )
+        op.modify(self.db).regions(new_regions).build()
     }
 
     /// Try to resolve a `src.call` as a method call using TDNR.

@@ -459,22 +459,9 @@ impl<'db> Resolver<'db> {
 
     /// Mark a src.var operation as a resolved local binding.
     fn mark_resolved_local(&self, op: Operation<'db>) -> Operation<'db> {
-        let mut attrs = op.attributes(self.db).clone();
-        attrs.insert(
-            Symbol::new(self.db, "resolved_local"),
-            Attribute::Bool(true),
-        );
-        Operation::new(
-            self.db,
-            op.location(self.db),
-            op.dialect(self.db),
-            op.name(self.db),
-            op.operands(self.db).clone(),
-            op.results(self.db).clone(),
-            attrs,
-            op.regions(self.db).clone(),
-            op.successors(self.db).clone(),
-        )
+        op.modify(self.db)
+            .attr("resolved_local", Attribute::Bool(true))
+            .build()
     }
 
     fn is_marked_resolved_local(&self, op: &Operation<'db>) -> bool {
@@ -785,17 +772,7 @@ impl<'db> Resolver<'db> {
             new_regions.push(self.resolve_region(region));
         }
 
-        Operation::new(
-            self.db,
-            op.location(self.db),
-            op.dialect(self.db),
-            op.name(self.db),
-            op.operands(self.db).clone(),
-            op.results(self.db).clone(),
-            op.attributes(self.db).clone(),
-            new_regions,
-            op.successors(self.db).clone(),
-        )
+        op.modify(self.db).regions(new_regions).build()
     }
 
     /// Resolve a case.arm operation with pattern bindings.
@@ -828,17 +805,7 @@ impl<'db> Resolver<'db> {
         new_regions.push(*pattern_region);
         new_regions.push(new_body);
 
-        Operation::new(
-            self.db,
-            op.location(self.db),
-            op.dialect(self.db),
-            op.name(self.db),
-            op.operands(self.db).clone(),
-            op.results(self.db).clone(),
-            op.attributes(self.db).clone(),
-            new_regions,
-            op.successors(self.db).clone(),
-        )
+        op.modify(self.db).regions(new_regions).build()
     }
 
     /// Collect pattern bindings from a pattern region.
@@ -1029,17 +996,7 @@ impl<'db> Resolver<'db> {
             return *op;
         }
 
-        Operation::new(
-            self.db,
-            op.location(self.db),
-            op.dialect(self.db),
-            op.name(self.db),
-            new_operands,
-            op.results(self.db).clone(),
-            op.attributes(self.db).clone(),
-            op.regions(self.db).clone(),
-            op.successors(self.db).clone(),
-        )
+        op.modify(self.db).operands(new_operands).build()
     }
 
     /// Recursively resolve regions and types within an operation.
@@ -1062,17 +1019,10 @@ impl<'db> Resolver<'db> {
             return *op;
         }
 
-        Operation::new(
-            self.db,
-            op.location(self.db),
-            op.dialect(self.db),
-            op.name(self.db),
-            op.operands(self.db).clone(),
-            new_results,
-            op.attributes(self.db).clone(),
-            new_regions,
-            op.successors(self.db).clone(),
-        )
+        op.modify(self.db)
+            .results(new_results)
+            .regions(new_regions)
+            .build()
     }
 
     /// Try to resolve a `src.var` operation.

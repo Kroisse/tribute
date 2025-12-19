@@ -221,17 +221,7 @@ impl PatternApplicator {
             .map(|region| self.rewrite_region(db, region, ctx))
             .collect();
 
-        Operation::new(
-            db,
-            op.location(db),
-            op.dialect(db),
-            op.name(db),
-            op.operands(db).clone(),
-            op.results(db).clone(),
-            op.attributes(db).clone(),
-            new_regions,
-            op.successors(db).clone(),
-        )
+        op.modify(db).regions(new_regions).build()
     }
 }
 
@@ -246,7 +236,7 @@ mod tests {
     use super::*;
     use salsa::Database;
     use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
-    use tribute_trunk_ir::{Attribute, Symbol, idvec};
+    use tribute_trunk_ir::{Attribute, idvec};
 
     /// A simple test pattern that rewrites `test.source` → `test.target`.
     struct TestRenamePattern;
@@ -263,17 +253,10 @@ mod tests {
             }
 
             // Create replacement operation with same structure but different name
-            let new_op = Operation::new(
-                db,
-                op.location(db),
-                op.dialect(db),
-                Symbol::new(db, "target"),
-                op.operands(db).clone(),
-                op.results(db).clone(),
-                op.attributes(db).clone(),
-                op.regions(db).clone(),
-                op.successors(db).clone(),
-            );
+            let new_op = op
+                .modify(db)
+                .name_str("target")
+                .build();
 
             RewriteResult::Replace(new_op)
         }

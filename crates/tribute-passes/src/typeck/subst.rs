@@ -89,17 +89,10 @@ fn apply_subst_to_operation<'db>(
         return *op;
     }
 
-    Operation::new(
-        db,
-        op.location(db),
-        op.dialect(db),
-        op.name(db),
-        op.operands(db).clone(),
-        new_results,
-        op.attributes(db).clone(),
-        new_regions,
-        op.successors(db).clone(),
-    )
+    op.modify(db)
+        .results(new_results)
+        .regions(new_regions)
+        .build()
 }
 
 /// Check if a type contains any type variables.

@@ -75,17 +75,7 @@ impl<'db> RewriteContext<'db> {
         }
 
         // Rebuild the operation with remapped operands
-        Operation::new(
-            db,
-            op.location(db),
-            op.dialect(db),
-            op.name(db),
-            new_operands,
-            op.results(db).clone(),
-            op.attributes(db).clone(),
-            op.regions(db).clone(),
-            op.successors(db).clone(),
-        )
+        op.modify(db).operands(new_operands).build()
     }
 
     /// Register value mappings from old operation results to new operation results.
