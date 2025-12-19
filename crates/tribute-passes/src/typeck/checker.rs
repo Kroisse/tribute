@@ -11,13 +11,17 @@
 //! then solved by the [`TypeSolver`].
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
 use trunk_ir::{
     Attribute, DialectOp, DialectType, Operation, Region, Symbol, Type, Value,
-    dialect::{core, func, ty},
+    dialect::{ability, adt, arith, case, core, func, list, pat, src, ty},
 };
+
+/// Common symbol for "unknown" - used as fallback in error cases.
+static UNKNOWN: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("unknown"));
 
 use super::constraint::ConstraintSet;
 use super::effect_row::{AbilityRef, EffectRow, RowVar};
@@ -206,100 +210,104 @@ impl<'db> TypeChecker<'db> {
         let name = op.name(self.db);
 
         // Dispatch by dialect first, then by operation name
-        if dialect == Symbol::new("func") {
-            if name == Symbol::new("func") {
+        // Use cached static symbols to avoid interner write locks
+        if dialect == *func::_NAME {
+            if name == *func::FUNC {
                 self.check_func_def(op);
-            } else if name == Symbol::new("return") {
+            } else if name == *func::RETURN {
                 self.check_return(op);
-            } else if name == Symbol::new("call") {
+            } else if name == *func::CALL {
                 self.check_func_call(op);
-            } else if name == Symbol::new("call_indirect") {
+            } else if name == *func::CALL_INDIRECT {
                 self.check_func_call_indirect(op);
-            } else if name == Symbol::new("constant") {
+            } else if name == *func::CONSTANT {
                 self.check_func_constant(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == Symbol::new("arith") {
-            if name == Symbol::new("const") {
+        } else if dialect == *arith::_NAME {
+            if name == *arith::CONST {
                 self.check_arith_const(op);
-            } else if name == Symbol::new("add")
-                || name == Symbol::new("sub")
-                || name == Symbol::new("mul")
-                || name == Symbol::new("div")
+            } else if name == *arith::ADD
+                || name == *arith::SUB
+                || name == *arith::MUL
+                || name == *arith::DIV
             {
                 self.check_arith_binop(op);
-            } else if name == Symbol::new("neg") {
+            } else if name == *arith::NEG {
                 self.check_arith_neg(op);
-            } else if name == Symbol::new("cmp") {
+            } else if name == *arith::CMP_EQ
+                || name == *arith::CMP_NE
+                || name == *arith::CMP_LT
+                || name == *arith::CMP_LE
+                || name == *arith::CMP_GT
+                || name == *arith::CMP_GE
+            {
                 self.check_arith_cmp(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == Symbol::new("src") {
-            if name == Symbol::new("var") {
+        } else if dialect == *src::_NAME {
+            if name == *src::VAR {
                 self.check_src_var(op);
-            } else if name == Symbol::new("call") {
+            } else if name == *src::CALL {
                 self.check_src_call(op);
-            } else if name == Symbol::new("binop") {
+            } else if name == *src::BINOP {
                 self.check_src_binop(op);
-            } else if name == Symbol::new("lambda") {
+            } else if name == *src::LAMBDA {
                 self.check_src_lambda(op);
-            } else if name == Symbol::new("block") {
+            } else if name == *src::BLOCK {
                 self.check_src_block(op);
-            } else if name == Symbol::new("yield") {
+            } else if name == *src::YIELD {
                 self.check_src_yield(op);
-            } else if name == Symbol::new("tuple") {
+            } else if name == *src::TUPLE {
                 self.check_src_tuple(op);
-            } else if name == Symbol::new("const") {
+            } else if name == *src::CONST {
                 self.check_src_const(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == Symbol::new("adt") {
-            if name == Symbol::new("string_const") {
+        } else if dialect == *adt::_NAME {
+            if name == *adt::STRING_CONST {
                 self.check_string_const(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == Symbol::new("list") {
-            if name == Symbol::new("new") {
+        } else if dialect == *list::_NAME {
+            if name == *list::NEW {
                 self.check_list_new(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == Symbol::new("case") {
-            if name == Symbol::new("case") {
+        } else if dialect == *case::_NAME {
+            if name == *case::CASE {
                 self.check_case(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == Symbol::new("ability") {
-            if name == Symbol::new("perform") {
+        } else if dialect == *ability::_NAME {
+            if name == *ability::PERFORM {
                 self.check_ability_perform(op);
-            } else if name == Symbol::new("prompt") {
+            } else if name == *ability::PROMPT {
                 self.check_ability_prompt(op);
-            } else if name == Symbol::new("resume") {
+            } else if name == *ability::RESUME {
                 self.check_ability_resume(op);
-            } else if name == Symbol::new("abort") {
+            } else if name == *ability::ABORT {
                 self.check_ability_abort(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == Symbol::new("type") {
+        } else if dialect == *ty::_NAME {
             // Type declarations (struct, enum, ability) don't need type checking
-            if name == Symbol::new("struct")
-                || name == Symbol::new("enum")
-                || name == Symbol::new("ability")
-            {
+            if name == *ty::STRUCT || name == *ty::ENUM || name == *ty::ABILITY {
                 // No-op
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == Symbol::new("core") {
-            if name == Symbol::new("module") {
+        } else if dialect == *core::_NAME {
+            if name == *core::MODULE {
                 // Module is checked via check_module
-            } else if name == Symbol::new("unrealized_conversion_cast") {
+            } else if name == *core::UNREALIZED_CONVERSION_CAST {
                 // Pass through - assign fresh type var to result
                 self.check_unknown_op(op);
             } else {
@@ -626,8 +634,7 @@ impl<'db> TypeChecker<'db> {
             // Look for case.arm operations in the region
             for block in region.blocks(self.db).iter() {
                 for arm_op in block.operations(self.db).iter() {
-                    if arm_op.dialect(self.db) == Symbol::new("case")
-                        && arm_op.name(self.db) == Symbol::new("arm")
+                    if arm_op.dialect(self.db) == *case::_NAME && arm_op.name(self.db) == *case::ARM
                     {
                         // Extract handled abilities from the pattern region
                         let arm_regions = arm_op.regions(self.db);
@@ -665,19 +672,14 @@ impl<'db> TypeChecker<'db> {
         for block in pattern_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
                 // Check for pat.handler_suspend
-                if op.dialect(self.db) == Symbol::new("pat")
-                    && op.name(self.db) == Symbol::new("handler_suspend")
-                {
+                if op.dialect(self.db) == *pat::_NAME && op.name(self.db) == *pat::HANDLER_SUSPEND {
                     // Extract ability reference from attributes
                     let attrs = op.attributes(self.db);
                     if let Some(Attribute::SymbolRef(ability_path)) =
                         attrs.get(&Symbol::new("ability_ref"))
                     {
                         // Extract ability name from path
-                        let ability_name = ability_path
-                            .last()
-                            .copied()
-                            .unwrap_or_else(|| Symbol::new("unknown"));
+                        let ability_name = ability_path.last().copied().unwrap_or(*UNKNOWN);
 
                         let ability = AbilityRef::simple(ability_name);
                         if !handled.contains(&ability) {
@@ -708,10 +710,7 @@ impl<'db> TypeChecker<'db> {
             op.attributes(self.db).get(&Symbol::new("ability_ref"))
         {
             // Extract ability name from the path (last component)
-            let ability_name = ability_path
-                .last()
-                .copied()
-                .unwrap_or_else(|| Symbol::new("unknown"));
+            let ability_name = ability_path.last().copied().unwrap_or(*UNKNOWN);
 
             // Create ability reference (with no type params for now)
             // TODO: Extract type parameters from the ability definition
@@ -942,11 +941,8 @@ pub fn typecheck_module_per_function<'db>(
 
     let block = &blocks[0];
     let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
-    let func_sym = Symbol::new("func");
-    let func_name = Symbol::new("func");
-
     for op in block.operations(db).iter() {
-        if op.dialect(db) == func_sym && op.name(db) == func_name {
+        if op.dialect(db) == *func::_NAME && op.name(db) == *func::FUNC {
             // Validate type annotations for top-level functions
             if let Ok(func_op) = func::Func::from_operation(db, *op) {
                 validate_toplevel_function_types(db, &func_op);
