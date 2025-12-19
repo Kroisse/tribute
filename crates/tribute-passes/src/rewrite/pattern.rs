@@ -16,27 +16,48 @@ use super::result::RewriteResult;
 ///
 /// # Example
 ///
-/// ```ignore
-/// struct ResolveSrcVar {
-///     env: ModuleEnv,
-/// }
+/// ```
+/// # use salsa::Database;
+/// # use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
+/// # use tribute_trunk_ir::Operation;
+/// use tribute_passes::rewrite::{RewriteContext, RewritePattern, RewriteResult};
 ///
-/// impl RewritePattern for ResolveSrcVar {
+/// struct RenamePattern;
+///
+/// impl RewritePattern for RenamePattern {
 ///     fn match_and_rewrite<'db>(
 ///         &self,
-///         db: &'db dyn Database,
+///         db: &'db dyn salsa::Database,
 ///         op: &Operation<'db>,
-///         ctx: &mut RewriteContext<'db>,
+///         _ctx: &mut RewriteContext<'db>,
 ///     ) -> RewriteResult<'db> {
-///         // Check if this is a src.var operation
-///         if op.dialect(db).text(db) != "src" || op.name(db).text(db) != "var" {
+///         if op.dialect(db).text(db) != "test" || op.name(db).text(db) != "source" {
 ///             return RewriteResult::Unchanged;
 ///         }
-///
-///         // Perform the transformation...
+///         let new_op = op.modify(db).name_str("target").build();
 ///         RewriteResult::Replace(new_op)
 ///     }
 /// }
+/// # #[salsa::tracked]
+/// # fn make_op(db: &dyn salsa::Database) -> Operation<'_> {
+/// #     let path = PathId::new(db, std::path::PathBuf::from("test.trb"));
+/// #     let location = Location::new(path, Span::new(0, 0));
+/// #     Operation::of_name(db, location, "test.source").build()
+/// # }
+/// # #[salsa::tracked]
+/// # fn rewrite_once(db: &dyn salsa::Database, op: Operation<'_>) -> String {
+/// #     let mut ctx = RewriteContext::new();
+/// #     let result = RenamePattern.match_and_rewrite(db, &op, &mut ctx);
+/// #     match result {
+/// #         RewriteResult::Replace(new_op) => new_op.full_name(db),
+/// #         _ => "unchanged".to_string(),
+/// #     }
+/// # }
+/// # TributeDatabaseImpl::default().attach(|db| {
+/// #     let op = make_op(db);
+/// #     let result = rewrite_once(db, op);
+/// #     assert_eq!(result, "test.target");
+/// # });
 /// ```
 pub trait RewritePattern {
     /// Attempt to match and rewrite an operation.

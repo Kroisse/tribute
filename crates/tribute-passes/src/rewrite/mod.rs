@@ -14,32 +14,51 @@
 //!
 //! # Usage
 //!
-//! ```ignore
-//! // Define a pattern
-//! struct MyPattern;
+//! ```
+//! # use salsa::Database;
+//! # use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
+//! # use tribute_trunk_ir::{Block, Operation, Region, idvec};
+//! # use tribute_trunk_ir::dialect::core::Module;
+//! use tribute_passes::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
 //!
-//! impl<'db> RewritePattern<'db> for MyPattern {
-//!     fn match_and_rewrite(
+//! struct RenamePattern;
+//!
+//! impl RewritePattern for RenamePattern {
+//!     fn match_and_rewrite<'db>(
 //!         &self,
-//!         db: &'db dyn Database,
+//!         db: &'db dyn salsa::Database,
 //!         op: &Operation<'db>,
-//!         ctx: &mut RewriteContext<'db>,
+//!         _ctx: &mut RewriteContext<'db>,
 //!     ) -> RewriteResult<'db> {
-//!         if !op.matches(db, "src", "var") {
+//!         if op.dialect(db).text(db) != "test" || op.name(db).text(db) != "source" {
 //!             return RewriteResult::Unchanged;
 //!         }
-//!         // ... transform the operation ...
+//!         let new_op = op.modify(db).name_str("target").build();
 //!         RewriteResult::Replace(new_op)
 //!     }
 //! }
-//!
-//! // Apply patterns to a module
-//! let applicator = PatternApplicator::new()
-//!     .add_pattern(MyPattern)
-//!     .with_max_iterations(50);
-//!
-//! let result = applicator.apply(db, module);
-//! assert!(result.reached_fixpoint);
+//! # #[salsa::tracked]
+//! # fn make_module(db: &dyn salsa::Database) -> Module<'_> {
+//! #     let path = PathId::new(db, std::path::PathBuf::from("test.trb"));
+//! #     let location = Location::new(path, Span::new(0, 0));
+//! #     let op = Operation::of_name(db, location, "test.source").build();
+//! #     let block = Block::new(db, location, idvec![], idvec![op]);
+//! #     let region = Region::new(db, location, idvec![block]);
+//! #     Module::create(db, location, "test", region)
+//! # }
+//! # #[salsa::tracked]
+//! # fn apply_rename(db: &dyn salsa::Database, module: Module<'_>) -> bool {
+//! #     let applicator = PatternApplicator::new()
+//! #         .add_pattern(RenamePattern)
+//! #         .with_max_iterations(50);
+//! #     let result = applicator.apply(db, module);
+//! #     result.reached_fixpoint
+//! # }
+//! # TributeDatabaseImpl::default().attach(|db| {
+//! #     let module = make_module(db);
+//! let reached = apply_rename(db, module);
+//! assert!(reached);
+//! # });
 //! ```
 //!
 //! # Design Notes
