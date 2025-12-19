@@ -457,6 +457,34 @@ impl<'db> Resolver<'db> {
         }
     }
 
+    /// Mark a src.var operation as a resolved local binding.
+    fn mark_resolved_local(&self, op: Operation<'db>) -> Operation<'db> {
+        let mut attrs = op.attributes(self.db).clone();
+        attrs.insert(
+            Symbol::new(self.db, "resolved_local"),
+            Attribute::Bool(true),
+        );
+        Operation::new(
+            self.db,
+            op.location(self.db),
+            op.dialect(self.db),
+            op.name(self.db),
+            op.operands(self.db).clone(),
+            op.results(self.db).clone(),
+            attrs,
+            op.regions(self.db).clone(),
+            op.successors(self.db).clone(),
+        )
+    }
+
+    fn is_marked_resolved_local(&self, op: &Operation<'db>) -> bool {
+        let key = Symbol::new(self.db, "resolved_local");
+        matches!(
+            op.attributes(self.db).get(&key),
+            Some(Attribute::Bool(true)) | Some(Attribute::IntBits(1))
+        )
+    }
+
     /// Look up a name in local scopes (innermost first).
     fn lookup_local(&self, name: &str) -> Option<&LocalBinding<'db>> {
         for scope in self.local_scopes.iter().rev() {
@@ -687,7 +715,8 @@ impl<'db> Resolver<'db> {
                             dialect != "src" && dialect != "type"
                         });
 
-                    if self.report_unresolved && !is_already_resolved {
+                    let is_resolved_local = self.is_marked_resolved_local(&remapped_op);
+                    if self.report_unresolved && !is_already_resolved && !is_resolved_local {
                         self.emit_unresolved_var_diagnostic(&remapped_op);
                     }
                     vec![self.resolve_op_regions(&remapped_op)]
@@ -1070,7 +1099,7 @@ impl<'db> Resolver<'db> {
 
                     // Create new src.var with resolved type (keeps span for hover)
                     let new_op = src::var(self.db, location, resolved_ty, *sym);
-                    let new_operation = new_op.as_operation();
+                    let new_operation = self.mark_resolved_local(new_op.as_operation());
 
                     // Map old result to the actual bound value (not the new src.var's result)
                     // This ensures use sites get the correct value
@@ -1085,7 +1114,8 @@ impl<'db> Resolver<'db> {
                     // Keep src.var as is with resolved type; no value remapping yet
                     let resolved_ty = self.resolve_type(*ty);
                     let new_op = src::var(self.db, location, resolved_ty, *sym);
-                    return Some(vec![new_op.as_operation()]);
+                    let new_operation = self.mark_resolved_local(new_op.as_operation());
+                    return Some(vec![new_operation]);
                 }
             }
         }
@@ -1197,7 +1227,23 @@ impl<'db> Resolver<'db> {
 
         // Try to resolve the callee
         let binding = if path_segments.len() == 1 {
-            self.lookup_binding(path_segments[0].text(self.db))
+            let name = path_segments[0].text(self.db);
+            if let Some(local) = self.lookup_local(name) {
+                let callee = match local {
+                    LocalBinding::Parameter { value, .. }
+                    | LocalBinding::LetBinding { value, .. } => *value,
+                    LocalBinding::PatternBinding { .. } => return None,
+                };
+                let new_op = func::call_indirect(self.db, location, callee, args, result_ty);
+                let new_operation = new_op.as_operation();
+
+                let old_result = op.result(self.db, 0);
+                let new_result = new_operation.result(self.db, 0);
+                self.map_value(old_result, new_result);
+
+                return Some(new_operation);
+            }
+            self.lookup_binding(name)
         } else {
             let name = path_segments.last()?.text(self.db);
             let namespace = self.resolve_namespace(&path_segments[..path_segments.len() - 1])?;
