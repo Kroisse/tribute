@@ -96,7 +96,7 @@ impl<'db> Func<'db> {
         let region = Region::new(db, location, idvec![entry.build()]);
 
         let mut builder = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new(db, name)))
+            .attr("sym_name", Attribute::Symbol(Symbol::new(name)))
             .attr(
                 "type",
                 Attribute::Type(core::Func::with_effect(db, params, result, effect).as_type()),
@@ -111,8 +111,8 @@ impl<'db> Func<'db> {
     }
 
     /// Get the function name.
-    pub fn name(&self, db: &'db dyn salsa::Database) -> &'db str {
-        self.sym_name(db).text(db)
+    pub fn name(&self, db: &'db dyn salsa::Database) -> Symbol {
+        self.sym_name(db)
     }
 
     /// Get the function type.

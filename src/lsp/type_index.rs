@@ -82,8 +82,8 @@ impl<'db> TypeIndex<'db> {
         use trunk_ir::Attribute;
 
         let span = op.location(db).span;
-        let dialect = op.dialect(db).text(db);
-        let name = op.name(db).text(db);
+        let dialect = op.dialect(db);
+        let name = op.name(db);
 
         // Determine the kind based on operation type
         let kind = if dialect == "func" && name == "func" {
@@ -95,8 +95,8 @@ impl<'db> TypeIndex<'db> {
         // Special case for func.func: use the 'type' attribute since it has no results
         // and use 'name_span' if available for precise hover targeting
         if dialect == "func" && name == "func" {
-            let type_key = trunk_ir::Symbol::new(db, "type");
-            let name_span_key = trunk_ir::Symbol::new(db, "name_span");
+            let type_key = trunk_ir::Symbol::new("type");
+            let name_span_key = trunk_ir::Symbol::new("name_span");
 
             if let Some(Attribute::Type(func_ty)) = op.attributes(db).get(&type_key) {
                 // Use name_span if available, otherwise fall back to operation span

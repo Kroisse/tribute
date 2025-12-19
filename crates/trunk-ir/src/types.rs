@@ -18,15 +18,15 @@ pub trait DialectType<'db>: Sized {
 }
 
 /// Attribute map type alias.
-pub type Attrs<'db> = BTreeMap<Symbol<'db>, Attribute<'db>>;
+pub type Attrs<'db> = BTreeMap<Symbol, Attribute<'db>>;
 
 /// IR type representation.
 ///
 /// All types are dialect-defined with a `dialect.name` naming convention.
 #[salsa::interned(debug)]
 pub struct Type<'db> {
-    pub dialect: Symbol<'db>,
-    pub name: Symbol<'db>,
+    pub dialect: Symbol,
+    pub name: Symbol,
     #[returns(deref)]
     pub params: IdVec<Type<'db>>,
     #[returns(ref)]
@@ -36,7 +36,7 @@ pub struct Type<'db> {
 impl<'db> Type<'db> {
     /// Check if this type matches the given dialect and name.
     pub fn is_dialect(&self, db: &'db dyn salsa::Database, dialect: &str, name: &str) -> bool {
-        self.dialect(db).text(db) == dialect && self.name(db).text(db) == name
+        self.dialect(db) == Symbol::new(dialect) && self.name(db) == Symbol::new(name)
     }
 
     /// Check if this is a function type (`core.func`).
@@ -79,7 +79,7 @@ impl<'db> Type<'db> {
 
     /// Get an attribute by key.
     pub fn get_attr(&self, db: &'db dyn salsa::Database, key: &str) -> Option<&Attribute<'db>> {
-        self.attrs(db).get(&Symbol::new(db, key))
+        self.attrs(db).get(&Symbol::new(key))
     }
 }
 
@@ -97,9 +97,9 @@ pub enum Attribute<'db> {
     Bytes(Vec<u8>),
     Type(Type<'db>),
     /// Single interned symbol (e.g., "foo").
-    Symbol(Symbol<'db>),
+    Symbol(Symbol),
     /// Symbol reference path (e.g., ["module", "func_name"])
-    SymbolRef(IdVec<Symbol<'db>>),
+    SymbolRef(IdVec<Symbol>),
     /// List of attributes (for arrays of values like switch cases).
     List(Vec<Attribute<'db>>),
     /// Source span (for tracking source locations in attributes).

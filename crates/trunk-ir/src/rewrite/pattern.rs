@@ -31,7 +31,7 @@ use super::result::RewriteResult;
 ///         op: &Operation<'db>,
 ///         _ctx: &mut RewriteContext<'db>,
 ///     ) -> RewriteResult<'db> {
-///         if op.dialect(db).text(db) != "test" || op.name(db).text(db) != "source" {
+///         if op.dialect(db) != "test" || op.name(db) != "source" {
 ///             return RewriteResult::Unchanged;
 ///         }
 ///         let new_op = op.modify(db).name_str("target").build();
@@ -91,10 +91,10 @@ pub trait OperationMatcher {
 
 impl<'db> OperationMatcher for Operation<'db> {
     fn matches(&self, db: &dyn salsa::Database, dialect: &str, name: &str) -> bool {
-        self.dialect(db).text(db) == dialect && self.name(db).text(db) == name
+        self.dialect(db) == dialect && self.name(db) == name
     }
 
     fn is_dialect(&self, db: &dyn salsa::Database, dialect: &str) -> bool {
-        self.dialect(db).text(db) == dialect
+        self.dialect(db) == dialect
     }
 }

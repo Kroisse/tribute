@@ -33,9 +33,9 @@ pub struct MethodInfo<'db> {
     /// The type this method belongs to (e.g., `List(a)`)
     pub receiver_type: Type<'db>,
     /// The method name (e.g., "len", "map")
-    pub name: Symbol<'db>,
+    pub name: Symbol,
     /// The full function path to call
-    pub func_path: IdVec<Symbol<'db>>,
+    pub func_path: IdVec<Symbol>,
     /// The function type
     pub func_type: Type<'db>,
 }
@@ -46,7 +46,7 @@ pub struct MethodInfo<'db> {
 #[derive(Debug, Default)]
 pub struct MethodRegistry<'db> {
     /// Methods indexed by (type_dialect, type_name, method_name)
-    methods: HashMap<(String, String, String), MethodInfo<'db>>,
+    methods: HashMap<(Symbol, Symbol, Symbol), MethodInfo<'db>>,
 }
 
 impl<'db> MethodRegistry<'db> {
@@ -58,9 +58,9 @@ impl<'db> MethodRegistry<'db> {
     /// Register a method for a type.
     pub fn register(&mut self, db: &'db dyn salsa::Database, info: MethodInfo<'db>) {
         let key = (
-            info.receiver_type.dialect(db).text(db).to_string(),
-            info.receiver_type.name(db).text(db).to_string(),
-            info.name.text(db).to_string(),
+            info.receiver_type.dialect(db),
+            info.receiver_type.name(db),
+            info.name,
         );
         self.methods.insert(key, info);
     }
@@ -70,15 +70,11 @@ impl<'db> MethodRegistry<'db> {
         &self,
         db: &'db dyn salsa::Database,
         receiver_type: Type<'db>,
-        method_name: &str,
+        method_name: Symbol,
     ) -> Option<&MethodInfo<'db>> {
-        let dialect = receiver_type.dialect(db).text(db);
-        let type_name = receiver_type.name(db).text(db);
-        let key = (
-            dialect.to_string(),
-            type_name.to_string(),
-            method_name.to_string(),
-        );
+        let dialect = receiver_type.dialect(db);
+        let type_name = receiver_type.name(db);
+        let key = (dialect, type_name, method_name);
         self.methods.get(&key)
     }
 }
@@ -96,8 +92,8 @@ pub fn builtin_methods<'db>(_db: &'db dyn salsa::Database) -> MethodRegistry<'db
     // let mut registry = MethodRegistry::new();
     // registry.register(db, MethodInfo {
     //     receiver_type: list_type,
-    //     name: Symbol::new(db, "len"),
-    //     func_path: idvec![Symbol::new(db, "List"), Symbol::new(db, "len")],
+    //     name: Symbol::new("len"),
+    //     func_path: idvec![Symbol::new("List"), Symbol::new("len")],
     //     func_type: ...,
     // });
     // registry
@@ -182,22 +178,19 @@ impl<'db> TdnrResolver<'db> {
         // First, remap operands
         let remapped_op = self.remap_operands(op);
 
-        let dialect = remapped_op.dialect(self.db).text(self.db);
-        let op_name = remapped_op.name(self.db).text(self.db);
+        let dialect = remapped_op.dialect(self.db);
+        let op_name = remapped_op.name(self.db);
 
-        match (dialect, op_name) {
-            ("src", "call") => {
-                if let Some(resolved) = self.try_resolve_method_call(&remapped_op) {
-                    vec![resolved]
-                } else {
-                    // Still unresolved - keep as is (will be an error later)
-                    vec![self.resolve_op_regions(&remapped_op)]
-                }
-            }
-            _ => {
-                // Recursively process regions
+        if dialect == "src" && op_name == "call" {
+            if let Some(resolved) = self.try_resolve_method_call(&remapped_op) {
+                vec![resolved]
+            } else {
+                // Still unresolved - keep as is (will be an error later)
                 vec![self.resolve_op_regions(&remapped_op)]
             }
+        } else {
+            // Recursively process regions
+            vec![self.resolve_op_regions(&remapped_op)]
         }
     }
 
@@ -246,7 +239,7 @@ impl<'db> TdnrResolver<'db> {
 
         // Get method name from attributes
         let attrs = op.attributes(self.db);
-        let name_key = Symbol::new(self.db, "name");
+        let name_key = Symbol::new("name");
         let Attribute::SymbolRef(name_segments) = attrs.get(&name_key)? else {
             return None;
         };
@@ -260,7 +253,7 @@ impl<'db> TdnrResolver<'db> {
             return None; // Already qualified, shouldn't be here
         }
 
-        let method_name = name_segments[0].text(self.db);
+        let method_name = name_segments[0];
         let receiver = operands[0];
 
         // Get the receiver's type

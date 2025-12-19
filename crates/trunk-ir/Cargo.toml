@@ -7,6 +7,8 @@ description = "TrunkIR: A multi-level dialect IR system"
 
 [dependencies]
 inventory.workspace = true
+lasso.workspace = true
+parking_lot.workspace = true
 paste.workspace = true
 salsa.workspace = true
 serde.workspace = true

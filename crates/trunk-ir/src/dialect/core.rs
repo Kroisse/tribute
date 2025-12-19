@@ -66,17 +66,17 @@ impl<'db> Module<'db> {
     pub fn create(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &str,
+        name: Symbol,
         body: Region<'db>,
     ) -> Self {
-        module(db, location, Symbol::new(db, name), body)
+        module(db, location, name, body)
     }
 
     /// Build a module with a closure that constructs the top-level block.
     pub fn build(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &str,
+        name: Symbol,
         f: impl FnOnce(&mut BlockBuilder<'db>),
     ) -> Self {
         let mut top = BlockBuilder::new(db, location);
@@ -86,8 +86,8 @@ impl<'db> Module<'db> {
     }
 
     /// Get the module name.
-    pub fn name(&self, db: &'db dyn salsa::Database) -> &'db str {
-        self.sym_name(db).text(db)
+    pub fn name(&self, db: &'db dyn salsa::Database) -> Symbol {
+        self.sym_name(db)
     }
 }
 
@@ -121,8 +121,8 @@ impl<'db, const BITS: u16> DialectType<'db> for I<'db, BITS> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        let expected_name = format!("i{BITS}");
-        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == expected_name {
+        if ty.dialect(db) == Symbol::new("core") && ty.name(db) == Symbol::new(&format!("i{BITS}"))
+        {
             Some(Self(ty))
         } else {
             None
@@ -145,8 +145,8 @@ pub type I64<'db> = I<'db, 64>;
 fn i(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     Type::new(
         db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, format!("i{bits}")),
+        Symbol::new("core"),
+        Symbol::new(&format!("i{bits}")),
         IdVec::new(),
         BTreeMap::new(),
     )
@@ -180,8 +180,8 @@ impl<'db, const BITS: u16> DialectType<'db> for F<'db, BITS> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        let expected_name = format!("f{BITS}");
-        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == expected_name {
+        if ty.dialect(db) == Symbol::new("core") && ty.name(db) == Symbol::new(&format!("f{BITS}"))
+        {
             Some(Self(ty))
         } else {
             None
@@ -198,8 +198,8 @@ pub type F64<'db> = F<'db, 64>;
 fn f(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     Type::new(
         db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, format!("f{bits}")),
+        Symbol::new("core"),
+        Symbol::new(&format!("f{bits}")),
         IdVec::new(),
         BTreeMap::new(),
     )
@@ -230,13 +230,13 @@ impl<'db> Func<'db> {
         all_types.push(result);
         all_types.extend(params.iter().copied());
         let attrs = match effect {
-            Some(eff) => BTreeMap::from([(Symbol::new(db, "effect"), Attribute::Type(eff))]),
+            Some(eff) => BTreeMap::from([(Symbol::new("effect"), Attribute::Type(eff))]),
             None => BTreeMap::new(),
         };
         Self(Type::new(
             db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "func"),
+            Symbol::new("core"),
+            Symbol::new("func"),
             all_types,
             attrs,
         ))
@@ -274,7 +274,7 @@ impl<'db> DialectType<'db> for Func<'db> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == "func" {
+        if ty.dialect(db) == Symbol::new("core") && ty.name(db) == Symbol::new("func") {
             Some(Self(ty))
         } else {
             None
@@ -303,8 +303,8 @@ impl<'db> EffectRowType<'db> {
     pub fn empty(db: &'db dyn salsa::Database) -> Self {
         Self(Type::new(
             db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "effect_row"),
+            Symbol::new("core"),
+            Symbol::new("effect_row"),
             IdVec::new(),
             BTreeMap::new(),
         ))
@@ -314,8 +314,8 @@ impl<'db> EffectRowType<'db> {
     pub fn concrete(db: &'db dyn salsa::Database, abilities: IdVec<Type<'db>>) -> Self {
         Self(Type::new(
             db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "effect_row"),
+            Symbol::new("core"),
+            Symbol::new("effect_row"),
             abilities,
             BTreeMap::new(),
         ))
@@ -329,10 +329,10 @@ impl<'db> EffectRowType<'db> {
     ) -> Self {
         Self(Type::new(
             db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "effect_row"),
+            Symbol::new("core"),
+            Symbol::new("effect_row"),
             abilities,
-            BTreeMap::from([(Symbol::new(db, "tail"), Attribute::IntBits(tail_var_id))]),
+            BTreeMap::from([(Symbol::new("tail"), Attribute::IntBits(tail_var_id))]),
         ))
     }
 
@@ -373,7 +373,7 @@ impl<'db> DialectType<'db> for EffectRowType<'db> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == "effect_row" {
+        if ty.dialect(db) == Symbol::new("core") && ty.name(db) == Symbol::new("effect_row") {
             Some(Self(ty))
         } else {
             None
@@ -394,33 +394,33 @@ pub struct AbilityRefType<'db>(Type<'db>);
 
 impl<'db> AbilityRefType<'db> {
     /// Create an ability type with no type parameters.
-    pub fn simple(db: &'db dyn salsa::Database, name: Symbol<'db>) -> Self {
+    pub fn simple(db: &'db dyn salsa::Database, name: Symbol) -> Self {
         Self(Type::new(
             db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "ability_ref"),
+            Symbol::new("core"),
+            Symbol::new("ability_ref"),
             IdVec::new(),
-            BTreeMap::from([(Symbol::new(db, "name"), Attribute::Symbol(name))]),
+            BTreeMap::from([(Symbol::new("name"), Attribute::Symbol(name))]),
         ))
     }
 
     /// Create an ability type with type parameters.
     pub fn with_params(
         db: &'db dyn salsa::Database,
-        name: Symbol<'db>,
+        name: Symbol,
         params: IdVec<Type<'db>>,
     ) -> Self {
         Self(Type::new(
             db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "ability_ref"),
+            Symbol::new("core"),
+            Symbol::new("ability_ref"),
             params,
-            BTreeMap::from([(Symbol::new(db, "name"), Attribute::Symbol(name))]),
+            BTreeMap::from([(Symbol::new("name"), Attribute::Symbol(name))]),
         ))
     }
 
     /// Get the ability name.
-    pub fn name(&self, db: &'db dyn salsa::Database) -> Option<Symbol<'db>> {
+    pub fn name(&self, db: &'db dyn salsa::Database) -> Option<Symbol> {
         match self.0.get_attr(db, "name") {
             Some(Attribute::Symbol(sym)) => Some(*sym),
             _ => None,
@@ -446,7 +446,7 @@ impl<'db> DialectType<'db> for AbilityRefType<'db> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == "ability_ref" {
+        if ty.dialect(db) == Symbol::new("core") && ty.name(db) == Symbol::new("ability_ref") {
             Some(Self(ty))
         } else {
             None
@@ -478,10 +478,11 @@ inventory::submit! { Printable::implement("core", "ptr", |_, _, f| f.write_str("
 // Integer types: i1 -> "Bool", i64 -> "Int", i{N} -> "I{N}"
 inventory::submit! {
     Printable::implement_prefix("core", "i", |db, ty, f| {
-        match ty.name(db).text(db) {
+        let name = ty.name(db).to_string();
+        match name.as_str() {
             "i1" => f.write_str("Bool"),
             "i64" => f.write_str("Int"),
-            name => write!(f, "I{}", &name[1..]),
+            _ => write!(f, "I{}", &name[1..]),
         }
     })
 }
@@ -489,9 +490,10 @@ inventory::submit! {
 // Floating-point types: f64 -> "Float", f{N} -> "F{N}"
 inventory::submit! {
     Printable::implement_prefix("core", "f", |db, ty, f| {
-        match ty.name(db).text(db) {
+        let name = ty.name(db).to_string();
+        match name.as_str() {
             "f64" => f.write_str("Float"),
-            name => write!(f, "F{}", &name[1..]),
+            _ => write!(f, "F{}", &name[1..]),
         }
     })
 }
@@ -646,10 +648,13 @@ inventory::submit! {
         };
 
         let params = ability.params(db);
+        // Get name string outside of lock to avoid nested lock when printing params
+        let name_str = name.to_string();
+
         if params.is_empty() {
-            f.write_str(name.text(db))
+            f.write_str(&name_str)
         } else {
-            f.write_str(name.text(db))?;
+            f.write_str(&name_str)?;
             f.write_char('(')?;
             for (i, &p) in params.iter().enumerate() {
                 if i > 0 {

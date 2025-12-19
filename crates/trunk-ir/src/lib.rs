@@ -37,3 +37,6 @@ pub use ops::strip_raw_prefix;
 /// Small vector for values tracked by Salsa framework.
 pub type IdVec<T> = smallvec::SmallVec<[T; 2]>;
 pub use smallvec::smallvec as idvec;
+
+/// Small vector for symbols.
+pub type SymbolVec = smallvec::SmallVec<[Symbol; 4]>;

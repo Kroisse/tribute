@@ -160,7 +160,7 @@ impl<'db> Arm<'db> {
         body: crate::Region<'db>,
     ) -> Self {
         use crate::{IdVec, Symbol};
-        let variant_path = IdVec::from(vec![Symbol::new(db, variant_name)]);
+        let variant_path = IdVec::from(vec![Symbol::new(variant_name)]);
         let fields = pattern::empty_region(db, location);
         let pattern_region = pattern::variant_region(db, location, variant_path, fields);
         arm(db, location, pattern_region, body)

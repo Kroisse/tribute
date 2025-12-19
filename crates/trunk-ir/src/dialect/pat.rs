@@ -170,7 +170,7 @@ pub mod helpers {
         location: Location<'db>,
         name: &str,
     ) -> Region<'db> {
-        let op = bind(db, location, Symbol::new(db, name));
+        let op = bind(db, location, Symbol::new(name));
         single_op_region(db, location, op.as_operation())
     }
 
@@ -208,7 +208,7 @@ pub mod helpers {
     pub fn variant_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        variant_path: IdVec<Symbol<'db>>,
+        variant_path: IdVec<Symbol>,
         fields: Region<'db>,
     ) -> Region<'db> {
         let op = variant(db, location, variant_path, fields);
@@ -239,7 +239,7 @@ pub mod helpers {
     pub fn list_rest_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        rest_name: Symbol<'db>,
+        rest_name: Symbol,
         head: Region<'db>,
     ) -> Region<'db> {
         let op = list_rest(db, location, rest_name, head);
@@ -281,10 +281,10 @@ pub mod helpers {
     pub fn handler_suspend_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        ability_ref: IdVec<Symbol<'db>>,
-        op_name: Symbol<'db>,
+        ability_ref: IdVec<Symbol>,
+        op_name: Symbol,
         args_pattern: Region<'db>,
-        continuation_name: Symbol<'db>,
+        continuation_name: Symbol,
     ) -> Region<'db> {
         let op = handler_suspend(
             db,

@@ -1,6 +1,10 @@
 //! Core IR structures.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
+
+use lasso::{Rodeo, Spur};
+use parking_lot::RwLock;
 
 use crate::Location;
 use crate::{Attribute, IdVec, Type};
@@ -9,12 +13,69 @@ use crate::{Attribute, IdVec, Type};
 // Interned Types
 // ============================================================================
 
+/// Global string interner for symbols.
+static INTERNER: LazyLock<RwLock<Rodeo>> = LazyLock::new(|| RwLock::new(Rodeo::default()));
+
 /// Interned symbol for efficient comparison of names (functions, variables, fields, etc.)
-#[salsa::interned(debug)]
-#[derive(Ord, PartialOrd)]
-pub struct Symbol<'db> {
-    #[returns(deref)]
-    pub text: String,
+///
+/// Uses lasso for string interning with 4-byte Spur keys.
+/// Significantly smaller than Salsa's interned types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
+pub struct Symbol(Spur);
+
+impl Symbol {
+    /// Intern a string and return its symbol.
+    pub fn new(text: &str) -> Self {
+        Symbol(INTERNER.write().get_or_intern(text))
+    }
+
+    /// Access the symbol's text with zero-copy (private - internal use only).
+    ///
+    /// SAFETY: Do NOT call any Symbol methods (to_string, Display, ==, etc.)
+    /// from within the closure, as this will cause a deadlock due to the RwLock.
+    fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        let interner = INTERNER.read();
+        let text = interner.resolve(&self.0);
+        f(text)
+    }
+}
+
+impl From<&str> for Symbol {
+    fn from(text: &str) -> Self {
+        Symbol::new(text)
+    }
+}
+
+// Convenient comparison with &str
+impl PartialEq<str> for Symbol {
+    fn eq(&self, other: &str) -> bool {
+        self.with_str(|s| s == other)
+    }
+}
+
+impl PartialEq<&str> for Symbol {
+    fn eq(&self, other: &&str) -> bool {
+        self.with_str(|s| s == *other)
+    }
+}
+
+impl PartialEq<Symbol> for str {
+    fn eq(&self, other: &Symbol) -> bool {
+        other.with_str(|s| s == self)
+    }
+}
+
+impl PartialEq<Symbol> for &str {
+    fn eq(&self, other: &Symbol) -> bool {
+        other.with_str(|s| s == *self)
+    }
+}
+
+// For Display (uses with_str for zero-copy)
+impl std::fmt::Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.with_str(|s| write!(f, "{}", s))
+    }
 }
 
 // ============================================================================
@@ -44,15 +105,15 @@ pub struct Value<'db> {
 pub struct Operation<'db> {
     pub location: Location<'db>,
     /// Dialect name (e.g., "arith", "func").
-    pub dialect: Symbol<'db>,
+    pub dialect: Symbol,
     /// Operation name within the dialect (e.g., "add", "call").
-    pub name: Symbol<'db>,
+    pub name: Symbol,
     #[returns(ref)]
     pub operands: IdVec<Value<'db>>,
     #[returns(ref)]
     pub results: IdVec<Type<'db>>,
     #[returns(ref)]
-    pub attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
+    pub attributes: BTreeMap<Symbol, Attribute<'db>>,
     #[tracked]
     #[returns(ref)]
     pub regions: IdVec<Region<'db>>,
@@ -65,8 +126,8 @@ impl<'db> Operation<'db> {
     pub fn of(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        dialect: Symbol<'db>,
-        name: Symbol<'db>,
+        dialect: Symbol,
+        name: Symbol,
     ) -> OperationBuilder<'db> {
         OperationBuilder::new(db, location, dialect, name)
     }
@@ -80,14 +141,14 @@ impl<'db> Operation<'db> {
         let (dialect, name) = full_name
             .split_once('.')
             .expect("invalid operation name: expected 'dialect.operation'");
-        let dialect = Symbol::new(db, dialect);
-        let name = Symbol::new(db, name);
+        let dialect = Symbol::new(dialect);
+        let name = Symbol::new(name);
         Self::of(db, location, dialect, name)
     }
 
     /// Format as "dialect.operation".
     pub fn full_name(&self, db: &'db dyn salsa::Database) -> String {
-        format!("{}.{}", self.dialect(db).text(db), self.name(db).text(db))
+        format!("{}.{}", self.dialect(db), self.name(db))
     }
 
     pub fn result(self, db: &'db dyn salsa::Database, index: usize) -> Value<'db> {
@@ -140,11 +201,11 @@ pub struct Region<'db> {
 pub struct OperationBuilder<'db> {
     db: &'db dyn salsa::Database,
     location: Location<'db>,
-    dialect: Symbol<'db>,
-    name: Symbol<'db>,
+    dialect: Symbol,
+    name: Symbol,
     operands: IdVec<Value<'db>>,
     results: IdVec<Type<'db>>,
-    attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
+    attributes: BTreeMap<Symbol, Attribute<'db>>,
     regions: IdVec<Region<'db>>,
     successors: IdVec<Block<'db>>,
 }
@@ -153,8 +214,8 @@ impl<'db> OperationBuilder<'db> {
     pub fn new(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        dialect: Symbol<'db>,
-        name: Symbol<'db>,
+        dialect: Symbol,
+        name: Symbol,
     ) -> Self {
         Self {
             db,
@@ -174,23 +235,23 @@ impl<'db> OperationBuilder<'db> {
         self
     }
 
-    pub fn dialect(mut self, dialect: Symbol<'db>) -> Self {
+    pub fn dialect(mut self, dialect: Symbol) -> Self {
         self.dialect = dialect;
         self
     }
 
     pub fn dialect_str(mut self, dialect: &str) -> Self {
-        self.dialect = Symbol::new(self.db, dialect);
+        self.dialect = Symbol::new(dialect);
         self
     }
 
-    pub fn name(mut self, name: Symbol<'db>) -> Self {
+    pub fn name(mut self, name: Symbol) -> Self {
         self.name = name;
         self
     }
 
     pub fn name_str(mut self, name: &str) -> Self {
-        self.name = Symbol::new(self.db, name);
+        self.name = Symbol::new(name);
         self
     }
 
@@ -210,7 +271,7 @@ impl<'db> OperationBuilder<'db> {
     }
 
     pub fn attr(mut self, key: &str, value: Attribute<'db>) -> Self {
-        let sym = Symbol::new(self.db, key);
+        let sym = Symbol::new(key);
         self.attributes.insert(sym, value);
         self
     }
@@ -320,7 +381,7 @@ mod tests {
             },
         );
 
-        core::Module::build(db, location, "main", |top| {
+        core::Module::build(db, location, "main".into(), |top| {
             top.op(main_func);
         })
         .as_operation()

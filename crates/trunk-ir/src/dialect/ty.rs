@@ -46,8 +46,8 @@ dialect! {
 pub fn var<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> Type<'db> {
     Type::new(
         db,
-        Symbol::new(db, "type"),
-        Symbol::new(db, "var"),
+        Symbol::new("type"),
+        Symbol::new("var"),
         IdVec::new(),
         attrs,
     )
@@ -57,7 +57,7 @@ pub fn var<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> Type<'db> {
 pub fn var_with_id<'db>(db: &'db dyn salsa::Database, id: u64) -> Type<'db> {
     var(
         db,
-        BTreeMap::from([(Symbol::new(db, "id"), Attribute::IntBits(id))]),
+        BTreeMap::from([(Symbol::new("id"), Attribute::IntBits(id))]),
     )
 }
 
@@ -67,8 +67,8 @@ pub fn var_with_id<'db>(db: &'db dyn salsa::Database, id: u64) -> Type<'db> {
 pub fn error<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> Type<'db> {
     Type::new(
         db,
-        Symbol::new(db, "type"),
-        Symbol::new(db, "error"),
+        Symbol::new("type"),
+        Symbol::new("error"),
         IdVec::new(),
         attrs,
     )

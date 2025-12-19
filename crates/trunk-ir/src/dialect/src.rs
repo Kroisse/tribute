@@ -85,7 +85,7 @@ pub fn unresolved_type<'db>(
     params: IdVec<crate::Type<'db>>,
 ) -> crate::Type<'db> {
     // Use the macro-generated Type struct
-    *Type::new(db, params, Symbol::new(db, name))
+    *Type::new(db, params, Symbol::new(name))
 }
 
 // === Printable interface registrations ===
@@ -102,10 +102,10 @@ inventory::submit! {
             return f.write_str("?unresolved");
         };
 
-        let name_text = name.text(db);
         let params = ty.params(db);
 
         // Capitalize first letter
+        let name_text = name.to_string();
         let mut chars = name_text.chars();
         if let Some(c) = chars.next() {
             for ch in c.to_uppercase() {

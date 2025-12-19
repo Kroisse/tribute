@@ -19,7 +19,8 @@
 //! // For prefix matching (e.g., int1, int32, int64)
 //! inventory::submit! {
 //!     Printable::implement_prefix("foobar", "int", |db, ty, f| {
-//!         let width = &ty.name(db).text(db)[3..];
+//!         let name = ty.name(db).to_string();
+//!         let width = &name[3..];
 //!         write!(f, "Int{width}")
 //!     })
 //! }
@@ -27,8 +28,8 @@
 //! # let db = TestDatabase::default();
 //! # let some_type = Type::new(
 //! #     &db,
-//! #     Symbol::new(&db, "foobar"),
-//! #     Symbol::new(&db, "lorem"),
+//! #     Symbol::new("foobar"),
+//! #     Symbol::new("lorem"),
 //! #     IdVec::new(),
 //! #     BTreeMap::new(),
 //! # );
@@ -43,7 +44,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Formatter, Write};
 use std::sync::LazyLock;
 
-use crate::Type;
+use crate::{Type, ir::Symbol};
 
 /// Type name matching strategy for interface registration.
 #[derive(Clone, Copy, Debug)]
@@ -74,9 +75,10 @@ inventory::collect!(PrintableRegistration);
 /// Internal registry built from inventory at first access.
 struct PrintableRegistry {
     /// Exact match lookup: (dialect, name) -> PrintFn
-    exact: HashMap<(&'static str, &'static str), PrintFn>,
-    /// Prefix match entries: (dialect, prefix, PrintFn)
-    prefix: Vec<(&'static str, &'static str, PrintFn)>,
+    exact: HashMap<(Symbol, Symbol), PrintFn>,
+    /// Prefix match entries: (dialect, prefix_str, PrintFn)
+    /// prefix is stored as String to avoid repeated to_string() in lookup
+    prefix: Vec<(Symbol, String, PrintFn)>,
 }
 
 impl PrintableRegistry {
@@ -87,16 +89,20 @@ impl PrintableRegistry {
         }
     }
 
-    fn lookup(&self, dialect: &str, name: &str) -> Option<PrintFn> {
+    fn lookup(&self, dialect: Symbol, name: Symbol) -> Option<PrintFn> {
         // Try exact match first
         if let Some(&print_fn) = self.exact.get(&(dialect, name)) {
             return Some(print_fn);
         }
 
         // Fall back to prefix matching
-        for &(d, prefix, print_fn) in &self.prefix {
-            if d == dialect && name.starts_with(prefix) {
-                return Some(print_fn);
+        for (d, prefix_str, print_fn) in &self.prefix {
+            if *d == dialect {
+                // prefix is already a String, so we only need one to_string()
+                let name_str = name.to_string();
+                if name_str.starts_with(prefix_str) {
+                    return Some(*print_fn);
+                }
             }
         }
 
@@ -111,10 +117,15 @@ static REGISTRY: LazyLock<PrintableRegistry> = LazyLock::new(|| {
     for reg in inventory::iter::<PrintableRegistration> {
         match reg.matcher {
             TypeMatcher::Exact(name) => {
-                registry.exact.insert((reg.dialect, name), reg.print);
+                registry
+                    .exact
+                    .insert((Symbol::new(reg.dialect), Symbol::new(name)), reg.print);
             }
             TypeMatcher::Prefix(prefix) => {
-                registry.prefix.push((reg.dialect, prefix, reg.print));
+                // Store prefix as String to avoid repeated to_string() in lookup
+                registry
+                    .prefix
+                    .push((Symbol::new(reg.dialect), prefix.to_string(), reg.print));
             }
         }
     }
@@ -159,7 +170,8 @@ impl Printable {
     /// # use trunk_ir::type_interface::Printable;
     /// inventory::submit! {
     ///     Printable::implement_prefix("demo", "t", |db, ty, f| {
-    ///         let suffix = &ty.name(db).text(db)[1..];
+    ///         let name = ty.name(db).to_string();
+    ///         let suffix = &name[1..];
     ///         write!(f, "T{suffix}")
     ///     })
     /// }
@@ -185,8 +197,8 @@ impl Printable {
         ty: Type<'_>,
         f: &mut Formatter<'_>,
     ) -> fmt::Result {
-        let dialect = ty.dialect(db).text(db);
-        let name = ty.name(db).text(db);
+        let dialect = ty.dialect(db);
+        let name = ty.name(db);
 
         if let Some(print_fn) = REGISTRY.lookup(dialect, name) {
             print_fn(db, ty, f)
@@ -199,8 +211,8 @@ impl Printable {
     /// Fallback printing for unregistered types.
     fn print_fallback(
         db: &dyn salsa::Database,
-        dialect: &str,
-        name: &str,
+        dialect: Symbol,
+        name: Symbol,
         ty: Type<'_>,
         f: &mut Formatter<'_>,
     ) -> fmt::Result {

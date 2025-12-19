@@ -46,7 +46,7 @@ use salsa::Accumulator;
 use tribute_core::SourceFile;
 use trunk_ir::Span;
 use trunk_ir::dialect::core::Module;
-use trunk_ir::{Block, IdVec, Region};
+use trunk_ir::{Block, IdVec, Region, Symbol};
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use crate::resolve::{Resolver, build_env};
@@ -170,7 +170,7 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> M
         // Parse failure - return empty module
         let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
         let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
-        return Module::build(db, location, "main", |_| {});
+        return Module::build(db, location, Symbol::new("main"), |_| {});
     };
 
     let user_module = lower_cst(db, source, cst);

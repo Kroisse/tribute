@@ -37,7 +37,7 @@ impl RowVar {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AbilityRef<'db> {
     /// The ability name (e.g., "State", "Console").
-    pub name: Symbol<'db>,
+    pub name: Symbol,
     /// Type parameters (e.g., `Int` in `State(Int)`).
     pub params: IdVec<Type<'db>>,
 }
@@ -60,12 +60,12 @@ impl<'db> Ord for AbilityRef<'db> {
 
 impl<'db> AbilityRef<'db> {
     /// Create a new ability reference.
-    pub fn new(name: Symbol<'db>, params: IdVec<Type<'db>>) -> Self {
+    pub fn new(name: Symbol, params: IdVec<Type<'db>>) -> Self {
         Self { name, params }
     }
 
     /// Create a simple ability reference with no type parameters.
-    pub fn simple(name: Symbol<'db>) -> Self {
+    pub fn simple(name: Symbol) -> Self {
         Self {
             name,
             params: IdVec::new(),
