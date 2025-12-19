@@ -5,19 +5,38 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! // In dialect/core.rs - register how to print "nil" type
+//! ```
+//! # use tribute_core::TributeDatabaseImpl;
+//! # use std::collections::BTreeMap;
+//! # use tribute_trunk_ir::{IdVec, Symbol, Type};
+//! # use tribute_trunk_ir::type_interface::Printable;
+//! #
+//! // In dialect/core.rs - register how to print "Lorem" type
 //! inventory::submit! {
-//!     Printable::implement("core", "nil", |_, _, f| write!(f, "()"))
+//!     Printable::implement("foobar", "lorem", |_, _, f| write!(f, "Lorem"))
 //! }
 //!
-//! // For prefix matching (e.g., i1, i32, i64)
+//! // For prefix matching (e.g., int1, int32, int64)
 //! inventory::submit! {
-//!     Printable::implement_prefix("core", "i", |db, ty, f| { ... })
+//!     Printable::implement_prefix("foobar", "int", |db, ty, f| {
+//!         let width = &ty.name(db).text(db)[3..];
+//!         write!(f, "Int{width}")
+//!     })
 //! }
 //!
+//! # let db = TributeDatabaseImpl::default();
+//! # let some_type = Type::new(
+//! #     &db,
+//! #     Symbol::new(&db, "foobar"),
+//! #     Symbol::new(&db, "lorem"),
+//! #     IdVec::new(),
+//! #     BTreeMap::new(),
+//! # );
 //! // Usage
-//! Printable::print_type(db, some_type, &mut formatter)?;
+//! # let printed =
+//! tribute_trunk_ir::type_interface::print_type(&db, some_type)
+//! # ;
+//! # assert_eq!(printed, "Lorem");
 //! ```
 
 use std::collections::HashMap;
