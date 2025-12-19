@@ -49,7 +49,20 @@ impl<'db> Func<'db> {
         result: Type<'db>,
         f: impl FnOnce(&mut BlockBuilder<'db>),
     ) -> Self {
-        Self::build_with_name_span(db, location, name, None, params, result, f)
+        Self::build_with_name_span_and_effect(db, location, name, None, params, result, None, f)
+    }
+
+    /// Build a function with an explicit effect type.
+    pub fn build_with_effect(
+        db: &'db dyn salsa::Database,
+        location: Location<'db>,
+        name: &str,
+        params: IdVec<Type<'db>>,
+        result: Type<'db>,
+        effect: Option<Type<'db>>,
+        f: impl FnOnce(&mut BlockBuilder<'db>),
+    ) -> Self {
+        Self::build_with_name_span_and_effect(db, location, name, None, params, result, effect, f)
     }
 
     /// Build a function with an explicit name span for hover support.
@@ -62,6 +75,22 @@ impl<'db> Func<'db> {
         result: Type<'db>,
         f: impl FnOnce(&mut BlockBuilder<'db>),
     ) -> Self {
+        Self::build_with_name_span_and_effect(
+            db, location, name, name_span, params, result, None, f,
+        )
+    }
+
+    /// Build a function with an explicit name span and effect type.
+    pub fn build_with_name_span_and_effect(
+        db: &'db dyn salsa::Database,
+        location: Location<'db>,
+        name: &str,
+        name_span: Option<Span>,
+        params: IdVec<Type<'db>>,
+        result: Type<'db>,
+        effect: Option<Type<'db>>,
+        f: impl FnOnce(&mut BlockBuilder<'db>),
+    ) -> Self {
         let mut entry = BlockBuilder::new(db, location).args(params.clone());
         f(&mut entry);
         let region = Region::new(db, location, idvec![entry.build()]);
@@ -70,7 +99,7 @@ impl<'db> Func<'db> {
             .attr("sym_name", Attribute::Symbol(Symbol::new(db, name)))
             .attr(
                 "type",
-                Attribute::Type(core::Func::new(db, params, result).as_type()),
+                Attribute::Type(core::Func::with_effect(db, params, result, effect).as_type()),
             )
             .region(region);
 

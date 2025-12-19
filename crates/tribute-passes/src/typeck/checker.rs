@@ -284,8 +284,76 @@ impl<'db> TypeChecker<'db> {
 
     /// Check a module.
     pub fn check_module(&mut self, module: &core::Module<'db>) {
+        self.seed_row_var_counter(module);
         let body = module.body(self.db);
         self.check_region(&body);
+    }
+
+    fn seed_row_var_counter(&mut self, module: &core::Module<'db>) {
+        let body = module.body(self.db);
+        let mut max_id: Option<u64> = None;
+        self.collect_row_vars_in_region(&body, &mut max_id);
+        if let Some(id) = max_id {
+            self.next_row_var = self.next_row_var.max(id + 1);
+        }
+    }
+
+    fn collect_row_vars_in_region(
+        &self,
+        region: &Region<'db>,
+        max_id: &mut Option<u64>,
+    ) {
+        for block in region.blocks(self.db).iter() {
+            for &arg in block.args(self.db).iter() {
+                self.collect_row_vars_in_type(arg, max_id);
+            }
+            for op in block.operations(self.db).iter() {
+                self.collect_row_vars_in_operation(op, max_id);
+            }
+        }
+    }
+
+    fn collect_row_vars_in_operation(
+        &self,
+        op: &Operation<'db>,
+        max_id: &mut Option<u64>,
+    ) {
+        for &ty in op.results(self.db).iter() {
+            self.collect_row_vars_in_type(ty, max_id);
+        }
+        for attr in op.attributes(self.db).values() {
+            self.collect_row_vars_in_attr(attr, max_id);
+        }
+        for region in op.regions(self.db).iter() {
+            self.collect_row_vars_in_region(region, max_id);
+        }
+    }
+
+    fn collect_row_vars_in_type(&self, ty: Type<'db>, max_id: &mut Option<u64>) {
+        if let Some(effect_row) = core::EffectRowType::from_type(self.db, ty)
+            && let Some(tail) = effect_row.tail_var(self.db)
+        {
+            *max_id = Some(max_id.map_or(tail, |current| current.max(tail)));
+        }
+
+        for &param in ty.params(self.db).iter() {
+            self.collect_row_vars_in_type(param, max_id);
+        }
+        for attr in ty.attrs(self.db).values() {
+            self.collect_row_vars_in_attr(attr, max_id);
+        }
+    }
+
+    fn collect_row_vars_in_attr(&self, attr: &Attribute<'db>, max_id: &mut Option<u64>) {
+        match attr {
+            Attribute::Type(ty) => self.collect_row_vars_in_type(*ty, max_id),
+            Attribute::List(items) => {
+                for item in items {
+                    self.collect_row_vars_in_attr(item, max_id);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Check a region (sequence of blocks).

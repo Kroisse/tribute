@@ -169,13 +169,15 @@ pub fn lower_function<'db, 'src>(
     // Resolve return type or create fresh type var
     let result = return_type.unwrap_or_else(|| ctx.fresh_type_var());
 
-    Some(func::Func::build_with_name_span(
+    let effect_type = ctx.fresh_effect_row_type();
+    Some(func::Func::build_with_name_span_and_effect(
         ctx.db,
         location,
         &name,
         name_span,
         params.clone(),
         result,
+        Some(effect_type),
         |entry| {
             // Bind parameters
             for (i, param_name) in param_names.iter().enumerate() {

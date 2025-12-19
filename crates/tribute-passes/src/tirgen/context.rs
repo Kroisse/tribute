@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use tree_sitter::Node;
 use tribute_core::{Location, PathId};
-use tribute_trunk_ir::{IdVec, Type, Value, dialect::ty};
+use tribute_trunk_ir::{DialectType, IdVec, Type, Value, dialect::{core, ty}};
 
 use super::helpers::{node_text, span_from_node};
 
@@ -19,6 +19,8 @@ pub struct CstLoweringCtx<'db, 'src> {
     type_var_bindings: HashMap<String, Type<'db>>,
     /// Counter for generating unique type variable IDs.
     next_type_var_id: u64,
+    /// Counter for generating unique effect row variable IDs.
+    next_row_var_id: u64,
 }
 
 impl<'db, 'src> CstLoweringCtx<'db, 'src> {
@@ -30,6 +32,7 @@ impl<'db, 'src> CstLoweringCtx<'db, 'src> {
             bindings: HashMap::new(),
             type_var_bindings: HashMap::new(),
             next_type_var_id: 0,
+            next_row_var_id: 0,
         }
     }
 
@@ -38,6 +41,13 @@ impl<'db, 'src> CstLoweringCtx<'db, 'src> {
         let id = self.next_type_var_id;
         self.next_type_var_id += 1;
         ty::var_with_id(self.db, id)
+    }
+
+    /// Generate a fresh effect row type with a unique tail variable.
+    pub fn fresh_effect_row_type(&mut self) -> Type<'db> {
+        let id = self.next_row_var_id;
+        self.next_row_var_id += 1;
+        core::EffectRowType::var(self.db, id).as_type()
     }
 
     /// Get or create a named type variable.

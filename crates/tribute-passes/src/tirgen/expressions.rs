@@ -489,7 +489,9 @@ fn lower_lambda_expr<'db, 'src>(
     let result_value = result_value?;
     body_block.op(src::r#yield(ctx.db, location, result_value));
 
-    let func_type = core::Func::new(ctx.db, param_types, result_type).as_type();
+    let effect_type = ctx.fresh_effect_row_type();
+    let func_type = core::Func::with_effect(ctx.db, param_types, result_type, Some(effect_type))
+        .as_type();
     let region = Region::new(ctx.db, location, idvec![body_block.build()]);
     let lambda_op = block.op(src::lambda(ctx.db, location, infer_ty, func_type, region));
     Some(lambda_op.result(ctx.db))
