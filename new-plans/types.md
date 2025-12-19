@@ -56,7 +56,7 @@ enum List(a) {
 // Named fields를 가진 variant
 enum Result(a, e) {
     Ok { value: a }
-    Err { error: e }
+    Error { error: e }
 }
 
 // 혼합 가능
@@ -77,7 +77,7 @@ enum Ordering { Less, Equal, Greater }
 ```rust
 struct Box(a) { value: a }
 enum Option(a) { None, Some(a) }
-enum Result(a, e) { Ok { value: a }, Err { error: e } }
+enum Result(a, e) { Ok { value: a }, Error { error: e } }
 
 // 사용
 let box: Box(Int) = Box { value: 42 }
@@ -111,7 +111,7 @@ let cons = Cons(1, Cons(2, Empty))
 
 // Named
 let ok = Ok { value: 42 }
-let err = Err { error: "something went wrong" }
+let error = Error { error: "something went wrong" }
 ```
 
 ### Shorthand Syntax
@@ -259,7 +259,7 @@ case opt {
 
 case result {
     Ok { value } -> value
-    Err { error } -> panic(error)
+    Error { error } -> panic(error)
 }
 ```
 
@@ -291,7 +291,7 @@ case user {
 
 case result {
     Ok { value, .. } -> handle_value(value)
-    Err { error, .. } -> handle_error(error)
+    Error { error, .. } -> handle_error(error)
 }
 ```
 
@@ -313,7 +313,7 @@ enum Option(a) {
 // Named - 필드가 여러 개이거나 의미를 명확히 할 때
 enum Result(a, e) {
     Ok { value: a }
-    Err { error: e }
+    Error { error: e }
 }
 
 // 같은 enum에서 혼합 가능

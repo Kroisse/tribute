@@ -8,11 +8,108 @@ enum Option(a) {
     Some(a),
 }
 
-/// A type that represents either success (`Ok`) or failure (`Err`).
+pub mod Option {
+    /// Transform the value inside an Option using a function.
+    /// If the Option is None, returns None.
+    pub fn map(opt: Option(a), f: fn(a) -> b) -> Option(b) {
+        case opt {
+            Some(x) -> Some(f(x))
+            None -> None
+        }
+    }
+
+    /// Chain Option-returning operations.
+    /// If the Option is None, returns None without calling f.
+    pub fn and_then(opt: Option(a), f: fn(a) -> Option(b)) -> Option(b) {
+        case opt {
+            Some(x) -> f(x)
+            None -> None
+        }
+    }
+
+    /// Extract the value from an Option, or return a default.
+    pub fn unwrap_or(opt: Option(a), default: a) -> a {
+        case opt {
+            Some(x) -> x
+            None -> default
+        }
+    }
+
+    /// Check if an Option contains a value.
+    pub fn is_some(opt: Option(a)) -> Bool {
+        case opt {
+            Some(_) -> True
+            None -> False
+        }
+    }
+
+    /// Check if an Option is None.
+    pub fn is_none(opt: Option(a)) -> Bool {
+        case opt {
+            Some(_) -> False
+            None -> True
+        }
+    }
+}
+
+/// A type that represents either success (`Ok`) or failure (`Error`).
 /// Used for operations that may fail.
 enum Result(a, e) {
     Ok(a),
-    Err(e),
+    Error(e),
+}
+
+pub mod Result {
+    /// Transform the success value inside a Result using a function.
+    /// If the Result is Error, returns the error unchanged.
+    pub fn map(res: Result(a, e), f: fn(a) -> b) -> Result(b, e) {
+        case res {
+            Ok(x) -> Ok(f(x))
+            Error(e) -> Error(e)
+        }
+    }
+
+    /// Transform the error value inside a Result using a function.
+    /// If the Result is Ok, returns the success value unchanged.
+    pub fn map_err(res: Result(a, e), f: fn(e) -> f) -> Result(a, f) {
+        case res {
+            Ok(x) -> Ok(x)
+            Error(e) -> Error(f(e))
+        }
+    }
+
+    /// Chain Result-returning operations.
+    /// If the Result is Error, returns the error without calling f.
+    pub fn and_then(res: Result(a, e), f: fn(a) -> Result(b, e)) -> Result(b, e) {
+        case res {
+            Ok(x) -> f(x)
+            Error(e) -> Error(e)
+        }
+    }
+
+    /// Extract the success value from a Result, or return a default.
+    pub fn unwrap_or(res: Result(a, e), default: a) -> a {
+        case res {
+            Ok(x) -> x
+            Error(_) -> default
+        }
+    }
+
+    /// Check if a Result is Ok.
+    pub fn is_ok(res: Result(a, e)) -> Bool {
+        case res {
+            Ok(_) -> True
+            Error(_) -> False
+        }
+    }
+
+    /// Check if a Result is Error.
+    pub fn is_error(res: Result(a, e)) -> Bool {
+        case res {
+            Ok(_) -> False
+            Error(_) -> True
+        }
+    }
 }
 
 /// Print a line to standard output.

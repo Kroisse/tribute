@@ -379,7 +379,7 @@ enum Option(a) {
 
 enum Result(a, e) {
     Ok { value: a }
-    Err { error: e }
+    Error { error: e }
 }
 
 // 혼합
@@ -650,7 +650,7 @@ Some(42)
 None
 Cons(1, Cons(2, Empty))
 Ok { value: 42 }
-Err { error: "failed" }
+Error { error: "failed" }
 ```
 
 ### Call and UFCS
@@ -780,7 +780,7 @@ case value {
 
 case result {
     Ok { value } -> value
-    Err { error } -> panic(error)
+    Error { error } -> panic(error)
 }
 ```
 
@@ -835,7 +835,7 @@ Some(x)
 None
 Cons(head, tail)
 Ok { value }
-Err { error: e }
+Error { error: e }
 
 // Record destructuring
 User { name, age }

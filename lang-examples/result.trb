@@ -1,0 +1,301 @@
+// Result Examples
+// Demonstrates the Result type for operations that may fail
+
+// ============================================================================
+// Basic Result Usage
+// ============================================================================
+
+// A function that may fail
+fn parse_int(s: String) -> Result(Int, String) {
+    case s {
+        "0" -> Ok(0)
+        "1" -> Ok(1)
+        "42" -> Ok(42)
+        "100" -> Ok(100)
+        "999" -> Ok(999)
+        _ -> Error("Invalid number: " <> s)
+    }
+}
+
+// Pattern matching on Result
+fn handle_parse(s: String) -> String {
+    case parse_int(s) {
+        Ok(n) -> "Parsed: " <> n.to_string
+        Error(e) -> "Failed: " <> e
+    }
+}
+
+// ============================================================================
+// Result::map - Transform the success value
+// ============================================================================
+
+// Transform the value on success
+fn parse_and_double(s: String) -> Result(Int, String) {
+    parse_int(s).map(fn(n) n * 2)
+}
+
+// Chain multiple transformations
+fn parse_and_calculate(s: String) -> Result(Int, String) {
+    parse_int(s)
+        .map(fn(n) n * 2)
+        .map(fn(n) n + 10)
+        .map(fn(n) n / 2)
+}
+
+// ============================================================================
+// Result::map_err - Transform the error value
+// ============================================================================
+
+// Add context to errors
+fn parse_with_context(s: String) -> Result(Int, String) {
+    parse_int(s).map_err(fn(e) "Parse error: " <> e)
+}
+
+// Convert error types
+fn parse_with_detailed_error(s: String) -> Result(Int, String) {
+    parse_int(s).map_err(fn(e) {
+        "Failed to parse '" <> s <> "': " <> e
+    })
+}
+
+// ============================================================================
+// Result::and_then - Chain Result-returning operations
+// ============================================================================
+
+// Another fallible operation
+fn divide(a: Int, b: Int) -> Result(Int, String) {
+    case b {
+        0 -> Error("Division by zero")
+        _ -> Ok(a / b)
+    }
+}
+
+fn sqrt(n: Int) -> Result(Int, String) {
+    case n < 0 {
+        True -> Error("Cannot take square root of negative number")
+        False -> Ok(n.sqrt)
+    }
+}
+
+// Chain two operations
+fn parse_and_divide(numerator: String, denominator: String) -> Result(Int, String) {
+    parse_int(numerator).and_then(fn(n) {
+        parse_int(denominator).and_then(fn(d) {
+            divide(n, d)
+        })
+    })
+}
+
+// More complex chaining
+fn parse_divide_and_sqrt(num: String, denom: String) -> Result(Int, String) {
+    parse_int(num)
+        .and_then(fn(n) parse_int(denom).map(fn(d) #(n, d)))
+        .and_then(fn(#(n, d)) divide(n, d))
+        .and_then(fn(result) sqrt(result))
+}
+
+// ============================================================================
+// Result::unwrap_or - Provide a default value
+// ============================================================================
+
+// Get value or use default
+fn safe_parse(s: String) -> Int {
+    parse_int(s).unwrap_or(0)
+}
+
+// Use default for calculations
+fn parse_or_default(s: String, default: Int) -> Int {
+    parse_int(s).unwrap_or(default)
+}
+
+// Combine with map
+fn parse_double_or_zero(s: String) -> Int {
+    parse_int(s)
+        .map(fn(n) n * 2)
+        .unwrap_or(0)
+}
+
+// ============================================================================
+// Result::is_ok and Result::is_error - Check success/failure
+// ============================================================================
+
+// Check if parsing succeeded
+fn is_valid_number(s: String) -> Bool {
+    parse_int(s).is_ok
+}
+
+// Check if parsing failed
+fn is_invalid_number(s: String) -> Bool {
+    parse_int(s).is_error
+}
+
+// Use in conditional logic
+fn validate_input(s: String) -> String {
+    let result = parse_int(s)
+    case result.is_ok {
+        True -> "Valid input"
+        False -> "Invalid input"
+    }
+}
+
+// ============================================================================
+// Advanced Pattern Matching
+// ============================================================================
+
+// Pattern matching with guards
+fn categorize_result(s: String) -> String {
+    case parse_int(s) {
+        Ok(n) if n > 100 -> "Very large: " <> n.to_string
+        Ok(n) if n > 10 -> "Large: " <> n.to_string
+        Ok(n) if n > 0 -> "Small: " <> n.to_string
+        Ok(n) -> "Non-positive: " <> n.to_string
+        Error(e) -> "Error: " <> e
+    }
+}
+
+// Nested pattern matching
+fn process_division(num: String, denom: String) -> String {
+    case parse_and_divide(num, denom) {
+        Ok(result) -> {
+            case result > 10 {
+                True -> "Large result: " <> result.to_string
+                False -> "Small result: " <> result.to_string
+            }
+        }
+        Error(e) -> "Calculation failed: " <> e
+    }
+}
+
+// ============================================================================
+// Practical Examples
+// ============================================================================
+
+// Validate and parse user input
+fn validate_age(input: String) -> Result(Int, String) {
+    parse_int(input).and_then(fn(age) {
+        case age >= 0 && age <= 150 {
+            True -> Ok(age)
+            False -> Error("Age must be between 0 and 150")
+        }
+    })
+}
+
+// Parse and validate multiple fields
+fn parse_coordinates(x: String, y: String) -> Result(#(Int, Int), String) {
+    parse_int(x).and_then(fn(x_val) {
+        parse_int(y).map(fn(y_val) {
+            #(x_val, y_val)
+        })
+    })
+}
+
+// Accumulate successful results
+fn parse_list(strings: List(String)) -> Result(List(Int), String) {
+    case strings {
+        [] -> Ok([])
+        [head, ..tail] -> {
+            parse_int(head).and_then(fn(n) {
+                parse_list(tail).map(fn(rest) {
+                    [n, ..rest]
+                })
+            })
+        }
+    }
+}
+
+// Try multiple operations, return first success
+fn try_parse_formats(s: String) -> Result(Int, String) {
+    let result1 = parse_int(s)
+    case result1 {
+        Ok(n) -> Ok(n)
+        Error(_) -> {
+            // Try alternative format
+            let trimmed = s.trim
+            parse_int(trimmed)
+        }
+    }
+}
+
+// Validate business logic
+fn process_order(quantity: String, price: String) -> Result(Int, String) {
+    parse_int(quantity)
+        .and_then(fn(q) {
+            case q > 0 {
+                True -> Ok(q)
+                False -> Error("Quantity must be positive")
+            }
+        })
+        .and_then(fn(q) {
+            parse_int(price).and_then(fn(p) {
+                case p > 0 {
+                    True -> Ok(q * p)
+                    False -> Error("Price must be positive")
+                }
+            })
+        })
+}
+
+// Convert Result to Option
+fn result_to_option(res: Result(a, e)) -> Option(a) {
+    case res {
+        Ok(x) -> Some(x)
+        Error(_) -> None
+    }
+}
+
+// Convert Option to Result
+fn option_to_result(opt: Option(a), error: e) -> Result(a, e) {
+    case opt {
+        Some(x) -> Ok(x)
+        None -> Error(error)
+    }
+}
+
+// ============================================================================
+// Main demonstration
+// ============================================================================
+
+fn main() -> Nil {
+    // Basic usage
+    let success = parse_int("42")         // Ok(42)
+    let failure = parse_int("abc")        // Error("Invalid number: abc")
+    let handled = handle_parse("42")      // "Parsed: 42"
+    let handled_err = handle_parse("xyz") // "Failed: Invalid number: xyz"
+
+    // Using map
+    let doubled = parse_and_double("42")  // Ok(84)
+    let calculated = parse_and_calculate("10") // Ok(15)
+
+    // Using map_err
+    let with_context = parse_with_context("bad")
+        // Error("Parse error: Invalid number: bad")
+
+    // Using and_then
+    let division = parse_and_divide("100", "5")  // Ok(20)
+    let div_by_zero = parse_and_divide("100", "0")
+        // Error("Division by zero")
+
+    // Using unwrap_or
+    let safe = safe_parse("42")           // 42
+    let safe_default = safe_parse("bad")  // 0
+
+    // Using is_ok/is_error
+    let valid = is_valid_number("42")     // True
+    let invalid = is_invalid_number("xyz") // True
+
+    // Advanced examples
+    let category = categorize_result("999") // "Very large: 999"
+    let age_result = validate_age("25")   // Ok(25)
+    let coords = parse_coordinates("10", "20") // Ok(#(10, 20))
+
+    // Business logic
+    let order = process_order("5", "100") // Ok(500)
+
+    // Print results
+    case success {
+        Ok(n) -> print_line("Success: " <> n.to_string)
+        Error(e) -> print_line("Error: " <> e)
+    }
+
+    Nil
+}

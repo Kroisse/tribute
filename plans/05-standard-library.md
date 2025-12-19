@@ -43,7 +43,7 @@ enum Option(a) {
 
 enum Result(a, e) {
     Ok(a)
-    Err(e)
+    Error(e)
 }
 ```
 
@@ -111,7 +111,7 @@ ability Throw(e) {
 fn catch(f: fn() ->{Throw(e), r} a) ->{r} Result(a, e) {
     case handle f() {
         { value } -> Ok(value)
-        { Throw::throw(e) -> _ } -> Err(e)
+        { Throw::throw(e) -> _ } -> Error(e)
     }
 }
 ```
