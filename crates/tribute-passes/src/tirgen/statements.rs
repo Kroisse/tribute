@@ -50,41 +50,16 @@ pub fn lower_let_statement<'db, 'src>(
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) {
-    let mut cursor = node.walk();
-    let mut pattern_node = None;
-    let mut value_node = None;
+    // Use field-based access
+    let Some(pattern_node) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(value_node) = node.child_by_field_name("value") else {
+        return;
+    };
 
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        match child.kind() {
-            // Simple identifier pattern
-            "identifier" | "identifier_pattern" if pattern_node.is_none() => {
-                pattern_node = Some(child);
-            }
-            // Other patterns
-            "wildcard_pattern"
-            | "constructor_pattern"
-            | "tuple_pattern"
-            | "list_pattern"
-            | "as_pattern"
-                if pattern_node.is_none() =>
-            {
-                pattern_node = Some(child);
-            }
-            // The value expression (anything else after pattern)
-            _ if pattern_node.is_some() && value_node.is_none() => {
-                value_node = Some(child);
-            }
-            _ => {}
-        }
-    }
-
-    if let (Some(pattern), Some(value)) = (pattern_node, value_node)
-        && let Some(value) = lower_expr(ctx, block, value)
-    {
-        bind_pattern(ctx, block, pattern, value);
+    if let Some(value) = lower_expr(ctx, block, value_node) {
+        bind_pattern(ctx, block, pattern_node, value);
     }
 }
 
@@ -108,30 +83,13 @@ pub fn bind_pattern<'db, 'src>(
         }
         "as_pattern" => {
             // Bind the whole value to the name, then recurse on inner pattern
-            let mut cursor = pattern.walk();
-            let mut inner_pattern = None;
-            let mut binding_name = None;
-
-            for child in pattern.named_children(&mut cursor) {
-                if is_comment(child.kind()) {
-                    continue;
-                }
-                match child.kind() {
-                    "identifier" => {
-                        binding_name = Some(node_text(&child, ctx.source).to_string());
-                    }
-                    _ if inner_pattern.is_none() => {
-                        inner_pattern = Some(child);
-                    }
-                    _ => {}
-                }
-            }
-
-            if let Some(name) = binding_name {
+            // Use field-based access
+            if let Some(binding_node) = pattern.child_by_field_name("binding") {
+                let name = node_text(&binding_node, ctx.source).to_string();
                 ctx.bind(name, value);
             }
-            if let Some(inner) = inner_pattern {
-                bind_pattern(ctx, block, inner, value);
+            if let Some(inner_pattern) = pattern.child_by_field_name("pattern") {
+                bind_pattern(ctx, block, inner_pattern, value);
             }
         }
         "literal_pattern" => {

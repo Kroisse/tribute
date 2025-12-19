@@ -141,45 +141,27 @@ pub fn lower_function<'db, 'src>(
     ctx: &mut CstLoweringCtx<'db, 'src>,
     node: Node,
 ) -> Option<func::Func<'db>> {
-    let mut cursor = node.walk();
     let location = ctx.location(&node);
 
-    let mut name = None;
-    let mut name_span = None;
-    let mut param_names = Vec::new();
-    let mut param_types = Vec::new();
-    let mut return_type = None;
-    let mut body_node = None;
+    // Use field-based access for cleaner extraction
+    let name_node = node.child_by_field_name("name")?;
+    let body_node = node.child_by_field_name("body")?;
 
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        match child.kind() {
-            "identifier" if name.is_none() => {
-                name = Some(node_text(&child, ctx.source).to_string());
-                name_span = Some(Span {
-                    start: child.start_byte(),
-                    end: child.end_byte(),
-                });
-            }
-            "parameter_list" => {
-                let (names, types) = parse_parameter_list(ctx, child);
-                param_names = names;
-                param_types = types;
-            }
-            "return_type_annotation" => {
-                return_type = parse_return_type(ctx, child);
-            }
-            "block" => {
-                body_node = Some(child);
-            }
-            _ => {}
-        }
-    }
+    let name = node_text(&name_node, ctx.source).to_string();
+    let name_span = Some(Span {
+        start: name_node.start_byte(),
+        end: name_node.end_byte(),
+    });
 
-    let name = name?;
-    let body_node = body_node?;
+    // Optional fields
+    let (param_names, param_types) = node
+        .child_by_field_name("params")
+        .map(|params| parse_parameter_list(ctx, params))
+        .unwrap_or_default();
+
+    let return_type = node
+        .child_by_field_name("return_type")
+        .and_then(|rt| parse_return_type(ctx, rt));
 
     // Resolve parameter types
     let params: IdVec<Type> = param_types.into_iter().collect();
@@ -230,29 +212,15 @@ pub fn lower_struct_decl<'db, 'src>(
     ctx: &mut CstLoweringCtx<'db, 'src>,
     node: Node,
 ) -> Option<ty::Struct<'db>> {
-    let mut cursor = node.walk();
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
 
-    let mut name = None;
-    let mut fields = Vec::new();
+    // Use field-based access
+    let name_node = node.child_by_field_name("name")?;
+    let body_node = node.child_by_field_name("body")?;
 
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        match child.kind() {
-            "type_identifier" if name.is_none() => {
-                name = Some(node_text(&child, ctx.source).to_string());
-            }
-            "struct_body" | "record_fields" => {
-                fields = parse_struct_fields(ctx, child);
-            }
-            _ => {}
-        }
-    }
-
-    let name = name?;
+    let name = node_text(&name_node, ctx.source).to_string();
+    let fields = parse_struct_fields(ctx, body_node);
     let fields_attr = Attribute::List(
         fields
             .into_iter()
@@ -287,27 +255,14 @@ fn parse_struct_fields<'db, 'src>(
             continue;
         }
         if child.kind() == "struct_field" || child.kind() == "record_field" {
-            let mut field_cursor = child.walk();
-            let mut field_name = None;
-            let mut field_type = None;
-
-            for field_child in child.named_children(&mut field_cursor) {
-                if is_comment(field_child.kind()) {
-                    continue;
-                }
-                match field_child.kind() {
-                    "identifier" if field_name.is_none() => {
-                        field_name = Some(node_text(&field_child, ctx.source).to_string());
-                    }
-                    "type_identifier" | "type_variable" | "generic_type" => {
-                        field_type = Some(ctx.resolve_type_node(field_child));
-                    }
-                    _ => {}
-                }
-            }
-
-            if let Some(name) = field_name {
-                fields.push((name, field_type.unwrap_or_else(|| ctx.fresh_type_var())));
+            // Use field-based access for struct_field
+            if let Some(name_node) = child.child_by_field_name("name") {
+                let field_name = node_text(&name_node, ctx.source).to_string();
+                let field_type = child
+                    .child_by_field_name("type")
+                    .map(|t| ctx.resolve_type_node(t))
+                    .unwrap_or_else(|| ctx.fresh_type_var());
+                fields.push((field_name, field_type));
             }
         }
     }
@@ -320,29 +275,15 @@ pub fn lower_enum_decl<'db, 'src>(
     ctx: &mut CstLoweringCtx<'db, 'src>,
     node: Node,
 ) -> Option<ty::Enum<'db>> {
-    let mut cursor = node.walk();
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
 
-    let mut name = None;
-    let mut variants = Vec::new();
+    // Use field-based access
+    let name_node = node.child_by_field_name("name")?;
+    let body_node = node.child_by_field_name("body")?;
 
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        match child.kind() {
-            "type_identifier" if name.is_none() => {
-                name = Some(node_text(&child, ctx.source).to_string());
-            }
-            "enum_body" => {
-                variants = parse_enum_variants(ctx, child);
-            }
-            _ => {}
-        }
-    }
-
-    let name = name?;
+    let name = node_text(&name_node, ctx.source).to_string();
+    let variants = parse_enum_variants(ctx, body_node);
     let variants_attr = Attribute::List(
         variants
             .into_iter()
@@ -387,45 +328,42 @@ fn parse_enum_variants<'db, 'src>(
             continue;
         }
         if child.kind() == "enum_variant" {
-            let mut variant_cursor = child.walk();
-            let mut variant_name = None;
-            let mut variant_fields = Vec::new();
-
-            for variant_child in child.named_children(&mut variant_cursor) {
-                if is_comment(variant_child.kind()) {
-                    continue;
-                }
-                match variant_child.kind() {
-                    "type_identifier" if variant_name.is_none() => {
-                        variant_name = Some(node_text(&variant_child, ctx.source).to_string());
-                    }
-                    "tuple_fields" => {
-                        // Positional fields: Variant(Int, String)
-                        let mut field_cursor = variant_child.walk();
-                        let mut idx = 0;
-                        for field_child in variant_child.named_children(&mut field_cursor) {
-                            if !is_comment(field_child.kind()) {
-                                let field_type = ctx.resolve_type_node(field_child);
-                                variant_fields.push((format!("_{}", idx), field_type));
-                                idx += 1;
-                            }
-                        }
-                    }
-                    "struct_body" | "record_fields" => {
-                        // Named fields: Variant { x: Int, y: String }
-                        variant_fields = parse_struct_fields(ctx, variant_child);
-                    }
-                    _ => {}
-                }
-            }
-
-            if let Some(name) = variant_name {
-                variants.push((name, variant_fields));
+            // Use field-based access for enum_variant
+            if let Some(name_node) = child.child_by_field_name("name") {
+                let variant_name = node_text(&name_node, ctx.source).to_string();
+                let variant_fields = child
+                    .child_by_field_name("fields")
+                    .map(|fields_node| parse_variant_fields(ctx, fields_node))
+                    .unwrap_or_default();
+                variants.push((variant_name, variant_fields));
             }
         }
     }
 
     variants
+}
+
+/// Parse variant fields (tuple or record style).
+fn parse_variant_fields<'db, 'src>(
+    ctx: &mut CstLoweringCtx<'db, 'src>,
+    node: Node,
+) -> Vec<(String, Type<'db>)> {
+    match node.kind() {
+        "tuple_fields" => {
+            // Positional fields: Variant(Int, String)
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .filter(|child| !is_comment(child.kind()))
+                .enumerate()
+                .map(|(idx, child)| (format!("_{}", idx), ctx.resolve_type_node(child)))
+                .collect()
+        }
+        "struct_body" | "record_fields" => {
+            // Named fields: Variant { x: Int, y: String }
+            parse_struct_fields(ctx, node)
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Lower a const declaration to src.const.
@@ -515,29 +453,15 @@ pub fn lower_ability_decl<'db, 'src>(
     ctx: &mut CstLoweringCtx<'db, 'src>,
     node: Node,
 ) -> Option<ty::Ability<'db>> {
-    let mut cursor = node.walk();
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
 
-    let mut name = None;
-    let mut operations = Vec::new();
+    // Use field-based access
+    let name_node = node.child_by_field_name("name")?;
+    let body_node = node.child_by_field_name("body")?;
 
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        match child.kind() {
-            "type_identifier" if name.is_none() => {
-                name = Some(node_text(&child, ctx.source).to_string());
-            }
-            "ability_body" => {
-                operations = parse_ability_operations(ctx, child);
-            }
-            _ => {}
-        }
-    }
-
-    let name = name?;
+    let name = node_text(&name_node, ctx.source).to_string();
+    let operations = parse_ability_operations(ctx, body_node);
     let operations_attr = Attribute::List(
         operations
             .into_iter()
@@ -578,41 +502,33 @@ fn parse_ability_operations<'db, 'src>(
             continue;
         }
         if child.kind() == "ability_operation" {
-            let mut op_cursor = child.walk();
-            let mut op_name = None;
-            let mut param_types = Vec::new();
-            let mut return_type = None;
+            // Use field-based access for ability_operation
+            if let Some(name_node) = child.child_by_field_name("name") {
+                let op_name = node_text(&name_node, ctx.source).to_string();
 
-            for op_child in child.named_children(&mut op_cursor) {
-                if is_comment(op_child.kind()) {
-                    continue;
-                }
-                match op_child.kind() {
-                    "identifier" if op_name.is_none() => {
-                        op_name = Some(node_text(&op_child, ctx.source).to_string());
-                    }
-                    "parameter_list" => {
-                        let (_, types) = parse_parameter_list(ctx, op_child);
-                        param_types = types;
-                    }
-                    "return_type_annotation" => {
-                        return_type = parse_return_type(ctx, op_child);
-                    }
-                    _ => {}
-                }
-            }
+                // Parameters need manual iteration (not a field in grammar)
+                let param_types = find_child_by_kind(child, "parameter_list")
+                    .map(|params| parse_parameter_list(ctx, params).1)
+                    .unwrap_or_default();
 
-            if let Some(name) = op_name {
-                operations.push((
-                    name,
-                    param_types,
-                    return_type.unwrap_or_else(|| ctx.fresh_type_var()),
-                ));
+                let return_type = child
+                    .child_by_field_name("return_type")
+                    .map(|rt| ctx.resolve_type_node(rt))
+                    .unwrap_or_else(|| ctx.fresh_type_var());
+
+                operations.push((op_name, param_types, return_type));
             }
         }
     }
 
     operations
+}
+
+/// Find a child node by kind (helper for nodes without field names).
+fn find_child_by_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find(|child| child.kind() == kind)
 }
 
 // =============================================================================
@@ -627,34 +543,17 @@ pub fn lower_mod_decl<'db, 'src>(
     ctx: &mut CstLoweringCtx<'db, 'src>,
     node: Node,
 ) -> Option<core::Module<'db>> {
-    let mut cursor = node.walk();
     let location = ctx.location(&node);
 
-    let mut name = None;
-    let mut body_node = None;
-    let mut _is_pub = false;
+    // Use field-based access
+    let name_node = node.child_by_field_name("name")?;
+    let body_node = node.child_by_field_name("body");
 
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        match child.kind() {
-            "visibility_marker" => {
-                // visibility_marker contains keyword_pub and optional (pkg) or (super)
-                _is_pub = true;
-                // TODO: Parse visibility modifier (pub, pub(pkg), pub(super))
-            }
-            "identifier" | "type_identifier" if name.is_none() => {
-                name = Some(node_text(&child, ctx.source).to_string());
-            }
-            "mod_body" => {
-                body_node = Some(child);
-            }
-            _ => {}
-        }
-    }
+    let name = node_text(&name_node, ctx.source).to_string();
 
-    let name = name?;
+    // Check for visibility marker (not a field, so use helper)
+    let _is_pub = find_child_by_kind(node, "visibility_marker").is_some();
+    // TODO: Parse visibility modifier (pub, pub(pkg), pub(super))
 
     // Build the module with its body
     let module = core::Module::build(ctx.db, location, &name, |mod_builder| {
@@ -726,25 +625,15 @@ pub fn parse_parameter_list<'db, 'src>(
 
     for child in node.named_children(&mut cursor) {
         if child.kind() == "parameter" {
-            let mut param_cursor = child.walk();
-            let mut param_name = None;
-            let mut param_type = None;
-
-            for param_child in child.named_children(&mut param_cursor) {
-                match param_child.kind() {
-                    "identifier" if param_name.is_none() => {
-                        param_name = Some(node_text(&param_child, ctx.source).to_string());
-                    }
-                    "type_identifier" | "type_variable" | "generic_type" => {
-                        param_type = Some(ctx.resolve_type_node(param_child));
-                    }
-                    _ => {}
-                }
-            }
-
-            if let Some(name) = param_name {
-                names.push(name);
-                types.push(param_type.unwrap_or_else(|| ctx.fresh_type_var()));
+            // Use field-based access for parameter
+            if let Some(name_node) = child.child_by_field_name("name") {
+                let param_name = node_text(&name_node, ctx.source).to_string();
+                let param_type = child
+                    .child_by_field_name("type")
+                    .map(|t| ctx.resolve_type_node(t))
+                    .unwrap_or_else(|| ctx.fresh_type_var());
+                names.push(param_name);
+                types.push(param_type);
             }
         }
     }
