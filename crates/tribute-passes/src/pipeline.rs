@@ -49,7 +49,7 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity, SourceFile,
 use tribute_trunk_ir::dialect::core::Module;
 use tribute_trunk_ir::{Block, IdVec, Region};
 
-use crate::cst_to_tir::{lower_cst, parse_cst};
+use crate::tirgen::{lower_cst, parse_cst};
 use crate::resolve::{Resolver, build_env};
 use crate::tdnr::resolve_tdnr;
 use crate::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
@@ -141,13 +141,13 @@ pub struct CompilationResult<'db> {
 
 /// Stage 1: Parse source to CST.
 ///
-/// Re-exported from `cst_to_tir` for convenience.
-pub use crate::cst_to_tir::parse_cst as stage_parse;
+/// Re-exported from `tirgen` for convenience.
+pub use crate::tirgen::parse_cst as stage_parse;
 
 /// Stage 2: Lower CST to TrunkIR.
 ///
-/// Re-exported from `cst_to_tir` for convenience.
-pub use crate::cst_to_tir::lower_cst as stage_lower;
+/// Re-exported from `tirgen` for convenience.
+pub use crate::tirgen::lower_cst as stage_lower;
 
 /// Stage 3: Resolve names in the module.
 ///

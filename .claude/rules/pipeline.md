@@ -18,7 +18,7 @@ Parses source code into a Concrete Syntax Tree using Tree-sitter.
 Converts CST to TrunkIR with unresolved `src.*` operations.
 - Input: `ParsedCst`
 - Output: `Module` with `src.var`, `src.call`, `src.path`, `src.binop`, etc.
-- Location: `crates/tribute-passes/src/cst_to_tir.rs`
+- Location: `crates/tribute-passes/src/tirgen/`
 
 ### 3. stage_resolve
 **Function**: `stage_resolve(db, module) -> Module`

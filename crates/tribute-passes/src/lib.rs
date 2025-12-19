@@ -18,15 +18,15 @@
 //! for detailed results including error messages.
 
 // === TrunkIR passes ===
-pub mod cst_to_tir;
 pub mod pipeline;
 pub mod resolve;
 pub mod rewrite;
 pub mod tdnr;
+pub mod tirgen;
 pub mod typeck;
 
 // Re-exports
-pub use cst_to_tir::{ParsedCst, lower_cst, lower_source_file, parse_cst};
+pub use tirgen::{ParsedCst, lower_cst, lower_source_file, parse_cst};
 pub use pipeline::{
     CompilationResult, compile, compile_with_diagnostics, stage_resolve, stage_tdnr,
     stage_typecheck,

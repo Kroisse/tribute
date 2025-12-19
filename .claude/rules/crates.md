@@ -22,7 +22,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 
 **Key Modules**:
 - `pipeline.rs` - Compilation pipeline orchestration (5 stages)
-- `cst_to_tir.rs` - CST to TrunkIR lowering
+- `tirgen/` - TrunkIR generation from CST
 - `resolve.rs` - Name resolution (`src.*` ops → concrete ops)
 - `typeck/` - Type checking (bidirectional, row-polymorphic effects)
 - `tdnr.rs` - Type-directed name resolution (UFCS method calls)
