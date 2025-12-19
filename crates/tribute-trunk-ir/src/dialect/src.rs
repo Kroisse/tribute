@@ -61,6 +61,11 @@ dialect! {
         #[attr(name: Symbol, value: any)]
         fn r#const() -> result;
 
+        /// `src.use` operation: import declaration.
+        /// Carries the fully qualified path and an optional local alias.
+        #[attr(path: SymbolRef, alias: Symbol, is_pub: bool)]
+        fn r#use();
+
         /// `src.type`: an unresolved type reference that needs name resolution.
         /// The `name` attribute holds the type name (e.g., "Int", "List").
         /// The `params` hold type arguments for generic types (e.g., `List(a)`).

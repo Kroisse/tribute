@@ -43,6 +43,13 @@ pub enum Binding<'db> {
         /// Function type
         ty: Type<'db>,
     },
+    /// A module/namespace binding (possibly with an associated type).
+    Module {
+        /// Fully qualified namespace path (e.g., "collections::List")
+        namespace: String,
+        /// Optional type definition for the same name.
+        type_def: Option<Type<'db>>,
+    },
     /// A type constructor (struct or enum variant).
     Constructor {
         /// The type being constructed
@@ -123,6 +130,11 @@ impl<'db> ModuleEnv<'db> {
     /// Look up a qualified path (e.g., "List::map").
     pub fn lookup_qualified(&self, namespace: &str, name: &str) -> Option<&Binding<'db>> {
         self.namespaces.get(namespace)?.get(name)
+    }
+
+    /// Check whether a namespace exists (e.g., "collections::List").
+    pub fn has_namespace(&self, namespace: &str) -> bool {
+        self.namespaces.contains_key(namespace)
     }
 }
 
@@ -312,6 +324,8 @@ pub struct Resolver<'db> {
     env: ModuleEnv<'db>,
     /// Maps old values to their replacements during transformation.
     value_map: HashMap<Value<'db>, Value<'db>>,
+    /// Import scope stack (for use declarations).
+    import_scopes: Vec<HashMap<String, Binding<'db>>>,
     /// Local scope stack (for function parameters, let bindings).
     /// Each entry is a scope level mapping names to local bindings.
     local_scopes: Vec<HashMap<String, LocalBinding<'db>>>,
@@ -326,6 +340,7 @@ impl<'db> Resolver<'db> {
             db,
             env,
             value_map: HashMap::new(),
+            import_scopes: vec![HashMap::new()],
             local_scopes: Vec::new(),
             report_unresolved: false,
         }
@@ -339,6 +354,7 @@ impl<'db> Resolver<'db> {
             db,
             env,
             value_map: HashMap::new(),
+            import_scopes: vec![HashMap::new()],
             local_scopes: Vec::new(),
             report_unresolved: true,
         }
@@ -367,6 +383,64 @@ impl<'db> Resolver<'db> {
     /// Pop the current local scope.
     fn pop_scope(&mut self) {
         self.local_scopes.pop();
+    }
+
+    /// Push a new import scope.
+    fn push_import_scope(&mut self) {
+        self.import_scopes.push(HashMap::new());
+    }
+
+    /// Pop the current import scope.
+    fn pop_import_scope(&mut self) {
+        self.import_scopes.pop();
+    }
+
+    /// Add an import binding to the current scope.
+    fn add_import(&mut self, name: String, binding: Binding<'db>) {
+        if let Some(scope) = self.import_scopes.last_mut() {
+            scope.insert(name, binding);
+        }
+    }
+
+    /// Look up a name in import scopes (innermost first).
+    fn lookup_import(&self, name: &str) -> Option<&Binding<'db>> {
+        for scope in self.import_scopes.iter().rev() {
+            if let Some(binding) = scope.get(name) {
+                return Some(binding);
+            }
+        }
+        None
+    }
+
+    /// Look up a name, checking imports before module definitions.
+    fn lookup_binding(&self, name: &str) -> Option<&Binding<'db>> {
+        self.lookup_import(name).or_else(|| self.env.lookup(name))
+    }
+
+    fn join_path(&self, segments: &[Symbol<'db>]) -> String {
+        segments
+            .iter()
+            .map(|s| s.text(self.db))
+            .collect::<Vec<_>>()
+            .join("::")
+    }
+
+    fn resolve_namespace(&self, segments: &[Symbol<'db>]) -> Option<String> {
+        if segments.is_empty() {
+            return None;
+        }
+
+        let first = segments[0].text(self.db);
+        if let Some(Binding::Module { namespace, .. }) = self.lookup_import(first) {
+            let mut resolved = namespace.clone();
+            if segments.len() > 1 {
+                resolved.push_str("::");
+                resolved.push_str(&self.join_path(&segments[1..]));
+            }
+            return Some(resolved);
+        }
+
+        Some(self.join_path(segments))
     }
 
     /// Add a local binding to the current scope.
@@ -431,24 +505,96 @@ impl<'db> Resolver<'db> {
             "Bool" => *core::I1::new(self.db),
             "Float" => *core::F64::new(self.db),
             "Nat" => *core::I64::new(self.db), // Nat is implemented as i64 for now
-            // TODO: String type - for now, leave unresolved
-            // "String" => ...,
+            "String" => *core::String::new(self.db),
+            "Bytes" => *core::Bytes::new(self.db),
 
             // Look up user-defined types in the environment
             _ => {
-                if let Some(Binding::TypeDef { ty }) = self.env.lookup(name) {
-                    *ty
-                } else {
-                    // Leave unresolved - will be caught by type checker
-                    Type::new(
-                        self.db,
-                        Symbol::new(self.db, "src"),
-                        Symbol::new(self.db, "type"),
-                        IdVec::new(),
-                        Attrs::new(),
-                    )
+                if let Some(binding) = self.lookup_binding(name) {
+                    match binding {
+                        Binding::TypeDef { ty } => return *ty,
+                        Binding::Module {
+                            type_def: Some(ty),
+                            ..
+                        } => return *ty,
+                        _ => {}
+                    }
                 }
+
+                // Leave unresolved - will be caught by type checker
+                Type::new(
+                    self.db,
+                    Symbol::new(self.db, "src"),
+                    Symbol::new(self.db, "type"),
+                    IdVec::new(),
+                    Attrs::new(),
+                )
             }
+        }
+    }
+
+    fn binding_from_path(&self, path: &IdVec<Symbol<'db>>) -> Option<Binding<'db>> {
+        if path.is_empty() {
+            return None;
+        }
+
+        if path.len() == 1 {
+            return self.env.lookup(path[0].text(self.db)).cloned();
+        }
+
+        let namespace = self.join_path(&path[..path.len() - 1]);
+        let name = path.last()?.text(self.db);
+        self.env.lookup_qualified(&namespace, name).cloned()
+    }
+
+    fn apply_use(&mut self, op: &Operation<'db>) {
+        let attrs = op.attributes(self.db);
+        let path_key = Symbol::new(self.db, "path");
+        let alias_key = Symbol::new(self.db, "alias");
+
+        let Some(Attribute::SymbolRef(path)) = attrs.get(&path_key) else {
+            return;
+        };
+
+        if path.is_empty() {
+            return;
+        }
+
+        let local_name = if let Some(Attribute::Symbol(alias)) = attrs.get(&alias_key) {
+            let text = alias.text(self.db);
+            if text.is_empty() {
+                path.last()
+                    .map(|sym| sym.text(self.db).to_string())
+                    .unwrap_or_default()
+            } else {
+                text.to_string()
+            }
+        } else {
+            path.last()
+                .map(|sym| sym.text(self.db).to_string())
+                .unwrap_or_default()
+        };
+
+        let full_namespace = self.join_path(path);
+        let binding = self.binding_from_path(path);
+
+        if self.env.has_namespace(&full_namespace) {
+            let type_def = match binding {
+                Some(Binding::TypeDef { ty }) => Some(ty),
+                _ => None,
+            };
+            self.add_import(
+                local_name,
+                Binding::Module {
+                    namespace: full_namespace,
+                    type_def,
+                },
+            );
+            return;
+        }
+
+        if let Some(binding) = binding {
+            self.add_import(local_name, binding);
         }
     }
 
@@ -457,7 +603,9 @@ impl<'db> Resolver<'db> {
     /// Returns the module with `src.*` operations transformed to resolved forms.
     pub fn resolve_module(&mut self, module: &Module<'db>) -> Module<'db> {
         let body = module.body(self.db);
+        self.push_import_scope();
         let new_body = self.resolve_region(&body);
+        self.pop_import_scope();
 
         Module::create(
             self.db,
@@ -512,6 +660,10 @@ impl<'db> Resolver<'db> {
                 // Handle function with local scope for parameters
                 vec![self.resolve_func(&remapped_op)]
             }
+            ("src", "use") => {
+                self.apply_use(&remapped_op);
+                Vec::new()
+            }
             ("src", "var") => {
                 if let Some(resolved) = self.try_resolve_var(&remapped_op) {
                     resolved
@@ -555,6 +707,12 @@ impl<'db> Resolver<'db> {
                     }
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
+            }
+            ("core", "module") => {
+                self.push_import_scope();
+                let resolved = self.resolve_op_regions(&remapped_op);
+                self.pop_import_scope();
+                vec![resolved]
             }
             _ => {
                 // Not a src.* operation - recursively process regions
@@ -805,7 +963,7 @@ impl<'db> Resolver<'db> {
         }
 
         // Then check module environment
-        match self.env.lookup(name)? {
+        match self.lookup_binding(name)? {
             Binding::Function { path, ty } => {
                 // Create func.constant operation
                 // func::constant(db, location, result_type, func_ref)
@@ -839,7 +997,7 @@ impl<'db> Resolver<'db> {
 
                 Some(vec![new_operation])
             }
-            Binding::TypeDef { .. } => {
+            Binding::TypeDef { .. } | Binding::Module { .. } => {
                 // Type used in value position - error (leave unresolved for diagnostics)
                 None
             }
@@ -860,11 +1018,10 @@ impl<'db> Resolver<'db> {
 
         let location = op.location(self.db);
 
-        // For now, only support 2-segment paths (Namespace::name)
-        let namespace = segments[0].text(self.db);
-        let name = segments[1].text(self.db);
+        let name = segments.last()?.text(self.db);
+        let namespace = self.resolve_namespace(&segments[..segments.len() - 1])?;
 
-        match self.env.lookup_qualified(namespace, name)? {
+        match self.env.lookup_qualified(&namespace, name)? {
             Binding::Function { path, ty } => {
                 let new_op = func::constant(self.db, location, *ty, path.clone());
                 let new_operation = new_op.as_operation();
@@ -890,7 +1047,7 @@ impl<'db> Resolver<'db> {
 
                 Some(new_operation)
             }
-            Binding::TypeDef { .. } => None,
+            Binding::TypeDef { .. } | Binding::Module { .. } => None,
         }
     }
 
@@ -911,16 +1068,15 @@ impl<'db> Resolver<'db> {
         let args: Vec<Value<'db>> = op.operands(self.db).iter().copied().collect();
 
         // Try to resolve the callee
-        let callee_name = if path_segments.len() == 1 {
-            // Unqualified name
-            path_segments[0].text(self.db)
+        let binding = if path_segments.len() == 1 {
+            self.lookup_binding(path_segments[0].text(self.db))
         } else {
-            // Qualified path - for now just use the last segment
-            // TODO: Proper qualified lookup
-            path_segments.last()?.text(self.db)
-        };
+            let name = path_segments.last()?.text(self.db);
+            let namespace = self.resolve_namespace(&path_segments[..path_segments.len() - 1])?;
+            self.env.lookup_qualified(&namespace, name)
+        }?;
 
-        match self.env.lookup(callee_name)? {
+        match binding {
             Binding::Function { path, .. } => {
                 // Direct function call
                 // func::call(db, location, args, result_type, callee)
@@ -949,7 +1105,7 @@ impl<'db> Resolver<'db> {
 
                 Some(new_operation)
             }
-            Binding::TypeDef { .. } => None,
+            Binding::TypeDef { .. } | Binding::Module { .. } => None,
         }
     }
 
@@ -1063,6 +1219,61 @@ mod tests {
     use super::*;
     use salsa::Database;
     use tribute_core::TributeDatabaseImpl;
+    use tribute_core::SourceFile;
+
+    #[salsa::tracked]
+    fn resolve_source<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
+        use crate::cst_to_tir::{lower_cst, parse_cst};
+
+        let cst = parse_cst(db, source).expect("parse should succeed");
+        let module = lower_cst(db, source, cst);
+        let env = build_env(db, &module);
+        let mut resolver = Resolver::new(db, env);
+        resolver.resolve_module(&module)
+    }
+
+    fn collect_ops<'db>(db: &'db dyn salsa::Database, region: &Region<'db>, out: &mut Vec<Operation<'db>>) {
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                out.push(*op);
+                for sub_region in op.regions(db).iter() {
+                    collect_ops(db, sub_region, out);
+                }
+            }
+        }
+    }
+
+    fn has_src_call_named<'db>(
+        db: &'db dyn salsa::Database,
+        ops: &[Operation<'db>],
+        name: &str,
+    ) -> bool {
+        let name_key = Symbol::new(db, "name");
+        ops.iter().any(|op| {
+            op.dialect(db).text(db) == "src"
+                && op.name(db).text(db) == "call"
+                && matches!(
+                    op.attributes(db).get(&name_key),
+                    Some(Attribute::SymbolRef(segments)) if segments.last().map(|s| s.text(db)) == Some(name)
+                )
+        })
+    }
+
+    fn has_func_call_named<'db>(
+        db: &'db dyn salsa::Database,
+        ops: &[Operation<'db>],
+        name: &str,
+    ) -> bool {
+        let callee_key = Symbol::new(db, "callee");
+        ops.iter().any(|op| {
+            op.dialect(db).text(db) == "func"
+                && op.name(db).text(db) == "call"
+                && matches!(
+                    op.attributes(db).get(&callee_key),
+                    Some(Attribute::SymbolRef(segments)) if segments.last().map(|s| s.text(db)) == Some(name)
+                )
+        })
+    }
 
     #[test]
     fn test_module_env_lookup() {
@@ -1079,7 +1290,7 @@ mod tests {
 
             let source = SourceFile::new(
                 db,
-                std::path::PathBuf::from("test.tr"),
+                "test.trb".into(),
                 "fn hello() -> Int { 42 }".to_string(),
             );
 
@@ -1107,7 +1318,7 @@ mod tests {
 
             let source = SourceFile::new(
                 db,
-                std::path::PathBuf::from("test.tr"),
+                "test.trb".into(),
                 r#"
                     pub mod math {
                         pub fn add(x: Int, y: Int) -> Int { x + y }
@@ -1145,7 +1356,7 @@ mod tests {
 
             let source = SourceFile::new(
                 db,
-                std::path::PathBuf::from("test.tr"),
+                "test.trb".into(),
                 r#"
                     pub mod outer {
                         pub mod inner {
@@ -1170,6 +1381,76 @@ mod tests {
             // Should find outer::inner as a module
             // (inner is in outer's namespace)
             // Note: We don't track modules as bindings yet, so this tests the qualified path
+        });
+    }
+
+    #[test]
+    fn test_use_import_resolves_call() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let source = SourceFile::new(
+                db,
+                "test.trb".into(),
+                r#"
+                    pub mod helpers {
+                        pub fn double(x: Int) -> Int { x * 2 }
+                    }
+
+                    use helpers::double
+
+                    fn main() {
+                        double(1)
+                    }
+                "#
+                .to_string(),
+            );
+            let module = resolve_source(db, source);
+
+            let mut ops = Vec::new();
+            collect_ops(db, &module.body(db), &mut ops);
+
+            assert!(
+                !has_src_call_named(db, &ops, "double"),
+                "use import should resolve src.call to func.call"
+            );
+            assert!(
+                has_func_call_named(db, &ops, "double"),
+                "expected func.call to helpers::double"
+            );
+        });
+    }
+
+    #[test]
+    fn test_use_alias_resolves_call() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let source = SourceFile::new(
+                db,
+                "test.trb".into(),
+                r#"
+                    pub mod helpers {
+                        pub fn double(x: Int) -> Int { x * 2 }
+                    }
+
+                    use helpers::double as dbl
+
+                    fn main() {
+                        dbl(1)
+                    }
+                "#
+                .to_string(),
+            );
+            let module = resolve_source(db, source);
+
+            let mut ops = Vec::new();
+            collect_ops(db, &module.body(db), &mut ops);
+
+            assert!(
+                !has_src_call_named(db, &ops, "dbl"),
+                "use alias should resolve src.call to func.call"
+            );
+            assert!(
+                has_func_call_named(db, &ops, "double"),
+                "expected func.call to helpers::double"
+            );
         });
     }
 }

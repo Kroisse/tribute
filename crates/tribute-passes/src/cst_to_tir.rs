@@ -217,6 +217,126 @@ impl<'db, 'src> CstLoweringCtx<'db, 'src> {
 }
 
 // =============================================================================
+// Use Declaration Lowering
+// =============================================================================
+
+#[derive(Debug)]
+struct UseImport {
+    path: Vec<String>,
+    alias: Option<String>,
+}
+
+fn lower_use_decl<'db, 'src>(
+    ctx: &mut CstLoweringCtx<'db, 'src>,
+    node: Node,
+    block: &mut BlockBuilder<'db>,
+) {
+    let location = ctx.location(&node);
+    let is_pub = node
+        .named_children(&mut node.walk())
+        .any(|child| child.kind() == "visibility_marker");
+
+    let Some(tree_node) = node.child_by_field_name("tree") else {
+        return;
+    };
+
+    let mut imports = Vec::new();
+    collect_use_imports(ctx, tree_node, &mut Vec::new(), &mut imports);
+
+    for import in imports {
+        let path: IdVec<Symbol<'db>> = import
+            .path
+            .iter()
+            .map(|segment| sym(ctx.db, segment))
+            .collect();
+
+        if path.is_empty() {
+            continue;
+        }
+
+        let alias_sym = import
+            .alias
+            .as_ref()
+            .map(|alias| sym(ctx.db, alias))
+            .unwrap_or_else(|| sym(ctx.db, ""));
+
+        block.op(src::r#use(ctx.db, location, path, alias_sym, is_pub));
+    }
+}
+
+fn collect_use_imports<'db, 'src>(
+    ctx: &CstLoweringCtx<'db, 'src>,
+    node: Node,
+    base: &mut Vec<String>,
+    out: &mut Vec<UseImport>,
+) {
+    match node.kind() {
+        "use_group" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "use_tree" {
+                    collect_use_imports(ctx, child, base, out);
+                }
+            }
+        }
+        "use_tree" => {
+            let alias_node = node.child_by_field_name("alias");
+            let alias_id = alias_node.as_ref().map(|n| n.id());
+            let alias = alias_node.map(|n| node_text(&n, ctx.source).to_string());
+
+            let mut cursor = node.walk();
+            let mut head = None;
+            let mut group_node = None;
+            let mut tail_node = None;
+
+            for child in node.named_children(&mut cursor) {
+                if alias_id == Some(child.id()) {
+                    continue;
+                }
+                match child.kind() {
+                    "identifier" | "type_identifier" | "path_keyword" if head.is_none() => {
+                        head = Some(node_text(&child, ctx.source).to_string());
+                    }
+                    "use_group" => group_node = Some(child),
+                    "use_tree" => tail_node = Some(child),
+                    _ => {}
+                }
+            }
+
+            let Some(head) = head else {
+                return;
+            };
+
+            if let Some(group) = group_node {
+                let mut new_base = base.clone();
+                new_base.push(head);
+                collect_use_imports(ctx, group, &mut new_base, out);
+                return;
+            }
+
+            if let Some(tail) = tail_node {
+                let mut new_base = base.clone();
+                new_base.push(head);
+                collect_use_imports(ctx, tail, &mut new_base, out);
+                return;
+            }
+
+            if head == "self" && !base.is_empty() {
+                out.push(UseImport {
+                    path: base.clone(),
+                    alias,
+                });
+            } else {
+                let mut path = base.clone();
+                path.push(head);
+                out.push(UseImport { path, alias });
+            }
+        }
+        _ => {}
+    }
+}
+
+// =============================================================================
 // Entry Points (Salsa-tracked)
 // =============================================================================
 
@@ -324,9 +444,8 @@ fn lower_cst_impl<'db>(
                         top.op(mod_op);
                     }
                 }
-                // use_declaration is handled in name resolution
                 "use_declaration" => {
-                    // TODO: Track for name resolution
+                    lower_use_decl(&mut ctx, child, top);
                 }
                 _ => {}
             }
@@ -910,7 +1029,7 @@ fn lower_mod_body<'db, 'src>(
                 }
             }
             "use_declaration" => {
-                // TODO: Track for name resolution
+                lower_use_decl(ctx, child, builder);
             }
             _ => {}
         }
@@ -1822,7 +1941,7 @@ fn lower_call_expr<'db, 'src>(
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
 
-    let mut func_name = None;
+    let mut func_path: Option<IdVec<Symbol<'db>>> = None;
     let mut args = Vec::new();
 
     for child in node.named_children(&mut cursor) {
@@ -1830,8 +1949,19 @@ fn lower_call_expr<'db, 'src>(
             continue;
         }
         match child.kind() {
-            "identifier" if func_name.is_none() => {
-                func_name = Some(node_text(&child, ctx.source).to_string());
+            "identifier" if func_path.is_none() => {
+                func_path = Some(sym_ref(ctx.db, node_text(&child, ctx.source)));
+            }
+            "path_expression" if func_path.is_none() => {
+                let mut path_cursor = child.walk();
+                let segments: Vec<Symbol<'db>> = child
+                    .named_children(&mut path_cursor)
+                    .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
+                    .map(|n| sym(ctx.db, node_text(&n, ctx.source)))
+                    .collect();
+                if !segments.is_empty() {
+                    func_path = Some(segments.into_iter().collect());
+                }
             }
             "argument_list" => {
                 let mut arg_cursor = child.walk();
@@ -1847,13 +1977,13 @@ fn lower_call_expr<'db, 'src>(
         }
     }
 
-    let func_name = func_name?;
+    let func_path = func_path?;
     let op = block.op(src::call(
         ctx.db,
         location,
         args,
         infer_ty,
-        sym_ref(ctx.db, &func_name),
+        func_path,
     ));
     Some(op.result(ctx.db))
 }
