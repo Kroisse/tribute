@@ -352,49 +352,61 @@ fn lower_call_expr<'db, 'src>(
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
-    let mut cursor = node.walk();
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
 
-    let mut func_path: Option<IdVec<Symbol<'db>>> = None;
+    // Use field-based access for function
+    let func_node = node.child_by_field_name("function")?;
+    let func_path: IdVec<Symbol<'db>> = match func_node.kind() {
+        "identifier" => sym_ref(ctx.db, node_text(&func_node, ctx.source)),
+        "path_expression" => {
+            let mut cursor = func_node.walk();
+            let segments: IdVec<Symbol<'db>> = func_node
+                .named_children(&mut cursor)
+                .filter_map(|n| {
+                    (n.kind() == "identifier" || n.kind() == "type_identifier")
+                        .then(|| sym(ctx.db, node_text(&n, ctx.source)))
+                })
+                .collect();
+            if segments.is_empty() {
+                return None;
+            }
+            segments
+        }
+        _ => return None,
+    };
+
+    // Arguments need iteration (not a field)
+    let args = collect_argument_list(ctx, block, node);
+
+    let op = block.op(src::call(ctx.db, location, args, infer_ty, func_path));
+    Some(op.result(ctx.db))
+}
+
+/// Collect arguments from argument_list child node.
+fn collect_argument_list<'db, 'src>(
+    ctx: &mut CstLoweringCtx<'db, 'src>,
+    block: &mut BlockBuilder<'db>,
+    node: Node,
+) -> Vec<Value<'db>> {
+    let mut cursor = node.walk();
     let mut args = Vec::new();
 
     for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        match child.kind() {
-            "identifier" if func_path.is_none() => {
-                func_path = Some(sym_ref(ctx.db, node_text(&child, ctx.source)));
-            }
-            "path_expression" if func_path.is_none() => {
-                let mut path_cursor = child.walk();
-                let segments: Vec<Symbol<'db>> = child
-                    .named_children(&mut path_cursor)
-                    .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
-                    .map(|n| sym(ctx.db, node_text(&n, ctx.source)))
-                    .collect();
-                if !segments.is_empty() {
-                    func_path = Some(segments.into_iter().collect());
+        if child.kind() == "argument_list" {
+            let mut arg_cursor = child.walk();
+            for arg_child in child.named_children(&mut arg_cursor) {
+                if !is_comment(arg_child.kind())
+                    && let Some(value) = lower_expr(ctx, block, arg_child)
+                {
+                    args.push(value);
                 }
             }
-            "argument_list" => {
-                let mut arg_cursor = child.walk();
-                for arg_child in child.named_children(&mut arg_cursor) {
-                    if !is_comment(arg_child.kind())
-                        && let Some(value) = lower_expr(ctx, block, arg_child)
-                    {
-                        args.push(value);
-                    }
-                }
-            }
-            _ => {}
+            break;
         }
     }
 
-    let func_path = func_path?;
-    let op = block.op(src::call(ctx.db, location, args, infer_ty, func_path));
-    Some(op.result(ctx.db))
+    args
 }
 
 /// Lower a method call expression (UFCS).
@@ -403,52 +415,19 @@ fn lower_method_call_expr<'db, 'src>(
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
-    let mut cursor = node.walk();
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
 
-    let mut receiver_node = None;
-    let mut method_name = None;
-    let mut args = Vec::new();
-
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        match child.kind() {
-            // First expression is the receiver
-            _ if receiver_node.is_none()
-                && !matches!(child.kind(), "identifier" | "argument_list") =>
-            {
-                receiver_node = Some(child);
-            }
-            "identifier" if method_name.is_none() => {
-                method_name = Some(node_text(&child, ctx.source).to_string());
-            }
-            "argument_list" => {
-                let mut arg_cursor = child.walk();
-                for arg_child in child.named_children(&mut arg_cursor) {
-                    if !is_comment(arg_child.kind())
-                        && let Some(value) = lower_expr(ctx, block, arg_child)
-                    {
-                        args.push(value);
-                    }
-                }
-            }
-            _ => {
-                // Could be receiver
-                if receiver_node.is_none() {
-                    receiver_node = Some(child);
-                }
-            }
-        }
-    }
-
-    let receiver_node = receiver_node?;
-    let method_name = method_name?;
+    // Use field-based access
+    let receiver_node = node.child_by_field_name("receiver")?;
+    let method_node = node.child_by_field_name("method")?;
+    let method_name = node_text(&method_node, ctx.source).to_string();
 
     // Lower receiver first
     let receiver = lower_expr(ctx, block, receiver_node)?;
+
+    // Arguments need iteration (not a field)
+    let args = collect_argument_list(ctx, block, node);
 
     // UFCS: x.f(y, z) → f(x, y, z)
     let mut all_args = vec![receiver];
@@ -474,34 +453,17 @@ fn lower_lambda_expr<'db, 'src>(
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
-    let mut cursor = node.walk();
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
 
-    let mut param_names = Vec::new();
-    let mut body_node = None;
+    // Use field-based access
+    let body_node = node.child_by_field_name("body")?;
 
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        match child.kind() {
-            "parameter_list" => {
-                let (names, _types) = parse_parameter_list(ctx, child);
-                param_names = names;
-            }
-            "identifier" if param_names.is_empty() => {
-                // Single parameter without parens: fn x x + 1
-                param_names.push(node_text(&child, ctx.source).to_string());
-            }
-            _ if body_node.is_none() => {
-                body_node = Some(child);
-            }
-            _ => {}
-        }
-    }
-
-    let body_node = body_node?;
+    // Optional params field
+    let param_names = node
+        .child_by_field_name("params")
+        .map(|params| parse_parameter_list(ctx, params).0)
+        .unwrap_or_default();
 
     // Build lambda body
     let param_types: IdVec<Type<'_>> = std::iter::repeat_n(infer_ty, param_names.len()).collect();
