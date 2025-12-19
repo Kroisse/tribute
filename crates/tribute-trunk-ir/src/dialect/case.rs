@@ -129,12 +129,6 @@ dialect! {
 // === Pattern Region Builders ===
 
 /// Re-export pattern helpers from the `pat` dialect.
-///
-/// For building pattern regions, use `pat::helpers` directly:
-/// ```ignore
-/// use tribute_trunk_ir::dialect::pat::helpers;
-/// let pattern = helpers::wildcard_region(db, location);
-/// ```
 pub use super::pat::helpers as pattern;
 
 impl<'db> Arm<'db> {

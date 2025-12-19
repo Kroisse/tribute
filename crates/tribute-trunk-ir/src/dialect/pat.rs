@@ -133,6 +133,23 @@ dialect! {
 /// Helper functions for building pattern regions.
 ///
 /// These helpers create single-operation pattern regions for simple cases.
+///
+/// ```
+/// # use salsa::Database;
+/// # use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
+/// # use tribute_trunk_ir::dialect::pat::helpers;
+/// # use tribute_trunk_ir::Region;
+/// # #[salsa::tracked]
+/// # fn build_pattern(db: &dyn salsa::Database) -> Region<'_> {
+/// #     let path = PathId::new(db, std::path::PathBuf::from("test.trb"));
+/// #     let location = Location::new(path, Span::new(0, 0));
+///       helpers::wildcard_region(db, location)
+/// # }
+/// # TributeDatabaseImpl::default().attach(|db| {
+/// #     let pattern = build_pattern(db);
+/// #     let _ = pattern;
+/// # });
+/// ```
 pub mod helpers {
     use super::*;
     use crate::{Attribute, Block, DialectOp, IdVec, Operation, Region, Symbol};
