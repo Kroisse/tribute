@@ -28,8 +28,8 @@ pub struct ApplyResult<'db> {
 ///
 /// ```
 /// # use salsa::Database;
-/// # use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
-/// # use tribute_trunk_ir::{Block, Operation, Region, idvec};
+/// # use tribute_core::TributeDatabaseImpl;
+/// # use tribute_trunk_ir::{Block, Location, Operation, PathId, Region, Span, idvec};
 /// # use tribute_trunk_ir::dialect::core::Module;
 /// use tribute_passes::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
 ///
@@ -272,8 +272,8 @@ impl Default for PatternApplicator {
 mod tests {
     use super::*;
     use salsa::Database;
-    use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
-    use tribute_trunk_ir::{Attribute, idvec};
+    use tribute_core::TributeDatabaseImpl;
+    use tribute_trunk_ir::{Attribute, Location, PathId, Span, idvec};
 
     /// A simple test pattern that rewrites `test.source` → `test.target`.
     struct TestRenamePattern;

@@ -147,8 +147,8 @@ fn operation_has_type_vars(db: &dyn salsa::Database, op: &Operation<'_>) -> bool
 mod tests {
     use super::*;
     use salsa::Database;
-    use tribute_core::{Location, PathId, SourceFile, Span, TributeDatabaseImpl};
-    use tribute_trunk_ir::{Attribute, idvec};
+    use tribute_core::{SourceFile, TributeDatabaseImpl};
+    use tribute_trunk_ir::{Attribute, Location, PathId, Span, idvec};
 
     /// Helper to create a module with an operation that has type variable 42 as result.
     #[salsa::tracked]

@@ -43,10 +43,12 @@
 //! collected at the end of compilation.
 
 use salsa::Accumulator;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity, SourceFile, Span};
+use tribute_core::SourceFile;
+use tribute_trunk_ir::Span;
 use tribute_trunk_ir::dialect::core::Module;
 use tribute_trunk_ir::{Block, IdVec, Region};
 
+use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use crate::resolve::{Resolver, build_env};
 use crate::tdnr::resolve_tdnr;
 use crate::tirgen::{lower_cst, parse_cst};
@@ -166,8 +168,8 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> M
     // Get the lowered module from the previous stage
     let Some(cst) = parse_cst(db, source) else {
         // Parse failure - return empty module
-        let path = tribute_core::PathId::new(db, source.uri(db).as_str().to_owned());
-        let location = tribute_core::Location::new(path, tribute_core::Span::new(0, 0));
+        let path = tribute_trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
+        let location = tribute_trunk_ir::Location::new(path, tribute_trunk_ir::Span::new(0, 0));
         return Module::build(db, location, "main", |_| {});
     };
 

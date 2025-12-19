@@ -13,9 +13,8 @@ use std::collections::BTreeMap;
 use std::ops::Deref;
 
 use crate::{
-    Attribute, DialectType, IdVec, Region, Symbol, Type, dialect, idvec, ir::BlockBuilder,
+    Attribute, DialectType, IdVec, Location, Region, Symbol, Type, dialect, idvec, ir::BlockBuilder,
 };
-use tribute_core::Location;
 
 dialect! {
     mod core {

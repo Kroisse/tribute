@@ -17,6 +17,9 @@
 //! Use `compile` to run the full pipeline, or `compile_with_diagnostics`
 //! for detailed results including error messages.
 
+// === Diagnostics ===
+pub mod diagnostic;
+
 // === TrunkIR passes ===
 pub mod pipeline;
 pub mod resolve;
@@ -26,6 +29,7 @@ pub mod tirgen;
 pub mod typeck;
 
 // Re-exports
+pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use pipeline::{
     CompilationResult, compile, compile_with_diagnostics, stage_resolve, stage_tdnr,
     stage_typecheck,
@@ -35,6 +39,3 @@ pub use rewrite::{ApplyResult, PatternApplicator, RewriteContext, RewritePattern
 pub use tdnr::{MethodInfo, MethodRegistry, TdnrResolver, resolve_tdnr};
 pub use tirgen::{ParsedCst, lower_cst, lower_source_file, parse_cst};
 pub use typeck::{Constraint, EffectRow, TypeChecker, TypeSolver, typecheck_module};
-
-// Re-export diagnostic types from tribute-core
-pub use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};

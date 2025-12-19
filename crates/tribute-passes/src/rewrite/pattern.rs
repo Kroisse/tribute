@@ -18,8 +18,8 @@ use super::result::RewriteResult;
 ///
 /// ```
 /// # use salsa::Database;
-/// # use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
-/// # use tribute_trunk_ir::Operation;
+/// # use tribute_core::TributeDatabaseImpl;
+/// # use tribute_trunk_ir::{Location, Operation, PathId, Span};
 /// use tribute_passes::rewrite::{RewriteContext, RewritePattern, RewriteResult};
 ///
 /// struct RenamePattern;

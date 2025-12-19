@@ -2,7 +2,7 @@
 //!
 //! Builds an index from byte positions to types by walking the IR.
 
-use tribute_core::Span;
+use tribute_trunk_ir::Span;
 use tribute_trunk_ir::dialect::core::Module;
 use tribute_trunk_ir::{Block, Operation, Region, Type};
 

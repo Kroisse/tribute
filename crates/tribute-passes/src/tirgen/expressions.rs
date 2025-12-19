@@ -363,10 +363,8 @@ fn lower_call_expr<'db, 'src>(
             let mut cursor = func_node.walk();
             let segments: IdVec<Symbol<'db>> = func_node
                 .named_children(&mut cursor)
-                .filter_map(|n| {
-                    (n.kind() == "identifier" || n.kind() == "type_identifier")
-                        .then(|| sym(ctx.db, node_text(&n, ctx.source)))
-                })
+                .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
+                .map(|n| sym(ctx.db, node_text(&n, ctx.source)))
                 .collect();
             if segments.is_empty() {
                 return None;
@@ -798,7 +796,7 @@ fn extract_pattern_op<'db>(
 /// Create a region from a list of operations.
 fn ops_to_region<'db>(
     db: &'db dyn salsa::Database,
-    location: tribute_core::Location<'db>,
+    location: tribute_trunk_ir::Location<'db>,
     ops: Vec<Operation<'db>>,
 ) -> Region<'db> {
     let block = Block::new(db, location, IdVec::new(), IdVec::from(ops));

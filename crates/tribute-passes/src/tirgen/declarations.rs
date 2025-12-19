@@ -1,7 +1,7 @@
 //! Declaration lowering for functions, types, and modules.
 
 use tree_sitter::Node;
-use tribute_core::Span;
+use tribute_trunk_ir::Span;
 use tribute_trunk_ir::{
     Attribute, BlockBuilder, IdVec, Symbol, Type,
     dialect::{core, func, src, ty},
@@ -438,13 +438,13 @@ fn literal_to_attribute<'db, 'src>(
 }
 
 /// Unwrap expression wrapper nodes to get the actual literal node.
-fn unwrap_expression_node<'tree>(node: Node<'tree>, source: &str) -> Option<Node<'tree>> {
+fn unwrap_expression_node<'tree>(node: Node<'tree>, _source: &str) -> Option<Node<'tree>> {
     match node.kind() {
         "primary_expression" | "expression" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 if !is_comment(child.kind()) {
-                    return unwrap_expression_node(child, source);
+                    return unwrap_expression_node(child, _source);
                 }
             }
             None

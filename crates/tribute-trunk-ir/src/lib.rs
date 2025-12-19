@@ -8,6 +8,7 @@ pub mod dialect;
 
 // === IR infrastructure ===
 pub mod ir;
+pub mod location;
 pub mod ops;
 pub mod type_interface;
 pub mod types;
@@ -19,10 +20,8 @@ pub use paste;
 // Re-export smallvec for use in macros and external crates
 pub use smallvec;
 
-// Re-export Location for use in macros
-pub use tribute_core::Location;
-
 pub use ir::{Block, BlockBuilder, Operation, Region, Symbol, Value, ValueDef};
+pub use location::{Location, PathId, Span, Spanned};
 pub use ops::{ConversionError, DialectOp};
 pub use types::{Attribute, Attrs, DialectType, Type};
 

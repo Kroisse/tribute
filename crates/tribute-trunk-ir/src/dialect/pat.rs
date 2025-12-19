@@ -136,9 +136,9 @@ dialect! {
 ///
 /// ```
 /// # use salsa::Database;
-/// # use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
+/// # use tribute_core::TributeDatabaseImpl;
+/// # use tribute_trunk_ir::{Location, PathId, Region, Span};
 /// # use tribute_trunk_ir::dialect::pat::helpers;
-/// # use tribute_trunk_ir::Region;
 /// # #[salsa::tracked]
 /// # fn build_pattern(db: &dyn salsa::Database) -> Region<'_> {
 /// #     let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -152,8 +152,8 @@ dialect! {
 /// ```
 pub mod helpers {
     use super::*;
+    use crate::Location;
     use crate::{Attribute, Block, DialectOp, IdVec, Operation, Region, Symbol};
-    use tribute_core::Location;
 
     /// Create a wildcard pattern region (`_`).
     pub fn wildcard_region<'db>(

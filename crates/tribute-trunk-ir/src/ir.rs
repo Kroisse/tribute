@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::Location;
 use crate::{Attribute, IdVec, Type};
-use tribute_core::Location;
 
 // ============================================================================
 // Interned Types
@@ -288,12 +288,12 @@ impl<'db> BlockBuilder<'db> {
 mod tests {
     use super::*;
     use crate::{
-        DialectOp, DialectType,
+        DialectOp, DialectType, Location, PathId, Span,
         dialect::{arith, core, func},
         idvec,
     };
     use salsa::Database;
-    use tribute_core::{PathId, Span, TributeDatabaseImpl};
+    use tribute_core::TributeDatabaseImpl;
 
     #[salsa::tracked]
     fn build_sample_module(db: &dyn salsa::Database) -> Operation<'_> {
@@ -337,9 +337,11 @@ mod tests {
 
     // Test the new define_op! macro
     mod define_op_tests {
-        use crate::{Attribute, DialectType, Region, dialect, dialect::core, idvec};
+        use crate::{
+            Attribute, DialectType, Location, PathId, Region, Span, dialect, dialect::core, idvec,
+        };
         use salsa::Database;
-        use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
+        use tribute_core::TributeDatabaseImpl;
 
         // Test: dialect! macro for grouping ops
         dialect! {

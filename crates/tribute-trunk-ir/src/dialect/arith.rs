@@ -1,8 +1,7 @@
 //! Arithmetic dialect operations.
 
 use super::core;
-use crate::{Attribute, DialectType, dialect};
-use tribute_core::Location;
+use crate::{Attribute, DialectType, Location, dialect};
 
 dialect! {
     mod arith {

@@ -16,8 +16,8 @@
 //!
 //! ```
 //! # use salsa::Database;
-//! # use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
-//! # use tribute_trunk_ir::{Block, Operation, Region, idvec};
+//! # use tribute_core::TributeDatabaseImpl;
+//! # use tribute_trunk_ir::{Block, Location, Operation, PathId, Region, Span, idvec};
 //! # use tribute_trunk_ir::dialect::core::Module;
 //! use tribute_passes::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
 //!

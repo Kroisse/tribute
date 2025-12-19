@@ -2,8 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{IdVec, Symbol};
-use tribute_core::Span;
+use crate::{IdVec, Span, Symbol};
 
 /// Trait for dialect-specific type wrappers.
 ///

@@ -12,8 +12,8 @@
 
 use std::collections::HashMap;
 
+use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_trunk_ir::{
     Attribute, DialectOp, DialectType, Operation, Region, Symbol, Type, Value,
     dialect::{core, func, ty},
@@ -1131,13 +1131,14 @@ pub fn typecheck_module_per_function<'db>(
 mod tests {
     use super::*;
     use salsa::Database;
-    use tribute_core::{PathId, Span, TributeDatabaseImpl};
+    use tribute_core::TributeDatabaseImpl;
     use tribute_trunk_ir::dialect::arith;
+    use tribute_trunk_ir::{PathId, Span};
 
     #[salsa::tracked]
     fn build_simple_module(db: &dyn salsa::Database) -> core::Module<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
-        let location = tribute_core::Location::new(path, Span::new(0, 0));
+        let location = tribute_trunk_ir::Location::new(path, Span::new(0, 0));
 
         core::Module::build(db, location, "test", |entry| {
             let _ = entry.op(arith::Const::i64(db, location, 42));
@@ -1147,7 +1148,7 @@ mod tests {
     #[salsa::tracked]
     fn build_arith_module(db: &dyn salsa::Database) -> core::Module<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
-        let location = tribute_core::Location::new(path, Span::new(0, 0));
+        let location = tribute_trunk_ir::Location::new(path, Span::new(0, 0));
         let i64_ty = *core::I64::new(db);
 
         core::Module::build(db, location, "test", |entry| {

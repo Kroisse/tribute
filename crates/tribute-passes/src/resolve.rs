@@ -19,8 +19,8 @@
 
 use std::collections::HashMap;
 
+use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
-use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_trunk_ir::dialect::adt;
 use tribute_trunk_ir::dialect::core::{self, Module};
 use tribute_trunk_ir::dialect::func;

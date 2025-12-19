@@ -211,9 +211,9 @@ impl LspServer {
                 Diagnostic {
                     range,
                     severity: Some(match d.severity {
-                        tribute_core::DiagnosticSeverity::Error => DiagnosticSeverity::ERROR,
-                        tribute_core::DiagnosticSeverity::Warning => DiagnosticSeverity::WARNING,
-                        tribute_core::DiagnosticSeverity::Info => DiagnosticSeverity::INFORMATION,
+                        tribute_passes::DiagnosticSeverity::Error => DiagnosticSeverity::ERROR,
+                        tribute_passes::DiagnosticSeverity::Warning => DiagnosticSeverity::WARNING,
+                        tribute_passes::DiagnosticSeverity::Info => DiagnosticSeverity::INFORMATION,
                     }),
                     message: d.message.clone(),
                     source: Some("tribute".to_string()),

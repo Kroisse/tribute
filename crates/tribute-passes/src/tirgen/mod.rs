@@ -20,8 +20,9 @@ mod literals;
 mod statements;
 
 use tree_sitter::{Node, Parser};
-use tribute_core::{Location, PathId, SourceFile, Span};
+use tribute_core::SourceFile;
 use tribute_trunk_ir::dialect::core;
+use tribute_trunk_ir::{Location, PathId, Span};
 
 pub use helpers::ParsedCst;
 

@@ -1,10 +1,9 @@
 //! Function dialect operations.
 use super::core;
 use crate::{
-    Attribute, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, dialect, idvec,
-    ir::BlockBuilder,
+    Attribute, DialectOp, DialectType, IdVec, Location, Operation, Region, Span, Symbol, Type,
+    dialect, idvec, ir::BlockBuilder,
 };
-use tribute_core::{Location, Span};
 
 dialect! {
     mod func {

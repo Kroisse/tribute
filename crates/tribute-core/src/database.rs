@@ -2,40 +2,6 @@ use std::path::Path;
 
 use dashmap::{DashMap, Entry};
 use fluent_uri::Uri;
-use serde::{Deserialize, Serialize};
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-}
-
-impl Span {
-    pub const fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
-    }
-}
-
-pub type Spanned<T> = (T, Span);
-
-#[salsa::interned(debug)]
-pub struct PathId {
-    /// URI string (e.g., "file:///path/to/file.trb")
-    #[returns(deref)]
-    pub uri: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
-pub struct Location<'db> {
-    pub path: PathId<'db>,
-    pub span: Span,
-}
-
-impl<'db> Location<'db> {
-    pub const fn new(path: PathId<'db>, span: Span) -> Self {
-        Self { path, span }
-    }
-}
 
 #[salsa::input(debug)]
 pub struct SourceFile {
@@ -132,41 +98,6 @@ impl Db for TributeDatabaseImpl {
                 let source_file = SourceFile::new(self, uri, contents);
                 Ok(*entry.insert(source_file))
             }
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[salsa::accumulator]
-pub struct Diagnostic {
-    pub message: String,
-    pub span: Span,
-    pub severity: DiagnosticSeverity,
-    pub phase: CompilationPhase,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum DiagnosticSeverity {
-    Error,
-    Warning,
-    Info,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum CompilationPhase {
-    Parsing,
-    TirGeneration,
-    NameResolution,
-    TypeChecking,
-    Optimization,
-}
-
-impl std::fmt::Display for DiagnosticSeverity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DiagnosticSeverity::Error => write!(f, "ERROR"),
-            DiagnosticSeverity::Warning => write!(f, "WARNING"),
-            DiagnosticSeverity::Info => write!(f, "INFO"),
         }
     }
 }

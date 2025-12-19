@@ -31,8 +31,7 @@
 //! }
 //! ```
 
-use crate::dialect;
-use tribute_core::Location;
+use crate::{Location, dialect};
 
 dialect! {
     mod case {

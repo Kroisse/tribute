@@ -3,7 +3,7 @@
 use std::hash::{Hash, Hasher};
 
 use tree_sitter::{Node, Tree};
-use tribute_core::Span;
+use tribute_trunk_ir::Span;
 use tribute_trunk_ir::{IdVec, Symbol, idvec};
 
 // =============================================================================
