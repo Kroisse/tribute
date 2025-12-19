@@ -5,6 +5,10 @@ mod lsp;
 
 use clap::Parser;
 use cli::{Cli, Command};
+use salsa::Database;
+use tribute_core::{SourceFile, TributeDatabaseImpl};
+use tribute_passes::pipeline::{compile_with_diagnostics, stage_resolve};
+use tribute_passes::resolve::build_env;
 
 fn main() {
     let cli = Cli::parse();
@@ -16,5 +20,45 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Command::Debug { file, show_env } => {
+            debug_file(file, show_env);
+        }
     }
+}
+
+fn debug_file(path: std::path::PathBuf, show_env: bool) {
+    let source_code = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("Error reading file: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    TributeDatabaseImpl::default().attach(|db| {
+        println!("=== Compiling: {} ===\n", path.display());
+
+        let source = SourceFile::new(db, path.clone(), source_code);
+        let result = compile_with_diagnostics(db, source);
+
+        // Show diagnostics
+        if result.diagnostics.is_empty() {
+            println!("✓ No errors");
+        } else {
+            println!("Diagnostics ({} total):", result.diagnostics.len());
+            for diag in &result.diagnostics {
+                println!("  [{:?}] {}", diag.phase, diag.message);
+            }
+        }
+
+        // Show environment if requested
+        if show_env {
+            println!("\n=== Module Environment ===");
+            let resolved = stage_resolve(db, source);
+            let env = build_env(db, &resolved);
+            println!("{:#?}", env);
+        }
+
+        println!();
+    });
 }

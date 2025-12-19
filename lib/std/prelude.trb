@@ -14,3 +14,9 @@ enum Result(a, e) {
     Ok(a),
     Err(e),
 }
+
+/// Print a line to standard output.
+/// This is a placeholder implementation.
+fn print_line(message: String) -> Nil {
+    Nil
+}
