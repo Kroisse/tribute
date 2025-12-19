@@ -141,7 +141,7 @@ dialect! {
 /// # use tribute_trunk_ir::Region;
 /// # #[salsa::tracked]
 /// # fn build_pattern(db: &dyn salsa::Database) -> Region<'_> {
-/// #     let path = PathId::new(db, std::path::PathBuf::from("test.trb"));
+/// #     let path = PathId::new(db, "file:///test.trb".to_owned());
 /// #     let location = Location::new(path, Span::new(0, 0));
 ///       helpers::wildcard_region(db, location)
 /// # }

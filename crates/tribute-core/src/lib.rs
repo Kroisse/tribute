@@ -6,4 +6,5 @@ pub mod database;
 pub mod target;
 
 pub use database::*;
+pub use fluent_uri::Uri;
 pub use target::*;

@@ -38,7 +38,7 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
     TributeDatabaseImpl::default().attach(|db| {
         println!("=== Compiling: {} ===\n", path.display());
 
-        let source = SourceFile::new(db, path.clone(), source_code);
+        let source = SourceFile::from_path(db, &path, source_code);
         let result = compile_with_diagnostics(db, source);
 
         // Show diagnostics

@@ -64,7 +64,7 @@ pub fn lower_cst<'db>(
     source: SourceFile,
     cst: ParsedCst,
 ) -> core::Module<'db> {
-    let path = PathId::new(db, source.path(db));
+    let path = PathId::new(db, source.uri(db).as_str().to_owned());
     let text = source.text(db);
     let root = cst.root_node();
     let location = Location::new(path, span_from_node(&root));
@@ -81,7 +81,7 @@ pub fn lower_source_file<'db>(
     db: &'db dyn salsa::Database,
     source: SourceFile,
 ) -> core::Module<'db> {
-    let path = PathId::new(db, source.path(db));
+    let path = PathId::new(db, source.uri(db).as_str().to_owned());
 
     match parse_cst(db, source) {
         Some(cst) => lower_cst(db, source, cst),
@@ -157,11 +157,11 @@ fn lower_cst_impl<'db>(
 mod tests {
     use super::*;
     use tribute_core::TributeDatabaseImpl;
-    use tribute_trunk_ir::dialect::{func, src};
     use tribute_trunk_ir::DialectOp;
+    use tribute_trunk_ir::dialect::{func, src};
 
     fn lower_and_get_module<'db>(db: &'db TributeDatabaseImpl, source: &str) -> core::Module<'db> {
-        let file = SourceFile::new(db, std::path::PathBuf::from("test.tr"), source.to_string());
+        let file = SourceFile::from_path(db, "test.trb", source.to_string());
         lower_source_file(db, file)
     }
 
@@ -400,7 +400,10 @@ mod tests {
         assert!(!nested_blocks.is_empty());
 
         let nested_ops = nested_blocks[0].operations(&db);
-        assert!(!nested_ops.is_empty(), "Nested module should have operations");
+        assert!(
+            !nested_ops.is_empty(),
+            "Nested module should have operations"
+        );
 
         let func_op =
             func::Func::from_operation(&db, nested_ops[0]).expect("Should be a func.func");
@@ -439,8 +442,7 @@ mod tests {
         let inner_body = inner_module.body(&db);
         let inner_blocks = inner_body.blocks(&db);
         let inner_ops = inner_blocks[0].operations(&db);
-        let func_op =
-            func::Func::from_operation(&db, inner_ops[0]).expect("Should be a func.func");
+        let func_op = func::Func::from_operation(&db, inner_ops[0]).expect("Should be a func.func");
         assert_eq!(func_op.name(&db), "value");
     }
 }

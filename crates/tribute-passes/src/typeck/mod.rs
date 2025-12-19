@@ -22,8 +22,13 @@ mod effect_row;
 mod solver;
 mod subst;
 
-pub use checker::{TypeChecker, typecheck_module};
+pub use checker::{
+    FunctionTypeResult, TypeChecker, typecheck_function, typecheck_module,
+    typecheck_module_per_function,
+};
 pub use constraint::Constraint;
 pub use effect_row::EffectRow;
 pub use solver::TypeSolver;
-pub use subst::{apply_subst_to_module, has_type_vars, module_has_type_vars};
+pub use subst::{
+    apply_subst_to_module, apply_subst_to_region, has_type_vars, module_has_type_vars,
+};

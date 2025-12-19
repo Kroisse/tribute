@@ -59,7 +59,7 @@ fn incremental_compilation_demo() {
     let mut db = TributeDatabaseImpl::default();
 
     // Create a source file
-    let source_file = SourceFile::new(&db, "math.tr".into(), "fn main() { 1 + 2 }".to_string());
+    let source_file = SourceFile::from_path(&db, "math.trb", "fn main() { 1 + 2 }".to_string());
 
     // Lower it
     println!("Initial lowering...");

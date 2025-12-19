@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use tree_sitter::Node;
 use tribute_core::{Location, PathId};
-use tribute_trunk_ir::{DialectType, IdVec, Type, Value, dialect::{core, ty}};
+use tribute_trunk_ir::{
+    DialectType, IdVec, Type, Value,
+    dialect::{core, ty},
+};
 
 use super::helpers::{node_text, span_from_node};
 

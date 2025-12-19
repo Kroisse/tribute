@@ -536,8 +536,7 @@ impl<'db> Resolver<'db> {
                     match binding {
                         Binding::TypeDef { ty } => return *ty,
                         Binding::Module {
-                            type_def: Some(ty),
-                            ..
+                            type_def: Some(ty), ..
                         } => return *ty,
                         _ => {}
                     }
@@ -833,8 +832,10 @@ impl<'db> Resolver<'db> {
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
                     let name = sym.text(self.db).to_string();
                     // Pattern binding - value comes from pattern matching at runtime
-                    let infer_ty =
-                        tribute_trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty = tribute_trunk_ir::dialect::ty::var(
+                        self.db,
+                        std::collections::BTreeMap::new(),
+                    );
                     self.add_local(name, LocalBinding::PatternBinding { ty: infer_ty });
                 }
             }
@@ -844,8 +845,10 @@ impl<'db> Resolver<'db> {
                 let name_key = Symbol::new(self.db, "name");
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
                     let name = sym.text(self.db).to_string();
-                    let infer_ty =
-                        tribute_trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty = tribute_trunk_ir::dialect::ty::var(
+                        self.db,
+                        std::collections::BTreeMap::new(),
+                    );
                     self.add_local(name, LocalBinding::PatternBinding { ty: infer_ty });
                 }
                 // Also collect from inner pattern region
@@ -859,8 +862,10 @@ impl<'db> Resolver<'db> {
                 let name_key = Symbol::new(self.db, "rest_name");
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
                     let name = sym.text(self.db).to_string();
-                    let infer_ty =
-                        tribute_trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty = tribute_trunk_ir::dialect::ty::var(
+                        self.db,
+                        std::collections::BTreeMap::new(),
+                    );
                     self.add_local(name, LocalBinding::PatternBinding { ty: infer_ty });
                 }
                 // Also collect from head pattern region
@@ -1342,8 +1347,8 @@ pub fn resolve_module<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) -
 mod tests {
     use super::*;
     use salsa::Database;
-    use tribute_core::TributeDatabaseImpl;
     use tribute_core::SourceFile;
+    use tribute_core::TributeDatabaseImpl;
 
     #[salsa::tracked]
     fn resolve_source<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
@@ -1356,7 +1361,11 @@ mod tests {
         resolver.resolve_module(&module)
     }
 
-    fn collect_ops<'db>(db: &'db dyn salsa::Database, region: &Region<'db>, out: &mut Vec<Operation<'db>>) {
+    fn collect_ops<'db>(
+        db: &'db dyn salsa::Database,
+        region: &Region<'db>,
+        out: &mut Vec<Operation<'db>>,
+    ) {
         for block in region.blocks(db).iter() {
             for op in block.operations(db).iter() {
                 out.push(*op);
@@ -1412,11 +1421,8 @@ mod tests {
             use crate::tirgen::{lower_cst, parse_cst};
             use tribute_core::SourceFile;
 
-            let source = SourceFile::new(
-                db,
-                "test.trb".into(),
-                "fn hello() -> Int { 42 }".to_string(),
-            );
+            let source =
+                SourceFile::from_path(db, "test.trb", "fn hello() -> Int { 42 }".to_string());
 
             let cst = parse_cst(db, source).expect("parse should succeed");
             let module = lower_cst(db, source, cst);
@@ -1440,9 +1446,9 @@ mod tests {
             use crate::tirgen::{lower_cst, parse_cst};
             use tribute_core::SourceFile;
 
-            let source = SourceFile::new(
+            let source = SourceFile::from_path(
                 db,
-                "test.trb".into(),
+                "test.trb",
                 r#"
                     pub mod math {
                         pub fn add(x: Int, y: Int) -> Int { x + y }
@@ -1468,7 +1474,10 @@ mod tests {
             );
 
             // Should not find 'add' at top level
-            assert!(env.lookup("add").is_none(), "add should not be at top level");
+            assert!(
+                env.lookup("add").is_none(),
+                "add should not be at top level"
+            );
         });
     }
 
@@ -1478,9 +1487,9 @@ mod tests {
             use crate::tirgen::{lower_cst, parse_cst};
             use tribute_core::SourceFile;
 
-            let source = SourceFile::new(
+            let source = SourceFile::from_path(
                 db,
-                "test.trb".into(),
+                "test.trb",
                 r#"
                     pub mod outer {
                         pub mod inner {
@@ -1511,9 +1520,9 @@ mod tests {
     #[test]
     fn test_use_import_resolves_call() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = SourceFile::new(
+            let source = SourceFile::from_path(
                 db,
-                "test.trb".into(),
+                "test.trb",
                 r#"
                     pub mod helpers {
                         pub fn double(x: Int) -> Int { x * 2 }
@@ -1546,9 +1555,9 @@ mod tests {
     #[test]
     fn test_use_alias_resolves_call() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = SourceFile::new(
+            let source = SourceFile::from_path(
                 db,
-                "test.trb".into(),
+                "test.trb",
                 r#"
                     pub mod helpers {
                         pub fn double(x: Int) -> Int { x * 2 }

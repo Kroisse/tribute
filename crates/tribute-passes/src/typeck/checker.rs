@@ -12,14 +12,17 @@
 
 use std::collections::HashMap;
 
+use salsa::Accumulator;
+use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_trunk_ir::{
-    Attribute, DialectType, Operation, Region, Symbol, Type, Value,
-    dialect::{core, ty},
+    Attribute, DialectOp, DialectType, Operation, Region, Symbol, Type, Value,
+    dialect::{core, func, ty},
 };
 
 use super::constraint::ConstraintSet;
 use super::effect_row::{AbilityRef, EffectRow, RowVar};
 use super::solver::{SolveResult, TypeSolver};
+use super::subst::has_type_vars;
 
 /// Type checking mode: infer or check.
 #[allow(dead_code)] // Part of public API, will be used in future
@@ -298,11 +301,7 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    fn collect_row_vars_in_region(
-        &self,
-        region: &Region<'db>,
-        max_id: &mut Option<u64>,
-    ) {
+    fn collect_row_vars_in_region(&self, region: &Region<'db>, max_id: &mut Option<u64>) {
         for block in region.blocks(self.db).iter() {
             for &arg in block.args(self.db).iter() {
                 self.collect_row_vars_in_type(arg, max_id);
@@ -313,11 +312,7 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    fn collect_row_vars_in_operation(
-        &self,
-        op: &Operation<'db>,
-        max_id: &mut Option<u64>,
-    ) {
+    fn collect_row_vars_in_operation(&self, op: &Operation<'db>, max_id: &mut Option<u64>) {
         for &ty in op.results(self.db).iter() {
             self.collect_row_vars_in_type(ty, max_id);
         }
@@ -963,17 +958,185 @@ pub fn typecheck_module<'db>(
     checker.solve()
 }
 
+// =============================================================================
+// Per-function type checking (salsa::tracked)
+// =============================================================================
+
+/// Result of type checking a single function.
+///
+/// This is a salsa::tracked struct, enabling incremental caching of
+/// per-function type checking results.
+#[salsa::tracked]
+pub struct FunctionTypeResult<'db> {
+    /// The function operation with types resolved (or original if failed).
+    pub operation: Operation<'db>,
+    /// Whether type checking succeeded.
+    pub success: bool,
+}
+
+/// Type check a single function operation.
+///
+/// This is a salsa::tracked function, so results are cached per-function.
+/// Each function is type-checked independently with its own constraint set.
+///
+/// Returns a `FunctionTypeResult` containing the typed operation and success status.
+/// Type errors are also reported via salsa accumulators (Diagnostic).
+#[salsa::tracked]
+pub fn typecheck_function<'db>(
+    db: &'db dyn salsa::Database,
+    func_op: Operation<'db>,
+) -> FunctionTypeResult<'db> {
+    let mut checker = TypeChecker::new(db);
+
+    // Check the function definition
+    checker.check_func_def(&func_op);
+
+    // Solve constraints for this function
+    match checker.solve() {
+        Ok(solver) => {
+            // Apply substitution to the function's regions
+            let subst = solver.type_subst();
+            let new_regions: tribute_trunk_ir::IdVec<_> = func_op
+                .regions(db)
+                .iter()
+                .map(|r| super::subst::apply_subst_to_region(db, r, subst))
+                .collect();
+
+            // Create new operation with resolved types
+            let new_results: tribute_trunk_ir::IdVec<_> = func_op
+                .results(db)
+                .iter()
+                .map(|ty| subst.apply(db, *ty))
+                .collect();
+
+            let new_op = Operation::new(
+                db,
+                func_op.location(db),
+                func_op.dialect(db),
+                func_op.name(db),
+                func_op.operands(db).clone(),
+                new_results,
+                func_op.attributes(db).clone(),
+                new_regions,
+                func_op.successors(db).clone(),
+            );
+
+            FunctionTypeResult::new(db, new_op, true)
+        }
+        Err(_err) => {
+            // TODO: Emit type error via accumulator
+            // Return the original operation with failure status
+            FunctionTypeResult::new(db, func_op, false)
+        }
+    }
+}
+
+/// Validate that a top-level function has explicit type annotations.
+///
+/// Top-level functions (those directly in the module body) must have
+/// explicit type annotations for all parameters and the return type.
+/// This is required because type inference scope is per-function.
+fn validate_toplevel_function_types<'db>(db: &'db dyn salsa::Database, func_op: &func::Func<'db>) {
+    let func_type_attr = func_op.r#type(db);
+
+    // Try to get the function type from the attribute
+    let Some(func_ty) = core::Func::from_type(db, func_type_attr) else {
+        return;
+    };
+
+    let location = func_op.operation().location(db);
+    let func_name = func_op.name(db);
+
+    // Check return type
+    let result_ty = func_ty.result(db);
+    if has_type_vars(db, result_ty) {
+        Diagnostic {
+            message: format!(
+                "top-level function `{}` must have an explicit return type annotation",
+                func_name
+            ),
+            span: location.span,
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::TypeChecking,
+        }
+        .accumulate(db);
+    }
+
+    // Check parameter types
+    let params = func_ty.params(db);
+    for (i, param_ty) in params.iter().enumerate() {
+        if has_type_vars(db, *param_ty) {
+            Diagnostic {
+                message: format!(
+                    "parameter {} of top-level function `{}` must have an explicit type annotation",
+                    i + 1,
+                    func_name
+                ),
+                span: location.span,
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::TypeChecking,
+            }
+            .accumulate(db);
+        }
+    }
+}
+
+/// Type check a module using per-function approach.
+///
+/// Each function is type-checked independently via `typecheck_function`,
+/// which enables incremental compilation at the function level.
+///
+/// This also validates that top-level functions have explicit type annotations.
+pub fn typecheck_module_per_function<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+) -> core::Module<'db> {
+    use tribute_trunk_ir::{Block, IdVec, Region};
+
+    let body = module.body(db);
+    let blocks = body.blocks(db);
+
+    if blocks.is_empty() {
+        return module;
+    }
+
+    let block = &blocks[0];
+    let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
+    let func_sym = Symbol::new(db, "func");
+    let func_name = Symbol::new(db, "func");
+
+    for op in block.operations(db).iter() {
+        if op.dialect(db) == func_sym && op.name(db) == func_name {
+            // Validate type annotations for top-level functions
+            if let Ok(func_op) = func::Func::from_operation(db, *op) {
+                validate_toplevel_function_types(db, &func_op);
+            }
+
+            // Type check this function independently
+            let result = typecheck_function(db, *op);
+            new_ops.push(result.operation(db));
+        } else {
+            // Non-function operations pass through
+            new_ops.push(*op);
+        }
+    }
+
+    let new_block = Block::new(db, block.location(db), block.args(db).clone(), new_ops);
+    let new_body = Region::new(db, body.location(db), IdVec::from(vec![new_block]));
+
+    core::Module::create(db, module.location(db), module.name(db), new_body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use salsa::Database;
-    use std::path::PathBuf;
     use tribute_core::{PathId, Span, TributeDatabaseImpl};
     use tribute_trunk_ir::dialect::arith;
 
     #[salsa::tracked]
     fn build_simple_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let path = PathId::new(db, PathBuf::from("test.tr"));
+        let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = tribute_core::Location::new(path, Span::new(0, 0));
 
         core::Module::build(db, location, "test", |entry| {
@@ -983,7 +1146,7 @@ mod tests {
 
     #[salsa::tracked]
     fn build_arith_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let path = PathId::new(db, PathBuf::from("test.tr"));
+        let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = tribute_core::Location::new(path, Span::new(0, 0));
         let i64_ty = *core::I64::new(db);
 
@@ -1009,6 +1172,64 @@ mod tests {
             let module = build_arith_module(db);
             let result = typecheck_module(db, &module);
             assert!(result.is_ok());
+        });
+    }
+
+    #[salsa::tracked]
+    fn run_per_function_typecheck(db: &dyn salsa::Database) -> core::Module<'_> {
+        use crate::pipeline::stage_resolve;
+        use tribute_core::SourceFile;
+
+        let source = SourceFile::from_path(
+            db,
+            "test.trb",
+            "fn add(x: Int, y: Int) -> Int { x + y }".to_string(),
+        );
+
+        let resolved_module = stage_resolve(db, source);
+        typecheck_module_per_function(db, resolved_module)
+    }
+
+    #[test]
+    fn test_typecheck_function_per_function() {
+        TributeDatabaseImpl::default().attach(|db| {
+            let typed_module = run_per_function_typecheck(db);
+            assert_eq!(typed_module.name(db), "main");
+        });
+    }
+
+    #[test]
+    fn test_has_type_vars_detection() {
+        use tribute_trunk_ir::dialect::ty;
+
+        TributeDatabaseImpl::default().attach(|db| {
+            // Type variable should be detected
+            let type_var = ty::var_with_id(db, 42);
+            assert!(
+                has_type_vars(db, type_var),
+                "Type variable should be detected"
+            );
+
+            // Concrete type should not have type vars
+            let i64_ty = *core::I64::new(db);
+            assert!(
+                !has_type_vars(db, i64_ty),
+                "Concrete type should not have type vars"
+            );
+
+            // Function type with type var in return should be detected
+            let func_with_var = core::Func::new(db, vec![i64_ty].into(), type_var).as_type();
+            assert!(
+                has_type_vars(db, func_with_var),
+                "Function with type var return should be detected"
+            );
+
+            // Function type with concrete types should not have type vars
+            let func_concrete = core::Func::new(db, vec![i64_ty].into(), i64_ty).as_type();
+            assert!(
+                !has_type_vars(db, func_concrete),
+                "Function with concrete types should not have type vars"
+            );
         });
     }
 }

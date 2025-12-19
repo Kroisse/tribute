@@ -40,7 +40,7 @@ use super::result::RewriteResult;
 /// }
 /// # #[salsa::tracked]
 /// # fn make_op(db: &dyn salsa::Database) -> Operation<'_> {
-/// #     let path = PathId::new(db, std::path::PathBuf::from("test.trb"));
+/// #     let path = PathId::new(db, "file:///test.trb".to_owned());
 /// #     let location = Location::new(path, Span::new(0, 0));
 /// #     Operation::of_name(db, location, "test.source").build()
 /// # }

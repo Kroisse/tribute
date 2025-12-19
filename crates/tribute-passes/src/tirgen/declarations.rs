@@ -9,7 +9,10 @@ use tribute_trunk_ir::{
 
 use super::context::CstLoweringCtx;
 use super::helpers::{is_comment, node_text, sym};
-use super::literals::{parse_int_literal, parse_nat_literal, parse_float_literal, parse_rune_literal, parse_string_literal};
+use super::literals::{
+    parse_float_literal, parse_int_literal, parse_nat_literal, parse_rune_literal,
+    parse_string_literal,
+};
 use super::statements::lower_block_body;
 
 // =============================================================================

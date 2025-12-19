@@ -23,7 +23,7 @@ pub fn apply_subst_to_module<'db>(
 }
 
 /// Apply type substitution to a region.
-fn apply_subst_to_region<'db>(
+pub fn apply_subst_to_region<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
     subst: &TypeSubst<'db>,
@@ -147,14 +147,13 @@ fn operation_has_type_vars(db: &dyn salsa::Database, op: &Operation<'_>) -> bool
 mod tests {
     use super::*;
     use salsa::Database;
-    use std::path::PathBuf;
     use tribute_core::{Location, PathId, SourceFile, Span, TributeDatabaseImpl};
     use tribute_trunk_ir::{Attribute, idvec};
 
     /// Helper to create a module with an operation that has type variable 42 as result.
     #[salsa::tracked]
     fn make_module_with_type_var_42(db: &dyn salsa::Database) -> core::Module<'_> {
-        let path = PathId::new(db, PathBuf::from("test.tr"));
+        let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
         let type_var = ty::var_with_id(db, 42);
 
@@ -177,7 +176,7 @@ mod tests {
     /// Helper to create a module with an operation that has type variable 1 as result.
     #[salsa::tracked]
     fn make_module_with_type_var_1(db: &dyn salsa::Database) -> core::Module<'_> {
-        let path = PathId::new(db, PathBuf::from("test.tr"));
+        let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
         let type_var = ty::var_with_id(db, 1);
 
@@ -200,7 +199,7 @@ mod tests {
     /// Helper to create a module with a concrete type result.
     #[salsa::tracked]
     fn make_module_with_concrete_type(db: &dyn salsa::Database) -> core::Module<'_> {
-        let path = PathId::new(db, PathBuf::from("test.tr"));
+        let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
         let i64_ty = *core::I64::new(db);
 
@@ -319,9 +318,9 @@ mod tests {
 
         TributeDatabaseImpl::default().attach(|db| {
             // Simple function with explicit types
-            let source = SourceFile::new(
+            let source = SourceFile::from_path(
                 db,
-                PathBuf::from("test.tr"),
+                "test.trb",
                 "fn add(x: Int, y: Int) -> Int { x + y }".to_string(),
             );
 

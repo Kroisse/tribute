@@ -385,6 +385,42 @@ let h = compose(
 
 ## Design Rules
 
+### Function Type Annotation 규칙
+
+**Top-level 함수는 반드시 타입을 명시**해야 한다:
+
+```rust
+// OK: 파라미터와 반환 타입 명시
+fn add(x: Int, y: Int) -> Int { x + y }
+
+// OK: effect도 명시 가능 (생략 시 암묵적 polymorphic)
+fn fetch(url: String) ->{Http} Response { ... }
+
+// Error: 파라미터 타입 누락
+fn add(x, y) -> Int { x + y }
+
+// Error: 반환 타입 누락
+fn add(x: Int, y: Int) { x + y }
+```
+
+**중첩 함수와 람다는 추론 가능**:
+
+```rust
+fn example() -> Int {
+    let double = fn(x) x * 2  // OK: 람다 타입 추론됨
+    let result = [1, 2, 3].map(fn(x) x + 1)  // OK
+    double(21)
+}
+```
+
+**이유**:
+1. **문서화**: 모듈의 공개 API는 명시적 타입이 필수
+2. **에러 지역화**: 타입 에러가 함수 경계를 넘어 전파되지 않음
+3. **증분 컴파일**: 함수 단위로 Salsa 캐싱 가능
+4. **별도 컴파일**: 모듈 간 의존성 분석에 시그니처만 필요
+
+**추론 범위**: 타입 추론은 **함수 본문 내부에서만** 동작한다. 각 함수는 독립적으로 타입 체크되며, 함수 간에 타입 변수가 공유되지 않는다.
+
 ### Effect Annotation 규칙
 
 Effect annotation을 생략하면 fresh한 ability 변수가 생성된다:

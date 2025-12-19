@@ -293,12 +293,11 @@ mod tests {
         idvec,
     };
     use salsa::Database;
-    use std::path::PathBuf;
     use tribute_core::{PathId, Span, TributeDatabaseImpl};
 
     #[salsa::tracked]
     fn build_sample_module(db: &dyn salsa::Database) -> Operation<'_> {
-        let path = PathId::new(db, PathBuf::from("test.tr"));
+        let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
 
         let main_func = func::Func::build(
@@ -340,7 +339,6 @@ mod tests {
     mod define_op_tests {
         use crate::{Attribute, DialectType, Region, dialect, dialect::core, idvec};
         use salsa::Database;
-        use std::path::PathBuf;
         use tribute_core::{Location, PathId, Span, TributeDatabaseImpl};
 
         // Test: dialect! macro for grouping ops
@@ -372,7 +370,7 @@ mod tests {
 
         #[salsa::tracked]
         fn test_binary_op(db: &dyn salsa::Database) -> Binary<'_> {
-            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let path = PathId::new(db, "file:///test.trb".to_owned());
             let location = Location::new(path, Span::new(0, 0));
 
             // Create dummy values using a helper op
@@ -401,7 +399,7 @@ mod tests {
 
         #[salsa::tracked]
         fn test_constant_op(db: &dyn salsa::Database) -> Constant<'_> {
-            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let path = PathId::new(db, "file:///test.trb".to_owned());
             let location = Location::new(path, Span::new(0, 0));
 
             constant(db, location, core::I64::new(db).as_type(), 42i64.into())
@@ -420,7 +418,7 @@ mod tests {
 
         #[salsa::tracked]
         fn test_variadic_op(db: &dyn salsa::Database) -> Variadic<'_> {
-            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let path = PathId::new(db, "file:///test.trb".to_owned());
             let location = Location::new(path, Span::new(0, 0));
 
             variadic(db, location, vec![])
@@ -436,7 +434,7 @@ mod tests {
 
         #[salsa::tracked]
         fn test_container_op(db: &dyn salsa::Database) -> Container<'_> {
-            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let path = PathId::new(db, "file:///test.trb".to_owned());
             let location = Location::new(path, Span::new(0, 0));
 
             let block = crate::Block::new(db, location, idvec![], idvec![]);
@@ -456,7 +454,7 @@ mod tests {
 
         #[salsa::tracked]
         fn test_mixed_op(db: &dyn salsa::Database) -> Mixed<'_> {
-            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let path = PathId::new(db, "file:///test.trb".to_owned());
             let location = Location::new(path, Span::new(0, 0));
 
             // Create dummy values
@@ -500,7 +498,7 @@ mod tests {
 
         #[salsa::tracked]
         fn test_multi_result_op(db: &dyn salsa::Database) -> MultiResult<'_> {
-            let path = PathId::new(db, PathBuf::from("test.tr"));
+            let path = PathId::new(db, "file:///test.trb".to_owned());
             let location = Location::new(path, Span::new(0, 0));
 
             // Create a dummy input value

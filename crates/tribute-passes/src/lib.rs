@@ -26,7 +26,6 @@ pub mod tirgen;
 pub mod typeck;
 
 // Re-exports
-pub use tirgen::{ParsedCst, lower_cst, lower_source_file, parse_cst};
 pub use pipeline::{
     CompilationResult, compile, compile_with_diagnostics, stage_resolve, stage_tdnr,
     stage_typecheck,
@@ -34,6 +33,7 @@ pub use pipeline::{
 pub use resolve::{ModuleEnv, Resolver, resolve_module};
 pub use rewrite::{ApplyResult, PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
 pub use tdnr::{MethodInfo, MethodRegistry, TdnrResolver, resolve_tdnr};
+pub use tirgen::{ParsedCst, lower_cst, lower_source_file, parse_cst};
 pub use typeck::{Constraint, EffectRow, TypeChecker, TypeSolver, typecheck_module};
 
 // Re-export diagnostic types from tribute-core

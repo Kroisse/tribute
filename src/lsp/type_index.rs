@@ -161,11 +161,7 @@ mod tests {
             //                    0         1         2         3
             //                    0123456789012345678901234567890123456789
             let source_text = "fn add(x: Int, y: Int) -> Int { x + y }";
-            let source = SourceFile::new(
-                db,
-                std::path::PathBuf::from("test.tr"),
-                source_text.to_string(),
-            );
+            let source = SourceFile::from_path(db, "test.trb", source_text.to_string());
 
             let module = compile(db, source);
             let index = TypeIndex::build(db, &module);
@@ -185,11 +181,7 @@ mod tests {
             //                    0         1         2         3
             //                    0123456789012345678901234567890123456
             let source_text = "fn foo(a: Int) -> Int { a }";
-            let source = SourceFile::new(
-                db,
-                std::path::PathBuf::from("test.tr"),
-                source_text.to_string(),
-            );
+            let source = SourceFile::from_path(db, "test.trb", source_text.to_string());
 
             let module = compile(db, source);
             let index = TypeIndex::build(db, &module);

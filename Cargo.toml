@@ -8,18 +8,20 @@ authors = ["Eunchong Yu <kroisse@gmail.com>"]
 
 [workspace.dependencies]
 clap = { version = "4.5", features = ["derive"] }
+fluent-uri = "0.1.4"
 cranelift-codegen = "0.120"
 cranelift-frontend = "0.120"
 cranelift-module = "0.120"
 cranelift-object = "0.120"
+dashmap = "6.1"
 derive_more = { version = "2.0", features = ["display", "error", "from"] }
 insta = "1.43.1"
 inventory = "0.3"
 lsp-server = "0.7"
-lsp-types = "0.95"
+lsp-types = "0.97"
 object = { version = "0.36", features = ["write_core"] }
 paste = "1.0"
-salsa = "0.24.0"
+salsa = "0.25.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 smallvec = { version = "1.13", features = ["union", "const_generics", "serde"] }

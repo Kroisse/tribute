@@ -22,6 +22,6 @@ pub fn lower_str<'db>(
     path: &(impl AsRef<Path> + ?Sized),
     source: &str,
 ) -> Module<'db> {
-    let source_file = SourceFile::new(db, path.as_ref().to_path_buf(), source.to_string());
+    let source_file = SourceFile::from_path(db, path.as_ref(), source.to_string());
     lower_source_file(db, source_file)
 }

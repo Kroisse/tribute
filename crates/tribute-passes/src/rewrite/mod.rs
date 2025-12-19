@@ -39,7 +39,7 @@
 //! }
 //! # #[salsa::tracked]
 //! # fn make_module(db: &dyn salsa::Database) -> Module<'_> {
-//! #     let path = PathId::new(db, std::path::PathBuf::from("test.trb"));
+//! #     let path = PathId::new(db, "file:///test.trb".to_owned());
 //! #     let location = Location::new(path, Span::new(0, 0));
 //! #     let op = Operation::of_name(db, location, "test.source").build();
 //! #     let block = Block::new(db, location, idvec![], idvec![op]);

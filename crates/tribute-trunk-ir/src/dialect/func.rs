@@ -81,6 +81,7 @@ impl<'db> Func<'db> {
     }
 
     /// Build a function with an explicit name span and effect type.
+    #[allow(clippy::too_many_arguments)]
     pub fn build_with_name_span_and_effect(
         db: &'db dyn salsa::Database,
         location: Location<'db>,

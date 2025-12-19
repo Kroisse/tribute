@@ -4,7 +4,7 @@ use tree_sitter::Node;
 use tribute_trunk_ir::{
     Attribute, Block, BlockBuilder, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
     Value,
-    dialect::{adt, ability, arith, case, core, list, pat, src},
+    dialect::{ability, adt, arith, case, core, list, pat, src},
     idvec,
 };
 
@@ -490,8 +490,8 @@ fn lower_lambda_expr<'db, 'src>(
     body_block.op(src::r#yield(ctx.db, location, result_value));
 
     let effect_type = ctx.fresh_effect_row_type();
-    let func_type = core::Func::with_effect(ctx.db, param_types, result_type, Some(effect_type))
-        .as_type();
+    let func_type =
+        core::Func::with_effect(ctx.db, param_types, result_type, Some(effect_type)).as_type();
     let region = Region::new(ctx.db, location, idvec![body_block.build()]);
     let lambda_op = block.op(src::lambda(ctx.db, location, infer_ty, func_type, region));
     Some(lambda_op.result(ctx.db))

@@ -51,7 +51,7 @@ pub struct ApplyResult<'db> {
 /// }
 /// # #[salsa::tracked]
 /// # fn make_module(db: &dyn salsa::Database) -> Module<'_> {
-/// #     let path = PathId::new(db, std::path::PathBuf::from("test.trb"));
+/// #     let path = PathId::new(db, "file:///test.trb".to_owned());
 /// #     let location = Location::new(path, Span::new(0, 0));
 /// #     let op = Operation::of_name(db, location, "test.source").build();
 /// #     let block = Block::new(db, location, idvec![], idvec![op]);
@@ -290,10 +290,7 @@ mod tests {
             }
 
             // Create replacement operation with same structure but different name
-            let new_op = op
-                .modify(db)
-                .name_str("target")
-                .build();
+            let new_op = op.modify(db).name_str("target").build();
 
             RewriteResult::Replace(new_op)
         }
@@ -302,7 +299,7 @@ mod tests {
     /// Create a test module with a test.source operation.
     #[salsa::tracked]
     fn make_source_module(db: &dyn salsa::Database) -> Module<'_> {
-        let path = PathId::new(db, std::path::PathBuf::from("test.tr"));
+        let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
 
         let op = Operation::of_name(db, location, "test.source")
@@ -316,7 +313,7 @@ mod tests {
     /// Create a test module with an unrelated operation.
     #[salsa::tracked]
     fn make_other_module(db: &dyn salsa::Database) -> Module<'_> {
-        let path = PathId::new(db, std::path::PathBuf::from("test.tr"));
+        let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
 
         let op = Operation::of_name(db, location, "other.op").build();

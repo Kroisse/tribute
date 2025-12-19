@@ -3,7 +3,6 @@
 //! This is a simple synchronous LSP server that handles requests one at a time.
 
 use std::error::Error;
-use std::path::PathBuf;
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{
@@ -15,7 +14,7 @@ use lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
     InitializeParams, MarkupContent, MarkupKind, PublishDiagnosticsParams, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Url,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
 };
 use salsa::Database;
 
@@ -35,7 +34,7 @@ struct Document {
 /// Main LSP server state.
 struct LspServer {
     connection: Connection,
-    documents: std::collections::HashMap<Url, Document>,
+    documents: std::collections::HashMap<Uri, Document>,
 }
 
 impl LspServer {
@@ -156,13 +155,14 @@ impl LspServer {
         let doc = self.documents.get(uri)?;
         let offset = doc.line_index.offset(position.line, position.character)?;
 
-        let path = uri_to_path(uri);
         let text = &doc.text;
 
         // Run Salsa compilation
         let db = TributeDatabaseImpl::default();
         let (type_str, span) = db.attach(|db| {
-            let source_file = SourceFile::new(db, path, text.to_string());
+            let uri =
+                tribute_core::Uri::parse_from(uri.as_str().to_owned()).expect("valid URI from LSP");
+            let source_file = SourceFile::new(db, uri, text.to_string());
             let module = compile(db, source_file);
             let type_index = TypeIndex::build(db, &module);
 
@@ -186,11 +186,9 @@ impl LspServer {
 
     fn publish_diagnostics(
         &self,
-        uri: &Url,
+        uri: &Uri,
         text: &str,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let path = uri_to_path(uri);
-
         let Some(doc) = self.documents.get(uri) else {
             return Ok(());
         };
@@ -198,7 +196,9 @@ impl LspServer {
         // Run Salsa compilation
         let db = TributeDatabaseImpl::default();
         let diags = db.attach(|db| {
-            let source_file = SourceFile::new(db, path, text.to_string());
+            let uri =
+                tribute_core::Uri::parse_from(uri.as_str().to_owned()).expect("valid URI from LSP");
+            let source_file = SourceFile::new(db, uri, text.to_string());
             let result = tribute_passes::compile_with_diagnostics(db, source_file);
             result.diagnostics
         });
@@ -280,10 +280,4 @@ fn cast_notification<N: lsp_types::notification::Notification>(
     } else {
         None
     }
-}
-
-/// Convert a URL to a filesystem path.
-fn uri_to_path(uri: &Url) -> PathBuf {
-    uri.to_file_path()
-        .unwrap_or_else(|_| PathBuf::from(uri.path()))
 }

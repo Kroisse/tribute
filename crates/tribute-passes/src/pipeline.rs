@@ -42,16 +42,14 @@
 //! diagnostics via `Diagnostic { ... }.accumulate(db)`, which are then
 //! collected at the end of compilation.
 
-use std::path::PathBuf;
-
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity, SourceFile, Span};
 use tribute_trunk_ir::dialect::core::Module;
 use tribute_trunk_ir::{Block, IdVec, Region};
 
-use crate::tirgen::{lower_cst, parse_cst};
 use crate::resolve::{Resolver, build_env};
 use crate::tdnr::resolve_tdnr;
+use crate::tirgen::{lower_cst, parse_cst};
 use crate::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 
 // =============================================================================
@@ -67,7 +65,9 @@ const PRELUDE_SOURCE: &str = include_str!("../../../lib/std/prelude.trb");
 /// and cached for all subsequent compilations.
 #[salsa::tracked]
 pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
-    let source_file = SourceFile::new(db, PathBuf::from("<prelude>"), PRELUDE_SOURCE.to_string());
+    let uri = tribute_core::Uri::parse_from("prelude:///std/prelude".to_owned())
+        .expect("valid prelude URI");
+    let source_file = SourceFile::new(db, uri, PRELUDE_SOURCE.to_string());
     let cst = parse_cst(db, source_file)?;
     Some(lower_cst(db, source_file, cst))
 }
@@ -166,7 +166,7 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> M
     // Get the lowered module from the previous stage
     let Some(cst) = parse_cst(db, source) else {
         // Parse failure - return empty module
-        let path = tribute_core::PathId::new(db, source.path(db));
+        let path = tribute_core::PathId::new(db, source.uri(db).as_str().to_owned());
         let location = tribute_core::Location::new(path, tribute_core::Span::new(0, 0));
         return Module::build(db, location, "main", |_| {});
     };
@@ -307,11 +307,8 @@ mod tests {
     #[test]
     fn test_full_pipeline() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = SourceFile::new(
-                db,
-                std::path::PathBuf::from("test.tr"),
-                "fn main() -> Int { 42 }".to_string(),
-            );
+            let source =
+                SourceFile::from_path(db, "test.trb", "fn main() -> Int { 42 }".to_string());
 
             let module = test_compile(db, source);
             assert_eq!(module.name(db), "main");
@@ -321,9 +318,9 @@ mod tests {
     #[test]
     fn test_compile_with_diagnostics() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = SourceFile::new(
+            let source = SourceFile::from_path(
                 db,
-                std::path::PathBuf::from("test.tr"),
+                "test.trb",
                 "fn add(x: Int, y: Int) -> Int { x + y }".to_string(),
             );
 
@@ -340,9 +337,9 @@ mod tests {
     #[test]
     fn test_unresolved_reference_diagnostic() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = SourceFile::new(
+            let source = SourceFile::from_path(
                 db,
-                std::path::PathBuf::from("test.tr"),
+                "test.trb",
                 // Reference to undefined variable `undefined_var`
                 "fn main() -> Int { undefined_var }".to_string(),
             );
@@ -380,9 +377,9 @@ mod tests {
     fn test_prelude_option_type() {
         TributeDatabaseImpl::default().attach(|db| {
             // Use Option type from prelude
-            let source = SourceFile::new(
+            let source = SourceFile::from_path(
                 db,
-                std::path::PathBuf::from("test.tr"),
+                "test.trb",
                 "fn maybe() -> Option(Int) { None }".to_string(),
             );
 
@@ -404,9 +401,9 @@ mod tests {
     fn test_prelude_result_type() {
         TributeDatabaseImpl::default().attach(|db| {
             // Use Result type from prelude
-            let source = SourceFile::new(
+            let source = SourceFile::from_path(
                 db,
-                std::path::PathBuf::from("test.tr"),
+                "test.trb",
                 "fn success() -> Result(Int, String) { Ok(42) }".to_string(),
             );
 
@@ -428,9 +425,9 @@ mod tests {
     fn test_case_expression_pattern_binding() {
         TributeDatabaseImpl::default().attach(|db| {
             // Simple case expression with identifier pattern binding
-            let source = SourceFile::new(
+            let source = SourceFile::from_path(
                 db,
-                std::path::PathBuf::from("test.tr"),
+                "test.trb",
                 r#"
                 fn test(x: Int) -> Int {
                     case x {
