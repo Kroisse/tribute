@@ -4,7 +4,7 @@
 // - Nested arithmetic expressions
 // - Multiple function definitions in one program
 
-fn add(x, y) {
+fn add(x: Int, y: Int) -> Int {
     x + y
 }
 
