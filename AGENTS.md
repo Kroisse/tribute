@@ -24,18 +24,13 @@ Tribute targets a functional language with **static types, type inference, and a
 - **File extension (spec)**: `.trb`
   - This repo may still contain legacy `.trb` examples (migration in progress).
 
-## Repo Layout (Current Workspace)
+## Codebase Structure
 
-This is a Rust Cargo workspace; the codebase is being incrementally aligned to the `new-plans/` spec.
-
-- `src/bin/trbi.rs`: (legacy) interpreter / runner driver
-- `src/bin/trbc.rs`: (legacy/experimental) compiler driver
-- `crates/tree-sitter-tribute/`: Tree-sitter grammar and bindings
-- `crates/tribute-core/`: shared infra (Salsa DB `TributeDatabaseImpl`, `TargetInfo`, `Diagnostic`, etc.)
-- `crates/tribute-ast/`: AST definitions and parsing
-- `crates/tribute-passes/`: compiler passes (AST → TrunkIR lowering)
-- `crates/tribute-trunk-ir/`: TrunkIR dialect system and IR definitions
-- `crates/tribute-cranelift/`: Cranelift backend (in progress)
+See `.claude/rules/` for detailed documentation:
+- `crates.md` - Crate structure and responsibilities
+- `pipeline.md` - Compilation pipeline stages
+- `ir.md` - TrunkIR dialect system
+- `conventions.md` - Code conventions and patterns
 
 ## Commit Guidelines
 
@@ -71,11 +66,7 @@ tree-sitter test
 tree-sitter build-wasm
 ```
 
-## Conventions / Notes for Agents
+## Notes for Agents
 
 - When changing language/type/ability/module rules: update `new-plans/*.md` first, then align implementation/tests.
-- Type/effect terminology:
-  - Omitting an effect annotation: `fn(a) -> b` desugars to `fn(a) ->{e} b` (fresh row variable).
-  - Pure functions are written explicitly as `->{}`.
-  - Module separator is `::`; method-style calls use UFCS `.`.
-- Prefer `derive_more` (`Display`/`Error`/`From`) for Rust error types when appropriate.
+- See `.claude/rules/conventions.md` for code patterns and conventions.

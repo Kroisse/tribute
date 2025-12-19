@@ -1,0 +1,107 @@
+# Code Conventions
+
+## Salsa Database Pattern
+
+All compilation stages use Salsa for incremental compilation:
+
+```rust
+#[salsa::tracked]
+pub fn stage_resolve<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Module<'db> {
+    // ...
+}
+```
+
+- Functions marked with `#[salsa::tracked]` are memoized
+- Database tracks dependencies automatically
+- Use `Accumulator` trait for collecting diagnostics
+
+## Error Handling
+
+Use `derive_more` for error types:
+
+```rust
+use derive_more::{Display, Error, From};
+
+#[derive(Debug, Display, Error, From)]
+pub enum CompileError {
+    #[display("Parse error: {_0}")]
+    Parse(ParseError),
+    #[display("Type error: {_0}")]
+    Type(TypeError),
+}
+```
+
+## Type System
+
+### Row-Polymorphic Effects
+
+Function types include effect information:
+
+```rust
+// Function type: fn(params) ->{effects} return_type
+let func_ty = func::Fn::new(db, params, return_ty, effect_row);
+```
+
+Effect rows are managed in `crates/tribute-passes/src/typeck/effect_row.rs`.
+
+### Bidirectional Type Checking
+
+Two modes in `crates/tribute-passes/src/typeck/checker.rs`:
+- **Infer mode**: Synthesize type from expression
+- **Check mode**: Verify expression against expected type
+
+```rust
+fn infer_expr(&mut self, expr: ...) -> Type { ... }
+fn check_expr(&mut self, expr: ..., expected: Type) { ... }
+```
+
+### Type Variables and Unification
+
+- Fresh type variables for unknowns
+- Union-find based constraint solver in `typeck/solver.rs`
+- Substitution applied after solving
+
+## Name Resolution
+
+Two-phase resolution:
+
+1. **Basic resolution** (`resolve.rs`): Resolves names and paths
+   - `src.var` → `func.call` or local reference
+   - `src.path` → qualified reference
+   - Builds `ModuleEnv` with bindings
+
+2. **Type-directed (TDNR)** (`tdnr.rs`): Resolves UFCS after type inference
+   - `expr.method(args)` → `Type::method(expr, args)`
+   - Requires inferred type information
+
+## Bindings
+
+Three kinds of bindings in `resolve.rs`:
+
+```rust
+pub enum Binding<'db> {
+    Function {
+        name: Symbol<'db>,
+        ty: Type<'db>,
+    },
+    Constructor {
+        type_name: Symbol<'db>,
+        ty: Type<'db>,
+        tag: Option<Symbol<'db>>,
+        params: IdVec<Type<'db>>,
+    },
+    TypeDef {
+        name: Symbol<'db>,
+        ty: Type<'db>,
+    },
+}
+```
+
+## Testing
+
+- Use `insta` for snapshot testing
+- Run `cargo insta review` when snapshots fail
+- Package-specific tests: `cargo test -p <crate-name>`
