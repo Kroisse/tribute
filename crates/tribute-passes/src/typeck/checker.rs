@@ -980,7 +980,7 @@ mod tests {
         let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = trunk_ir::Location::new(path, Span::new(0, 0));
 
-        core::Module::build(db, location, Symbol::new("test"), |entry| {
+        core::Module::build(db, location, Symbol::new("main"), |entry| {
             let _ = entry.op(arith::Const::i64(db, location, 42));
         })
     }
@@ -991,7 +991,7 @@ mod tests {
         let location = trunk_ir::Location::new(path, Span::new(0, 0));
         let i64_ty = core::I64::new(db);
 
-        core::Module::build(db, location, Symbol::new("test"), |entry| {
+        core::Module::build(db, location, Symbol::new("main"), |entry| {
             let a = entry.op(arith::Const::i64(db, location, 1));
             let b = entry.op(arith::Const::i64(db, location, 2));
             let _ = entry.op(arith::add(
@@ -1024,22 +1024,8 @@ mod tests {
 
     #[salsa::tracked]
     fn run_per_function_typecheck(db: &dyn salsa::Database) -> core::Module<'_> {
-        use crate::resolve::{Resolver, build_env};
-        use tribute_core::SourceFile;
-        use tribute_front::{lower_cst, parse_cst};
-
-        let source = SourceFile::from_path(
-            db,
-            "test.trb",
-            "fn add(x: Int, y: Int) -> Int { x + y }".to_string(),
-        );
-
-        let cst = parse_cst(db, source).expect("parse should succeed");
-        let module = lower_cst(db, source, cst);
-        let env = build_env(db, &module);
-        let mut resolver = Resolver::new(db, env);
-        let resolved_module = resolver.resolve_module(&module);
-        typecheck_module_per_function(db, resolved_module)
+        let module = build_simple_module(db);
+        typecheck_module_per_function(db, module)
     }
 
     #[test]

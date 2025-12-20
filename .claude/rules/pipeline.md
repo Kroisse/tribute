@@ -1,6 +1,6 @@
 # Compilation Pipeline
 
-The Tribute compiler uses a 5-stage pipeline, orchestrated in `crates/tribute-passes/src/pipeline.rs`.
+The Tribute compiler uses a 5-stage pipeline, orchestrated in `src/pipeline.rs`.
 
 ## Pipeline Stages
 
@@ -13,15 +13,15 @@ Parses source code into a Concrete Syntax Tree using Tree-sitter.
 - Parser: `tree-sitter-tribute` grammar
 
 ### 2. lower_cst
-**Function**: `lower_cst(db, source_file) -> Module`
+**Function**: `lower_cst(db, source_file, cst) -> Module`
 
 Converts CST to TrunkIR with unresolved `src.*` operations.
 - Input: `ParsedCst`
 - Output: `Module` with `src.var`, `src.call`, `src.path`, `src.binop`, etc.
-- Location: `crates/tribute-passes/src/tirgen/`
+- Location: `crates/tribute-front/src/tirgen/`
 
 ### 3. stage_resolve
-**Function**: `stage_resolve(db, module) -> Module`
+**Function**: `stage_resolve(db, source_file) -> Module`
 
 Resolves names and converts `src.*` operations to concrete ops.
 - Builds `ModuleEnv` (collects definitions)
@@ -30,7 +30,7 @@ Resolves names and converts `src.*` operations to concrete ops.
 - Location: `crates/tribute-passes/src/resolve.rs`
 
 ### 4. stage_typecheck
-**Function**: `stage_typecheck(db, module) -> (Module, TypeSolver)`
+**Function**: `stage_typecheck(db, source_file) -> Module`
 
 Performs bidirectional type inference with row-polymorphic effects.
 - `TypeChecker` walks module, collects `Constraint`s
@@ -39,7 +39,7 @@ Performs bidirectional type inference with row-polymorphic effects.
 - Location: `crates/tribute-passes/src/typeck/`
 
 ### 5. stage_tdnr
-**Function**: `stage_tdnr(db, module, solver) -> Module`
+**Function**: `stage_tdnr(db, source_file) -> Module`
 
 Type-directed name resolution for UFCS method calls.
 - Resolves `expr.method(args)` → `Type::method(expr, args)`
@@ -61,7 +61,7 @@ Module [src.*, func.*, adt.*, arith.*]
 Module [func.*, adt.*, arith.*, case.*]
     │
     ▼ stage_typecheck
-Module + TypeSolver (with inferred types)
+Module (with inferred types)
     │
     ▼ stage_tdnr
 Fully Typed, Resolved Module
@@ -69,9 +69,10 @@ Fully Typed, Resolved Module
 
 ## Entry Point
 
-The main compilation entry point is:
+The main compilation entry points are:
 ```rust
-pub fn compile(db: &dyn salsa::Database, source_file: SourceFile) -> CompilationResult
+pub fn compile(db: &dyn salsa::Database, source_file: SourceFile) -> Module
+pub fn compile_with_diagnostics(db: &dyn salsa::Database, source_file: SourceFile) -> CompilationResult
 ```
 
 Returns `CompilationResult` containing:

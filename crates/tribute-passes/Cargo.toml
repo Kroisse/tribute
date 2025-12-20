@@ -9,6 +9,3 @@ description = "Compiler passes for Tribute (CST to TrunkIR lowering, type infere
 salsa.workspace = true
 tribute-core.workspace = true
 trunk-ir.workspace = true
-
-[dev-dependencies]
-tribute-front.workspace = true

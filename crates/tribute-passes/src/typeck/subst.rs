@@ -148,7 +148,8 @@ mod tests {
     use super::*;
     use crate::typeck::TypeChecker;
     use salsa::Database;
-    use tribute_core::{SourceFile, TributeDatabaseImpl};
+    use tribute_core::TributeDatabaseImpl;
+    use trunk_ir::dialect::{arith, core, func};
     use trunk_ir::{Attribute, Location, PathId, Span, idvec};
 
     /// Helper to create a module with an operation that has type variable 42 as result.
@@ -221,25 +222,37 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn lower_source<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> core::Module<'db> {
-        use crate::resolve::{Resolver, build_env};
-        use tribute_front::{lower_cst, parse_cst};
+    fn make_simple_module<'db>(db: &'db dyn salsa::Database) -> core::Module<'db> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i64_ty = *core::I64::new(db);
 
-        let cst = parse_cst(db, source).expect("parse should succeed");
-        let module = lower_cst(db, source, cst);
-        let env = build_env(db, &module);
-        let mut resolver = Resolver::new(db, env);
-        resolver.resolve_module(&module)
+        let func = func::Func::build(db, location, "add", idvec![], i64_ty, |entry| {
+            let lhs = entry.op(arith::Const::i64(db, location, 1));
+            let rhs = entry.op(arith::Const::i64(db, location, 2));
+            let add = entry.op(arith::add(
+                db,
+                location,
+                lhs.result(db),
+                rhs.result(db),
+                i64_ty,
+            ));
+            entry.op(func::Return::value(db, location, add.result(db)));
+        });
+
+        core::Module::build(db, location, "main".into(), |top| {
+            top.op(func);
+        })
     }
 
     #[salsa::tracked]
-    fn infer_module<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> core::Module<'db> {
-        let resolved = lower_source(db, source);
+    fn infer_simple_module<'db>(db: &'db dyn salsa::Database) -> core::Module<'db> {
+        let module = make_simple_module(db);
         let mut checker = TypeChecker::new(db);
-        checker.check_module(&resolved);
+        checker.check_module(&module);
         match checker.solve() {
-            Ok(solver) => apply_subst_to_module(db, resolved, solver.type_subst()),
-            Err(_) => resolved,
+            Ok(solver) => apply_subst_to_module(db, module, solver.type_subst()),
+            Err(_) => module,
         }
     }
 
@@ -340,14 +353,7 @@ mod tests {
     #[test]
     fn test_end_to_end_type_inference() {
         TributeDatabaseImpl::default().attach(|db| {
-            // Simple function with explicit types
-            let source = SourceFile::from_path(
-                db,
-                "test.trb",
-                "fn add(x: Int, y: Int) -> Int { x + y }".to_string(),
-            );
-
-            let module = infer_module(db, source);
+            let module = infer_simple_module(db);
 
             // Print IR for debugging
             println!("=== Compiled Module ===");

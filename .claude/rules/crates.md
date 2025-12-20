@@ -18,16 +18,24 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 
 ## tribute-passes
 
-**Role**: Compiler transformation passes from CST to TrunkIR
+**Role**: Compiler transformation passes (name resolution, type checking, TDNR)
 
 **Key Modules**:
-- `pipeline.rs` - Compilation pipeline orchestration (5 stages)
-- `tirgen/` - TrunkIR generation from CST
 - `resolve.rs` - Name resolution (`src.*` ops → concrete ops)
 - `typeck/` - Type checking (bidirectional, row-polymorphic effects)
 - `tdnr.rs` - Type-directed name resolution (UFCS method calls)
 
 **Location**: `crates/tribute-passes/`
+
+## tribute-front
+
+**Role**: Front-end utilities (CST parsing/lowering and text helpers)
+
+**Key Modules**:
+- `tirgen/` - TrunkIR generation from CST (Tree-sitter)
+- `line_index.rs` - Text/position conversions for editor integrations
+
+**Location**: `crates/tribute-front/`
 
 ## trunk-ir
 
@@ -51,11 +59,12 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 
 ## tribute (main crate)
 
-**Role**: CLI entry point and LSP server
+**Role**: CLI entry point, LSP server, and pipeline orchestration
 
 **Key Modules**:
 - `cli.rs` - Command-line argument parsing (serve command)
 - `lsp/` - LSP server (hover, diagnostics, document sync)
+- `pipeline.rs` - Compilation pipeline orchestration
 
 **Location**: `src/`
 
@@ -64,11 +73,17 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 ```
 tribute (main)
 ├── tribute-core
+├── tribute-front
 ├── tribute-passes
 │   ├── tribute-core
 │   ├── trunk-ir
-│   └── tree-sitter-tribute
-└── trunk-ir
+├── trunk-ir
+└── tree-sitter-tribute
+
+tribute-front
+├── tribute-core
+├── trunk-ir
+└── tree-sitter-tribute
 ```
 
 Note: `trunk-ir` is now fully independent with no dependencies on other tribute crates (not even as dev-dependencies). It's a standalone IR system.

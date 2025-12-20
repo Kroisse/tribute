@@ -1311,15 +1311,111 @@ pub fn resolve_module<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) -
 mod tests {
     use super::*;
     use salsa::Database;
-    use tribute_core::SourceFile;
     use tribute_core::TributeDatabaseImpl;
+    use trunk_ir::dialect::{arith, core, func, src};
+    use trunk_ir::{Location, PathId, Span, SymbolVec, idvec};
+
+    fn test_location<'db>(db: &'db dyn salsa::Database) -> Location<'db> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        Location::new(path, Span::new(0, 0))
+    }
+
+    fn simple_func<'db>(
+        db: &'db dyn salsa::Database,
+        location: Location<'db>,
+        name: &str,
+    ) -> func::Func<'db> {
+        func::Func::build(db, location, name, idvec![], *core::I64::new(db), |entry| {
+            let value = entry.op(arith::Const::i64(db, location, 42));
+            entry.op(func::Return::value(db, location, value.result(db)));
+        })
+    }
+
+    fn module_with_use_call<'db>(db: &'db dyn salsa::Database, alias: Option<&str>) -> Module<'db> {
+        let location = test_location(db);
+        let helpers = core::Module::build(db, location, Symbol::new("helpers"), |inner| {
+            inner.op(simple_func(db, location, "double"));
+        });
+        let path = SymbolVec::from(vec![Symbol::new("helpers"), Symbol::new("double")]);
+        let alias_sym = Symbol::from_dynamic(alias.unwrap_or(""));
+
+        let name = alias.unwrap_or("double");
+        let call_path = SymbolVec::from(vec![Symbol::from_dynamic(name)]);
+        let arg = arith::Const::i64(db, location, 1);
+        let call_result_ty = src::unresolved_type(db, "Int", idvec![]);
+        let call = src::call(
+            db,
+            location,
+            vec![arg.result(db)],
+            call_result_ty,
+            call_path,
+        );
+
+        let main_func = func::Func::build(
+            db,
+            location,
+            "main",
+            idvec![],
+            *core::I64::new(db),
+            |entry| {
+                entry.op(arg);
+                let op = entry.op(call);
+                entry.op(func::Return::value(db, location, op.result(db)));
+            },
+        );
+
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            top.op(helpers);
+            top.op(src::r#use(db, location, path, alias_sym, false));
+            top.op(main_func);
+        })
+    }
 
     #[salsa::tracked]
-    fn resolve_source<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
-        use tribute_front::{lower_cst, parse_cst};
+    fn module_with_hello(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            top.op(simple_func(db, location, "hello"));
+        })
+    }
 
-        let cst = parse_cst(db, source).expect("parse should succeed");
-        let module = lower_cst(db, source, cst);
+    #[salsa::tracked]
+    fn module_with_nested_math(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let math_module = core::Module::build(db, location, Symbol::new("math"), |inner| {
+            inner.op(simple_func(db, location, "add"));
+            inner.op(simple_func(db, location, "sub"));
+        });
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            top.op(math_module);
+        })
+    }
+
+    #[salsa::tracked]
+    fn module_with_outer_inner(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let inner_mod = core::Module::build(db, location, Symbol::new("inner"), |inner| {
+            inner.op(simple_func(db, location, "deep"));
+        });
+        let outer = core::Module::build(db, location, Symbol::new("outer"), |outer| {
+            outer.op(inner_mod);
+        });
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            top.op(outer);
+        })
+    }
+
+    #[salsa::tracked]
+    fn resolve_use_call_module(db: &dyn salsa::Database) -> Module<'_> {
+        let module = module_with_use_call(db, None);
+        let env = build_env(db, &module);
+        let mut resolver = Resolver::new(db, env);
+        resolver.resolve_module(&module)
+    }
+
+    #[salsa::tracked]
+    fn resolve_use_alias_module(db: &dyn salsa::Database) -> Module<'_> {
+        let module = module_with_use_call(db, Some("dbl"));
         let env = build_env(db, &module);
         let mut resolver = Resolver::new(db, env);
         resolver.resolve_module(&module)
@@ -1382,15 +1478,7 @@ mod tests {
     #[test]
     fn test_build_env_from_module() {
         TributeDatabaseImpl::default().attach(|db| {
-            use tribute_core::SourceFile;
-            use tribute_front::{lower_cst, parse_cst};
-
-            let source =
-                SourceFile::from_path(db, "test.trb", "fn hello() -> Int { 42 }".to_string());
-
-            let cst = parse_cst(db, source).expect("parse should succeed");
-            let module = lower_cst(db, source, cst);
-
+            let module = module_with_hello(db);
             let env = build_env(db, &module);
 
             // Should find the 'hello' function
@@ -1407,24 +1495,7 @@ mod tests {
     #[test]
     fn test_nested_module_resolution() {
         TributeDatabaseImpl::default().attach(|db| {
-            use tribute_core::SourceFile;
-            use tribute_front::{lower_cst, parse_cst};
-
-            let source = SourceFile::from_path(
-                db,
-                "test.trb",
-                r#"
-                    pub mod math {
-                        pub fn add(x: Int, y: Int) -> Int { x + y }
-                        pub fn sub(x: Int, y: Int) -> Int { x - y }
-                    }
-                "#
-                .to_string(),
-            );
-
-            let cst = parse_cst(db, source).expect("parse should succeed");
-            let module = lower_cst(db, source, cst);
-
+            let module = module_with_nested_math(db);
             let env = build_env(db, &module);
 
             // Should find math::add and math::sub
@@ -1451,25 +1522,7 @@ mod tests {
     #[ignore = "TODO: Implement multi-level namespace support"]
     fn test_deeply_nested_module_resolution() {
         TributeDatabaseImpl::default().attach(|db| {
-            use tribute_core::SourceFile;
-            use tribute_front::{lower_cst, parse_cst};
-
-            let source = SourceFile::from_path(
-                db,
-                "test.trb",
-                r#"
-                    pub mod outer {
-                        pub mod inner {
-                            pub fn deep() -> Int { 42 }
-                        }
-                    }
-                "#
-                .to_string(),
-            );
-
-            let cst = parse_cst(db, source).expect("parse should succeed");
-            let module = lower_cst(db, source, cst);
-
+            let module = module_with_outer_inner(db);
             let env = build_env(db, &module);
 
             // Should find outer::inner::deep
@@ -1489,23 +1542,7 @@ mod tests {
     #[ignore = "TODO: Fix use import resolution"]
     fn test_use_import_resolves_call() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = SourceFile::from_path(
-                db,
-                "test.trb",
-                r#"
-                    pub mod helpers {
-                        pub fn double(x: Int) -> Int { x * 2 }
-                    }
-
-                    use helpers::double
-
-                    fn main() {
-                        double(1)
-                    }
-                "#
-                .to_string(),
-            );
-            let module = resolve_source(db, source);
+            let module = resolve_use_call_module(db);
 
             let mut ops = Vec::new();
             collect_ops(db, &module.body(db), &mut ops);
@@ -1524,23 +1561,7 @@ mod tests {
     #[test]
     fn test_use_alias_resolves_call() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = SourceFile::from_path(
-                db,
-                "test.trb",
-                r#"
-                    pub mod helpers {
-                        pub fn double(x: Int) -> Int { x * 2 }
-                    }
-
-                    use helpers::double as dbl
-
-                    fn main() {
-                        dbl(1)
-                    }
-                "#
-                .to_string(),
-            );
-            let module = resolve_source(db, source);
+            let module = resolve_use_alias_module(db);
 
             let mut ops = Vec::new();
             collect_ops(db, &module.body(db), &mut ops);
