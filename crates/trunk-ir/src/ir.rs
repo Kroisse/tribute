@@ -270,9 +270,8 @@ impl<'db> OperationBuilder<'db> {
         self
     }
 
-    pub fn attr(mut self, key: &str, value: Attribute<'db>) -> Self {
-        let sym = Symbol::new(key);
-        self.attributes.insert(sym, value);
+    pub fn attr(mut self, key: impl Into<Symbol>, value: Attribute<'db>) -> Self {
+        self.attributes.insert(key.into(), value);
         self
     }
 

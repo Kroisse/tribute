@@ -18,16 +18,38 @@
 //! This module handles phase 1. UFCS resolution happens during type checking.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
 use trunk_ir::dialect::adt;
+use trunk_ir::dialect::case;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func;
+use trunk_ir::dialect::pat;
 use trunk_ir::dialect::src;
+use trunk_ir::dialect::ty;
 use trunk_ir::{
     Attribute, Attrs, Block, DialectOp, IdVec, Operation, Region, Symbol, Type, Value, ValueDef,
 };
+
+// =============================================================================
+// Cached Attribute Keys (hot path optimization)
+// =============================================================================
+
+/// Cached symbols for frequently-used attribute keys.
+/// These are used in hot paths (resolve_operation, collect_definitions, etc.)
+/// to avoid interner write locks.
+static ATTR_NAME: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("name"));
+static ATTR_TYPE: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("type"));
+static ATTR_PATH: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("path"));
+static ATTR_SYM_NAME: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("sym_name"));
+static ATTR_VARIANTS: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("variants"));
+static ATTR_ALIAS: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("alias"));
+#[allow(dead_code)] // Used in test helpers
+static ATTR_CALLEE: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("callee"));
+static ATTR_REST_NAME: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("rest_name"));
+static ATTR_RESOLVED_LOCAL: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("resolved_local"));
 
 // =============================================================================
 // Module Environment
@@ -175,27 +197,23 @@ fn collect_definition<'db>(
     let op_name = op.name(db);
 
     match (dialect, op_name) {
-        (d, n) if d == Symbol::new("func") && n == Symbol::new("func") => {
+        (d, n) if d == *func::_NAME && n == *func::FUNC => {
             // Function definition
             let attrs = op.attributes(db);
-            let sym_key = Symbol::new("sym_name");
-            let type_key = Symbol::new("type");
 
             if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
-                (attrs.get(&sym_key), attrs.get(&type_key))
+                (attrs.get(&*ATTR_SYM_NAME), attrs.get(&*ATTR_TYPE))
             {
                 let path: IdVec<Symbol> = vec![*sym].into_iter().collect();
                 env.add_function(*sym, path, *ty);
             }
         }
-        (d, n) if d == Symbol::new("type") && n == Symbol::new("struct") => {
+        (d, n) if d == *ty::_NAME && n == *ty::STRUCT => {
             // Struct definition → creates constructor
             let attrs = op.attributes(db);
-            let name_key = Symbol::new("name");
-            let type_key = Symbol::new("type");
 
             if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
-                (attrs.get(&name_key), attrs.get(&type_key))
+                (attrs.get(&*ATTR_NAME), attrs.get(&*ATTR_TYPE))
             {
                 // Add type definition
                 env.add_type(*sym, *ty);
@@ -204,14 +222,12 @@ fn collect_definition<'db>(
                 env.add_constructor(*sym, *ty, None, IdVec::new());
             }
         }
-        (d, n) if d == Symbol::new("type") && n == Symbol::new("enum") => {
+        (d, n) if d == *ty::_NAME && n == *ty::ENUM => {
             // Enum definition → creates constructors for each variant
             let attrs = op.attributes(db);
-            let name_key = Symbol::new("name");
-            let type_key = Symbol::new("type");
 
             if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
-                (attrs.get(&name_key), attrs.get(&type_key))
+                (attrs.get(&*ATTR_NAME), attrs.get(&*ATTR_TYPE))
             {
                 // Add type definition
                 env.add_type(*sym, *ty);
@@ -220,12 +236,11 @@ fn collect_definition<'db>(
                 collect_enum_constructors(db, env, op, *sym, *ty);
             }
         }
-        (d, n) if d == Symbol::new("core") && n == Symbol::new("module") => {
+        (d, n) if d == *core::_NAME && n == *core::MODULE => {
             // Nested module → collect definitions into a namespace
             let attrs = op.attributes(db);
-            let sym_key = Symbol::new("sym_name");
 
-            if let Some(Attribute::Symbol(sym)) = attrs.get(&sym_key) {
+            if let Some(Attribute::Symbol(sym)) = attrs.get(&*ATTR_SYM_NAME) {
                 // Recursively collect definitions from the module's body
                 let mut mod_env = ModuleEnv::new();
                 for region in op.regions(db).iter() {
@@ -263,9 +278,8 @@ fn collect_enum_constructors<'db>(
 ) {
     // Check for variants attribute
     let attrs = op.attributes(db);
-    let variants_key = Symbol::new("variants");
 
-    if let Some(Attribute::SymbolRef(variants)) = attrs.get(&variants_key) {
+    if let Some(Attribute::SymbolRef(variants)) = attrs.get(&*ATTR_VARIANTS) {
         for variant_sym in variants.iter() {
             // Add to type's namespace
             env.add_to_namespace(
@@ -426,14 +440,13 @@ impl<'db> Resolver<'db> {
     /// Mark a src.var operation as a resolved local binding.
     fn mark_resolved_local(&self, op: Operation<'db>) -> Operation<'db> {
         op.modify(self.db)
-            .attr("resolved_local", Attribute::Bool(true))
+            .attr(*ATTR_RESOLVED_LOCAL, Attribute::Bool(true))
             .build()
     }
 
     fn is_marked_resolved_local(&self, op: &Operation<'db>) -> bool {
-        let key = Symbol::new("resolved_local");
         matches!(
-            op.attributes(self.db).get(&key),
+            op.attributes(self.db).get(&*ATTR_RESOLVED_LOCAL),
             Some(Attribute::Bool(true)) | Some(Attribute::IntBits(1))
         )
     }
@@ -512,7 +525,7 @@ impl<'db> Resolver<'db> {
                 // Leave unresolved - will be caught by type checker
                 Type::new(
                     self.db,
-                    Symbol::new("src"),
+                    *src::_NAME,
                     Symbol::new("type"),
                     IdVec::new(),
                     Attrs::new(),
@@ -539,10 +552,8 @@ impl<'db> Resolver<'db> {
 
     fn apply_use(&mut self, op: &Operation<'db>) {
         let attrs = op.attributes(self.db);
-        let path_key = Symbol::new("path");
-        let alias_key = Symbol::new("alias");
 
-        let Some(Attribute::SymbolRef(path)) = attrs.get(&path_key) else {
+        let Some(Attribute::SymbolRef(path)) = attrs.get(&*ATTR_PATH) else {
             return;
         };
 
@@ -550,7 +561,7 @@ impl<'db> Resolver<'db> {
             return;
         }
 
-        let local_name = if let Some(Attribute::Symbol(alias)) = attrs.get(&alias_key) {
+        let local_name = if let Some(Attribute::Symbol(alias)) = attrs.get(&*ATTR_ALIAS) {
             *alias
         } else {
             *path.last().unwrap()
@@ -638,15 +649,15 @@ impl<'db> Resolver<'db> {
         let op_name = remapped_op.name(self.db);
 
         match (dialect, op_name) {
-            (d, n) if d == Symbol::new("func") && n == Symbol::new("func") => {
+            (d, n) if d == *func::_NAME && n == *func::FUNC => {
                 // Handle function with local scope for parameters
                 vec![self.resolve_func(&remapped_op)]
             }
-            (d, n) if d == Symbol::new("src") && n == Symbol::new("use") => {
+            (d, n) if d == *src::_NAME && n == *src::USE => {
                 self.apply_use(&remapped_op);
                 Vec::new()
             }
-            (d, n) if d == Symbol::new("src") && n == Symbol::new("var") => {
+            (d, n) if d == *src::_NAME && n == *src::VAR => {
                 if let Some(resolved) = self.try_resolve_var(&remapped_op) {
                     resolved
                 } else {
@@ -669,7 +680,7 @@ impl<'db> Resolver<'db> {
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
-            (d, n) if d == Symbol::new("src") && n == Symbol::new("path") => {
+            (d, n) if d == *src::_NAME && n == *src::PATH => {
                 if let Some(resolved) = self.try_resolve_path(&remapped_op) {
                     vec![resolved]
                 } else {
@@ -680,7 +691,7 @@ impl<'db> Resolver<'db> {
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
-            (d, n) if d == Symbol::new("src") && n == Symbol::new("call") => {
+            (d, n) if d == *src::_NAME && n == *src::CALL => {
                 if let Some(resolved) = self.try_resolve_call(&remapped_op) {
                     vec![resolved]
                 } else {
@@ -691,13 +702,13 @@ impl<'db> Resolver<'db> {
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
-            (d, n) if d == Symbol::new("core") && n == Symbol::new("module") => {
+            (d, n) if d == *core::_NAME && n == *core::MODULE => {
                 self.push_import_scope();
                 let resolved = self.resolve_op_regions(&remapped_op);
                 self.pop_import_scope();
                 vec![resolved]
             }
-            (d, n) if d == Symbol::new("case") && n == Symbol::new("arm") => {
+            (d, n) if d == *case::_NAME && n == *case::ARM => {
                 // Handle case arm with pattern bindings
                 vec![self.resolve_case_arm(&remapped_op)]
             }
@@ -786,22 +797,20 @@ impl<'db> Resolver<'db> {
         let op_name = op.name(self.db);
 
         match (dialect, op_name) {
-            (d, n) if d == Symbol::new("pat") && n == Symbol::new("bind") => {
+            (d, n) if d == *pat::_NAME && n == *pat::BIND => {
                 // pat.bind has a "name" attribute
                 let attrs = op.attributes(self.db);
-                let name_key = Symbol::new("name");
-                if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
+                if let Some(Attribute::Symbol(sym)) = attrs.get(&*ATTR_NAME) {
                     // Pattern binding - value comes from pattern matching at runtime
                     let infer_ty =
                         trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
                 }
             }
-            (d, n) if d == Symbol::new("pat") && n == Symbol::new("as_pat") => {
+            (d, n) if d == *pat::_NAME && n == *pat::AS_PAT => {
                 // pat.as_pat has a "name" attribute and an inner pattern region
                 let attrs = op.attributes(self.db);
-                let name_key = Symbol::new("name");
-                if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
+                if let Some(Attribute::Symbol(sym)) = attrs.get(&*ATTR_NAME) {
                     let infer_ty =
                         trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
@@ -811,11 +820,10 @@ impl<'db> Resolver<'db> {
                     self.collect_pattern_bindings(region);
                 }
             }
-            (d, n) if d == Symbol::new("pat") && n == Symbol::new("list_rest") => {
+            (d, n) if d == *pat::_NAME && n == *pat::LIST_REST => {
                 // pat.list_rest has a "rest_name" attribute
                 let attrs = op.attributes(self.db);
-                let name_key = Symbol::new("rest_name");
-                if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
+                if let Some(Attribute::Symbol(sym)) = attrs.get(&*ATTR_REST_NAME) {
                     let infer_ty =
                         trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
@@ -884,8 +892,7 @@ impl<'db> Resolver<'db> {
 
                 // This is a parameter declaration
                 let attrs = op.attributes(self.db);
-                let name_key = Symbol::new("name");
-                if let Some(Attribute::Symbol(sym)) = attrs.get(&name_key) {
+                if let Some(Attribute::Symbol(sym)) = attrs.get(&*ATTR_NAME) {
                     param_declarations.push((*sym, *op));
                 } else {
                     break; // Not a proper src.var, stop scanning
@@ -989,8 +996,7 @@ impl<'db> Resolver<'db> {
     /// - None if unresolved
     fn try_resolve_var(&mut self, op: &Operation<'db>) -> Option<Vec<Operation<'db>>> {
         let attrs = op.attributes(self.db);
-        let name_key = Symbol::new("name");
-        let Attribute::Symbol(sym) = attrs.get(&name_key)? else {
+        let Attribute::Symbol(sym) = attrs.get(&*ATTR_NAME)? else {
             return None;
         };
         let name = *sym;
@@ -1071,8 +1077,7 @@ impl<'db> Resolver<'db> {
     /// Try to resolve a `src.path` operation.
     fn try_resolve_path(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let attrs = op.attributes(self.db);
-        let path_key = Symbol::new("path");
-        let Attribute::SymbolRef(segments) = attrs.get(&path_key)? else {
+        let Attribute::SymbolRef(segments) = attrs.get(&*ATTR_PATH)? else {
             return None;
         };
 
@@ -1124,8 +1129,7 @@ impl<'db> Resolver<'db> {
     /// Try to resolve a `src.call` operation.
     fn try_resolve_call(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let attrs = op.attributes(self.db);
-        let name_key = Symbol::new("name");
-        let Attribute::SymbolRef(path_segments) = attrs.get(&name_key)? else {
+        let Attribute::SymbolRef(path_segments) = attrs.get(&*ATTR_NAME)? else {
             return None;
         };
 
@@ -1204,10 +1208,9 @@ impl<'db> Resolver<'db> {
 
     /// Emit diagnostic for unresolved `src.var`.
     fn emit_unresolved_var_diagnostic(&self, op: &Operation<'db>) {
-        let name_key = Symbol::new("name");
         let name = op
             .attributes(self.db)
-            .get(&name_key)
+            .get(&*ATTR_NAME)
             .and_then(|a| {
                 if let Attribute::Symbol(s) = a {
                     Some(s.to_string())
@@ -1228,10 +1231,9 @@ impl<'db> Resolver<'db> {
 
     /// Emit diagnostic for unresolved `src.path`.
     fn emit_unresolved_path_diagnostic(&self, op: &Operation<'db>) {
-        let path_key = Symbol::new("path");
         let path = op
             .attributes(self.db)
-            .get(&path_key)
+            .get(&*ATTR_PATH)
             .and_then(|a| {
                 if let Attribute::SymbolRef(segments) = a {
                     Some(
@@ -1258,10 +1260,9 @@ impl<'db> Resolver<'db> {
 
     /// Emit diagnostic for unresolved `src.call`.
     fn emit_unresolved_call_diagnostic(&self, op: &Operation<'db>) {
-        let name_key = Symbol::new("name");
         let name = op
             .attributes(self.db)
-            .get(&name_key)
+            .get(&*ATTR_NAME)
             .and_then(|a| {
                 if let Attribute::SymbolRef(segments) = a {
                     Some(
@@ -1343,13 +1344,12 @@ mod tests {
         ops: &[Operation<'db>],
         name: &str,
     ) -> bool {
-        let name_key = Symbol::new("name");
         let name_sym = Symbol::new(name);
         ops.iter().any(|op| {
             op.dialect(db) == "src"
                 && op.name(db) == "call"
                 && matches!(
-                    op.attributes(db).get(&name_key),
+                    op.attributes(db).get(&*ATTR_NAME),
                     Some(Attribute::SymbolRef(segments)) if segments.last() == Some(&name_sym)
                 )
         })
@@ -1360,13 +1360,12 @@ mod tests {
         ops: &[Operation<'db>],
         name: &str,
     ) -> bool {
-        let callee_key = Symbol::new("callee");
         let name_sym = Symbol::new(name);
         ops.iter().any(|op| {
             op.dialect(db) == "func"
                 && op.name(db) == "call"
                 && matches!(
-                    op.attributes(db).get(&callee_key),
+                    op.attributes(db).get(&*ATTR_CALLEE),
                     Some(Attribute::SymbolRef(segments)) if segments.last() == Some(&name_sym)
                 )
         })
