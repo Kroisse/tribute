@@ -22,8 +22,8 @@ use super::statements::{bind_pattern, lower_block_body};
 // =============================================================================
 
 /// Lower an expression node to TrunkIR operations.
-pub fn lower_expr<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+pub fn lower_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -34,17 +34,17 @@ pub fn lower_expr<'db, 'src>(
     match node.kind() {
         // === Literals ===
         "nat_literal" => {
-            let value = parse_nat_literal(node_text(&node, ctx.source))?;
+            let value = parse_nat_literal(&node_text(&node, &ctx.source))?;
             let op = block.op(arith::Const::u64(ctx.db, location, value));
             Some(op.result(ctx.db))
         }
         "int_literal" => {
-            let value = parse_int_literal(node_text(&node, ctx.source))?;
+            let value = parse_int_literal(&node_text(&node, &ctx.source))?;
             let op = block.op(arith::Const::i64(ctx.db, location, value));
             Some(op.result(ctx.db))
         }
         "float_literal" => {
-            let value = parse_float_literal(node_text(&node, ctx.source))?;
+            let value = parse_float_literal(&node_text(&node, &ctx.source))?;
             let op = block.op(arith::Const::f64(ctx.db, location, value));
             Some(op.result(ctx.db))
         }
@@ -71,7 +71,7 @@ pub fn lower_expr<'db, 'src>(
             Some(op.result(ctx.db))
         }
         "rune" => {
-            let c = parse_rune_literal(node_text(&node, ctx.source))?;
+            let c = parse_rune_literal(&node_text(&node, &ctx.source))?;
             let op = block.op(arith::r#const(
                 ctx.db,
                 location,
@@ -83,7 +83,7 @@ pub fn lower_expr<'db, 'src>(
 
         // === String literals ===
         "string" | "raw_string" | "multiline_string" => {
-            let s = parse_string_literal(node, ctx.source);
+            let s = parse_string_literal(node, &ctx.source);
             let string_ty = core::String::new(ctx.db).as_type();
             let op = block.op(adt::string_const(ctx.db, location, string_ty, s));
             Some(op.result(ctx.db))
@@ -91,7 +91,7 @@ pub fn lower_expr<'db, 'src>(
 
         // === Bytes literals ===
         "bytes_string" | "raw_bytes" | "multiline_bytes" => {
-            let bytes = parse_bytes_literal(node, ctx.source);
+            let bytes = parse_bytes_literal(node, &ctx.source);
             let bytes_ty = core::Bytes::new(ctx.db).as_type();
             let op = block.op(adt::bytes_const(
                 ctx.db,
@@ -107,8 +107,8 @@ pub fn lower_expr<'db, 'src>(
             // Always create src.var for variable references, even for local bindings.
             // This preserves the source span for hover. Resolution will transform
             // local references to identity operations with the correct type.
-            let name = node_text(&node, ctx.source);
-            let op = block.op(src::var(ctx.db, location, infer_ty, sym(name)));
+            let name = node_text(&node, &ctx.source);
+            let op = block.op(src::var(ctx.db, location, infer_ty, name.into()));
             Some(op.result(ctx.db))
         }
         "path_expression" => {
@@ -116,7 +116,7 @@ pub fn lower_expr<'db, 'src>(
             let segments: Vec<Symbol> = node
                 .named_children(&mut cursor)
                 .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
-                .map(|n| sym(node_text(&n, ctx.source)))
+                .map(|n| Symbol::from(node_text(&n, &ctx.source)))
                 .collect();
 
             if segments.is_empty() {
@@ -207,8 +207,8 @@ pub fn lower_expr<'db, 'src>(
 // =============================================================================
 
 /// Lower a binary expression.
-fn lower_binary_expr<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_binary_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -228,7 +228,7 @@ fn lower_binary_expr<'db, 'src>(
         if lhs_node.is_none() {
             lhs_node = Some(child);
         } else if operator.is_none() && is_operator_node(&child) {
-            operator = Some(node_text(&child, ctx.source).to_string());
+            operator = Some(node_text(&child, &ctx.source).to_string());
         } else if rhs_node.is_none() {
             rhs_node = Some(child);
         }
@@ -241,8 +241,8 @@ fn lower_binary_expr<'db, 'src>(
         if child_cursor.goto_first_child() {
             loop {
                 let child = child_cursor.node();
-                if !child.is_named() && is_operator_text(node_text(&child, ctx.source)) {
-                    operator = Some(node_text(&child, ctx.source).to_string());
+                if !child.is_named() && is_operator_text(&node_text(&child, &ctx.source)) {
+                    operator = Some(node_text(&child, &ctx.source).to_string());
                     break;
                 }
                 if !child_cursor.goto_next_sibling() {
@@ -347,8 +347,8 @@ fn is_operator_text(text: &str) -> bool {
 // =============================================================================
 
 /// Lower a call expression.
-fn lower_call_expr<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_call_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -358,13 +358,13 @@ fn lower_call_expr<'db, 'src>(
     // Use field-based access for function
     let func_node = node.child_by_field_name("function")?;
     let func_path: SymbolVec = match func_node.kind() {
-        "identifier" => sym_ref(node_text(&func_node, ctx.source)),
+        "identifier" => sym_ref(&node_text(&func_node, &ctx.source)),
         "path_expression" => {
             let mut cursor = func_node.walk();
             let segments: SymbolVec = func_node
                 .named_children(&mut cursor)
                 .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
-                .map(|n| sym(node_text(&n, ctx.source)))
+                .map(|n| node_text(&n, &ctx.source).into())
                 .collect();
             if segments.is_empty() {
                 return None;
@@ -382,8 +382,8 @@ fn lower_call_expr<'db, 'src>(
 }
 
 /// Collect arguments from argument_list child node.
-fn collect_argument_list<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn collect_argument_list<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Vec<Value<'db>> {
@@ -408,8 +408,8 @@ fn collect_argument_list<'db, 'src>(
 }
 
 /// Lower a method call expression (UFCS).
-fn lower_method_call_expr<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_method_call_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -419,7 +419,7 @@ fn lower_method_call_expr<'db, 'src>(
     // Use field-based access
     let receiver_node = node.child_by_field_name("receiver")?;
     let method_node = node.child_by_field_name("method")?;
-    let method_name = node_text(&method_node, ctx.source).to_string();
+    let method_name = node_text(&method_node, &ctx.source).to_string();
 
     // Lower receiver first
     let receiver = lower_expr(ctx, block, receiver_node)?;
@@ -446,8 +446,8 @@ fn lower_method_call_expr<'db, 'src>(
 // =============================================================================
 
 /// Lower a lambda expression.
-fn lower_lambda_expr<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_lambda_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -470,8 +470,8 @@ fn lower_lambda_expr<'db, 'src>(
 
     let result_value = ctx.scoped(|ctx| {
         // Bind parameters
-        for param_name in &param_names {
-            let param_value = body_block.op(src::var(ctx.db, location, infer_ty, sym(param_name)));
+        for param_name in param_names {
+            let param_value = body_block.op(src::var(ctx.db, location, infer_ty, param_name));
             ctx.bind(param_name.clone(), param_value.result(ctx.db));
         }
 
@@ -495,8 +495,8 @@ fn lower_lambda_expr<'db, 'src>(
 // =============================================================================
 
 /// Lower a case/match expression.
-fn lower_case_expr<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_case_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -536,8 +536,8 @@ fn lower_case_expr<'db, 'src>(
 }
 
 /// Lower a single case arm.
-fn lower_case_arm<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_case_arm<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     node: Node,
     scrutinee: Value<'db>,
 ) -> Option<case::Arm<'db>> {
@@ -584,7 +584,7 @@ fn lower_case_arm<'db, 'src>(
 /// Convert a pattern node to a pattern region for case arms.
 ///
 /// Creates a region containing pattern operations from the `pat` dialect.
-fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> Region<'db> {
+fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'db> {
     let location = ctx.location(&node);
 
     match node.kind() {
@@ -602,12 +602,12 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
                 let mut cursor = node.walk();
                 node.named_children(&mut cursor)
                     .next()
-                    .map(|child| node_text(&child, ctx.source))
-                    .unwrap_or_else(|| node_text(&node, ctx.source))
+                    .map(|child| node_text(&child, &ctx.source))
+                    .unwrap_or_else(|| node_text(&node, &ctx.source))
             } else {
-                node_text(&node, ctx.source)
+                node_text(&node, &ctx.source)
             };
-            pat::helpers::bind_region(ctx.db, location, name)
+            pat::helpers::bind_region(ctx.db, location, name.into())
         }
         "wildcard_pattern" => pat::helpers::wildcard_region(ctx.db, location),
         "literal_pattern" => {
@@ -620,7 +620,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
             }
         }
         "nat_literal" | "int_literal" => {
-            if let Some(n) = parse_int_literal(node_text(&node, ctx.source)) {
+            if let Some(n) = parse_int_literal(&node_text(&node, &ctx.source)) {
                 pat::helpers::int_region(ctx.db, location, n)
             } else {
                 pat::helpers::wildcard_region(ctx.db, location)
@@ -629,7 +629,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
         "true" => pat::helpers::bool_region(ctx.db, location, true),
         "false" => pat::helpers::bool_region(ctx.db, location, false),
         "string" | "raw_string" | "multiline_string" => {
-            let s = parse_string_literal(node, ctx.source);
+            let s = parse_string_literal(node, &ctx.source);
             pat::helpers::string_region(ctx.db, location, &s)
         }
         "constructor_pattern" => {
@@ -643,7 +643,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
                 }
                 match child.kind() {
                     "type_identifier" => {
-                        ctor_name = Some(node_text(&child, ctx.source));
+                        ctor_name = Some(node_text(&child, &ctx.source).into());
                     }
                     "pattern_list" => {
                         let mut list_cursor = child.walk();
@@ -679,8 +679,8 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
                 }
             }
 
-            let name = ctor_name.unwrap_or("_");
-            let variant_path = idvec![Symbol::from_dynamic(name)];
+            let name = ctor_name.unwrap_or_else(|| Symbol::new("_"));
+            let variant_path = idvec![name];
             let fields_region = ops_to_region(ctx.db, location, field_ops);
             pat::helpers::variant_region(ctx.db, location, variant_path, fields_region)
         }
@@ -711,7 +711,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
         "list_pattern" => {
             let mut cursor = node.walk();
             let mut elem_ops: Vec<Operation<'db>> = Vec::new();
-            let mut rest_name: Option<&str> = None;
+            let mut rest_name = None;
 
             for child in node.named_children(&mut cursor) {
                 if is_comment(child.kind()) {
@@ -721,7 +721,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
                     let mut rest_cursor = child.walk();
                     for rest_child in child.named_children(&mut rest_cursor) {
                         if rest_child.kind() == "identifier" {
-                            rest_name = Some(node_text(&rest_child, ctx.source));
+                            rest_name = Some(node_text(&rest_child, &ctx.source).into());
                             break;
                         }
                     }
@@ -735,12 +735,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
 
             if let Some(name) = rest_name {
                 let head_region = ops_to_region(ctx.db, location, elem_ops);
-                pat::helpers::list_rest_region(
-                    ctx.db,
-                    location,
-                    Symbol::from_dynamic(name),
-                    head_region,
-                )
+                pat::helpers::list_rest_region(ctx.db, location, name, head_region)
             } else {
                 let elements_region = ops_to_region(ctx.db, location, elem_ops);
                 pat::helpers::list_region(ctx.db, location, elements_region)
@@ -757,7 +752,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
                 }
                 match child.kind() {
                     "identifier" => {
-                        binding_name = Some(node_text(&child, ctx.source));
+                        binding_name = Some(node_text(&child, &ctx.source).into());
                     }
                     _ if inner_region.is_none() => {
                         inner_region = Some(pattern_to_region(ctx, child));
@@ -768,9 +763,9 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
 
             let inner =
                 inner_region.unwrap_or_else(|| pat::helpers::wildcard_region(ctx.db, location));
-            let name = binding_name.unwrap_or("_");
+            let name = binding_name.unwrap_or_else(|| Symbol::new("_"));
             // Create as_pat operation with inner region
-            let as_op = pat::as_pat(ctx.db, location, Symbol::from_dynamic(name), inner);
+            let as_op = pat::as_pat(ctx.db, location, name, inner);
             pat::helpers::single_op_region(ctx.db, location, as_op.as_operation())
         }
         _ => pat::helpers::wildcard_region(ctx.db, location),
@@ -803,8 +798,8 @@ fn ops_to_region<'db>(
 // =============================================================================
 
 /// Lower a block expression.
-fn lower_block_expr<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_block_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -823,8 +818,8 @@ fn lower_block_expr<'db, 'src>(
 }
 
 /// Lower a list expression.
-fn lower_list_expr<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_list_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -847,8 +842,8 @@ fn lower_list_expr<'db, 'src>(
 }
 
 /// Lower a tuple expression.
-fn lower_tuple_expr<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_tuple_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -874,8 +869,8 @@ fn lower_tuple_expr<'db, 'src>(
 }
 
 /// Lower a record expression.
-fn lower_record_expr<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_record_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -892,7 +887,7 @@ fn lower_record_expr<'db, 'src>(
         }
         match child.kind() {
             "type_identifier" if type_name.is_none() => {
-                type_name = Some(node_text(&child, ctx.source).to_string());
+                type_name = Some(node_text(&child, &ctx.source).to_string());
             }
             "record_field" => {
                 // Get field value
@@ -907,12 +902,11 @@ fn lower_record_expr<'db, 'src>(
                         }
                     } else {
                         // Shorthand: { name } means { name: name }
-                        let field_name = node_text(&field_child, ctx.source);
+                        let field_name = node_text(&field_child, &ctx.source).into();
                         if let Some(value) = ctx.lookup(field_name) {
                             field_values.push(value);
                         } else {
-                            let var_op =
-                                block.op(src::var(ctx.db, location, infer_ty, sym(field_name)));
+                            let var_op = block.op(src::var(ctx.db, location, infer_ty, field_name));
                             field_values.push(var_op.result(ctx.db));
                         }
                     }
@@ -945,8 +939,8 @@ fn lower_record_expr<'db, 'src>(
 /// %request = ability.prompt { expr }
 /// case.case(%request) { arms... }
 /// ```
-fn lower_handle_expr<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_handle_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -1019,8 +1013,8 @@ fn lower_handle_expr<'db, 'src>(
 }
 
 /// Lower a handler arm (for ability handling).
-fn lower_handler_arm<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_handler_arm<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     node: Node,
     request: Value<'db>,
 ) -> Option<case::Arm<'db>> {
@@ -1065,8 +1059,8 @@ fn lower_handler_arm<'db, 'src>(
 }
 
 /// Bind handler pattern variables.
-fn bind_handler_pattern<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn bind_handler_pattern<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
     request: Value<'db>,
@@ -1088,18 +1082,18 @@ fn bind_handler_pattern<'db, 'src>(
                 match child.kind() {
                     "identifier" if op_name.is_none() && value_name.is_none() => {
                         // Could be value binding or operation name
-                        let name = node_text(&child, ctx.source);
+                        let name = node_text(&child, &ctx.source).into();
                         // Check if this is followed by -> (continuation)
                         // For now, treat single identifier as value binding
                         value_name = Some(name);
                     }
                     "type_identifier" => {
                         // This is an ability operation name
-                        op_name = Some(node_text(&child, ctx.source));
+                        op_name = Some(node_text(&child, &ctx.source));
                     }
                     "identifier" if op_name.is_some() => {
                         // This is the continuation binding
-                        continuation_name = Some(node_text(&child, ctx.source));
+                        continuation_name = Some(node_text(&child, &ctx.source).into());
                     }
                     _ => {}
                 }
@@ -1111,13 +1105,8 @@ fn bind_handler_pattern<'db, 'src>(
             {
                 // Simple value binding: { result }
                 // The request's Done payload is bound to name
-                let bind_op = block.op(case::bind(
-                    ctx.db,
-                    location,
-                    ctx.fresh_type_var(),
-                    Symbol::from_dynamic(name),
-                ));
-                ctx.bind(name.to_string(), bind_op.result(ctx.db));
+                let bind_op = block.op(case::bind(ctx.db, location, ctx.fresh_type_var(), name));
+                ctx.bind(name, bind_op.result(ctx.db));
             }
 
             // Bind continuation (for { Op(args) -> k } pattern)
@@ -1126,9 +1115,9 @@ fn bind_handler_pattern<'db, 'src>(
                     ctx.db,
                     location,
                     ctx.fresh_type_var(),
-                    Symbol::from_dynamic(cont_name),
+                    cont_name,
                 ));
-                ctx.bind(cont_name.to_string(), cont_bind.result(ctx.db));
+                ctx.bind(cont_name, cont_bind.result(ctx.db));
             }
 
             // TODO: Bind operation arguments
@@ -1145,17 +1134,14 @@ fn bind_handler_pattern<'db, 'src>(
 /// Handler patterns are for ability effect handling:
 /// - `{ result }` - Done pattern, binds the result value
 /// - `{ Path::op(args) -> k }` - Suspend pattern, binds args and continuation
-fn handler_pattern_to_region<'db, 'src>(
-    ctx: &CstLoweringCtx<'db, 'src>,
-    node: Node,
-) -> Region<'db> {
+fn handler_pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'db> {
     let location = ctx.location(&node);
     let mut cursor = node.walk();
 
-    let mut result_name: Option<&str> = None;
+    let mut result_name = None;
     let mut operation_path: Option<Node> = None;
     let mut args_node: Option<Node> = None;
-    let mut continuation_name: Option<&str> = None;
+    let mut continuation_name = None;
 
     // Parse handler pattern children
     for child in node.named_children(&mut cursor) {
@@ -1167,10 +1153,10 @@ fn handler_pattern_to_region<'db, 'src>(
                 // Could be result binding or continuation
                 if operation_path.is_some() {
                     // After operation, this is the continuation
-                    continuation_name = Some(node_text(&child, ctx.source));
+                    continuation_name = Some(node_text(&child, &ctx.source).into());
                 } else if result_name.is_none() {
                     // First identifier without operation is result binding
-                    result_name = Some(node_text(&child, ctx.source));
+                    result_name = Some(node_text(&child, &ctx.source).into());
                 }
             }
             "path_expression" => {
@@ -1209,7 +1195,7 @@ fn handler_pattern_to_region<'db, 'src>(
         };
 
         // Continuation name (empty Symbol for wildcard/discard)
-        let cont_symbol = Symbol::from_dynamic(continuation_name.unwrap_or("_"));
+        let cont_symbol = continuation_name.unwrap_or_else(|| Symbol::new("_"));
 
         pat::helpers::handler_suspend_region(
             ctx.db,
@@ -1231,11 +1217,8 @@ fn handler_pattern_to_region<'db, 'src>(
 }
 
 /// Parse an operation path like `State::get` into (ability_ref, op_name).
-fn parse_operation_path<'db, 'src>(
-    ctx: &CstLoweringCtx<'db, 'src>,
-    node: Node,
-) -> (SymbolVec, Symbol) {
-    let mut path_parts = Vec::new();
+fn parse_operation_path<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> (SymbolVec, Symbol) {
+    let mut path_parts = SymbolVec::new();
     let mut cursor = node.walk();
 
     // Collect all path components
@@ -1244,22 +1227,25 @@ fn parse_operation_path<'db, 'src>(
             continue;
         }
         if child.kind() == "identifier" || child.kind() == "type_identifier" {
-            path_parts.push(node_text(&child, ctx.source));
+            path_parts.push(node_text(&child, &ctx.source).into());
         }
     }
 
     // If it's a single identifier, treat it as ability::op where ability is inferred
     // Otherwise, the last part is the operation name, rest is the ability path
     if path_parts.len() <= 1 {
-        let op_name = path_parts.first().copied().unwrap_or("unknown");
+        let op_name = path_parts
+            .first()
+            .copied()
+            .unwrap_or_else(|| Symbol::new("unknown"));
         (
             SymbolVec::new(), // Empty ability ref (to be inferred)
-            Symbol::from_dynamic(op_name),
+            op_name,
         )
     } else {
         let op_name = path_parts.pop().unwrap();
-        let ability_ref: Vec<Symbol> = path_parts.into_iter().map(Symbol::from_dynamic).collect();
-        (SymbolVec::from(ability_ref), Symbol::from_dynamic(op_name))
+        let ability_ref: SymbolVec = path_parts;
+        (ability_ref, op_name)
     }
 }
 
@@ -1268,8 +1254,8 @@ fn parse_operation_path<'db, 'src>(
 // =============================================================================
 
 /// Lower a string interpolation expression.
-fn lower_string_interpolation<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_string_interpolation<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -1288,7 +1274,7 @@ fn lower_string_interpolation<'db, 'src>(
         let value = match child.kind() {
             "string_segment" | "multiline_string_segment" => {
                 // Regular string content
-                let content = node_text(&child, ctx.source);
+                let content = node_text(&child, &ctx.source);
                 let op = block.op(adt::string_const(
                     ctx.db,
                     location,
@@ -1347,8 +1333,8 @@ fn lower_string_interpolation<'db, 'src>(
 }
 
 /// Lower a bytes interpolation expression.
-fn lower_bytes_interpolation<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn lower_bytes_interpolation<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -1367,7 +1353,7 @@ fn lower_bytes_interpolation<'db, 'src>(
         let value = match child.kind() {
             "bytes_segment" | "multiline_bytes_segment" => {
                 // Regular bytes content
-                let content = node_text(&child, ctx.source);
+                let content = node_text(&child, &ctx.source);
                 let op = block.op(adt::bytes_const(
                     ctx.db,
                     location,

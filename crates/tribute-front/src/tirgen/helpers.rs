@@ -1,7 +1,9 @@
 //! CST navigation helpers and utility types.
 
+use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 
+use ropey::Rope;
 use tree_sitter::{Node, Tree};
 use trunk_ir::Span;
 use trunk_ir::{Symbol, SymbolVec, idvec};
@@ -77,8 +79,11 @@ pub fn is_comment(kind: &str) -> bool {
 }
 
 /// Get text from a node.
-pub fn node_text<'a>(node: &Node, source: &'a str) -> &'a str {
-    node.utf8_text(source.as_bytes()).unwrap_or("")
+pub fn node_text<'a>(node: &Node, source: &'a Rope) -> Cow<'a, str> {
+    source
+        .get_byte_slice(node.byte_range())
+        .map(Cow::from)
+        .unwrap_or_default()
 }
 
 /// Create a Span from a tree-sitter Node.

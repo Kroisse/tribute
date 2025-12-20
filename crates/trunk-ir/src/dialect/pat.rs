@@ -169,9 +169,9 @@ pub mod helpers {
     pub fn bind_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &str,
+        name: Symbol,
     ) -> Region<'db> {
-        let op = bind(db, location, Symbol::from_dynamic(name));
+        let op = bind(db, location, name);
         single_op_region(db, location, op.as_operation())
     }
 

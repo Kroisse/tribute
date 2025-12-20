@@ -5,6 +5,7 @@ mod lsp;
 
 use clap::Parser;
 use cli::{Cli, Command};
+use ropey::Rope;
 use salsa::Database;
 use tribute::pipeline::{compile_with_diagnostics, stage_resolve};
 use tribute::{SourceFile, TributeDatabaseImpl};
@@ -27,11 +28,13 @@ fn main() {
 }
 
 fn debug_file(path: std::path::PathBuf, show_env: bool) {
-    let source_code = match std::fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("Error reading file: {e}");
-            std::process::exit(1);
+    let source_code = {
+        match std::fs::File::open(&path).and_then(Rope::from_reader) {
+            Ok(content) => content,
+            Err(e) => {
+                eprintln!("Error reading file: {e}");
+                std::process::exit(1);
+            }
         }
     };
 

@@ -24,6 +24,7 @@ use tree_sitter::{InputEdit, Parser, Point, Tree};
 
 use tribute::compile;
 use tribute::{SourceFile, TributeDatabaseImpl};
+use tribute_front::source_file::parse_with_rope;
 
 use super::pretty::print_type;
 use super::type_index::TypeIndex;
@@ -104,10 +105,16 @@ impl LspServer {
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
             .expect("Failed to set language");
         let tree = parse_with_rope(&mut parser, &rope, None);
-        self.documents
-            .insert(uri.clone(), Document { rope, parser, tree });
+        self.documents.insert(
+            uri.clone(),
+            Document {
+                rope: rope.clone(),
+                parser,
+                tree,
+            },
+        );
 
-        self.publish_diagnostics(&uri, &text)?;
+        self.publish_diagnostics(&uri, rope)?;
         Ok(())
     }
 
@@ -125,10 +132,10 @@ impl LspServer {
                 Self::apply_change(doc, change)?;
             }
 
-            doc.rope.to_string()
+            doc.rope.clone()
         };
 
-        self.publish_diagnostics(&uri, &text)?;
+        self.publish_diagnostics(&uri, text)?;
         Ok(())
     }
 
@@ -157,12 +164,12 @@ impl LspServer {
         let doc = self.documents.get(uri)?;
         let offset = offset_from_position(&doc.rope, position.line, position.character)?;
 
-        let text = doc.rope.to_string();
+        let text = doc.rope.clone();
 
         // Run Salsa compilation
         let db = TributeDatabaseImpl::default();
         let (type_str, span) = db.attach(|db| {
-            let source_file = SourceFile::new(db, (**uri).clone(), text.to_string());
+            let source_file = SourceFile::new(db, (**uri).clone(), text);
             let module = compile(db, source_file);
             let type_index = TypeIndex::build(db, &module);
 
@@ -187,7 +194,7 @@ impl LspServer {
     fn publish_diagnostics(
         &self,
         uri: &Uri,
-        text: &str,
+        text: Rope,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let Some(doc) = self.documents.get(uri) else {
             return Ok(());
@@ -196,7 +203,7 @@ impl LspServer {
         // Run Salsa compilation
         let db = TributeDatabaseImpl::default();
         let diags = db.attach(|db| {
-            let source_file = SourceFile::new(db, (**uri).clone(), text.to_string());
+            let source_file = SourceFile::new(db, (**uri).clone(), text);
             let result = tribute::compile_with_diagnostics(db, source_file);
             result.diagnostics
         });
@@ -329,11 +336,6 @@ fn point_after_text(start: Point, text: &str) -> Point {
     Point { row, column }
 }
 
-fn parse_with_rope(parser: &mut Parser, rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
-    let mut callback = |byte: usize, _: Point| chunk_from_byte(rope, byte);
-    parser.parse_with_options(&mut callback, old_tree, None)
-}
-
 fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
     let start = position_from_offset(rope, span.start);
     let end = position_from_offset(rope, span.end);
@@ -397,15 +399,6 @@ fn byte_line_col(rope: &Rope, offset: usize) -> (u32, u32) {
     let line_start_byte = rope.char_to_byte(line_start_char);
     let column = offset - line_start_byte;
     (line as u32, column as u32)
-}
-
-fn chunk_from_byte(rope: &Rope, byte: usize) -> &str {
-    if byte >= rope.len_bytes() {
-        return "";
-    }
-    let (chunk, chunk_start, _, _) = rope.chunk_at_byte(byte);
-    let start = byte - chunk_start;
-    &chunk[start..]
 }
 
 /// Cast a request to a specific type.

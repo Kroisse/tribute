@@ -30,7 +30,7 @@ fn main() {
     for (filename, source_code) in examples {
         // Use attach pattern for test isolation
         let op_count = TributeDatabaseImpl::default().attach(|db| {
-            let source_file = SourceFile::from_path(db, filename, source_code.to_string());
+            let source_file = SourceFile::from_path(db, filename, source_code.into());
             let module = lower_source_file(db, source_file);
 
             // Count top-level operations in the module
@@ -66,8 +66,7 @@ fn main() {
 fn test_salsa_incremental_computation_detailed() {
     // Demonstrate incremental computation
     let mut db = TributeDatabaseImpl::default();
-    let source_file =
-        SourceFile::from_path(&db, "incremental.trb", "fn main() { 1 + 2 }".to_string());
+    let source_file = SourceFile::from_path(&db, "incremental.trb", "fn main() { 1 + 2 }".into());
 
     // Initial lowering
     let module1 = lower_source_file(&db, source_file);
@@ -80,7 +79,7 @@ fn test_salsa_incremental_computation_detailed() {
     // Modify the source file
     source_file
         .set_text(&mut db)
-        .to("fn main() { 1 + 2 + 3 + 4 }".to_string());
+        .to("fn main() { 1 + 2 + 3 + 4 }".into());
 
     // Lower again - should recompute
     let module2 = lower_source_file(&db, source_file);
@@ -112,7 +111,7 @@ fn add(a, b) { a + b }
 fn multiply(a, b) { a * b }
 fn main() { print_line("test") }
 "#
-            .to_string(),
+            .into(),
         );
         let module = lower_source_file(db, source);
 
@@ -132,13 +131,13 @@ fn main() { print_line("test") }
 fn test_salsa_database_isolation() {
     // Test that different database instances are isolated
     let module1_name = TributeDatabaseImpl::default().attach(|db| {
-        let source1 = SourceFile::from_path(db, "test1.trb", "fn main() { 1 + 2 }".to_string());
+        let source1 = SourceFile::from_path(db, "test1.trb", "fn main() { 1 + 2 }".into());
         let module1 = lower_source_file(db, source1);
         module1.name(db).to_string()
     });
 
     let module2_name = TributeDatabaseImpl::default().attach(|db| {
-        let source2 = SourceFile::from_path(db, "test2.trb", "fn main() { 3 * 4 }".to_string());
+        let source2 = SourceFile::from_path(db, "test2.trb", "fn main() { 3 * 4 }".into());
         let module2 = lower_source_file(db, source2);
         module2.name(db).to_string()
     });
@@ -154,7 +153,7 @@ fn test_function_lowering() {
 
     let source = "fn main() { 1 + 2 }";
     TributeDatabaseImpl::default().attach(|db| {
-        let source_file = SourceFile::from_path(db, "func_test.trb", source.to_string());
+        let source_file = SourceFile::from_path(db, "func_test.trb", source.into());
         let module = lower_source_file(db, source_file);
 
         let body = module.body(db);

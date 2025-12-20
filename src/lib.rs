@@ -27,11 +27,12 @@ pub use pipeline::{
 };
 
 /// Lower a Tribute source string to TrunkIR module.
+#[deprecated]
 pub fn lower_str<'db>(
     db: &'db dyn salsa::Database,
     path: &(impl AsRef<Path> + ?Sized),
     source: &str,
 ) -> Module<'db> {
-    let source_file = SourceFile::from_path(db, path.as_ref(), source.to_string());
+    let source_file = SourceFile::from_path(db, path.as_ref(), source.into());
     lower_source_file(db, source_file)
 }

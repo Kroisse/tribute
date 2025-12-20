@@ -1,5 +1,6 @@
 //! Literal parsing utilities.
 
+use ropey::Rope;
 use tree_sitter::Node;
 
 use super::helpers::node_text;
@@ -69,28 +70,28 @@ pub fn parse_rune_literal(text: &str) -> Option<char> {
 }
 
 /// Parse a string literal (handling escapes).
-pub fn parse_string_literal(node: Node, source: &str) -> String {
+pub fn parse_string_literal(node: Node, source: &Rope) -> String {
     let text = node_text(&node, source);
 
     match node.kind() {
         "raw_string" => {
             // r"..." or r#"..."#
-            extract_raw_string_content(text)
+            extract_raw_string_content(&text)
         }
         "multiline_string" => {
             // #"..."#
-            extract_multiline_string_content(text)
+            extract_multiline_string_content(&text)
         }
         "string" => {
             // Regular "..." with escapes
-            extract_string_content(text)
+            extract_string_content(&text)
         }
-        _ => text.to_string(),
+        _ => text.into_owned(),
     }
 }
 
 /// Parse a bytes literal.
-pub fn parse_bytes_literal(node: Node, source: &str) -> Vec<u8> {
+pub fn parse_bytes_literal(node: Node, source: &Rope) -> Vec<u8> {
     let text = node_text(&node, source);
 
     match node.kind() {

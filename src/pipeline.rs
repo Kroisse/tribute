@@ -68,7 +68,7 @@ const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
     let uri = fluent_uri::Uri::parse_from("prelude:///std/prelude".to_owned())
         .expect("valid prelude URI");
-    let source_file = SourceFile::new(db, uri, PRELUDE_SOURCE.to_string());
+    let source_file = SourceFile::new(db, uri, PRELUDE_SOURCE.into());
     let cst = parse_cst(db, source_file)?;
     Some(lower_cst(db, source_file, cst))
 }
@@ -308,8 +308,7 @@ mod tests {
     #[test]
     fn test_full_pipeline() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source =
-                SourceFile::from_path(db, "test.trb", "fn main() -> Int { 42 }".to_string());
+            let source = SourceFile::from_path(db, "test.trb", "fn main() -> Int { 42 }".into());
 
             let module = test_compile(db, source);
             assert_eq!(module.name(db), "main");
@@ -322,7 +321,7 @@ mod tests {
             let source = SourceFile::from_path(
                 db,
                 "test.trb",
-                "fn add(x: Int, y: Int) -> Int { x + y }".to_string(),
+                "fn add(x: Int, y: Int) -> Int { x + y }".into(),
             );
 
             let result = compile_with_diagnostics(db, source);
@@ -342,7 +341,7 @@ mod tests {
                 db,
                 "test.trb",
                 // Reference to undefined variable `undefined_var`
-                "fn main() -> Int { undefined_var }".to_string(),
+                "fn main() -> Int { undefined_var }".into(),
             );
 
             let result = compile_with_diagnostics(db, source);
@@ -378,11 +377,8 @@ mod tests {
     fn test_prelude_option_type() {
         TributeDatabaseImpl::default().attach(|db| {
             // Use Option type from prelude
-            let source = SourceFile::from_path(
-                db,
-                "test.trb",
-                "fn maybe() -> Option(Int) { None }".to_string(),
-            );
+            let source =
+                SourceFile::from_path(db, "test.trb", "fn maybe() -> Option(Int) { None }".into());
 
             let result = compile_with_diagnostics(db, source);
             // Should compile without "unresolved" errors for Option or None
@@ -405,7 +401,7 @@ mod tests {
             let source = SourceFile::from_path(
                 db,
                 "test.trb",
-                "fn success() -> Result(Int, String) { Ok(42) }".to_string(),
+                "fn success() -> Result(Int, String) { Ok(42) }".into(),
             );
 
             let result = compile_with_diagnostics(db, source);
@@ -436,7 +432,7 @@ mod tests {
                     }
                 }
                 "#
-                .to_string(),
+                .into(),
             );
 
             let result = compile_with_diagnostics(db, source);

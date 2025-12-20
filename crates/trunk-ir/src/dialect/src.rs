@@ -81,11 +81,11 @@ dialect! {
 /// This is a convenience wrapper around `Type::new` that takes a string name.
 pub fn unresolved_type<'db>(
     db: &'db dyn salsa::Database,
-    name: &str,
+    name: Symbol,
     params: IdVec<crate::Type<'db>>,
 ) -> crate::Type<'db> {
     // Use the macro-generated Type struct
-    *Type::new(db, params, Symbol::from_dynamic(name))
+    *Type::new(db, params, name)
 }
 
 // === Printable interface registrations ===

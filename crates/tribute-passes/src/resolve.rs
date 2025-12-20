@@ -1350,7 +1350,7 @@ mod tests {
         let name = alias.unwrap_or("double");
         let call_path = SymbolVec::from(vec![Symbol::from_dynamic(name)]);
         let arg = arith::Const::i64(db, location, 1);
-        let call_result_ty = src::unresolved_type(db, "Int", idvec![]);
+        let call_result_ty = src::unresolved_type(db, Symbol::new("Int"), idvec![]);
         let call = src::call(
             db,
             location,

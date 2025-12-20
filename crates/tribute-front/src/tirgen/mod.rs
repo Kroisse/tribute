@@ -19,7 +19,9 @@ mod helpers;
 mod literals;
 mod statements;
 
+use crate::source_file::parse_with_rope;
 use crate::{SourceCst, SourceFile};
+use ropey::Rope;
 use tree_sitter::{Node, Parser};
 use trunk_ir::dialect::core;
 use trunk_ir::{Location, PathId, Span, Symbol};
@@ -51,7 +53,8 @@ pub fn parse_cst(db: &dyn salsa::Database, source: SourceFile) -> Option<ParsedC
         .set_language(&tree_sitter_tribute::LANGUAGE.into())
         .expect("Failed to set language");
 
-    parser.parse(text, None).map(ParsedCst::new)
+    let tree = parse_with_rope(&mut parser, text, None)?;
+    Some(ParsedCst::new(tree))
 }
 
 /// Wrap a pre-parsed CST stored in the database.
@@ -76,7 +79,7 @@ pub fn lower_cst<'db>(
     let root = cst.root_node();
     let location = Location::new(path, span_from_node(&root));
 
-    lower_cst_impl(db, path, text, root, location)
+    lower_cst_impl(db, path, text.clone(), root, location)
 }
 
 /// Lower a pre-parsed CST stored alongside source text to TrunkIR module.
@@ -88,7 +91,7 @@ pub fn lower_source_cst<'db>(db: &'db dyn salsa::Database, source: SourceCst) ->
     let root = cst.root_node();
     let location = Location::new(path, span_from_node(&root));
 
-    lower_cst_impl(db, path, text, root, location)
+    lower_cst_impl(db, path, text.clone(), root, location)
 }
 
 /// Lower a source file directly from CST to TrunkIR module.
@@ -116,7 +119,7 @@ pub fn lower_source_file<'db>(
 fn lower_cst_impl<'db>(
     db: &'db dyn salsa::Database,
     path: PathId<'db>,
-    text: &str,
+    text: Rope,
     root: Node<'_>,
     location: Location<'db>,
 ) -> core::Module<'db> {
@@ -190,7 +193,7 @@ mod tests {
     impl salsa::Database for TestDb {}
 
     fn lower_and_get_module<'db>(db: &'db TestDb, source: &str) -> core::Module<'db> {
-        let file = SourceFile::from_path(db, "test.trb", source.to_string());
+        let file = SourceFile::from_path(db, "test.trb", source.into());
         lower_source_file(db, file)
     }
 
@@ -200,7 +203,7 @@ mod tests {
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
             .expect("Failed to set language");
         let tree = parser.parse(source, None).expect("tree");
-        let file = SourceCst::from_path(db, "test.trb", source.to_string(), tree);
+        let file = SourceCst::from_path(db, "test.trb", source.into(), tree);
         lower_source_cst(db, file)
     }
 
@@ -287,7 +290,7 @@ mod tests {
 
         let mut db = TestDb::default();
         let tree = parser.parse("fn main() { 1 }", None).expect("tree");
-        let source = SourceCst::from_path(&db, "test.trb", "fn main() { 1 }".to_string(), tree);
+        let source = SourceCst::from_path(&db, "test.trb", "fn main() { 1 }".into(), tree);
 
         let tree2 = parser.parse("fn main() { 2 }", None).expect("tree2");
         source.set_tree(&mut db).to(tree2);

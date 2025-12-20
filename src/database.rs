@@ -1,5 +1,6 @@
 use dashmap::{DashMap, Entry};
 
+use ropey::Rope;
 use tribute_front::{SourceFile, path_to_uri};
 
 #[derive(Default, Clone)]
@@ -24,7 +25,8 @@ impl TributeDatabaseImpl {
         match self.files.entry(uri_str) {
             Entry::Occupied(entry) => Ok(*entry.get()),
             Entry::Vacant(entry) => {
-                let contents = std::fs::read_to_string(&path)?;
+                let file = std::fs::File::open(&path)?;
+                let contents = Rope::from_reader(file)?;
                 let source_file = SourceFile::new(self, uri, contents);
                 Ok(*entry.insert(source_file))
             }

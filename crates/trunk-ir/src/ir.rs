@@ -1,5 +1,6 @@
 //! Core IR structures.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
@@ -66,6 +67,12 @@ impl Symbol {
 impl From<&'static str> for Symbol {
     fn from(text: &'static str) -> Self {
         Symbol::new(text)
+    }
+}
+
+impl From<Cow<'_, str>> for Symbol {
+    fn from(text: Cow<'_, str>) -> Self {
+        Symbol::from_dynamic(&text)
     }
 }
 

@@ -59,7 +59,7 @@ fn incremental_compilation_demo() {
     let mut db = TributeDatabaseImpl::default();
 
     // Create a source file
-    let source_file = SourceFile::from_path(&db, "math.trb", "fn main() { 1 + 2 }".to_string());
+    let source_file = SourceFile::from_path(&db, "math.trb", "fn main() { 1 + 2 }".into());
 
     // Lower it
     println!("Initial lowering...");
@@ -74,7 +74,7 @@ fn incremental_compilation_demo() {
     println!("Modifying source...");
     source_file
         .set_text(&mut db)
-        .to("fn main() { 3 * (1 + 2) }".to_string());
+        .to("fn main() { 3 * (1 + 2) }".into());
 
     // Lower again - Salsa will automatically detect the change and recompute
     let module2 = lower_source_file(&db, source_file);
