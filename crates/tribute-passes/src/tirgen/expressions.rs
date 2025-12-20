@@ -2,8 +2,8 @@
 
 use tree_sitter::Node;
 use trunk_ir::{
-    Attribute, Block, BlockBuilder, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
-    Value,
+    Attribute, Block, BlockBuilder, DialectOp, DialectType, IdVec, Operation, Region, Symbol,
+    SymbolVec, Type, Value,
     dialect::{ability, adt, arith, case, core, list, pat, src},
     idvec,
 };
@@ -108,22 +108,22 @@ pub fn lower_expr<'db, 'src>(
             // This preserves the source span for hover. Resolution will transform
             // local references to identity operations with the correct type.
             let name = node_text(&node, ctx.source);
-            let op = block.op(src::var(ctx.db, location, infer_ty, sym(ctx.db, name)));
+            let op = block.op(src::var(ctx.db, location, infer_ty, sym(name)));
             Some(op.result(ctx.db))
         }
         "path_expression" => {
             let mut cursor = node.walk();
-            let segments: Vec<Symbol<'db>> = node
+            let segments: Vec<Symbol> = node
                 .named_children(&mut cursor)
                 .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
-                .map(|n| sym(ctx.db, node_text(&n, ctx.source)))
+                .map(|n| sym(node_text(&n, ctx.source)))
                 .collect();
 
             if segments.is_empty() {
                 return None;
             }
 
-            let path: IdVec<_> = segments.into_iter().collect();
+            let path: SymbolVec = segments.into_iter().collect();
             let op = block.op(src::path(ctx.db, location, infer_ty, path));
             Some(op.result(ctx.db))
         }
@@ -309,7 +309,7 @@ fn lower_binary_expr<'db, 'src>(
                     lhs,
                     rhs,
                     infer_ty,
-                    sym(ctx.db, "concat"),
+                    sym("concat"),
                 ))
                 .result(ctx.db)
         }
@@ -322,7 +322,7 @@ fn lower_binary_expr<'db, 'src>(
                     lhs,
                     rhs,
                     infer_ty,
-                    sym(ctx.db, &operator),
+                    sym(&operator),
                 ))
                 .result(ctx.db)
         }
@@ -357,14 +357,14 @@ fn lower_call_expr<'db, 'src>(
 
     // Use field-based access for function
     let func_node = node.child_by_field_name("function")?;
-    let func_path: IdVec<Symbol<'db>> = match func_node.kind() {
-        "identifier" => sym_ref(ctx.db, node_text(&func_node, ctx.source)),
+    let func_path: SymbolVec = match func_node.kind() {
+        "identifier" => sym_ref(node_text(&func_node, ctx.source)),
         "path_expression" => {
             let mut cursor = func_node.walk();
-            let segments: IdVec<Symbol<'db>> = func_node
+            let segments: SymbolVec = func_node
                 .named_children(&mut cursor)
                 .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
-                .map(|n| sym(ctx.db, node_text(&n, ctx.source)))
+                .map(|n| sym(node_text(&n, ctx.source)))
                 .collect();
             if segments.is_empty() {
                 return None;
@@ -436,7 +436,7 @@ fn lower_method_call_expr<'db, 'src>(
         location,
         all_args,
         infer_ty,
-        sym_ref(ctx.db, &method_name),
+        sym_ref(&method_name),
     ));
     Some(op.result(ctx.db))
 }
@@ -471,12 +471,7 @@ fn lower_lambda_expr<'db, 'src>(
     let result_value = ctx.scoped(|ctx| {
         // Bind parameters
         for param_name in &param_names {
-            let param_value = body_block.op(src::var(
-                ctx.db,
-                location,
-                infer_ty,
-                sym(ctx.db, param_name),
-            ));
+            let param_value = body_block.op(src::var(ctx.db, location, infer_ty, sym(param_name)));
             ctx.bind(param_name.clone(), param_value.result(ctx.db));
         }
 
@@ -685,7 +680,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
             }
 
             let name = ctor_name.unwrap_or("_");
-            let variant_path = idvec![Symbol::new(ctx.db, name)];
+            let variant_path = idvec![Symbol::from_dynamic(name)];
             let fields_region = ops_to_region(ctx.db, location, field_ops);
             pat::helpers::variant_region(ctx.db, location, variant_path, fields_region)
         }
@@ -743,7 +738,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
                 pat::helpers::list_rest_region(
                     ctx.db,
                     location,
-                    Symbol::new(ctx.db, name),
+                    Symbol::from_dynamic(name),
                     head_region,
                 )
             } else {
@@ -775,7 +770,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
                 inner_region.unwrap_or_else(|| pat::helpers::wildcard_region(ctx.db, location));
             let name = binding_name.unwrap_or("_");
             // Create as_pat operation with inner region
-            let as_op = pat::as_pat(ctx.db, location, Symbol::new(ctx.db, name), inner);
+            let as_op = pat::as_pat(ctx.db, location, Symbol::from_dynamic(name), inner);
             pat::helpers::single_op_region(ctx.db, location, as_op.as_operation())
         }
         _ => pat::helpers::wildcard_region(ctx.db, location),
@@ -916,12 +911,8 @@ fn lower_record_expr<'db, 'src>(
                         if let Some(value) = ctx.lookup(field_name) {
                             field_values.push(value);
                         } else {
-                            let var_op = block.op(src::var(
-                                ctx.db,
-                                location,
-                                infer_ty,
-                                sym(ctx.db, field_name),
-                            ));
+                            let var_op =
+                                block.op(src::var(ctx.db, location, infer_ty, sym(field_name)));
                             field_values.push(var_op.result(ctx.db));
                         }
                     }
@@ -937,7 +928,7 @@ fn lower_record_expr<'db, 'src>(
         location,
         field_values,
         infer_ty,
-        sym_ref(ctx.db, &type_name),
+        sym_ref(&type_name),
     ));
     Some(op.result(ctx.db))
 }
@@ -1124,7 +1115,7 @@ fn bind_handler_pattern<'db, 'src>(
                     ctx.db,
                     location,
                     ctx.fresh_type_var(),
-                    Symbol::new(ctx.db, name),
+                    Symbol::from_dynamic(name),
                 ));
                 ctx.bind(name.to_string(), bind_op.result(ctx.db));
             }
@@ -1135,7 +1126,7 @@ fn bind_handler_pattern<'db, 'src>(
                     ctx.db,
                     location,
                     ctx.fresh_type_var(),
-                    Symbol::new(ctx.db, cont_name),
+                    Symbol::from_dynamic(cont_name),
                 ));
                 ctx.bind(cont_name.to_string(), cont_bind.result(ctx.db));
             }
@@ -1218,7 +1209,7 @@ fn handler_pattern_to_region<'db, 'src>(
         };
 
         // Continuation name (empty Symbol for wildcard/discard)
-        let cont_symbol = Symbol::new(ctx.db, continuation_name.unwrap_or("_"));
+        let cont_symbol = Symbol::from_dynamic(continuation_name.unwrap_or("_"));
 
         pat::helpers::handler_suspend_region(
             ctx.db,
@@ -1243,7 +1234,7 @@ fn handler_pattern_to_region<'db, 'src>(
 fn parse_operation_path<'db, 'src>(
     ctx: &CstLoweringCtx<'db, 'src>,
     node: Node,
-) -> (IdVec<Symbol<'db>>, Symbol<'db>) {
+) -> (SymbolVec, Symbol) {
     let mut path_parts = Vec::new();
     let mut cursor = node.walk();
 
@@ -1262,16 +1253,13 @@ fn parse_operation_path<'db, 'src>(
     if path_parts.len() <= 1 {
         let op_name = path_parts.first().copied().unwrap_or("unknown");
         (
-            IdVec::new(), // Empty ability ref (to be inferred)
-            Symbol::new(ctx.db, op_name),
+            SymbolVec::new(), // Empty ability ref (to be inferred)
+            Symbol::from_dynamic(op_name),
         )
     } else {
         let op_name = path_parts.pop().unwrap();
-        let ability_ref: Vec<Symbol<'db>> = path_parts
-            .into_iter()
-            .map(|s| Symbol::new(ctx.db, s))
-            .collect();
-        (IdVec::from(ability_ref), Symbol::new(ctx.db, op_name))
+        let ability_ref: Vec<Symbol> = path_parts.into_iter().map(Symbol::from_dynamic).collect();
+        (SymbolVec::from(ability_ref), Symbol::from_dynamic(op_name))
     }
 }
 
@@ -1328,7 +1316,7 @@ fn lower_string_interpolation<'db, 'src>(
                             location,
                             vec![v],
                             string_ty,
-                            sym_ref(ctx.db, "to_string"),
+                            sym_ref("to_string"),
                         ))
                         .result(ctx.db)
                 })
@@ -1340,14 +1328,7 @@ fn lower_string_interpolation<'db, 'src>(
             result = Some(match result {
                 None => v,
                 Some(r) => block
-                    .op(src::binop(
-                        ctx.db,
-                        location,
-                        r,
-                        v,
-                        infer_ty,
-                        sym(ctx.db, "concat"),
-                    ))
+                    .op(src::binop(ctx.db, location, r, v, infer_ty, sym("concat")))
                     .result(ctx.db),
             });
         }
@@ -1414,7 +1395,7 @@ fn lower_bytes_interpolation<'db, 'src>(
                             location,
                             vec![v],
                             bytes_ty,
-                            sym_ref(ctx.db, "to_bytes"),
+                            sym_ref("to_bytes"),
                         ))
                         .result(ctx.db)
                 })
@@ -1426,14 +1407,7 @@ fn lower_bytes_interpolation<'db, 'src>(
             result = Some(match result {
                 None => v,
                 Some(r) => block
-                    .op(src::binop(
-                        ctx.db,
-                        location,
-                        r,
-                        v,
-                        infer_ty,
-                        sym(ctx.db, "concat"),
-                    ))
+                    .op(src::binop(ctx.db, location, r, v, infer_ty, sym("concat")))
                     .result(ctx.db),
             });
         }

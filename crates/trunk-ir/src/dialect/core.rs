@@ -16,6 +16,12 @@ use crate::{
     Attribute, DialectType, IdVec, Location, Region, Symbol, Type, dialect, idvec, ir::BlockBuilder,
 };
 
+crate::symbols! {
+    ABILITY_REF => "ability_ref",
+    EFFECT_ROW => "effect_row",
+    FUNC => "func",
+}
+
 dialect! {
     mod core {
         // === Operations ===
@@ -66,17 +72,17 @@ impl<'db> Module<'db> {
     pub fn create(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &str,
+        name: Symbol,
         body: Region<'db>,
     ) -> Self {
-        module(db, location, Symbol::new(db, name), body)
+        module(db, location, name, body)
     }
 
     /// Build a module with a closure that constructs the top-level block.
     pub fn build(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &str,
+        name: Symbol,
         f: impl FnOnce(&mut BlockBuilder<'db>),
     ) -> Self {
         let mut top = BlockBuilder::new(db, location);
@@ -86,8 +92,8 @@ impl<'db> Module<'db> {
     }
 
     /// Get the module name.
-    pub fn name(&self, db: &'db dyn salsa::Database) -> &'db str {
-        self.sym_name(db).text(db)
+    pub fn name(&self, db: &'db dyn salsa::Database) -> Symbol {
+        self.sym_name(db)
     }
 }
 
@@ -121,8 +127,9 @@ impl<'db, const BITS: u16> DialectType<'db> for I<'db, BITS> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        let expected_name = format!("i{BITS}");
-        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == expected_name {
+        if ty.dialect(db) == DIALECT_NAME()
+            && ty.name(db).with_str(|n| n == format!("i{BITS}").as_str())
+        {
             Some(Self(ty))
         } else {
             None
@@ -145,8 +152,8 @@ pub type I64<'db> = I<'db, 64>;
 fn i(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     Type::new(
         db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, format!("i{bits}")),
+        DIALECT_NAME(),
+        Symbol::from_dynamic(&format!("i{bits}")),
         IdVec::new(),
         BTreeMap::new(),
     )
@@ -180,8 +187,9 @@ impl<'db, const BITS: u16> DialectType<'db> for F<'db, BITS> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        let expected_name = format!("f{BITS}");
-        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == expected_name {
+        if ty.dialect(db) == DIALECT_NAME()
+            && ty.name(db).with_str(|n| n == format!("f{BITS}").as_str())
+        {
             Some(Self(ty))
         } else {
             None
@@ -198,8 +206,8 @@ pub type F64<'db> = F<'db, 64>;
 fn f(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     Type::new(
         db,
-        Symbol::new(db, "core"),
-        Symbol::new(db, format!("f{bits}")),
+        DIALECT_NAME(),
+        Symbol::from_dynamic(&format!("f{bits}")),
         IdVec::new(),
         BTreeMap::new(),
     )
@@ -230,16 +238,10 @@ impl<'db> Func<'db> {
         all_types.push(result);
         all_types.extend(params.iter().copied());
         let attrs = match effect {
-            Some(eff) => BTreeMap::from([(Symbol::new(db, "effect"), Attribute::Type(eff))]),
+            Some(eff) => BTreeMap::from([(Self::effect_sym(), Attribute::Type(eff))]),
             None => BTreeMap::new(),
         };
-        Self(Type::new(
-            db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "func"),
-            all_types,
-            attrs,
-        ))
+        Self(Type::new(db, DIALECT_NAME(), FUNC(), all_types, attrs))
     }
 
     /// Get the return type.
@@ -252,9 +254,13 @@ impl<'db> Func<'db> {
         self.0.params(db).iter().skip(1).copied().collect()
     }
 
+    pub fn effect_sym() -> Symbol {
+        Symbol::new("effect")
+    }
+
     /// Get the effect type, if any.
     pub fn effect(&self, db: &'db dyn salsa::Database) -> Option<Type<'db>> {
-        match self.0.get_attr(db, "effect") {
+        match self.0.get_attr(db, Self::effect_sym()) {
             Some(Attribute::Type(ty)) => Some(*ty),
             _ => None,
         }
@@ -274,7 +280,7 @@ impl<'db> DialectType<'db> for Func<'db> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == "func" {
+        if ty.dialect(db) == DIALECT_NAME() && ty.name(db) == FUNC() {
             Some(Self(ty))
         } else {
             None
@@ -299,41 +305,45 @@ impl<'db> DialectType<'db> for Func<'db> {
 pub struct EffectRowType<'db>(Type<'db>);
 
 impl<'db> EffectRowType<'db> {
-    /// Create an empty effect row (pure function).
-    pub fn empty(db: &'db dyn salsa::Database) -> Self {
+    /// Create an effect row with abilities and a tail variable (open row).
+    pub fn new(
+        db: &'db dyn salsa::Database,
+        abilities: IdVec<Type<'db>>,
+        tail_var_id: u64,
+    ) -> Self {
+        let mut attrs = BTreeMap::new();
+        if tail_var_id != 0 {
+            attrs.insert(Self::tail_sym(), Attribute::IntBits(tail_var_id));
+        }
         Self(Type::new(
             db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "effect_row"),
-            IdVec::new(),
-            BTreeMap::new(),
+            DIALECT_NAME(),
+            EFFECT_ROW(),
+            abilities,
+            attrs,
         ))
+    }
+
+    /// Create an empty effect row (pure function).
+    #[inline]
+    pub fn empty(db: &'db dyn salsa::Database) -> Self {
+        Self::new(db, Default::default(), Default::default())
     }
 
     /// Create an effect row with abilities and no tail (closed row).
+    #[inline]
     pub fn concrete(db: &'db dyn salsa::Database, abilities: IdVec<Type<'db>>) -> Self {
-        Self(Type::new(
-            db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "effect_row"),
-            abilities,
-            BTreeMap::new(),
-        ))
+        Self::new(db, abilities, Default::default())
     }
 
     /// Create an effect row with a tail variable (open row).
+    #[inline]
     pub fn with_tail(
         db: &'db dyn salsa::Database,
         abilities: IdVec<Type<'db>>,
         tail_var_id: u64,
     ) -> Self {
-        Self(Type::new(
-            db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "effect_row"),
-            abilities,
-            BTreeMap::from([(Symbol::new(db, "tail"), Attribute::IntBits(tail_var_id))]),
-        ))
+        Self::new(db, abilities, tail_var_id)
     }
 
     /// Create an effect row with just a tail variable (polymorphic row).
@@ -351,9 +361,13 @@ impl<'db> EffectRowType<'db> {
         self.0.params(db)
     }
 
+    pub fn tail_sym() -> Symbol {
+        Symbol::new("tail")
+    }
+
     /// Get the tail variable ID, if any.
     pub fn tail_var(&self, db: &'db dyn salsa::Database) -> Option<u64> {
-        match self.0.get_attr(db, "tail") {
+        match self.0.get_attr(db, Self::tail_sym()) {
             Some(Attribute::IntBits(id)) => Some(*id),
             _ => None,
         }
@@ -373,7 +387,7 @@ impl<'db> DialectType<'db> for EffectRowType<'db> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == "effect_row" {
+        if ty.dialect(db) == DIALECT_NAME() && ty.name(db) == EFFECT_ROW() {
             Some(Self(ty))
         } else {
             None
@@ -394,34 +408,38 @@ pub struct AbilityRefType<'db>(Type<'db>);
 
 impl<'db> AbilityRefType<'db> {
     /// Create an ability type with no type parameters.
-    pub fn simple(db: &'db dyn salsa::Database, name: Symbol<'db>) -> Self {
+    pub fn simple(db: &'db dyn salsa::Database, name: Symbol) -> Self {
         Self(Type::new(
             db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "ability_ref"),
+            DIALECT_NAME(),
+            ABILITY_REF(),
             IdVec::new(),
-            BTreeMap::from([(Symbol::new(db, "name"), Attribute::Symbol(name))]),
+            BTreeMap::from([(Self::name_sym(), Attribute::Symbol(name))]),
         ))
     }
 
     /// Create an ability type with type parameters.
     pub fn with_params(
         db: &'db dyn salsa::Database,
-        name: Symbol<'db>,
+        name: Symbol,
         params: IdVec<Type<'db>>,
     ) -> Self {
         Self(Type::new(
             db,
-            Symbol::new(db, "core"),
-            Symbol::new(db, "ability_ref"),
+            DIALECT_NAME(),
+            ABILITY_REF(),
             params,
-            BTreeMap::from([(Symbol::new(db, "name"), Attribute::Symbol(name))]),
+            BTreeMap::from([(Self::name_sym(), Attribute::Symbol(name))]),
         ))
     }
 
+    pub fn name_sym() -> Symbol {
+        Symbol::new("name")
+    }
+
     /// Get the ability name.
-    pub fn name(&self, db: &'db dyn salsa::Database) -> Option<Symbol<'db>> {
-        match self.0.get_attr(db, "name") {
+    pub fn name(&self, db: &'db dyn salsa::Database) -> Option<Symbol> {
+        match self.0.get_attr(db, Self::name_sym()) {
             Some(Attribute::Symbol(sym)) => Some(*sym),
             _ => None,
         }
@@ -446,7 +464,7 @@ impl<'db> DialectType<'db> for AbilityRefType<'db> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db).text(db) == "core" && ty.name(db).text(db) == "ability_ref" {
+        if ty.dialect(db) == DIALECT_NAME() && ty.name(db) == ABILITY_REF() {
             Some(Self(ty))
         } else {
             None
@@ -478,21 +496,21 @@ inventory::submit! { Printable::implement("core", "ptr", |_, _, f| f.write_str("
 // Integer types: i1 -> "Bool", i64 -> "Int", i{N} -> "I{N}"
 inventory::submit! {
     Printable::implement_prefix("core", "i", |db, ty, f| {
-        match ty.name(db).text(db) {
+        ty.name(db).with_str(|name| match name {
             "i1" => f.write_str("Bool"),
             "i64" => f.write_str("Int"),
-            name => write!(f, "I{}", &name[1..]),
-        }
+            _ => write!(f, "I{}", &name[1..]),
+        })
     })
 }
 
 // Floating-point types: f64 -> "Float", f{N} -> "F{N}"
 inventory::submit! {
     Printable::implement_prefix("core", "f", |db, ty, f| {
-        match ty.name(db).text(db) {
+        ty.name(db).with_str(|name| match name {
             "f64" => f.write_str("Float"),
-            name => write!(f, "F{}", &name[1..]),
-        }
+            _ => write!(f, "F{}", &name[1..]),
+        })
     })
 }
 
@@ -551,7 +569,7 @@ fn print_tuple(db: &dyn salsa::Database, ty: Type<'_>, f: &mut Formatter<'_>) ->
     let mut elements = Vec::new();
     let mut current = ty;
 
-    while current.is_dialect(db, "core", "tuple") {
+    while current.is_dialect(db, DIALECT_NAME(), TUPLE()) {
         let params = current.params(db);
         if params.len() >= 2 {
             elements.push(params[0]); // head
@@ -562,7 +580,7 @@ fn print_tuple(db: &dyn salsa::Database, ty: Type<'_>, f: &mut Formatter<'_>) ->
     }
 
     // Check if tail is nil (complete tuple)
-    let has_tail = !current.is_dialect(db, "core", "nil");
+    let has_tail = !current.is_dialect(db, DIALECT_NAME(), NIL());
 
     f.write_char('(')?;
     for (i, &elem) in elements.iter().enumerate() {
@@ -646,10 +664,13 @@ inventory::submit! {
         };
 
         let params = ability.params(db);
+        // Get name string outside of lock to avoid nested lock when printing params
+        let name_str = name.to_string();
+
         if params.is_empty() {
-            f.write_str(name.text(db))
+            f.write_str(&name_str)
         } else {
-            f.write_str(name.text(db))?;
+            f.write_str(&name_str)?;
             f.write_char('(')?;
             for (i, &p) in params.iter().enumerate() {
                 if i > 0 {
@@ -667,7 +688,7 @@ inventory::submit! {
     Printable::implement("core", "ref_", |db, ty, f| {
         let params = ty.params(db);
         let nullable = matches!(
-            ty.get_attr(db, "nullable"),
+            ty.get_attr(db, Ref::nullable_sym()),
             Some(Attribute::Bool(true))
         );
 

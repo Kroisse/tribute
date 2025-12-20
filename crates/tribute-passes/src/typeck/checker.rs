@@ -16,8 +16,13 @@ use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
 use trunk_ir::{
     Attribute, DialectOp, DialectType, Operation, Region, Symbol, Type, Value,
-    dialect::{core, func, ty},
+    dialect::{ability, adt, arith, case, core, func, list, pat, src, ty},
 };
+
+/// Get the "unknown" symbol - used as fallback in error cases.
+fn unknown_sym() -> Symbol {
+    Symbol::new("unknown")
+}
 
 use super::constraint::ConstraintSet;
 use super::effect_row::{AbilityRef, EffectRow, RowVar};
@@ -34,172 +39,11 @@ pub enum Mode<'db> {
     Check(Type<'db>),
 }
 
-/// Cached symbols for efficient operation dispatch.
-///
-/// Pre-interned symbols avoid repeated `Symbol::new` calls during type checking.
-struct OpSymbols<'db> {
-    // Dialects
-    func: Symbol<'db>,
-    arith: Symbol<'db>,
-    src: Symbol<'db>,
-    adt: Symbol<'db>,
-    list: Symbol<'db>,
-    case: Symbol<'db>,
-    ability: Symbol<'db>,
-    r#type: Symbol<'db>,
-    core: Symbol<'db>,
-
-    // func dialect ops
-    func_func: Symbol<'db>,
-    func_return: Symbol<'db>,
-    func_call: Symbol<'db>,
-    func_call_indirect: Symbol<'db>,
-    func_constant: Symbol<'db>,
-
-    // arith dialect ops
-    arith_const: Symbol<'db>,
-    arith_add: Symbol<'db>,
-    arith_sub: Symbol<'db>,
-    arith_mul: Symbol<'db>,
-    arith_div: Symbol<'db>,
-    arith_neg: Symbol<'db>,
-    arith_cmp: Symbol<'db>,
-
-    // src dialect ops
-    src_var: Symbol<'db>,
-    src_call: Symbol<'db>,
-    src_binop: Symbol<'db>,
-    src_lambda: Symbol<'db>,
-    src_block: Symbol<'db>,
-    src_yield: Symbol<'db>,
-    src_tuple: Symbol<'db>,
-    src_const: Symbol<'db>,
-
-    // adt dialect ops
-    adt_string_const: Symbol<'db>,
-
-    // list dialect ops
-    list_new: Symbol<'db>,
-
-    // case dialect ops
-    case_case: Symbol<'db>,
-
-    // ability dialect ops
-    ability_perform: Symbol<'db>,
-    ability_prompt: Symbol<'db>,
-    ability_resume: Symbol<'db>,
-    ability_abort: Symbol<'db>,
-
-    // type dialect ops
-    type_struct: Symbol<'db>,
-    type_enum: Symbol<'db>,
-    type_ability: Symbol<'db>,
-
-    // core dialect ops
-    core_module: Symbol<'db>,
-    core_unrealized_conversion_cast: Symbol<'db>,
-
-    // pat dialect
-    pat: Symbol<'db>,
-    pat_handler_suspend: Symbol<'db>,
-    #[allow(dead_code)] // Will be used for Done pattern handling
-    pat_handler_done: Symbol<'db>,
-
-    // case dialect arm
-    case_arm: Symbol<'db>,
-
-    // Attribute keys
-    attr_ability_ref: Symbol<'db>,
-    #[allow(dead_code)] // Will be used for operation name extraction
-    attr_op: Symbol<'db>,
-}
-
-impl<'db> OpSymbols<'db> {
-    fn new(db: &'db dyn salsa::Database) -> Self {
-        Self {
-            // Dialects
-            func: Symbol::new(db, "func"),
-            arith: Symbol::new(db, "arith"),
-            src: Symbol::new(db, "src"),
-            adt: Symbol::new(db, "adt"),
-            list: Symbol::new(db, "list"),
-            case: Symbol::new(db, "case"),
-            ability: Symbol::new(db, "ability"),
-            r#type: Symbol::new(db, "type"),
-            core: Symbol::new(db, "core"),
-
-            // func dialect ops
-            func_func: Symbol::new(db, "func"),
-            func_return: Symbol::new(db, "return"),
-            func_call: Symbol::new(db, "call"),
-            func_call_indirect: Symbol::new(db, "call_indirect"),
-            func_constant: Symbol::new(db, "constant"),
-
-            // arith dialect ops
-            arith_const: Symbol::new(db, "const"),
-            arith_add: Symbol::new(db, "add"),
-            arith_sub: Symbol::new(db, "sub"),
-            arith_mul: Symbol::new(db, "mul"),
-            arith_div: Symbol::new(db, "div"),
-            arith_neg: Symbol::new(db, "neg"),
-            arith_cmp: Symbol::new(db, "cmp"),
-
-            // src dialect ops
-            src_var: Symbol::new(db, "var"),
-            src_call: Symbol::new(db, "call"),
-            src_binop: Symbol::new(db, "binop"),
-            src_lambda: Symbol::new(db, "lambda"),
-            src_block: Symbol::new(db, "block"),
-            src_yield: Symbol::new(db, "yield"),
-            src_tuple: Symbol::new(db, "tuple"),
-            src_const: Symbol::new(db, "const"),
-
-            // adt dialect ops
-            adt_string_const: Symbol::new(db, "string_const"),
-
-            // list dialect ops
-            list_new: Symbol::new(db, "new"),
-
-            // case dialect ops
-            case_case: Symbol::new(db, "case"),
-
-            // ability dialect ops
-            ability_perform: Symbol::new(db, "perform"),
-            ability_prompt: Symbol::new(db, "prompt"),
-            ability_resume: Symbol::new(db, "resume"),
-            ability_abort: Symbol::new(db, "abort"),
-
-            // type dialect ops
-            type_struct: Symbol::new(db, "struct"),
-            type_enum: Symbol::new(db, "enum"),
-            type_ability: Symbol::new(db, "ability"),
-
-            // core dialect ops
-            core_module: Symbol::new(db, "module"),
-            core_unrealized_conversion_cast: Symbol::new(db, "unrealized_conversion_cast"),
-
-            // pat dialect
-            pat: Symbol::new(db, "pat"),
-            pat_handler_suspend: Symbol::new(db, "handler_suspend"),
-            pat_handler_done: Symbol::new(db, "handler_done"),
-
-            // case dialect arm
-            case_arm: Symbol::new(db, "arm"),
-
-            // Attribute keys
-            attr_ability_ref: Symbol::new(db, "ability_ref"),
-            attr_op: Symbol::new(db, "op"),
-        }
-    }
-}
-
 /// Type checking context.
 ///
 /// Tracks the current environment (bindings) and generates constraints.
 pub struct TypeChecker<'db> {
     db: &'db dyn salsa::Database,
-    /// Cached symbols for efficient dispatch.
-    syms: OpSymbols<'db>,
     /// Map from SSA values to their types.
     value_types: HashMap<Value<'db>, Type<'db>>,
     /// Constraint set being built.
@@ -217,7 +61,6 @@ impl<'db> TypeChecker<'db> {
     pub fn new(db: &'db dyn salsa::Database) -> Self {
         Self {
             db,
-            syms: OpSymbols::new(db),
             value_types: HashMap::new(),
             constraints: ConstraintSet::new(),
             next_type_var: 0,
@@ -366,100 +209,106 @@ impl<'db> TypeChecker<'db> {
     pub fn check_operation(&mut self, op: &Operation<'db>) {
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
-        let s = &self.syms;
 
         // Dispatch by dialect first, then by operation name
-        if dialect == s.func {
-            if name == s.func_func {
+        // Use cached static symbols to avoid interner write locks
+        if dialect == func::DIALECT_NAME() {
+            if name == func::FUNC() {
                 self.check_func_def(op);
-            } else if name == s.func_return {
+            } else if name == func::RETURN() {
                 self.check_return(op);
-            } else if name == s.func_call {
+            } else if name == func::CALL() {
                 self.check_func_call(op);
-            } else if name == s.func_call_indirect {
+            } else if name == func::CALL_INDIRECT() {
                 self.check_func_call_indirect(op);
-            } else if name == s.func_constant {
+            } else if name == func::CONSTANT() {
                 self.check_func_constant(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == s.arith {
-            if name == s.arith_const {
+        } else if dialect == arith::DIALECT_NAME() {
+            if name == arith::CONST() {
                 self.check_arith_const(op);
-            } else if name == s.arith_add
-                || name == s.arith_sub
-                || name == s.arith_mul
-                || name == s.arith_div
+            } else if name == arith::ADD()
+                || name == arith::SUB()
+                || name == arith::MUL()
+                || name == arith::DIV()
             {
                 self.check_arith_binop(op);
-            } else if name == s.arith_neg {
+            } else if name == arith::NEG() {
                 self.check_arith_neg(op);
-            } else if name == s.arith_cmp {
+            } else if name == arith::CMP_EQ()
+                || name == arith::CMP_NE()
+                || name == arith::CMP_LT()
+                || name == arith::CMP_LE()
+                || name == arith::CMP_GT()
+                || name == arith::CMP_GE()
+            {
                 self.check_arith_cmp(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == s.src {
-            if name == s.src_var {
+        } else if dialect == src::DIALECT_NAME() {
+            if name == src::VAR() {
                 self.check_src_var(op);
-            } else if name == s.src_call {
+            } else if name == src::CALL() {
                 self.check_src_call(op);
-            } else if name == s.src_binop {
+            } else if name == src::BINOP() {
                 self.check_src_binop(op);
-            } else if name == s.src_lambda {
+            } else if name == src::LAMBDA() {
                 self.check_src_lambda(op);
-            } else if name == s.src_block {
+            } else if name == src::BLOCK() {
                 self.check_src_block(op);
-            } else if name == s.src_yield {
+            } else if name == src::YIELD() {
                 self.check_src_yield(op);
-            } else if name == s.src_tuple {
+            } else if name == src::TUPLE() {
                 self.check_src_tuple(op);
-            } else if name == s.src_const {
+            } else if name == src::CONST() {
                 self.check_src_const(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == s.adt {
-            if name == s.adt_string_const {
+        } else if dialect == adt::DIALECT_NAME() {
+            if name == adt::STRING_CONST() {
                 self.check_string_const(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == s.list {
-            if name == s.list_new {
+        } else if dialect == list::DIALECT_NAME() {
+            if name == list::NEW() {
                 self.check_list_new(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == s.case {
-            if name == s.case_case {
+        } else if dialect == case::DIALECT_NAME() {
+            if name == case::CASE() {
                 self.check_case(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == s.ability {
-            if name == s.ability_perform {
+        } else if dialect == ability::DIALECT_NAME() {
+            if name == ability::PERFORM() {
                 self.check_ability_perform(op);
-            } else if name == s.ability_prompt {
+            } else if name == ability::PROMPT() {
                 self.check_ability_prompt(op);
-            } else if name == s.ability_resume {
+            } else if name == ability::RESUME() {
                 self.check_ability_resume(op);
-            } else if name == s.ability_abort {
+            } else if name == ability::ABORT() {
                 self.check_ability_abort(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == s.r#type {
+        } else if dialect == ty::DIALECT_NAME() {
             // Type declarations (struct, enum, ability) don't need type checking
-            if name == s.type_struct || name == s.type_enum || name == s.type_ability {
+            if name == ty::STRUCT() || name == ty::ENUM() || name == ty::ABILITY() {
                 // No-op
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == s.core {
-            if name == s.core_module {
+        } else if dialect == core::DIALECT_NAME() {
+            if name == core::MODULE() {
                 // Module is checked via check_module
-            } else if name == s.core_unrealized_conversion_cast {
+            } else if name == core::UNREALIZED_CONVERSION_CAST() {
                 // Pass through - assign fresh type var to result
                 self.check_unknown_op(op);
             } else {
@@ -629,9 +478,9 @@ impl<'db> TypeChecker<'db> {
 
     fn check_arith_cmp(&mut self, op: &Operation<'db>) {
         // Comparison returns I1 (bool)
-        let bool_type = *core::I1::new(self.db);
+        let bool_type = core::I1::new(self.db);
         let value = op.result(self.db, 0);
-        self.record_type(value, bool_type);
+        self.record_type(value, *bool_type);
     }
 
     // === src dialect checking ===
@@ -752,9 +601,9 @@ impl<'db> TypeChecker<'db> {
     // === adt dialect checking ===
 
     fn check_string_const(&mut self, op: &Operation<'db>) {
-        let string_type = *core::String::new(self.db);
+        let string_type = core::String::new(self.db);
         let value = op.result(self.db, 0);
-        self.record_type(value, string_type);
+        self.record_type(value, *string_type);
     }
 
     // === list dialect checking ===
@@ -786,8 +635,8 @@ impl<'db> TypeChecker<'db> {
             // Look for case.arm operations in the region
             for block in region.blocks(self.db).iter() {
                 for arm_op in block.operations(self.db).iter() {
-                    if arm_op.dialect(self.db) == self.syms.case
-                        && arm_op.name(self.db) == self.syms.case_arm
+                    if arm_op.dialect(self.db) == case::DIALECT_NAME()
+                        && arm_op.name(self.db) == case::ARM()
                     {
                         // Extract handled abilities from the pattern region
                         let arm_regions = arm_op.regions(self.db);
@@ -822,22 +671,18 @@ impl<'db> TypeChecker<'db> {
         pattern_region: &Region<'db>,
         handled: &mut Vec<AbilityRef<'db>>,
     ) {
+        let ability_ref_sym = Symbol::new("ability_ref");
         for block in pattern_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
                 // Check for pat.handler_suspend
-                if op.dialect(self.db) == self.syms.pat
-                    && op.name(self.db) == self.syms.pat_handler_suspend
+                if op.dialect(self.db) == pat::DIALECT_NAME()
+                    && op.name(self.db) == pat::HANDLER_SUSPEND()
                 {
                     // Extract ability reference from attributes
                     let attrs = op.attributes(self.db);
-                    if let Some(Attribute::SymbolRef(ability_path)) =
-                        attrs.get(&self.syms.attr_ability_ref)
-                    {
+                    if let Some(Attribute::SymbolRef(ability_path)) = attrs.get(&ability_ref_sym) {
                         // Extract ability name from path
-                        let ability_name = ability_path
-                            .last()
-                            .copied()
-                            .unwrap_or_else(|| Symbol::new(self.db, "unknown"));
+                        let ability_name = ability_path.last().copied().unwrap_or(unknown_sym());
 
                         let ability = AbilityRef::simple(ability_name);
                         if !handled.contains(&ability) {
@@ -865,13 +710,10 @@ impl<'db> TypeChecker<'db> {
         // attr: ability_ref: SymbolRef (path to ability)
         // attr: op: Symbol (operation name)
         if let Some(Attribute::SymbolRef(ability_path)) =
-            op.attributes(self.db).get(&self.syms.attr_ability_ref)
+            op.attributes(self.db).get(&Symbol::new("ability_ref"))
         {
             // Extract ability name from the path (last component)
-            let ability_name = ability_path
-                .last()
-                .copied()
-                .unwrap_or_else(|| Symbol::new(self.db, "unknown"));
+            let ability_name = ability_path.last().copied().unwrap_or(unknown_sym());
 
             // Create ability reference (with no type params for now)
             // TODO: Extract type parameters from the ability definition
@@ -1102,11 +944,8 @@ pub fn typecheck_module_per_function<'db>(
 
     let block = &blocks[0];
     let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
-    let func_sym = Symbol::new(db, "func");
-    let func_name = Symbol::new(db, "func");
-
     for op in block.operations(db).iter() {
-        if op.dialect(db) == func_sym && op.name(db) == func_name {
+        if op.dialect(db) == func::DIALECT_NAME() && op.name(db) == func::FUNC() {
             // Validate type annotations for top-level functions
             if let Ok(func_op) = func::Func::from_operation(db, *op) {
                 validate_toplevel_function_types(db, &func_op);
@@ -1133,6 +972,7 @@ mod tests {
     use salsa::Database;
     use tribute_core::TributeDatabaseImpl;
     use trunk_ir::dialect::arith;
+    use trunk_ir::idvec;
     use trunk_ir::{PathId, Span};
 
     #[salsa::tracked]
@@ -1140,7 +980,7 @@ mod tests {
         let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = trunk_ir::Location::new(path, Span::new(0, 0));
 
-        core::Module::build(db, location, "test", |entry| {
+        core::Module::build(db, location, Symbol::new("test"), |entry| {
             let _ = entry.op(arith::Const::i64(db, location, 42));
         })
     }
@@ -1149,12 +989,18 @@ mod tests {
     fn build_arith_module(db: &dyn salsa::Database) -> core::Module<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = trunk_ir::Location::new(path, Span::new(0, 0));
-        let i64_ty = *core::I64::new(db);
+        let i64_ty = core::I64::new(db);
 
-        core::Module::build(db, location, "test", |entry| {
+        core::Module::build(db, location, Symbol::new("test"), |entry| {
             let a = entry.op(arith::Const::i64(db, location, 1));
             let b = entry.op(arith::Const::i64(db, location, 2));
-            let _ = entry.op(arith::add(db, location, a.result(db), b.result(db), i64_ty));
+            let _ = entry.op(arith::add(
+                db,
+                location,
+                a.result(db),
+                b.result(db),
+                *i64_ty,
+            ));
         })
     }
 
@@ -1212,21 +1058,21 @@ mod tests {
             );
 
             // Concrete type should not have type vars
-            let i64_ty = *core::I64::new(db);
+            let i64_ty = core::I64::new(db);
             assert!(
-                !has_type_vars(db, i64_ty),
+                !has_type_vars(db, *i64_ty),
                 "Concrete type should not have type vars"
             );
 
             // Function type with type var in return should be detected
-            let func_with_var = core::Func::new(db, vec![i64_ty].into(), type_var).as_type();
+            let func_with_var = core::Func::new(db, idvec![*i64_ty], type_var).as_type();
             assert!(
                 has_type_vars(db, func_with_var),
                 "Function with type var return should be detected"
             );
 
             // Function type with concrete types should not have type vars
-            let func_concrete = core::Func::new(db, vec![i64_ty].into(), i64_ty).as_type();
+            let func_concrete = core::Func::new(db, idvec![*i64_ty], *i64_ty).as_type();
             assert!(
                 !has_type_vars(db, func_concrete),
                 "Function with concrete types should not have type vars"

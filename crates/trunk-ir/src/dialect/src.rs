@@ -85,7 +85,7 @@ pub fn unresolved_type<'db>(
     params: IdVec<crate::Type<'db>>,
 ) -> crate::Type<'db> {
     // Use the macro-generated Type struct
-    *Type::new(db, params, Symbol::new(db, name))
+    *Type::new(db, params, Symbol::from_dynamic(name))
 }
 
 // === Printable interface registrations ===
@@ -98,14 +98,14 @@ use crate::type_interface::Printable;
 // src.type -> "Name" or "Name(params...)"
 inventory::submit! {
     Printable::implement("src", "type", |db, ty, f| {
-        let Some(Attribute::Symbol(name)) = ty.get_attr(db, "name") else {
+        let Some(Attribute::Symbol(name)) = ty.get_attr(db, Type::name_sym()) else {
             return f.write_str("?unresolved");
         };
 
-        let name_text = name.text(db);
         let params = ty.params(db);
 
         // Capitalize first letter
+        let name_text = name.to_string();
         let mut chars = name_text.chars();
         if let Some(c) = chars.next() {
             for ch in c.to_uppercase() {

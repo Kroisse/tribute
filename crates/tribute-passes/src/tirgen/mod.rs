@@ -22,7 +22,7 @@ mod statements;
 use tree_sitter::{Node, Parser};
 use tribute_core::SourceFile;
 use trunk_ir::dialect::core;
-use trunk_ir::{Location, PathId, Span};
+use trunk_ir::{Location, PathId, Span, Symbol};
 
 pub use helpers::ParsedCst;
 
@@ -89,7 +89,7 @@ pub fn lower_source_file<'db>(
         None => {
             // Return empty module on parse failure
             let location = Location::new(path, Span::new(0, 0));
-            core::Module::build(db, location, "main", |_| {})
+            core::Module::build(db, location, Symbol::new("main"), |_| {})
         }
     }
 }
@@ -102,7 +102,7 @@ fn lower_cst_impl<'db>(
     root: Node<'_>,
     location: Location<'db>,
 ) -> core::Module<'db> {
-    core::Module::build(db, location, "main", |top| {
+    core::Module::build(db, location, Symbol::new("main"), |top| {
         let mut cursor = root.walk();
         let mut ctx = CstLoweringCtx::new(db, path, text);
 
@@ -367,7 +367,7 @@ mod tests {
 
         // The first op should be src.const
         let const_op = src::Const::from_operation(&db, ops[0]).expect("Should be a src.const");
-        assert_eq!(const_op.name(&db).text(&db), "pi");
+        assert_eq!(const_op.name(&db), "pi");
     }
 
     #[test]

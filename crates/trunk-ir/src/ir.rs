@@ -1,6 +1,10 @@
 //! Core IR structures.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
+
+use lasso::{Rodeo, Spur};
+use parking_lot::RwLock;
 
 use crate::Location;
 use crate::{Attribute, IdVec, Type};
@@ -9,12 +13,119 @@ use crate::{Attribute, IdVec, Type};
 // Interned Types
 // ============================================================================
 
+/// Global string interner for symbols.
+static INTERNER: LazyLock<RwLock<Rodeo>> = LazyLock::new(|| RwLock::new(Rodeo::default()));
+
 /// Interned symbol for efficient comparison of names (functions, variables, fields, etc.)
-#[salsa::interned(debug)]
-#[derive(Ord, PartialOrd)]
-pub struct Symbol<'db> {
-    #[returns(deref)]
-    pub text: String,
+///
+/// Uses lasso for string interning with 4-byte Spur keys.
+/// Significantly smaller than Salsa's interned types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
+pub struct Symbol(Spur);
+
+impl Symbol {
+    /// Intern a static string and return its symbol. Prefer this over `from_dynamic` when possible.
+    pub fn new(text: &'static str) -> Self {
+        Self::get_or_else(text, |rodeo| rodeo.get_or_intern_static(text))
+    }
+
+    /// Intern a string and return its symbol. Prefer `new` if the text is static.
+    pub fn from_dynamic(text: &str) -> Self {
+        Self::get_or_else(text, |rodeo| rodeo.get_or_intern(text))
+    }
+
+    fn get_or_else(text: &str, f: impl for<'r> FnOnce(&'r mut Rodeo) -> Spur) -> Self {
+        let mut lock = INTERNER.upgradable_read();
+        Symbol(if let Some(spur) = lock.get(text) {
+            spur
+        } else {
+            lock.with_upgraded(f)
+        })
+    }
+
+    /// Access the symbol's text with zero-copy.
+    ///
+    /// Uses `read_recursive()` to allow nested Symbol operations (Display, ==, to_string)
+    /// within the closure without risk of deadlock.
+    ///
+    /// This is useful for optimization: when you need to work with the symbol's text
+    /// without allocating a String, use this method. For example:
+    ///
+    /// ```ignore
+    /// // Avoid: symbol.to_string() == "something"
+    /// // Prefer:
+    /// symbol.with_str(|s| s == "something")
+    /// ```
+    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        let interner = INTERNER.read_recursive();
+        let text = interner.resolve(&self.0);
+        f(text)
+    }
+}
+
+impl From<&'static str> for Symbol {
+    fn from(text: &'static str) -> Self {
+        Symbol::new(text)
+    }
+}
+
+/// Helper macro for declaring multiple symbol helpers at once.
+///
+/// # Example
+/// ```
+/// use trunk_ir::symbols;
+///
+/// symbols! {
+///     ATTR_NAME => "name",
+///     ATTR_TYPE => "type",
+///     #[allow(dead_code)]
+///     ATTR_UNUSED => "unused",
+/// }
+/// ```
+#[macro_export]
+macro_rules! symbols {
+    ($($(#[$attr:meta])* $name:ident => $text:literal),* $(,)?) => {
+        $(
+            $(#[$attr])*
+            #[allow(non_snake_case)]
+            #[inline]
+            pub fn $name() -> $crate::Symbol {
+                $crate::Symbol::new($text)
+            }
+        )*
+    };
+}
+
+// Convenient comparison with &str
+impl PartialEq<str> for Symbol {
+    fn eq(&self, other: &str) -> bool {
+        self.with_str(|s| s == other)
+    }
+}
+
+impl PartialEq<&str> for Symbol {
+    fn eq(&self, other: &&str) -> bool {
+        self.with_str(|s| s == *other)
+    }
+}
+
+impl PartialEq<Symbol> for str {
+    fn eq(&self, other: &Symbol) -> bool {
+        other.with_str(|s| s == self)
+    }
+}
+
+impl PartialEq<Symbol> for &str {
+    fn eq(&self, other: &Symbol) -> bool {
+        other.with_str(|s| s == *self)
+    }
+}
+
+// For Display (uses with_str for zero-copy)
+impl std::fmt::Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.with_str(|s| write!(f, "{}", s))
+    }
 }
 
 // ============================================================================
@@ -44,15 +155,15 @@ pub struct Value<'db> {
 pub struct Operation<'db> {
     pub location: Location<'db>,
     /// Dialect name (e.g., "arith", "func").
-    pub dialect: Symbol<'db>,
+    pub dialect: Symbol,
     /// Operation name within the dialect (e.g., "add", "call").
-    pub name: Symbol<'db>,
+    pub name: Symbol,
     #[returns(ref)]
     pub operands: IdVec<Value<'db>>,
     #[returns(ref)]
     pub results: IdVec<Type<'db>>,
     #[returns(ref)]
-    pub attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
+    pub attributes: BTreeMap<Symbol, Attribute<'db>>,
     #[tracked]
     #[returns(ref)]
     pub regions: IdVec<Region<'db>>,
@@ -65,8 +176,8 @@ impl<'db> Operation<'db> {
     pub fn of(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        dialect: Symbol<'db>,
-        name: Symbol<'db>,
+        dialect: Symbol,
+        name: Symbol,
     ) -> OperationBuilder<'db> {
         OperationBuilder::new(db, location, dialect, name)
     }
@@ -75,19 +186,19 @@ impl<'db> Operation<'db> {
     pub fn of_name(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        full_name: &str,
+        full_name: &'static str,
     ) -> OperationBuilder<'db> {
         let (dialect, name) = full_name
             .split_once('.')
             .expect("invalid operation name: expected 'dialect.operation'");
-        let dialect = Symbol::new(db, dialect);
-        let name = Symbol::new(db, name);
+        let dialect = Symbol::new(dialect);
+        let name = Symbol::new(name);
         Self::of(db, location, dialect, name)
     }
 
     /// Format as "dialect.operation".
     pub fn full_name(&self, db: &'db dyn salsa::Database) -> String {
-        format!("{}.{}", self.dialect(db).text(db), self.name(db).text(db))
+        format!("{}.{}", self.dialect(db), self.name(db))
     }
 
     pub fn result(self, db: &'db dyn salsa::Database, index: usize) -> Value<'db> {
@@ -140,11 +251,11 @@ pub struct Region<'db> {
 pub struct OperationBuilder<'db> {
     db: &'db dyn salsa::Database,
     location: Location<'db>,
-    dialect: Symbol<'db>,
-    name: Symbol<'db>,
+    dialect: Symbol,
+    name: Symbol,
     operands: IdVec<Value<'db>>,
     results: IdVec<Type<'db>>,
-    attributes: BTreeMap<Symbol<'db>, Attribute<'db>>,
+    attributes: BTreeMap<Symbol, Attribute<'db>>,
     regions: IdVec<Region<'db>>,
     successors: IdVec<Block<'db>>,
 }
@@ -153,8 +264,8 @@ impl<'db> OperationBuilder<'db> {
     pub fn new(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        dialect: Symbol<'db>,
-        name: Symbol<'db>,
+        dialect: Symbol,
+        name: Symbol,
     ) -> Self {
         Self {
             db,
@@ -174,23 +285,23 @@ impl<'db> OperationBuilder<'db> {
         self
     }
 
-    pub fn dialect(mut self, dialect: Symbol<'db>) -> Self {
+    pub fn dialect(mut self, dialect: Symbol) -> Self {
         self.dialect = dialect;
         self
     }
 
     pub fn dialect_str(mut self, dialect: &str) -> Self {
-        self.dialect = Symbol::new(self.db, dialect);
+        self.dialect = Symbol::from_dynamic(dialect);
         self
     }
 
-    pub fn name(mut self, name: Symbol<'db>) -> Self {
+    pub fn name(mut self, name: Symbol) -> Self {
         self.name = name;
         self
     }
 
     pub fn name_str(mut self, name: &str) -> Self {
-        self.name = Symbol::new(self.db, name);
+        self.name = Symbol::from_dynamic(name);
         self
     }
 
@@ -209,9 +320,8 @@ impl<'db> OperationBuilder<'db> {
         self
     }
 
-    pub fn attr(mut self, key: &str, value: Attribute<'db>) -> Self {
-        let sym = Symbol::new(self.db, key);
-        self.attributes.insert(sym, value);
+    pub fn attr(mut self, key: impl Into<Symbol>, value: Attribute<'db>) -> Self {
+        self.attributes.insert(key.into(), value);
         self
     }
 
@@ -320,7 +430,7 @@ mod tests {
             },
         );
 
-        core::Module::build(db, location, "main", |top| {
+        core::Module::build(db, location, "main".into(), |top| {
             top.op(main_func);
         })
         .as_operation()

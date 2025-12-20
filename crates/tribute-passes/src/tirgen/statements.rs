@@ -186,7 +186,7 @@ pub fn bind_pattern<'db, 'src>(
                                 location,
                                 vec![value],
                                 infer_ty,
-                                sym_ref(ctx.db, &format!("tuple_get_{}", idx)),
+                                sym_ref(&format!("tuple_get_{}", idx)),
                             ))
                             .result(ctx.db);
                         bind_pattern(ctx, block, pat_child, elem_value);

@@ -170,7 +170,7 @@ mod tests {
         let region = Region::new(db, location, idvec![block]);
 
         // Build module
-        core::Module::create(db, location, "test", region)
+        core::Module::create(db, location, "test".into(), region)
     }
 
     /// Helper to create a module with an operation that has type variable 1 as result.
@@ -193,7 +193,7 @@ mod tests {
         let region = Region::new(db, location, idvec![block]);
 
         // Build module
-        core::Module::create(db, location, "test", region)
+        core::Module::create(db, location, "test".into(), region)
     }
 
     /// Helper to create a module with a concrete type result.
@@ -216,7 +216,7 @@ mod tests {
         let region = Region::new(db, location, idvec![block]);
 
         // Build module
-        core::Module::create(db, location, "test", region)
+        core::Module::create(db, location, "test".into(), region)
     }
 
     /// Apply substitution to the test module (var 42 -> I64).
@@ -287,7 +287,7 @@ mod tests {
             println!("{}block[{}]:", prefix, bi);
             // Print block args
             for (i, ty) in block.args(db).iter().enumerate() {
-                let ty_name = format!("{}.{}", ty.dialect(db).text(db), ty.name(db).text(db));
+                let ty_name = format!("{}.{}", ty.dialect(db).to_string(), ty.name(db).to_string());
                 let is_var = ty::is_var(db, *ty);
                 println!("{}  arg[{}]: {} (is_var: {})", prefix, i, ty_name, is_var);
             }
@@ -295,7 +295,8 @@ mod tests {
             for op in block.operations(db).iter() {
                 println!("{}  {}", prefix, op.full_name(db));
                 for (i, ty) in op.results(db).iter().enumerate() {
-                    let ty_name = format!("{}.{}", ty.dialect(db).text(db), ty.name(db).text(db));
+                    let ty_name =
+                        format!("{}.{}", ty.dialect(db).to_string(), ty.name(db).to_string());
                     let is_var = ty::is_var(db, *ty);
                     println!(
                         "{}    result[{}]: {} (is_var: {})",

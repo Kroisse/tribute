@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 
 use tree_sitter::{Node, Tree};
 use trunk_ir::Span;
-use trunk_ir::{IdVec, Symbol, idvec};
+use trunk_ir::{Symbol, SymbolVec, idvec};
 
 // =============================================================================
 // Parsed CST (Salsa-cacheable)
@@ -55,13 +55,13 @@ impl Hash for ParsedCst {
 // =============================================================================
 
 /// Create a symbol from a string.
-pub fn sym<'db>(db: &'db dyn salsa::Database, name: &str) -> Symbol<'db> {
-    Symbol::new(db, name)
+pub fn sym(name: &str) -> Symbol {
+    Symbol::from_dynamic(name)
 }
 
 /// Create a symbol reference (path) from a single name.
-pub fn sym_ref<'db>(db: &'db dyn salsa::Database, name: &str) -> IdVec<Symbol<'db>> {
-    idvec![Symbol::new(db, name)]
+pub fn sym_ref(name: &str) -> SymbolVec {
+    idvec![Symbol::from_dynamic(name)]
 }
 
 // =============================================================================

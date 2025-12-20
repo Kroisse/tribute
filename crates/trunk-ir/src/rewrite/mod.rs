@@ -17,7 +17,7 @@
 //! ```
 //! # use salsa::Database;
 //! # use trunk_ir::test_db::TestDatabase;
-//! # use trunk_ir::{Block, Location, Operation, PathId, Region, Span, idvec};
+//! # use trunk_ir::{Block, Location, Operation, PathId, Region, Span, Symbol, idvec};
 //! # use trunk_ir::dialect::core::Module;
 //! use trunk_ir::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
 //!
@@ -30,7 +30,7 @@
 //!         op: &Operation<'db>,
 //!         _ctx: &mut RewriteContext<'db>,
 //!     ) -> RewriteResult<'db> {
-//!         if op.dialect(db).text(db) != "test" || op.name(db).text(db) != "source" {
+//!         if op.dialect(db) != "test" || op.name(db) != "source" {
 //!             return RewriteResult::Unchanged;
 //!         }
 //!         let new_op = op.modify(db).name_str("target").build();
@@ -44,7 +44,7 @@
 //! #     let op = Operation::of_name(db, location, "test.source").build();
 //! #     let block = Block::new(db, location, idvec![], idvec![op]);
 //! #     let region = Region::new(db, location, idvec![block]);
-//! #     Module::create(db, location, "test", region)
+//! #     Module::create(db, location, Symbol::new("test"), region)
 //! # }
 //! # #[salsa::tracked]
 //! # fn apply_rename(db: &dyn salsa::Database, module: Module<'_>) -> bool {

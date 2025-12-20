@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{IdVec, Span, Symbol};
+use crate::{IdVec, Span, Symbol, SymbolVec, dialect::core};
 
 /// Trait for dialect-specific type wrappers.
 ///
@@ -18,15 +18,15 @@ pub trait DialectType<'db>: Sized {
 }
 
 /// Attribute map type alias.
-pub type Attrs<'db> = BTreeMap<Symbol<'db>, Attribute<'db>>;
+pub type Attrs<'db> = BTreeMap<Symbol, Attribute<'db>>;
 
 /// IR type representation.
 ///
 /// All types are dialect-defined with a `dialect.name` naming convention.
 #[salsa::interned(debug)]
 pub struct Type<'db> {
-    pub dialect: Symbol<'db>,
-    pub name: Symbol<'db>,
+    pub dialect: Symbol,
+    pub name: Symbol,
     #[returns(deref)]
     pub params: IdVec<Type<'db>>,
     #[returns(ref)]
@@ -35,13 +35,13 @@ pub struct Type<'db> {
 
 impl<'db> Type<'db> {
     /// Check if this type matches the given dialect and name.
-    pub fn is_dialect(&self, db: &'db dyn salsa::Database, dialect: &str, name: &str) -> bool {
-        self.dialect(db).text(db) == dialect && self.name(db).text(db) == name
+    pub fn is_dialect(&self, db: &'db dyn salsa::Database, dialect: Symbol, name: Symbol) -> bool {
+        self.dialect(db) == dialect && self.name(db) == name
     }
 
     /// Check if this is a function type (`core.func`).
     pub fn is_function(&self, db: &'db dyn salsa::Database) -> bool {
-        self.is_dialect(db, "core", "func")
+        self.is_dialect(db, core::DIALECT_NAME(), core::FUNC())
     }
 
     /// Get function parameter types if this is a function type.
@@ -71,15 +71,15 @@ impl<'db> Type<'db> {
         if !self.is_function(db) {
             return None;
         }
-        match self.get_attr(db, "effect") {
+        match self.get_attr(db, core::Func::effect_sym()) {
             Some(Attribute::Type(ty)) => Some(*ty),
             _ => None,
         }
     }
 
     /// Get an attribute by key.
-    pub fn get_attr(&self, db: &'db dyn salsa::Database, key: &str) -> Option<&Attribute<'db>> {
-        self.attrs(db).get(&Symbol::new(db, key))
+    pub fn get_attr(&self, db: &'db dyn salsa::Database, key: Symbol) -> Option<&Attribute<'db>> {
+        self.attrs(db).get(&key)
     }
 }
 
@@ -97,9 +97,9 @@ pub enum Attribute<'db> {
     Bytes(Vec<u8>),
     Type(Type<'db>),
     /// Single interned symbol (e.g., "foo").
-    Symbol(Symbol<'db>),
+    Symbol(Symbol),
     /// Symbol reference path (e.g., ["module", "func_name"])
-    SymbolRef(IdVec<Symbol<'db>>),
+    SymbolRef(SymbolVec),
     /// List of attributes (for arrays of values like switch cases).
     List(Vec<Attribute<'db>>),
     /// Source span (for tracking source locations in attributes).

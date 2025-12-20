@@ -56,7 +56,7 @@ mod tests {
             assert_eq!(print_type(db, empty), "{}");
 
             // Row with ability
-            let console = *AbilityRefType::simple(db, Symbol::new(db, "Console"));
+            let console = *AbilityRefType::simple(db, Symbol::new("Console"));
             let row = *EffectRowType::concrete(db, idvec![console]);
             assert_eq!(print_type(db, row), "{Console}");
 

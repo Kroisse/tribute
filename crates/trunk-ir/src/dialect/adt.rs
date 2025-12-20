@@ -86,10 +86,10 @@ dialect! {
 // This uses Prefix("") as a catch-all for any adt type
 inventory::submit! {
     Printable::implement_prefix("adt", "", |db, ty, f| {
-        let name = ty.name(db).text(db);
         let params = ty.params(db);
 
         // Capitalize first letter
+        let name = ty.name(db).to_string();
         let mut chars = name.chars();
         if let Some(c) = chars.next() {
             for ch in c.to_uppercase() {

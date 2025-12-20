@@ -3,7 +3,7 @@
 use tree_sitter::Node;
 use trunk_ir::Span;
 use trunk_ir::{
-    Attribute, BlockBuilder, IdVec, Symbol, Type,
+    Attribute, BlockBuilder, IdVec, Symbol, SymbolVec, Type,
     dialect::{core, func, src, ty},
 };
 
@@ -21,8 +21,8 @@ use super::statements::lower_block_body;
 
 #[derive(Debug)]
 struct UseImport {
-    path: Vec<String>,
-    alias: Option<String>,
+    path: SymbolVec,
+    alias: Option<Symbol>,
 }
 
 pub fn lower_use_decl<'db, 'src>(
@@ -40,33 +40,23 @@ pub fn lower_use_decl<'db, 'src>(
     };
 
     let mut imports = Vec::new();
-    collect_use_imports(ctx, tree_node, &mut Vec::new(), &mut imports);
+    collect_use_imports(ctx, tree_node, &mut SymbolVec::new(), &mut imports);
 
     for import in imports {
-        let path: IdVec<Symbol<'db>> = import
-            .path
-            .iter()
-            .map(|segment| sym(ctx.db, segment))
-            .collect();
-
-        if path.is_empty() {
+        if import.path.is_empty() {
             continue;
         }
 
-        let alias_sym = import
-            .alias
-            .as_ref()
-            .map(|alias| sym(ctx.db, alias))
-            .unwrap_or_else(|| sym(ctx.db, ""));
+        let alias_sym = import.alias.unwrap_or_else(|| sym(""));
 
-        block.op(src::r#use(ctx.db, location, path, alias_sym, is_pub));
+        block.op(src::r#use(ctx.db, location, import.path, alias_sym, is_pub));
     }
 }
 
 fn collect_use_imports<'db, 'src>(
     ctx: &CstLoweringCtx<'db, 'src>,
     node: Node,
-    base: &mut Vec<String>,
+    base: &mut SymbolVec,
     out: &mut Vec<UseImport>,
 ) {
     match node.kind() {
@@ -81,7 +71,7 @@ fn collect_use_imports<'db, 'src>(
         "use_tree" => {
             let alias_node = node.child_by_field_name("alias");
             let alias_id = alias_node.as_ref().map(|n| n.id());
-            let alias = alias_node.map(|n| node_text(&n, ctx.source).to_string());
+            let alias = alias_node.map(|n| Symbol::from_dynamic(node_text(&n, ctx.source)));
 
             let mut cursor = node.walk();
             let mut head = None;
@@ -94,7 +84,7 @@ fn collect_use_imports<'db, 'src>(
                 }
                 match child.kind() {
                     "identifier" | "type_identifier" | "path_keyword" if head.is_none() => {
-                        head = Some(node_text(&child, ctx.source).to_string());
+                        head = Some(Symbol::from_dynamic(node_text(&child, ctx.source)));
                     }
                     "use_group" => group_node = Some(child),
                     "use_tree" => tail_node = Some(child),
@@ -185,12 +175,7 @@ pub fn lower_function<'db, 'src>(
             // Bind parameters
             for (i, param_name) in param_names.iter().enumerate() {
                 let infer_ty = ctx.fresh_type_var();
-                let param_value = entry.op(src::var(
-                    ctx.db,
-                    location,
-                    infer_ty,
-                    sym(ctx.db, param_name),
-                ));
+                let param_value = entry.op(src::var(ctx.db, location, infer_ty, sym(param_name)));
                 ctx.bind(param_name.clone(), param_value.result(ctx.db));
                 let _ = i;
             }
@@ -231,8 +216,8 @@ pub fn lower_struct_decl<'db, 'src>(
             .into_iter()
             .map(|(field_name, field_type)| {
                 Attribute::List(vec![
-                    Attribute::Symbol(sym(ctx.db, &field_name)),
-                    Attribute::Symbol(sym(ctx.db, &format!("{:?}", field_type))),
+                    Attribute::Symbol(sym(&field_name)),
+                    Attribute::Symbol(sym(&format!("{:?}", field_type))),
                 ])
             })
             .collect(),
@@ -242,7 +227,7 @@ pub fn lower_struct_decl<'db, 'src>(
         ctx.db,
         location,
         infer_ty,
-        Attribute::Symbol(sym(ctx.db, &name)),
+        Attribute::Symbol(sym(&name)),
         fields_attr,
     ))
 }
@@ -294,14 +279,14 @@ pub fn lower_enum_decl<'db, 'src>(
             .into_iter()
             .map(|(variant_name, variant_fields)| {
                 Attribute::List(vec![
-                    Attribute::Symbol(sym(ctx.db, &variant_name)),
+                    Attribute::Symbol(sym(&variant_name)),
                     Attribute::List(
                         variant_fields
                             .into_iter()
                             .map(|(f_name, f_type)| {
                                 Attribute::List(vec![
-                                    Attribute::Symbol(sym(ctx.db, &f_name)),
-                                    Attribute::Symbol(sym(ctx.db, &format!("{:?}", f_type))),
+                                    Attribute::Symbol(sym(&f_name)),
+                                    Attribute::Symbol(sym(&format!("{:?}", f_type))),
                                 ])
                             })
                             .collect(),
@@ -315,7 +300,7 @@ pub fn lower_enum_decl<'db, 'src>(
         ctx.db,
         location,
         infer_ty,
-        Attribute::Symbol(sym(ctx.db, &name)),
+        Attribute::Symbol(sym(&name)),
         variants_attr,
     ))
 }
@@ -396,7 +381,7 @@ pub fn lower_const_decl<'db, 'src>(
         ctx.db,
         location,
         result_type,
-        sym(ctx.db, &name),
+        sym(&name),
         value_attr,
     ))
 }
@@ -472,14 +457,14 @@ pub fn lower_ability_decl<'db, 'src>(
             .into_iter()
             .map(|(op_name, param_types, return_type)| {
                 Attribute::List(vec![
-                    Attribute::Symbol(sym(ctx.db, &op_name)),
+                    Attribute::Symbol(sym(&op_name)),
                     Attribute::List(
                         param_types
                             .iter()
-                            .map(|t| Attribute::Symbol(sym(ctx.db, &format!("{:?}", t))))
+                            .map(|t| Attribute::Symbol(sym(&format!("{:?}", t))))
                             .collect(),
                     ),
-                    Attribute::Symbol(sym(ctx.db, &format!("{:?}", return_type))),
+                    Attribute::Symbol(sym(&format!("{:?}", return_type))),
                 ])
             })
             .collect(),
@@ -489,7 +474,7 @@ pub fn lower_ability_decl<'db, 'src>(
         ctx.db,
         location,
         infer_ty,
-        Attribute::Symbol(sym(ctx.db, &name)),
+        Attribute::Symbol(sym(&name)),
         operations_attr,
     ))
 }
@@ -554,14 +539,14 @@ pub fn lower_mod_decl<'db, 'src>(
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body");
 
-    let name = node_text(&name_node, ctx.source).to_string();
+    let name = Symbol::from_dynamic(node_text(&name_node, ctx.source));
 
     // Check for visibility marker (not a field, so use helper)
     let _is_pub = find_child_by_kind(node, "visibility_marker").is_some();
     // TODO: Parse visibility modifier (pub, pub(pkg), pub(super))
 
     // Build the module with its body
-    let module = core::Module::build(ctx.db, location, &name, |mod_builder| {
+    let module = core::Module::build(ctx.db, location, name, |mod_builder| {
         if let Some(body) = body_node {
             lower_mod_body(ctx, body, mod_builder);
         }

@@ -8,7 +8,13 @@
 //! - `type.error` - an error type indicating type resolution failed
 use std::collections::BTreeMap;
 
-use crate::{Attribute, Attrs, IdVec, Symbol, Type, dialect};
+use crate::{Attribute, Attrs, IdVec, Type, dialect};
+
+crate::symbols! {
+    ATTR_ID => "id",
+    ERROR => "error",
+    VAR => "var",
+}
 
 dialect! {
     mod r#type {
@@ -44,44 +50,29 @@ dialect! {
 ///
 /// The `attrs` can carry metadata such as a unique variable ID or constraints.
 pub fn var<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> Type<'db> {
-    Type::new(
-        db,
-        Symbol::new(db, "type"),
-        Symbol::new(db, "var"),
-        IdVec::new(),
-        attrs,
-    )
+    Type::new(db, DIALECT_NAME(), VAR(), IdVec::new(), attrs)
 }
 
 /// Create a type variable with a numeric ID.
 pub fn var_with_id<'db>(db: &'db dyn salsa::Database, id: u64) -> Type<'db> {
-    var(
-        db,
-        BTreeMap::from([(Symbol::new(db, "id"), Attribute::IntBits(id))]),
-    )
+    var(db, BTreeMap::from([(ATTR_ID(), Attribute::IntBits(id))]))
 }
 
 /// Create an error type (`type.error`) indicating type resolution failed.
 ///
 /// The `attrs` can carry error information or source location.
 pub fn error<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> Type<'db> {
-    Type::new(
-        db,
-        Symbol::new(db, "type"),
-        Symbol::new(db, "error"),
-        IdVec::new(),
-        attrs,
-    )
+    Type::new(db, DIALECT_NAME(), ERROR(), IdVec::new(), attrs)
 }
 
 /// Check if a type is a type variable (`type.var`).
 pub fn is_var(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    ty.is_dialect(db, "type", "var")
+    ty.is_dialect(db, DIALECT_NAME(), VAR())
 }
 
 /// Check if a type is an error type (`type.error`).
 pub fn is_error(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    ty.is_dialect(db, "type", "error")
+    ty.is_dialect(db, DIALECT_NAME(), ERROR())
 }
 
 // === Printable interface registrations ===
@@ -93,7 +84,7 @@ use crate::type_interface::Printable;
 // type.var -> "a", "b", ..., "t0", "t1", ...
 inventory::submit! {
     Printable::implement("type", "var", |db, ty, f| {
-        if let Some(Attribute::IntBits(id)) = ty.get_attr(db, "id") {
+        if let Some(Attribute::IntBits(id)) = ty.get_attr(db, ATTR_ID()) {
             fmt_var_id(f, *id)
         } else {
             f.write_char('?')
