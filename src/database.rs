@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
 use lsp_types::Uri;
 use ropey::Rope;
 use tree_sitter::Tree;
@@ -43,15 +44,17 @@ impl TributeDatabaseImpl {
         let path = path.canonicalize()?;
         let uri = path_to_uri(&path);
         let key = uri.as_str().to_owned();
-        if let Some(existing) = self.documents.get(key.as_str()) {
-            return Ok(*existing);
+        match self.documents.entry(key) {
+            Entry::Occupied(entry) => Ok(*entry.get()),
+            Entry::Vacant(entry) => {
+                let file = std::fs::File::open(&path)?;
+                let contents = Rope::from_reader(file)?;
+                let tree = parse_with_thread_local(&contents, None);
+                let source_cst = SourceCst::new(self, uri, contents, tree);
+                entry.insert(source_cst);
+                Ok(source_cst)
+            }
         }
-        let file = std::fs::File::open(&path)?;
-        let contents = Rope::from_reader(file)?;
-        let tree = parse_with_thread_local(&contents, None);
-        let source_cst = SourceCst::new(self, uri, contents, tree);
-        self.documents.insert(key, source_cst);
-        Ok(source_cst)
     }
 
     pub fn open_document(&mut self, uri: &Uri, text: Rope) {
