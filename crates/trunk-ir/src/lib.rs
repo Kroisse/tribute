@@ -14,10 +14,6 @@ pub mod rewrite;
 pub mod type_interface;
 pub mod types;
 
-// === Test utilities ===
-#[doc(hidden)]
-pub mod test_db;
-
 // Re-export paste for use in macros
 #[doc(hidden)]
 pub use paste;

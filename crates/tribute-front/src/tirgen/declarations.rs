@@ -25,8 +25,8 @@ struct UseImport {
     alias: Option<Symbol>,
 }
 
-pub fn lower_use_decl<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+pub fn lower_use_decl<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     node: Node,
     block: &mut BlockBuilder<'db>,
 ) {
@@ -53,8 +53,8 @@ pub fn lower_use_decl<'db, 'src>(
     }
 }
 
-fn collect_use_imports<'db, 'src>(
-    ctx: &CstLoweringCtx<'db, 'src>,
+fn collect_use_imports<'db>(
+    ctx: &CstLoweringCtx<'db>,
     node: Node,
     base: &mut SymbolVec,
     out: &mut Vec<UseImport>,
@@ -71,7 +71,7 @@ fn collect_use_imports<'db, 'src>(
         "use_tree" => {
             let alias_node = node.child_by_field_name("alias");
             let alias_id = alias_node.as_ref().map(|n| n.id());
-            let alias = alias_node.map(|n| Symbol::from_dynamic(node_text(&n, ctx.source)));
+            let alias = alias_node.map(|n| Symbol::from(node_text(&n, &ctx.source)));
 
             let mut cursor = node.walk();
             let mut head = None;
@@ -84,7 +84,7 @@ fn collect_use_imports<'db, 'src>(
                 }
                 match child.kind() {
                     "identifier" | "type_identifier" | "path_keyword" if head.is_none() => {
-                        head = Some(Symbol::from_dynamic(node_text(&child, ctx.source)));
+                        head = Some(Symbol::from(node_text(&child, &ctx.source)));
                     }
                     "use_group" => group_node = Some(child),
                     "use_tree" => tail_node = Some(child),
@@ -130,17 +130,14 @@ fn collect_use_imports<'db, 'src>(
 // =============================================================================
 
 /// Lower a function definition to a func.func operation.
-pub fn lower_function<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
-    node: Node,
-) -> Option<func::Func<'db>> {
+pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<func::Func<'db>> {
     let location = ctx.location(&node);
 
     // Use field-based access for cleaner extraction
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
-    let name = node_text(&name_node, ctx.source).to_string();
+    let name = node_text(&name_node, &ctx.source).to_string();
     let name_span = Some(Span {
         start: name_node.start_byte(),
         end: name_node.end_byte(),
@@ -173,10 +170,10 @@ pub fn lower_function<'db, 'src>(
         Some(effect_type),
         |entry| {
             // Bind parameters
-            for (i, param_name) in param_names.iter().enumerate() {
+            for (i, param_name) in param_names.into_iter().enumerate() {
                 let infer_ty = ctx.fresh_type_var();
-                let param_value = entry.op(src::var(ctx.db, location, infer_ty, sym(param_name)));
-                ctx.bind(param_name.clone(), param_value.result(ctx.db));
+                let param_value = entry.op(src::var(ctx.db, location, infer_ty, param_name));
+                ctx.bind(param_name, param_value.result(ctx.db));
                 let _ = i;
             }
 
@@ -198,8 +195,8 @@ pub fn lower_function<'db, 'src>(
 // =============================================================================
 
 /// Lower a struct declaration to type.struct.
-pub fn lower_struct_decl<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+pub fn lower_struct_decl<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     node: Node,
 ) -> Option<ty::Struct<'db>> {
     let location = ctx.location(&node);
@@ -209,7 +206,7 @@ pub fn lower_struct_decl<'db, 'src>(
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
-    let name = node_text(&name_node, ctx.source).to_string();
+    let name = node_text(&name_node, &ctx.source).to_string();
     let fields = parse_struct_fields(ctx, body_node);
     let fields_attr = Attribute::List(
         fields
@@ -233,10 +230,7 @@ pub fn lower_struct_decl<'db, 'src>(
 }
 
 /// Parse struct fields from struct_body or record_fields.
-fn parse_struct_fields<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
-    node: Node,
-) -> Vec<(String, Type<'db>)> {
+fn parse_struct_fields<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Vec<(String, Type<'db>)> {
     let mut cursor = node.walk();
     let mut fields = Vec::new();
 
@@ -247,7 +241,7 @@ fn parse_struct_fields<'db, 'src>(
         if child.kind() == "struct_field" || child.kind() == "record_field" {
             // Use field-based access for struct_field
             if let Some(name_node) = child.child_by_field_name("name") {
-                let field_name = node_text(&name_node, ctx.source).to_string();
+                let field_name = node_text(&name_node, &ctx.source).to_string();
                 let field_type = child
                     .child_by_field_name("type")
                     .map(|t| ctx.resolve_type_node(t))
@@ -261,10 +255,7 @@ fn parse_struct_fields<'db, 'src>(
 }
 
 /// Lower an enum declaration to type.enum.
-pub fn lower_enum_decl<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
-    node: Node,
-) -> Option<ty::Enum<'db>> {
+pub fn lower_enum_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<ty::Enum<'db>> {
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
 
@@ -272,7 +263,7 @@ pub fn lower_enum_decl<'db, 'src>(
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
-    let name = node_text(&name_node, ctx.source).to_string();
+    let name = node_text(&name_node, &ctx.source).to_string();
     let variants = parse_enum_variants(ctx, body_node);
     let variants_attr = Attribute::List(
         variants
@@ -306,8 +297,8 @@ pub fn lower_enum_decl<'db, 'src>(
 }
 
 /// Parse enum variants from enum_body.
-fn parse_enum_variants<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn parse_enum_variants<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     node: Node,
 ) -> Vec<(String, Vec<(String, Type<'db>)>)> {
     let mut cursor = node.walk();
@@ -320,7 +311,7 @@ fn parse_enum_variants<'db, 'src>(
         if child.kind() == "enum_variant" {
             // Use field-based access for enum_variant
             if let Some(name_node) = child.child_by_field_name("name") {
-                let variant_name = node_text(&name_node, ctx.source).to_string();
+                let variant_name = node_text(&name_node, &ctx.source).to_string();
                 let variant_fields = child
                     .child_by_field_name("fields")
                     .map(|fields_node| parse_variant_fields(ctx, fields_node))
@@ -334,8 +325,8 @@ fn parse_enum_variants<'db, 'src>(
 }
 
 /// Parse variant fields (tuple or record style).
-fn parse_variant_fields<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn parse_variant_fields<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     node: Node,
 ) -> Vec<(String, Type<'db>)> {
     match node.kind() {
@@ -357,8 +348,8 @@ fn parse_variant_fields<'db, 'src>(
 }
 
 /// Lower a const declaration to src.const.
-pub fn lower_const_decl<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+pub fn lower_const_decl<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     _block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<src::Const<'db>> {
@@ -369,7 +360,7 @@ pub fn lower_const_decl<'db, 'src>(
     let value_node = node.child_by_field_name("value")?;
     let type_node = node.child_by_field_name("type");
 
-    let name = node_text(&name_node, ctx.source).to_string();
+    let name = node_text(&name_node, &ctx.source).to_string();
     let result_type = type_node
         .map(|n| ctx.resolve_type_node(n))
         .unwrap_or_else(|| ctx.fresh_type_var());
@@ -387,33 +378,30 @@ pub fn lower_const_decl<'db, 'src>(
 }
 
 /// Convert a literal CST node to an Attribute.
-fn literal_to_attribute<'db, 'src>(
-    ctx: &CstLoweringCtx<'db, 'src>,
-    node: Node,
-) -> Option<Attribute<'db>> {
+fn literal_to_attribute<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Option<Attribute<'db>> {
     // Unwrap expression wrapper nodes to get the actual literal
-    let actual_node = unwrap_expression_node(node, ctx.source)?;
-    let text = node_text(&actual_node, ctx.source);
+    let actual_node = unwrap_expression_node(node)?;
+    let text = node_text(&actual_node, &ctx.source);
 
     match actual_node.kind() {
         "nat_literal" => {
-            let n = parse_nat_literal(text)?;
+            let n = parse_nat_literal(&text)?;
             Some(Attribute::IntBits(n))
         }
         "int_literal" => {
-            let n = parse_int_literal(text)?;
+            let n = parse_int_literal(&text)?;
             Some(Attribute::IntBits(n as u64))
         }
         "float_literal" => {
-            let n = parse_float_literal(text)?;
+            let n = parse_float_literal(&text)?;
             Some(Attribute::FloatBits(n.to_bits()))
         }
         "rune" => {
-            let ch = parse_rune_literal(text)?;
+            let ch = parse_rune_literal(&text)?;
             Some(Attribute::IntBits(ch as u64))
         }
         "string" | "raw_string" | "multiline_string" => {
-            let s = parse_string_literal(actual_node, ctx.source);
+            let s = parse_string_literal(actual_node, &ctx.source);
             Some(Attribute::String(s))
         }
         "true" => Some(Attribute::Bool(true)),
@@ -423,13 +411,13 @@ fn literal_to_attribute<'db, 'src>(
 }
 
 /// Unwrap expression wrapper nodes to get the actual literal node.
-fn unwrap_expression_node<'tree>(node: Node<'tree>, _source: &str) -> Option<Node<'tree>> {
+fn unwrap_expression_node<'tree>(node: Node<'tree>) -> Option<Node<'tree>> {
     match node.kind() {
         "primary_expression" | "expression" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 if !is_comment(child.kind()) {
-                    return unwrap_expression_node(child, _source);
+                    return unwrap_expression_node(child);
                 }
             }
             None
@@ -439,8 +427,8 @@ fn unwrap_expression_node<'tree>(node: Node<'tree>, _source: &str) -> Option<Nod
 }
 
 /// Lower an ability declaration to type.ability.
-pub fn lower_ability_decl<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+pub fn lower_ability_decl<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     node: Node,
 ) -> Option<ty::Ability<'db>> {
     let location = ctx.location(&node);
@@ -450,7 +438,7 @@ pub fn lower_ability_decl<'db, 'src>(
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
-    let name = node_text(&name_node, ctx.source).to_string();
+    let name = node_text(&name_node, &ctx.source).to_string();
     let operations = parse_ability_operations(ctx, body_node);
     let operations_attr = Attribute::List(
         operations
@@ -480,8 +468,8 @@ pub fn lower_ability_decl<'db, 'src>(
 }
 
 /// Parse ability operations from ability_body.
-fn parse_ability_operations<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+fn parse_ability_operations<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     node: Node,
 ) -> Vec<(String, Vec<Type<'db>>, Type<'db>)> {
     let mut cursor = node.walk();
@@ -494,7 +482,7 @@ fn parse_ability_operations<'db, 'src>(
         if child.kind() == "ability_operation" {
             // Use field-based access for ability_operation
             if let Some(name_node) = child.child_by_field_name("name") {
-                let op_name = node_text(&name_node, ctx.source).to_string();
+                let op_name = node_text(&name_node, &ctx.source).to_string();
 
                 // Parameters need manual iteration (not a field in grammar)
                 let param_types = find_child_by_kind(child, "parameter_list")
@@ -529,17 +517,14 @@ fn find_child_by_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree
 ///
 /// Handles both inline modules (`mod foo { ... }`) and file-based module
 /// declarations (`mod foo`). Currently, only inline modules are fully lowered.
-pub fn lower_mod_decl<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
-    node: Node,
-) -> Option<core::Module<'db>> {
+pub fn lower_mod_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<core::Module<'db>> {
     let location = ctx.location(&node);
 
     // Use field-based access
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body");
 
-    let name = Symbol::from_dynamic(node_text(&name_node, ctx.source));
+    let name = Symbol::from(node_text(&name_node, &ctx.source));
 
     // Check for visibility marker (not a field, so use helper)
     let _is_pub = find_child_by_kind(node, "visibility_marker").is_some();
@@ -559,8 +544,8 @@ pub fn lower_mod_decl<'db, 'src>(
 }
 
 /// Lower items within a mod_body into the module's block.
-pub fn lower_mod_body<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+pub fn lower_mod_body<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     node: Node,
     builder: &mut BlockBuilder<'db>,
 ) {
@@ -605,10 +590,10 @@ pub fn lower_mod_body<'db, 'src>(
 }
 
 /// Parse a parameter list node, returning (names, types).
-pub fn parse_parameter_list<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+pub fn parse_parameter_list<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     node: Node,
-) -> (Vec<String>, Vec<Type<'db>>) {
+) -> (Vec<Symbol>, Vec<Type<'db>>) {
     let mut cursor = node.walk();
     let mut names = Vec::new();
     let mut types = Vec::new();
@@ -617,7 +602,7 @@ pub fn parse_parameter_list<'db, 'src>(
         if child.kind() == "parameter" {
             // Use field-based access for parameter
             if let Some(name_node) = child.child_by_field_name("name") {
-                let param_name = node_text(&name_node, ctx.source).to_string();
+                let param_name = node_text(&name_node, &ctx.source).into();
                 let param_type = child
                     .child_by_field_name("type")
                     .map(|t| ctx.resolve_type_node(t))
@@ -632,10 +617,7 @@ pub fn parse_parameter_list<'db, 'src>(
 }
 
 /// Parse a return type annotation.
-pub fn parse_return_type<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
-    node: Node,
-) -> Option<Type<'db>> {
+pub fn parse_return_type<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<Type<'db>> {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {

@@ -30,7 +30,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 **Key Modules**:
 - `tirgen/` - TrunkIR generation from CST (Tree-sitter)
 - `line_index.rs` - Text/position conversions for editor integrations
-- `source_file.rs` - `SourceFile` input and URI helpers
+- `source_file.rs` - `SourceCst` input and URI helpers
 
 **Location**: `crates/tribute-front/`
 

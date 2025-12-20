@@ -15,8 +15,8 @@ use super::helpers::{is_comment, node_text, sym_ref};
 // =============================================================================
 
 /// Lower block body statements, returning the last expression value.
-pub fn lower_block_body<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+pub fn lower_block_body<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
@@ -45,8 +45,8 @@ pub fn lower_block_body<'db, 'src>(
 }
 
 /// Lower a let statement.
-pub fn lower_let_statement<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+pub fn lower_let_statement<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) {
@@ -64,8 +64,8 @@ pub fn lower_let_statement<'db, 'src>(
 }
 
 /// Bind a pattern to a value, emitting extraction operations as needed.
-pub fn bind_pattern<'db, 'src>(
-    ctx: &mut CstLoweringCtx<'db, 'src>,
+pub fn bind_pattern<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     pattern: Node,
     value: Value<'db>,
@@ -75,7 +75,7 @@ pub fn bind_pattern<'db, 'src>(
 
     match pattern.kind() {
         "identifier" | "identifier_pattern" => {
-            let name = node_text(&pattern, ctx.source).to_string();
+            let name = node_text(&pattern, &ctx.source).into();
             ctx.bind(name, value);
         }
         "wildcard_pattern" => {
@@ -85,7 +85,7 @@ pub fn bind_pattern<'db, 'src>(
             // Bind the whole value to the name, then recurse on inner pattern
             // Use field-based access
             if let Some(binding_node) = pattern.child_by_field_name("binding") {
-                let name = node_text(&binding_node, ctx.source).to_string();
+                let name = node_text(&binding_node, &ctx.source).into();
                 ctx.bind(name, value);
             }
             if let Some(inner_pattern) = pattern.child_by_field_name("pattern") {
@@ -152,7 +152,7 @@ pub fn bind_pattern<'db, 'src>(
                                         break;
                                     } else if pat.kind() == "identifier" {
                                         // Shorthand: { name } means { name: name }
-                                        let field_name = node_text(&pat, ctx.source).to_string();
+                                        let field_name = node_text(&pat, &ctx.source).into();
                                         ctx.bind(field_name, field_value);
                                         break;
                                     }
@@ -233,7 +233,7 @@ pub fn bind_pattern<'db, 'src>(
                 let mut rest_cursor = rest_node.walk();
                 for rest_child in rest_node.named_children(&mut rest_cursor) {
                     if rest_child.kind() == "identifier" {
-                        let rest_name = node_text(&rest_child, ctx.source).to_string();
+                        let rest_name = node_text(&rest_child, &ctx.source).into();
                         let start_value = block
                             .op(arith::Const::i64(ctx.db, location, idx))
                             .result(ctx.db);

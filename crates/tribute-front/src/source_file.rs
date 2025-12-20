@@ -1,32 +1,17 @@
 use std::path::Path;
 
 use fluent_uri::Uri;
-use tree_sitter::Tree;
-
-#[salsa::input(debug)]
-pub struct SourceFile {
-    #[returns(ref)]
-    pub uri: Uri<String>,
-    #[returns(deref)]
-    pub text: String,
-}
+use ropey::Rope;
+use tree_sitter::{Parser, Tree};
 
 #[salsa::input(debug)]
 pub struct SourceCst {
     #[returns(ref)]
     pub uri: Uri<String>,
-    #[returns(deref)]
-    pub text: String,
     #[returns(ref)]
-    pub tree: Tree,
-}
-
-impl SourceFile {
-    /// Create a SourceFile from a file path (convenience for CLI/tests).
-    pub fn from_path(db: &dyn salsa::Database, path: impl AsRef<Path>, text: String) -> Self {
-        let uri = path_to_uri(path.as_ref());
-        Self::new(db, uri, text)
-    }
+    pub text: Rope,
+    #[returns(ref)]
+    pub tree: Option<Tree>,
 }
 
 impl SourceCst {
@@ -34,8 +19,8 @@ impl SourceCst {
     pub fn from_path(
         db: &dyn salsa::Database,
         path: impl AsRef<Path>,
-        text: String,
-        tree: Tree,
+        text: Rope,
+        tree: Option<Tree>,
     ) -> Self {
         let uri = path_to_uri(path.as_ref());
         Self::new(db, uri, text, tree)
@@ -84,4 +69,19 @@ fn percent_decode(s: &str) -> String {
         }
     }
     result
+}
+
+/// Parse a text rope with a given parser.
+pub fn parse_with_rope(parser: &mut Parser, rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
+    let mut callback = |byte: usize, _| chunk_from_byte(rope, byte);
+    parser.parse_with_options(&mut callback, old_tree, None)
+}
+
+fn chunk_from_byte(rope: &Rope, byte: usize) -> &[u8] {
+    if byte >= rope.len_bytes() {
+        return b"";
+    }
+    let (chunk, chunk_start, _, _) = rope.chunk_at_byte(byte);
+    let start = byte - chunk_start;
+    &chunk.as_bytes()[start..]
 }

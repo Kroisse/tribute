@@ -1,5 +1,6 @@
 //! Core IR structures.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
@@ -66,6 +67,12 @@ impl Symbol {
 impl From<&'static str> for Symbol {
     fn from(text: &'static str) -> Self {
         Symbol::new(text)
+    }
+}
+
+impl From<Cow<'_, str>> for Symbol {
+    fn from(text: Cow<'_, str>) -> Self {
+        Symbol::from_dynamic(&text)
     }
 }
 
@@ -397,13 +404,13 @@ impl<'db> BlockBuilder<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_db::TestDatabase;
     use crate::{
         DialectOp, DialectType, Location, PathId, Span,
         dialect::{arith, core, func},
         idvec,
     };
     use salsa::Database;
+    use salsa::DatabaseImpl;
 
     #[salsa::tracked]
     fn build_sample_module(db: &dyn salsa::Database) -> Operation<'_> {
@@ -438,7 +445,7 @@ mod tests {
 
     #[test]
     fn can_model_basic_structure() {
-        TestDatabase::default().attach(|db| {
+        DatabaseImpl::default().attach(|db| {
             let op = build_sample_module(db);
             let module = core::Module::from_operation(db, op).unwrap();
             assert_eq!(module.name(db), "main");
@@ -447,11 +454,11 @@ mod tests {
 
     // Test the new define_op! macro
     mod define_op_tests {
-        use crate::test_db::TestDatabase;
         use crate::{
             Attribute, DialectType, Location, PathId, Region, Span, dialect, dialect::core, idvec,
         };
         use salsa::Database;
+        use salsa::DatabaseImpl;
 
         // Test: dialect! macro for grouping ops
         dialect! {
@@ -498,7 +505,7 @@ mod tests {
 
         #[test]
         fn test_define_op_binary() {
-            TestDatabase::default().attach(|db| {
+            DatabaseImpl::default().attach(|db| {
                 let binary = test_binary_op(db);
                 assert_eq!(binary.result_ty(db), core::I32::new(db).as_type());
 
@@ -519,7 +526,7 @@ mod tests {
 
         #[test]
         fn test_define_op_constant() {
-            TestDatabase::default().attach(|db| {
+            DatabaseImpl::default().attach(|db| {
                 let constant = test_constant_op(db);
                 assert_eq!(constant.result_ty(db), core::I64::new(db).as_type());
 
@@ -538,7 +545,7 @@ mod tests {
 
         #[test]
         fn test_define_op_variadic() {
-            TestDatabase::default().attach(|db| {
+            DatabaseImpl::default().attach(|db| {
                 let variadic = test_variadic_op(db);
                 assert!(variadic.args(db).is_empty());
             });
@@ -557,7 +564,7 @@ mod tests {
 
         #[test]
         fn test_define_op_container() {
-            TestDatabase::default().attach(|db| {
+            DatabaseImpl::default().attach(|db| {
                 let container = test_container_op(db);
                 assert_eq!(container.body(db).blocks(db).len(), 1);
                 assert_eq!(container.regions(db).len(), 1);
@@ -593,7 +600,7 @@ mod tests {
 
         #[test]
         fn test_define_op_mixed() {
-            TestDatabase::default().attach(|db| {
+            DatabaseImpl::default().attach(|db| {
                 let mixed = test_mixed_op(db);
                 assert_eq!(mixed.result_ty(db), core::I32::new(db).as_type());
 
@@ -630,7 +637,7 @@ mod tests {
 
         #[test]
         fn test_define_op_multi_result() {
-            TestDatabase::default().attach(|db| {
+            DatabaseImpl::default().attach(|db| {
                 let multi = test_multi_result_op(db);
 
                 // Test named result accessors for each result

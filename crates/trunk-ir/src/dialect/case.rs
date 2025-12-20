@@ -31,7 +31,9 @@
 //! }
 //! ```
 
-use crate::{Location, dialect};
+use smallvec::smallvec;
+
+use crate::{Location, Symbol, dialect};
 
 dialect! {
     mod case {
@@ -145,7 +147,7 @@ impl<'db> Arm<'db> {
     pub fn binding(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &str,
+        name: Symbol,
         body: crate::Region<'db>,
     ) -> Self {
         let pattern_region = pattern::bind_region(db, location, name);
@@ -156,11 +158,10 @@ impl<'db> Arm<'db> {
     pub fn unit_variant(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        variant_name: &str,
+        variant_name: Symbol,
         body: crate::Region<'db>,
     ) -> Self {
-        use crate::{Symbol, SymbolVec};
-        let variant_path = SymbolVec::from(vec![Symbol::from_dynamic(variant_name)]);
+        let variant_path = smallvec![variant_name];
         let fields = pattern::empty_region(db, location);
         let pattern_region = pattern::variant_region(db, location, variant_path, fields);
         arm(db, location, pattern_region, body)

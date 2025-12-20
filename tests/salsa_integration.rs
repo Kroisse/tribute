@@ -1,7 +1,8 @@
 //! Salsa integration tests for CST→TrunkIR lowering.
 
 use salsa::{Database as _, Setter as _};
-use tribute::{SourceFile, TributeDatabaseImpl, lower_source_file};
+use tree_sitter::Parser;
+use tribute::{SourceCst, TributeDatabaseImpl, lower_source_cst};
 use trunk_ir::DialectOp;
 
 #[test]
@@ -30,8 +31,13 @@ fn main() {
     for (filename, source_code) in examples {
         // Use attach pattern for test isolation
         let op_count = TributeDatabaseImpl::default().attach(|db| {
-            let source_file = SourceFile::from_path(db, filename, source_code.to_string());
-            let module = lower_source_file(db, source_file);
+            let mut parser = Parser::new();
+            parser
+                .set_language(&tree_sitter_tribute::LANGUAGE.into())
+                .expect("Failed to set language");
+            let tree = parser.parse(source_code, None).expect("tree");
+            let source_file = SourceCst::from_path(db, filename, source_code.into(), Some(tree));
+            let module = lower_source_cst(db, source_file);
 
             // Count top-level operations in the module
             let body = module.body(db);
@@ -66,11 +72,16 @@ fn main() {
 fn test_salsa_incremental_computation_detailed() {
     // Demonstrate incremental computation
     let mut db = TributeDatabaseImpl::default();
-    let source_file =
-        SourceFile::from_path(&db, "incremental.trb", "fn main() { 1 + 2 }".to_string());
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set language");
+    let text = "fn main() { 1 + 2 }";
+    let tree = parser.parse(text, None).expect("tree");
+    let source_file = SourceCst::from_path(&db, "incremental.trb", text.into(), Some(tree));
 
     // Initial lowering
-    let module1 = lower_source_file(&db, source_file);
+    let module1 = lower_source_cst(&db, source_file);
     let body1 = module1.body(&db);
     let blocks1 = body1.blocks(&db);
     assert!(!blocks1.is_empty());
@@ -78,12 +89,13 @@ fn test_salsa_incremental_computation_detailed() {
     assert_eq!(op_count1, 1);
 
     // Modify the source file
-    source_file
-        .set_text(&mut db)
-        .to("fn main() { 1 + 2 + 3 + 4 }".to_string());
+    let updated_text = "fn main() { 1 + 2 + 3 + 4 }";
+    let updated_tree = parser.parse(updated_text, None).expect("tree");
+    source_file.set_text(&mut db).to(updated_text.into());
+    source_file.set_tree(&mut db).to(Some(updated_tree));
 
     // Lower again - should recompute
-    let module2 = lower_source_file(&db, source_file);
+    let module2 = lower_source_cst(&db, source_file);
     let body2 = module2.body(&db);
     let blocks2 = body2.blocks(&db);
     assert!(!blocks2.is_empty());
@@ -91,7 +103,7 @@ fn test_salsa_incremental_computation_detailed() {
     assert_eq!(op_count2, 1);
 
     // Lower again without changes - should use cached result
-    let module3 = lower_source_file(&db, source_file);
+    let module3 = lower_source_cst(&db, source_file);
 
     // Verify that cached results are the same
     assert_eq!(
@@ -104,17 +116,18 @@ fn test_salsa_incremental_computation_detailed() {
 #[test]
 fn test_salsa_multiple_functions() {
     let op_count = TributeDatabaseImpl::default().attach(|db| {
-        let source = SourceFile::from_path(
-            db,
-            "multi.trb",
-            r#"
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set language");
+        let text = r#"
 fn add(a, b) { a + b }
 fn multiply(a, b) { a * b }
 fn main() { print_line("test") }
-"#
-            .to_string(),
-        );
-        let module = lower_source_file(db, source);
+"#;
+        let tree = parser.parse(text, None).expect("tree");
+        let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
+        let module = lower_source_cst(db, source);
 
         let body = module.body(db);
         let blocks = body.blocks(db);
@@ -132,14 +145,26 @@ fn main() { print_line("test") }
 fn test_salsa_database_isolation() {
     // Test that different database instances are isolated
     let module1_name = TributeDatabaseImpl::default().attach(|db| {
-        let source1 = SourceFile::from_path(db, "test1.trb", "fn main() { 1 + 2 }".to_string());
-        let module1 = lower_source_file(db, source1);
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set language");
+        let text = "fn main() { 1 + 2 }";
+        let tree = parser.parse(text, None).expect("tree");
+        let source1 = SourceCst::from_path(db, "test1.trb", text.into(), Some(tree));
+        let module1 = lower_source_cst(db, source1);
         module1.name(db).to_string()
     });
 
     let module2_name = TributeDatabaseImpl::default().attach(|db| {
-        let source2 = SourceFile::from_path(db, "test2.trb", "fn main() { 3 * 4 }".to_string());
-        let module2 = lower_source_file(db, source2);
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set language");
+        let text = "fn main() { 3 * 4 }";
+        let tree = parser.parse(text, None).expect("tree");
+        let source2 = SourceCst::from_path(db, "test2.trb", text.into(), Some(tree));
+        let module2 = lower_source_cst(db, source2);
         module2.name(db).to_string()
     });
 
@@ -154,8 +179,13 @@ fn test_function_lowering() {
 
     let source = "fn main() { 1 + 2 }";
     TributeDatabaseImpl::default().attach(|db| {
-        let source_file = SourceFile::from_path(db, "func_test.trb", source.to_string());
-        let module = lower_source_file(db, source_file);
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set language");
+        let tree = parser.parse(source, None).expect("tree");
+        let source_file = SourceCst::from_path(db, "func_test.trb", source.into(), Some(tree));
+        let module = lower_source_cst(db, source_file);
 
         let body = module.body(db);
         let blocks = body.blocks(db);

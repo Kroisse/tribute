@@ -2,9 +2,10 @@
 
 use std::collections::HashMap;
 
+use ropey::Rope;
 use tree_sitter::Node;
 use trunk_ir::{
-    DialectType, IdVec, Type, Value,
+    DialectType, IdVec, Symbol, Type, Value,
     dialect::{core, ty},
 };
 use trunk_ir::{Location, PathId};
@@ -12,22 +13,22 @@ use trunk_ir::{Location, PathId};
 use super::helpers::{node_text, span_from_node};
 
 /// Context for lowering, tracking local variable bindings and type variable generation.
-pub struct CstLoweringCtx<'db, 'src> {
+pub struct CstLoweringCtx<'db> {
     pub db: &'db dyn salsa::Database,
     pub path: PathId<'db>,
-    pub source: &'src str,
+    pub source: Rope,
     /// Map from variable names to their SSA values.
-    bindings: HashMap<String, Value<'db>>,
+    bindings: HashMap<Symbol, Value<'db>>,
     /// Map from type variable names to their Type representations.
-    type_var_bindings: HashMap<String, Type<'db>>,
+    type_var_bindings: HashMap<Symbol, Type<'db>>,
     /// Counter for generating unique type variable IDs.
     next_type_var_id: u64,
     /// Counter for generating unique effect row variable IDs.
     next_row_var_id: u64,
 }
 
-impl<'db, 'src> CstLoweringCtx<'db, 'src> {
-    pub fn new(db: &'db dyn salsa::Database, path: PathId<'db>, source: &'src str) -> Self {
+impl<'db> CstLoweringCtx<'db> {
+    pub fn new(db: &'db dyn salsa::Database, path: PathId<'db>, source: Rope) -> Self {
         Self {
             db,
             path,
@@ -55,12 +56,12 @@ impl<'db, 'src> CstLoweringCtx<'db, 'src> {
 
     /// Get or create a named type variable.
     /// Same name always returns the same type variable within a scope.
-    pub fn named_type_var(&mut self, name: &str) -> Type<'db> {
-        if let Some(&ty) = self.type_var_bindings.get(name) {
+    pub fn named_type_var(&mut self, name: Symbol) -> Type<'db> {
+        if let Some(&ty) = self.type_var_bindings.get(&name) {
             ty
         } else {
             let ty = self.fresh_type_var();
-            self.type_var_bindings.insert(name.to_string(), ty);
+            self.type_var_bindings.insert(name, ty);
             ty
         }
     }
@@ -73,13 +74,13 @@ impl<'db, 'src> CstLoweringCtx<'db, 'src> {
         match node.kind() {
             "type_identifier" => {
                 // Concrete named type
-                let name = node_text(&node, self.source);
-                src::unresolved_type(self.db, name, IdVec::new())
+                let name = node_text(&node, &self.source);
+                src::unresolved_type(self.db, name.into(), IdVec::new())
             }
             "type_variable" => {
                 // Type variable (lowercase)
-                let name = node_text(&node, self.source);
-                self.named_type_var(name)
+                let name = node_text(&node, &self.source);
+                self.named_type_var(name.into())
             }
             "generic_type" => {
                 // Generic type: List(a), Option(b)
@@ -89,7 +90,7 @@ impl<'db, 'src> CstLoweringCtx<'db, 'src> {
                 for child in node.named_children(&mut cursor) {
                     match child.kind() {
                         "type_identifier" if name.is_none() => {
-                            name = Some(node_text(&child, self.source));
+                            name = Some(Symbol::from(node_text(&child, &self.source)));
                         }
                         "type_variable" | "type_identifier" | "generic_type" => {
                             args.push(self.resolve_type_node(child));
@@ -98,7 +99,7 @@ impl<'db, 'src> CstLoweringCtx<'db, 'src> {
                     }
                 }
 
-                let name = name.unwrap_or("Unknown");
+                let name = name.unwrap_or(Symbol::new("Unknown"));
                 let params: IdVec<Type<'db>> = args.into_iter().collect();
                 src::unresolved_type(self.db, name, params)
             }
@@ -110,13 +111,13 @@ impl<'db, 'src> CstLoweringCtx<'db, 'src> {
     }
 
     /// Bind a name to a value.
-    pub fn bind(&mut self, name: String, value: Value<'db>) {
+    pub fn bind(&mut self, name: Symbol, value: Value<'db>) {
         self.bindings.insert(name, value);
     }
 
     /// Look up a binding by name.
-    pub fn lookup(&self, name: &str) -> Option<Value<'db>> {
-        self.bindings.get(name).copied()
+    pub fn lookup(&self, name: Symbol) -> Option<Value<'db>> {
+        self.bindings.get(&name).copied()
     }
 
     /// Execute a closure in a new scope. Bindings created inside are discarded after.

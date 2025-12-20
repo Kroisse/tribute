@@ -151,15 +151,6 @@ mod tests {
     use trunk_ir::dialect::{arith, core, func};
     use trunk_ir::{Attribute, Location, PathId, Span, idvec};
 
-    #[salsa::db]
-    #[derive(Default, Clone)]
-    struct TestDb {
-        storage: salsa::Storage<Self>,
-    }
-
-    #[salsa::db]
-    impl salsa::Database for TestDb {}
-
     /// Helper to create a module with an operation that has type variable 42 as result.
     #[salsa::tracked]
     fn make_module_with_type_var_42(db: &dyn salsa::Database) -> core::Module<'_> {
@@ -280,7 +271,7 @@ mod tests {
 
     #[test]
     fn test_has_type_vars() {
-        TestDb::default().attach(|db| {
+        salsa::DatabaseImpl::default().attach(|db| {
             let type_var = ty::var_with_id(db, 42);
             assert!(has_type_vars(db, type_var));
 
@@ -291,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_apply_subst_basic() {
-        TestDb::default().attach(|db| {
+        salsa::DatabaseImpl::default().attach(|db| {
             // Create and verify original module has type variable
             let module = make_module_with_type_var_42(db);
             let body = module.body(db);
@@ -314,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_module_has_type_vars() {
-        TestDb::default().attach(|db| {
+        salsa::DatabaseImpl::default().attach(|db| {
             // Module with type variable
             let module_with_var = make_module_with_type_var_1(db);
             assert!(module_has_type_vars(db, module_with_var));
@@ -360,7 +351,7 @@ mod tests {
     /// Integration test: compile actual source code and verify no type variables remain.
     #[test]
     fn test_end_to_end_type_inference() {
-        TestDb::default().attach(|db| {
+        salsa::DatabaseImpl::default().attach(|db| {
             let module = infer_simple_module(db);
 
             // Print IR for debugging

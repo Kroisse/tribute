@@ -6,7 +6,7 @@
 //! ## Pipeline Stages
 //!
 //! ```text
-//! SourceFile
+//! SourceCst
 //!     │
 //!     ▼
 //! parse_cst ─► ParsedCst
@@ -42,8 +42,11 @@
 //! diagnostics via `Diagnostic { ... }.accumulate(db)`, which are then
 //! collected at the end of compilation.
 
-use crate::SourceFile;
+use crate::SourceCst;
+use ropey::Rope;
 use salsa::Accumulator;
+use tree_sitter::Parser;
+use tribute_front::source_file::parse_with_rope;
 use tribute_front::{lower_cst, parse_cst};
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::resolve::{Resolver, build_env};
@@ -68,9 +71,15 @@ const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
     let uri = fluent_uri::Uri::parse_from("prelude:///std/prelude".to_owned())
         .expect("valid prelude URI");
-    let source_file = SourceFile::new(db, uri, PRELUDE_SOURCE.to_string());
-    let cst = parse_cst(db, source_file)?;
-    Some(lower_cst(db, source_file, cst))
+    let text: Rope = PRELUDE_SOURCE.into();
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set language");
+    let tree = parse_with_rope(&mut parser, &text, None)?;
+    let source = SourceCst::new(db, uri, text, Some(tree));
+    let cst = parse_cst(db, source)?;
+    Some(lower_cst(db, source, cst))
 }
 
 /// Merge prelude definitions into a user module.
@@ -163,15 +172,12 @@ pub use tribute_front::lower_cst as stage_lower;
 /// The prelude is automatically merged into the module before resolution,
 /// making standard library types (Option, Result, etc.) available.
 #[salsa::tracked]
-pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
-    // Get the lowered module from the previous stage
+pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let Some(cst) = parse_cst(db, source) else {
-        // Parse failure - return empty module
         let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
         let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
         return Module::build(db, location, Symbol::new("main"), |_| {});
     };
-
     let user_module = lower_cst(db, source, cst);
 
     // Merge prelude definitions into the user module
@@ -193,7 +199,7 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> M
 /// - Substitutes inferred types back into the module
 /// - Reports type errors
 #[salsa::tracked]
-pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
+pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     // Get the resolved module from the previous stage
     let module = stage_resolve(db, source);
 
@@ -222,7 +228,7 @@ pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceFile) ->
 /// - `list.len()` → `List::len(list)` (based on list's type being `List(a)`)
 /// - `x.map(f)` → `Type::map(x, f)` (based on x's inferred type)
 #[salsa::tracked]
-pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
+pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let module = stage_typecheck(db, source);
     resolve_tdnr(db, module)
 }
@@ -241,7 +247,7 @@ pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Modu
 /// 5. TDNR (Type-Directed Name Resolution)
 /// 6. Final resolution pass (reports unresolved references)
 #[salsa::tracked]
-pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
+pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let module = stage_tdnr(db, source);
 
     // Final pass: resolve any remaining unresolved references and emit diagnostics
@@ -255,7 +261,7 @@ pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<
 /// Diagnostics are collected using Salsa accumulators from all compilation stages.
 pub fn compile_with_diagnostics<'db>(
     db: &'db dyn salsa::Database,
-    source: SourceFile,
+    source: SourceCst,
 ) -> CompilationResult<'db> {
     // Run the full compilation pipeline (which checks for unresolved references)
     let module = compile(db, source);
@@ -299,17 +305,29 @@ mod tests {
     use super::*;
     use crate::TributeDatabaseImpl;
     use salsa::Database;
+    use tree_sitter::Parser;
 
     #[salsa::tracked]
-    fn test_compile(db: &dyn salsa::Database, source: SourceFile) -> Module<'_> {
+    fn test_compile(db: &dyn salsa::Database, source: SourceCst) -> Module<'_> {
         compile(db, source)
+    }
+
+    fn source_from_str(path: &str, text: &str) -> SourceCst {
+        salsa::with_attached_database(|db| {
+            let mut parser = Parser::new();
+            parser
+                .set_language(&tree_sitter_tribute::LANGUAGE.into())
+                .expect("Failed to set language");
+            let tree = parser.parse(text, None).expect("tree");
+            SourceCst::from_path(db, path, text.into(), Some(tree))
+        })
+        .expect("attached db")
     }
 
     #[test]
     fn test_full_pipeline() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source =
-                SourceFile::from_path(db, "test.trb", "fn main() -> Int { 42 }".to_string());
+            let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
 
             let module = test_compile(db, source);
             assert_eq!(module.name(db), "main");
@@ -319,11 +337,7 @@ mod tests {
     #[test]
     fn test_compile_with_diagnostics() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = SourceFile::from_path(
-                db,
-                "test.trb",
-                "fn add(x: Int, y: Int) -> Int { x + y }".to_string(),
-            );
+            let source = source_from_str("test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
 
             let result = compile_with_diagnostics(db, source);
             // Should compile without errors
@@ -338,12 +352,7 @@ mod tests {
     #[test]
     fn test_unresolved_reference_diagnostic() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = SourceFile::from_path(
-                db,
-                "test.trb",
-                // Reference to undefined variable `undefined_var`
-                "fn main() -> Int { undefined_var }".to_string(),
-            );
+            let source = source_from_str("test.trb", "fn main() -> Int { undefined_var }");
 
             let result = compile_with_diagnostics(db, source);
             // Should have an unresolved reference error
@@ -378,11 +387,7 @@ mod tests {
     fn test_prelude_option_type() {
         TributeDatabaseImpl::default().attach(|db| {
             // Use Option type from prelude
-            let source = SourceFile::from_path(
-                db,
-                "test.trb",
-                "fn maybe() -> Option(Int) { None }".to_string(),
-            );
+            let source = source_from_str("test.trb", "fn maybe() -> Option(Int) { None }");
 
             let result = compile_with_diagnostics(db, source);
             // Should compile without "unresolved" errors for Option or None
@@ -402,11 +407,8 @@ mod tests {
     fn test_prelude_result_type() {
         TributeDatabaseImpl::default().attach(|db| {
             // Use Result type from prelude
-            let source = SourceFile::from_path(
-                db,
-                "test.trb",
-                "fn success() -> Result(Int, String) { Ok(42) }".to_string(),
-            );
+            let source =
+                source_from_str("test.trb", "fn success() -> Result(Int, String) { Ok(42) }");
 
             let result = compile_with_diagnostics(db, source);
             // Should compile without "unresolved" errors for Result or Ok
@@ -426,8 +428,7 @@ mod tests {
     fn test_case_expression_pattern_binding() {
         TributeDatabaseImpl::default().attach(|db| {
             // Simple case expression with identifier pattern binding
-            let source = SourceFile::from_path(
-                db,
+            let source = source_from_str(
                 "test.trb",
                 r#"
                 fn test(x: Int) -> Int {
@@ -435,8 +436,7 @@ mod tests {
                         y -> y
                     }
                 }
-                "#
-                .to_string(),
+                "#,
             );
 
             let result = compile_with_diagnostics(db, source);
