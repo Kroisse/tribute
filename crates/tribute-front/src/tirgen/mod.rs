@@ -157,6 +157,7 @@ fn lower_cst_impl<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tree_sitter::{InputEdit, Parser, Point};
     use tribute_core::TributeDatabaseImpl;
     use trunk_ir::DialectOp;
     use trunk_ir::dialect::{func, src};
@@ -164,6 +165,70 @@ mod tests {
     fn lower_and_get_module<'db>(db: &'db TributeDatabaseImpl, source: &str) -> core::Module<'db> {
         let file = SourceFile::from_path(db, "test.trb", source.to_string());
         lower_source_file(db, file)
+    }
+
+    fn point_for_byte(text: &str, byte: usize) -> Point {
+        let mut row = 0usize;
+        let mut column = 0usize;
+        for b in text.as_bytes().iter().take(byte.min(text.len())) {
+            if *b == b'\n' {
+                row += 1;
+                column = 0;
+            } else {
+                column += 1;
+            }
+        }
+        Point { row, column }
+    }
+
+    fn apply_replace(old: &str, start: usize, old_end: usize, insert: &str) -> (String, InputEdit) {
+        let mut new_text = String::with_capacity(old.len() - (old_end - start) + insert.len());
+        new_text.push_str(&old[..start]);
+        new_text.push_str(insert);
+        new_text.push_str(&old[old_end..]);
+
+        let start_point = point_for_byte(old, start);
+        let old_end_point = point_for_byte(old, old_end);
+        let new_end_byte = start + insert.len();
+        let new_end_point = point_for_byte(&new_text, new_end_byte);
+
+        (
+            new_text,
+            InputEdit {
+                start_byte: start,
+                old_end_byte: old_end,
+                new_end_byte,
+                start_position: start_point,
+                old_end_position: old_end_point,
+                new_end_position: new_end_point,
+            },
+        )
+    }
+
+    #[test]
+    fn test_incremental_parse_matches_full_parse() {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set language");
+
+        let old_text = "fn main() {\n  let x = 1;\n  x + 2\n}\n";
+        let mut tree = parser.parse(old_text, None).expect("initial parse");
+
+        let start = old_text.find("x + 2").expect("find expression");
+        let old_end = start + "x + 2".len();
+        let (new_text, edit) = apply_replace(old_text, start, old_end, "x + 2 + 3");
+
+        tree.edit(&edit);
+        let incremental = parser
+            .parse(&new_text, Some(&tree))
+            .expect("incremental parse");
+        let full = parser.parse(&new_text, None).expect("full parse");
+
+        assert_eq!(
+            incremental.root_node().to_sexp(),
+            full.root_node().to_sexp()
+        );
     }
 
     #[test]
