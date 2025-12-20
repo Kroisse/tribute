@@ -680,7 +680,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
             }
 
             let name = ctor_name.unwrap_or("_");
-            let variant_path = idvec![Symbol::new(name)];
+            let variant_path = idvec![Symbol::from_dynamic(name)];
             let fields_region = ops_to_region(ctx.db, location, field_ops);
             pat::helpers::variant_region(ctx.db, location, variant_path, fields_region)
         }
@@ -735,7 +735,12 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
 
             if let Some(name) = rest_name {
                 let head_region = ops_to_region(ctx.db, location, elem_ops);
-                pat::helpers::list_rest_region(ctx.db, location, Symbol::new(name), head_region)
+                pat::helpers::list_rest_region(
+                    ctx.db,
+                    location,
+                    Symbol::from_dynamic(name),
+                    head_region,
+                )
             } else {
                 let elements_region = ops_to_region(ctx.db, location, elem_ops);
                 pat::helpers::list_region(ctx.db, location, elements_region)
@@ -765,7 +770,7 @@ fn pattern_to_region<'db, 'src>(ctx: &CstLoweringCtx<'db, 'src>, node: Node) -> 
                 inner_region.unwrap_or_else(|| pat::helpers::wildcard_region(ctx.db, location));
             let name = binding_name.unwrap_or("_");
             // Create as_pat operation with inner region
-            let as_op = pat::as_pat(ctx.db, location, Symbol::new(name), inner);
+            let as_op = pat::as_pat(ctx.db, location, Symbol::from_dynamic(name), inner);
             pat::helpers::single_op_region(ctx.db, location, as_op.as_operation())
         }
         _ => pat::helpers::wildcard_region(ctx.db, location),
@@ -1110,7 +1115,7 @@ fn bind_handler_pattern<'db, 'src>(
                     ctx.db,
                     location,
                     ctx.fresh_type_var(),
-                    Symbol::new(name),
+                    Symbol::from_dynamic(name),
                 ));
                 ctx.bind(name.to_string(), bind_op.result(ctx.db));
             }
@@ -1121,7 +1126,7 @@ fn bind_handler_pattern<'db, 'src>(
                     ctx.db,
                     location,
                     ctx.fresh_type_var(),
-                    Symbol::new(cont_name),
+                    Symbol::from_dynamic(cont_name),
                 ));
                 ctx.bind(cont_name.to_string(), cont_bind.result(ctx.db));
             }
@@ -1204,7 +1209,7 @@ fn handler_pattern_to_region<'db, 'src>(
         };
 
         // Continuation name (empty Symbol for wildcard/discard)
-        let cont_symbol = Symbol::new(continuation_name.unwrap_or("_"));
+        let cont_symbol = Symbol::from_dynamic(continuation_name.unwrap_or("_"));
 
         pat::helpers::handler_suspend_region(
             ctx.db,
@@ -1249,12 +1254,12 @@ fn parse_operation_path<'db, 'src>(
         let op_name = path_parts.first().copied().unwrap_or("unknown");
         (
             SymbolVec::new(), // Empty ability ref (to be inferred)
-            Symbol::new(op_name),
+            Symbol::from_dynamic(op_name),
         )
     } else {
         let op_name = path_parts.pop().unwrap();
-        let ability_ref: Vec<Symbol> = path_parts.into_iter().map(Symbol::new).collect();
-        (SymbolVec::from(ability_ref), Symbol::new(op_name))
+        let ability_ref: Vec<Symbol> = path_parts.into_iter().map(Symbol::from_dynamic).collect();
+        (SymbolVec::from(ability_ref), Symbol::from_dynamic(op_name))
     }
 }
 

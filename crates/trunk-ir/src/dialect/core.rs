@@ -9,8 +9,8 @@
 //! - `core.string` - string type
 //! - `core.bytes` - byte sequence type
 //! - `core.ptr` - raw pointer type
+use std::collections::BTreeMap;
 use std::ops::Deref;
-use std::{collections::BTreeMap, sync::OnceLock};
 
 use crate::{
     Attribute, DialectType, IdVec, Location, Region, Symbol, Type, dialect, idvec, ir::BlockBuilder,
@@ -153,7 +153,7 @@ fn i(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     Type::new(
         db,
         *DIALECT_NAME,
-        Symbol::new(&format!("i{bits}")),
+        Symbol::from_dynamic(&format!("i{bits}")),
         IdVec::new(),
         BTreeMap::new(),
     )
@@ -207,7 +207,7 @@ fn f(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     Type::new(
         db,
         *DIALECT_NAME,
-        Symbol::new(&format!("f{bits}")),
+        Symbol::from_dynamic(&format!("f{bits}")),
         IdVec::new(),
         BTreeMap::new(),
     )
@@ -255,8 +255,7 @@ impl<'db> Func<'db> {
     }
 
     pub fn effect_sym() -> Symbol {
-        static CELL: OnceLock<Symbol> = OnceLock::new();
-        *CELL.get_or_init(|| Symbol::new("effect"))
+        Symbol::new("effect")
     }
 
     /// Get the effect type, if any.
@@ -357,8 +356,7 @@ impl<'db> EffectRowType<'db> {
     }
 
     pub fn tail_sym() -> Symbol {
-        static CELL: OnceLock<Symbol> = OnceLock::new();
-        *CELL.get_or_init(|| Symbol::new("tail"))
+        Symbol::new("tail")
     }
 
     /// Get the tail variable ID, if any.
@@ -430,8 +428,7 @@ impl<'db> AbilityRefType<'db> {
     }
 
     pub fn name_sym() -> Symbol {
-        static CELL: OnceLock<Symbol> = OnceLock::new();
-        *CELL.get_or_init(|| Symbol::new("name"))
+        Symbol::new("name")
     }
 
     /// Get the ability name.
