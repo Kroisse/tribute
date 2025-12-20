@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 
 use tree_sitter::{Node, Tree};
 use trunk_ir::Span;
-use trunk_ir::{IdVec, Symbol, idvec};
+use trunk_ir::{Symbol, SymbolVec, idvec};
 
 // =============================================================================
 // Parsed CST (Salsa-cacheable)
@@ -60,7 +60,7 @@ pub fn sym(name: &str) -> Symbol {
 }
 
 /// Create a symbol reference (path) from a single name.
-pub fn sym_ref(name: &str) -> IdVec<Symbol> {
+pub fn sym_ref(name: &str) -> SymbolVec {
     idvec![Symbol::new(name)]
 }
 

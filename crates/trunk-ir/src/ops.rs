@@ -30,7 +30,7 @@ macro_rules! attr_type_helper {
     (@rust_type Type) => { $crate::Type<'db> };
     (@rust_type String) => { std::string::String };
     (@rust_type Symbol) => { $crate::Symbol };
-    (@rust_type SymbolRef) => { $crate::IdVec<$crate::Symbol> };
+    (@rust_type SymbolRef) => { $crate::SymbolVec };
 
     // Convert Rust value to Attribute
     (@to_attr any, $val:expr) => { $val };

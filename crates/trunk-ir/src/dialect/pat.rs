@@ -31,6 +31,7 @@
 //! }
 //! ```
 
+use crate::SymbolVec;
 use crate::dialect;
 
 dialect! {
@@ -208,7 +209,7 @@ pub mod helpers {
     pub fn variant_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        variant_path: IdVec<Symbol>,
+        variant_path: SymbolVec,
         fields: Region<'db>,
     ) -> Region<'db> {
         let op = variant(db, location, variant_path, fields);
@@ -281,7 +282,7 @@ pub mod helpers {
     pub fn handler_suspend_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        ability_ref: IdVec<Symbol>,
+        ability_ref: SymbolVec,
         op_name: Symbol,
         args_pattern: Region<'db>,
         continuation_name: Symbol,

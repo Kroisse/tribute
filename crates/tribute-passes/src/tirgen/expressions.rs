@@ -2,8 +2,8 @@
 
 use tree_sitter::Node;
 use trunk_ir::{
-    Attribute, Block, BlockBuilder, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
-    Value,
+    Attribute, Block, BlockBuilder, DialectOp, DialectType, IdVec, Operation, Region, Symbol,
+    SymbolVec, Type, Value,
     dialect::{ability, adt, arith, case, core, list, pat, src},
     idvec,
 };
@@ -123,7 +123,7 @@ pub fn lower_expr<'db, 'src>(
                 return None;
             }
 
-            let path: IdVec<_> = segments.into_iter().collect();
+            let path: SymbolVec = segments.into_iter().collect();
             let op = block.op(src::path(ctx.db, location, infer_ty, path));
             Some(op.result(ctx.db))
         }
@@ -357,11 +357,11 @@ fn lower_call_expr<'db, 'src>(
 
     // Use field-based access for function
     let func_node = node.child_by_field_name("function")?;
-    let func_path: IdVec<Symbol> = match func_node.kind() {
+    let func_path: SymbolVec = match func_node.kind() {
         "identifier" => sym_ref(node_text(&func_node, ctx.source)),
         "path_expression" => {
             let mut cursor = func_node.walk();
-            let segments: IdVec<Symbol> = func_node
+            let segments: SymbolVec = func_node
                 .named_children(&mut cursor)
                 .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
                 .map(|n| sym(node_text(&n, ctx.source)))
@@ -1229,7 +1229,7 @@ fn handler_pattern_to_region<'db, 'src>(
 fn parse_operation_path<'db, 'src>(
     ctx: &CstLoweringCtx<'db, 'src>,
     node: Node,
-) -> (IdVec<Symbol>, Symbol) {
+) -> (SymbolVec, Symbol) {
     let mut path_parts = Vec::new();
     let mut cursor = node.walk();
 
@@ -1248,13 +1248,13 @@ fn parse_operation_path<'db, 'src>(
     if path_parts.len() <= 1 {
         let op_name = path_parts.first().copied().unwrap_or("unknown");
         (
-            IdVec::new(), // Empty ability ref (to be inferred)
+            SymbolVec::new(), // Empty ability ref (to be inferred)
             Symbol::new(op_name),
         )
     } else {
         let op_name = path_parts.pop().unwrap();
         let ability_ref: Vec<Symbol> = path_parts.into_iter().map(Symbol::new).collect();
-        (IdVec::from(ability_ref), Symbol::new(op_name))
+        (SymbolVec::from(ability_ref), Symbol::new(op_name))
     }
 }
 

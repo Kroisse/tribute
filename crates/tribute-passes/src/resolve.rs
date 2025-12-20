@@ -29,7 +29,8 @@ use trunk_ir::dialect::pat;
 use trunk_ir::dialect::src;
 use trunk_ir::dialect::ty;
 use trunk_ir::{
-    Attribute, Attrs, Block, DialectOp, IdVec, Operation, Region, Symbol, Type, Value, ValueDef,
+    Attribute, Attrs, Block, DialectOp, IdVec, Operation, Region, Symbol, SymbolVec, Type, Value,
+    ValueDef,
 };
 
 // =============================================================================
@@ -62,14 +63,14 @@ pub enum Binding<'db> {
     /// A function defined in this module or imported.
     Function {
         /// Fully qualified path (e.g., ["List", "map"])
-        path: IdVec<Symbol>,
+        path: SymbolVec,
         /// Function type
         ty: Type<'db>,
     },
     /// A module/namespace binding (possibly with an associated type).
     Module {
         /// Fully qualified namespace path (e.g., ["collections", "List"])
-        namespace: IdVec<Symbol>,
+        namespace: SymbolVec,
         /// Optional type definition for the same name.
         type_def: Option<Type<'db>>,
     },
@@ -109,7 +110,7 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Add a function definition.
-    pub fn add_function(&mut self, name: Symbol, path: IdVec<Symbol>, ty: Type<'db>) {
+    pub fn add_function(&mut self, name: Symbol, path: SymbolVec, ty: Type<'db>) {
         self.definitions
             .insert(name, Binding::Function { path, ty });
     }
@@ -205,7 +206,7 @@ fn collect_definition<'db>(
             if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
                 (attrs.get(&*ATTR_SYM_NAME), attrs.get(&*ATTR_TYPE))
             {
-                let path: IdVec<Symbol> = vec![*sym].into_iter().collect();
+                let path: SymbolVec = vec![*sym].into_iter().collect();
                 env.add_function(*sym, path, *ty);
             }
         }
@@ -535,7 +536,7 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    fn binding_from_path(&self, path: &IdVec<Symbol>) -> Option<Binding<'db>> {
+    fn binding_from_path(&self, path: &SymbolVec) -> Option<Binding<'db>> {
         if path.is_empty() {
             return None;
         }

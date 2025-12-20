@@ -21,7 +21,9 @@ use std::collections::HashMap;
 
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::func;
-use trunk_ir::{Attribute, Block, DialectOp, IdVec, Operation, Region, Symbol, Type, Value};
+use trunk_ir::{
+    Attribute, Block, DialectOp, IdVec, Operation, Region, Symbol, SymbolVec, Type, Value,
+};
 
 // =============================================================================
 // Method Registry
@@ -35,7 +37,7 @@ pub struct MethodInfo<'db> {
     /// The method name (e.g., "len", "map")
     pub name: Symbol,
     /// The full function path to call
-    pub func_path: IdVec<Symbol>,
+    pub func_path: SymbolVec,
     /// The function type
     pub func_type: Type<'db>,
 }

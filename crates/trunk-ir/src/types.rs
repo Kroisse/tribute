@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{IdVec, Span, Symbol};
+use crate::{IdVec, Span, Symbol, SymbolVec};
 
 /// Trait for dialect-specific type wrappers.
 ///
@@ -99,7 +99,7 @@ pub enum Attribute<'db> {
     /// Single interned symbol (e.g., "foo").
     Symbol(Symbol),
     /// Symbol reference path (e.g., ["module", "func_name"])
-    SymbolRef(IdVec<Symbol>),
+    SymbolRef(SymbolVec),
     /// List of attributes (for arrays of values like switch cases).
     List(Vec<Attribute<'db>>),
     /// Source span (for tracking source locations in attributes).

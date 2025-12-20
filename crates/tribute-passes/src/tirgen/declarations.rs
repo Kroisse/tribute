@@ -3,7 +3,7 @@
 use tree_sitter::Node;
 use trunk_ir::Span;
 use trunk_ir::{
-    Attribute, BlockBuilder, IdVec, Symbol, Type,
+    Attribute, BlockBuilder, IdVec, Symbol, SymbolVec, Type,
     dialect::{core, func, src, ty},
 };
 
@@ -21,7 +21,7 @@ use super::statements::lower_block_body;
 
 #[derive(Debug)]
 struct UseImport {
-    path: IdVec<Symbol>,
+    path: SymbolVec,
     alias: Option<Symbol>,
 }
 
@@ -40,7 +40,7 @@ pub fn lower_use_decl<'db, 'src>(
     };
 
     let mut imports = Vec::new();
-    collect_use_imports(ctx, tree_node, &mut IdVec::new(), &mut imports);
+    collect_use_imports(ctx, tree_node, &mut SymbolVec::new(), &mut imports);
 
     for import in imports {
         if import.path.is_empty() {
@@ -56,7 +56,7 @@ pub fn lower_use_decl<'db, 'src>(
 fn collect_use_imports<'db, 'src>(
     ctx: &CstLoweringCtx<'db, 'src>,
     node: Node,
-    base: &mut IdVec<Symbol>,
+    base: &mut SymbolVec,
     out: &mut Vec<UseImport>,
 ) {
     match node.kind() {
