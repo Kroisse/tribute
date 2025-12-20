@@ -1319,10 +1319,7 @@ macro_rules! define_type {
                 $(
                     #[allow(dead_code)]
                     pub fn [<$attr:snake _sym>]() -> Symbol {
-                        static CELL: std::sync::OnceLock<$crate::Symbol> = std::sync::OnceLock::new();
-                        *CELL.get_or_init(|| {
-                            Symbol::new($crate::raw_ident_str!($attr))
-                        })
+                        Symbol::new($crate::raw_ident_str!($attr))
                     }
 
                     #[allow(dead_code)]
@@ -1407,10 +1404,7 @@ macro_rules! define_type {
                 $(
                     #[allow(dead_code)]
                     pub fn [<$attr:snake _sym>]() -> Symbol {
-                        static CELL: std::sync::OnceLock<$crate::Symbol> = std::sync::OnceLock::new();
-                        *CELL.get_or_init(|| {
-                            Symbol::new($crate::raw_ident_str!($attr))
-                        })
+                        Symbol::new($crate::raw_ident_str!($attr))
                     }
 
                     #[allow(dead_code)]

@@ -8,7 +8,7 @@
 //! - `type.error` - an error type indicating type resolution failed
 use std::collections::BTreeMap;
 
-use crate::{Attribute, Attrs, IdVec, Symbol, Type, dialect};
+use crate::{Attribute, Attrs, IdVec, Type, dialect};
 
 crate::symbols! {
     ATTR_ID => "id",
@@ -55,10 +55,7 @@ pub fn var<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> Type<'db> {
 
 /// Create a type variable with a numeric ID.
 pub fn var_with_id<'db>(db: &'db dyn salsa::Database, id: u64) -> Type<'db> {
-    var(
-        db,
-        BTreeMap::from([(Symbol::new("id"), Attribute::IntBits(id))]),
-    )
+    var(db, BTreeMap::from([(ATTR_ID(), Attribute::IntBits(id))]))
 }
 
 /// Create an error type (`type.error`) indicating type resolution failed.

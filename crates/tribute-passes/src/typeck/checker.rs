@@ -671,6 +671,7 @@ impl<'db> TypeChecker<'db> {
         pattern_region: &Region<'db>,
         handled: &mut Vec<AbilityRef<'db>>,
     ) {
+        let ability_ref_sym = Symbol::new("ability_ref");
         for block in pattern_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
                 // Check for pat.handler_suspend
@@ -679,9 +680,7 @@ impl<'db> TypeChecker<'db> {
                 {
                     // Extract ability reference from attributes
                     let attrs = op.attributes(self.db);
-                    if let Some(Attribute::SymbolRef(ability_path)) =
-                        attrs.get(&Symbol::new("ability_ref"))
-                    {
+                    if let Some(Attribute::SymbolRef(ability_path)) = attrs.get(&ability_ref_sym) {
                         // Extract ability name from path
                         let ability_name = ability_path.last().copied().unwrap_or(unknown_sym());
 

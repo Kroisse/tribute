@@ -97,12 +97,8 @@ impl PrintableRegistry {
 
         // Fall back to prefix matching
         for (d, prefix_str, print_fn) in &self.prefix {
-            if *d == dialect {
-                // prefix is already a String, so we only need one to_string()
-                let name_str = name.to_string();
-                if name_str.starts_with(prefix_str) {
-                    return Some(*print_fn);
-                }
+            if *d == dialect && name.with_str(|n| n.starts_with(prefix_str)) {
+                return Some(*print_fn);
             }
         }
 
