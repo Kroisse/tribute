@@ -107,7 +107,7 @@ impl<'db> TypeSubst<'db> {
     pub fn apply(&self, db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
         // If it's a type variable, look it up
         if ty::is_var(db, ty) {
-            if let Some(Attribute::IntBits(id)) = ty.get_attr(db, Symbol::new("id"))
+            if let Some(Attribute::IntBits(id)) = ty.get_attr(db, Symbol::from_dynamic("id"))
                 && let Some(resolved) = self.get(*id)
             {
                 // Recursively apply in case the resolved type also has variables
@@ -252,7 +252,9 @@ impl<'db> TypeSolver<'db> {
         match (t1_is_var, t2_is_var) {
             (true, _) => {
                 // Bind t1 to t2
-                if let Some(Attribute::IntBits(id)) = t1.get_attr(self.db, Symbol::new("id")) {
+                if let Some(Attribute::IntBits(id)) =
+                    t1.get_attr(self.db, Symbol::from_dynamic("id"))
+                {
                     // Occurs check
                     if self.occurs_in(*id, t2) {
                         return Err(SolveError::OccursCheck {
@@ -266,7 +268,9 @@ impl<'db> TypeSolver<'db> {
             }
             (false, true) => {
                 // Bind t2 to t1
-                if let Some(Attribute::IntBits(id)) = t2.get_attr(self.db, Symbol::new("id")) {
+                if let Some(Attribute::IntBits(id)) =
+                    t2.get_attr(self.db, Symbol::from_dynamic("id"))
+                {
                     // Occurs check
                     if self.occurs_in(*id, t1) {
                         return Err(SolveError::OccursCheck {
@@ -335,7 +339,7 @@ impl<'db> TypeSolver<'db> {
         let ty = self.type_subst.apply(self.db, ty);
 
         if ty::is_var(self.db, ty)
-            && let Some(Attribute::IntBits(id)) = ty.get_attr(self.db, Symbol::new("id"))
+            && let Some(Attribute::IntBits(id)) = ty.get_attr(self.db, Symbol::from_dynamic("id"))
         {
             return *id == var_id;
         }

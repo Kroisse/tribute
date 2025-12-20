@@ -1345,7 +1345,7 @@ mod tests {
         ops: &[Operation<'db>],
         name: &str,
     ) -> bool {
-        let name_sym = Symbol::new(name);
+        let name_sym = Symbol::from_dynamic(name);
         ops.iter().any(|op| {
             op.dialect(db) == "src"
                 && op.name(db) == "call"
@@ -1361,7 +1361,7 @@ mod tests {
         ops: &[Operation<'db>],
         name: &str,
     ) -> bool {
-        let name_sym = Symbol::new(name);
+        let name_sym = Symbol::from_dynamic(name);
         ops.iter().any(|op| {
             op.dialect(db) == "func"
                 && op.name(db) == "call"

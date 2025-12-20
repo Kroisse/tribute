@@ -56,12 +56,12 @@ impl Hash for ParsedCst {
 
 /// Create a symbol from a string.
 pub fn sym(name: &str) -> Symbol {
-    Symbol::new(name)
+    Symbol::from_dynamic(name)
 }
 
 /// Create a symbol reference (path) from a single name.
 pub fn sym_ref(name: &str) -> SymbolVec {
-    idvec![Symbol::new(name)]
+    idvec![Symbol::from_dynamic(name)]
 }
 
 // =============================================================================

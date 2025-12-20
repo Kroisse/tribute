@@ -241,8 +241,7 @@ impl<'db> TdnrResolver<'db> {
 
         // Get method name from attributes
         let attrs = op.attributes(self.db);
-        let name_key = Symbol::new("name");
-        let Attribute::SymbolRef(name_segments) = attrs.get(&name_key)? else {
+        let Attribute::SymbolRef(name_segments) = attrs.get(&Symbol::new("name"))? else {
             return None;
         };
 

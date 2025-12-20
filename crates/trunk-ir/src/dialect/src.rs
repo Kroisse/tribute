@@ -85,7 +85,7 @@ pub fn unresolved_type<'db>(
     params: IdVec<crate::Type<'db>>,
 ) -> crate::Type<'db> {
     // Use the macro-generated Type struct
-    *Type::new(db, params, Symbol::new(name))
+    *Type::new(db, params, Symbol::from_dynamic(name))
 }
 
 // === Printable interface registrations ===

@@ -24,9 +24,23 @@ static INTERNER: LazyLock<RwLock<Rodeo>> = LazyLock::new(|| RwLock::new(Rodeo::d
 pub struct Symbol(Spur);
 
 impl Symbol {
-    /// Intern a string and return its symbol.
-    pub fn new(text: &str) -> Self {
-        Symbol(INTERNER.write().get_or_intern(text))
+    /// Intern a static string and return its symbol. Prefer this over `from_dynamic` when possible.
+    pub fn new(text: &'static str) -> Self {
+        Self::get_or_else(text, |rodeo| rodeo.get_or_intern_static(text))
+    }
+
+    /// Intern a string and return its symbol. Prefer `new` if the text is static.
+    pub fn from_dynamic(text: &str) -> Self {
+        Self::get_or_else(text, |rodeo| rodeo.get_or_intern(text))
+    }
+
+    fn get_or_else(text: &str, f: impl for<'r> FnOnce(&'r mut Rodeo) -> Spur) -> Self {
+        let mut lock = INTERNER.upgradable_read();
+        Symbol(if let Some(spur) = lock.get(text) {
+            spur
+        } else {
+            lock.with_upgraded(f)
+        })
     }
 
     /// Access the symbol's text with zero-copy.
@@ -49,8 +63,8 @@ impl Symbol {
     }
 }
 
-impl From<&str> for Symbol {
-    fn from(text: &str) -> Self {
+impl From<&'static str> for Symbol {
+    fn from(text: &'static str) -> Self {
         Symbol::new(text)
     }
 }
@@ -71,7 +85,7 @@ impl From<&str> for Symbol {
 /// ```
 #[macro_export]
 macro_rules! symbols {
-    ($($(#[$attr:meta])* $name:ident => $text:expr),* $(,)?) => {
+    ($($(#[$attr:meta])* $name:ident => $text:literal),* $(,)?) => {
         $(
             $(#[$attr])*
             pub static $name: std::sync::LazyLock<$crate::Symbol> =
@@ -170,7 +184,7 @@ impl<'db> Operation<'db> {
     pub fn of_name(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        full_name: &str,
+        full_name: &'static str,
     ) -> OperationBuilder<'db> {
         let (dialect, name) = full_name
             .split_once('.')
@@ -275,7 +289,7 @@ impl<'db> OperationBuilder<'db> {
     }
 
     pub fn dialect_str(mut self, dialect: &str) -> Self {
-        self.dialect = Symbol::new(dialect);
+        self.dialect = Symbol::from_dynamic(dialect);
         self
     }
 
@@ -285,7 +299,7 @@ impl<'db> OperationBuilder<'db> {
     }
 
     pub fn name_str(mut self, name: &str) -> Self {
-        self.name = Symbol::new(name);
+        self.name = Symbol::from_dynamic(name);
         self
     }
 

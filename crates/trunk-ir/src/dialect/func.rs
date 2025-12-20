@@ -96,7 +96,7 @@ impl<'db> Func<'db> {
         let region = Region::new(db, location, idvec![entry.build()]);
 
         let mut builder = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new(name)))
+            .attr("sym_name", Attribute::Symbol(Symbol::from_dynamic(name)))
             .attr(
                 "type",
                 Attribute::Type(core::Func::with_effect(db, params, result, effect).as_type()),

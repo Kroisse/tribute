@@ -171,7 +171,7 @@ pub mod helpers {
         location: Location<'db>,
         name: &str,
     ) -> Region<'db> {
-        let op = bind(db, location, Symbol::new(name));
+        let op = bind(db, location, Symbol::from_dynamic(name));
         single_op_region(db, location, op.as_operation())
     }
 

@@ -117,15 +117,21 @@ static REGISTRY: LazyLock<PrintableRegistry> = LazyLock::new(|| {
     for reg in inventory::iter::<PrintableRegistration> {
         match reg.matcher {
             TypeMatcher::Exact(name) => {
-                registry
-                    .exact
-                    .insert((Symbol::new(reg.dialect), Symbol::new(name)), reg.print);
+                registry.exact.insert(
+                    (
+                        Symbol::from_dynamic(reg.dialect),
+                        Symbol::from_dynamic(name),
+                    ),
+                    reg.print,
+                );
             }
             TypeMatcher::Prefix(prefix) => {
                 // Store prefix as String to avoid repeated to_string() in lookup
-                registry
-                    .prefix
-                    .push((Symbol::new(reg.dialect), prefix.to_string(), reg.print));
+                registry.prefix.push((
+                    Symbol::from_dynamic(reg.dialect),
+                    prefix.to_string(),
+                    reg.print,
+                ));
             }
         }
     }

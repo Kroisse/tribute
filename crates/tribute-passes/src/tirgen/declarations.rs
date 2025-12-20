@@ -71,7 +71,7 @@ fn collect_use_imports<'db, 'src>(
         "use_tree" => {
             let alias_node = node.child_by_field_name("alias");
             let alias_id = alias_node.as_ref().map(|n| n.id());
-            let alias = alias_node.map(|n| node_text(&n, ctx.source).into());
+            let alias = alias_node.map(|n| Symbol::from_dynamic(node_text(&n, ctx.source)));
 
             let mut cursor = node.walk();
             let mut head = None;
@@ -84,7 +84,7 @@ fn collect_use_imports<'db, 'src>(
                 }
                 match child.kind() {
                     "identifier" | "type_identifier" | "path_keyword" if head.is_none() => {
-                        head = Some(node_text(&child, ctx.source).into());
+                        head = Some(Symbol::from_dynamic(node_text(&child, ctx.source)));
                     }
                     "use_group" => group_node = Some(child),
                     "use_tree" => tail_node = Some(child),
@@ -539,7 +539,7 @@ pub fn lower_mod_decl<'db, 'src>(
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body");
 
-    let name = Symbol::new(node_text(&name_node, ctx.source));
+    let name = Symbol::from_dynamic(node_text(&name_node, ctx.source));
 
     // Check for visibility marker (not a field, so use helper)
     let _is_pub = find_child_by_kind(node, "visibility_marker").is_some();
