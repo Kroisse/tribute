@@ -50,7 +50,7 @@ dialect! {
 ///
 /// The `attrs` can carry metadata such as a unique variable ID or constraints.
 pub fn var<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> Type<'db> {
-    Type::new(db, *DIALECT_NAME, *VAR, IdVec::new(), attrs)
+    Type::new(db, DIALECT_NAME(), VAR(), IdVec::new(), attrs)
 }
 
 /// Create a type variable with a numeric ID.
@@ -65,17 +65,17 @@ pub fn var_with_id<'db>(db: &'db dyn salsa::Database, id: u64) -> Type<'db> {
 ///
 /// The `attrs` can carry error information or source location.
 pub fn error<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> Type<'db> {
-    Type::new(db, *DIALECT_NAME, *ERROR, IdVec::new(), attrs)
+    Type::new(db, DIALECT_NAME(), ERROR(), IdVec::new(), attrs)
 }
 
 /// Check if a type is a type variable (`type.var`).
 pub fn is_var(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    ty.is_dialect(db, *DIALECT_NAME, *VAR)
+    ty.is_dialect(db, DIALECT_NAME(), VAR())
 }
 
 /// Check if a type is an error type (`type.error`).
 pub fn is_error(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    ty.is_dialect(db, *DIALECT_NAME, *ERROR)
+    ty.is_dialect(db, DIALECT_NAME(), ERROR())
 }
 
 // === Printable interface registrations ===
@@ -87,7 +87,7 @@ use crate::type_interface::Printable;
 // type.var -> "a", "b", ..., "t0", "t1", ...
 inventory::submit! {
     Printable::implement("type", "var", |db, ty, f| {
-        if let Some(Attribute::IntBits(id)) = ty.get_attr(db, *ATTR_ID) {
+        if let Some(Attribute::IntBits(id)) = ty.get_attr(db, ATTR_ID()) {
             fmt_var_id(f, *id)
         } else {
             f.write_char('?')

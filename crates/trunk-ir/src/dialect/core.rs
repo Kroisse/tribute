@@ -127,7 +127,7 @@ impl<'db, const BITS: u16> DialectType<'db> for I<'db, BITS> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db) == *DIALECT_NAME
+        if ty.dialect(db) == DIALECT_NAME()
             && ty.name(db).with_str(|n| n == format!("i{BITS}").as_str())
         {
             Some(Self(ty))
@@ -152,7 +152,7 @@ pub type I64<'db> = I<'db, 64>;
 fn i(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     Type::new(
         db,
-        *DIALECT_NAME,
+        DIALECT_NAME(),
         Symbol::from_dynamic(&format!("i{bits}")),
         IdVec::new(),
         BTreeMap::new(),
@@ -187,7 +187,7 @@ impl<'db, const BITS: u16> DialectType<'db> for F<'db, BITS> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db) == *DIALECT_NAME
+        if ty.dialect(db) == DIALECT_NAME()
             && ty.name(db).with_str(|n| n == format!("f{BITS}").as_str())
         {
             Some(Self(ty))
@@ -206,7 +206,7 @@ pub type F64<'db> = F<'db, 64>;
 fn f(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     Type::new(
         db,
-        *DIALECT_NAME,
+        DIALECT_NAME(),
         Symbol::from_dynamic(&format!("f{bits}")),
         IdVec::new(),
         BTreeMap::new(),
@@ -241,7 +241,7 @@ impl<'db> Func<'db> {
             Some(eff) => BTreeMap::from([(Self::effect_sym(), Attribute::Type(eff))]),
             None => BTreeMap::new(),
         };
-        Self(Type::new(db, *DIALECT_NAME, *FUNC, all_types, attrs))
+        Self(Type::new(db, DIALECT_NAME(), FUNC(), all_types, attrs))
     }
 
     /// Get the return type.
@@ -280,7 +280,7 @@ impl<'db> DialectType<'db> for Func<'db> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db) == *DIALECT_NAME && ty.name(db) == *FUNC {
+        if ty.dialect(db) == DIALECT_NAME() && ty.name(db) == FUNC() {
             Some(Self(ty))
         } else {
             None
@@ -315,7 +315,13 @@ impl<'db> EffectRowType<'db> {
         if tail_var_id != 0 {
             attrs.insert(Self::tail_sym(), Attribute::IntBits(tail_var_id));
         }
-        Self(Type::new(db, *DIALECT_NAME, *EFFECT_ROW, abilities, attrs))
+        Self(Type::new(
+            db,
+            DIALECT_NAME(),
+            EFFECT_ROW(),
+            abilities,
+            attrs,
+        ))
     }
 
     /// Create an empty effect row (pure function).
@@ -381,7 +387,7 @@ impl<'db> DialectType<'db> for EffectRowType<'db> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db) == *DIALECT_NAME && ty.name(db) == *EFFECT_ROW {
+        if ty.dialect(db) == DIALECT_NAME() && ty.name(db) == EFFECT_ROW() {
             Some(Self(ty))
         } else {
             None
@@ -405,8 +411,8 @@ impl<'db> AbilityRefType<'db> {
     pub fn simple(db: &'db dyn salsa::Database, name: Symbol) -> Self {
         Self(Type::new(
             db,
-            *DIALECT_NAME,
-            *ABILITY_REF,
+            DIALECT_NAME(),
+            ABILITY_REF(),
             IdVec::new(),
             BTreeMap::from([(Self::name_sym(), Attribute::Symbol(name))]),
         ))
@@ -420,8 +426,8 @@ impl<'db> AbilityRefType<'db> {
     ) -> Self {
         Self(Type::new(
             db,
-            *DIALECT_NAME,
-            *ABILITY_REF,
+            DIALECT_NAME(),
+            ABILITY_REF(),
             params,
             BTreeMap::from([(Self::name_sym(), Attribute::Symbol(name))]),
         ))
@@ -458,7 +464,7 @@ impl<'db> DialectType<'db> for AbilityRefType<'db> {
     }
 
     fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db) == *DIALECT_NAME && ty.name(db) == *ABILITY_REF {
+        if ty.dialect(db) == DIALECT_NAME() && ty.name(db) == ABILITY_REF() {
             Some(Self(ty))
         } else {
             None
@@ -563,7 +569,7 @@ fn print_tuple(db: &dyn salsa::Database, ty: Type<'_>, f: &mut Formatter<'_>) ->
     let mut elements = Vec::new();
     let mut current = ty;
 
-    while current.is_dialect(db, *DIALECT_NAME, *TUPLE) {
+    while current.is_dialect(db, DIALECT_NAME(), TUPLE()) {
         let params = current.params(db);
         if params.len() >= 2 {
             elements.push(params[0]); // head
@@ -574,7 +580,7 @@ fn print_tuple(db: &dyn salsa::Database, ty: Type<'_>, f: &mut Formatter<'_>) ->
     }
 
     // Check if tail is nil (complete tuple)
-    let has_tail = !current.is_dialect(db, *DIALECT_NAME, *NIL);
+    let has_tail = !current.is_dialect(db, DIALECT_NAME(), NIL());
 
     f.write_char('(')?;
     for (i, &elem) in elements.iter().enumerate() {

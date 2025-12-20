@@ -41,7 +41,7 @@ impl<'db> Type<'db> {
 
     /// Check if this is a function type (`core.func`).
     pub fn is_function(&self, db: &'db dyn salsa::Database) -> bool {
-        self.is_dialect(db, *core::DIALECT_NAME, *core::FUNC)
+        self.is_dialect(db, core::DIALECT_NAME(), core::FUNC())
     }
 
     /// Get function parameter types if this is a function type.

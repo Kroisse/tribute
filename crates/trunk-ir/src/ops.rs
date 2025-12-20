@@ -2,15 +2,59 @@
 
 use crate::Operation;
 
-/// Strip `r#` prefix from raw identifier names.
+/// Convert an identifier token into a clean string, handling raw identifiers.
 ///
 /// Rust requires the `r#` prefix for reserved keywords like `type` or `yield`
-/// when used as identifiers. This function strips that prefix so the IR stores
-/// clean names like "type" instead of "r#type".
+/// when used as identifiers. This macro strips that prefix at expansion time
+/// so the IR stores clean names like "type" instead of "r#type".
 #[doc(hidden)]
-#[inline]
-pub fn strip_raw_prefix(s: &str) -> &str {
-    s.strip_prefix("r#").unwrap_or(s)
+#[macro_export]
+macro_rules! raw_ident_str {
+    (r#type) => {
+        "type"
+    };
+    (r#const) => {
+        "const"
+    };
+    (r#use) => {
+        "use"
+    };
+    (r#yield) => {
+        "yield"
+    };
+    (r#return) => {
+        "return"
+    };
+    (r#if) => {
+        "if"
+    };
+    (r#else) => {
+        "else"
+    };
+    (r#loop) => {
+        "loop"
+    };
+    (r#case) => {
+        "case"
+    };
+    (r#struct) => {
+        "struct"
+    };
+    (r#enum) => {
+        "enum"
+    };
+    (r#break) => {
+        "break"
+    };
+    (r#continue) => {
+        "continue"
+    };
+    (r#ref) => {
+        "ref"
+    };
+    ($ident:ident) => {
+        stringify!($ident)
+    };
 }
 
 /// Helper macro for attribute type mappings.
@@ -178,11 +222,14 @@ pub trait DialectOp<'db>: Sized + Copy {
 /// ```
 #[macro_export]
 macro_rules! dialect {
-    // Entry point - generate _NAME static and parse body
+    // Entry point - generate _NAME helper and parse body
     (mod $dialect:ident { $($body:tt)* }) => {
-        // Generate _NAME static (cached dialect name, shared by all operations)
-        pub static DIALECT_NAME: std::sync::LazyLock<$crate::Symbol> =
-            std::sync::LazyLock::new(|| $crate::Symbol::new($crate::strip_raw_prefix(stringify!($dialect))));
+        // Generate _NAME helper (dialect name, shared by all operations)
+        #[allow(non_snake_case)]
+        #[inline]
+        pub fn DIALECT_NAME() -> $crate::Symbol {
+            $crate::Symbol::new($crate::raw_ident_str!($dialect))
+        }
 
         $crate::dialect!(@parse $dialect [$($body)*]);
     };
@@ -199,10 +246,13 @@ macro_rules! dialect {
          fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
          $($rest:tt)*]
     ) => {
-        // Generate operation-specific static (cached operation name)
+        // Generate operation-specific helper
         $crate::paste::paste! {
-            pub static [<$op:upper>]: std::sync::LazyLock<$crate::Symbol> =
-                std::sync::LazyLock::new(|| $crate::Symbol::new($crate::strip_raw_prefix(stringify!($op))));
+            #[allow(non_snake_case)]
+            #[inline]
+            pub fn [<$op:upper>]() -> $crate::Symbol {
+                $crate::Symbol::new($crate::raw_ident_str!($op))
+            }
         }
 
         $crate::define_op! {
@@ -224,10 +274,13 @@ macro_rules! dialect {
          type $ty:ident $(($($params:ident),* $(,)?))?;
          $($rest:tt)*]
     ) => {
-        // Generate type-specific static (cached type name)
+        // Generate type-specific helper
         $crate::paste::paste! {
-            pub static [<$ty:upper>]: std::sync::LazyLock<$crate::Symbol> =
-                std::sync::LazyLock::new(|| $crate::Symbol::new($crate::strip_raw_prefix(stringify!($ty))));
+            #[allow(non_snake_case)]
+            #[inline]
+            pub fn [<$ty:upper>]() -> $crate::Symbol {
+                $crate::Symbol::new($crate::raw_ident_str!($ty))
+            }
         }
 
         $crate::define_type! {
@@ -247,10 +300,13 @@ macro_rules! dialect {
          type $ty:ident(#[rest] $variadic:ident);
          $($rest:tt)*]
     ) => {
-        // Generate type-specific static (cached type name)
+        // Generate type-specific helper
         $crate::paste::paste! {
-            pub static [<$ty:upper>]: std::sync::LazyLock<$crate::Symbol> =
-                std::sync::LazyLock::new(|| $crate::Symbol::new($crate::strip_raw_prefix(stringify!($ty))));
+            #[allow(non_snake_case)]
+            #[inline]
+            pub fn [<$ty:upper>]() -> $crate::Symbol {
+                $crate::Symbol::new($crate::raw_ident_str!($ty))
+            }
         }
 
         $crate::define_type! {
@@ -769,8 +825,8 @@ macro_rules! define_op {
                     db: &'db dyn salsa::Database,
                     op: $crate::Operation<'db>,
                 ) -> Result<Self, $crate::ConversionError> {
-                    // Use cached symbols (lazy-initialized, no write lock after first access)
-                    if op.dialect(db) != *DIALECT_NAME || op.name(db) != *[<$op:upper>] {
+                    // Use interned symbols (cheap read path in Symbol::new)
+                    if op.dialect(db) != DIALECT_NAME() || op.name(db) != [<$op:upper>]() {
                         return Err($crate::ConversionError::WrongOperation {
                             expected: concat!(stringify!($dialect), ".", stringify!($op)),
                             actual: op.full_name(db),
@@ -1001,8 +1057,8 @@ macro_rules! define_op {
                 $($attr: $crate::define_op!(@attr_param_type $kind $($attr_ty)?),)*
                 $($region: $crate::Region<'db>,)*
             ) -> [<$op:camel>]<'db> {
-                let dialect = $crate::Symbol::new($crate::strip_raw_prefix(stringify!($dialect)));
-                let name = $crate::Symbol::new($crate::strip_raw_prefix(stringify!($op)));
+                let dialect = $crate::Symbol::new($crate::raw_ident_str!($dialect));
+                let name = $crate::Symbol::new($crate::raw_ident_str!($op));
                 #[allow(unused_mut)]
                 let mut operands = $crate::idvec![$($fixed),*];
                 $(operands.extend($var);)?
@@ -1028,30 +1084,30 @@ macro_rules! define_op {
 
     // Add attribute to builder (final stage)
     (@add_attr_final $builder:ident, $attr:ident, untyped) => {
-        $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $attr);
+        $builder = $builder.attr($crate::raw_ident_str!($attr), $attr);
     };
     (@add_attr_final $builder:ident, $attr:ident, required $attr_ty:ident) => {
-        $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $crate::attr_type_helper!(@to_attr $attr_ty, $attr));
+        $builder = $builder.attr($crate::raw_ident_str!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, $attr));
     };
     (@add_attr_final $builder:ident, $attr:ident, optional $attr_ty:ident) => {
         if let Some(val) = $attr {
-            $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $crate::attr_type_helper!(@to_attr $attr_ty, val));
+            $builder = $builder.attr($crate::raw_ident_str!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, val));
         }
     };
 
     // Add attributes to builder from attr blocks
     (@add_attrs $builder:ident,) => {};
     (@add_attrs $builder:ident, { $attr:ident } $($rest:tt)*) => {
-        $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $attr);
+        $builder = $builder.attr($crate::raw_ident_str!($attr), $attr);
         $crate::define_op!(@add_attrs $builder, $($rest)*);
     };
     (@add_attrs $builder:ident, { $attr:ident : $attr_ty:ident } $($rest:tt)*) => {
-        $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $crate::attr_type_helper!(@to_attr $attr_ty, $attr));
+        $builder = $builder.attr($crate::raw_ident_str!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, $attr));
         $crate::define_op!(@add_attrs $builder, $($rest)*);
     };
     (@add_attrs $builder:ident, { $attr:ident : ? $attr_ty:ident } $($rest:tt)*) => {
         if let Some(val) = $attr {
-            $builder = $builder.attr($crate::strip_raw_prefix(stringify!($attr)), $crate::attr_type_helper!(@to_attr $attr_ty, val));
+            $builder = $builder.attr($crate::raw_ident_str!($attr), $crate::attr_type_helper!(@to_attr $attr_ty, val));
         }
         $crate::define_op!(@add_attrs $builder, $($rest)*);
     };
@@ -1147,7 +1203,7 @@ macro_rules! define_op {
     (@gen_attr_accessors { $attr:ident } $($rest:tt)*) => {
         #[allow(dead_code, clippy::should_implement_trait)]
         pub fn $attr(&self, db: &'db dyn salsa::Database) -> &'db $crate::Attribute<'db> {
-            let key = $crate::Symbol::new($crate::strip_raw_prefix(stringify!($attr)));
+            let key = $crate::Symbol::new($crate::raw_ident_str!($attr));
             self.op.attributes(db).get(&key).expect(concat!("missing attribute: ", stringify!($attr)))
         }
         $crate::define_op!(@gen_attr_accessors $($rest)*);
@@ -1156,7 +1212,7 @@ macro_rules! define_op {
         #[allow(dead_code, clippy::should_implement_trait)]
         pub fn $attr(&self, db: &'db dyn salsa::Database) -> $crate::attr_type_helper!(@rust_type $attr_ty) {
             let attr = self.op.attributes(db)
-                .get(&$crate::Symbol::new($crate::strip_raw_prefix(stringify!($attr))))
+                .get(&$crate::Symbol::new($crate::raw_ident_str!($attr)))
                 .expect(concat!("missing attribute: ", stringify!($attr)));
             $crate::attr_type_helper!(@from_attr $attr_ty, attr)
         }
@@ -1166,7 +1222,7 @@ macro_rules! define_op {
         #[allow(dead_code, clippy::should_implement_trait)]
         pub fn $attr(&self, db: &'db dyn salsa::Database) -> Option<$crate::attr_type_helper!(@rust_type $attr_ty)> {
             self.op.attributes(db)
-                .get(&$crate::Symbol::new($crate::strip_raw_prefix(stringify!($attr))))
+                .get(&$crate::Symbol::new($crate::raw_ident_str!($attr)))
                 .map(|attr| $crate::attr_type_helper!(@from_attr $attr_ty, attr))
         }
         $crate::define_op!(@gen_attr_accessors $($rest)*);
@@ -1176,7 +1232,7 @@ macro_rules! define_op {
     (@validate_attrs $op:ident, $db:ident,) => {};
     (@validate_attrs $op:ident, $db:ident, { $attr:ident } $($rest:tt)*) => {
         {
-            let key = $crate::Symbol::new($crate::strip_raw_prefix(stringify!($attr)));
+            let key = $crate::Symbol::new($crate::raw_ident_str!($attr));
             if !$op.attributes($db).contains_key(&key) {
                 return Err($crate::ConversionError::MissingAttribute(stringify!($attr)));
             }
@@ -1185,7 +1241,7 @@ macro_rules! define_op {
     };
     (@validate_attrs $op:ident, $db:ident, { $attr:ident : $attr_ty:ident } $($rest:tt)*) => {
         {
-            let key = $crate::Symbol::new($crate::strip_raw_prefix(stringify!($attr)));
+            let key = $crate::Symbol::new($crate::raw_ident_str!($attr));
             if !$op.attributes($db).contains_key(&key) {
                 return Err($crate::ConversionError::MissingAttribute(stringify!($attr)));
             }
@@ -1243,14 +1299,14 @@ macro_rules! define_type {
                     let mut attrs = std::collections::BTreeMap::new();
                     $(
                         attrs.insert(
-                            $crate::Symbol::new($crate::strip_raw_prefix(stringify!($attr))),
+                            $crate::Symbol::new($crate::raw_ident_str!($attr)),
                             $crate::define_type!(@to_attr $attr_ty, $attr),
                         );
                     )*
                     Self($crate::Type::new(
                         db,
-                        $crate::Symbol::new($crate::strip_raw_prefix(stringify!($dialect))),
-                        $crate::Symbol::new($crate::strip_raw_prefix(stringify!($ty))),
+                        $crate::Symbol::new($crate::raw_ident_str!($dialect)),
+                        $crate::Symbol::new($crate::raw_ident_str!($ty)),
                         $crate::idvec![$($param),*],
                         attrs,
                     ))
@@ -1265,7 +1321,7 @@ macro_rules! define_type {
                     pub fn [<$attr:snake _sym>]() -> Symbol {
                         static CELL: std::sync::OnceLock<$crate::Symbol> = std::sync::OnceLock::new();
                         *CELL.get_or_init(|| {
-                            Symbol::new($crate::strip_raw_prefix(stringify!($attr)))
+                            Symbol::new($crate::raw_ident_str!($attr))
                         })
                     }
 
@@ -1291,8 +1347,8 @@ macro_rules! define_type {
                 }
 
                 fn from_type(db: &'db dyn salsa::Database, ty: $crate::Type<'db>) -> Option<Self> {
-                    if ty.dialect(db) == $crate::Symbol::new($crate::strip_raw_prefix(stringify!($dialect)))
-                        && ty.name(db) == $crate::Symbol::new($crate::strip_raw_prefix(stringify!($ty)))
+                    if ty.dialect(db) == $crate::Symbol::new($crate::raw_ident_str!($dialect))
+                        && ty.name(db) == $crate::Symbol::new($crate::raw_ident_str!($ty))
                     {
                         Some(Self(ty))
                     } else {
@@ -1328,14 +1384,14 @@ macro_rules! define_type {
                     let mut attrs = std::collections::BTreeMap::new();
                     $(
                         attrs.insert(
-                            $crate::Symbol::new($crate::strip_raw_prefix(stringify!($attr))),
+                            $crate::Symbol::new($crate::raw_ident_str!($attr)),
                             $crate::define_type!(@to_attr $attr_ty, $attr),
                         );
                     )*
                     Self($crate::Type::new(
                         db,
-                        $crate::Symbol::new($crate::strip_raw_prefix(stringify!($dialect))),
-                        $crate::Symbol::new($crate::strip_raw_prefix(stringify!($ty))),
+                        $crate::Symbol::new($crate::raw_ident_str!($dialect)),
+                        $crate::Symbol::new($crate::raw_ident_str!($ty)),
                         $variadic,
                         attrs,
                     ))
@@ -1353,7 +1409,7 @@ macro_rules! define_type {
                     pub fn [<$attr:snake _sym>]() -> Symbol {
                         static CELL: std::sync::OnceLock<$crate::Symbol> = std::sync::OnceLock::new();
                         *CELL.get_or_init(|| {
-                            Symbol::new($crate::strip_raw_prefix(stringify!($attr)))
+                            Symbol::new($crate::raw_ident_str!($attr))
                         })
                     }
 
@@ -1379,8 +1435,8 @@ macro_rules! define_type {
                 }
 
                 fn from_type(db: &'db dyn salsa::Database, ty: $crate::Type<'db>) -> Option<Self> {
-                    if ty.dialect(db) == $crate::Symbol::new($crate::strip_raw_prefix(stringify!($dialect)))
-                        && ty.name(db) == $crate::Symbol::new($crate::strip_raw_prefix(stringify!($ty)))
+                    if ty.dialect(db) == $crate::Symbol::new($crate::raw_ident_str!($dialect))
+                        && ty.name(db) == $crate::Symbol::new($crate::raw_ident_str!($ty))
                     {
                         Some(Self(ty))
                     } else {

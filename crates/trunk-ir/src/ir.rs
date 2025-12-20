@@ -69,12 +69,11 @@ impl From<&'static str> for Symbol {
     }
 }
 
-/// Helper macro for declaring multiple lazy static symbols at once.
+/// Helper macro for declaring multiple symbol helpers at once.
 ///
 /// # Example
 /// ```
 /// use trunk_ir::symbols;
-/// use std::sync::LazyLock;
 ///
 /// symbols! {
 ///     ATTR_NAME => "name",
@@ -88,8 +87,11 @@ macro_rules! symbols {
     ($($(#[$attr:meta])* $name:ident => $text:literal),* $(,)?) => {
         $(
             $(#[$attr])*
-            pub static $name: std::sync::LazyLock<$crate::Symbol> =
-                std::sync::LazyLock::new(|| $crate::Symbol::new($text));
+            #[allow(non_snake_case)]
+            #[inline]
+            pub fn $name() -> $crate::Symbol {
+                $crate::Symbol::new($text)
+            }
         )*
     };
 }
