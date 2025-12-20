@@ -98,7 +98,7 @@ use crate::type_interface::Printable;
 // src.type -> "Name" or "Name(params...)"
 inventory::submit! {
     Printable::implement("src", "type", |db, ty, f| {
-        let Some(Attribute::Symbol(name)) = ty.get_attr(db, "name") else {
+        let Some(Attribute::Symbol(name)) = ty.get_attr(db, Type::name_sym()) else {
             return f.write_str("?unresolved");
         };
 

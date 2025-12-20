@@ -160,7 +160,7 @@ pub trait DialectOp<'db>: Sized + Copy {
 ///
 /// Types generate wrapper structs with `new()` constructors and `DialectType` impl:
 /// ```
-/// # use trunk_ir::dialect;
+/// # use trunk_ir::{dialect, Symbol};
 /// dialect! {
 ///     mod core {
 ///         /// Tuple cons cell.
@@ -181,7 +181,7 @@ macro_rules! dialect {
     // Entry point - generate _NAME static and parse body
     (mod $dialect:ident { $($body:tt)* }) => {
         // Generate _NAME static (cached dialect name, shared by all operations)
-        pub static _NAME: std::sync::LazyLock<$crate::Symbol> =
+        pub static DIALECT_NAME: std::sync::LazyLock<$crate::Symbol> =
             std::sync::LazyLock::new(|| $crate::Symbol::new($crate::strip_raw_prefix(stringify!($dialect))));
 
         $crate::dialect!(@parse $dialect [$($body)*]);
@@ -224,6 +224,12 @@ macro_rules! dialect {
          type $ty:ident $(($($params:ident),* $(,)?))?;
          $($rest:tt)*]
     ) => {
+        // Generate type-specific static (cached type name)
+        $crate::paste::paste! {
+            pub static [<$ty:upper>]: std::sync::LazyLock<$crate::Symbol> =
+                std::sync::LazyLock::new(|| $crate::Symbol::new($crate::strip_raw_prefix(stringify!($ty))));
+        }
+
         $crate::define_type! {
             doc: [$($doc),*],
             dialect: $dialect,
@@ -241,6 +247,12 @@ macro_rules! dialect {
          type $ty:ident(#[rest] $variadic:ident);
          $($rest:tt)*]
     ) => {
+        // Generate type-specific static (cached type name)
+        $crate::paste::paste! {
+            pub static [<$ty:upper>]: std::sync::LazyLock<$crate::Symbol> =
+                std::sync::LazyLock::new(|| $crate::Symbol::new($crate::strip_raw_prefix(stringify!($ty))));
+        }
+
         $crate::define_type! {
             @variadic
             doc: [$($doc),*],
@@ -758,7 +770,7 @@ macro_rules! define_op {
                     op: $crate::Operation<'db>,
                 ) -> Result<Self, $crate::ConversionError> {
                     // Use cached symbols (lazy-initialized, no write lock after first access)
-                    if op.dialect(db) != *_NAME || op.name(db) != *[<$op:upper>] {
+                    if op.dialect(db) != *DIALECT_NAME || op.name(db) != *[<$op:upper>] {
                         return Err($crate::ConversionError::WrongOperation {
                             expected: concat!(stringify!($dialect), ".", stringify!($op)),
                             actual: op.full_name(db),
@@ -1250,8 +1262,16 @@ macro_rules! define_type {
                 // Attribute accessors
                 $(
                     #[allow(dead_code)]
+                    pub fn [<$attr:snake _sym>]() -> Symbol {
+                        static CELL: std::sync::OnceLock<$crate::Symbol> = std::sync::OnceLock::new();
+                        *CELL.get_or_init(|| {
+                            Symbol::new($crate::strip_raw_prefix(stringify!($attr)))
+                        })
+                    }
+
+                    #[allow(dead_code)]
                     pub fn $attr(&self, db: &'db dyn salsa::Database) -> $crate::define_type!(@rust_type $attr_ty) {
-                        let attr = self.0.get_attr(db, $crate::strip_raw_prefix(stringify!($attr)))
+                        let attr = self.0.get_attr(db, Self::[<$attr:snake _sym>]())
                             .expect(concat!("missing attribute: ", stringify!($attr)));
                         $crate::define_type!(@from_attr $attr_ty, attr)
                     }
@@ -1330,8 +1350,16 @@ macro_rules! define_type {
                 // Attribute accessors
                 $(
                     #[allow(dead_code)]
+                    pub fn [<$attr:snake _sym>]() -> Symbol {
+                        static CELL: std::sync::OnceLock<$crate::Symbol> = std::sync::OnceLock::new();
+                        *CELL.get_or_init(|| {
+                            Symbol::new($crate::strip_raw_prefix(stringify!($attr)))
+                        })
+                    }
+
+                    #[allow(dead_code)]
                     pub fn $attr(&self, db: &'db dyn salsa::Database) -> $crate::define_type!(@rust_type $attr_ty) {
-                        let attr = self.0.get_attr(db, $crate::strip_raw_prefix(stringify!($attr)))
+                        let attr = self.0.get_attr(db, Self::[<$attr:snake _sym>]())
                             .expect(concat!("missing attribute: ", stringify!($attr)));
                         $crate::define_type!(@from_attr $attr_ty, attr)
                     }

@@ -199,7 +199,7 @@ fn collect_definition<'db>(
     let op_name = op.name(db);
 
     match (dialect, op_name) {
-        (d, n) if d == *func::_NAME && n == *func::FUNC => {
+        (d, n) if d == *func::DIALECT_NAME && n == *func::FUNC => {
             // Function definition
             let attrs = op.attributes(db);
 
@@ -210,7 +210,7 @@ fn collect_definition<'db>(
                 env.add_function(*sym, path, *ty);
             }
         }
-        (d, n) if d == *ty::_NAME && n == *ty::STRUCT => {
+        (d, n) if d == *ty::DIALECT_NAME && n == *ty::STRUCT => {
             // Struct definition → creates constructor
             let attrs = op.attributes(db);
 
@@ -224,7 +224,7 @@ fn collect_definition<'db>(
                 env.add_constructor(*sym, *ty, None, IdVec::new());
             }
         }
-        (d, n) if d == *ty::_NAME && n == *ty::ENUM => {
+        (d, n) if d == *ty::DIALECT_NAME && n == *ty::ENUM => {
             // Enum definition → creates constructors for each variant
             let attrs = op.attributes(db);
 
@@ -238,7 +238,7 @@ fn collect_definition<'db>(
                 collect_enum_constructors(db, env, op, *sym, *ty);
             }
         }
-        (d, n) if d == *core::_NAME && n == *core::MODULE => {
+        (d, n) if d == *core::DIALECT_NAME && n == *core::MODULE => {
             // Nested module → collect definitions into a namespace
             let attrs = op.attributes(db);
 
@@ -474,8 +474,8 @@ impl<'db> Resolver<'db> {
         // Check if this is an unresolved type (src.type)
         if ty.dialect(self.db) == "src" && ty.name(self.db) == "type" {
             // Get the type name from the name attribute (stored as Symbol)
-            if let Some(Attribute::Symbol(name_sym)) = ty.get_attr(self.db, "name") {
-                return self.resolve_type_name(&name_sym.to_string());
+            if let Some(Attribute::Symbol(name_sym)) = ty.get_attr(self.db, src::Type::name_sym()) {
+                return self.resolve_type_name(*name_sym);
             }
         }
 
@@ -501,8 +501,9 @@ impl<'db> Resolver<'db> {
     }
 
     /// Resolve a type name to a concrete type.
-    fn resolve_type_name(&self, name: &str) -> Type<'db> {
-        match name {
+    fn resolve_type_name(&self, name: Symbol) -> Type<'db> {
+        let name_str = name.to_string();
+        match &*name_str {
             // Primitive types
             "Int" => *core::I64::new(self.db),
             "Bool" => *core::I1::new(self.db),
@@ -510,11 +511,9 @@ impl<'db> Resolver<'db> {
             "Nat" => *core::I64::new(self.db), // Nat is implemented as i64 for now
             "String" => *core::String::new(self.db),
             "Bytes" => *core::Bytes::new(self.db),
-
-            // Look up user-defined types in the environment
             _ => {
-                let name_sym = Symbol::new(name);
-                if let Some(binding) = self.lookup_binding(name_sym) {
+                // Look up user-defined types in the environment
+                if let Some(binding) = self.lookup_binding(name) {
                     match binding {
                         Binding::TypeDef { ty } => return *ty,
                         Binding::Module {
@@ -527,8 +526,8 @@ impl<'db> Resolver<'db> {
                 // Leave unresolved - will be caught by type checker
                 Type::new(
                     self.db,
-                    *src::_NAME,
-                    Symbol::new("type"),
+                    *src::DIALECT_NAME,
+                    *src::TYPE,
                     IdVec::new(),
                     Attrs::new(),
                 )
@@ -651,15 +650,15 @@ impl<'db> Resolver<'db> {
         let op_name = remapped_op.name(self.db);
 
         match (dialect, op_name) {
-            (d, n) if d == *func::_NAME && n == *func::FUNC => {
+            (d, n) if d == *func::DIALECT_NAME && n == *func::FUNC => {
                 // Handle function with local scope for parameters
                 vec![self.resolve_func(&remapped_op)]
             }
-            (d, n) if d == *src::_NAME && n == *src::USE => {
+            (d, n) if d == *src::DIALECT_NAME && n == *src::USE => {
                 self.apply_use(&remapped_op);
                 Vec::new()
             }
-            (d, n) if d == *src::_NAME && n == *src::VAR => {
+            (d, n) if d == *src::DIALECT_NAME && n == *src::VAR => {
                 if let Some(resolved) = self.try_resolve_var(&remapped_op) {
                     resolved
                 } else {
@@ -670,9 +669,9 @@ impl<'db> Resolver<'db> {
                     // - Concrete types (core.*, adt.*): Already resolved local var
                     let is_already_resolved =
                         remapped_op.results(self.db).first().is_some_and(|ty| {
-                            let dialect = ty.dialect(self.db).to_string();
                             // Type is resolved if it's not a source type placeholder and not a type variable
-                            dialect != "src" && dialect != "type"
+                            let dialect = ty.dialect(self.db);
+                            dialect != *src::DIALECT_NAME && dialect != *ty::DIALECT_NAME
                         });
 
                     let is_resolved_local = self.is_marked_resolved_local(&remapped_op);
@@ -682,7 +681,7 @@ impl<'db> Resolver<'db> {
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
-            (d, n) if d == *src::_NAME && n == *src::PATH => {
+            (d, n) if d == *src::DIALECT_NAME && n == *src::PATH => {
                 if let Some(resolved) = self.try_resolve_path(&remapped_op) {
                     vec![resolved]
                 } else {
@@ -693,7 +692,7 @@ impl<'db> Resolver<'db> {
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
-            (d, n) if d == *src::_NAME && n == *src::CALL => {
+            (d, n) if d == *src::DIALECT_NAME && n == *src::CALL => {
                 if let Some(resolved) = self.try_resolve_call(&remapped_op) {
                     vec![resolved]
                 } else {
@@ -704,13 +703,13 @@ impl<'db> Resolver<'db> {
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
-            (d, n) if d == *core::_NAME && n == *core::MODULE => {
+            (d, n) if d == *core::DIALECT_NAME && n == *core::MODULE => {
                 self.push_import_scope();
                 let resolved = self.resolve_op_regions(&remapped_op);
                 self.pop_import_scope();
                 vec![resolved]
             }
-            (d, n) if d == *case::_NAME && n == *case::ARM => {
+            (d, n) if d == *case::DIALECT_NAME && n == *case::ARM => {
                 // Handle case arm with pattern bindings
                 vec![self.resolve_case_arm(&remapped_op)]
             }
@@ -799,7 +798,7 @@ impl<'db> Resolver<'db> {
         let op_name = op.name(self.db);
 
         match (dialect, op_name) {
-            (d, n) if d == *pat::_NAME && n == *pat::BIND => {
+            (d, n) if d == *pat::DIALECT_NAME && n == *pat::BIND => {
                 // pat.bind has a "name" attribute
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&*ATTR_NAME) {
@@ -809,7 +808,7 @@ impl<'db> Resolver<'db> {
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
                 }
             }
-            (d, n) if d == *pat::_NAME && n == *pat::AS_PAT => {
+            (d, n) if d == *pat::DIALECT_NAME && n == *pat::AS_PAT => {
                 // pat.as_pat has a "name" attribute and an inner pattern region
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&*ATTR_NAME) {
@@ -822,7 +821,7 @@ impl<'db> Resolver<'db> {
                     self.collect_pattern_bindings(region);
                 }
             }
-            (d, n) if d == *pat::_NAME && n == *pat::LIST_REST => {
+            (d, n) if d == *pat::DIALECT_NAME && n == *pat::LIST_REST => {
                 // pat.list_rest has a "rest_name" attribute
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&*ATTR_REST_NAME) {

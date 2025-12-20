@@ -211,7 +211,7 @@ impl<'db> TypeChecker<'db> {
 
         // Dispatch by dialect first, then by operation name
         // Use cached static symbols to avoid interner write locks
-        if dialect == *func::_NAME {
+        if dialect == *func::DIALECT_NAME {
             if name == *func::FUNC {
                 self.check_func_def(op);
             } else if name == *func::RETURN {
@@ -225,7 +225,7 @@ impl<'db> TypeChecker<'db> {
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == *arith::_NAME {
+        } else if dialect == *arith::DIALECT_NAME {
             if name == *arith::CONST {
                 self.check_arith_const(op);
             } else if name == *arith::ADD
@@ -247,7 +247,7 @@ impl<'db> TypeChecker<'db> {
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == *src::_NAME {
+        } else if dialect == *src::DIALECT_NAME {
             if name == *src::VAR {
                 self.check_src_var(op);
             } else if name == *src::CALL {
@@ -267,25 +267,25 @@ impl<'db> TypeChecker<'db> {
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == *adt::_NAME {
+        } else if dialect == *adt::DIALECT_NAME {
             if name == *adt::STRING_CONST {
                 self.check_string_const(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == *list::_NAME {
+        } else if dialect == *list::DIALECT_NAME {
             if name == *list::NEW {
                 self.check_list_new(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == *case::_NAME {
+        } else if dialect == *case::DIALECT_NAME {
             if name == *case::CASE {
                 self.check_case(op);
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == *ability::_NAME {
+        } else if dialect == *ability::DIALECT_NAME {
             if name == *ability::PERFORM {
                 self.check_ability_perform(op);
             } else if name == *ability::PROMPT {
@@ -297,14 +297,14 @@ impl<'db> TypeChecker<'db> {
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == *ty::_NAME {
+        } else if dialect == *ty::DIALECT_NAME {
             // Type declarations (struct, enum, ability) don't need type checking
             if name == *ty::STRUCT || name == *ty::ENUM || name == *ty::ABILITY {
                 // No-op
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == *core::_NAME {
+        } else if dialect == *core::DIALECT_NAME {
             if name == *core::MODULE {
                 // Module is checked via check_module
             } else if name == *core::UNREALIZED_CONVERSION_CAST {
@@ -634,7 +634,8 @@ impl<'db> TypeChecker<'db> {
             // Look for case.arm operations in the region
             for block in region.blocks(self.db).iter() {
                 for arm_op in block.operations(self.db).iter() {
-                    if arm_op.dialect(self.db) == *case::_NAME && arm_op.name(self.db) == *case::ARM
+                    if arm_op.dialect(self.db) == *case::DIALECT_NAME
+                        && arm_op.name(self.db) == *case::ARM
                     {
                         // Extract handled abilities from the pattern region
                         let arm_regions = arm_op.regions(self.db);
@@ -672,7 +673,9 @@ impl<'db> TypeChecker<'db> {
         for block in pattern_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
                 // Check for pat.handler_suspend
-                if op.dialect(self.db) == *pat::_NAME && op.name(self.db) == *pat::HANDLER_SUSPEND {
+                if op.dialect(self.db) == *pat::DIALECT_NAME
+                    && op.name(self.db) == *pat::HANDLER_SUSPEND
+                {
                     // Extract ability reference from attributes
                     let attrs = op.attributes(self.db);
                     if let Some(Attribute::SymbolRef(ability_path)) =
@@ -942,7 +945,7 @@ pub fn typecheck_module_per_function<'db>(
     let block = &blocks[0];
     let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
     for op in block.operations(db).iter() {
-        if op.dialect(db) == *func::_NAME && op.name(db) == *func::FUNC {
+        if op.dialect(db) == *func::DIALECT_NAME && op.name(db) == *func::FUNC {
             // Validate type annotations for top-level functions
             if let Ok(func_op) = func::Func::from_operation(db, *op) {
                 validate_toplevel_function_types(db, &func_op);

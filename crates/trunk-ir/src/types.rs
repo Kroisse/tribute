@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{IdVec, Span, Symbol, SymbolVec};
+use crate::{IdVec, Span, Symbol, SymbolVec, dialect::core};
 
 /// Trait for dialect-specific type wrappers.
 ///
@@ -35,13 +35,13 @@ pub struct Type<'db> {
 
 impl<'db> Type<'db> {
     /// Check if this type matches the given dialect and name.
-    pub fn is_dialect(&self, db: &'db dyn salsa::Database, dialect: &str, name: &str) -> bool {
-        self.dialect(db) == Symbol::new(dialect) && self.name(db) == Symbol::new(name)
+    pub fn is_dialect(&self, db: &'db dyn salsa::Database, dialect: Symbol, name: Symbol) -> bool {
+        self.dialect(db) == dialect && self.name(db) == name
     }
 
     /// Check if this is a function type (`core.func`).
     pub fn is_function(&self, db: &'db dyn salsa::Database) -> bool {
-        self.is_dialect(db, "core", "func")
+        self.is_dialect(db, *core::DIALECT_NAME, *core::FUNC)
     }
 
     /// Get function parameter types if this is a function type.
@@ -71,15 +71,15 @@ impl<'db> Type<'db> {
         if !self.is_function(db) {
             return None;
         }
-        match self.get_attr(db, "effect") {
+        match self.get_attr(db, core::Func::effect_sym()) {
             Some(Attribute::Type(ty)) => Some(*ty),
             _ => None,
         }
     }
 
     /// Get an attribute by key.
-    pub fn get_attr(&self, db: &'db dyn salsa::Database, key: &str) -> Option<&Attribute<'db>> {
-        self.attrs(db).get(&Symbol::new(key))
+    pub fn get_attr(&self, db: &'db dyn salsa::Database, key: Symbol) -> Option<&Attribute<'db>> {
+        self.attrs(db).get(&key)
     }
 }
 
