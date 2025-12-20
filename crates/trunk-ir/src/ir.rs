@@ -46,6 +46,31 @@ impl From<&str> for Symbol {
     }
 }
 
+/// Helper macro for declaring multiple lazy static symbols at once.
+///
+/// # Example
+/// ```
+/// use trunk_ir::symbols;
+/// use std::sync::LazyLock;
+///
+/// symbols! {
+///     ATTR_NAME => "name",
+///     ATTR_TYPE => "type",
+///     #[allow(dead_code)]
+///     ATTR_UNUSED => "unused",
+/// }
+/// ```
+#[macro_export]
+macro_rules! symbols {
+    ($($(#[$attr:meta])* $name:ident => $text:expr),* $(,)?) => {
+        $(
+            $(#[$attr])*
+            static $name: std::sync::LazyLock<$crate::Symbol> =
+                std::sync::LazyLock::new(|| $crate::Symbol::new($text));
+        )*
+    };
+}
+
 // Convenient comparison with &str
 impl PartialEq<str> for Symbol {
     fn eq(&self, other: &str) -> bool {

@@ -18,7 +18,6 @@
 //! This module handles phase 1. UFCS resolution happens during type checking.
 
 use std::collections::HashMap;
-use std::sync::LazyLock;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
@@ -37,19 +36,21 @@ use trunk_ir::{
 // Cached Attribute Keys (hot path optimization)
 // =============================================================================
 
-/// Cached symbols for frequently-used attribute keys.
-/// These are used in hot paths (resolve_operation, collect_definitions, etc.)
-/// to avoid interner write locks.
-static ATTR_NAME: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("name"));
-static ATTR_TYPE: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("type"));
-static ATTR_PATH: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("path"));
-static ATTR_SYM_NAME: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("sym_name"));
-static ATTR_VARIANTS: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("variants"));
-static ATTR_ALIAS: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("alias"));
-#[allow(dead_code)] // Used in test helpers
-static ATTR_CALLEE: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("callee"));
-static ATTR_REST_NAME: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("rest_name"));
-static ATTR_RESOLVED_LOCAL: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("resolved_local"));
+// Cached symbols for frequently-used attribute keys.
+// These are used in hot paths (resolve_operation, collect_definitions, etc.)
+// to avoid interner write locks.
+trunk_ir::symbols! {
+    ATTR_NAME => "name",
+    ATTR_TYPE => "type",
+    ATTR_PATH => "path",
+    ATTR_SYM_NAME => "sym_name",
+    ATTR_VARIANTS => "variants",
+    ATTR_ALIAS => "alias",
+    #[allow(dead_code)] // Used in test helpers
+    ATTR_CALLEE => "callee",
+    ATTR_REST_NAME => "rest_name",
+    ATTR_RESOLVED_LOCAL => "resolved_local",
+}
 
 // =============================================================================
 // Module Environment
