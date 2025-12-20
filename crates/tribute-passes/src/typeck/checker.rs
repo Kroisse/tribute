@@ -11,7 +11,6 @@
 //! then solved by the [`TypeSolver`].
 
 use std::collections::HashMap;
-use std::sync::LazyLock;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
@@ -20,8 +19,10 @@ use trunk_ir::{
     dialect::{ability, adt, arith, case, core, func, list, pat, src, ty},
 };
 
-/// Common symbol for "unknown" - used as fallback in error cases.
-static UNKNOWN: LazyLock<Symbol> = LazyLock::new(|| Symbol::new("unknown"));
+/// Get the "unknown" symbol - used as fallback in error cases.
+fn unknown_sym() -> Symbol {
+    Symbol::new("unknown")
+}
 
 use super::constraint::ConstraintSet;
 use super::effect_row::{AbilityRef, EffectRow, RowVar};
@@ -682,7 +683,7 @@ impl<'db> TypeChecker<'db> {
                         attrs.get(&Symbol::new("ability_ref"))
                     {
                         // Extract ability name from path
-                        let ability_name = ability_path.last().copied().unwrap_or(*UNKNOWN);
+                        let ability_name = ability_path.last().copied().unwrap_or(unknown_sym());
 
                         let ability = AbilityRef::simple(ability_name);
                         if !handled.contains(&ability) {
@@ -713,7 +714,7 @@ impl<'db> TypeChecker<'db> {
             op.attributes(self.db).get(&Symbol::new("ability_ref"))
         {
             // Extract ability name from the path (last component)
-            let ability_name = ability_path.last().copied().unwrap_or(*UNKNOWN);
+            let ability_name = ability_path.last().copied().unwrap_or(unknown_sym());
 
             // Create ability reference (with no type params for now)
             // TODO: Extract type parameters from the ability definition
