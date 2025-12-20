@@ -28,7 +28,7 @@ pub struct ApplyResult<'db> {
 ///
 /// ```
 /// # use salsa::Database;
-/// # use trunk_ir::test_db::TestDatabase;
+/// # use salsa::DatabaseImpl;
 /// # use trunk_ir::{Block, Location, Operation, PathId, Region, Span, Symbol, idvec};
 /// # use trunk_ir::dialect::core::Module;
 /// use trunk_ir::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
@@ -66,7 +66,7 @@ pub struct ApplyResult<'db> {
 /// #     let result = applicator.apply(db, module);
 /// #     result.reached_fixpoint
 /// # }
-/// # TestDatabase::default().attach(|db| {
+/// # DatabaseImpl::default().attach(|db| {
 /// #     let module = make_module(db);
 /// let reached = apply_rename(db, module);
 /// assert!(reached);
@@ -271,9 +271,9 @@ impl Default for PatternApplicator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_db::TestDatabase;
     use crate::{Attribute, Location, PathId, Span, idvec};
     use salsa::Database;
+    use salsa::DatabaseImpl;
 
     /// A simple test pattern that rewrites `test.source` → `test.target`.
     struct TestRenamePattern;
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_pattern_applicator_basic() {
-        TestDatabase::default().attach(|db| {
+        DatabaseImpl::default().attach(|db| {
             let module = make_source_module(db);
             let (reached_fixpoint, total_changes, _iterations, op_name) =
                 apply_rename_pattern(db, module);
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_pattern_applicator_no_match() {
-        TestDatabase::default().attach(|db| {
+        DatabaseImpl::default().attach(|db| {
             let module = make_other_module(db);
             let (reached_fixpoint, total_changes, iterations, _op_name) =
                 apply_rename_pattern(db, module);

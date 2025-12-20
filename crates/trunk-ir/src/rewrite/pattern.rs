@@ -18,7 +18,7 @@ use super::result::RewriteResult;
 ///
 /// ```
 /// # use salsa::Database;
-/// # use trunk_ir::test_db::TestDatabase;
+/// # use salsa::DatabaseImpl;
 /// # use trunk_ir::{Location, Operation, PathId, Span};
 /// use trunk_ir::rewrite::{RewriteContext, RewritePattern, RewriteResult};
 ///
@@ -53,7 +53,7 @@ use super::result::RewriteResult;
 /// #         _ => "unchanged".to_string(),
 /// #     }
 /// # }
-/// # TestDatabase::default().attach(|db| {
+/// # DatabaseImpl::default().attach(|db| {
 /// #     let op = make_op(db);
 /// #     let result = rewrite_once(db, op);
 /// #     assert_eq!(result, "test.target");

@@ -16,7 +16,7 @@
 //!
 //! ```
 //! # use salsa::Database;
-//! # use trunk_ir::test_db::TestDatabase;
+//! # use salsa::DatabaseImpl;
 //! # use trunk_ir::{Block, Location, Operation, PathId, Region, Span, Symbol, idvec};
 //! # use trunk_ir::dialect::core::Module;
 //! use trunk_ir::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
@@ -54,7 +54,7 @@
 //! #     let result = applicator.apply(db, module);
 //! #     result.reached_fixpoint
 //! # }
-//! # TestDatabase::default().attach(|db| {
+//! # DatabaseImpl::default().attach(|db| {
 //! #     let module = make_module(db);
 //! let reached = apply_rename(db, module);
 //! assert!(reached);

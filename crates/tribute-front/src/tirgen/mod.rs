@@ -147,20 +147,11 @@ mod tests {
     use trunk_ir::DialectOp;
     use trunk_ir::dialect::{func, src};
 
-    #[salsa::db]
-    #[derive(Default, Clone)]
-    struct TestDb {
-        storage: salsa::Storage<Self>,
-    }
-
-    #[salsa::db]
-    impl salsa::Database for TestDb {}
-
-    fn lower_and_get_module<'db>(db: &'db TestDb, source: &str) -> core::Module<'db> {
+    fn lower_and_get_module<'db>(db: &'db salsa::DatabaseImpl, source: &str) -> core::Module<'db> {
         lower_from_tree(db, source)
     }
 
-    fn lower_from_tree<'db>(db: &'db TestDb, source: &str) -> core::Module<'db> {
+    fn lower_from_tree<'db>(db: &'db salsa::DatabaseImpl, source: &str) -> core::Module<'db> {
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
@@ -236,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_lower_source_cst_reuses_tree() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let module = lower_from_tree(&db, "fn main() { 42 }");
 
         let body_region = module.body(&db);
@@ -251,7 +242,7 @@ mod tests {
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
             .expect("Failed to set language");
 
-        let mut db = TestDb::default();
+        let mut db = salsa::DatabaseImpl::default();
         let tree = parser.parse("fn main() { 1 }", None).expect("tree");
         let source = SourceCst::from_path(&db, "test.trb", "fn main() { 1 }".into(), Some(tree));
 
@@ -261,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_simple_function() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = "fn main() { 42 }";
         let module = lower_and_get_module(&db, source);
 
@@ -280,7 +271,7 @@ mod tests {
 
     #[test]
     fn test_nat_literal() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = "fn main() { 123 }";
         let module = lower_and_get_module(&db, source);
 
@@ -292,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_binary_expression() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = "fn main() { 1 + 2 }";
         let module = lower_and_get_module(&db, source);
 
@@ -304,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_let_binding() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = "fn main() { let x = 10; x }";
         let module = lower_and_get_module(&db, source);
 
@@ -316,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_tuple_pattern() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = "fn main() { let #(a, b) = #(1, 2); a + b }";
         let module = lower_and_get_module(&db, source);
 
@@ -327,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_list_expression() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = "fn main() { [1, 2, 3] }";
         let module = lower_and_get_module(&db, source);
 
@@ -338,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_case_expression() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = r#"
             fn main() {
                 let x = 1;
@@ -358,7 +349,7 @@ mod tests {
 
     #[test]
     fn test_lambda_expression() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = "fn main() { fn(x) { x + 1 } }";
         let module = lower_and_get_module(&db, source);
 
@@ -369,7 +360,7 @@ mod tests {
 
     #[test]
     fn test_method_call() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = "fn main() { [1, 2, 3].len() }";
         let module = lower_and_get_module(&db, source);
 
@@ -380,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_string_literal() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = r#"fn main() { "hello" }"#;
         let module = lower_and_get_module(&db, source);
 
@@ -391,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_wildcard_pattern() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = "fn main() { let _ = 42; 0 }";
         let module = lower_and_get_module(&db, source);
 
@@ -402,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_struct_declaration() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = r#"
             struct Point {
                 x: Int,
@@ -423,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_enum_declaration() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = r#"
             enum Option(a) {
                 Some(a),
@@ -443,7 +434,7 @@ mod tests {
 
     #[test]
     fn test_const_declaration() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         // Test const declaration lowered to src.const
         // Note: uppercase identifiers like PI are parsed as type_identifier by the grammar
         // so we use lowercase for const names
@@ -465,7 +456,7 @@ mod tests {
 
     #[test]
     fn test_inline_module() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = r#"
             pub mod math {
                 pub fn add(x: Int, y: Int) -> Int {
@@ -506,7 +497,7 @@ mod tests {
 
     #[test]
     fn test_nested_modules() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let source = r#"
             pub mod outer {
                 pub mod inner {

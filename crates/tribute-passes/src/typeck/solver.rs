@@ -564,18 +564,9 @@ mod tests {
     use super::*;
     use trunk_ir::dialect::core;
 
-    #[salsa::db]
-    #[derive(Default, Clone)]
-    struct TestDb {
-        storage: salsa::Storage<Self>,
-    }
-
-    #[salsa::db]
-    impl salsa::Database for TestDb {}
-
     #[test]
     fn test_unify_same_type() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let mut solver = TypeSolver::new(&db);
 
         let i64_ty = *core::I64::new(&db);
@@ -585,7 +576,7 @@ mod tests {
 
     #[test]
     fn test_unify_type_var() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let mut solver = TypeSolver::new(&db);
 
         let var = ty::var_with_id(&db, 0);
@@ -600,7 +591,7 @@ mod tests {
 
     #[test]
     fn test_unify_different_types() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let mut solver = TypeSolver::new(&db);
 
         let i64_ty = *core::I64::new(&db);
@@ -612,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_empty_row_unification() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let mut solver = TypeSolver::new(&db);
 
         let r1 = EffectRow::empty();
@@ -624,7 +615,7 @@ mod tests {
 
     #[test]
     fn test_row_var_unification() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let mut solver = TypeSolver::new(&db);
 
         let var = solver.fresh_row_var();

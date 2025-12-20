@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```
-//! # use trunk_ir::test_db::TestDatabase;
+//! # use salsa::DatabaseImpl;
 //! # use std::collections::BTreeMap;
 //! # use trunk_ir::{IdVec, Symbol, Type};
 //! # use trunk_ir::type_interface::Printable;
@@ -25,7 +25,7 @@
 //!     })
 //! }
 //!
-//! # let db = TestDatabase::default();
+//! # let db = DatabaseImpl::default();
 //! # let some_type = Type::new(
 //! #     &db,
 //! #     Symbol::new("foobar"),

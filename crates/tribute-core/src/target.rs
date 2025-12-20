@@ -83,18 +83,9 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
-    #[salsa::db]
-    #[derive(Default, Clone)]
-    struct TestDb {
-        storage: salsa::Storage<Self>,
-    }
-
-    #[salsa::db]
-    impl salsa::Database for TestDb {}
-
     #[test]
     fn test_host_target() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let target = TargetInfo::host(&db);
 
         // Should have reasonable values
@@ -105,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_x86_64_target() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let triple = Triple::from_str("x86_64-unknown-linux-gnu").unwrap();
         let target = TargetInfo::from_triple(&db, triple);
 
@@ -119,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_i386_target() {
-        let db = TestDb::default();
+        let db = salsa::DatabaseImpl::default();
         let triple = Triple::from_str("i386-unknown-linux-gnu").unwrap();
         let target = TargetInfo::from_triple(&db, triple);
 

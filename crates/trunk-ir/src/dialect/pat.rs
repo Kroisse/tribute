@@ -137,7 +137,7 @@ dialect! {
 ///
 /// ```
 /// # use salsa::Database;
-/// # use trunk_ir::test_db::TestDatabase;
+/// # use salsa::DatabaseImpl;
 /// # use trunk_ir::{Location, PathId, Region, Span};
 /// # use trunk_ir::dialect::pat::helpers;
 /// # #[salsa::tracked]
@@ -146,7 +146,7 @@ dialect! {
 /// #     let location = Location::new(path, Span::new(0, 0));
 ///       helpers::wildcard_region(db, location)
 /// # }
-/// # TestDatabase::default().attach(|db| {
+/// # DatabaseImpl::default().attach(|db| {
 /// #     let pattern = build_pattern(db);
 /// #     let _ = pattern;
 /// # });
