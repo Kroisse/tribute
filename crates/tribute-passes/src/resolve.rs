@@ -1310,7 +1310,7 @@ pub fn resolve_module<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use salsa::Database;
+    use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::{arith, core, func, src};
     use trunk_ir::{Location, PathId, Span, SymbolVec, idvec};
 
@@ -1474,105 +1474,95 @@ mod tests {
         assert!(env.lookup(Symbol::new("foo")).is_none());
     }
 
-    #[test]
-    fn test_build_env_from_module() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            let module = module_with_hello(db);
-            let env = build_env(db, &module);
+    #[salsa_test]
+    fn test_build_env_from_module(db: &salsa::DatabaseImpl) {
+        let module = module_with_hello(db);
+        let env = build_env(db, &module);
 
-            // Should find the 'hello' function
-            assert!(env.lookup(Symbol::new("hello")).is_some());
-            match env.lookup(Symbol::new("hello")) {
-                Some(Binding::Function { path, .. }) => {
-                    assert_eq!(path.len(), 1);
-                }
-                _ => panic!("Expected function binding"),
+        // Should find the 'hello' function
+        assert!(env.lookup(Symbol::new("hello")).is_some());
+        match env.lookup(Symbol::new("hello")) {
+            Some(Binding::Function { path, .. }) => {
+                assert_eq!(path.len(), 1);
             }
-        });
+            _ => panic!("Expected function binding"),
+        }
     }
 
-    #[test]
-    fn test_nested_module_resolution() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            let module = module_with_nested_math(db);
-            let env = build_env(db, &module);
+    #[salsa_test]
+    fn test_nested_module_resolution(db: &salsa::DatabaseImpl) {
+        let module = module_with_nested_math(db);
+        let env = build_env(db, &module);
 
-            // Should find math::add and math::sub
-            assert!(
-                env.lookup_qualified(Symbol::new("math"), Symbol::new("add"))
-                    .is_some(),
-                "should find math::add"
-            );
-            assert!(
-                env.lookup_qualified(Symbol::new("math"), Symbol::new("sub"))
-                    .is_some(),
-                "should find math::sub"
-            );
+        // Should find math::add and math::sub
+        assert!(
+            env.lookup_qualified(Symbol::new("math"), Symbol::new("add"))
+                .is_some(),
+            "should find math::add"
+        );
+        assert!(
+            env.lookup_qualified(Symbol::new("math"), Symbol::new("sub"))
+                .is_some(),
+            "should find math::sub"
+        );
 
-            // Should not find 'add' at top level
-            assert!(
-                env.lookup(Symbol::new("add")).is_none(),
-                "add should not be at top level"
-            );
-        });
+        // Should not find 'add' at top level
+        assert!(
+            env.lookup(Symbol::new("add")).is_none(),
+            "add should not be at top level"
+        );
     }
 
-    #[test]
+    #[salsa_test]
     #[ignore = "TODO: Implement multi-level namespace support"]
-    fn test_deeply_nested_module_resolution() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            let module = module_with_outer_inner(db);
-            let env = build_env(db, &module);
+    fn test_deeply_nested_module_resolution(db: &salsa::DatabaseImpl) {
+        let module = module_with_outer_inner(db);
+        let env = build_env(db, &module);
 
-            // Should find outer::inner::deep
-            assert!(
-                env.lookup_qualified(Symbol::new("outer::inner"), Symbol::new("deep"))
-                    .is_some(),
-                "should find outer::inner::deep"
-            );
+        // Should find outer::inner::deep
+        assert!(
+            env.lookup_qualified(Symbol::new("outer::inner"), Symbol::new("deep"))
+                .is_some(),
+            "should find outer::inner::deep"
+        );
 
-            // Should find outer::inner as a module
-            // (inner is in outer's namespace)
-            // Note: We don't track modules as bindings yet, so this tests the qualified path
-        });
+        // Should find outer::inner as a module
+        // (inner is in outer's namespace)
+        // Note: We don't track modules as bindings yet, so this tests the qualified path
     }
 
-    #[test]
+    #[salsa_test]
     #[ignore = "TODO: Fix use import resolution"]
-    fn test_use_import_resolves_call() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            let module = resolve_use_call_module(db);
+    fn test_use_import_resolves_call(db: &salsa::DatabaseImpl) {
+        let module = resolve_use_call_module(db);
 
-            let mut ops = Vec::new();
-            collect_ops(db, &module.body(db), &mut ops);
+        let mut ops = Vec::new();
+        collect_ops(db, &module.body(db), &mut ops);
 
-            assert!(
-                !has_src_call_named(db, &ops, "double"),
-                "use import should resolve src.call to func.call"
-            );
-            assert!(
-                has_func_call_named(db, &ops, "double"),
-                "expected func.call to helpers::double"
-            );
-        });
+        assert!(
+            !has_src_call_named(db, &ops, "double"),
+            "use import should resolve src.call to func.call"
+        );
+        assert!(
+            has_func_call_named(db, &ops, "double"),
+            "expected func.call to helpers::double"
+        );
     }
 
-    #[test]
-    fn test_use_alias_resolves_call() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            let module = resolve_use_alias_module(db);
+    #[salsa_test]
+    fn test_use_alias_resolves_call(db: &salsa::DatabaseImpl) {
+        let module = resolve_use_alias_module(db);
 
-            let mut ops = Vec::new();
-            collect_ops(db, &module.body(db), &mut ops);
+        let mut ops = Vec::new();
+        collect_ops(db, &module.body(db), &mut ops);
 
-            assert!(
-                !has_src_call_named(db, &ops, "dbl"),
-                "use alias should resolve src.call to func.call"
-            );
-            assert!(
-                has_func_call_named(db, &ops, "double"),
-                "expected func.call to helpers::double"
-            );
-        });
+        assert!(
+            !has_src_call_named(db, &ops, "dbl"),
+            "use alias should resolve src.call to func.call"
+        );
+        assert!(
+            has_func_call_named(db, &ops, "double"),
+            "expected func.call to helpers::double"
+        );
     }
 }

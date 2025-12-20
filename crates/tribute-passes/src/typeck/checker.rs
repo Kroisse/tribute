@@ -969,7 +969,7 @@ pub fn typecheck_module_per_function<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use salsa::Database;
+    use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::arith;
     use trunk_ir::idvec;
     use trunk_ir::{PathId, Span};
@@ -1003,22 +1003,18 @@ mod tests {
         })
     }
 
-    #[test]
-    fn test_check_simple_module() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            let module = build_simple_module(db);
-            let result = typecheck_module(db, &module);
-            assert!(result.is_ok());
-        });
+    #[salsa_test]
+    fn test_check_simple_module(db: &salsa::DatabaseImpl) {
+        let module = build_simple_module(db);
+        let result = typecheck_module(db, &module);
+        assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_check_arith_binop() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            let module = build_arith_module(db);
-            let result = typecheck_module(db, &module);
-            assert!(result.is_ok());
-        });
+    #[salsa_test]
+    fn test_check_arith_binop(db: &salsa::DatabaseImpl) {
+        let module = build_arith_module(db);
+        let result = typecheck_module(db, &module);
+        assert!(result.is_ok());
     }
 
     #[salsa::tracked]
@@ -1027,46 +1023,42 @@ mod tests {
         typecheck_module_per_function(db, module)
     }
 
-    #[test]
-    fn test_typecheck_function_per_function() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            let typed_module = run_per_function_typecheck(db);
-            assert_eq!(typed_module.name(db), "main");
-        });
+    #[salsa_test]
+    fn test_typecheck_function_per_function(db: &salsa::DatabaseImpl) {
+        let typed_module = run_per_function_typecheck(db);
+        assert_eq!(typed_module.name(db), "main");
     }
 
-    #[test]
-    fn test_has_type_vars_detection() {
+    #[salsa_test]
+    fn test_has_type_vars_detection(db: &salsa::DatabaseImpl) {
         use trunk_ir::dialect::ty;
 
-        salsa::DatabaseImpl::default().attach(|db| {
-            // Type variable should be detected
-            let type_var = ty::var_with_id(db, 42);
-            assert!(
-                has_type_vars(db, type_var),
-                "Type variable should be detected"
-            );
+        // Type variable should be detected
+        let type_var = ty::var_with_id(db, 42);
+        assert!(
+            has_type_vars(db, type_var),
+            "Type variable should be detected"
+        );
 
-            // Concrete type should not have type vars
-            let i64_ty = core::I64::new(db);
-            assert!(
-                !has_type_vars(db, *i64_ty),
-                "Concrete type should not have type vars"
-            );
+        // Concrete type should not have type vars
+        let i64_ty = core::I64::new(db);
+        assert!(
+            !has_type_vars(db, *i64_ty),
+            "Concrete type should not have type vars"
+        );
 
-            // Function type with type var in return should be detected
-            let func_with_var = core::Func::new(db, idvec![*i64_ty], type_var).as_type();
-            assert!(
-                has_type_vars(db, func_with_var),
-                "Function with type var return should be detected"
-            );
+        // Function type with type var in return should be detected
+        let func_with_var = core::Func::new(db, idvec![*i64_ty], type_var).as_type();
+        assert!(
+            has_type_vars(db, func_with_var),
+            "Function with type var return should be detected"
+        );
 
-            // Function type with concrete types should not have type vars
-            let func_concrete = core::Func::new(db, idvec![*i64_ty], *i64_ty).as_type();
-            assert!(
-                !has_type_vars(db, func_concrete),
-                "Function with concrete types should not have type vars"
-            );
-        });
+        // Function type with concrete types should not have type vars
+        let func_concrete = core::Func::new(db, idvec![*i64_ty], *i64_ty).as_type();
+        assert!(
+            !has_type_vars(db, func_concrete),
+            "Function with concrete types should not have type vars"
+        );
     }
 }

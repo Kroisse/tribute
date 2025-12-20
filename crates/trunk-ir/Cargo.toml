@@ -14,3 +14,5 @@ salsa.workspace = true
 serde.workspace = true
 smallvec.workspace = true
 
+[dev-dependencies]
+salsa-test-macros = { path = "../salsa-test-macros" }

@@ -8,3 +8,6 @@ description = "Compiler passes for Tribute (CST to TrunkIR lowering, type infere
 [dependencies]
 salsa.workspace = true
 trunk-ir.workspace = true
+
+[dev-dependencies]
+salsa-test-macros = { path = "../salsa-test-macros" }

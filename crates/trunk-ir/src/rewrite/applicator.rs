@@ -272,8 +272,7 @@ impl Default for PatternApplicator {
 mod tests {
     use super::*;
     use crate::{Attribute, Location, PathId, Span, idvec};
-    use salsa::Database;
-    use salsa::DatabaseImpl;
+    use salsa_test_macros::salsa_test;
 
     /// A simple test pattern that rewrites `test.source` → `test.target`.
     struct TestRenamePattern;
@@ -340,33 +339,29 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_pattern_applicator_basic() {
-        DatabaseImpl::default().attach(|db| {
-            let module = make_source_module(db);
-            let (reached_fixpoint, total_changes, _iterations, op_name) =
-                apply_rename_pattern(db, module);
+    #[salsa_test]
+    fn test_pattern_applicator_basic(db: &salsa::DatabaseImpl) {
+        let module = make_source_module(db);
+        let (reached_fixpoint, total_changes, _iterations, op_name) =
+            apply_rename_pattern(db, module);
 
-            // Should have made one change and reached fixpoint
-            assert!(reached_fixpoint);
-            assert_eq!(total_changes, 1);
+        // Should have made one change and reached fixpoint
+        assert!(reached_fixpoint);
+        assert_eq!(total_changes, 1);
 
-            // The operation should now be test.target
-            assert_eq!(op_name, "test.target");
-        });
+        // The operation should now be test.target
+        assert_eq!(op_name, "test.target");
     }
 
-    #[test]
-    fn test_pattern_applicator_no_match() {
-        DatabaseImpl::default().attach(|db| {
-            let module = make_other_module(db);
-            let (reached_fixpoint, total_changes, iterations, _op_name) =
-                apply_rename_pattern(db, module);
+    #[salsa_test]
+    fn test_pattern_applicator_no_match(db: &salsa::DatabaseImpl) {
+        let module = make_other_module(db);
+        let (reached_fixpoint, total_changes, iterations, _op_name) =
+            apply_rename_pattern(db, module);
 
-            // Should reach fixpoint immediately with no changes
-            assert!(reached_fixpoint);
-            assert_eq!(total_changes, 0);
-            assert_eq!(iterations, 1);
-        });
+        // Should reach fixpoint immediately with no changes
+        assert!(reached_fixpoint);
+        assert_eq!(total_changes, 0);
+        assert_eq!(iterations, 1);
     }
 }

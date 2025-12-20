@@ -562,25 +562,24 @@ impl<'db> TypeSolver<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::core;
 
-    #[test]
-    fn test_unify_same_type() {
-        let db = salsa::DatabaseImpl::default();
-        let mut solver = TypeSolver::new(&db);
+    #[salsa_test]
+    fn test_unify_same_type(db: &salsa::DatabaseImpl) {
+        let mut solver = TypeSolver::new(db);
 
-        let i64_ty = *core::I64::new(&db);
+        let i64_ty = *core::I64::new(db);
         let result = solver.unify_types(i64_ty, i64_ty);
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_unify_type_var() {
-        let db = salsa::DatabaseImpl::default();
-        let mut solver = TypeSolver::new(&db);
+    #[salsa_test]
+    fn test_unify_type_var(db: &salsa::DatabaseImpl) {
+        let mut solver = TypeSolver::new(db);
 
-        let var = ty::var_with_id(&db, 0);
-        let i64_ty = *core::I64::new(&db);
+        let var = ty::var_with_id(db, 0);
+        let i64_ty = *core::I64::new(db);
 
         let result = solver.unify_types(var, i64_ty);
         assert!(result.is_ok());
@@ -589,22 +588,20 @@ mod tests {
         assert_eq!(resolved, i64_ty);
     }
 
-    #[test]
-    fn test_unify_different_types() {
-        let db = salsa::DatabaseImpl::default();
-        let mut solver = TypeSolver::new(&db);
+    #[salsa_test]
+    fn test_unify_different_types(db: &salsa::DatabaseImpl) {
+        let mut solver = TypeSolver::new(db);
 
-        let i64_ty = *core::I64::new(&db);
-        let f64_ty = *core::F64::new(&db);
+        let i64_ty = *core::I64::new(db);
+        let f64_ty = *core::F64::new(db);
 
         let result = solver.unify_types(i64_ty, f64_ty);
         assert!(matches!(result, Err(SolveError::TypeMismatch { .. })));
     }
 
-    #[test]
-    fn test_empty_row_unification() {
-        let db = salsa::DatabaseImpl::default();
-        let mut solver = TypeSolver::new(&db);
+    #[salsa_test]
+    fn test_empty_row_unification(db: &salsa::DatabaseImpl) {
+        let mut solver = TypeSolver::new(db);
 
         let r1 = EffectRow::empty();
         let r2 = EffectRow::empty();
@@ -613,10 +610,9 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_row_var_unification() {
-        let db = salsa::DatabaseImpl::default();
-        let mut solver = TypeSolver::new(&db);
+    #[salsa_test]
+    fn test_row_var_unification(db: &salsa::DatabaseImpl) {
+        let mut solver = TypeSolver::new(db);
 
         let var = solver.fresh_row_var();
         let r1 = EffectRow::var(var);

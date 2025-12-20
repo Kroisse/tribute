@@ -409,8 +409,7 @@ mod tests {
         dialect::{arith, core, func},
         idvec,
     };
-    use salsa::Database;
-    use salsa::DatabaseImpl;
+    use salsa_test_macros::salsa_test;
 
     #[salsa::tracked]
     fn build_sample_module(db: &dyn salsa::Database) -> Operation<'_> {
@@ -443,13 +442,11 @@ mod tests {
         .as_operation()
     }
 
-    #[test]
-    fn can_model_basic_structure() {
-        DatabaseImpl::default().attach(|db| {
-            let op = build_sample_module(db);
-            let module = core::Module::from_operation(db, op).unwrap();
-            assert_eq!(module.name(db), "main");
-        });
+    #[salsa_test]
+    fn can_model_basic_structure(db: &salsa::DatabaseImpl) {
+        let op = build_sample_module(db);
+        let module = core::Module::from_operation(db, op).unwrap();
+        assert_eq!(module.name(db), "main");
     }
 
     // Test the new define_op! macro
@@ -457,8 +454,7 @@ mod tests {
         use crate::{
             Attribute, DialectType, Location, PathId, Region, Span, dialect, dialect::core, idvec,
         };
-        use salsa::Database;
-        use salsa::DatabaseImpl;
+        use salsa_test_macros::salsa_test;
 
         // Test: dialect! macro for grouping ops
         dialect! {
@@ -503,17 +499,15 @@ mod tests {
             binary(db, location, v0, v1, core::I32::new(db).as_type())
         }
 
-        #[test]
-        fn test_define_op_binary() {
-            DatabaseImpl::default().attach(|db| {
-                let binary = test_binary_op(db);
-                assert_eq!(binary.result_ty(db), core::I32::new(db).as_type());
+        #[salsa_test]
+        fn test_define_op_binary(db: &salsa::DatabaseImpl) {
+            let binary = test_binary_op(db);
+            assert_eq!(binary.result_ty(db), core::I32::new(db).as_type());
 
-                // Test auto-generated named accessors
-                let lhs = binary.lhs(db);
-                let rhs = binary.rhs(db);
-                assert_ne!(lhs, rhs); // They should be different values
-            });
+            // Test auto-generated named accessors
+            let lhs = binary.lhs(db);
+            let rhs = binary.rhs(db);
+            assert_ne!(lhs, rhs); // They should be different values
         }
 
         #[salsa::tracked]
@@ -524,15 +518,13 @@ mod tests {
             constant(db, location, core::I64::new(db).as_type(), 42i64.into())
         }
 
-        #[test]
-        fn test_define_op_constant() {
-            DatabaseImpl::default().attach(|db| {
-                let constant = test_constant_op(db);
-                assert_eq!(constant.result_ty(db), core::I64::new(db).as_type());
+        #[salsa_test]
+        fn test_define_op_constant(db: &salsa::DatabaseImpl) {
+            let constant = test_constant_op(db);
+            assert_eq!(constant.result_ty(db), core::I64::new(db).as_type());
 
-                // Test auto-generated attribute accessor
-                assert_eq!(constant.value(db), &Attribute::IntBits(42));
-            });
+            // Test auto-generated attribute accessor
+            assert_eq!(constant.value(db), &Attribute::IntBits(42));
         }
 
         #[salsa::tracked]
@@ -543,12 +535,10 @@ mod tests {
             variadic(db, location, vec![])
         }
 
-        #[test]
-        fn test_define_op_variadic() {
-            DatabaseImpl::default().attach(|db| {
-                let variadic = test_variadic_op(db);
-                assert!(variadic.args(db).is_empty());
-            });
+        #[salsa_test]
+        fn test_define_op_variadic(db: &salsa::DatabaseImpl) {
+            let variadic = test_variadic_op(db);
+            assert!(variadic.args(db).is_empty());
         }
 
         #[salsa::tracked]
@@ -562,13 +552,11 @@ mod tests {
             container(db, location, Attribute::String("test".to_string()), region)
         }
 
-        #[test]
-        fn test_define_op_container() {
-            DatabaseImpl::default().attach(|db| {
-                let container = test_container_op(db);
-                assert_eq!(container.body(db).blocks(db).len(), 1);
-                assert_eq!(container.regions(db).len(), 1);
-            });
+        #[salsa_test]
+        fn test_define_op_container(db: &salsa::DatabaseImpl) {
+            let container = test_container_op(db);
+            assert_eq!(container.body(db).blocks(db).len(), 1);
+            assert_eq!(container.regions(db).len(), 1);
         }
 
         #[salsa::tracked]
@@ -598,21 +586,19 @@ mod tests {
             )
         }
 
-        #[test]
-        fn test_define_op_mixed() {
-            DatabaseImpl::default().attach(|db| {
-                let mixed = test_mixed_op(db);
-                assert_eq!(mixed.result_ty(db), core::I32::new(db).as_type());
+        #[salsa_test]
+        fn test_define_op_mixed(db: &salsa::DatabaseImpl) {
+            let mixed = test_mixed_op(db);
+            assert_eq!(mixed.result_ty(db), core::I32::new(db).as_type());
 
-                // Test named accessors for fixed operands
-                let first = mixed.first(db);
-                let second = mixed.second(db);
-                assert_ne!(first, second);
+            // Test named accessors for fixed operands
+            let first = mixed.first(db);
+            let second = mixed.second(db);
+            assert_ne!(first, second);
 
-                // Test variadic accessor
-                let rest = mixed.rest(db);
-                assert_eq!(rest.len(), 2);
-            });
+            // Test variadic accessor
+            let rest = mixed.rest(db);
+            assert_eq!(rest.len(), 2);
         }
 
         #[salsa::tracked]
@@ -635,23 +621,21 @@ mod tests {
             )
         }
 
-        #[test]
-        fn test_define_op_multi_result() {
-            DatabaseImpl::default().attach(|db| {
-                let multi = test_multi_result_op(db);
+        #[salsa_test]
+        fn test_define_op_multi_result(db: &salsa::DatabaseImpl) {
+            let multi = test_multi_result_op(db);
 
-                // Test named result accessors for each result
-                assert_eq!(multi.quotient_ty(db), core::I32::new(db).as_type());
-                assert_eq!(multi.remainder_ty(db), core::I32::new(db).as_type());
+            // Test named result accessors for each result
+            assert_eq!(multi.quotient_ty(db), core::I32::new(db).as_type());
+            assert_eq!(multi.remainder_ty(db), core::I32::new(db).as_type());
 
-                // Test that we get different Value handles for each result
-                let q = multi.quotient(db);
-                let r = multi.remainder(db);
-                assert_ne!(q, r); // They should be different values (different indices)
+            // Test that we get different Value handles for each result
+            let q = multi.quotient(db);
+            let r = multi.remainder(db);
+            assert_ne!(q, r); // They should be different values (different indices)
 
-                // Verify the underlying operation has 2 results
-                assert_eq!(multi.results(db).len(), 2);
-            });
+            // Verify the underlying operation has 2 results
+            assert_eq!(multi.results(db).len(), 2);
         }
     }
 }

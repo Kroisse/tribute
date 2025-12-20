@@ -1260,6 +1260,7 @@ name = "tribute-passes"
 version = "0.1.0"
 dependencies = [
  "salsa",
+ "salsa-test-macros",
  "trunk-ir",
 ]
 
@@ -1272,6 +1273,7 @@ dependencies = [
  "parking_lot",
  "paste",
  "salsa",
+ "salsa-test-macros",
  "serde",
  "smallvec",
 ]

@@ -147,7 +147,7 @@ fn operation_has_type_vars(db: &dyn salsa::Database, op: &Operation<'_>) -> bool
 mod tests {
     use super::*;
     use crate::typeck::TypeChecker;
-    use salsa::Database;
+    use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::{arith, core, func};
     use trunk_ir::{Attribute, Location, PathId, Span, idvec};
 
@@ -269,51 +269,45 @@ mod tests {
         apply_subst_to_module(db, module, &subst)
     }
 
-    #[test]
-    fn test_has_type_vars() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            let type_var = ty::var_with_id(db, 42);
-            assert!(has_type_vars(db, type_var));
+    #[salsa_test]
+    fn test_has_type_vars(db: &salsa::DatabaseImpl) {
+        let type_var = ty::var_with_id(db, 42);
+        assert!(has_type_vars(db, type_var));
 
-            let i64_ty = *core::I64::new(db);
-            assert!(!has_type_vars(db, i64_ty));
-        });
+        let i64_ty = *core::I64::new(db);
+        assert!(!has_type_vars(db, i64_ty));
     }
 
-    #[test]
-    fn test_apply_subst_basic() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            // Create and verify original module has type variable
-            let module = make_module_with_type_var_42(db);
-            let body = module.body(db);
-            let op = &body.blocks(db)[0].operations(db)[0];
-            let result_ty = op.results(db)[0];
-            assert!(ty::is_var(db, result_ty));
+    #[salsa_test]
+    fn test_apply_subst_basic(db: &salsa::DatabaseImpl) {
+        // Create and verify original module has type variable
+        let module = make_module_with_type_var_42(db);
+        let body = module.body(db);
+        let op = &body.blocks(db)[0].operations(db)[0];
+        let result_ty = op.results(db)[0];
+        assert!(ty::is_var(db, result_ty));
 
-            // Apply substitution (in tracked function)
-            let new_module = apply_subst_var42_to_i64(db);
+        // Apply substitution (in tracked function)
+        let new_module = apply_subst_var42_to_i64(db);
 
-            // Check that the result now has I64
-            let new_body = new_module.body(db);
-            let new_op = &new_body.blocks(db)[0].operations(db)[0];
-            let new_result_ty = new_op.results(db)[0];
+        // Check that the result now has I64
+        let new_body = new_module.body(db);
+        let new_op = &new_body.blocks(db)[0].operations(db)[0];
+        let new_result_ty = new_op.results(db)[0];
 
-            let i64_ty = *core::I64::new(db);
-            assert_eq!(new_result_ty, i64_ty);
-        });
+        let i64_ty = *core::I64::new(db);
+        assert_eq!(new_result_ty, i64_ty);
     }
 
-    #[test]
-    fn test_module_has_type_vars() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            // Module with type variable
-            let module_with_var = make_module_with_type_var_1(db);
-            assert!(module_has_type_vars(db, module_with_var));
+    #[salsa_test]
+    fn test_module_has_type_vars(db: &salsa::DatabaseImpl) {
+        // Module with type variable
+        let module_with_var = make_module_with_type_var_1(db);
+        assert!(module_has_type_vars(db, module_with_var));
 
-            // Module without type variable
-            let module_concrete = make_module_with_concrete_type(db);
-            assert!(!module_has_type_vars(db, module_concrete));
-        });
+        // Module without type variable
+        let module_concrete = make_module_with_concrete_type(db);
+        assert!(!module_has_type_vars(db, module_concrete));
     }
 
     /// Helper to print IR recursively
@@ -349,23 +343,21 @@ mod tests {
     }
 
     /// Integration test: compile actual source code and verify no type variables remain.
-    #[test]
-    fn test_end_to_end_type_inference() {
-        salsa::DatabaseImpl::default().attach(|db| {
-            let module = infer_simple_module(db);
+    #[salsa_test]
+    fn test_end_to_end_type_inference(db: &salsa::DatabaseImpl) {
+        let module = infer_simple_module(db);
 
-            // Print IR for debugging
-            println!("=== Compiled Module ===");
-            println!("Module: {}", module.name(db));
-            let body = module.body(db);
-            print_region(db, &body, 0);
+        // Print IR for debugging
+        println!("=== Compiled Module ===");
+        println!("Module: {}", module.name(db));
+        let body = module.body(db);
+        print_region(db, &body, 0);
 
-            // After compilation, there should be no type variables
-            let has_vars = module_has_type_vars(db, module);
-            println!("\nHas type vars: {}", has_vars);
+        // After compilation, there should be no type variables
+        let has_vars = module_has_type_vars(db, module);
+        println!("\nHas type vars: {}", has_vars);
 
-            // This assertion may fail - let's see what happens
-            // assert!(!has_vars, "Module should not have type variables after compilation");
-        });
+        // This assertion may fail - let's see what happens
+        // assert!(!has_vars, "Module should not have type variables after compilation");
     }
 }
