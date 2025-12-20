@@ -156,18 +156,25 @@ mod tests {
     use tribute::compile;
     use tribute::{SourceCst, TributeDatabaseImpl};
 
+    fn make_source(path: &str, text: &str) -> SourceCst {
+        salsa::with_attached_database(|db| {
+            let mut parser = Parser::new();
+            parser
+                .set_language(&tree_sitter_tribute::LANGUAGE.into())
+                .expect("Failed to set language");
+            let tree = parser.parse(text, None).expect("tree");
+            SourceCst::from_path(db, path, text.into(), Some(tree))
+        })
+        .expect("attached db")
+    }
+
     #[test]
     fn test_type_index_basic() {
         TributeDatabaseImpl::default().attach(|db| {
             //                    0         1         2         3
             //                    0123456789012345678901234567890123456789
             let source_text = "fn add(x: Int, y: Int) -> Int { x + y }";
-            let mut parser = Parser::new();
-            parser
-                .set_language(&tree_sitter_tribute::LANGUAGE.into())
-                .expect("Failed to set language");
-            let tree = parser.parse(source_text, None).expect("tree");
-            let source = SourceCst::from_path(db, "test.trb", source_text.into(), Some(tree));
+            let source = make_source("test.trb", source_text);
 
             let module = compile(db, source);
             let index = TypeIndex::build(db, &module);
@@ -187,12 +194,7 @@ mod tests {
             //                    0         1         2         3
             //                    0123456789012345678901234567890123456
             let source_text = "fn foo(a: Int) -> Int { a }";
-            let mut parser = Parser::new();
-            parser
-                .set_language(&tree_sitter_tribute::LANGUAGE.into())
-                .expect("Failed to set language");
-            let tree = parser.parse(source_text, None).expect("tree");
-            let source = SourceCst::from_path(db, "test.trb", source_text.into(), Some(tree));
+            let source = make_source("test.trb", source_text);
 
             let module = compile(db, source);
             let index = TypeIndex::build(db, &module);

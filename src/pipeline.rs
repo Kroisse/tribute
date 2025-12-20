@@ -312,19 +312,22 @@ mod tests {
         compile(db, source)
     }
 
-    fn source_from_str(db: &dyn salsa::Database, path: &str, text: &str) -> SourceCst {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        let tree = parser.parse(text, None).expect("tree");
-        SourceCst::from_path(db, path, text.into(), Some(tree))
+    fn source_from_str(path: &str, text: &str) -> SourceCst {
+        salsa::with_attached_database(|db| {
+            let mut parser = Parser::new();
+            parser
+                .set_language(&tree_sitter_tribute::LANGUAGE.into())
+                .expect("Failed to set language");
+            let tree = parser.parse(text, None).expect("tree");
+            SourceCst::from_path(db, path, text.into(), Some(tree))
+        })
+        .expect("attached db")
     }
 
     #[test]
     fn test_full_pipeline() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = source_from_str(db, "test.trb", "fn main() -> Int { 42 }");
+            let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
 
             let module = test_compile(db, source);
             assert_eq!(module.name(db), "main");
@@ -334,7 +337,7 @@ mod tests {
     #[test]
     fn test_compile_with_diagnostics() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = source_from_str(db, "test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
+            let source = source_from_str("test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
 
             let result = compile_with_diagnostics(db, source);
             // Should compile without errors
@@ -349,7 +352,7 @@ mod tests {
     #[test]
     fn test_unresolved_reference_diagnostic() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = source_from_str(db, "test.trb", "fn main() -> Int { undefined_var }");
+            let source = source_from_str("test.trb", "fn main() -> Int { undefined_var }");
 
             let result = compile_with_diagnostics(db, source);
             // Should have an unresolved reference error
@@ -384,7 +387,7 @@ mod tests {
     fn test_prelude_option_type() {
         TributeDatabaseImpl::default().attach(|db| {
             // Use Option type from prelude
-            let source = source_from_str(db, "test.trb", "fn maybe() -> Option(Int) { None }");
+            let source = source_from_str("test.trb", "fn maybe() -> Option(Int) { None }");
 
             let result = compile_with_diagnostics(db, source);
             // Should compile without "unresolved" errors for Option or None
@@ -404,11 +407,8 @@ mod tests {
     fn test_prelude_result_type() {
         TributeDatabaseImpl::default().attach(|db| {
             // Use Result type from prelude
-            let source = source_from_str(
-                db,
-                "test.trb",
-                "fn success() -> Result(Int, String) { Ok(42) }",
-            );
+            let source =
+                source_from_str("test.trb", "fn success() -> Result(Int, String) { Ok(42) }");
 
             let result = compile_with_diagnostics(db, source);
             // Should compile without "unresolved" errors for Result or Ok
@@ -429,7 +429,6 @@ mod tests {
         TributeDatabaseImpl::default().attach(|db| {
             // Simple case expression with identifier pattern binding
             let source = source_from_str(
-                db,
                 "test.trb",
                 r#"
                 fn test(x: Int) -> Int {
