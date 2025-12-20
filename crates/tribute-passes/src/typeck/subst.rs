@@ -146,6 +146,7 @@ fn operation_has_type_vars(db: &dyn salsa::Database, op: &Operation<'_>) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::typeck::TypeChecker;
     use salsa::Database;
     use tribute_core::{SourceFile, TributeDatabaseImpl};
     use trunk_ir::{Attribute, Location, PathId, Span, idvec};
@@ -217,6 +218,29 @@ mod tests {
 
         // Build module
         core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa::tracked]
+    fn lower_source<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> core::Module<'db> {
+        use crate::resolve::{Resolver, build_env};
+        use tribute_front::{lower_cst, parse_cst};
+
+        let cst = parse_cst(db, source).expect("parse should succeed");
+        let module = lower_cst(db, source, cst);
+        let env = build_env(db, &module);
+        let mut resolver = Resolver::new(db, env);
+        resolver.resolve_module(&module)
+    }
+
+    #[salsa::tracked]
+    fn infer_module<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> core::Module<'db> {
+        let resolved = lower_source(db, source);
+        let mut checker = TypeChecker::new(db);
+        checker.check_module(&resolved);
+        match checker.solve() {
+            Ok(solver) => apply_subst_to_module(db, resolved, solver.type_subst()),
+            Err(_) => resolved,
+        }
     }
 
     /// Apply substitution to the test module (var 42 -> I64).
@@ -315,8 +339,6 @@ mod tests {
     /// Integration test: compile actual source code and verify no type variables remain.
     #[test]
     fn test_end_to_end_type_inference() {
-        use crate::pipeline::compile;
-
         TributeDatabaseImpl::default().attach(|db| {
             // Simple function with explicit types
             let source = SourceFile::from_path(
@@ -325,7 +347,7 @@ mod tests {
                 "fn add(x: Int, y: Int) -> Int { x + y }".to_string(),
             );
 
-            let module = compile(db, source);
+            let module = infer_module(db, source);
 
             // Print IR for debugging
             println!("=== Compiled Module ===");

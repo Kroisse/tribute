@@ -1024,8 +1024,9 @@ mod tests {
 
     #[salsa::tracked]
     fn run_per_function_typecheck(db: &dyn salsa::Database) -> core::Module<'_> {
-        use crate::pipeline::stage_resolve;
+        use crate::resolve::{Resolver, build_env};
         use tribute_core::SourceFile;
+        use tribute_front::{lower_cst, parse_cst};
 
         let source = SourceFile::from_path(
             db,
@@ -1033,7 +1034,11 @@ mod tests {
             "fn add(x: Int, y: Int) -> Int { x + y }".to_string(),
         );
 
-        let resolved_module = stage_resolve(db, source);
+        let cst = parse_cst(db, source).expect("parse should succeed");
+        let module = lower_cst(db, source, cst);
+        let env = build_env(db, &module);
+        let mut resolver = Resolver::new(db, env);
+        let resolved_module = resolver.resolve_module(&module);
         typecheck_module_per_function(db, resolved_module)
     }
 

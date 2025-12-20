@@ -62,6 +62,62 @@ impl LineIndex {
         (line as u32, character)
     }
 
+    /// Get the current source text.
+    pub fn text(&self) -> &str {
+        &self.source
+    }
+
+    /// Convert byte offset to (line, byte column).
+    pub fn byte_line_col(&self, offset: usize) -> (u32, u32) {
+        let offset = offset.min(self.source.len());
+        let line = self
+            .line_starts
+            .partition_point(|&start| start <= offset)
+            .saturating_sub(1);
+        let line_start = self.line_starts[line];
+        let column = offset - line_start;
+        (line as u32, column as u32)
+    }
+
+    /// Apply an in-place edit using byte offsets and line numbers.
+    pub fn apply_edit(
+        &mut self,
+        start_line: u32,
+        end_line: u32,
+        start_byte: usize,
+        old_end_byte: usize,
+        new_text: &str,
+    ) {
+        let start_line = start_line as usize;
+        let end_line = end_line as usize;
+        self.source
+            .replace_range(start_byte..old_end_byte, new_text);
+
+        let removed_bytes = old_end_byte - start_byte;
+        let delta = new_text.len() as isize - removed_bytes as isize;
+
+        let mut new_line_starts = Vec::new();
+        for (idx, byte) in new_text.bytes().enumerate() {
+            if byte == b'\n' {
+                new_line_starts.push(start_byte + idx + 1);
+            }
+        }
+
+        let prefix = &self.line_starts[..=start_line];
+        let suffix = &self.line_starts[(end_line + 1)..];
+        let mut updated = Vec::with_capacity(prefix.len() + new_line_starts.len() + suffix.len());
+        updated.extend_from_slice(prefix);
+        updated.extend(new_line_starts);
+        if delta == 0 {
+            updated.extend_from_slice(suffix);
+        } else {
+            for &pos in suffix {
+                updated.push(((pos as isize) + delta) as usize);
+            }
+        }
+        self.line_starts = updated;
+    }
+
     /// Convert a Span to LSP Range.
     pub fn span_to_range(&self, span: Span) -> lsp_types::Range {
         let start = self.line_col(span.start);

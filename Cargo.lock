@@ -1184,7 +1184,10 @@ dependencies = [
  "salsa",
  "serde_json",
  "tracing",
+ "tree-sitter",
+ "tree-sitter-tribute",
  "tribute-core",
+ "tribute-front",
  "tribute-passes",
  "trunk-ir",
 ]
@@ -1212,13 +1215,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "tribute-passes"
+name = "tribute-front"
 version = "0.1.0"
 dependencies = [
+ "lsp-types",
  "salsa",
  "tree-sitter",
  "tree-sitter-tribute",
  "tribute-core",
+ "trunk-ir",
+]
+
+[[package]]
+name = "tribute-passes"
+version = "0.1.0"
+dependencies = [
+ "salsa",
+ "tribute-core",
+ "tribute-front",
  "trunk-ir",
 ]
 

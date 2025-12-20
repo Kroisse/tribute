@@ -1,0 +1,14 @@
+[package]
+name = "tribute-front"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Front-end utilities for Tribute (CST parsing and text helpers)"
+
+[dependencies]
+salsa.workspace = true
+lsp-types.workspace = true
+tree-sitter.workspace = true
+tree-sitter-tribute.workspace = true
+tribute-core.workspace = true
+trunk-ir.workspace = true

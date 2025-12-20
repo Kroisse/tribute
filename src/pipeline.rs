@@ -44,22 +44,21 @@
 
 use salsa::Accumulator;
 use tribute_core::SourceFile;
+use tribute_front::{lower_cst, parse_cst};
+use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_passes::resolve::{Resolver, build_env};
+use tribute_passes::tdnr::resolve_tdnr;
+use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 use trunk_ir::Span;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::{Block, IdVec, Region, Symbol};
-
-use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use crate::resolve::{Resolver, build_env};
-use crate::tdnr::resolve_tdnr;
-use crate::tirgen::{lower_cst, parse_cst};
-use crate::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 
 // =============================================================================
 // Standard Library Prelude
 // =============================================================================
 
 /// The prelude source code, embedded at compile time.
-const PRELUDE_SOURCE: &str = include_str!("../../../lib/std/prelude.trb");
+const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 
 /// Load and cache the prelude module.
 ///
@@ -125,7 +124,7 @@ pub fn merge_with_prelude<'db>(
 }
 
 // Re-export for convenience
-pub use crate::resolve::build_env as build_module_env;
+pub use tribute_passes::resolve::build_env as build_module_env;
 
 /// Result of the full compilation pipeline.
 pub struct CompilationResult<'db> {
@@ -143,13 +142,13 @@ pub struct CompilationResult<'db> {
 
 /// Stage 1: Parse source to CST.
 ///
-/// Re-exported from `tirgen` for convenience.
-pub use crate::tirgen::parse_cst as stage_parse;
+/// Re-exported from `tribute-front` for convenience.
+pub use tribute_front::parse_cst as stage_parse;
 
 /// Stage 2: Lower CST to TrunkIR.
 ///
-/// Re-exported from `tirgen` for convenience.
-pub use crate::tirgen::lower_cst as stage_lower;
+/// Re-exported from `tribute-front` for convenience.
+pub use tribute_front::lower_cst as stage_lower;
 
 /// Stage 3: Resolve names in the module.
 ///

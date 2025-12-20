@@ -13,10 +13,16 @@
 use std::path::Path;
 
 pub use tribute_core::{SourceFile, TributeDatabaseImpl};
-pub use tribute_passes::{
-    Diagnostic, DiagnosticSeverity, ParsedCst, lower_cst, lower_source_file, parse_cst,
-};
+pub use tribute_front::{ParsedCst, lower_cst, lower_source_file, parse_cst};
+pub use tribute_passes::{Diagnostic, DiagnosticSeverity};
 pub use trunk_ir::dialect::core::Module;
+
+pub mod pipeline;
+
+pub use pipeline::{
+    CompilationResult, compile, compile_with_diagnostics, stage_resolve, stage_tdnr,
+    stage_typecheck,
+};
 
 /// Lower a Tribute source string to TrunkIR module.
 pub fn lower_str<'db>(

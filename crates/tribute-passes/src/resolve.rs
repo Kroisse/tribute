@@ -1316,7 +1316,7 @@ mod tests {
 
     #[salsa::tracked]
     fn resolve_source<'db>(db: &'db dyn salsa::Database, source: SourceFile) -> Module<'db> {
-        use crate::tirgen::{lower_cst, parse_cst};
+        use tribute_front::{lower_cst, parse_cst};
 
         let cst = parse_cst(db, source).expect("parse should succeed");
         let module = lower_cst(db, source, cst);
@@ -1382,8 +1382,8 @@ mod tests {
     #[test]
     fn test_build_env_from_module() {
         TributeDatabaseImpl::default().attach(|db| {
-            use crate::tirgen::{lower_cst, parse_cst};
             use tribute_core::SourceFile;
+            use tribute_front::{lower_cst, parse_cst};
 
             let source =
                 SourceFile::from_path(db, "test.trb", "fn hello() -> Int { 42 }".to_string());
@@ -1407,8 +1407,8 @@ mod tests {
     #[test]
     fn test_nested_module_resolution() {
         TributeDatabaseImpl::default().attach(|db| {
-            use crate::tirgen::{lower_cst, parse_cst};
             use tribute_core::SourceFile;
+            use tribute_front::{lower_cst, parse_cst};
 
             let source = SourceFile::from_path(
                 db,
@@ -1451,8 +1451,8 @@ mod tests {
     #[ignore = "TODO: Implement multi-level namespace support"]
     fn test_deeply_nested_module_resolution() {
         TributeDatabaseImpl::default().attach(|db| {
-            use crate::tirgen::{lower_cst, parse_cst};
             use tribute_core::SourceFile;
+            use tribute_front::{lower_cst, parse_cst};
 
             let source = SourceFile::from_path(
                 db,

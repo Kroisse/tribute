@@ -4,7 +4,6 @@
 //! - Hover: Display type information at cursor position
 //! - Diagnostics: Real-time error and warning reporting
 
-mod line_index;
 mod pretty;
 mod server;
 mod type_index;

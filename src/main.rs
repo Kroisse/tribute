@@ -6,8 +6,8 @@ mod lsp;
 use clap::Parser;
 use cli::{Cli, Command};
 use salsa::Database;
+use tribute::pipeline::{compile_with_diagnostics, stage_resolve};
 use tribute_core::{SourceFile, TributeDatabaseImpl};
-use tribute_passes::pipeline::{compile_with_diagnostics, stage_resolve};
 use tribute_passes::resolve::build_env;
 
 fn main() {

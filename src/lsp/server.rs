@@ -3,6 +3,7 @@
 //! This is a simple synchronous LSP server that handles requests one at a time.
 
 use std::error::Error;
+use std::io;
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{
@@ -14,21 +15,24 @@ use lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
     InitializeParams, MarkupContent, MarkupKind, PublishDiagnosticsParams, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
+    TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, Uri,
 };
 use salsa::Database;
+use tree_sitter::{InputEdit, Parser, Point, Tree};
 
+use tribute::compile;
 use tribute_core::{SourceFile, TributeDatabaseImpl};
-use tribute_passes::compile;
 
-use super::line_index::LineIndex;
 use super::pretty::print_type;
 use super::type_index::TypeIndex;
+use tribute_front::LineIndex;
 
 /// Document state stored per-file.
 struct Document {
-    text: String,
     line_index: LineIndex,
+    parser: Parser,
+    tree: Option<Tree>,
 }
 
 /// Main LSP server state.
@@ -96,11 +100,17 @@ impl LspServer {
         let text = params.text_document.text;
 
         let line_index = LineIndex::new(&text);
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set language");
+        let tree = parser.parse(&text, None);
         self.documents.insert(
             uri.clone(),
             Document {
-                text: text.clone(),
                 line_index,
+                parser,
+                tree,
             },
         );
 
@@ -113,20 +123,19 @@ impl LspServer {
         params: DidChangeTextDocumentParams,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let uri = params.text_document.uri;
-        if let Some(change) = params.content_changes.into_iter().next() {
-            let text = change.text;
-            let line_index = LineIndex::new(&text);
+        let text = {
+            let Some(doc) = self.documents.get_mut(&uri) else {
+                return Ok(());
+            };
 
-            self.documents.insert(
-                uri.clone(),
-                Document {
-                    text: text.clone(),
-                    line_index,
-                },
-            );
+            for change in params.content_changes {
+                Self::apply_change(doc, change)?;
+            }
 
-            self.publish_diagnostics(&uri, &text)?;
-        }
+            doc.line_index.text().to_string()
+        };
+
+        self.publish_diagnostics(&uri, &text)?;
         Ok(())
     }
 
@@ -155,7 +164,7 @@ impl LspServer {
         let doc = self.documents.get(uri)?;
         let offset = doc.line_index.offset(position.line, position.character)?;
 
-        let text = &doc.text;
+        let text = doc.line_index.text();
 
         // Run Salsa compilation
         let db = TributeDatabaseImpl::default();
@@ -199,7 +208,7 @@ impl LspServer {
             let uri =
                 tribute_core::Uri::parse_from(uri.as_str().to_owned()).expect("valid URI from LSP");
             let source_file = SourceFile::new(db, uri, text.to_string());
-            let result = tribute_passes::compile_with_diagnostics(db, source_file);
+            let result = tribute::compile_with_diagnostics(db, source_file);
             result.diagnostics
         });
 
@@ -231,6 +240,72 @@ impl LspServer {
         self.connection.sender.send(Message::Notification(notif))?;
         Ok(())
     }
+
+    fn apply_change(
+        doc: &mut Document,
+        change: TextDocumentContentChangeEvent,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        match change.range {
+            Some(range) => {
+                let start = range.start;
+                let end = range.end;
+                let start_byte =
+                    doc.line_index
+                        .offset(start.line, start.character)
+                        .ok_or(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "invalid start position",
+                        ))?;
+                let old_end_byte =
+                    doc.line_index
+                        .offset(end.line, end.character)
+                        .ok_or(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "invalid end position",
+                        ))?;
+
+                let (start_row, start_col) = doc.line_index.byte_line_col(start_byte);
+                let (old_end_row, old_end_col) = doc.line_index.byte_line_col(old_end_byte);
+                let start_point = Point {
+                    row: start_row as usize,
+                    column: start_col as usize,
+                };
+                let old_end_point = Point {
+                    row: old_end_row as usize,
+                    column: old_end_col as usize,
+                };
+                let new_end_point = point_after_text(start_point, &change.text);
+                let new_end_byte = start_byte + change.text.len();
+
+                doc.line_index.apply_edit(
+                    start.line,
+                    end.line,
+                    start_byte,
+                    old_end_byte,
+                    &change.text,
+                );
+
+                if let Some(mut tree) = doc.tree.take() {
+                    tree.edit(&InputEdit {
+                        start_byte,
+                        old_end_byte,
+                        new_end_byte,
+                        start_position: start_point,
+                        old_end_position: old_end_point,
+                        new_end_position: new_end_point,
+                    });
+                    doc.tree = doc.parser.parse(doc.line_index.text(), Some(&tree));
+                } else {
+                    doc.tree = doc.parser.parse(doc.line_index.text(), None);
+                }
+            }
+            None => {
+                doc.line_index = LineIndex::new(&change.text);
+                doc.tree = doc.parser.parse(doc.line_index.text(), None);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Start the LSP server.
@@ -242,7 +317,7 @@ pub fn serve() -> Result<(), Box<dyn Error + Send + Sync>> {
         text_document_sync: Some(TextDocumentSyncCapability::Options(
             TextDocumentSyncOptions {
                 open_close: Some(true),
-                change: Some(TextDocumentSyncKind::FULL),
+                change: Some(TextDocumentSyncKind::INCREMENTAL),
                 ..Default::default()
             },
         )),
@@ -259,6 +334,20 @@ pub fn serve() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     io_threads.join()?;
     Ok(())
+}
+
+fn point_after_text(start: Point, text: &str) -> Point {
+    let mut row = start.row;
+    let mut column = start.column;
+    let mut lines = text.split('\n');
+    if let Some(first) = lines.next() {
+        column += first.len();
+    }
+    for line in lines {
+        row += 1;
+        column = line.len();
+    }
+    Point { row, column }
 }
 
 /// Cast a request to a specific type.

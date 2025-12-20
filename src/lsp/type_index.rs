@@ -152,8 +152,8 @@ impl<'db> TypeIndex<'db> {
 mod tests {
     use super::*;
     use salsa::prelude::*;
+    use tribute::compile;
     use tribute_core::{SourceFile, TributeDatabaseImpl};
-    use tribute_passes::compile;
 
     #[test]
     fn test_type_index_basic() {
