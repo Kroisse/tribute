@@ -19,7 +19,7 @@ mod helpers;
 mod literals;
 mod statements;
 
-use crate::SourceFile;
+use crate::{SourceCst, SourceFile};
 use tree_sitter::{Node, Parser};
 use trunk_ir::dialect::core;
 use trunk_ir::{Location, PathId, Span, Symbol};
@@ -54,6 +54,12 @@ pub fn parse_cst(db: &dyn salsa::Database, source: SourceFile) -> Option<ParsedC
     parser.parse(text, None).map(ParsedCst::new)
 }
 
+/// Wrap a pre-parsed CST stored in the database.
+#[salsa::tracked]
+pub fn parse_cst_from_tree(db: &dyn salsa::Database, source: SourceCst) -> ParsedCst {
+    ParsedCst::new(source.tree(db).clone())
+}
+
 /// Lower a parsed CST to TrunkIR module.
 ///
 /// This is the second stage of the compilation pipeline. It takes
@@ -67,6 +73,18 @@ pub fn lower_cst<'db>(
 ) -> core::Module<'db> {
     let path = PathId::new(db, source.uri(db).as_str().to_owned());
     let text = source.text(db);
+    let root = cst.root_node();
+    let location = Location::new(path, span_from_node(&root));
+
+    lower_cst_impl(db, path, text, root, location)
+}
+
+/// Lower a pre-parsed CST stored alongside source text to TrunkIR module.
+#[salsa::tracked]
+pub fn lower_source_cst<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> core::Module<'db> {
+    let path = PathId::new(db, source.uri(db).as_str().to_owned());
+    let text = source.text(db);
+    let cst = parse_cst_from_tree(db, source);
     let root = cst.root_node();
     let location = Location::new(path, span_from_node(&root));
 
@@ -157,6 +175,7 @@ fn lower_cst_impl<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use salsa::Setter;
     use tree_sitter::{InputEdit, Parser, Point};
     use trunk_ir::DialectOp;
     use trunk_ir::dialect::{func, src};
@@ -173,6 +192,16 @@ mod tests {
     fn lower_and_get_module<'db>(db: &'db TestDb, source: &str) -> core::Module<'db> {
         let file = SourceFile::from_path(db, "test.trb", source.to_string());
         lower_source_file(db, file)
+    }
+
+    fn lower_from_tree<'db>(db: &'db TestDb, source: &str) -> core::Module<'db> {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set language");
+        let tree = parser.parse(source, None).expect("tree");
+        let file = SourceCst::from_path(db, "test.trb", source.to_string(), tree);
+        lower_source_cst(db, file)
     }
 
     fn point_for_byte(text: &str, byte: usize) -> Point {
@@ -237,6 +266,31 @@ mod tests {
             incremental.root_node().to_sexp(),
             full.root_node().to_sexp()
         );
+    }
+
+    #[test]
+    fn test_lower_source_cst_reuses_tree() {
+        let db = TestDb::default();
+        let module = lower_from_tree(&db, "fn main() { 42 }");
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        assert!(!blocks.is_empty(), "Module should have at least one block");
+    }
+
+    #[test]
+    fn test_source_cst_set_tree() {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set language");
+
+        let mut db = TestDb::default();
+        let tree = parser.parse("fn main() { 1 }", None).expect("tree");
+        let source = SourceCst::from_path(&db, "test.trb", "fn main() { 1 }".to_string(), tree);
+
+        let tree2 = parser.parse("fn main() { 2 }", None).expect("tree2");
+        source.set_tree(&mut db).to(tree2);
     }
 
     #[test]

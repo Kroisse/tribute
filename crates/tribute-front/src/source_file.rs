@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use fluent_uri::Uri;
+use tree_sitter::Tree;
 
 #[salsa::input(debug)]
 pub struct SourceFile {
@@ -10,11 +11,34 @@ pub struct SourceFile {
     pub text: String,
 }
 
+#[salsa::input(debug)]
+pub struct SourceCst {
+    #[returns(ref)]
+    pub uri: Uri<String>,
+    #[returns(deref)]
+    pub text: String,
+    #[returns(ref)]
+    pub tree: Tree,
+}
+
 impl SourceFile {
     /// Create a SourceFile from a file path (convenience for CLI/tests).
     pub fn from_path(db: &dyn salsa::Database, path: impl AsRef<Path>, text: String) -> Self {
         let uri = path_to_uri(path.as_ref());
         Self::new(db, uri, text)
+    }
+}
+
+impl SourceCst {
+    /// Create a SourceCst from a file path (convenience for CLI/tests).
+    pub fn from_path(
+        db: &dyn salsa::Database,
+        path: impl AsRef<Path>,
+        text: String,
+        tree: Tree,
+    ) -> Self {
+        let uri = path_to_uri(path.as_ref());
+        Self::new(db, uri, text, tree)
     }
 }
 

@@ -18,6 +18,7 @@ use lsp_types::{
     TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
     TextDocumentSyncOptions, Uri,
 };
+use ropey::Rope;
 use salsa::Database;
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 
@@ -26,11 +27,9 @@ use tribute::{SourceFile, TributeDatabaseImpl};
 
 use super::pretty::print_type;
 use super::type_index::TypeIndex;
-use tribute_front::LineIndex;
-
 /// Document state stored per-file.
 struct Document {
-    line_index: LineIndex,
+    rope: Rope,
     parser: Parser,
     tree: Option<Tree>,
 }
@@ -99,20 +98,14 @@ impl LspServer {
         let uri = params.text_document.uri;
         let text = params.text_document.text;
 
-        let line_index = LineIndex::new(&text);
+        let rope = Rope::from_str(&text);
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
             .expect("Failed to set language");
-        let tree = parser.parse(&text, None);
-        self.documents.insert(
-            uri.clone(),
-            Document {
-                line_index,
-                parser,
-                tree,
-            },
-        );
+        let tree = parse_with_rope(&mut parser, &rope, None);
+        self.documents
+            .insert(uri.clone(), Document { rope, parser, tree });
 
         self.publish_diagnostics(&uri, &text)?;
         Ok(())
@@ -132,7 +125,7 @@ impl LspServer {
                 Self::apply_change(doc, change)?;
             }
 
-            doc.line_index.text().to_string()
+            doc.rope.to_string()
         };
 
         self.publish_diagnostics(&uri, &text)?;
@@ -162,16 +155,14 @@ impl LspServer {
         let position = params.text_document_position_params.position;
 
         let doc = self.documents.get(uri)?;
-        let offset = doc.line_index.offset(position.line, position.character)?;
+        let offset = offset_from_position(&doc.rope, position.line, position.character)?;
 
-        let text = doc.line_index.text();
+        let text = doc.rope.to_string();
 
         // Run Salsa compilation
         let db = TributeDatabaseImpl::default();
         let (type_str, span) = db.attach(|db| {
-            let uri =
-                fluent_uri::Uri::parse_from(uri.as_str().to_owned()).expect("valid URI from LSP");
-            let source_file = SourceFile::new(db, uri, text.to_string());
+            let source_file = SourceFile::new(db, (**uri).clone(), text.to_string());
             let module = compile(db, source_file);
             let type_index = TypeIndex::build(db, &module);
 
@@ -185,7 +176,7 @@ impl LspServer {
             kind: MarkupKind::Markdown,
             value: format!("```tribute\n{}\n```", type_str),
         });
-        let range = doc.line_index.span_to_range(span);
+        let range = span_to_range(&doc.rope, span);
 
         Some(Hover {
             contents,
@@ -205,9 +196,7 @@ impl LspServer {
         // Run Salsa compilation
         let db = TributeDatabaseImpl::default();
         let diags = db.attach(|db| {
-            let uri =
-                fluent_uri::Uri::parse_from(uri.as_str().to_owned()).expect("valid URI from LSP");
-            let source_file = SourceFile::new(db, uri, text.to_string());
+            let source_file = SourceFile::new(db, (**uri).clone(), text.to_string());
             let result = tribute::compile_with_diagnostics(db, source_file);
             result.diagnostics
         });
@@ -216,7 +205,7 @@ impl LspServer {
         let diagnostics: Vec<Diagnostic> = diags
             .iter()
             .map(|d| {
-                let range = doc.line_index.span_to_range(d.span);
+                let range = span_to_range(&doc.rope, d.span);
                 Diagnostic {
                     range,
                     severity: Some(match d.severity {
@@ -250,22 +239,15 @@ impl LspServer {
                 let start = range.start;
                 let end = range.end;
                 let start_byte =
-                    doc.line_index
-                        .offset(start.line, start.character)
-                        .ok_or(io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            "invalid start position",
-                        ))?;
-                let old_end_byte =
-                    doc.line_index
-                        .offset(end.line, end.character)
-                        .ok_or(io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            "invalid end position",
-                        ))?;
+                    offset_from_position(&doc.rope, start.line, start.character).ok_or(
+                        io::Error::new(io::ErrorKind::InvalidInput, "invalid start position"),
+                    )?;
+                let old_end_byte = offset_from_position(&doc.rope, end.line, end.character).ok_or(
+                    io::Error::new(io::ErrorKind::InvalidInput, "invalid end position"),
+                )?;
 
-                let (start_row, start_col) = doc.line_index.byte_line_col(start_byte);
-                let (old_end_row, old_end_col) = doc.line_index.byte_line_col(old_end_byte);
+                let (start_row, start_col) = byte_line_col(&doc.rope, start_byte);
+                let (old_end_row, old_end_col) = byte_line_col(&doc.rope, old_end_byte);
                 let start_point = Point {
                     row: start_row as usize,
                     column: start_col as usize,
@@ -277,13 +259,10 @@ impl LspServer {
                 let new_end_point = point_after_text(start_point, &change.text);
                 let new_end_byte = start_byte + change.text.len();
 
-                doc.line_index.apply_edit(
-                    start.line,
-                    end.line,
-                    start_byte,
-                    old_end_byte,
-                    &change.text,
-                );
+                let start_char = doc.rope.byte_to_char(start_byte);
+                let old_end_char = doc.rope.byte_to_char(old_end_byte);
+                doc.rope.remove(start_char..old_end_char);
+                doc.rope.insert(start_char, &change.text);
 
                 if let Some(mut tree) = doc.tree.take() {
                     tree.edit(&InputEdit {
@@ -294,14 +273,14 @@ impl LspServer {
                         old_end_position: old_end_point,
                         new_end_position: new_end_point,
                     });
-                    doc.tree = doc.parser.parse(doc.line_index.text(), Some(&tree));
+                    doc.tree = parse_with_rope(&mut doc.parser, &doc.rope, Some(&tree));
                 } else {
-                    doc.tree = doc.parser.parse(doc.line_index.text(), None);
+                    doc.tree = parse_with_rope(&mut doc.parser, &doc.rope, None);
                 }
             }
             None => {
-                doc.line_index = LineIndex::new(&change.text);
-                doc.tree = doc.parser.parse(doc.line_index.text(), None);
+                doc.rope = Rope::from_str(&change.text);
+                doc.tree = parse_with_rope(&mut doc.parser, &doc.rope, None);
             }
         }
         Ok(())
@@ -348,6 +327,85 @@ fn point_after_text(start: Point, text: &str) -> Point {
         column = line.len();
     }
     Point { row, column }
+}
+
+fn parse_with_rope(parser: &mut Parser, rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
+    let mut callback = |byte: usize, _: Point| chunk_from_byte(rope, byte);
+    parser.parse_with_options(&mut callback, old_tree, None)
+}
+
+fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
+    let start = position_from_offset(rope, span.start);
+    let end = position_from_offset(rope, span.end);
+    lsp_types::Range {
+        start: lsp_types::Position {
+            line: start.0,
+            character: start.1,
+        },
+        end: lsp_types::Position {
+            line: end.0,
+            character: end.1,
+        },
+    }
+}
+
+fn position_from_offset(rope: &Rope, offset: usize) -> (u32, u32) {
+    let offset = offset.min(rope.len_bytes());
+    let char_index = rope.byte_to_char(offset);
+    let line = rope.char_to_line(char_index);
+    let line_start_char = rope.line_to_char(line);
+    let line_slice = rope.line(line);
+    let mut end = line_slice.len_chars();
+    if end > 0 {
+        let last = line_slice.slice(end - 1..end).chars().next().unwrap();
+        if last == '\n' {
+            end -= 1;
+        }
+    }
+    let slice = line_slice.slice(..end);
+    let char_in_line = char_index.saturating_sub(line_start_char);
+    let utf16 = slice.char_to_utf16_cu(char_in_line);
+    (line as u32, utf16 as u32)
+}
+
+fn offset_from_position(rope: &Rope, line: u32, character: u32) -> Option<usize> {
+    let line = line as usize;
+    if line >= rope.len_lines() {
+        return None;
+    }
+    let line_start_char = rope.line_to_char(line);
+    let line_slice = rope.line(line);
+    let mut end = line_slice.len_chars();
+    if end > 0 {
+        let last = line_slice.slice(end - 1..end).chars().next().unwrap();
+        if last == '\n' {
+            end -= 1;
+        }
+    }
+    let slice = line_slice.slice(..end);
+    let utf16_offset = (character as usize).min(slice.len_utf16_cu());
+    let char_offset = slice.utf16_cu_to_char(utf16_offset);
+    let char_index = line_start_char + char_offset;
+    Some(rope.char_to_byte(char_index))
+}
+
+fn byte_line_col(rope: &Rope, offset: usize) -> (u32, u32) {
+    let offset = offset.min(rope.len_bytes());
+    let char_index = rope.byte_to_char(offset);
+    let line = rope.char_to_line(char_index);
+    let line_start_char = rope.line_to_char(line);
+    let line_start_byte = rope.char_to_byte(line_start_char);
+    let column = offset - line_start_byte;
+    (line as u32, column as u32)
+}
+
+fn chunk_from_byte(rope: &Rope, byte: usize) -> &str {
+    if byte >= rope.len_bytes() {
+        return "";
+    }
+    let (chunk, chunk_start, _, _) = rope.chunk_at_byte(byte);
+    let start = byte - chunk_start;
+    &chunk[start..]
 }
 
 /// Cast a request to a specific type.

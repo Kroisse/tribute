@@ -23,6 +23,7 @@ lsp-types = "0.97"
 object = { version = "0.36", features = ["write_core"] }
 parking_lot = "0.12"
 paste = "1.0"
+ropey = "1.6"
 salsa = "0.25.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
@@ -50,6 +51,7 @@ dashmap.workspace = true
 fluent-uri.workspace = true
 lsp-server.workspace = true
 lsp-types.workspace = true
+ropey.workspace = true
 salsa.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
