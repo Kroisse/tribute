@@ -1,12 +1,13 @@
 //! Salsa integration tests for CST→TrunkIR lowering.
 
 use salsa::{Database as _, Setter as _};
+use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
 use tribute::{SourceCst, TributeDatabaseImpl, lower_source_cst};
 use trunk_ir::DialectOp;
 
-#[test]
-fn test_salsa_database_examples() {
+#[salsa_test]
+fn test_salsa_database_examples(db: &salsa::DatabaseImpl) {
     // Example source code
     let examples = vec![
         ("hello.trb", r#"fn main() { print_line("Hello, World!") }"#),
@@ -29,25 +30,22 @@ fn main() {
     ];
 
     for (filename, source_code) in examples {
-        // Use attach pattern for test isolation
-        let op_count = TributeDatabaseImpl::default().attach(|db| {
-            let mut parser = Parser::new();
-            parser
-                .set_language(&tree_sitter_tribute::LANGUAGE.into())
-                .expect("Failed to set language");
-            let tree = parser.parse(source_code, None).expect("tree");
-            let source_file = SourceCst::from_path(db, filename, source_code.into(), Some(tree));
-            let module = lower_source_cst(db, source_file);
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set language");
+        let tree = parser.parse(source_code, None).expect("tree");
+        let source_file = SourceCst::from_path(db, filename, source_code.into(), Some(tree));
+        let module = lower_source_cst(db, source_file);
 
-            // Count top-level operations in the module
-            let body = module.body(db);
-            let blocks = body.blocks(db);
-            if blocks.is_empty() {
-                0
-            } else {
-                blocks[0].operations(db).len()
-            }
-        });
+        // Count top-level operations in the module
+        let body = module.body(db);
+        let blocks = body.blocks(db);
+        let op_count = if blocks.is_empty() {
+            0
+        } else {
+            blocks[0].operations(db).len()
+        };
 
         // Verify parsing results
         assert!(
@@ -113,30 +111,28 @@ fn test_salsa_incremental_computation_detailed() {
     );
 }
 
-#[test]
-fn test_salsa_multiple_functions() {
-    let op_count = TributeDatabaseImpl::default().attach(|db| {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        let text = r#"
+#[salsa_test]
+fn test_salsa_multiple_functions(db: &salsa::DatabaseImpl) {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set language");
+    let text = r#"
 fn add(a, b) { a + b }
 fn multiply(a, b) { a * b }
 fn main() { print_line("test") }
 "#;
-        let tree = parser.parse(text, None).expect("tree");
-        let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
-        let module = lower_source_cst(db, source);
+    let tree = parser.parse(text, None).expect("tree");
+    let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
+    let module = lower_source_cst(db, source);
 
-        let body = module.body(db);
-        let blocks = body.blocks(db);
-        if blocks.is_empty() {
-            0
-        } else {
-            blocks[0].operations(db).len()
-        }
-    });
+    let body = module.body(db);
+    let blocks = body.blocks(db);
+    let op_count = if blocks.is_empty() {
+        0
+    } else {
+        blocks[0].operations(db).len()
+    };
 
     assert_eq!(op_count, 3, "Should have 3 functions");
 }
@@ -173,29 +169,27 @@ fn test_salsa_database_isolation() {
     assert_eq!(module2_name, "main");
 }
 
-#[test]
-fn test_function_lowering() {
+#[salsa_test]
+fn test_function_lowering(db: &salsa::DatabaseImpl) {
     use trunk_ir::dialect::func;
 
     let source = "fn main() { 1 + 2 }";
-    TributeDatabaseImpl::default().attach(|db| {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        let tree = parser.parse(source, None).expect("tree");
-        let source_file = SourceCst::from_path(db, "func_test.trb", source.into(), Some(tree));
-        let module = lower_source_cst(db, source_file);
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set language");
+    let tree = parser.parse(source, None).expect("tree");
+    let source_file = SourceCst::from_path(db, "func_test.trb", source.into(), Some(tree));
+    let module = lower_source_cst(db, source_file);
 
-        let body = module.body(db);
-        let blocks = body.blocks(db);
-        assert!(!blocks.is_empty());
+    let body = module.body(db);
+    let blocks = body.blocks(db);
+    assert!(!blocks.is_empty());
 
-        let ops = blocks[0].operations(db);
-        assert_eq!(ops.len(), 1);
+    let ops = blocks[0].operations(db);
+    assert_eq!(ops.len(), 1);
 
-        // Check that the operation is a func.func
-        let func_op = func::Func::from_operation(db, ops[0]).expect("Should be a func.func");
-        assert_eq!(func_op.name(db), "main");
-    });
+    // Check that the operation is a func.func
+    let func_op = func::Func::from_operation(db, ops[0]).expect("Should be a func.func");
+    assert_eq!(func_op.name(db), "main");
 }

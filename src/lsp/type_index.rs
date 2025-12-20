@@ -151,10 +151,10 @@ impl<'db> TypeIndex<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use salsa::prelude::*;
+    use salsa_test_macros::salsa_test;
     use tree_sitter::Parser;
+    use tribute::SourceCst;
     use tribute::compile;
-    use tribute::{SourceCst, TributeDatabaseImpl};
 
     fn make_source(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| {
@@ -168,55 +168,51 @@ mod tests {
         .expect("attached db")
     }
 
-    #[test]
-    fn test_type_index_basic() {
-        TributeDatabaseImpl::default().attach(|db| {
-            //                    0         1         2         3
-            //                    0123456789012345678901234567890123456789
-            let source_text = "fn add(x: Int, y: Int) -> Int { x + y }";
-            let source = make_source("test.trb", source_text);
+    #[salsa_test]
+    fn test_type_index_basic(db: &salsa::DatabaseImpl) {
+        //                    0         1         2         3
+        //                    0123456789012345678901234567890123456789
+        let source_text = "fn add(x: Int, y: Int) -> Int { x + y }";
+        let source = make_source("test.trb", source_text);
 
-            let module = compile(db, source);
-            let index = TypeIndex::build(db, &module);
+        let module = compile(db, source);
+        let index = TypeIndex::build(db, &module);
 
-            // Should find the function type at the function name "add" (position 3-6)
-            assert!(index.type_at(3).is_some());
-            // Should NOT find function type at "fn" keyword (position 0)
-            assert!(index.type_at(0).is_none());
-        });
+        // Should find the function type at the function name "add" (position 3-6)
+        assert!(index.type_at(3).is_some());
+        // Should NOT find function type at "fn" keyword (position 0)
+        assert!(index.type_at(0).is_none());
     }
 
-    #[test]
-    fn test_type_index_local_var() {
+    #[salsa_test]
+    fn test_type_index_local_var(db: &salsa::DatabaseImpl) {
         use crate::lsp::pretty::print_type;
 
-        TributeDatabaseImpl::default().attach(|db| {
-            //                    0         1         2         3
-            //                    0123456789012345678901234567890123456
-            let source_text = "fn foo(a: Int) -> Int { a }";
-            let source = make_source("test.trb", source_text);
+        //                    0         1         2         3
+        //                    0123456789012345678901234567890123456
+        let source_text = "fn foo(a: Int) -> Int { a }";
+        let source = make_source("test.trb", source_text);
 
-            let module = compile(db, source);
-            let index = TypeIndex::build(db, &module);
+        let module = compile(db, source);
+        let index = TypeIndex::build(db, &module);
 
-            // Position of 'a' in body "{ a }" should show type Int
-            let a_pos = source_text.find("{ a }").unwrap() + 2;
+        // Position of 'a' in body "{ a }" should show type Int
+        let a_pos = source_text.find("{ a }").unwrap() + 2;
 
-            let entry = index
-                .type_at(a_pos)
-                .expect("Should find type for local variable 'a'");
-            let ty_str = print_type(db, entry.ty);
-            assert_eq!(
-                ty_str, "Int",
-                "Expected Int for variable 'a', got {}",
-                ty_str
-            );
+        let entry = index
+            .type_at(a_pos)
+            .expect("Should find type for local variable 'a'");
+        let ty_str = print_type(db, entry.ty);
+        assert_eq!(
+            ty_str, "Int",
+            "Expected Int for variable 'a', got {}",
+            ty_str
+        );
 
-            // Function name hover should also work (position 3 = "foo")
-            assert!(
-                index.type_at(3).is_some(),
-                "Function name hover should work"
-            );
-        });
+        // Function name hover should also work (position 3 = "foo")
+        assert!(
+            index.type_at(3).is_some(),
+            "Function name hover should work"
+        );
     }
 }
