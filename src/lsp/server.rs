@@ -132,9 +132,7 @@ impl LspServer {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        let rope = self
-            .db
-            .with_document(uri, |doc| doc.text(&self.db).clone())?;
+        let rope = self.db.source_cst(uri)?.text(&self.db).clone();
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
 
@@ -162,13 +160,10 @@ impl LspServer {
     }
 
     fn publish_diagnostics(&self, uri: &Uri) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let rope = self.db.with_document(uri, |doc| doc.text(&self.db).clone());
-        let Some(rope) = rope else {
-            return Ok(());
-        };
         let Some(source_cst) = self.db.source_cst(uri) else {
             return Ok(());
         };
+        let rope = source_cst.text(&self.db);
 
         // Run Salsa compilation
         let diags = self
@@ -179,7 +174,7 @@ impl LspServer {
         let diagnostics: Vec<Diagnostic> = diags
             .iter()
             .map(|d| {
-                let range = span_to_range(&rope, d.span);
+                let range = span_to_range(rope, d.span);
                 Diagnostic {
                     range,
                     severity: Some(match d.severity {

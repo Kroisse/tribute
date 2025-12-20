@@ -57,7 +57,7 @@ impl TributeDatabaseImpl {
         }
     }
 
-    pub fn open_document(&mut self, uri: &Uri, text: Rope) {
+    pub fn open_document(&self, uri: &Uri, text: Rope) {
         let key = uri.as_str().to_owned();
         let tree = parse_with_thread_local(&text, None);
         let source_cst = SourceCst::new(self, (**uri).clone(), text, tree);
@@ -67,11 +67,6 @@ impl TributeDatabaseImpl {
     pub fn close_document(&self, uri: &Uri) {
         let key = uri.as_str();
         self.documents.remove(key);
-    }
-
-    pub fn with_document<T>(&self, uri: &Uri, f: impl FnOnce(&SourceCst) -> T) -> Option<T> {
-        let key = uri.as_str();
-        self.documents.get(key).map(|doc| f(&doc))
     }
 
     pub fn source_cst(&self, uri: &Uri) -> Option<SourceCst> {
