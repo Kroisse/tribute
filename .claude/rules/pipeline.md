@@ -8,7 +8,7 @@ The Tribute compiler uses a 5-stage pipeline, orchestrated in `src/pipeline.rs`.
 **Function**: `parse_cst(db, source_file) -> ParsedCst`
 
 Parses source code into a Concrete Syntax Tree using Tree-sitter.
-- Input: `SourceFile` (Salsa input)
+- Input: `SourceCst` (Salsa input)
 - Output: `ParsedCst` (reference-counted, cached)
 - Parser: `tree-sitter-tribute` grammar
 
@@ -71,8 +71,8 @@ Fully Typed, Resolved Module
 
 The main compilation entry points are:
 ```rust
-pub fn compile(db: &dyn salsa::Database, source_file: SourceFile) -> Module
-pub fn compile_with_diagnostics(db: &dyn salsa::Database, source_file: SourceFile) -> CompilationResult
+pub fn compile(db: &dyn salsa::Database, source_file: SourceCst) -> Module
+pub fn compile_with_diagnostics(db: &dyn salsa::Database, source_file: SourceCst) -> CompilationResult
 ```
 
 Returns `CompilationResult` containing:

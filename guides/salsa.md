@@ -25,7 +25,7 @@ Salsa is an incremental computation framework written in Rust. Key features:
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  SourceFile │ ──> │    Parse    │ ──> │   Program   │
+│  SourceCst │ ──> │    Parse    │ ──> │   Program   │
 │   (Input)   │     │   (Query)   │     │  (Tracked)  │
 └─────────────┘     └─────────────┘     └─────────────┘
                             │
@@ -57,11 +57,13 @@ Inputs represent data provided from the outside:
 
 ```rust
 #[salsa::input]
-pub struct SourceFile {
-    #[return_ref]
-    pub path: PathBuf,
-    #[return_ref]
-    pub text: String,
+pub struct SourceCst {
+    #[returns(ref)]
+    pub uri: Uri<String>,
+    #[returns(ref)]
+    pub text: Rope,
+    #[returns(ref)]
+    pub tree: Option<Tree>,
 }
 ```
 
@@ -72,7 +74,7 @@ Tracked types store query results and Salsa manages their lifecycle:
 ```rust
 #[salsa::tracked]
 pub struct Program<'db> {
-    pub source_file: SourceFile,
+    pub source_cst: SourceCst,
     #[return_ref]
     pub expressions: Vec<TrackedExpression<'db>>,
 }
@@ -113,19 +115,19 @@ Queries are defined as standalone functions with the `#[salsa::tracked]` attribu
 ```rust
 // AST level queries
 #[salsa::tracked]
-pub fn parse_source_file(db: &dyn salsa::Database, source: SourceFile) -> Program<'_> {
+pub fn parse_source_cst(db: &dyn salsa::Database, source: SourceCst) -> Program<'_> {
     // Implementation
 }
 
 #[salsa::tracked]
-pub fn diagnostics(db: &dyn salsa::Database, source: SourceFile) -> Vec<Diagnostic> {
+pub fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
     // Collect accumulated diagnostics
-    parse_source_file::accumulated::<Diagnostic>(db, source)
+    parse_source_cst::accumulated::<Diagnostic>(db, source)
 }
 
 // HIR level queries
 #[salsa::tracked]
-pub fn lower_source_to_hir(db: &dyn salsa::Database, source: SourceFile) -> HirProgram<'_> {
+pub fn lower_source_to_hir(db: &dyn salsa::Database, source: SourceCst) -> HirProgram<'_> {
     // Implementation
 }
 ```
@@ -167,7 +169,7 @@ pub fn type_check(db: &dyn salsa::Database, program: HirProgram<'_>) -> TypedPro
 // Create tracked types with new method
 let program = Program::new(
     db,
-    source_file,
+    source_cst,
     expressions.into_iter().map(|(expr, span)| {
         TrackedExpression::new(db, expr, span)
     }).collect(),
@@ -179,9 +181,9 @@ let program = Program::new(
 ```rust
 // Dependencies are automatically created when queries call other queries
 #[salsa::tracked]
-pub fn compile(db: &dyn salsa::Database, source: SourceFile) -> CompiledProgram {
-    // Depends on parse_source_file
-    let ast = parse_source_file(db, source);
+pub fn compile(db: &dyn salsa::Database, source: SourceCst) -> CompiledProgram {
+    // Depends on parse_source_cst
+    let ast = parse_source_cst(db, source);
     
     // Depends on lower_source_to_hir
     let hir = lower_source_to_hir(db, source);
@@ -199,9 +201,9 @@ pub fn compile(db: &dyn salsa::Database, source: SourceFile) -> CompiledProgram 
 ```rust
 // To collect accumulated values from a specific query
 #[salsa::tracked]
-pub fn all_diagnostics(db: &dyn salsa::Database, source: SourceFile) -> Vec<Diagnostic> {
+pub fn all_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
     // Get diagnostics accumulated during parsing
-    let parse_diags = parse_source_file::accumulated::<Diagnostic>(db, source);
+    let parse_diags = parse_source_cst::accumulated::<Diagnostic>(db, source);
     
     // Get diagnostics accumulated during HIR lowering
     let hir_diags = lower_source_to_hir::accumulated::<Diagnostic>(db, source);
@@ -215,23 +217,42 @@ pub fn all_diagnostics(db: &dyn salsa::Database, source: SourceFile) -> Vec<Diag
 
 ## Practical Examples
 
+```rust
+use ropey::Rope;
+use std::path::Path;
+use tree_sitter::Parser;
+use tribute_front::path_to_uri;
+use tribute_front::SourceCst;
+
+fn make_source(
+    db: &dyn salsa::Database,
+    path: &Path,
+    text: &str,
+) -> SourceCst {
+    let uri = path_to_uri(path);
+    let rope = Rope::from_str(text);
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set language");
+    let tree = parser.parse(text, None);
+    SourceCst::new(db, uri, rope, tree)
+}
+```
+
 ### 1. Basic Usage
 
 ```rust
-use tribute_ast::{TributeDatabaseImpl, parse_source_file, diagnostics};
+use tribute_ast::{TributeDatabaseImpl, diagnostics, parse_source_cst};
 
 // Create database
 let db = TributeDatabaseImpl::default();
 
 // Create source file
-let source = SourceFile::new(
-    &db,
-    PathBuf::from("example.trb"),
-    "(+ 1 2 3)".to_string(),
-);
+let source = make_source(&db, Path::new("example.trb"), "(+ 1 2 3)");
 
 // Parse
-let program = parse_source_file(&db, source);
+let program = parse_source_cst(&db, source);
 
 // Check diagnostics
 let diagnostics = diagnostics(&db, source);
@@ -245,14 +266,14 @@ for diag in diagnostics {
 ```rust
 // Initial parsing
 let mut db = TributeDatabaseImpl::default();
-let source = SourceFile::new(&db, path, text);
-let program1 = parse_source_file(&db, source);
+let source = make_source(&db, path, text);
+let program1 = parse_source_cst(&db, source);
 
 // Modify source
 source.set_text(&mut db).to("(+ 1 2 3 4)".to_string());
 
 // Reparse - automatically invalidated and recomputed
-let program2 = parse_source_file(&db, source);
+let program2 = parse_source_cst(&db, source);
 
 // program1 and program2 are different results
 ```
@@ -262,8 +283,8 @@ let program2 = parse_source_file(&db, source);
 ```rust
 TributeDatabaseImpl::default().attach(|db| {
     // Use db within this block
-    let source = SourceFile::new(db, path, text);
-    let program = parse_source_file(db, source);
+    let source = make_source(db, path, text);
+    let program = parse_source_cst(db, source);
     
     // Test assertions
     assert_eq!(program.expressions(db).len(), 1);
@@ -278,13 +299,9 @@ TributeDatabaseImpl::default().attach(|db| {
 #[test]
 fn test_parse_simple_expression() {
     TributeDatabaseImpl::default().attach(|db| {
-        let source = SourceFile::new(
-            db,
-            PathBuf::from("test.trb"),
-            "(+ 1 2)".to_string(),
-        );
+        let source = make_source(db, Path::new("test.trb"), "(+ 1 2)");
         
-        let program = parse_source_file(db, source);
+        let program = parse_source_cst(db, source);
         let exprs = program.expressions(db);
         
         assert_eq!(exprs.len(), 1);
@@ -304,23 +321,25 @@ fn test_parse_simple_expression() {
 ```rust
 #[test]
 fn test_incremental_parsing() {
+    use ropey::Rope;
+
     TributeDatabaseImpl::default().attach(|db| {
-        let source = SourceFile::new(db, path, "(+ 1 2)".to_string());
+        let source = make_source(db, path, "(+ 1 2)");
         
         // First parse
-        let program1 = parse_source_file(db, source);
+        let program1 = parse_source_cst(db, source);
         let revision1 = db.salsa_runtime().current_revision();
         
         // Parse again with same content - uses cache
-        let program2 = parse_source_file(db, source);
+        let program2 = parse_source_cst(db, source);
         let revision2 = db.salsa_runtime().current_revision();
         assert_eq!(revision1, revision2); // No revision change
         
         // Modify source
-        source.set_text(db).to("(+ 1 2 3)".to_string());
+        source.set_text(db).to(Rope::from_str("(+ 1 2 3)"));
         
         // Reparse - new computation
-        let program3 = parse_source_file(db, source);
+        let program3 = parse_source_cst(db, source);
         let revision3 = db.salsa_runtime().current_revision();
         assert_ne!(revision2, revision3); // Revision changed
     });
@@ -333,13 +352,9 @@ fn test_incremental_parsing() {
 #[test]
 fn test_parse_error_diagnostics() {
     TributeDatabaseImpl::default().attach(|db| {
-        let source = SourceFile::new(
-            db,
-            PathBuf::from("error.trb"),
-            "(+ 1 2".to_string(), // Missing closing parenthesis
-        );
+        let source = make_source(db, Path::new("error.trb"), "(+ 1 2");
         
-        let _ = parse_source_file(db, source);
+        let _ = parse_source_cst(db, source);
         let diagnostics = diagnostics(db, source);
         
         assert_eq!(diagnostics.len(), 1);
@@ -402,7 +417,7 @@ fn dead_code_elimination(db: &dyn salsa::Database, hir: OptimizedHir<'_>) -> Opt
 #[salsa::tracked]
 fn find_definition(
     db: &dyn salsa::Database,
-    file: SourceFile,
+    file: SourceCst,
     position: Position,
 ) -> Option<Location> {
     // Implementation
@@ -419,7 +434,7 @@ fn find_references(
 #[salsa::tracked]
 fn hover_info(
     db: &dyn salsa::Database,
-    file: SourceFile,
+    file: SourceCst,
     position: Position,
 ) -> Option<HoverInfo> {
     // Implementation
@@ -431,7 +446,7 @@ fn hover_info(
 ```rust
 // Process multiple files in parallel
 #[salsa::tracked]
-fn compile_workspace(db: &dyn salsa::Database, files: Vec<SourceFile>) -> WorkspaceResult {
+fn compile_workspace(db: &dyn salsa::Database, files: Vec<SourceCst>) -> WorkspaceResult {
     use rayon::prelude::*;
     
     let results: Vec<_> = files
@@ -467,14 +482,14 @@ let deps = db.salsa_runtime().dependencies();
 
 // Debug a specific query
 #[salsa::tracked(recovery_fn = recover_from_parse_error)]
-pub fn parse_with_recovery(db: &dyn salsa::Database, source: SourceFile) -> Program<'_> {
+pub fn parse_with_recovery(db: &dyn salsa::Database, source: SourceCst) -> Program<'_> {
     // Implementation
 }
 
 fn recover_from_parse_error(
     db: &dyn salsa::Database,
     _cycle: &salsa::Cycle,
-    source: SourceFile,
+    source: SourceCst,
 ) -> Program<'_> {
     // Return a default/error program
     Program::new(db, source, vec![])
