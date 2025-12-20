@@ -1275,7 +1275,7 @@ impl<'db> Resolver<'db> {
                             .join("::"),
                     )
                 } else if let Attribute::Symbol(s) = a {
-                    Some(s.to_string().to_string())
+                    Some(s.to_string())
                 } else {
                     None
                 }

@@ -29,12 +29,12 @@ impl Symbol {
         Symbol(INTERNER.write().get_or_intern(text))
     }
 
-    /// Access the symbol's text with zero-copy (private - internal use only).
+    /// Access the symbol's text with zero-copy.
     ///
-    /// SAFETY: Do NOT call any Symbol methods (to_string, Display, ==, etc.)
-    /// from within the closure, as this will cause a deadlock due to the RwLock.
-    fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
-        let interner = INTERNER.read();
+    /// Uses `read_recursive()` to allow nested Symbol operations (Display, ==, to_string)
+    /// within the closure without risk of deadlock.
+    pub(crate) fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        let interner = INTERNER.read_recursive();
         let text = interner.resolve(&self.0);
         f(text)
     }
