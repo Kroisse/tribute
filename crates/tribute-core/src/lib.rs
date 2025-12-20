@@ -1,10 +1,4 @@
-//! Tribute compiler database
-//!
-//! This crate provides the Salsa database implementation for the Tribute compiler.
-
-pub mod database;
+//! Tribute compiler utilities.
 pub mod target;
 
-pub use database::*;
-pub use fluent_uri::Uri;
 pub use target::*;

@@ -4,7 +4,10 @@
 //! along with shared text helpers for editor integrations.
 
 pub mod line_index;
+pub mod source_file;
 pub mod tirgen;
 
+pub use fluent_uri::Uri;
 pub use line_index::LineIndex;
+pub use source_file::{SourceFile, path_to_uri, uri_to_path};
 pub use tirgen::{ParsedCst, lower_cst, lower_source_file, parse_cst};

@@ -5,9 +5,5 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
-dashmap.workspace = true
-derive_more.workspace = true
-fluent-uri.workspace = true
 salsa.workspace = true
-serde.workspace = true
 target-lexicon.workspace = true

@@ -46,12 +46,13 @@ authors.workspace = true
 
 [dependencies]
 clap.workspace = true
+dashmap.workspace = true
+fluent-uri.workspace = true
 lsp-server.workspace = true
 lsp-types.workspace = true
 salsa.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-tribute-core.workspace = true
 tribute-front.workspace = true
 tribute-passes.workspace = true
 trunk-ir.workspace = true

@@ -1178,6 +1178,8 @@ name = "tribute"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "dashmap",
+ "fluent-uri",
  "insta",
  "lsp-server",
  "lsp-types",
@@ -1186,7 +1188,6 @@ dependencies = [
  "tracing",
  "tree-sitter",
  "tree-sitter-tribute",
- "tribute-core",
  "tribute-front",
  "tribute-passes",
  "trunk-ir",
@@ -1196,11 +1197,7 @@ dependencies = [
 name = "tribute-core"
 version = "0.1.0"
 dependencies = [
- "dashmap",
- "derive_more",
- "fluent-uri",
  "salsa",
- "serde",
  "target-lexicon",
 ]
 
@@ -1218,11 +1215,11 @@ dependencies = [
 name = "tribute-front"
 version = "0.1.0"
 dependencies = [
+ "fluent-uri",
  "lsp-types",
  "salsa",
  "tree-sitter",
  "tree-sitter-tribute",
- "tribute-core",
  "trunk-ir",
 ]
 
@@ -1231,7 +1228,6 @@ name = "tribute-passes"
 version = "0.1.0"
 dependencies = [
  "salsa",
- "tribute-core",
  "trunk-ir",
 ]
 

@@ -970,10 +970,18 @@ pub fn typecheck_module_per_function<'db>(
 mod tests {
     use super::*;
     use salsa::Database;
-    use tribute_core::TributeDatabaseImpl;
     use trunk_ir::dialect::arith;
     use trunk_ir::idvec;
     use trunk_ir::{PathId, Span};
+
+    #[salsa::db]
+    #[derive(Default, Clone)]
+    struct TestDb {
+        storage: salsa::Storage<Self>,
+    }
+
+    #[salsa::db]
+    impl salsa::Database for TestDb {}
 
     #[salsa::tracked]
     fn build_simple_module(db: &dyn salsa::Database) -> core::Module<'_> {
@@ -1006,7 +1014,7 @@ mod tests {
 
     #[test]
     fn test_check_simple_module() {
-        TributeDatabaseImpl::default().attach(|db| {
+        TestDb::default().attach(|db| {
             let module = build_simple_module(db);
             let result = typecheck_module(db, &module);
             assert!(result.is_ok());
@@ -1015,7 +1023,7 @@ mod tests {
 
     #[test]
     fn test_check_arith_binop() {
-        TributeDatabaseImpl::default().attach(|db| {
+        TestDb::default().attach(|db| {
             let module = build_arith_module(db);
             let result = typecheck_module(db, &module);
             assert!(result.is_ok());
@@ -1030,7 +1038,7 @@ mod tests {
 
     #[test]
     fn test_typecheck_function_per_function() {
-        TributeDatabaseImpl::default().attach(|db| {
+        TestDb::default().attach(|db| {
             let typed_module = run_per_function_typecheck(db);
             assert_eq!(typed_module.name(db), "main");
         });
@@ -1040,7 +1048,7 @@ mod tests {
     fn test_has_type_vars_detection() {
         use trunk_ir::dialect::ty;
 
-        TributeDatabaseImpl::default().attach(|db| {
+        TestDb::default().attach(|db| {
             // Type variable should be detected
             let type_var = ty::var_with_id(db, 42);
             assert!(

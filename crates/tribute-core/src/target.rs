@@ -3,7 +3,6 @@
 //! This module defines target-specific information that affects
 //! code generation, type sizes, and calling conventions.
 
-use crate::Db;
 use target_lexicon::{Architecture, Triple};
 
 /// Target platform information for code generation
@@ -28,7 +27,7 @@ pub enum Endianness {
 
 impl TargetInfo {
     /// Create target info from a triple
-    pub fn from_triple(db: &dyn Db, triple: Triple) -> Self {
+    pub fn from_triple(db: &dyn salsa::Database, triple: Triple) -> Self {
         let pointer_size = match triple.pointer_width() {
             Ok(target_lexicon::PointerWidth::U16) => 2,
             Ok(target_lexicon::PointerWidth::U32) => 4,
@@ -49,32 +48,32 @@ impl TargetInfo {
     }
 
     /// Get the default target for the current host
-    pub fn host(db: &dyn Db) -> Self {
+    pub fn host(db: &dyn salsa::Database) -> Self {
         Self::from_triple(db, Triple::host())
     }
 
     /// Check if this is a 64-bit target
-    pub fn is_64bit(&self, db: &dyn Db) -> bool {
+    pub fn is_64bit(&self, db: &dyn salsa::Database) -> bool {
         self.pointer_size(db) == 8
     }
 
     /// Check if this is a 32-bit target
-    pub fn is_32bit(&self, db: &dyn Db) -> bool {
+    pub fn is_32bit(&self, db: &dyn salsa::Database) -> bool {
         self.pointer_size(db) == 4
     }
 
     /// Check if this target uses little endian byte order
-    pub fn is_little_endian(&self, db: &dyn Db) -> bool {
+    pub fn is_little_endian(&self, db: &dyn salsa::Database) -> bool {
         self.endianness(db) == Endianness::Little
     }
 
     /// Get the architecture of this target
-    pub fn architecture(&self, db: &dyn Db) -> Architecture {
+    pub fn architecture(&self, db: &dyn salsa::Database) -> Architecture {
         self.triple(db).architecture
     }
 
     /// Get a string representation of the target
-    pub fn as_str(&self, db: &dyn Db) -> String {
+    pub fn as_str(&self, db: &dyn salsa::Database) -> String {
         self.triple(db).to_string()
     }
 }
@@ -82,12 +81,20 @@ impl TargetInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TributeDatabaseImpl;
     use std::str::FromStr;
+
+    #[salsa::db]
+    #[derive(Default, Clone)]
+    struct TestDb {
+        storage: salsa::Storage<Self>,
+    }
+
+    #[salsa::db]
+    impl salsa::Database for TestDb {}
 
     #[test]
     fn test_host_target() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let target = TargetInfo::host(&db);
 
         // Should have reasonable values
@@ -98,7 +105,7 @@ mod tests {
 
     #[test]
     fn test_x86_64_target() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let triple = Triple::from_str("x86_64-unknown-linux-gnu").unwrap();
         let target = TargetInfo::from_triple(&db, triple);
 
@@ -112,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_i386_target() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let triple = Triple::from_str("i386-unknown-linux-gnu").unwrap();
         let target = TargetInfo::from_triple(&db, triple);
 

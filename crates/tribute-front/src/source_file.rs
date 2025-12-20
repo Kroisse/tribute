@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use dashmap::{DashMap, Entry};
 use fluent_uri::Uri;
 
 #[salsa::input(debug)]
@@ -61,43 +60,4 @@ fn percent_decode(s: &str) -> String {
         }
     }
     result
-}
-
-#[salsa::db]
-pub trait Db: salsa::Database {
-    fn input(
-        &self,
-        path: std::path::PathBuf,
-    ) -> Result<SourceFile, Box<dyn std::error::Error + Send + Sync>>;
-}
-
-#[derive(Default, Clone)]
-#[salsa::db]
-pub struct TributeDatabaseImpl {
-    storage: salsa::Storage<Self>,
-    /// Cache of loaded source files, keyed by URI string.
-    files: DashMap<String, SourceFile>,
-}
-
-#[salsa::db]
-impl salsa::Database for TributeDatabaseImpl {}
-
-#[salsa::db]
-impl Db for TributeDatabaseImpl {
-    fn input(
-        &self,
-        path: std::path::PathBuf,
-    ) -> Result<SourceFile, Box<dyn std::error::Error + Send + Sync>> {
-        let path = path.canonicalize()?;
-        let uri = path_to_uri(&path);
-        let uri_str = uri.as_str().to_owned();
-        match self.files.entry(uri_str) {
-            Entry::Occupied(entry) => Ok(*entry.get()),
-            Entry::Vacant(entry) => {
-                let contents = std::fs::read_to_string(&path)?;
-                let source_file = SourceFile::new(self, uri, contents);
-                Ok(*entry.insert(source_file))
-            }
-        }
-    }
 }

@@ -1311,9 +1311,17 @@ pub fn resolve_module<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) -
 mod tests {
     use super::*;
     use salsa::Database;
-    use tribute_core::TributeDatabaseImpl;
     use trunk_ir::dialect::{arith, core, func, src};
     use trunk_ir::{Location, PathId, Span, SymbolVec, idvec};
+
+    #[salsa::db]
+    #[derive(Default, Clone)]
+    struct TestDb {
+        storage: salsa::Storage<Self>,
+    }
+
+    #[salsa::db]
+    impl salsa::Database for TestDb {}
 
     fn test_location<'db>(db: &'db dyn salsa::Database) -> Location<'db> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -1477,7 +1485,7 @@ mod tests {
 
     #[test]
     fn test_build_env_from_module() {
-        TributeDatabaseImpl::default().attach(|db| {
+        TestDb::default().attach(|db| {
             let module = module_with_hello(db);
             let env = build_env(db, &module);
 
@@ -1494,7 +1502,7 @@ mod tests {
 
     #[test]
     fn test_nested_module_resolution() {
-        TributeDatabaseImpl::default().attach(|db| {
+        TestDb::default().attach(|db| {
             let module = module_with_nested_math(db);
             let env = build_env(db, &module);
 
@@ -1521,7 +1529,7 @@ mod tests {
     #[test]
     #[ignore = "TODO: Implement multi-level namespace support"]
     fn test_deeply_nested_module_resolution() {
-        TributeDatabaseImpl::default().attach(|db| {
+        TestDb::default().attach(|db| {
             let module = module_with_outer_inner(db);
             let env = build_env(db, &module);
 
@@ -1541,7 +1549,7 @@ mod tests {
     #[test]
     #[ignore = "TODO: Fix use import resolution"]
     fn test_use_import_resolves_call() {
-        TributeDatabaseImpl::default().attach(|db| {
+        TestDb::default().attach(|db| {
             let module = resolve_use_call_module(db);
 
             let mut ops = Vec::new();
@@ -1560,7 +1568,7 @@ mod tests {
 
     #[test]
     fn test_use_alias_resolves_call() {
-        TributeDatabaseImpl::default().attach(|db| {
+        TestDb::default().attach(|db| {
             let module = resolve_use_alias_module(db);
 
             let mut ops = Vec::new();

@@ -15,7 +15,7 @@ pub fn print_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
 mod tests {
     use super::*;
     use salsa::prelude::*;
-    use tribute_core::TributeDatabaseImpl;
+    use tribute::TributeDatabaseImpl;
     use trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func, I64, Nil};
     use trunk_ir::{IdVec, Symbol, idvec};
 

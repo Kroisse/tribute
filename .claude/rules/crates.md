@@ -4,15 +4,11 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 
 ## tribute-core
 
-**Role**: Shared compiler infrastructure and Salsa database
+**Role**: Shared compiler utilities (target info, future utilities)
 
 **Key Types**:
-- `TributeDatabaseImpl` - Salsa database implementation
-- `Diagnostic` - Compilation errors/warnings (phases: Parsing, TirGeneration, NameResolution, TypeChecking, Optimization)
-- `SourceFile` - Salsa input for source file content
-- `Span` - Source location (start, end character offsets)
-- `PathId` - Interned file paths for efficient comparison
 - `TargetInfo` - Platform info (triple, pointer size, endianness)
+- `Endianness` - Target byte order
 
 **Location**: `crates/tribute-core/`
 
@@ -34,6 +30,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 **Key Modules**:
 - `tirgen/` - TrunkIR generation from CST (Tree-sitter)
 - `line_index.rs` - Text/position conversions for editor integrations
+- `source_file.rs` - `SourceFile` input and URI helpers
 
 **Location**: `crates/tribute-front/`
 
@@ -63,6 +60,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 
 **Key Modules**:
 - `cli.rs` - Command-line argument parsing (serve command)
+- `database.rs` - `TributeDatabaseImpl` and file loading cache
 - `lsp/` - LSP server (hover, diagnostics, document sync)
 - `pipeline.rs` - Compilation pipeline orchestration
 
@@ -72,16 +70,13 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 
 ```
 tribute (main)
-├── tribute-core
 ├── tribute-front
 ├── tribute-passes
-│   ├── tribute-core
 │   ├── trunk-ir
 ├── trunk-ir
 └── tree-sitter-tribute
 
 tribute-front
-├── tribute-core
 ├── trunk-ir
 └── tree-sitter-tribute
 ```

@@ -42,8 +42,8 @@
 //! diagnostics via `Diagnostic { ... }.accumulate(db)`, which are then
 //! collected at the end of compilation.
 
+use crate::SourceFile;
 use salsa::Accumulator;
-use tribute_core::SourceFile;
 use tribute_front::{lower_cst, parse_cst};
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::resolve::{Resolver, build_env};
@@ -66,7 +66,7 @@ const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 /// and cached for all subsequent compilations.
 #[salsa::tracked]
 pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
-    let uri = tribute_core::Uri::parse_from("prelude:///std/prelude".to_owned())
+    let uri = fluent_uri::Uri::parse_from("prelude:///std/prelude".to_owned())
         .expect("valid prelude URI");
     let source_file = SourceFile::new(db, uri, PRELUDE_SOURCE.to_string());
     let cst = parse_cst(db, source_file)?;
@@ -297,8 +297,8 @@ pub fn compile_with_diagnostics<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TributeDatabaseImpl;
     use salsa::Database;
-    use tribute_core::TributeDatabaseImpl;
 
     #[salsa::tracked]
     fn test_compile(db: &dyn salsa::Database, source: SourceFile) -> Module<'_> {

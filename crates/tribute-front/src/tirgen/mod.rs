@@ -19,8 +19,8 @@ mod helpers;
 mod literals;
 mod statements;
 
+use crate::SourceFile;
 use tree_sitter::{Node, Parser};
-use tribute_core::SourceFile;
 use trunk_ir::dialect::core;
 use trunk_ir::{Location, PathId, Span, Symbol};
 
@@ -158,11 +158,19 @@ fn lower_cst_impl<'db>(
 mod tests {
     use super::*;
     use tree_sitter::{InputEdit, Parser, Point};
-    use tribute_core::TributeDatabaseImpl;
     use trunk_ir::DialectOp;
     use trunk_ir::dialect::{func, src};
 
-    fn lower_and_get_module<'db>(db: &'db TributeDatabaseImpl, source: &str) -> core::Module<'db> {
+    #[salsa::db]
+    #[derive(Default, Clone)]
+    struct TestDb {
+        storage: salsa::Storage<Self>,
+    }
+
+    #[salsa::db]
+    impl salsa::Database for TestDb {}
+
+    fn lower_and_get_module<'db>(db: &'db TestDb, source: &str) -> core::Module<'db> {
         let file = SourceFile::from_path(db, "test.trb", source.to_string());
         lower_source_file(db, file)
     }
@@ -233,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_simple_function() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = "fn main() { 42 }";
         let module = lower_and_get_module(&db, source);
 
@@ -252,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_nat_literal() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = "fn main() { 123 }";
         let module = lower_and_get_module(&db, source);
 
@@ -264,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_binary_expression() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = "fn main() { 1 + 2 }";
         let module = lower_and_get_module(&db, source);
 
@@ -276,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_let_binding() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = "fn main() { let x = 10; x }";
         let module = lower_and_get_module(&db, source);
 
@@ -288,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_tuple_pattern() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = "fn main() { let #(a, b) = #(1, 2); a + b }";
         let module = lower_and_get_module(&db, source);
 
@@ -299,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_list_expression() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = "fn main() { [1, 2, 3] }";
         let module = lower_and_get_module(&db, source);
 
@@ -310,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_case_expression() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = r#"
             fn main() {
                 let x = 1;
@@ -330,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_lambda_expression() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = "fn main() { fn(x) { x + 1 } }";
         let module = lower_and_get_module(&db, source);
 
@@ -341,7 +349,7 @@ mod tests {
 
     #[test]
     fn test_method_call() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = "fn main() { [1, 2, 3].len() }";
         let module = lower_and_get_module(&db, source);
 
@@ -352,7 +360,7 @@ mod tests {
 
     #[test]
     fn test_string_literal() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = r#"fn main() { "hello" }"#;
         let module = lower_and_get_module(&db, source);
 
@@ -363,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_wildcard_pattern() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = "fn main() { let _ = 42; 0 }";
         let module = lower_and_get_module(&db, source);
 
@@ -374,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_struct_declaration() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = r#"
             struct Point {
                 x: Int,
@@ -395,7 +403,7 @@ mod tests {
 
     #[test]
     fn test_enum_declaration() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = r#"
             enum Option(a) {
                 Some(a),
@@ -415,7 +423,7 @@ mod tests {
 
     #[test]
     fn test_const_declaration() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         // Test const declaration lowered to src.const
         // Note: uppercase identifiers like PI are parsed as type_identifier by the grammar
         // so we use lowercase for const names
@@ -437,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_inline_module() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = r#"
             pub mod math {
                 pub fn add(x: Int, y: Int) -> Int {
@@ -478,7 +486,7 @@ mod tests {
 
     #[test]
     fn test_nested_modules() {
-        let db = TributeDatabaseImpl::default();
+        let db = TestDb::default();
         let source = r#"
             pub mod outer {
                 pub mod inner {

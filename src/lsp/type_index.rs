@@ -153,7 +153,7 @@ mod tests {
     use super::*;
     use salsa::prelude::*;
     use tribute::compile;
-    use tribute_core::{SourceFile, TributeDatabaseImpl};
+    use tribute::{SourceFile, TributeDatabaseImpl};
 
     #[test]
     fn test_type_index_basic() {

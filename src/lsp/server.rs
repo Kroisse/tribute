@@ -22,7 +22,7 @@ use salsa::Database;
 use tree_sitter::{InputEdit, Parser, Point, Tree};
 
 use tribute::compile;
-use tribute_core::{SourceFile, TributeDatabaseImpl};
+use tribute::{SourceFile, TributeDatabaseImpl};
 
 use super::pretty::print_type;
 use super::type_index::TypeIndex;
@@ -170,7 +170,7 @@ impl LspServer {
         let db = TributeDatabaseImpl::default();
         let (type_str, span) = db.attach(|db| {
             let uri =
-                tribute_core::Uri::parse_from(uri.as_str().to_owned()).expect("valid URI from LSP");
+                fluent_uri::Uri::parse_from(uri.as_str().to_owned()).expect("valid URI from LSP");
             let source_file = SourceFile::new(db, uri, text.to_string());
             let module = compile(db, source_file);
             let type_index = TypeIndex::build(db, &module);
@@ -206,7 +206,7 @@ impl LspServer {
         let db = TributeDatabaseImpl::default();
         let diags = db.attach(|db| {
             let uri =
-                tribute_core::Uri::parse_from(uri.as_str().to_owned()).expect("valid URI from LSP");
+                fluent_uri::Uri::parse_from(uri.as_str().to_owned()).expect("valid URI from LSP");
             let source_file = SourceFile::new(db, uri, text.to_string());
             let result = tribute::compile_with_diagnostics(db, source_file);
             result.diagnostics
