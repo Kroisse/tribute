@@ -303,8 +303,7 @@ pub fn compile_with_diagnostics<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TributeDatabaseImpl;
-    use salsa::Database;
+    use salsa_test_macros::salsa_test;
     use tree_sitter::Parser;
 
     #[salsa::tracked]
@@ -324,132 +323,117 @@ mod tests {
         .expect("attached db")
     }
 
-    #[test]
-    fn test_full_pipeline() {
-        TributeDatabaseImpl::default().attach(|db| {
-            let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
+    #[salsa_test]
+    fn test_full_pipeline(db: &salsa::DatabaseImpl) {
+        let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
 
-            let module = test_compile(db, source);
-            assert_eq!(module.name(db), "main");
-        });
+        let module = test_compile(db, source);
+        assert_eq!(module.name(db), "main");
     }
 
-    #[test]
-    fn test_compile_with_diagnostics() {
-        TributeDatabaseImpl::default().attach(|db| {
-            let source = source_from_str("test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
+    #[salsa_test]
+    fn test_compile_with_diagnostics(db: &salsa::DatabaseImpl) {
+        let source = source_from_str("test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
 
-            let result = compile_with_diagnostics(db, source);
-            // Should compile without errors
-            assert!(
-                result.diagnostics.is_empty(),
-                "Expected no diagnostics, got: {:?}",
-                result.diagnostics
-            );
-        });
+        let result = compile_with_diagnostics(db, source);
+        // Should compile without errors
+        assert!(
+            result.diagnostics.is_empty(),
+            "Expected no diagnostics, got: {:?}",
+            result.diagnostics
+        );
     }
 
-    #[test]
-    fn test_unresolved_reference_diagnostic() {
-        TributeDatabaseImpl::default().attach(|db| {
-            let source = source_from_str("test.trb", "fn main() -> Int { undefined_var }");
+    #[salsa_test]
+    fn test_unresolved_reference_diagnostic(db: &salsa::DatabaseImpl) {
+        let source = source_from_str("test.trb", "fn main() -> Int { undefined_var }");
 
-            let result = compile_with_diagnostics(db, source);
-            // Should have an unresolved reference error
-            assert!(
-                !result.diagnostics.is_empty(),
-                "Expected diagnostic for unresolved reference"
-            );
+        let result = compile_with_diagnostics(db, source);
+        // Should have an unresolved reference error
+        assert!(
+            !result.diagnostics.is_empty(),
+            "Expected diagnostic for unresolved reference"
+        );
 
-            // Check that the diagnostic message mentions the unresolved name
-            let has_unresolved_error = result.diagnostics.iter().any(|d| {
-                d.message.contains("unresolved")
-                    && d.severity == DiagnosticSeverity::Error
-                    && d.phase == CompilationPhase::NameResolution
-            });
-            assert!(
-                has_unresolved_error,
-                "Expected unresolved name error, got: {:?}",
-                result.diagnostics
-            );
+        // Check that the diagnostic message mentions the unresolved name
+        let has_unresolved_error = result.diagnostics.iter().any(|d| {
+            d.message.contains("unresolved")
+                && d.severity == DiagnosticSeverity::Error
+                && d.phase == CompilationPhase::NameResolution
         });
+        assert!(
+            has_unresolved_error,
+            "Expected unresolved name error, got: {:?}",
+            result.diagnostics
+        );
     }
 
-    #[test]
-    fn test_prelude_loads() {
-        TributeDatabaseImpl::default().attach(|db| {
-            let prelude = prelude_module(db);
-            assert!(prelude.is_some(), "Prelude should load successfully");
-        });
+    #[salsa_test]
+    fn test_prelude_loads(db: &salsa::DatabaseImpl) {
+        let prelude = prelude_module(db);
+        assert!(prelude.is_some(), "Prelude should load successfully");
     }
 
-    #[test]
-    fn test_prelude_option_type() {
-        TributeDatabaseImpl::default().attach(|db| {
-            // Use Option type from prelude
-            let source = source_from_str("test.trb", "fn maybe() -> Option(Int) { None }");
+    #[salsa_test]
+    fn test_prelude_option_type(db: &salsa::DatabaseImpl) {
+        // Use Option type from prelude
+        let source = source_from_str("test.trb", "fn maybe() -> Option(Int) { None }");
 
-            let result = compile_with_diagnostics(db, source);
-            // Should compile without "unresolved" errors for Option or None
-            let has_option_error = result
-                .diagnostics
-                .iter()
-                .any(|d| d.message.contains("Option") || d.message.contains("None"));
-            assert!(
-                !has_option_error,
-                "Option and None should be available from prelude, got: {:?}",
-                result.diagnostics
-            );
-        });
+        let result = compile_with_diagnostics(db, source);
+        // Should compile without "unresolved" errors for Option or None
+        let has_option_error = result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("Option") || d.message.contains("None"));
+        assert!(
+            !has_option_error,
+            "Option and None should be available from prelude, got: {:?}",
+            result.diagnostics
+        );
     }
 
-    #[test]
-    fn test_prelude_result_type() {
-        TributeDatabaseImpl::default().attach(|db| {
-            // Use Result type from prelude
-            let source =
-                source_from_str("test.trb", "fn success() -> Result(Int, String) { Ok(42) }");
+    #[salsa_test]
+    fn test_prelude_result_type(db: &salsa::DatabaseImpl) {
+        // Use Result type from prelude
+        let source = source_from_str("test.trb", "fn success() -> Result(Int, String) { Ok(42) }");
 
-            let result = compile_with_diagnostics(db, source);
-            // Should compile without "unresolved" errors for Result or Ok
-            let has_result_error = result
-                .diagnostics
-                .iter()
-                .any(|d| d.message.contains("Result") || d.message.contains("Ok"));
-            assert!(
-                !has_result_error,
-                "Result and Ok should be available from prelude, got: {:?}",
-                result.diagnostics
-            );
-        });
+        let result = compile_with_diagnostics(db, source);
+        // Should compile without "unresolved" errors for Result or Ok
+        let has_result_error = result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("Result") || d.message.contains("Ok"));
+        assert!(
+            !has_result_error,
+            "Result and Ok should be available from prelude, got: {:?}",
+            result.diagnostics
+        );
     }
 
-    #[test]
-    fn test_case_expression_pattern_binding() {
-        TributeDatabaseImpl::default().attach(|db| {
-            // Simple case expression with identifier pattern binding
-            let source = source_from_str(
-                "test.trb",
-                r#"
-                fn test(x: Int) -> Int {
-                    case x {
-                        y -> y
-                    }
+    #[salsa_test]
+    fn test_case_expression_pattern_binding(db: &salsa::DatabaseImpl) {
+        // Simple case expression with identifier pattern binding
+        let source = source_from_str(
+            "test.trb",
+            r#"
+            fn test(x: Int) -> Int {
+                case x {
+                    y -> y
                 }
-                "#,
-            );
+            }
+            "#,
+        );
 
-            let result = compile_with_diagnostics(db, source);
-            // Pattern binding `y` should be resolved in the case arm body
-            let has_unresolved_y = result
-                .diagnostics
-                .iter()
-                .any(|d| d.message.contains("unresolved") && d.message.contains("y"));
-            assert!(
-                !has_unresolved_y,
-                "Pattern binding `y` should be resolved, got: {:?}",
-                result.diagnostics
-            );
-        });
+        let result = compile_with_diagnostics(db, source);
+        // Pattern binding `y` should be resolved in the case arm body
+        let has_unresolved_y = result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("unresolved") && d.message.contains("y"));
+        assert!(
+            !has_unresolved_y,
+            "Pattern binding `y` should be resolved, got: {:?}",
+            result.diagnostics
+        );
     }
 }

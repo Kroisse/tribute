@@ -38,6 +38,8 @@ tribute-core = { path = "crates/tribute-core" }
 tribute-front = { path = "crates/tribute-front" }
 tribute-passes = { path = "crates/tribute-passes" }
 trunk-ir = { path = "crates/trunk-ir" }
+unsynn = "0.3.0"
+quote = "1.0"
 
 [package]
 name = "tribute"
@@ -63,3 +65,4 @@ tree-sitter-tribute.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+salsa-test-macros = { path = "crates/salsa-test-macros" }

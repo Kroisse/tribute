@@ -1,0 +1,12 @@
+[package]
+name = "salsa-test-macros"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+unsynn = { workspace = true }
+quote = "1.0"
