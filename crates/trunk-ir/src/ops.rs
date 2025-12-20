@@ -1344,9 +1344,7 @@ macro_rules! define_type {
                 }
 
                 fn from_type(db: &'db dyn salsa::Database, ty: $crate::Type<'db>) -> Option<Self> {
-                    if ty.dialect(db) == $crate::Symbol::new($crate::raw_ident_str!($dialect))
-                        && ty.name(db) == $crate::Symbol::new($crate::raw_ident_str!($ty))
-                    {
+                    if ty.dialect(db) == DIALECT_NAME() && ty.name(db) == [<$ty:upper>]() {
                         Some(Self(ty))
                     } else {
                         None
