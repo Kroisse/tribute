@@ -5,29 +5,13 @@ use ropey::Rope;
 use tree_sitter::{Parser, Tree};
 
 #[salsa::input(debug)]
-pub struct SourceFile {
-    #[returns(ref)]
-    pub uri: Uri<String>,
-    #[returns(ref)]
-    pub text: Rope,
-}
-
-#[salsa::input(debug)]
 pub struct SourceCst {
     #[returns(ref)]
     pub uri: Uri<String>,
     #[returns(ref)]
     pub text: Rope,
     #[returns(ref)]
-    pub tree: Tree,
-}
-
-impl SourceFile {
-    /// Create a SourceFile from a file path (convenience for CLI/tests).
-    pub fn from_path(db: &dyn salsa::Database, path: impl AsRef<Path>, text: Rope) -> Self {
-        let uri = path_to_uri(path.as_ref());
-        Self::new(db, uri, text)
-    }
+    pub tree: Option<Tree>,
 }
 
 impl SourceCst {
@@ -36,7 +20,7 @@ impl SourceCst {
         db: &dyn salsa::Database,
         path: impl AsRef<Path>,
         text: Rope,
-        tree: Tree,
+        tree: Option<Tree>,
     ) -> Self {
         let uri = path_to_uri(path.as_ref());
         Self::new(db, uri, text, tree)

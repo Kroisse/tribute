@@ -6,39 +6,29 @@ use std::error::Error;
 use std::io;
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
-use lsp_types::notification::{
-    DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
-    PublishDiagnostics,
-};
-use lsp_types::request::HoverRequest;
 use lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
     InitializeParams, MarkupContent, MarkupKind, PublishDiagnosticsParams, ServerCapabilities,
     TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
     TextDocumentSyncOptions, Uri,
+    notification::{
+        DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
+        PublishDiagnostics,
+    },
+    request::HoverRequest,
 };
 use ropey::Rope;
-use salsa::Database;
-use tree_sitter::{InputEdit, Parser, Point, Tree};
+use salsa::{Database, Setter};
+use tree_sitter::{InputEdit, Point};
 
-use tribute::compile;
-use tribute::{SourceFile, TributeDatabaseImpl};
-use tribute_front::source_file::parse_with_rope;
-
+use tribute::{TributeDatabaseImpl, compile, database::parse_with_thread_local};
 use super::pretty::print_type;
 use super::type_index::TypeIndex;
-/// Document state stored per-file.
-struct Document {
-    rope: Rope,
-    parser: Parser,
-    tree: Option<Tree>,
-}
 
 /// Main LSP server state.
 struct LspServer {
     connection: Connection,
-    documents: std::collections::HashMap<Uri, Document>,
     db: TributeDatabaseImpl,
 }
 
@@ -46,7 +36,6 @@ impl LspServer {
     fn new(connection: Connection) -> Self {
         Self {
             connection,
-            documents: std::collections::HashMap::new(),
             db: TributeDatabaseImpl::default(),
         }
     }
@@ -102,21 +91,9 @@ impl LspServer {
         let text = params.text_document.text;
 
         let rope = Rope::from_str(&text);
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        let tree = parse_with_rope(&mut parser, &rope, None);
-        self.documents.insert(
-            uri.clone(),
-            Document {
-                rope: rope.clone(),
-                parser,
-                tree,
-            },
-        );
+        self.db.open_document(&uri, rope);
 
-        self.publish_diagnostics(&uri, rope)?;
+        self.publish_diagnostics(&uri)?;
         Ok(())
     }
 
@@ -125,19 +102,11 @@ impl LspServer {
         params: DidChangeTextDocumentParams,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let uri = params.text_document.uri;
-        let text = {
-            let Some(doc) = self.documents.get_mut(&uri) else {
-                return Ok(());
-            };
+        for change in params.content_changes {
+            self.apply_change(&uri, change)?;
+        }
 
-            for change in params.content_changes {
-                Self::apply_change(doc, change)?;
-            }
-
-            doc.rope.clone()
-        };
-
-        self.publish_diagnostics(&uri, text)?;
+        self.publish_diagnostics(&uri)?;
         Ok(())
     }
 
@@ -146,7 +115,7 @@ impl LspServer {
         params: DidCloseTextDocumentParams,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let uri = params.text_document.uri;
-        self.documents.remove(&uri);
+        self.db.close_document(&uri);
 
         // Clear diagnostics
         let params = PublishDiagnosticsParams {
@@ -163,15 +132,15 @@ impl LspServer {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        let doc = self.documents.get(uri)?;
-        let offset = offset_from_position(&doc.rope, position.line, position.character)?;
-
-        let text = doc.rope.clone();
+        let rope = self
+            .db
+            .with_document(uri, |doc| doc.text(&self.db).clone())?;
+        let offset = offset_from_position(&rope, position.line, position.character)?;
+        let source_cst = self.db.source_cst(uri)?;
 
         // Run Salsa compilation
         let (type_str, span) = self.db.attach(|db| {
-            let source_file = SourceFile::new(db, (**uri).clone(), text);
-            let module = compile(db, source_file);
+            let module = compile(db, source_cst);
             let type_index = TypeIndex::build(db, &module);
 
             type_index.type_at(offset).map(|entry| {
@@ -184,7 +153,7 @@ impl LspServer {
             kind: MarkupKind::Markdown,
             value: format!("```tribute\n{}\n```", type_str),
         });
-        let range = span_to_range(&doc.rope, span);
+        let range = span_to_range(&rope, span);
 
         Some(Hover {
             contents,
@@ -192,27 +161,27 @@ impl LspServer {
         })
     }
 
-    fn publish_diagnostics(
-        &self,
-        uri: &Uri,
-        text: Rope,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let Some(doc) = self.documents.get(uri) else {
+    fn publish_diagnostics(&self, uri: &Uri) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let rope = self
+            .db
+            .with_document(uri, |doc| doc.text(&self.db).clone());
+        let Some(rope) = rope else {
+            return Ok(());
+        };
+        let Some(source_cst) = self.db.source_cst(uri) else {
             return Ok(());
         };
 
         // Run Salsa compilation
-        let diags = self.db.attach(|db| {
-            let source_file = SourceFile::new(db, (**uri).clone(), text);
-            let result = tribute::compile_with_diagnostics(db, source_file);
-            result.diagnostics
-        });
+        let diags = self
+            .db
+            .attach(|db| tribute::compile_with_diagnostics(db, source_cst).diagnostics);
 
         // Convert to LSP diagnostics
         let diagnostics: Vec<Diagnostic> = diags
             .iter()
             .map(|d| {
-                let range = span_to_range(&doc.rope, d.span);
+                let range = span_to_range(&rope, d.span);
                 Diagnostic {
                     range,
                     severity: Some(match d.severity {
@@ -238,23 +207,34 @@ impl LspServer {
     }
 
     fn apply_change(
-        doc: &mut Document,
+        &mut self,
+        uri: &Uri,
         change: TextDocumentContentChangeEvent,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let Some(doc) = self.db.source_cst(uri) else {
+            return Ok(());
+        };
+
         match change.range {
             Some(range) => {
                 let start = range.start;
                 let end = range.end;
                 let start_byte =
-                    offset_from_position(&doc.rope, start.line, start.character).ok_or(
-                        io::Error::new(io::ErrorKind::InvalidInput, "invalid start position"),
-                    )?;
-                let old_end_byte = offset_from_position(&doc.rope, end.line, end.character).ok_or(
-                    io::Error::new(io::ErrorKind::InvalidInput, "invalid end position"),
-                )?;
+                    offset_from_position(&doc.text(&self.db), start.line, start.character)
+                        .ok_or(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "invalid start position",
+                        ))?;
+                let old_end_byte =
+                    offset_from_position(&doc.text(&self.db), end.line, end.character)
+                        .ok_or(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "invalid end position",
+                        ))?;
 
-                let (start_row, start_col) = byte_line_col(&doc.rope, start_byte);
-                let (old_end_row, old_end_col) = byte_line_col(&doc.rope, old_end_byte);
+                let (start_row, start_col) = byte_line_col(&doc.text(&self.db), start_byte);
+                let (old_end_row, old_end_col) =
+                    byte_line_col(&doc.text(&self.db), old_end_byte);
                 let start_point = Point {
                     row: start_row as usize,
                     column: start_col as usize,
@@ -266,12 +246,14 @@ impl LspServer {
                 let new_end_point = point_after_text(start_point, &change.text);
                 let new_end_byte = start_byte + change.text.len();
 
-                let start_char = doc.rope.byte_to_char(start_byte);
-                let old_end_char = doc.rope.byte_to_char(old_end_byte);
-                doc.rope.remove(start_char..old_end_char);
-                doc.rope.insert(start_char, &change.text);
+                let mut rope = doc.text(&self.db).clone();
+                let start_char = rope.byte_to_char(start_byte);
+                let old_end_char = rope.byte_to_char(old_end_byte);
+                rope.remove(start_char..old_end_char);
+                rope.insert(start_char, &change.text);
 
-                if let Some(mut tree) = doc.tree.take() {
+                let current_tree = doc.tree(&self.db).clone();
+                let updated_tree = if let Some(mut tree) = current_tree {
                     tree.edit(&InputEdit {
                         start_byte,
                         old_end_byte,
@@ -280,14 +262,18 @@ impl LspServer {
                         old_end_position: old_end_point,
                         new_end_position: new_end_point,
                     });
-                    doc.tree = parse_with_rope(&mut doc.parser, &doc.rope, Some(&tree));
+                    parse_with_thread_local(&rope, Some(&tree))
                 } else {
-                    doc.tree = parse_with_rope(&mut doc.parser, &doc.rope, None);
-                }
+                    parse_with_thread_local(&rope, None)
+                };
+                doc.set_text(&mut self.db).to(rope.clone());
+                doc.set_tree(&mut self.db).to(updated_tree);
             }
             None => {
-                doc.rope = Rope::from_str(&change.text);
-                doc.tree = parse_with_rope(&mut doc.parser, &doc.rope, None);
+                let rope = Rope::from_str(&change.text);
+                doc.set_text(&mut self.db).to(rope.clone());
+                doc.set_tree(&mut self.db)
+                    .to(parse_with_thread_local(&rope, None));
             }
         }
         Ok(())

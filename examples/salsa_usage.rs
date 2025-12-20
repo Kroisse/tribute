@@ -3,7 +3,8 @@
 //! This example demonstrates the CST→TrunkIR lowering pipeline.
 
 use salsa::Setter;
-use tribute::{SourceFile, TributeDatabaseImpl, lower_source_file, lower_str};
+use tree_sitter::Parser;
+use tribute::{SourceCst, TributeDatabaseImpl, lower_source_cst};
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::func;
 
@@ -20,6 +21,10 @@ fn basic_database_usage() {
 
     // Create a database instance
     let db = TributeDatabaseImpl::default();
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set language");
 
     // Parse some Tribute code
     let source_code = r#"
@@ -30,7 +35,9 @@ fn basic_database_usage() {
     "#;
 
     // Lower to TrunkIR using the convenience function
-    let module = lower_str(&db, "example.tr", source_code);
+    let tree = parser.parse(source_code, None).expect("tree");
+    let source = SourceCst::from_path(&db, "example.tr", source_code.into(), Some(tree));
+    let module = lower_source_cst(&db, source);
 
     // Get the operations from the module
     let body = module.body(&db);
@@ -57,13 +64,20 @@ fn incremental_compilation_demo() {
     println!("=== Incremental Compilation Demo ===");
 
     let mut db = TributeDatabaseImpl::default();
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set language");
 
     // Create a source file
-    let source_file = SourceFile::from_path(&db, "math.trb", "fn main() { 1 + 2 }".into());
+    let initial_text = "fn main() { 1 + 2 }";
+    let initial_tree = parser.parse(initial_text, None).expect("tree");
+    let source_file =
+        SourceCst::from_path(&db, "math.trb", initial_text.into(), Some(initial_tree));
 
     // Lower it
     println!("Initial lowering...");
-    let module1 = lower_source_file(&db, source_file);
+    let module1 = lower_source_cst(&db, source_file);
     let body1 = module1.body(&db);
     let blocks1 = body1.blocks(&db);
     if !blocks1.is_empty() {
@@ -72,12 +86,13 @@ fn incremental_compilation_demo() {
 
     // Modify the source file
     println!("Modifying source...");
-    source_file
-        .set_text(&mut db)
-        .to("fn main() { 3 * (1 + 2) }".into());
+    let updated_text = "fn main() { 3 * (1 + 2) }";
+    let updated_tree = parser.parse(updated_text, None).expect("tree");
+    source_file.set_text(&mut db).to(updated_text.into());
+    source_file.set_tree(&mut db).to(Some(updated_tree));
 
     // Lower again - Salsa will automatically detect the change and recompute
-    let module2 = lower_source_file(&db, source_file);
+    let module2 = lower_source_cst(&db, source_file);
     let body2 = module2.body(&db);
     let blocks2 = body2.blocks(&db);
     if !blocks2.is_empty() {
@@ -88,7 +103,7 @@ fn incremental_compilation_demo() {
     }
 
     // Lower again without changes - this should use the cached result
-    let module3 = lower_source_file(&db, source_file);
+    let module3 = lower_source_cst(&db, source_file);
     println!(
         "Cached result identical: {}",
         module2.body(&db).blocks(&db).len() == module3.body(&db).blocks(&db).len()

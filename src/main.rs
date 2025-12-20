@@ -8,7 +8,8 @@ use cli::{Cli, Command};
 use ropey::Rope;
 use salsa::Database;
 use tribute::pipeline::{compile_with_diagnostics, stage_resolve};
-use tribute::{SourceFile, TributeDatabaseImpl};
+use tribute::{SourceCst, TributeDatabaseImpl};
+use tribute::database::parse_with_thread_local;
 use tribute_passes::resolve::build_env;
 
 fn main() {
@@ -41,7 +42,8 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
     TributeDatabaseImpl::default().attach(|db| {
         println!("=== Compiling: {} ===\n", path.display());
 
-        let source = SourceFile::from_path(db, &path, source_code);
+        let tree = parse_with_thread_local(&source_code, None);
+        let source = SourceCst::from_path(db, &path, source_code, tree);
         let result = compile_with_diagnostics(db, source);
 
         // Show diagnostics

@@ -1,14 +1,35 @@
-use dashmap::{DashMap, Entry};
+use std::cell::RefCell;
+use std::sync::Arc;
 
+use dashmap::DashMap;
+use lsp_types::Uri;
 use ropey::Rope;
-use tribute_front::{SourceFile, path_to_uri};
+use tree_sitter::Tree;
+use tribute_front::source_file::parse_with_rope;
+use tribute_front::{SourceCst, path_to_uri};
+
+thread_local! {
+    static PARSER: RefCell<tree_sitter::Parser> = {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set language");
+        RefCell::new(parser)
+    };
+}
+
+pub fn parse_with_thread_local(rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
+    PARSER.with(|parser| {
+        let mut parser = parser.borrow_mut();
+        parse_with_rope(&mut parser, rope, old_tree)
+    })
+}
 
 #[derive(Default, Clone)]
 #[salsa::db]
 pub struct TributeDatabaseImpl {
     storage: salsa::Storage<Self>,
-    /// Cache of loaded source files, keyed by URI string.
-    files: DashMap<String, SourceFile>,
+    documents: Arc<DashMap<String, SourceCst>>,
 }
 
 #[salsa::db]
@@ -18,18 +39,40 @@ impl TributeDatabaseImpl {
     pub fn input(
         &self,
         path: std::path::PathBuf,
-    ) -> Result<SourceFile, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<SourceCst, Box<dyn std::error::Error + Send + Sync>> {
         let path = path.canonicalize()?;
         let uri = path_to_uri(&path);
-        let uri_str = uri.as_str().to_owned();
-        match self.files.entry(uri_str) {
-            Entry::Occupied(entry) => Ok(*entry.get()),
-            Entry::Vacant(entry) => {
-                let file = std::fs::File::open(&path)?;
-                let contents = Rope::from_reader(file)?;
-                let source_file = SourceFile::new(self, uri, contents);
-                Ok(*entry.insert(source_file))
-            }
+        let key = uri.as_str().to_owned();
+        if let Some(existing) = self.documents.get(key.as_str()) {
+            return Ok(existing.clone());
         }
+        let file = std::fs::File::open(&path)?;
+        let contents = Rope::from_reader(file)?;
+        let tree = parse_with_thread_local(&contents, None);
+        let source_cst = SourceCst::new(self, uri, contents, tree);
+        self.documents.insert(key, source_cst);
+        Ok(source_cst)
+    }
+
+    pub fn open_document(&mut self, uri: &Uri, text: Rope) {
+        let key = uri.as_str().to_owned();
+        let tree = parse_with_thread_local(&text, None);
+        let source_cst = SourceCst::new(self, (**uri).clone(), text, tree);
+        self.documents.insert(key, source_cst);
+    }
+
+    pub fn close_document(&self, uri: &Uri) {
+        let key = uri.as_str();
+        self.documents.remove(key);
+    }
+
+    pub fn with_document<T>(&self, uri: &Uri, f: impl FnOnce(&SourceCst) -> T) -> Option<T> {
+        let key = uri.as_str();
+        self.documents.get(key).map(|doc| f(&*doc))
+    }
+
+    pub fn source_cst(&self, uri: &Uri) -> Option<SourceCst> {
+        let key = uri.as_str();
+        self.documents.get(key).map(|entry| entry.clone())
     }
 }

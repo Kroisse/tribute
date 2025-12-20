@@ -8,15 +8,18 @@
 //! 1. **Parsing**: `parse_cst` - Parse source to CST (Tree-sitter)
 //! 2. **Lowering**: `lower_cst` - Lower CST to TrunkIR
 //!
-//! For convenience, `lower_source_file` combines both stages.
+//! For convenience, `lower_source_cst` combines both stages.
 
 use std::path::Path;
 
 pub use crate::database::TributeDatabaseImpl;
-pub use tribute_front::SourceFile;
-pub use tribute_front::{ParsedCst, lower_cst, lower_source_file, parse_cst};
+pub use ropey::Rope;
+pub use tribute_front::SourceCst;
+pub use tribute_front::{ParsedCst, lower_cst, lower_source_cst, parse_cst};
 pub use tribute_passes::{Diagnostic, DiagnosticSeverity};
 pub use trunk_ir::dialect::core::Module;
+use tree_sitter::Parser;
+use tribute_front::source_file::parse_with_rope;
 
 pub mod database;
 pub mod pipeline;
@@ -33,6 +36,12 @@ pub fn lower_str<'db>(
     path: &(impl AsRef<Path> + ?Sized),
     source: &str,
 ) -> Module<'db> {
-    let source_file = SourceFile::from_path(db, path.as_ref(), source.into());
-    lower_source_file(db, source_file)
+    let text = Rope::from_str(source);
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set language");
+    let tree = parse_with_rope(&mut parser, &text, None).expect("tree");
+    let source = SourceCst::from_path(db, path.as_ref(), text, Some(tree));
+    lower_source_cst(db, source)
 }

@@ -153,7 +153,8 @@ mod tests {
     use super::*;
     use salsa::prelude::*;
     use tribute::compile;
-    use tribute::{SourceFile, TributeDatabaseImpl};
+    use tribute::{SourceCst, TributeDatabaseImpl};
+    use tree_sitter::Parser;
 
     #[test]
     fn test_type_index_basic() {
@@ -161,7 +162,12 @@ mod tests {
             //                    0         1         2         3
             //                    0123456789012345678901234567890123456789
             let source_text = "fn add(x: Int, y: Int) -> Int { x + y }";
-            let source = SourceFile::from_path(db, "test.trb", source_text.into());
+            let mut parser = Parser::new();
+            parser
+                .set_language(&tree_sitter_tribute::LANGUAGE.into())
+                .expect("Failed to set language");
+            let tree = parser.parse(source_text, None).expect("tree");
+            let source = SourceCst::from_path(db, "test.trb", source_text.into(), Some(tree));
 
             let module = compile(db, source);
             let index = TypeIndex::build(db, &module);
@@ -181,7 +187,12 @@ mod tests {
             //                    0         1         2         3
             //                    0123456789012345678901234567890123456
             let source_text = "fn foo(a: Int) -> Int { a }";
-            let source = SourceFile::from_path(db, "test.trb", source_text.into());
+            let mut parser = Parser::new();
+            parser
+                .set_language(&tree_sitter_tribute::LANGUAGE.into())
+                .expect("Failed to set language");
+            let tree = parser.parse(source_text, None).expect("tree");
+            let source = SourceCst::from_path(db, "test.trb", source_text.into(), Some(tree));
 
             let module = compile(db, source);
             let index = TypeIndex::build(db, &module);

@@ -7,7 +7,7 @@
 //! ## Pipeline
 //!
 //! The lowering is split into two Salsa-tracked stages:
-//! 1. `parse_cst` - Parse source to CST (cached by Salsa)
+//! 1. `parse_cst` - Wrap CST from `SourceCst` (cached by Salsa)
 //! 2. `lower_cst` - Lower CST to TrunkIR module
 //!
 //! This allows Salsa to cache the CST independently from the TrunkIR output.
@@ -19,10 +19,9 @@ mod helpers;
 mod literals;
 mod statements;
 
-use crate::source_file::parse_with_rope;
-use crate::{SourceCst, SourceFile};
+use crate::SourceCst;
 use ropey::Rope;
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 use trunk_ir::dialect::core;
 use trunk_ir::{Location, PathId, Span, Symbol};
 
@@ -39,28 +38,11 @@ use helpers::{is_comment, span_from_node};
 // Entry Points
 // =============================================================================
 
-/// Parse a source file into a CST.
-///
-/// This is the first stage of the compilation pipeline. The resulting
-/// `ParsedCst` is cached by Salsa and will only be recomputed when
-/// the source file changes.
-#[salsa::tracked]
-pub fn parse_cst(db: &dyn salsa::Database, source: SourceFile) -> Option<ParsedCst> {
-    let text = source.text(db);
-
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_tribute::LANGUAGE.into())
-        .expect("Failed to set language");
-
-    let tree = parse_with_rope(&mut parser, text, None)?;
-    Some(ParsedCst::new(tree))
-}
-
 /// Wrap a pre-parsed CST stored in the database.
 #[salsa::tracked]
-pub fn parse_cst_from_tree(db: &dyn salsa::Database, source: SourceCst) -> ParsedCst {
-    ParsedCst::new(source.tree(db).clone())
+pub fn parse_cst(db: &dyn salsa::Database, source: SourceCst) -> Option<ParsedCst> {
+    let tree = source.tree(db).clone()?;
+    Some(ParsedCst::new(tree))
 }
 
 /// Lower a parsed CST to TrunkIR module.
@@ -71,7 +53,7 @@ pub fn parse_cst_from_tree(db: &dyn salsa::Database, source: SourceCst) -> Parse
 #[salsa::tracked]
 pub fn lower_cst<'db>(
     db: &'db dyn salsa::Database,
-    source: SourceFile,
+    source: SourceCst,
     cst: ParsedCst,
 ) -> core::Module<'db> {
     let path = PathId::new(db, source.uri(db).as_str().to_owned());
@@ -87,32 +69,14 @@ pub fn lower_cst<'db>(
 pub fn lower_source_cst<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> core::Module<'db> {
     let path = PathId::new(db, source.uri(db).as_str().to_owned());
     let text = source.text(db);
-    let cst = parse_cst_from_tree(db, source);
+    let Some(cst) = parse_cst(db, source) else {
+        let location = Location::new(path, Span::new(0, 0));
+        return core::Module::build(db, location, Symbol::new("main"), |_| {});
+    };
     let root = cst.root_node();
     let location = Location::new(path, span_from_node(&root));
 
     lower_cst_impl(db, path, text.clone(), root, location)
-}
-
-/// Lower a source file directly from CST to TrunkIR module.
-///
-/// This is a convenience function that combines `parse_cst` and `lower_cst`.
-/// For fine-grained caching control, use the two functions separately.
-#[salsa::tracked]
-pub fn lower_source_file<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceFile,
-) -> core::Module<'db> {
-    let path = PathId::new(db, source.uri(db).as_str().to_owned());
-
-    match parse_cst(db, source) {
-        Some(cst) => lower_cst(db, source, cst),
-        None => {
-            // Return empty module on parse failure
-            let location = Location::new(path, Span::new(0, 0));
-            core::Module::build(db, location, Symbol::new("main"), |_| {})
-        }
-    }
 }
 
 /// Internal implementation of CST lowering.
@@ -193,8 +157,7 @@ mod tests {
     impl salsa::Database for TestDb {}
 
     fn lower_and_get_module<'db>(db: &'db TestDb, source: &str) -> core::Module<'db> {
-        let file = SourceFile::from_path(db, "test.trb", source.into());
-        lower_source_file(db, file)
+        lower_from_tree(db, source)
     }
 
     fn lower_from_tree<'db>(db: &'db TestDb, source: &str) -> core::Module<'db> {
@@ -203,7 +166,7 @@ mod tests {
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
             .expect("Failed to set language");
         let tree = parser.parse(source, None).expect("tree");
-        let file = SourceCst::from_path(db, "test.trb", source.into(), tree);
+        let file = SourceCst::from_path(db, "test.trb", source.into(), Some(tree));
         lower_source_cst(db, file)
     }
 
@@ -290,10 +253,10 @@ mod tests {
 
         let mut db = TestDb::default();
         let tree = parser.parse("fn main() { 1 }", None).expect("tree");
-        let source = SourceCst::from_path(&db, "test.trb", "fn main() { 1 }".into(), tree);
+        let source = SourceCst::from_path(&db, "test.trb", "fn main() { 1 }".into(), Some(tree));
 
         let tree2 = parser.parse("fn main() { 2 }", None).expect("tree2");
-        source.set_tree(&mut db).to(tree2);
+        source.set_tree(&mut db).to(Some(tree2));
     }
 
     #[test]
