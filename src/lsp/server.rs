@@ -39,6 +39,7 @@ struct Document {
 struct LspServer {
     connection: Connection,
     documents: std::collections::HashMap<Uri, Document>,
+    db: TributeDatabaseImpl,
 }
 
 impl LspServer {
@@ -46,6 +47,7 @@ impl LspServer {
         Self {
             connection,
             documents: std::collections::HashMap::new(),
+            db: TributeDatabaseImpl::default(),
         }
     }
 
@@ -167,8 +169,7 @@ impl LspServer {
         let text = doc.rope.clone();
 
         // Run Salsa compilation
-        let db = TributeDatabaseImpl::default();
-        let (type_str, span) = db.attach(|db| {
+        let (type_str, span) = self.db.attach(|db| {
             let source_file = SourceFile::new(db, (**uri).clone(), text);
             let module = compile(db, source_file);
             let type_index = TypeIndex::build(db, &module);
@@ -201,8 +202,7 @@ impl LspServer {
         };
 
         // Run Salsa compilation
-        let db = TributeDatabaseImpl::default();
-        let diags = db.attach(|db| {
+        let diags = self.db.attach(|db| {
             let source_file = SourceFile::new(db, (**uri).clone(), text);
             let result = tribute::compile_with_diagnostics(db, source_file);
             result.diagnostics
