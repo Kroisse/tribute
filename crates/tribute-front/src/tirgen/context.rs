@@ -90,7 +90,7 @@ impl<'db> CstLoweringCtx<'db> {
                 for child in node.named_children(&mut cursor) {
                     match child.kind() {
                         "type_identifier" if name.is_none() => {
-                            name = Some(node_text(&child, &self.source)).map(Symbol::from);
+                            name = Some(Symbol::from(node_text(&child, &self.source)));
                         }
                         "type_variable" | "type_identifier" | "generic_type" => {
                             args.push(self.resolve_type_node(child));

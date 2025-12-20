@@ -472,7 +472,7 @@ fn lower_lambda_expr<'db>(
         // Bind parameters
         for param_name in param_names {
             let param_value = body_block.op(src::var(ctx.db, location, infer_ty, param_name));
-            ctx.bind(param_name.clone(), param_value.result(ctx.db));
+            ctx.bind(param_name, param_value.result(ctx.db));
         }
 
         // Lower body

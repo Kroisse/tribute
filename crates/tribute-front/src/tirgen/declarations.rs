@@ -173,7 +173,7 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
             for (i, param_name) in param_names.into_iter().enumerate() {
                 let infer_ty = ctx.fresh_type_var();
                 let param_value = entry.op(src::var(ctx.db, location, infer_ty, param_name));
-                ctx.bind(param_name.clone(), param_value.result(ctx.db));
+                ctx.bind(param_name, param_value.result(ctx.db));
                 let _ = i;
             }
 
@@ -438,7 +438,7 @@ pub fn lower_ability_decl<'db>(
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
-    let name = node_text(&name_node, &&ctx.source).to_string();
+    let name = node_text(&name_node, &ctx.source).to_string();
     let operations = parse_ability_operations(ctx, body_node);
     let operations_attr = Attribute::List(
         operations
