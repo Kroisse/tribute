@@ -8,6 +8,4 @@ pub mod tirgen;
 
 pub use fluent_uri::Uri;
 pub use source_file::{SourceCst, path_to_uri, uri_to_path};
-pub use tirgen::{
-    ParsedCst, lower_cst, lower_source_cst, parse_cst,
-};
+pub use tirgen::{ParsedCst, lower_cst, lower_source_cst, parse_cst};

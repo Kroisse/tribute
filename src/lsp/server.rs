@@ -22,9 +22,9 @@ use ropey::Rope;
 use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
-use tribute::{TributeDatabaseImpl, compile, database::parse_with_thread_local};
 use super::pretty::print_type;
 use super::type_index::TypeIndex;
+use tribute::{TributeDatabaseImpl, compile, database::parse_with_thread_local};
 
 /// Main LSP server state.
 struct LspServer {
@@ -162,9 +162,7 @@ impl LspServer {
     }
 
     fn publish_diagnostics(&self, uri: &Uri) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let rope = self
-            .db
-            .with_document(uri, |doc| doc.text(&self.db).clone());
+        let rope = self.db.with_document(uri, |doc| doc.text(&self.db).clone());
         let Some(rope) = rope else {
             return Ok(());
         };
@@ -220,21 +218,16 @@ impl LspServer {
                 let start = range.start;
                 let end = range.end;
                 let start_byte =
-                    offset_from_position(&doc.text(&self.db), start.line, start.character)
-                        .ok_or(io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            "invalid start position",
-                        ))?;
+                    offset_from_position(doc.text(&self.db), start.line, start.character).ok_or(
+                        io::Error::new(io::ErrorKind::InvalidInput, "invalid start position"),
+                    )?;
                 let old_end_byte =
-                    offset_from_position(&doc.text(&self.db), end.line, end.character)
-                        .ok_or(io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            "invalid end position",
-                        ))?;
+                    offset_from_position(doc.text(&self.db), end.line, end.character).ok_or(
+                        io::Error::new(io::ErrorKind::InvalidInput, "invalid end position"),
+                    )?;
 
-                let (start_row, start_col) = byte_line_col(&doc.text(&self.db), start_byte);
-                let (old_end_row, old_end_col) =
-                    byte_line_col(&doc.text(&self.db), old_end_byte);
+                let (start_row, start_col) = byte_line_col(doc.text(&self.db), start_byte);
+                let (old_end_row, old_end_col) = byte_line_col(doc.text(&self.db), old_end_byte);
                 let start_point = Point {
                     row: start_row as usize,
                     column: start_col as usize,

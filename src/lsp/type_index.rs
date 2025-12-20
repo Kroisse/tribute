@@ -152,9 +152,9 @@ impl<'db> TypeIndex<'db> {
 mod tests {
     use super::*;
     use salsa::prelude::*;
+    use tree_sitter::Parser;
     use tribute::compile;
     use tribute::{SourceCst, TributeDatabaseImpl};
-    use tree_sitter::Parser;
 
     #[test]
     fn test_type_index_basic() {

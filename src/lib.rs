@@ -14,12 +14,12 @@ use std::path::Path;
 
 pub use crate::database::TributeDatabaseImpl;
 pub use ropey::Rope;
+use tree_sitter::Parser;
 pub use tribute_front::SourceCst;
+use tribute_front::source_file::parse_with_rope;
 pub use tribute_front::{ParsedCst, lower_cst, lower_source_cst, parse_cst};
 pub use tribute_passes::{Diagnostic, DiagnosticSeverity};
 pub use trunk_ir::dialect::core::Module;
-use tree_sitter::Parser;
-use tribute_front::source_file::parse_with_rope;
 
 pub mod database;
 pub mod pipeline;

@@ -1,8 +1,8 @@
 //! Salsa integration tests for CST→TrunkIR lowering.
 
 use salsa::{Database as _, Setter as _};
-use tribute::{SourceCst, TributeDatabaseImpl, lower_source_cst};
 use tree_sitter::Parser;
+use tribute::{SourceCst, TributeDatabaseImpl, lower_source_cst};
 use trunk_ir::DialectOp;
 
 #[test]
@@ -124,8 +124,7 @@ fn test_salsa_multiple_functions() {
 fn add(a, b) { a + b }
 fn multiply(a, b) { a * b }
 fn main() { print_line("test") }
-"#
-        ;
+"#;
         let tree = parser.parse(text, None).expect("tree");
         let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
         let module = lower_source_cst(db, source);

@@ -44,7 +44,7 @@ impl TributeDatabaseImpl {
         let uri = path_to_uri(&path);
         let key = uri.as_str().to_owned();
         if let Some(existing) = self.documents.get(key.as_str()) {
-            return Ok(existing.clone());
+            return Ok(*existing);
         }
         let file = std::fs::File::open(&path)?;
         let contents = Rope::from_reader(file)?;
@@ -68,11 +68,11 @@ impl TributeDatabaseImpl {
 
     pub fn with_document<T>(&self, uri: &Uri, f: impl FnOnce(&SourceCst) -> T) -> Option<T> {
         let key = uri.as_str();
-        self.documents.get(key).map(|doc| f(&*doc))
+        self.documents.get(key).map(|doc| f(&doc))
     }
 
     pub fn source_cst(&self, uri: &Uri) -> Option<SourceCst> {
         let key = uri.as_str();
-        self.documents.get(key).map(|entry| entry.clone())
+        self.documents.get(key).map(|entry| *entry)
     }
 }

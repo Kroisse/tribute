@@ -7,9 +7,9 @@ use clap::Parser;
 use cli::{Cli, Command};
 use ropey::Rope;
 use salsa::Database;
+use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{compile_with_diagnostics, stage_resolve};
 use tribute::{SourceCst, TributeDatabaseImpl};
-use tribute::database::parse_with_thread_local;
 use tribute_passes::resolve::build_env;
 
 fn main() {

@@ -312,11 +312,7 @@ mod tests {
         compile(db, source)
     }
 
-    fn source_from_str(
-        db: &dyn salsa::Database,
-        path: &str,
-        text: &str,
-    ) -> SourceCst {
+    fn source_from_str(db: &dyn salsa::Database, path: &str, text: &str) -> SourceCst {
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
@@ -338,11 +334,7 @@ mod tests {
     #[test]
     fn test_compile_with_diagnostics() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = source_from_str(
-                db,
-                "test.trb",
-                "fn add(x: Int, y: Int) -> Int { x + y }",
-            );
+            let source = source_from_str(db, "test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
 
             let result = compile_with_diagnostics(db, source);
             // Should compile without errors
@@ -357,11 +349,7 @@ mod tests {
     #[test]
     fn test_unresolved_reference_diagnostic() {
         TributeDatabaseImpl::default().attach(|db| {
-            let source = source_from_str(
-                db,
-                "test.trb",
-                "fn main() -> Int { undefined_var }",
-            );
+            let source = source_from_str(db, "test.trb", "fn main() -> Int { undefined_var }");
 
             let result = compile_with_diagnostics(db, source);
             // Should have an unresolved reference error
