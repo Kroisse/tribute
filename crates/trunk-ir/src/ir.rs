@@ -33,7 +33,16 @@ impl Symbol {
     ///
     /// Uses `read_recursive()` to allow nested Symbol operations (Display, ==, to_string)
     /// within the closure without risk of deadlock.
-    pub(crate) fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+    ///
+    /// This is useful for optimization: when you need to work with the symbol's text
+    /// without allocating a String, use this method. For example:
+    ///
+    /// ```ignore
+    /// // Avoid: symbol.to_string() == "something"
+    /// // Prefer:
+    /// symbol.with_str(|s| s == "something")
+    /// ```
+    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
         let interner = INTERNER.read_recursive();
         let text = interner.resolve(&self.0);
         f(text)
@@ -65,7 +74,7 @@ macro_rules! symbols {
     ($($(#[$attr:meta])* $name:ident => $text:expr),* $(,)?) => {
         $(
             $(#[$attr])*
-            static $name: std::sync::LazyLock<$crate::Symbol> =
+            pub static $name: std::sync::LazyLock<$crate::Symbol> =
                 std::sync::LazyLock::new(|| $crate::Symbol::new($text));
         )*
     };
