@@ -4,6 +4,7 @@
 //! to a WebAssembly binary. It combines lowering (IR transformation) and emission
 //! (binary generation) into a single tracked artifact.
 
+use crate::{ATTR_MODULE, ATTR_NAME, ATTR_SYM_NAME};
 use trunk_ir::Operation;
 use trunk_ir::Symbol;
 use trunk_ir::dialect::core::Module;
@@ -98,10 +99,8 @@ fn get_sym_name<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> Optio
     use trunk_ir::Attribute;
 
     let attrs = op.attributes(db);
-    for (_, attr) in attrs.iter() {
-        if let Attribute::Symbol(sym) = attr {
-            return Some(*sym);
-        }
+    if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_SYM_NAME()) {
+        return Some(*sym);
     }
     None
 }
@@ -114,23 +113,18 @@ fn get_import_names<'db>(
     use trunk_ir::Attribute;
 
     let attrs = op.attributes(db);
-    let mut module_name = None;
-    let mut func_name = None;
 
-    for (_, attr) in attrs.iter() {
-        if let Attribute::Symbol(sym) = attr {
-            // First symbol is typically module, second is function
-            if module_name.is_none() {
-                module_name = Some(*sym);
-            } else if func_name.is_none() {
-                func_name = Some(*sym);
-                break;
-            }
-        }
-    }
-
-    match (module_name, func_name) {
-        (Some(m), Some(f)) => Some((m, f)),
+    // Extract module name attribute
+    let module_name = match attrs.get(&ATTR_MODULE()) {
+        Some(Attribute::Symbol(s)) => Some(*s),
         _ => None,
-    }
+    }?;
+
+    // Extract function name attribute
+    let func_name = match attrs.get(&ATTR_NAME()) {
+        Some(Attribute::Symbol(s)) => Some(*s),
+        _ => None,
+    }?;
+
+    Some((module_name, func_name))
 }
