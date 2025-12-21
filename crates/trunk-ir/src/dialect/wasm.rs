@@ -38,6 +38,9 @@ dialect! {
         /// `wasm.return` operation: return from function.
         fn r#return(#[rest] values);
 
+        /// `wasm.drop` operation: drop a value on the stack.
+        fn drop(value);
+
         /// `wasm.return_call` operation: tail call (return_call).
         #[attr(callee)]
         fn return_call(#[rest] args);
@@ -49,6 +52,28 @@ dialect! {
         /// `wasm.call_indirect` operation: indirect function call.
         #[attr(type_idx, table)]
         fn call_indirect(#[rest] args) -> result;
+
+        // === Module-level Definitions ===
+
+        /// `wasm.import_func` operation: import a function.
+        #[attr(module, name, sym_name, r#type)]
+        fn import_func();
+
+        /// `wasm.export_func` operation: export a function by symbol.
+        #[attr(name, func)]
+        fn export_func();
+
+        /// `wasm.export_memory` operation: export a memory by index.
+        #[attr(name, index)]
+        fn export_memory();
+
+        /// `wasm.memory` operation: define linear memory.
+        #[attr(min, max, shared, memory64)]
+        fn memory();
+
+        /// `wasm.data` operation: define a data segment.
+        #[attr(offset, bytes)]
+        fn data();
 
         // === Integer Arithmetic (i32) ===
 

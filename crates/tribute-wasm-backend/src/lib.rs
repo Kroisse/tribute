@@ -3,10 +3,11 @@
 use std::collections::HashMap;
 
 use trunk_ir::dialect::core;
-use trunk_ir::{Attribute, DialectType, IdVec, Operation, Symbol, SymbolVec, Type, Value};
+use trunk_ir::{Attribute, Attrs, DialectType, IdVec, Operation, Symbol, SymbolVec, Type, Value};
 use wasm_encoder::{
-    CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction, Module,
-    TypeSection, ValType,
+    CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection, Function,
+    FunctionSection, ImportSection, Instruction, MemorySection, MemoryType, Module, TypeSection,
+    ValType,
 };
 
 mod errors;
@@ -19,6 +20,15 @@ trunk_ir::symbols! {
     ATTR_CALLEE => "callee",
     ATTR_VALUE => "value",
     ATTR_INDEX => "index",
+    ATTR_MODULE => "module",
+    ATTR_NAME => "name",
+    ATTR_FUNC => "func",
+    ATTR_MIN => "min",
+    ATTR_MAX => "max",
+    ATTR_SHARED => "shared",
+    ATTR_MEMORY64 => "memory64",
+    ATTR_OFFSET => "offset",
+    ATTR_BYTES => "bytes",
 }
 
 struct FunctionDef<'db> {
@@ -27,24 +37,88 @@ struct FunctionDef<'db> {
     op: Operation<'db>,
 }
 
+struct ImportFuncDef<'db> {
+    sym: Symbol,
+    module: String,
+    name: String,
+    ty: core::Func<'db>,
+}
+
+struct ExportDef {
+    name: String,
+    kind: ExportKind,
+    target: ExportTarget,
+}
+
+enum ExportTarget {
+    Func(Symbol),
+    Memory(u32),
+}
+
+struct MemoryDef {
+    min: u32,
+    max: Option<u32>,
+    shared: bool,
+    memory64: bool,
+}
+
+struct DataDef {
+    offset: i32,
+    bytes: Vec<u8>,
+}
+
+struct ModuleInfo<'db> {
+    imports: Vec<ImportFuncDef<'db>>,
+    funcs: Vec<FunctionDef<'db>>,
+    exports: Vec<ExportDef>,
+    memory: Option<MemoryDef>,
+    data: Vec<DataDef>,
+}
+
 pub fn emit_wasm<'db>(
     db: &'db dyn salsa::Database,
     module: &core::Module<'db>,
 ) -> CompilationResult<Vec<u8>> {
-    let funcs = collect_functions(db, module)?;
+    let module_info = collect_module_info(db, module)?;
 
     let mut type_section = TypeSection::new();
+    let mut import_section = ImportSection::new();
     let mut function_section = FunctionSection::new();
+    let mut memory_section = MemorySection::new();
     let mut export_section = ExportSection::new();
     let mut code_section = CodeSection::new();
+    let mut data_section = DataSection::new();
 
     let mut func_indices = HashMap::new();
+    let mut type_indices = Vec::new();
 
-    for (index, func_def) in funcs.iter().enumerate() {
-        func_indices.insert(func_def.name, index as u32);
+    for (index, import_def) in module_info.imports.iter().enumerate() {
+        func_indices.insert(import_def.sym, index as u32);
+    }
+    let import_count = module_info.imports.len() as u32;
+    for (index, func_def) in module_info.funcs.iter().enumerate() {
+        func_indices.insert(func_def.name, import_count + index as u32);
     }
 
-    for (index, func_def) in funcs.iter().enumerate() {
+    for import_def in module_info.imports.iter() {
+        let params = import_def
+            .ty
+            .params(db)
+            .iter()
+            .map(|ty| type_to_valtype(db, *ty))
+            .collect::<CompilationResult<Vec<_>>>()?;
+        let results = result_types(db, import_def.ty.result(db))?;
+        type_section.ty().function(params, results);
+        let type_index = type_indices.len() as u32;
+        type_indices.push(type_index);
+        import_section.import(
+            import_def.module.as_str(),
+            import_def.name.as_str(),
+            EntityType::Function(type_index),
+        );
+    }
+
+    for func_def in module_info.funcs.iter() {
         let params = func_def
             .ty
             .params(db)
@@ -53,45 +127,125 @@ pub fn emit_wasm<'db>(
             .collect::<CompilationResult<Vec<_>>>()?;
         let results = result_types(db, func_def.ty.result(db))?;
         type_section.ty().function(params, results);
-        function_section.function(index as u32);
+        let type_index = type_indices.len() as u32;
+        type_indices.push(type_index);
+        function_section.function(type_index);
+    }
 
-        func_def.name.with_str(|name| {
-            export_section.export(name, ExportKind::Func, index as u32);
+    if let Some(memory) = &module_info.memory {
+        memory_section.memory(MemoryType {
+            minimum: memory.min as u64,
+            maximum: memory.max.map(|value| value as u64),
+            memory64: memory.memory64,
+            shared: memory.shared,
+            page_size_log2: None,
         });
     }
 
-    for func_def in funcs {
-        let function = emit_function(db, &func_def, &func_indices)?;
+    for export in module_info.exports.iter() {
+        match export.target {
+            ExportTarget::Func(sym) => {
+                let Some(index) = func_indices.get(&sym) else {
+                    return Err(CompilationError::function_not_found(&sym.to_string()));
+                };
+                export_section.export(export.name.as_str(), export.kind, *index);
+            }
+            ExportTarget::Memory(index) => {
+                export_section.export(export.name.as_str(), export.kind, index);
+            }
+        }
+    }
+    if module_info.exports.is_empty() {
+        for func_def in module_info.funcs.iter() {
+            let Some(index) = func_indices.get(&func_def.name) else {
+                continue;
+            };
+            func_def.name.with_str(|name| {
+                export_section.export(name, ExportKind::Func, *index);
+            });
+        }
+    }
+
+    for data in module_info.data.iter() {
+        let offset = ConstExpr::i32_const(data.offset);
+        data_section.active(0, &offset, data.bytes.iter().copied());
+    }
+
+    for func_def in &module_info.funcs {
+        let function = emit_function(db, func_def, &func_indices)?;
         code_section.function(&function);
     }
 
     let mut module_bytes = Module::new();
     module_bytes.section(&type_section);
-    module_bytes.section(&function_section);
+    if !module_info.imports.is_empty() {
+        module_bytes.section(&import_section);
+    }
+    if !module_info.funcs.is_empty() {
+        module_bytes.section(&function_section);
+    }
+    if module_info.memory.is_some() {
+        module_bytes.section(&memory_section);
+    }
     module_bytes.section(&export_section);
-    module_bytes.section(&code_section);
+    if !module_info.funcs.is_empty() {
+        module_bytes.section(&code_section);
+    }
+    if !module_info.data.is_empty() {
+        module_bytes.section(&data_section);
+    }
 
     Ok(module_bytes.finish())
 }
 
-fn collect_functions<'db>(
+fn collect_module_info<'db>(
     db: &'db dyn salsa::Database,
     module: &core::Module<'db>,
-) -> CompilationResult<Vec<FunctionDef<'db>>> {
+) -> CompilationResult<ModuleInfo<'db>> {
     let mut funcs = Vec::new();
+    let mut imports = Vec::new();
+    let mut exports = Vec::new();
+    let mut memory = None;
+    let mut data = Vec::new();
     let func_dialect = Symbol::new("func");
     let func_name = Symbol::new("func");
+    let wasm_dialect = Symbol::new("wasm");
 
     let body = module.body(db);
     for block in body.blocks(db).iter() {
         for op in block.operations(db).iter() {
             if op.dialect(db) == func_dialect && op.name(db) == func_name {
                 funcs.push(extract_function_def(db, op)?);
+            } else if op.dialect(db) == wasm_dialect {
+                match op.name(db) {
+                    name if name == Symbol::new("import_func") => {
+                        imports.push(extract_import_def(db, op)?);
+                    }
+                    name if name == Symbol::new("export_func") => {
+                        exports.push(extract_export_func(db, op)?);
+                    }
+                    name if name == Symbol::new("export_memory") => {
+                        exports.push(extract_export_memory(db, op)?);
+                    }
+                    name if name == Symbol::new("memory") => {
+                        memory = Some(extract_memory_def(db, op)?);
+                    }
+                    name if name == Symbol::new("data") => {
+                        data.push(extract_data_def(db, op)?);
+                    }
+                    _ => {}
+                }
             }
         }
     }
 
-    Ok(funcs)
+    Ok(ModuleInfo {
+        imports,
+        funcs,
+        exports,
+        memory,
+        data,
+    })
 }
 
 fn extract_function_def<'db>(
@@ -131,6 +285,101 @@ fn extract_function_def<'db>(
         ty: func_ty,
         op: *op,
     })
+}
+
+fn extract_import_def<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+) -> CompilationResult<ImportFuncDef<'db>> {
+    let attrs = op.attributes(db);
+    let module = attr_string(attrs, ATTR_MODULE())?;
+    let name = attr_string(attrs, ATTR_NAME())?;
+    let sym = attr_symbol(attrs, ATTR_SYM_NAME())?;
+    let ty = attr_type(attrs, ATTR_TYPE())?;
+
+    let func_ty = core::Func::from_type(db, ty)
+        .ok_or_else(|| CompilationError::type_error("wasm.import_func requires core.func type"))?;
+
+    Ok(ImportFuncDef {
+        sym,
+        module,
+        name,
+        ty: func_ty,
+    })
+}
+
+fn extract_export_func<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+) -> CompilationResult<ExportDef> {
+    let attrs = op.attributes(db);
+    let name = attr_string(attrs, ATTR_NAME())?;
+    let func = attr_symbol_ref_attr(attrs, ATTR_FUNC())?;
+    let sym = func
+        .last()
+        .ok_or_else(|| CompilationError::invalid_module("export func missing symbol"))?;
+    Ok(ExportDef {
+        name,
+        kind: ExportKind::Func,
+        target: ExportTarget::Func(*sym),
+    })
+}
+
+fn extract_export_memory<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+) -> CompilationResult<ExportDef> {
+    let attrs = op.attributes(db);
+    let name = attr_string(attrs, ATTR_NAME())?;
+    let index = attr_u32(attrs, ATTR_INDEX())?;
+    Ok(ExportDef {
+        name,
+        kind: ExportKind::Memory,
+        target: ExportTarget::Memory(index),
+    })
+}
+
+fn extract_memory_def<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+) -> CompilationResult<MemoryDef> {
+    let attrs = op.attributes(db);
+    let min = attr_u32(attrs, ATTR_MIN())?;
+    let max = match attrs.get(&ATTR_MAX()) {
+        Some(Attribute::IntBits(bits)) => Some(*bits as u32),
+        _ => None,
+    };
+    let shared = match attrs.get(&ATTR_SHARED()) {
+        Some(Attribute::Bool(value)) => *value,
+        _ => false,
+    };
+    let memory64 = match attrs.get(&ATTR_MEMORY64()) {
+        Some(Attribute::Bool(value)) => *value,
+        _ => false,
+    };
+    Ok(MemoryDef {
+        min,
+        max,
+        shared,
+        memory64,
+    })
+}
+
+fn extract_data_def<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+) -> CompilationResult<DataDef> {
+    let attrs = op.attributes(db);
+    let offset = attr_i32_attr(attrs, ATTR_OFFSET())?;
+    let bytes = match attrs.get(&ATTR_BYTES()) {
+        Some(Attribute::Bytes(value)) => value.clone(),
+        _ => {
+            return Err(CompilationError::from(
+                errors::CompilationErrorKind::InvalidAttribute("bytes"),
+            ));
+        }
+    };
+    Ok(DataDef { offset, bytes })
 }
 
 fn emit_function<'db>(
@@ -338,6 +587,9 @@ fn emit_op<'db>(
         emit_operands(operands, value_locals, function)?;
         function.instruction(&Instruction::F64Div);
         set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("drop") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::Drop);
     } else if name == Symbol::new("call") {
         emit_operands(operands, value_locals, function)?;
         let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
@@ -544,6 +796,66 @@ fn attr_symbol_ref<'db>(
     }
 }
 
+fn attr_symbol_ref_attr<'db>(
+    attrs: &'db Attrs<'db>,
+    key: Symbol,
+) -> CompilationResult<&'db SymbolVec> {
+    match attrs.get(&key) {
+        Some(Attribute::SymbolRef(path)) => Ok(path),
+        _ => Err(CompilationError::from(
+            errors::CompilationErrorKind::MissingAttribute("symbol_ref"),
+        )),
+    }
+}
+
+fn attr_string<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<String> {
+    match attrs.get(&key) {
+        Some(Attribute::String(value)) => Ok(value.clone()),
+        _ => Err(CompilationError::from(
+            errors::CompilationErrorKind::MissingAttribute("string"),
+        )),
+    }
+}
+
+fn attr_symbol<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<Symbol> {
+    match attrs.get(&key) {
+        Some(Attribute::Symbol(value)) => Ok(*value),
+        _ => Err(CompilationError::from(
+            errors::CompilationErrorKind::MissingAttribute("symbol"),
+        )),
+    }
+}
+
+fn attr_type<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<Type<'db>> {
+    match attrs.get(&key) {
+        Some(Attribute::Type(value)) => Ok(*value),
+        _ => Err(CompilationError::from(
+            errors::CompilationErrorKind::MissingAttribute("type"),
+        )),
+    }
+}
+
+fn attr_u32<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<u32> {
+    match attrs.get(&key) {
+        Some(Attribute::IntBits(bits)) => Ok(*bits as u32),
+        _ => Err(CompilationError::from(
+            errors::CompilationErrorKind::MissingAttribute("u32"),
+        )),
+    }
+}
+
+fn attr_i32_attr<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<i32> {
+    match attrs.get(&key) {
+        Some(Attribute::IntBits(bits)) => {
+            let value = *bits as u32;
+            Ok(i32::from_ne_bytes(value.to_ne_bytes()))
+        }
+        _ => Err(CompilationError::from(
+            errors::CompilationErrorKind::MissingAttribute("i32"),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,12 +868,6 @@ mod tests {
     use trunk_ir::smallvec::smallvec;
     use trunk_ir::{
         Attribute, Block, DialectType, Location, PathId, Region, Span, SymbolVec, idvec,
-    };
-    #[cfg(feature = "wasmtime-tests")]
-    use wasm_encoder::{
-        CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection, Function,
-        FunctionSection, ImportSection, Instruction, MemorySection, MemoryType,
-        Module as WasmModule, TypeSection, ValType,
     };
 
     #[salsa::tracked]
@@ -913,8 +1219,9 @@ mod tests {
 
     #[cfg(feature = "wasmtime-tests")]
     #[salsa_test]
-    fn runs_wasi_hello_world(_db: &salsa::DatabaseImpl) {
-        let bytes = build_wasi_hello_module();
+    fn runs_wasi_hello_world(db: &salsa::DatabaseImpl) {
+        let module = build_wasi_hello_module(db);
+        let bytes = emit_wasm(db, &module).expect("emit wasm");
         let mut temp = NamedTempFile::new().expect("tempfile");
         std::io::Write::write_all(&mut temp, &bytes).expect("write wasm");
         let path = temp.into_temp_path();
@@ -942,66 +1249,111 @@ mod tests {
     }
 
     #[cfg(feature = "wasmtime-tests")]
-    fn build_wasi_hello_module() -> Vec<u8> {
-        let mut types = TypeSection::new();
-        types.ty().function(
-            [ValType::I32, ValType::I32, ValType::I32, ValType::I32],
-            [ValType::I32],
-        );
-        types.ty().function([], []);
-
-        let mut imports = ImportSection::new();
-        imports.import(
-            "wasi_snapshot_preview1",
-            "fd_write",
-            EntityType::Function(0),
-        );
-
-        let mut functions = FunctionSection::new();
-        functions.function(1);
-
-        let mut memory = MemorySection::new();
-        memory.memory(MemoryType {
-            minimum: 1,
-            maximum: None,
-            memory64: false,
-            shared: false,
-            page_size_log2: None,
-        });
-
-        let mut exports = ExportSection::new();
-        exports.export("memory", ExportKind::Memory, 0);
-        exports.export("_start", ExportKind::Func, 1);
+    #[salsa::tracked]
+    fn build_wasi_hello_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///wasi.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
 
         let message = b"hello\n";
         let mut iovec = Vec::new();
         iovec.extend_from_slice(&8u32.to_le_bytes());
         iovec.extend_from_slice(&(message.len() as u32).to_le_bytes());
 
-        let mut data = DataSection::new();
-        data.active(0, &ConstExpr::i32_const(0), iovec.iter().copied());
-        data.active(0, &ConstExpr::i32_const(8), message.iter().copied());
+        let import_ty =
+            core::Func::new(db, idvec![i32_ty, i32_ty, i32_ty, i32_ty], i32_ty).as_type();
+        let import_op = Operation::of_name(db, location, "wasm.import_func")
+            .attr("module", Attribute::String("wasi_snapshot_preview1".into()))
+            .attr("name", Attribute::String("fd_write".into()))
+            .attr("sym_name", Attribute::Symbol(Symbol::new("fd_write")))
+            .attr("type", Attribute::Type(import_ty))
+            .build();
 
-        let mut code = CodeSection::new();
-        let mut func = Function::new([]);
-        func.instruction(&Instruction::I32Const(1));
-        func.instruction(&Instruction::I32Const(0));
-        func.instruction(&Instruction::I32Const(1));
-        func.instruction(&Instruction::I32Const(16));
-        func.instruction(&Instruction::Call(0));
-        func.instruction(&Instruction::Drop);
-        func.instruction(&Instruction::End);
-        code.function(&func);
+        let memory_op = Operation::of_name(db, location, "wasm.memory")
+            .attr("min", Attribute::IntBits(1))
+            .build();
 
-        let mut module = WasmModule::new();
-        module.section(&types);
-        module.section(&imports);
-        module.section(&functions);
-        module.section(&memory);
-        module.section(&exports);
-        module.section(&code);
-        module.section(&data);
+        let data_iovec = Operation::of_name(db, location, "wasm.data")
+            .attr("offset", Attribute::IntBits(0))
+            .attr("bytes", Attribute::Bytes(iovec))
+            .build();
+        let data_msg = Operation::of_name(db, location, "wasm.data")
+            .attr("offset", Attribute::IntBits(8))
+            .attr("bytes", Attribute::Bytes(message.to_vec()))
+            .build();
 
-        module.finish()
+        let export_memory = Operation::of_name(db, location, "wasm.export_memory")
+            .attr("name", Attribute::String("memory".into()))
+            .attr("index", Attribute::IntBits(0))
+            .build();
+
+        let c_fd = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(1))
+            .result(i32_ty)
+            .build();
+        let c_iovec_ptr = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(0))
+            .result(i32_ty)
+            .build();
+        let c_iovec_len = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(1))
+            .result(i32_ty)
+            .build();
+        let c_nwritten = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(16))
+            .result(i32_ty)
+            .build();
+        let callee: SymbolVec = smallvec![Symbol::new("fd_write")];
+        let call = Operation::of_name(db, location, "wasm.call")
+            .attr("callee", Attribute::SymbolRef(callee))
+            .operand(c_fd.result(db, 0))
+            .operand(c_iovec_ptr.result(db, 0))
+            .operand(c_iovec_len.result(db, 0))
+            .operand(c_nwritten.result(db, 0))
+            .result(i32_ty)
+            .build();
+        let drop = Operation::of_name(db, location, "wasm.drop")
+            .operand(call.result(db, 0))
+            .build();
+        let ret = Operation::of_name(db, location, "wasm.return").build();
+
+        let start_block = Block::new(
+            db,
+            location,
+            idvec![],
+            idvec![c_fd, c_iovec_ptr, c_iovec_len, c_nwritten, call, drop, ret],
+        );
+        let start_body = Region::new(db, location, idvec![start_block]);
+        let start_ty = core::Func::new(db, idvec![], core::Nil::new(db).as_type()).as_type();
+        let start_func = Operation::of_name(db, location, "func.func")
+            .attr("sym_name", Attribute::Symbol(Symbol::new("_start")))
+            .attr("type", Attribute::Type(start_ty))
+            .region(start_body)
+            .build();
+
+        let export_start = Operation::of_name(db, location, "wasm.export_func")
+            .attr("name", Attribute::String("_start".into()))
+            .attr(
+                "func",
+                Attribute::SymbolRef(smallvec![Symbol::new("_start")]),
+            )
+            .build();
+
+        let top_block = Block::new(
+            db,
+            location,
+            idvec![],
+            idvec![
+                import_op,
+                memory_op,
+                data_iovec,
+                data_msg,
+                export_memory,
+                start_func,
+                export_start
+            ],
+        );
+        let module_region = Region::new(db, location, idvec![top_block]);
+        core::Module::create(db, location, Symbol::new("main"), module_region)
     }
 }
