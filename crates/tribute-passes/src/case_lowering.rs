@@ -128,6 +128,7 @@ impl<'db> CaseLowerer<'db> {
     ) -> Vec<Operation<'db>> {
         let location = op.location(self.db);
         let Some(result_type) = op.results(self.db).first().copied() else {
+            self.emit_error(location, "case expression must produce a result");
             return vec![op];
         };
 
