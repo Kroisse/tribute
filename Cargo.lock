@@ -1229,6 +1229,7 @@ dependencies = [
  "tree-sitter-tribute",
  "tribute-front",
  "tribute-passes",
+ "tribute-wasm-backend",
  "trunk-ir",
 ]
 

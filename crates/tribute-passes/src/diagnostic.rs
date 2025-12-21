@@ -27,6 +27,7 @@ pub enum CompilationPhase {
     TirGeneration,
     NameResolution,
     TypeChecking,
+    Lowering,
     Optimization,
 }
 

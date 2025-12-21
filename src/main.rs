@@ -7,8 +7,9 @@ use clap::Parser;
 use cli::{Cli, Command};
 use ropey::Rope;
 use salsa::Database;
+use std::path::PathBuf;
 use tribute::database::parse_with_thread_local;
-use tribute::pipeline::{compile_with_diagnostics, stage_resolve};
+use tribute::pipeline::{compile_with_diagnostics, stage_lower_to_wasm, stage_resolve};
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_passes::resolve::build_env;
 
@@ -22,10 +23,88 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Command::Compile {
+            file,
+            output,
+            target,
+        } => {
+            compile_file(file, output, &target);
+        }
         Command::Debug { file, show_env } => {
             debug_file(file, show_env);
         }
     }
+}
+
+fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str) {
+    let source_code = {
+        match std::fs::File::open(&input_path).and_then(Rope::from_reader) {
+            Ok(content) => content,
+            Err(e) => {
+                eprintln!("Error reading file {}: {}", input_path.display(), e);
+                std::process::exit(1);
+            }
+        }
+    };
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source = SourceCst::from_path(db, &input_path, source_code, tree);
+
+        match target {
+            "wasm" => {
+                println!("Compiling {} to WebAssembly...", input_path.display());
+
+                if let Some(wasm_binary) = stage_lower_to_wasm(db, source) {
+                    let bytes = wasm_binary.bytes(db);
+                    let output = output_path.unwrap_or_else(|| input_path.with_extension("wasm"));
+
+                    match std::fs::write(&output, bytes) {
+                        Ok(_) => {
+                            println!(
+                                "✓ Successfully wrote WebAssembly binary to {}",
+                                output.display()
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("Error writing output file {}: {}", output.display(), e);
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    // Collect and show accumulated diagnostics
+                    let result = compile_with_diagnostics(db, source);
+                    if !result.diagnostics.is_empty() {
+                        println!("Diagnostics ({} total):", result.diagnostics.len());
+                        for diag in &result.diagnostics {
+                            println!("  [{:?}] {}", diag.phase, diag.message);
+                        }
+                    } else {
+                        eprintln!("✗ WebAssembly compilation failed (lowering or emission error)");
+                    }
+                    std::process::exit(1);
+                }
+            }
+            "none" => {
+                println!("Compiling {}...", input_path.display());
+                let result = compile_with_diagnostics(db, source);
+
+                if result.diagnostics.is_empty() {
+                    println!("✓ Compiled successfully");
+                } else {
+                    println!("Diagnostics ({} total):", result.diagnostics.len());
+                    for diag in &result.diagnostics {
+                        println!("  [{:?}] {}", diag.phase, diag.message);
+                    }
+                    std::process::exit(1);
+                }
+            }
+            _ => {
+                eprintln!("Unknown target: {}. Use 'wasm' or 'none'", target);
+                std::process::exit(1);
+            }
+        }
+    });
 }
 
 fn debug_file(path: std::path::PathBuf, show_env: bool) {

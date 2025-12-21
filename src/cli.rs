@@ -17,6 +17,20 @@ pub enum Command {
     #[command(alias = "lsp")]
     Serve,
 
+    /// Compile a source file to a target
+    Compile {
+        /// Path to the source file to compile
+        file: PathBuf,
+
+        /// Output file path
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Compilation target (wasm, none)
+        #[arg(long, default_value = "none")]
+        target: String,
+    },
+
     /// Debug compilation of a source file
     Debug {
         /// Path to the source file to debug
