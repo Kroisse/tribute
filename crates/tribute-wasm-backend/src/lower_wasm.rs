@@ -5,9 +5,11 @@
 
 use std::collections::HashMap;
 
-use trunk_ir::dialect::core::Module;
-use trunk_ir::dialect::{arith, func};
-use trunk_ir::{Attribute, Block, IdVec, Operation, Region, Symbol, Type, Value};
+use trunk_ir::dialect::core::{self, Module};
+use trunk_ir::dialect::{arith, func, scf};
+use trunk_ir::{
+    Attribute, Block, DialectType, IdVec, Location, Operation, Region, Symbol, Type, Value,
+};
 
 /// Entry point for lowering mid-level IR to wasm dialect.
 #[salsa::tracked]
@@ -117,6 +119,10 @@ impl<'db> WasmLowerer<'db> {
 
         if dialect == func::DIALECT_NAME() {
             return self.lower_func_op(op, name, remapped_operands);
+        }
+
+        if dialect == scf::DIALECT_NAME() {
+            return self.lower_scf_op(op, name, remapped_operands);
         }
 
         // Operations we're not handling should not appear in function bodies
@@ -359,6 +365,181 @@ impl<'db> WasmLowerer<'db> {
             .build();
         self.map_results(op, new_op);
         vec![new_op]
+    }
+
+    fn lower_scf_op(
+        &mut self,
+        op: Operation<'db>,
+        name: Symbol,
+        operands: IdVec<Value<'db>>,
+    ) -> Vec<Operation<'db>> {
+        let location = op.location(self.db);
+
+        if name == scf::IF() {
+            return self.lower_scf_if(op, location, operands);
+        }
+
+        if name == scf::LOOP() {
+            return self.lower_scf_loop(op, location, operands);
+        }
+
+        if name == scf::YIELD() {
+            // Yields are implicit in wasm - remove them
+            return vec![];
+        }
+
+        if name == scf::CONTINUE() {
+            return self.lower_scf_continue(location);
+        }
+
+        if name == scf::BREAK() {
+            return self.lower_scf_break(location, operands);
+        }
+
+        // Unhandled scf operations (switch, case, default) - keep as-is
+        let new_regions = op
+            .regions(self.db)
+            .iter()
+            .copied()
+            .map(|region| self.lower_region(region))
+            .collect::<Vec<_>>();
+
+        let new_op = op
+            .modify(self.db)
+            .operands(operands)
+            .regions(IdVec::from(new_regions))
+            .build();
+        self.map_results(op, new_op);
+        vec![new_op]
+    }
+
+    fn lower_scf_if(
+        &mut self,
+        op: Operation<'db>,
+        location: Location<'db>,
+        operands: IdVec<Value<'db>>,
+    ) -> Vec<Operation<'db>> {
+        let regions = op.regions(self.db);
+        let then_region = regions
+            .first()
+            .copied()
+            .expect("scf.if missing then region");
+        let else_region = regions.get(1).copied();
+
+        // Lower regions and strip scf.yield terminators
+        let lowered_then = self.lower_region_strip_yield(then_region);
+        let lowered_else = else_region.map(|r| self.lower_region_strip_yield(r));
+
+        // Build wasm.if with same structure
+        let mut wasm_if = Operation::of_name(self.db, location, "wasm.if").operands(operands);
+
+        if let Some(result_ty) = op.results(self.db).first().copied() {
+            wasm_if = wasm_if.results(IdVec::from(vec![result_ty]));
+        }
+
+        let mut new_regions = vec![lowered_then];
+        if let Some(else_r) = lowered_else {
+            new_regions.push(else_r);
+        }
+
+        let new_op = wasm_if.regions(IdVec::from(new_regions)).build();
+        self.map_results(op, new_op);
+        vec![new_op]
+    }
+
+    fn lower_region_strip_yield(&mut self, region: Region<'db>) -> Region<'db> {
+        let lowered = self.lower_region(region);
+        let blocks = lowered.blocks(self.db);
+        let block = &blocks[0];
+        let ops = block.operations(self.db);
+
+        // Remove trailing scf.yield
+        let mut new_ops = IdVec::new();
+        for (i, op) in ops.iter().enumerate() {
+            let is_last = i == ops.len() - 1;
+            let is_yield = op.dialect(self.db) == Symbol::new("scf")
+                && op.name(self.db) == Symbol::new("yield");
+
+            if !(is_last && is_yield) {
+                new_ops.push(*op);
+            }
+        }
+
+        let new_block = Block::new(
+            self.db,
+            block.location(self.db),
+            block.args(self.db).clone(),
+            new_ops,
+        );
+
+        Region::new(
+            self.db,
+            lowered.location(self.db),
+            IdVec::from(vec![new_block]),
+        )
+    }
+
+    fn lower_scf_loop(
+        &mut self,
+        op: Operation<'db>,
+        location: Location<'db>,
+        _operands: IdVec<Value<'db>>,
+    ) -> Vec<Operation<'db>> {
+        let regions = op.regions(self.db);
+        let body_region = *regions.first().expect("scf.loop missing body");
+
+        // Lower loop body (contains scf.continue/scf.break)
+        let lowered_body = self.lower_region(body_region);
+
+        // Create wasm.loop with lowered body
+        let wasm_loop = Operation::of_name(self.db, location, "wasm.loop")
+            .regions(IdVec::from(vec![lowered_body]))
+            .build();
+
+        // Wrap in wasm.block for break target
+        let result_ty = op
+            .results(self.db)
+            .first()
+            .copied()
+            .unwrap_or_else(|| core::Nil::new(self.db).as_type());
+
+        let block_body_block = Block::new(
+            self.db,
+            location,
+            IdVec::new(),
+            IdVec::from(vec![wasm_loop]),
+        );
+        let block_body = Region::new(self.db, location, IdVec::from(vec![block_body_block]));
+
+        let wasm_block = Operation::of_name(self.db, location, "wasm.block")
+            .results(IdVec::from(vec![result_ty]))
+            .regions(IdVec::from(vec![block_body]))
+            .build();
+
+        self.map_results(op, wasm_block);
+        vec![wasm_block]
+    }
+
+    fn lower_scf_continue(&mut self, location: Location<'db>) -> Vec<Operation<'db>> {
+        // Branch to enclosing wasm.loop (depth 1)
+        let br_op = Operation::of_name(self.db, location, "wasm.br")
+            .attr("target", Attribute::IntBits(1))
+            .build();
+        vec![br_op]
+    }
+
+    fn lower_scf_break(
+        &mut self,
+        location: Location<'db>,
+        operands: IdVec<Value<'db>>,
+    ) -> Vec<Operation<'db>> {
+        // Branch to enclosing wasm.block (depth 0)
+        // Operand (result value) stays on stack
+        let br_op = Operation::of_name(self.db, location, "wasm.br")
+            .attr("target", Attribute::IntBits(0))
+            .operands(operands)
+            .build();
+        vec![br_op]
     }
 
     fn remap_operands(&self, op: Operation<'db>) -> IdVec<Value<'db>> {
