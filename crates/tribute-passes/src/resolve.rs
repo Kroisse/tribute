@@ -214,28 +214,25 @@ fn collect_definition<'db>(
             // Struct definition → creates constructor
             let attrs = op.attributes(db);
 
-            if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
-                (attrs.get(&ATTR_NAME()), attrs.get(&ATTR_TYPE()))
-            {
+            if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_SYM_NAME()) {
+                let ty = op.results(db).first().copied().unwrap_or_else(|| ty::var(db, std::collections::BTreeMap::new()));
                 // Add type definition
-                env.add_type(*sym, *ty);
+                env.add_type(*sym, ty);
                 // Struct constructor has same name as type
                 // TODO: Get field types for constructor params
-                env.add_constructor(*sym, *ty, None, IdVec::new());
+                env.add_constructor(*sym, ty, None, IdVec::new());
             }
         }
         (d, n) if d == ty::DIALECT_NAME() && n == ty::ENUM() => {
             // Enum definition → creates constructors for each variant
             let attrs = op.attributes(db);
-
-            if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
-                (attrs.get(&ATTR_NAME()), attrs.get(&ATTR_TYPE()))
-            {
+            if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_SYM_NAME()) {
+                let ty = op.results(db).first().copied().unwrap_or_else(|| ty::var(db, std::collections::BTreeMap::new()));
                 // Add type definition
-                env.add_type(*sym, *ty);
+                env.add_type(*sym, ty);
                 // Extract variants from the operation's regions or attributes
                 // Each variant becomes a constructor in the type's namespace
-                collect_enum_constructors(db, env, op, *sym, *ty);
+                collect_enum_constructors(db, env, op, *sym, ty);
             }
         }
         (d, n) if d == core::DIALECT_NAME() && n == core::MODULE() => {
@@ -278,12 +275,17 @@ fn collect_enum_constructors<'db>(
     type_name: Symbol,
     ty: Type<'db>,
 ) {
-    // Check for variants attribute
     let attrs = op.attributes(db);
 
-    if let Some(Attribute::SymbolRef(variants)) = attrs.get(&ATTR_VARIANTS()) {
-        for variant_sym in variants.iter() {
-            // Add to type's namespace
+    if let Some(Attribute::List(variants)) = attrs.get(&ATTR_VARIANTS()) {
+        for variant in variants.iter() {
+            let Attribute::List(parts) = variant else {
+                continue;
+            };
+            let Some(Attribute::Symbol(variant_sym)) = parts.first() else {
+                continue;
+            };
+
             env.add_to_namespace(
                 type_name,
                 *variant_sym,
@@ -293,7 +295,6 @@ fn collect_enum_constructors<'db>(
                     params: IdVec::new(), // TODO: Get variant params
                 },
             );
-            // Also add unqualified if it doesn't conflict
             if env.lookup(*variant_sym).is_none() {
                 env.add_constructor(*variant_sym, ty, Some(*variant_sym), IdVec::new());
             }
@@ -699,6 +700,16 @@ impl<'db> Resolver<'db> {
                     // Unresolved
                     if self.report_unresolved {
                         self.emit_unresolved_call_diagnostic(&remapped_op);
+                    }
+                    vec![self.resolve_op_regions(&remapped_op)]
+                }
+            }
+            (d, n) if d == src::DIALECT_NAME() && n == src::CONS() => {
+                if let Some(resolved) = self.try_resolve_cons(&remapped_op) {
+                    vec![resolved]
+                } else {
+                    if self.report_unresolved {
+                        self.emit_unresolved_cons_diagnostic(&remapped_op);
                     }
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
@@ -1185,13 +1196,42 @@ impl<'db> Resolver<'db> {
 
                 Some(new_operation)
             }
+            Binding::Constructor { .. } | Binding::TypeDef { .. } | Binding::Module { .. } => None,
+        }
+    }
+
+    /// Try to resolve a `src.cons` operation.
+    fn try_resolve_cons(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
+        let attrs = op.attributes(self.db);
+        let Attribute::SymbolRef(path_segments) = attrs.get(&ATTR_NAME())? else {
+            return None;
+        };
+
+        if path_segments.is_empty() {
+            return None;
+        }
+
+        let location = op.location(self.db);
+        let args: Vec<Value<'db>> = op.operands(self.db).iter().copied().collect();
+
+        let binding = if path_segments.len() == 1 {
+            let name = path_segments[0];
+            self.lookup_binding(name)
+        } else {
+            // For now, only support single-level qualified constructors (Type::Variant)
+            if path_segments.len() != 2 {
+                return None;
+            }
+            let namespace = path_segments[0];
+            let name = path_segments[1];
+            self.env.lookup_qualified(namespace, name)
+        }?;
+
+        match binding {
             Binding::Constructor { ty, tag, .. } => {
-                // Constructor application
                 let new_operation = if let Some(tag) = tag {
-                    // variant_new(db, location, fields, result_type, ty, tag)
                     adt::variant_new(self.db, location, args, *ty, *ty, *tag).as_operation()
                 } else {
-                    // struct_new(db, location, fields, result_type, ty)
                     adt::struct_new(self.db, location, args, *ty, *ty).as_operation()
                 };
 
@@ -1201,7 +1241,7 @@ impl<'db> Resolver<'db> {
 
                 Some(new_operation)
             }
-            Binding::TypeDef { .. } | Binding::Module { .. } => None,
+            _ => None,
         }
     }
 
@@ -1283,6 +1323,37 @@ impl<'db> Resolver<'db> {
 
         Diagnostic {
             message: format!("unresolved function call: `{}`", name),
+            span: op.location(self.db).span,
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::NameResolution,
+        }
+        .accumulate(self.db);
+    }
+
+    /// Emit diagnostic for unresolved `src.cons`.
+    fn emit_unresolved_cons_diagnostic(&self, op: &Operation<'db>) {
+        let name = op
+            .attributes(self.db)
+            .get(&ATTR_NAME())
+            .and_then(|a| {
+                if let Attribute::SymbolRef(segments) = a {
+                    Some(
+                        segments
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect::<Vec<_>>()
+                            .join("::"),
+                    )
+                } else if let Attribute::Symbol(s) = a {
+                    Some(s.to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        Diagnostic {
+            message: format!("unresolved constructor: `{}`", name),
             span: op.location(self.db).span,
             severity: DiagnosticSeverity::Error,
             phase: CompilationPhase::NameResolution,

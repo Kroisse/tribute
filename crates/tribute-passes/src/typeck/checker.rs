@@ -253,6 +253,8 @@ impl<'db> TypeChecker<'db> {
                 self.check_src_var(op);
             } else if name == src::CALL() {
                 self.check_src_call(op);
+            } else if name == src::CONS() {
+                self.check_src_call(op);
             } else if name == src::BINOP() {
                 self.check_src_binop(op);
             } else if name == src::LAMBDA() {
