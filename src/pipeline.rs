@@ -22,6 +22,10 @@
 //!     │
 //!     ▼
 //! stage_tdnr ─► Module (UFCS method calls resolved)
+//!     │
+//!     ├─► [No target] ─► Full Tribute module (diagnostic/analysis)
+//!     │
+//!     └─► [target: wasm] ─► stage_lower_to_wasm ─► WasmBinary (WebAssembly bytes)
 //! ```
 //!
 //! ## Incremental Compilation
@@ -52,6 +56,7 @@ use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverit
 use tribute_passes::resolve::{Resolver, build_env};
 use tribute_passes::tdnr::resolve_tdnr;
 use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
+use tribute_wasm_backend::{WasmBinary, compile_to_wasm};
 use trunk_ir::Span;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::{Block, IdVec, Region, Symbol};
@@ -231,6 +236,38 @@ pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
 pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let module = stage_typecheck(db, source);
     resolve_tdnr(db, module)
+}
+
+/// Stage 6: Lower to WebAssembly target.
+///
+/// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
+/// It performs:
+/// - Lowering mid-level IR (func, scf, arith) to wasm dialect operations
+/// - Emission to WebAssembly binary format
+/// - Extraction of metadata (exports, imports) for tooling
+///
+/// The result is a `WasmBinary` artifact containing the compiled WebAssembly bytes.
+/// Returns None if compilation fails, with error message accumulated.
+#[salsa::tracked]
+pub fn stage_lower_to_wasm<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<WasmBinary<'db>> {
+    let module = stage_tdnr(db, source);
+    match compile_to_wasm(db, module) {
+        Ok(binary) => Some(binary),
+        Err(e) => {
+            // Accumulate error as diagnostic for reporting
+            Diagnostic {
+                message: format!("WebAssembly compilation failed: {}", e),
+                span: Span::new(0, 0), // TODO: Extract span from error
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(db);
+            None
+        }
+    }
 }
 
 // =============================================================================

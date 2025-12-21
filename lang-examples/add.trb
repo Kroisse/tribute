@@ -1,0 +1,6 @@
+// Simple arithmetic function for WebAssembly compilation testing
+fn add(x: Int, y: Int) -> Int { x + y }
+
+fn main() -> Int {
+    add(40, 2)
+}

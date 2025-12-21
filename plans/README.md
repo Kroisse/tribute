@@ -35,6 +35,7 @@ See **[../new-plans/](../new-plans/)** directory:
 
 | Plan | Description | Priority |
 |------|-------------|----------|
+| [02.04-wasm-translation.md](02.04-wasm-translation.md) | End-to-end Wasm translation plan | High |
 | [03-lsp-implementation.md](03-lsp-implementation.md) | LSP server implementation | Medium |
 | [05-standard-library.md](05-standard-library.md) | Standard library (ability-based) | Medium |
 | [06-package-manager.md](06-package-manager.md) | Package manager | Medium |
