@@ -154,6 +154,11 @@ impl<'db> CaseLowerer<'db> {
             return vec![self.rebuild_case(op, remapped_operands)];
         }
 
+        if arms.len() == 1 && !self.is_irrefutable(&arms[0].pattern) {
+            self.emit_error(location, "single-arm case requires irrefutable pattern");
+            return vec![self.rebuild_case(op, remapped_operands)];
+        }
+
         let (ops, _final_value) = self.build_arm_chain(location, scrutinee, result_type, &arms);
         if let Some(last_op) = ops.last() {
             self.map_results(op, *last_op);
@@ -304,6 +309,22 @@ impl<'db> CaseLowerer<'db> {
         seen_variants.len() == all_variants.len()
     }
 
+    fn is_irrefutable(&self, pattern: &ArmPattern<'db>) -> bool {
+        match pattern {
+            ArmPattern::Wildcard | ArmPattern::Bind => true,
+            ArmPattern::Literal(_) => false,
+            ArmPattern::Variant(name) => {
+                let Some(owner) = self.variant_owner.get(name).copied() else {
+                    return false;
+                };
+                let Some(all_variants) = self.enum_variants.get(&owner) else {
+                    return false;
+                };
+                all_variants.len() == 1
+            }
+        }
+    }
+
     fn build_arm_chain(
         &mut self,
         location: Location<'db>,
@@ -315,6 +336,7 @@ impl<'db> CaseLowerer<'db> {
             let (cond_ops, cond) = self.build_condition_ops(location, scrutinee, &arms[0].pattern);
             let body_region = self.lower_region(arms[0].body);
             let then_region = body_region;
+            // Single-arm cases are irrefutable; reuse the body for the else branch.
             let else_region = body_region;
             let if_op = Operation::of_name(self.db, location, "scf.if")
                 .operands(IdVec::from(vec![cond]))

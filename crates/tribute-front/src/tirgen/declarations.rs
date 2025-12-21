@@ -308,7 +308,7 @@ fn parse_enum_variants<'db>(
         if is_comment(child.kind()) {
             continue;
         }
-        if child.kind() == "enum_variants" || child.kind() == "enum_variant" {
+        if child.kind() == "enum_variants" {
             let mut variant_cursor = child.walk();
             for variant_node in child.named_children(&mut variant_cursor) {
                 if is_comment(variant_node.kind()) {
