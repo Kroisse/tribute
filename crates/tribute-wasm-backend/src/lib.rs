@@ -865,9 +865,11 @@ mod tests {
     #[cfg(feature = "wasmtime-tests")]
     use tempfile::NamedTempFile;
     use trunk_ir::dialect::core;
+    use trunk_ir::dialect::func;
+    use trunk_ir::dialect::wasm;
     use trunk_ir::smallvec::smallvec;
     use trunk_ir::{
-        Attribute, Block, DialectType, Location, PathId, Region, Span, SymbolVec, idvec,
+        Attribute, BlockBuilder, DialectType, Location, PathId, Region, Span, SymbolVec, idvec,
     };
 
     #[salsa::tracked]
@@ -876,25 +878,22 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
         let i32_ty = core::I32::new(db).as_type();
 
-        let const_op = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(42))
-            .result(i32_ty)
-            .build();
-        let ret_op = Operation::of_name(db, location, "wasm.return")
-            .operand(const_op.result(db, 0))
-            .build();
-
-        let block = Block::new(db, location, idvec![], idvec![const_op, ret_op]);
+        let mut block = BlockBuilder::new(db, location);
+        let const_op = block.op(wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            Attribute::IntBits(42),
+        ));
+        block.op(wasm::r#return(db, location, vec![const_op.result(db)]));
+        let block = block.build();
         let body = Region::new(db, location, idvec![block]);
 
         let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
-        let func_op = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("main")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(body)
-            .build();
-
-        let top_block = Block::new(db, location, idvec![], idvec![func_op]);
+        let func_op = func::func(db, location, Symbol::new("main"), func_ty, body);
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(func_op);
+        let top_block = top_builder.build();
         let module_region = Region::new(db, location, idvec![top_block]);
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
@@ -905,34 +904,26 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
         let i32_ty = core::I32::new(db).as_type();
 
-        let left = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(6))
-            .result(i32_ty)
-            .build();
-        let right = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(7))
-            .result(i32_ty)
-            .build();
-        let mul = Operation::of_name(db, location, "wasm.i32_mul")
-            .operand(left.result(db, 0))
-            .operand(right.result(db, 0))
-            .result(i32_ty)
-            .build();
-        let ret = Operation::of_name(db, location, "wasm.return")
-            .operand(mul.result(db, 0))
-            .build();
-
-        let block = Block::new(db, location, idvec![], idvec![left, right, mul, ret]);
+        let mut block = BlockBuilder::new(db, location);
+        let left = block.op(wasm::i32_const(db, location, i32_ty, Attribute::IntBits(6)));
+        let right = block.op(wasm::i32_const(db, location, i32_ty, Attribute::IntBits(7)));
+        let mul = block.op(wasm::i32_mul(
+            db,
+            location,
+            left.result(db),
+            right.result(db),
+            i32_ty,
+        ));
+        block.op(wasm::r#return(db, location, vec![mul.result(db)]));
+        let block = block.build();
         let body = Region::new(db, location, idvec![block]);
 
         let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
-        let func_op = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("main")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(body)
-            .build();
+        let func_op = func::func(db, location, Symbol::new("main"), func_ty, body);
 
-        let top_block = Block::new(db, location, idvec![], idvec![func_op]);
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(func_op);
+        let top_block = top_builder.build();
         let module_region = Region::new(db, location, idvec![top_block]);
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
@@ -943,65 +934,51 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
         let i32_ty = core::I32::new(db).as_type();
 
-        let add_lhs = Operation::of_name(db, location, "wasm.local_get")
-            .attr("index", Attribute::IntBits(0))
-            .result(i32_ty)
-            .build();
-        let add_rhs = Operation::of_name(db, location, "wasm.local_get")
-            .attr("index", Attribute::IntBits(1))
-            .result(i32_ty)
-            .build();
-        let add = Operation::of_name(db, location, "wasm.i32_add")
-            .operand(add_lhs.result(db, 0))
-            .operand(add_rhs.result(db, 0))
-            .result(i32_ty)
-            .build();
-        let add_ret = Operation::of_name(db, location, "wasm.return")
-            .operand(add.result(db, 0))
-            .build();
-        let add_block = Block::new(
+        let mut add_block_builder = BlockBuilder::new(db, location).args(idvec![i32_ty, i32_ty]);
+        let add_lhs =
+            add_block_builder.op(wasm::local_get(db, location, i32_ty, Attribute::IntBits(0)));
+        let add_rhs =
+            add_block_builder.op(wasm::local_get(db, location, i32_ty, Attribute::IntBits(1)));
+        let add = add_block_builder.op(wasm::i32_add(
             db,
             location,
-            idvec![i32_ty, i32_ty],
-            idvec![add_lhs, add_rhs, add, add_ret],
-        );
+            add_lhs.result(db),
+            add_rhs.result(db),
+            i32_ty,
+        ));
+        add_block_builder.op(wasm::r#return(db, location, vec![add.result(db)]));
+        let add_block = add_block_builder.build();
         let add_body = Region::new(db, location, idvec![add_block]);
         let add_ty = core::Func::new(db, idvec![i32_ty, i32_ty], i32_ty).as_type();
-        let add_func = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("add")))
-            .attr("type", Attribute::Type(add_ty))
-            .region(add_body)
-            .build();
+        let add_func = func::func(db, location, Symbol::new("add"), add_ty, add_body);
 
-        let left = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(40))
-            .result(i32_ty)
-            .build();
-        let right = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(2))
-            .result(i32_ty)
-            .build();
+        let mut main_block_builder = BlockBuilder::new(db, location);
+        let left = main_block_builder.op(wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            Attribute::IntBits(40),
+        ));
+        let right =
+            main_block_builder.op(wasm::i32_const(db, location, i32_ty, Attribute::IntBits(2)));
         let callee: SymbolVec = smallvec![Symbol::new("add")];
-        let call = Operation::of_name(db, location, "wasm.call")
-            .attr("callee", Attribute::SymbolRef(callee))
-            .operand(left.result(db, 0))
-            .operand(right.result(db, 0))
-            .result(i32_ty)
-            .build();
-        let ret = Operation::of_name(db, location, "wasm.return")
-            .operand(call.result(db, 0))
-            .build();
-
-        let main_block = Block::new(db, location, idvec![], idvec![left, right, call, ret]);
+        let call = main_block_builder.op(wasm::call(
+            db,
+            location,
+            vec![left.result(db), right.result(db)],
+            i32_ty,
+            Attribute::SymbolRef(callee),
+        ));
+        main_block_builder.op(wasm::r#return(db, location, vec![call.result(db)]));
+        let main_block = main_block_builder.build();
         let main_body = Region::new(db, location, idvec![main_block]);
         let main_ty = core::Func::new(db, idvec![], i32_ty).as_type();
-        let main_func = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("main")))
-            .attr("type", Attribute::Type(main_ty))
-            .region(main_body)
-            .build();
+        let main_func = func::func(db, location, Symbol::new("main"), main_ty, main_body);
 
-        let top_block = Block::new(db, location, idvec![], idvec![add_func, main_func]);
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(add_func);
+        top_builder.op(main_func);
+        let top_block = top_builder.build();
         let module_region = Region::new(db, location, idvec![top_block]);
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
@@ -1012,47 +989,38 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
         let i32_ty = core::I32::new(db).as_type();
 
-        let c0 = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(41))
-            .result(i32_ty)
-            .build();
-        let c1 = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(1))
-            .result(i32_ty)
-            .build();
-        let add = Operation::of_name(db, location, "wasm.i32_add")
-            .operand(c0.result(db, 0))
-            .operand(c1.result(db, 0))
-            .result(i32_ty)
-            .build();
-        let set_local = Operation::of_name(db, location, "wasm.local_set")
-            .attr("index", Attribute::IntBits(0))
-            .operand(add.result(db, 0))
-            .build();
-        let get_local = Operation::of_name(db, location, "wasm.local_get")
-            .attr("index", Attribute::IntBits(0))
-            .result(i32_ty)
-            .build();
-        let ret = Operation::of_name(db, location, "wasm.return")
-            .operand(get_local.result(db, 0))
-            .build();
-
-        let block = Block::new(
+        let mut block = BlockBuilder::new(db, location);
+        let c0 = block.op(wasm::i32_const(
             db,
             location,
-            idvec![],
-            idvec![c0, c1, add, set_local, get_local, ret],
-        );
+            i32_ty,
+            Attribute::IntBits(41),
+        ));
+        let c1 = block.op(wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1)));
+        let add = block.op(wasm::i32_add(
+            db,
+            location,
+            c0.result(db),
+            c1.result(db),
+            i32_ty,
+        ));
+        block.op(wasm::local_set(
+            db,
+            location,
+            add.result(db),
+            Attribute::IntBits(0),
+        ));
+        let get_local = block.op(wasm::local_get(db, location, i32_ty, Attribute::IntBits(0)));
+        block.op(wasm::r#return(db, location, vec![get_local.result(db)]));
+        let block = block.build();
         let body = Region::new(db, location, idvec![block]);
 
         let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
-        let func_op = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("main")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(body)
-            .build();
+        let func_op = func::func(db, location, Symbol::new("main"), func_ty, body);
 
-        let top_block = Block::new(db, location, idvec![], idvec![func_op]);
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(func_op);
+        let top_block = top_builder.build();
         let module_region = Region::new(db, location, idvec![top_block]);
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
@@ -1063,34 +1031,31 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
         let i64_ty = core::I64::new(db).as_type();
 
-        let left = Operation::of_name(db, location, "wasm.i64_const")
-            .attr("value", Attribute::IntBits(40))
-            .result(i64_ty)
-            .build();
-        let right = Operation::of_name(db, location, "wasm.i64_const")
-            .attr("value", Attribute::IntBits(2))
-            .result(i64_ty)
-            .build();
-        let add = Operation::of_name(db, location, "wasm.i64_add")
-            .operand(left.result(db, 0))
-            .operand(right.result(db, 0))
-            .result(i64_ty)
-            .build();
-        let ret = Operation::of_name(db, location, "wasm.return")
-            .operand(add.result(db, 0))
-            .build();
-
-        let block = Block::new(db, location, idvec![], idvec![left, right, add, ret]);
+        let mut block = BlockBuilder::new(db, location);
+        let left = block.op(wasm::i64_const(
+            db,
+            location,
+            i64_ty,
+            Attribute::IntBits(40),
+        ));
+        let right = block.op(wasm::i64_const(db, location, i64_ty, Attribute::IntBits(2)));
+        let add = block.op(wasm::i64_add(
+            db,
+            location,
+            left.result(db),
+            right.result(db),
+            i64_ty,
+        ));
+        block.op(wasm::r#return(db, location, vec![add.result(db)]));
+        let block = block.build();
         let body = Region::new(db, location, idvec![block]);
 
         let func_ty = core::Func::new(db, idvec![], i64_ty).as_type();
-        let func_op = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("main")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(body)
-            .build();
+        let func_op = func::func(db, location, Symbol::new("main"), func_ty, body);
 
-        let top_block = Block::new(db, location, idvec![], idvec![func_op]);
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(func_op);
+        let top_block = top_builder.build();
         let module_region = Region::new(db, location, idvec![top_block]);
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
@@ -1101,34 +1066,36 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
         let i32_ty = core::I32::new(db).as_type();
 
-        let left = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(40))
-            .result(i32_ty)
-            .build();
-        let right = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(40))
-            .result(i32_ty)
-            .build();
-        let cmp = Operation::of_name(db, location, "wasm.i32_eq")
-            .operand(left.result(db, 0))
-            .operand(right.result(db, 0))
-            .result(i32_ty)
-            .build();
-        let ret = Operation::of_name(db, location, "wasm.return")
-            .operand(cmp.result(db, 0))
-            .build();
-
-        let block = Block::new(db, location, idvec![], idvec![left, right, cmp, ret]);
+        let mut block = BlockBuilder::new(db, location);
+        let left = block.op(wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            Attribute::IntBits(40),
+        ));
+        let right = block.op(wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            Attribute::IntBits(40),
+        ));
+        let cmp = block.op(wasm::i32_eq(
+            db,
+            location,
+            left.result(db),
+            right.result(db),
+            i32_ty,
+        ));
+        block.op(wasm::r#return(db, location, vec![cmp.result(db)]));
+        let block = block.build();
         let body = Region::new(db, location, idvec![block]);
 
         let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
-        let func_op = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("main")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(body)
-            .build();
+        let func_op = func::func(db, location, Symbol::new("main"), func_ty, body);
 
-        let top_block = Block::new(db, location, idvec![], idvec![func_op]);
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(func_op);
+        let top_block = top_builder.build();
         let module_region = Region::new(db, location, idvec![top_block]);
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
@@ -1262,97 +1229,88 @@ mod tests {
 
         let import_ty =
             core::Func::new(db, idvec![i32_ty, i32_ty, i32_ty, i32_ty], i32_ty).as_type();
-        let import_op = Operation::of_name(db, location, "wasm.import_func")
-            .attr("module", Attribute::String("wasi_snapshot_preview1".into()))
-            .attr("name", Attribute::String("fd_write".into()))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("fd_write")))
-            .attr("type", Attribute::Type(import_ty))
-            .build();
-
-        let memory_op = Operation::of_name(db, location, "wasm.memory")
-            .attr("min", Attribute::IntBits(1))
-            .build();
-
-        let data_iovec = Operation::of_name(db, location, "wasm.data")
-            .attr("offset", Attribute::IntBits(0))
-            .attr("bytes", Attribute::Bytes(iovec))
-            .build();
-        let data_msg = Operation::of_name(db, location, "wasm.data")
-            .attr("offset", Attribute::IntBits(8))
-            .attr("bytes", Attribute::Bytes(message.to_vec()))
-            .build();
-
-        let export_memory = Operation::of_name(db, location, "wasm.export_memory")
-            .attr("name", Attribute::String("memory".into()))
-            .attr("index", Attribute::IntBits(0))
-            .build();
-
-        let c_fd = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(1))
-            .result(i32_ty)
-            .build();
-        let c_iovec_ptr = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(0))
-            .result(i32_ty)
-            .build();
-        let c_iovec_len = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(1))
-            .result(i32_ty)
-            .build();
-        let c_nwritten = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(16))
-            .result(i32_ty)
-            .build();
-        let callee: SymbolVec = smallvec![Symbol::new("fd_write")];
-        let call = Operation::of_name(db, location, "wasm.call")
-            .attr("callee", Attribute::SymbolRef(callee))
-            .operand(c_fd.result(db, 0))
-            .operand(c_iovec_ptr.result(db, 0))
-            .operand(c_iovec_len.result(db, 0))
-            .operand(c_nwritten.result(db, 0))
-            .result(i32_ty)
-            .build();
-        let drop = Operation::of_name(db, location, "wasm.drop")
-            .operand(call.result(db, 0))
-            .build();
-        let ret = Operation::of_name(db, location, "wasm.return").build();
-
-        let start_block = Block::new(
+        let import_op = wasm::import_func(
             db,
             location,
-            idvec![],
-            idvec![c_fd, c_iovec_ptr, c_iovec_len, c_nwritten, call, drop, ret],
+            Attribute::String("wasi_snapshot_preview1".into()),
+            Attribute::String("fd_write".into()),
+            Attribute::Symbol(Symbol::new("fd_write")),
+            Attribute::Type(import_ty),
         );
+
+        let memory_op = wasm::memory(
+            db,
+            location,
+            Attribute::IntBits(1),
+            Attribute::Unit,
+            Attribute::Bool(false),
+            Attribute::Bool(false),
+        );
+
+        let data_iovec = wasm::data(db, location, Attribute::IntBits(0), Attribute::Bytes(iovec));
+        let data_msg = wasm::data(
+            db,
+            location,
+            Attribute::IntBits(8),
+            Attribute::Bytes(message.to_vec()),
+        );
+
+        let export_memory = wasm::export_memory(
+            db,
+            location,
+            Attribute::String("memory".into()),
+            Attribute::IntBits(0),
+        );
+
+        let c_fd = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1));
+        let c_iovec_ptr = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0));
+        let c_iovec_len = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1));
+        let c_nwritten = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(16));
+        let callee: SymbolVec = smallvec![Symbol::new("fd_write")];
+        let call = wasm::call(
+            db,
+            location,
+            vec![
+                c_fd.result(db),
+                c_iovec_ptr.result(db),
+                c_iovec_len.result(db),
+                c_nwritten.result(db),
+            ],
+            i32_ty,
+            Attribute::SymbolRef(callee),
+        );
+        let drop = wasm::drop(db, location, call.result(db));
+        let ret = wasm::r#return(db, location, Vec::new());
+
+        let mut start_block_builder = BlockBuilder::new(db, location);
+        start_block_builder.op(c_fd);
+        start_block_builder.op(c_iovec_ptr);
+        start_block_builder.op(c_iovec_len);
+        start_block_builder.op(c_nwritten);
+        start_block_builder.op(call);
+        start_block_builder.op(drop);
+        start_block_builder.op(ret);
+        let start_block = start_block_builder.build();
         let start_body = Region::new(db, location, idvec![start_block]);
         let start_ty = core::Func::new(db, idvec![], core::Nil::new(db).as_type()).as_type();
-        let start_func = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("_start")))
-            .attr("type", Attribute::Type(start_ty))
-            .region(start_body)
-            .build();
+        let start_func = func::func(db, location, Symbol::new("_start"), start_ty, start_body);
 
-        let export_start = Operation::of_name(db, location, "wasm.export_func")
-            .attr("name", Attribute::String("_start".into()))
-            .attr(
-                "func",
-                Attribute::SymbolRef(smallvec![Symbol::new("_start")]),
-            )
-            .build();
-
-        let top_block = Block::new(
+        let export_start = wasm::export_func(
             db,
             location,
-            idvec![],
-            idvec![
-                import_op,
-                memory_op,
-                data_iovec,
-                data_msg,
-                export_memory,
-                start_func,
-                export_start
-            ],
+            Attribute::String("_start".into()),
+            Attribute::SymbolRef(smallvec![Symbol::new("_start")]),
         );
+
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(import_op);
+        top_builder.op(memory_op);
+        top_builder.op(data_iovec);
+        top_builder.op(data_msg);
+        top_builder.op(export_memory);
+        top_builder.op(start_func);
+        top_builder.op(export_start);
+        let top_block = top_builder.build();
         let module_region = Region::new(db, location, idvec![top_block]);
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
