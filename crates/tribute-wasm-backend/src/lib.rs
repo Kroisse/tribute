@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use trunk_ir::dialect::core;
 use trunk_ir::{
     Attribute, Attrs, DialectType, IdVec, Operation, Region, Symbol, SymbolVec, Type, Value,
+    ValueDef,
 };
 use wasm_encoder::{
     BlockType, CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection,
-    Function, FunctionSection, ImportSection, Instruction, MemorySection, MemoryType, Module,
-    TypeSection, ValType,
+    FieldType, Function, FunctionSection, HeapType, ImportSection, Instruction, MemorySection,
+    MemoryType, Module, RefType, StorageType, TypeSection, ValType,
 };
 
 mod errors;
@@ -22,6 +23,10 @@ pub use translate::{WasmBinary, compile_to_wasm};
 trunk_ir::symbols! {
     ATTR_SYM_NAME => "sym_name",
     ATTR_TYPE => "type",
+    ATTR_TYPE_IDX => "type_idx",
+    ATTR_FIELD_IDX => "field_idx",
+    ATTR_HEAP_TYPE => "heap_type",
+    ATTR_TARGET_TYPE => "target_type",
     ATTR_CALLEE => "callee",
     ATTR_VALUE => "value",
     ATTR_INDEX => "index",
@@ -79,6 +84,12 @@ struct ModuleInfo<'db> {
     exports: Vec<ExportDef>,
     memory: Option<MemoryDef>,
     data: Vec<DataDef>,
+    gc_types: Vec<GcTypeDef>,
+}
+
+enum GcTypeDef {
+    Struct(Vec<FieldType>),
+    Array(FieldType),
 }
 
 pub fn emit_wasm<'db>(
@@ -96,7 +107,8 @@ pub fn emit_wasm<'db>(
     let mut data_section = DataSection::new();
 
     let mut func_indices = HashMap::new();
-    let mut type_indices = Vec::new();
+    let gc_type_count = module_info.gc_types.len() as u32;
+    let mut next_type_index = gc_type_count;
 
     for (index, import_def) in module_info.imports.iter().enumerate() {
         func_indices.insert(import_def.sym, index as u32);
@@ -104,6 +116,17 @@ pub fn emit_wasm<'db>(
     let import_count = module_info.imports.len() as u32;
     for (index, func_def) in module_info.funcs.iter().enumerate() {
         func_indices.insert(func_def.name, import_count + index as u32);
+    }
+
+    for gc_type in &module_info.gc_types {
+        match gc_type {
+            GcTypeDef::Struct(fields) => {
+                type_section.ty().struct_(fields.clone());
+            }
+            GcTypeDef::Array(field) => {
+                type_section.ty().array(&field.element_type, field.mutable);
+            }
+        }
     }
 
     for import_def in module_info.imports.iter() {
@@ -115,8 +138,8 @@ pub fn emit_wasm<'db>(
             .collect::<CompilationResult<Vec<_>>>()?;
         let results = result_types(db, import_def.ty.result(db))?;
         type_section.ty().function(params, results);
-        let type_index = type_indices.len() as u32;
-        type_indices.push(type_index);
+        let type_index = next_type_index;
+        next_type_index += 1;
         import_section.import(
             import_def.module.as_str(),
             import_def.name.as_str(),
@@ -133,8 +156,8 @@ pub fn emit_wasm<'db>(
             .collect::<CompilationResult<Vec<_>>>()?;
         let results = result_types(db, func_def.ty.result(db))?;
         type_section.ty().function(params, results);
-        let type_index = type_indices.len() as u32;
-        type_indices.push(type_index);
+        let type_index = next_type_index;
+        next_type_index += 1;
         function_section.function(type_index);
     }
 
@@ -251,7 +274,322 @@ fn collect_module_info<'db>(
         exports,
         memory,
         data,
+        gc_types: collect_gc_types(db, module)?,
     })
+}
+
+fn collect_gc_types<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+) -> CompilationResult<Vec<GcTypeDef>> {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum GcKind {
+        Struct,
+        Array,
+        Unknown,
+    }
+
+    struct GcTypeBuilder<'db> {
+        kind: GcKind,
+        fields: Vec<Option<Type<'db>>>,
+        array_elem: Option<Type<'db>>,
+        field_count: Option<usize>,
+    }
+
+    impl<'db> GcTypeBuilder<'db> {
+        fn new() -> Self {
+            Self {
+                kind: GcKind::Unknown,
+                fields: Vec::new(),
+                array_elem: None,
+                field_count: None,
+            }
+        }
+    }
+
+    let wasm_dialect = Symbol::new("wasm");
+    let mut builders: Vec<GcTypeBuilder<'db>> = Vec::new();
+    let mut type_idx_by_type: HashMap<Type<'db>, u32> = HashMap::new();
+
+    fn ensure_builder<'db, 'a>(
+        builders: &'a mut Vec<GcTypeBuilder<'db>>,
+        idx: u32,
+    ) -> &'a mut GcTypeBuilder<'db> {
+        if builders.len() <= idx as usize {
+            builders.resize_with(idx as usize + 1, GcTypeBuilder::new);
+        }
+        &mut builders[idx as usize]
+    }
+
+    fn register_type<'db>(type_idx_by_type: &mut HashMap<Type<'db>, u32>, idx: u32, ty: Type<'db>) {
+        type_idx_by_type.entry(ty).or_insert(idx);
+    }
+
+    fn record_struct_field<'db>(
+        type_idx: u32,
+        builder: &mut GcTypeBuilder<'db>,
+        field_idx: u32,
+        ty: Type<'db>,
+    ) -> CompilationResult<()> {
+        if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
+            let count = builder.field_count.expect("count checked by matches");
+            return Err(CompilationError::type_error(format!(
+                "struct type index {type_idx} field index {field_idx} out of bounds (fields: {count})",
+            )));
+        }
+        let idx = field_idx as usize;
+        if builder.fields.len() <= idx {
+            builder.fields.resize_with(idx + 1, || None);
+        }
+        if let Some(existing) = builder.fields[idx] {
+            if existing != ty {
+                return Err(CompilationError::type_error(format!(
+                    "struct type index {type_idx} field {field_idx} type mismatch",
+                )));
+            }
+        } else {
+            builder.fields[idx] = Some(ty);
+        }
+        Ok(())
+    }
+
+    fn record_array_elem<'db>(
+        type_idx: u32,
+        builder: &mut GcTypeBuilder<'db>,
+        ty: Type<'db>,
+    ) -> CompilationResult<()> {
+        if let Some(existing) = builder.array_elem {
+            if existing != ty {
+                return Err(CompilationError::type_error(format!(
+                    "array type index {type_idx} element type mismatch",
+                )));
+            }
+        } else {
+            builder.array_elem = Some(ty);
+        }
+        Ok(())
+    }
+
+    let mut visit_op = |op: &Operation<'db>| -> CompilationResult<()> {
+        if op.dialect(db) != wasm_dialect {
+            return Ok(());
+        }
+        let name = op.name(db);
+        if name == Symbol::new("struct_new") {
+            let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+            let builder = ensure_builder(&mut builders, type_idx);
+            builder.kind = GcKind::Struct;
+            let field_count = op.operands(db).len();
+            if matches!(builder.field_count, Some(existing_count) if existing_count != field_count)
+            {
+                let existing_count = builder.field_count.expect("count checked by matches");
+                return Err(CompilationError::type_error(format!(
+                    "struct type index {type_idx} field count mismatch ({existing_count} vs {field_count})",
+                )));
+            } else {
+                builder.field_count = Some(field_count);
+                if builder.fields.len() < field_count {
+                    builder.fields.resize_with(field_count, || None);
+                }
+            }
+            if let Some(result_ty) = op.results(db).first().copied() {
+                register_type(&mut type_idx_by_type, type_idx, result_ty);
+            }
+            for (field_idx, value) in op.operands(db).iter().enumerate() {
+                if let Some(ty) = value_type(db, *value) {
+                    record_struct_field(type_idx, builder, field_idx as u32, ty)?;
+                }
+            }
+        } else if name == Symbol::new("struct_get") {
+            let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+            let field_idx = attr_u32(op.attributes(db), ATTR_FIELD_IDX())?;
+            let builder = ensure_builder(&mut builders, type_idx);
+            builder.kind = GcKind::Struct;
+            if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
+                let count = builder.field_count.expect("count checked by matches");
+                return Err(CompilationError::type_error(format!(
+                    "struct type index {type_idx} field index {field_idx} out of bounds (fields: {count})",
+                )));
+            }
+            if let Some(ty) = op
+                .operands(db)
+                .first()
+                .copied()
+                .and_then(|value| value_type(db, value))
+            {
+                register_type(&mut type_idx_by_type, type_idx, ty);
+            }
+            if let Some(result_ty) = op.results(db).first().copied() {
+                record_struct_field(type_idx, builder, field_idx, result_ty)?;
+            }
+        } else if name == Symbol::new("struct_set") {
+            let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+            let field_idx = attr_u32(op.attributes(db), ATTR_FIELD_IDX())?;
+            let builder = ensure_builder(&mut builders, type_idx);
+            builder.kind = GcKind::Struct;
+            if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
+                let count = builder.field_count.expect("count checked by matches");
+                return Err(CompilationError::type_error(format!(
+                    "struct type index {type_idx} field index {field_idx} out of bounds (fields: {count})",
+                )));
+            }
+            if let Some(ty) = op
+                .operands(db)
+                .first()
+                .copied()
+                .and_then(|value| value_type(db, value))
+            {
+                register_type(&mut type_idx_by_type, type_idx, ty);
+            }
+            if let Some(ty) = op
+                .operands(db)
+                .get(1)
+                .copied()
+                .and_then(|value| value_type(db, value))
+            {
+                record_struct_field(type_idx, builder, field_idx, ty)?;
+            }
+        } else if name == Symbol::new("array_new") || name == Symbol::new("array_new_default") {
+            let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+            let builder = ensure_builder(&mut builders, type_idx);
+            builder.kind = GcKind::Array;
+            if let Some(result_ty) = op.results(db).first().copied() {
+                register_type(&mut type_idx_by_type, type_idx, result_ty);
+            }
+            if let Some(ty) = op
+                .operands(db)
+                .get(1)
+                .copied()
+                .and_then(|value| value_type(db, value))
+            {
+                record_array_elem(type_idx, builder, ty)?;
+            }
+        } else if name == Symbol::new("array_get") {
+            let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+            let builder = ensure_builder(&mut builders, type_idx);
+            builder.kind = GcKind::Array;
+            if let Some(ty) = op
+                .operands(db)
+                .first()
+                .copied()
+                .and_then(|value| value_type(db, value))
+            {
+                register_type(&mut type_idx_by_type, type_idx, ty);
+            }
+            if let Some(result_ty) = op.results(db).first().copied() {
+                record_array_elem(type_idx, builder, result_ty)?;
+            }
+        } else if name == Symbol::new("array_set") {
+            let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+            let builder = ensure_builder(&mut builders, type_idx);
+            builder.kind = GcKind::Array;
+            if let Some(ty) = op
+                .operands(db)
+                .first()
+                .copied()
+                .and_then(|value| value_type(db, value))
+            {
+                register_type(&mut type_idx_by_type, type_idx, ty);
+            }
+            if let Some(ty) = op
+                .operands(db)
+                .get(2)
+                .copied()
+                .and_then(|value| value_type(db, value))
+            {
+                record_array_elem(type_idx, builder, ty)?;
+            }
+        } else if name == Symbol::new("ref_null")
+            || name == Symbol::new("ref_cast")
+            || name == Symbol::new("ref_test")
+        {
+            let type_idx = if name == Symbol::new("ref_null") {
+                attr_u32(op.attributes(db), ATTR_HEAP_TYPE())?
+            } else {
+                attr_u32(op.attributes(db), ATTR_TARGET_TYPE())?
+            };
+            if let Some(result_ty) = op.results(db).first().copied() {
+                register_type(&mut type_idx_by_type, type_idx, result_ty);
+            }
+            let builder = ensure_builder(&mut builders, type_idx);
+            if builder.kind == GcKind::Unknown {
+                builder.kind = GcKind::Struct;
+            }
+        }
+        Ok(())
+    };
+
+    let body = module.body(db);
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if op.dialect(db) == Symbol::new("func") && op.name(db) == Symbol::new("func") {
+                if let Some(region) = op.regions(db).first() {
+                    for block in region.blocks(db).iter() {
+                        for op in block.operations(db).iter() {
+                            visit_op(op)?;
+                        }
+                    }
+                }
+            } else {
+                visit_op(op)?;
+            }
+        }
+    }
+
+    let to_field_type = |ty: Type<'db>, type_idx_by_type: &HashMap<_, _>| -> FieldType {
+        let element_type = if core::I32::from_type(db, ty).is_some() {
+            StorageType::Val(ValType::I32)
+        } else if core::I64::from_type(db, ty).is_some() {
+            StorageType::Val(ValType::I64)
+        } else if core::F32::from_type(db, ty).is_some() {
+            StorageType::Val(ValType::F32)
+        } else if core::F64::from_type(db, ty).is_some() {
+            StorageType::Val(ValType::F64)
+        } else if let Some(type_idx) = type_idx_by_type.get(&ty).copied() {
+            StorageType::Val(ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Concrete(type_idx),
+            }))
+        } else {
+            StorageType::Val(ValType::Ref(RefType::ANYREF))
+        };
+        FieldType {
+            element_type,
+            mutable: false,
+        }
+    };
+
+    let mut result = Vec::new();
+    for builder in builders {
+        match builder.kind {
+            GcKind::Array => {
+                let elem = builder
+                    .array_elem
+                    .map(|ty| to_field_type(ty, &type_idx_by_type))
+                    .unwrap_or(FieldType {
+                        element_type: StorageType::Val(ValType::I32),
+                        mutable: false,
+                    });
+                result.push(GcTypeDef::Array(elem));
+            }
+            GcKind::Struct | GcKind::Unknown => {
+                let fields = builder
+                    .fields
+                    .into_iter()
+                    .map(|ty| {
+                        ty.map(|ty| to_field_type(ty, &type_idx_by_type))
+                            .unwrap_or(FieldType {
+                                element_type: StorageType::Val(ValType::I32),
+                                mutable: false,
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                result.push(GcTypeDef::Struct(fields));
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 fn extract_function_def<'db>(
@@ -792,6 +1130,69 @@ fn emit_op<'db>(
         emit_operands(operands, value_locals, function)?;
         function.instruction(&Instruction::LocalTee(index));
         set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("struct_new") {
+        emit_operands(operands, value_locals, function)?;
+        let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+        function.instruction(&Instruction::StructNew(type_idx));
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("struct_get") {
+        emit_operands(operands, value_locals, function)?;
+        let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+        let field_idx = attr_u32(op.attributes(db), ATTR_FIELD_IDX())?;
+        function.instruction(&Instruction::StructGet {
+            struct_type_index: type_idx,
+            field_index: field_idx,
+        });
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("struct_set") {
+        emit_operands(operands, value_locals, function)?;
+        let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+        let field_idx = attr_u32(op.attributes(db), ATTR_FIELD_IDX())?;
+        function.instruction(&Instruction::StructSet {
+            struct_type_index: type_idx,
+            field_index: field_idx,
+        });
+    } else if name == Symbol::new("array_new") {
+        emit_operands(operands, value_locals, function)?;
+        let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+        function.instruction(&Instruction::ArrayNew(type_idx));
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("array_new_default") {
+        emit_operands(operands, value_locals, function)?;
+        let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+        function.instruction(&Instruction::ArrayNewDefault(type_idx));
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("array_get") {
+        emit_operands(operands, value_locals, function)?;
+        let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+        function.instruction(&Instruction::ArrayGet(type_idx));
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("array_set") {
+        emit_operands(operands, value_locals, function)?;
+        let type_idx = attr_u32(op.attributes(db), ATTR_TYPE_IDX())?;
+        function.instruction(&Instruction::ArraySet(type_idx));
+    } else if name == Symbol::new("array_len") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::ArrayLen);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("ref_null") {
+        let heap_type = attr_heap_type(op.attributes(db), ATTR_HEAP_TYPE())?;
+        function.instruction(&Instruction::RefNull(heap_type));
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("ref_is_null") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::RefIsNull);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("ref_cast") {
+        emit_operands(operands, value_locals, function)?;
+        let heap_type = attr_heap_type(op.attributes(db), ATTR_TARGET_TYPE())?;
+        function.instruction(&Instruction::RefCastNullable(heap_type));
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("ref_test") {
+        emit_operands(operands, value_locals, function)?;
+        let heap_type = attr_heap_type(op.attributes(db), ATTR_TARGET_TYPE())?;
+        function.instruction(&Instruction::RefTestNullable(heap_type));
+        set_result_local(db, op, value_locals, function)?;
     } else {
         return Err(CompilationError::unsupported_feature(
             "wasm op not supported",
@@ -813,6 +1214,13 @@ fn emit_operands<'db>(
         function.instruction(&Instruction::LocalGet(*index));
     }
     Ok(())
+}
+
+fn value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
+    match value.def(db) {
+        ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
+        ValueDef::BlockArg(block) => block.args(db).get(value.index(db)).copied(),
+    }
 }
 
 fn set_result_local<'db>(
@@ -1018,6 +1426,15 @@ fn attr_u32<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<u32> {
         Some(Attribute::IntBits(bits)) => Ok(*bits as u32),
         _ => Err(CompilationError::from(
             errors::CompilationErrorKind::MissingAttribute("u32"),
+        )),
+    }
+}
+
+fn attr_heap_type<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<HeapType> {
+    match attrs.get(&key) {
+        Some(Attribute::IntBits(bits)) => Ok(HeapType::Concrete(*bits as u32)),
+        _ => Err(CompilationError::from(
+            errors::CompilationErrorKind::MissingAttribute("heap_type"),
         )),
     }
 }
