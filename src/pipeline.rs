@@ -264,7 +264,7 @@ pub fn stage_lower_to_wasm<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<WasmBinary<'db>> {
-    let module = stage_tdnr(db, source);
+    let module = stage_lower_case(db, source);
     match compile_to_wasm(db, module) {
         Ok(binary) => Some(binary),
         Err(e) => {
