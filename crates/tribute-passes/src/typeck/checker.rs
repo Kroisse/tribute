@@ -251,7 +251,7 @@ impl<'db> TypeChecker<'db> {
         } else if dialect == src::DIALECT_NAME() {
             if name == src::VAR() {
                 self.check_src_var(op);
-            } else if name == src::CALL() {
+            } else if name == src::CALL() || name == src::CONS() {
                 self.check_src_call(op);
             } else if name == src::BINOP() {
                 self.check_src_binop(op);

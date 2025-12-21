@@ -14,6 +14,11 @@ dialect! {
         #[attr(name: SymbolRef)]
         fn call(#[rest] args) -> result;
 
+        /// `src.cons` operation: unresolved constructor application.
+        /// The constructor name will be resolved to a struct/variant constructor.
+        #[attr(name: SymbolRef)]
+        fn cons(#[rest] args) -> result;
+
         /// `src.var` operation: unresolved variable reference (single name).
         /// May resolve to local binding or module-level definition.
         #[attr(name: Symbol)]

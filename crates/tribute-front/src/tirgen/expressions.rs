@@ -48,7 +48,7 @@ pub fn lower_expr<'db>(
             let op = block.op(arith::Const::f64(ctx.db, location, value));
             Some(op.result(ctx.db))
         }
-        "true" => {
+        "true" | "keyword_true" => {
             let op = block.op(arith::r#const(
                 ctx.db,
                 location,
@@ -57,7 +57,7 @@ pub fn lower_expr<'db>(
             ));
             Some(op.result(ctx.db))
         }
-        "false" => {
+        "false" | "keyword_false" => {
             let op = block.op(arith::r#const(
                 ctx.db,
                 location,
@@ -66,7 +66,7 @@ pub fn lower_expr<'db>(
             ));
             Some(op.result(ctx.db))
         }
-        "nil" => {
+        "nil" | "keyword_nil" => {
             let op = block.op(arith::r#const(ctx.db, location, unit_ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -133,6 +133,9 @@ pub fn lower_expr<'db>(
 
         // === Call expressions ===
         "call_expression" => lower_call_expr(ctx, block, node),
+
+        // === Constructor expressions ===
+        "constructor_expression" => lower_constructor_expr(ctx, block, node),
 
         // === Method call ===
         "method_call_expression" => lower_method_call_expr(ctx, block, node),
@@ -381,6 +384,38 @@ fn lower_call_expr<'db>(
     Some(op.result(ctx.db))
 }
 
+/// Lower a constructor expression.
+fn lower_constructor_expr<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
+    block: &mut BlockBuilder<'db>,
+    node: Node,
+) -> Option<Value<'db>> {
+    let location = ctx.location(&node);
+    let infer_ty = ctx.fresh_type_var();
+
+    let ctor_node = node.child_by_field_name("constructor")?;
+    let ctor_path: SymbolVec = match ctor_node.kind() {
+        "type_identifier" => sym_ref(&node_text(&ctor_node, &ctx.source)),
+        "path_expression" => {
+            let mut cursor = ctor_node.walk();
+            let segments: SymbolVec = ctor_node
+                .named_children(&mut cursor)
+                .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
+                .map(|n| node_text(&n, &ctx.source).into())
+                .collect();
+            if segments.is_empty() {
+                return None;
+            }
+            segments
+        }
+        _ => return None,
+    };
+
+    let args = collect_argument_list(ctx, block, node);
+    let op = block.op(src::cons(ctx.db, location, args, infer_ty, ctor_path));
+    Some(op.result(ctx.db))
+}
+
 /// Collect arguments from argument_list child node.
 fn collect_argument_list<'db>(
     ctx: &mut CstLoweringCtx<'db>,
@@ -626,8 +661,12 @@ fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'db> 
                 pat::helpers::wildcard_region(ctx.db, location)
             }
         }
-        "true" => pat::helpers::bool_region(ctx.db, location, true),
-        "false" => pat::helpers::bool_region(ctx.db, location, false),
+        "true" | "keyword_true" => pat::helpers::bool_region(ctx.db, location, true),
+        "false" | "keyword_false" => pat::helpers::bool_region(ctx.db, location, false),
+        "nil" | "keyword_nil" => {
+            let op = pat::literal(ctx.db, location, Attribute::Unit);
+            pat::helpers::single_op_region(ctx.db, location, op.as_operation())
+        }
         "string" | "raw_string" | "multiline_string" => {
             let s = parse_string_literal(node, &ctx.source);
             pat::helpers::string_region(ctx.db, location, &s)

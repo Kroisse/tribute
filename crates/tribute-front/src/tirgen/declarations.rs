@@ -308,15 +308,23 @@ fn parse_enum_variants<'db>(
         if is_comment(child.kind()) {
             continue;
         }
-        if child.kind() == "enum_variant" {
-            // Use field-based access for enum_variant
-            if let Some(name_node) = child.child_by_field_name("name") {
-                let variant_name = node_text(&name_node, &ctx.source).to_string();
-                let variant_fields = child
-                    .child_by_field_name("fields")
-                    .map(|fields_node| parse_variant_fields(ctx, fields_node))
-                    .unwrap_or_default();
-                variants.push((variant_name, variant_fields));
+        if child.kind() == "enum_variants" {
+            let mut variant_cursor = child.walk();
+            for variant_node in child.named_children(&mut variant_cursor) {
+                if is_comment(variant_node.kind()) {
+                    continue;
+                }
+                if variant_node.kind() != "enum_variant" {
+                    continue;
+                }
+                if let Some(name_node) = variant_node.child_by_field_name("name") {
+                    let variant_name = node_text(&name_node, &ctx.source).to_string();
+                    let variant_fields = variant_node
+                        .child_by_field_name("fields")
+                        .map(|fields_node| parse_variant_fields(ctx, fields_node))
+                        .unwrap_or_default();
+                    variants.push((variant_name, variant_fields));
+                }
             }
         }
     }

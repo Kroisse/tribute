@@ -23,6 +23,9 @@
 //!     ▼
 //! stage_tdnr ─► Module (UFCS method calls resolved)
 //!     │
+//!     ▼
+//! stage_lower_case ─► Module (case.case lowered to scf.if)
+//!     │
 //!     ├─► [No target] ─► Full Tribute module (diagnostic/analysis)
 //!     │
 //!     └─► [target: wasm] ─► stage_lower_to_wasm ─► WasmBinary (WebAssembly bytes)
@@ -53,6 +56,7 @@ use tree_sitter::Parser;
 use tribute_front::source_file::parse_with_rope;
 use tribute_front::{lower_cst, parse_cst};
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_passes::lower_case_to_scf;
 use tribute_passes::resolve::{Resolver, build_env};
 use tribute_passes::tdnr::resolve_tdnr;
 use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
@@ -238,6 +242,13 @@ pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Modul
     resolve_tdnr(db, module)
 }
 
+/// Stage 6: Lower `case.case` to `scf.if` chains.
+#[salsa::tracked]
+pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = stage_tdnr(db, source);
+    lower_case_to_scf(db, module)
+}
+
 /// Stage 6: Lower to WebAssembly target.
 ///
 /// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
@@ -282,10 +293,11 @@ pub fn stage_lower_to_wasm<'db>(
 /// 3. Resolve names
 /// 4. Infer types
 /// 5. TDNR (Type-Directed Name Resolution)
-/// 6. Final resolution pass (reports unresolved references)
+/// 6. Lower case expressions to `scf.if`
+/// 7. Final resolution pass (reports unresolved references)
 #[salsa::tracked]
 pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_tdnr(db, source);
+    let module = stage_lower_case(db, source);
 
     // Final pass: resolve any remaining unresolved references and emit diagnostics
     let env = build_env(db, &module);
@@ -470,6 +482,52 @@ mod tests {
         assert!(
             !has_unresolved_y,
             "Pattern binding `y` should be resolved, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[salsa_test]
+    fn test_case_lowering_exhaustive(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "test.trb",
+            r#"
+            fn test(x: Int) -> Int {
+                case x {
+                    0 -> 1
+                    _ -> 2
+                }
+            }
+            "#,
+        );
+
+        let result = compile_with_diagnostics(db, source);
+        assert!(
+            result.diagnostics.is_empty(),
+            "Expected no diagnostics, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[salsa_test]
+    fn test_case_lowering_non_exhaustive(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "test.trb",
+            r#"
+            fn test(x: Int) -> Int {
+                case x {
+                    0 -> 1
+                }
+            }
+            "#,
+        );
+
+        let result = compile_with_diagnostics(db, source);
+        let has_non_exhaustive = result.diagnostics.iter().any(|d| {
+            d.message.contains("non-exhaustive") && d.severity == DiagnosticSeverity::Error
+        });
+        assert!(
+            has_non_exhaustive,
+            "Expected non-exhaustive case diagnostic, got: {:?}",
             result.diagnostics
         );
     }
