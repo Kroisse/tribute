@@ -32,7 +32,7 @@ target-lexicon = "0.13"
 tempfile = "3.8"
 tracing = "0.1"
 tree-sitter = "0.25.6"
-tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute", tag = "v0.2.1" }
+tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute", tag = "v0.2.2" }
 tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-front = { path = "crates/tribute-front" }
