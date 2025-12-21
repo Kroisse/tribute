@@ -3,11 +3,13 @@
 use std::collections::HashMap;
 
 use trunk_ir::dialect::core;
-use trunk_ir::{Attribute, Attrs, DialectType, IdVec, Operation, Symbol, SymbolVec, Type, Value};
+use trunk_ir::{
+    Attribute, Attrs, DialectType, IdVec, Operation, Region, Symbol, SymbolVec, Type, Value,
+};
 use wasm_encoder::{
-    CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection, Function,
-    FunctionSection, ImportSection, Instruction, MemorySection, MemoryType, Module, TypeSection,
-    ValType,
+    BlockType, CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection,
+    Function, FunctionSection, ImportSection, Instruction, MemorySection, MemoryType, Module,
+    TypeSection, ValType,
 };
 
 mod errors;
@@ -20,6 +22,7 @@ trunk_ir::symbols! {
     ATTR_CALLEE => "callee",
     ATTR_VALUE => "value",
     ATTR_INDEX => "index",
+    ATTR_TARGET => "target",
     ATTR_MODULE => "module",
     ATTR_NAME => "name",
     ATTR_FUNC => "func",
@@ -396,11 +399,6 @@ fn emit_function<'db>(
     let block = blocks
         .first()
         .ok_or_else(|| CompilationError::invalid_module("func.func has no entry block"))?;
-    if blocks.len() != 1 {
-        return Err(CompilationError::unsupported_feature(
-            "multi-block functions",
-        ));
-    }
 
     let params = func_def.ty.params(db);
     if params.len() != block.args(db).len() {
@@ -418,28 +416,90 @@ fn emit_function<'db>(
 
     let param_count = params.len() as u32;
 
-    for op in block.operations(db).iter() {
-        let result_types = op.results(db);
-        if result_types.len() > 1 {
-            return Err(CompilationError::unsupported_feature("multi-result ops"));
-        }
-        if let Some(result_ty) = result_types.first() {
-            let val_type = type_to_valtype(db, *result_ty)?;
-            let local_index = param_count + locals.len() as u32;
-            value_locals.insert(op.result(db, 0), local_index);
-            locals.push(val_type);
-        }
-    }
+    assign_locals_in_region(db, region, param_count, &mut locals, &mut value_locals)?;
 
     let mut function = Function::new(compress_locals(&locals));
 
-    for op in block.operations(db).iter() {
-        emit_op(db, op, &value_locals, func_indices, &mut function)?;
-    }
+    emit_region_ops(db, region, &value_locals, func_indices, &mut function)?;
 
     function.instruction(&Instruction::End);
 
     Ok(function)
+}
+
+fn assign_locals_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    param_count: u32,
+    locals: &mut Vec<ValType>,
+    value_locals: &mut HashMap<Value<'db>, u32>,
+) -> CompilationResult<()> {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            let result_types = op.results(db);
+            if result_types.len() > 1 {
+                return Err(CompilationError::unsupported_feature("multi-result ops"));
+            }
+            if let Some(result_ty) = result_types
+                .first()
+                .copied()
+                .filter(|ty| !is_nil_type(db, *ty))
+            {
+                let val_type = type_to_valtype(db, result_ty)?;
+                let local_index = param_count + locals.len() as u32;
+                value_locals.insert(op.result(db, 0), local_index);
+                locals.push(val_type);
+            }
+            for nested in op.regions(db).iter() {
+                assign_locals_in_region(db, nested, param_count, locals, value_locals)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn emit_region_ops<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    value_locals: &HashMap<Value<'db>, u32>,
+    func_indices: &HashMap<Symbol, u32>,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    let blocks = region.blocks(db);
+    if blocks.len() != 1 {
+        return Err(CompilationError::unsupported_feature("multi-block regions"));
+    }
+    let block = &blocks[0];
+    for op in block.operations(db).iter() {
+        emit_op(db, op, value_locals, func_indices, function)?;
+    }
+    Ok(())
+}
+
+fn region_result_value<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+) -> Option<Value<'db>> {
+    let blocks = region.blocks(db);
+    let block = blocks.last()?;
+    let op = block.operations(db).last()?;
+    if op.results(db).is_empty() {
+        None
+    } else {
+        Some(op.result(db, 0))
+    }
+}
+
+fn emit_value_get<'db>(
+    value: Value<'db>,
+    value_locals: &HashMap<Value<'db>, u32>,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    let index = value_locals
+        .get(&value)
+        .ok_or_else(|| CompilationError::invalid_module("value missing local mapping"))?;
+    function.instruction(&Instruction::LocalGet(*index));
+    Ok(())
 }
 
 fn emit_op<'db>(
@@ -587,6 +647,86 @@ fn emit_op<'db>(
         emit_operands(operands, value_locals, function)?;
         function.instruction(&Instruction::F64Div);
         set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("if") {
+        let result_ty = op.results(db).first().copied();
+        let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
+        let block_type = if has_result {
+            BlockType::Result(type_to_valtype(db, result_ty.expect("if result type"))?)
+        } else {
+            BlockType::Empty
+        };
+        if operands.len() != 1 {
+            return Err(CompilationError::invalid_module(
+                "wasm.if expects a single condition operand",
+            ));
+        }
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::If(block_type));
+        let regions = op.regions(db);
+        let then_region = regions
+            .first()
+            .ok_or_else(|| CompilationError::invalid_module("wasm.if missing then region"))?;
+        let then_result = if has_result {
+            Some(region_result_value(db, then_region).ok_or_else(|| {
+                CompilationError::invalid_module("wasm.if then region missing result value")
+            })?)
+        } else {
+            None
+        };
+        emit_region_ops(db, then_region, value_locals, func_indices, function)?;
+        if let Some(value) = then_result {
+            emit_value_get(value, value_locals, function)?;
+        }
+        if let Some(else_region) = regions.get(1) {
+            let else_result = if has_result {
+                Some(region_result_value(db, else_region).ok_or_else(|| {
+                    CompilationError::invalid_module("wasm.if else region missing result value")
+                })?)
+            } else {
+                None
+            };
+            function.instruction(&Instruction::Else);
+            emit_region_ops(db, else_region, value_locals, func_indices, function)?;
+            if let Some(value) = else_result {
+                emit_value_get(value, value_locals, function)?;
+            }
+        } else if has_result {
+            return Err(CompilationError::invalid_module(
+                "wasm.if with result requires else region",
+            ));
+        }
+        function.instruction(&Instruction::End);
+        if has_result {
+            set_result_local(db, op, value_locals, function)?;
+        }
+    } else if name == Symbol::new("block") {
+        function.instruction(&Instruction::Block(BlockType::Empty));
+        let region = op
+            .regions(db)
+            .first()
+            .ok_or_else(|| CompilationError::invalid_module("wasm.block missing body region"))?;
+        emit_region_ops(db, region, value_locals, func_indices, function)?;
+        function.instruction(&Instruction::End);
+    } else if name == Symbol::new("loop") {
+        function.instruction(&Instruction::Loop(BlockType::Empty));
+        let region = op
+            .regions(db)
+            .first()
+            .ok_or_else(|| CompilationError::invalid_module("wasm.loop missing body region"))?;
+        emit_region_ops(db, region, value_locals, func_indices, function)?;
+        function.instruction(&Instruction::End);
+    } else if name == Symbol::new("br") {
+        let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
+        function.instruction(&Instruction::Br(depth));
+    } else if name == Symbol::new("br_if") {
+        if operands.len() != 1 {
+            return Err(CompilationError::invalid_module(
+                "wasm.br_if expects a single condition operand",
+            ));
+        }
+        emit_operands(operands, value_locals, function)?;
+        let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
+        function.instruction(&Instruction::BrIf(depth));
     } else if name == Symbol::new("drop") {
         emit_operands(operands, value_locals, function)?;
         function.instruction(&Instruction::Drop);
@@ -688,12 +828,15 @@ fn result_types<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
 ) -> CompilationResult<Vec<ValType>> {
-    let is_nil = ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == Symbol::new("nil");
-    if is_nil {
+    if is_nil_type(db, ty) {
         Ok(Vec::new())
     } else {
         Ok(vec![type_to_valtype(db, ty)?])
     }
+}
+
+fn is_nil_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == Symbol::new("nil")
 }
 
 fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
@@ -1100,6 +1243,50 @@ mod tests {
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
 
+    #[salsa::tracked]
+    fn build_if_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///if.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+
+        let mut block = BlockBuilder::new(db, location);
+        let cond = block.op(wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1)));
+
+        let mut then_block = BlockBuilder::new(db, location);
+        then_block.op(wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            Attribute::IntBits(42),
+        ));
+        let then_region = Region::new(db, location, idvec![then_block.build()]);
+
+        let mut else_block = BlockBuilder::new(db, location);
+        else_block.op(wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0)));
+        let else_region = Region::new(db, location, idvec![else_block.build()]);
+
+        let if_op = block.op(wasm::r#if(
+            db,
+            location,
+            cond.result(db),
+            i32_ty,
+            then_region,
+            else_region,
+        ));
+        block.op(wasm::r#return(db, location, vec![if_op.result(db)]));
+        let block = block.build();
+        let body = Region::new(db, location, idvec![block]);
+
+        let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
+        let func_op = func::func(db, location, Symbol::new("main"), func_ty, body);
+
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(func_op);
+        let top_block = top_builder.build();
+        let module_region = Region::new(db, location, idvec![top_block]);
+        core::Module::create(db, location, Symbol::new("main"), module_region)
+    }
+
     #[salsa_test]
     fn emits_basic_wasm_module(db: &salsa::DatabaseImpl) {
         let module = build_basic_module(db);
@@ -1150,6 +1337,13 @@ mod tests {
     fn runs_cmp_in_wasmtime(db: &salsa::DatabaseImpl) {
         let module = build_i32_cmp_module(db);
         assert_wasmtime_result(db, &module, "1");
+    }
+
+    #[cfg(feature = "wasmtime-tests")]
+    #[salsa_test]
+    fn runs_if_in_wasmtime(db: &salsa::DatabaseImpl) {
+        let module = build_if_module(db);
+        assert_wasmtime_result(db, &module, "42");
     }
 
     #[cfg(feature = "wasmtime-tests")]
