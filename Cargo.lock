@@ -616,6 +616,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "leb128fmt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
+
+[[package]]
 name = "libc"
 version = "0.2.178"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1223,6 +1229,7 @@ dependencies = [
  "tree-sitter-tribute",
  "tribute-front",
  "tribute-passes",
+ "tribute-wasm-backend",
  "trunk-ir",
 ]
 
@@ -1263,6 +1270,18 @@ dependencies = [
  "salsa",
  "salsa-test-macros",
  "trunk-ir",
+]
+
+[[package]]
+name = "tribute-wasm-backend"
+version = "0.1.0"
+dependencies = [
+ "derive_more",
+ "salsa",
+ "salsa-test-macros",
+ "tempfile",
+ "trunk-ir",
+ "wasm-encoder",
 ]
 
 [[package]]
@@ -1337,6 +1356,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0562428422c63773dad2c345a1882263bbf4d65cf3f42e90921f787ef5ad58e7"
 dependencies = [
  "wit-bindgen",
+]
+
+[[package]]
+name = "wasm-encoder"
+version = "0.243.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c55db9c896d70bd9fa535ce83cd4e1f2ec3726b0edd2142079f594fc3be1cb35"
+dependencies = [
+ "leb128fmt",
+ "wasmparser",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.243.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6d8db401b0528ec316dfbe579e6ab4152d61739cfe076706d2009127970159d"
+dependencies = [
+ "bitflags 2.10.0",
+ "indexmap",
+ "semver",
 ]
 
 [[package]]

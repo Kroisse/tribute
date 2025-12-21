@@ -1,0 +1,18 @@
+[package]
+name = "tribute-wasm-backend"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+derive_more.workspace = true
+salsa.workspace = true
+trunk-ir.workspace = true
+wasm-encoder.workspace = true
+
+[dev-dependencies]
+salsa-test-macros = { path = "../salsa-test-macros" }
+tempfile.workspace = true
+
+[features]
+wasmtime-tests = []
