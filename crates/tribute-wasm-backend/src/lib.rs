@@ -13,8 +13,10 @@ use wasm_encoder::{
 };
 
 mod errors;
+pub mod translate;
 
 pub use errors::{CompilationError, CompilationResult};
+pub use translate::{WasmBinary, compile_to_wasm};
 
 trunk_ir::symbols! {
     ATTR_SYM_NAME => "sym_name",
@@ -80,7 +82,7 @@ struct ModuleInfo<'db> {
 
 pub fn emit_wasm<'db>(
     db: &'db dyn salsa::Database,
-    module: &core::Module<'db>,
+    module: core::Module<'db>,
 ) -> CompilationResult<Vec<u8>> {
     let module_info = collect_module_info(db, module)?;
 
@@ -203,7 +205,7 @@ pub fn emit_wasm<'db>(
 
 fn collect_module_info<'db>(
     db: &'db dyn salsa::Database,
-    module: &core::Module<'db>,
+    module: core::Module<'db>,
 ) -> CompilationResult<ModuleInfo<'db>> {
     let mut funcs = Vec::new();
     let mut imports = Vec::new();
@@ -1492,7 +1494,7 @@ mod tests {
     fn emits_basic_wasm_module(db: &salsa::DatabaseImpl) {
         let module = build_basic_module(db);
 
-        let bytes = emit_wasm(db, &module).expect("emit wasm");
+        let bytes = emit_wasm(db, module).expect("emit wasm");
         assert!(bytes.len() >= 8, "wasm header should be present");
         assert_eq!(&bytes[0..4], b"\0asm");
         assert_eq!(&bytes[4..8], &[0x01, 0x00, 0x00, 0x00]);

@@ -4,7 +4,7 @@ use derive_more::{Display, From};
 
 pub type CompilationResult<T> = Result<T, CompilationError>;
 
-#[derive(Display, Debug, From)]
+#[derive(Clone, Display, Debug, From, PartialEq, salsa::Update)]
 #[display("{kind}")]
 pub struct CompilationError {
     #[from]
@@ -41,7 +41,7 @@ impl CompilationError {
     }
 }
 
-#[derive(Display, Debug)]
+#[derive(Clone, Display, Debug, PartialEq)]
 pub enum CompilationErrorKind {
     #[display("Unsupported feature: {_0}")]
     UnsupportedFeature(&'static str),
