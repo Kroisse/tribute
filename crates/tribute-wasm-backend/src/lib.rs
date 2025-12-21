@@ -238,6 +238,46 @@ fn emit_op<'db>(
         emit_operands(operands, value_locals, function)?;
         function.instruction(&Instruction::I32Mul);
         set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_eq") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32Eq);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_ne") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32Ne);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_lt_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32LtS);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_lt_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32LtU);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_le_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32LeS);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_le_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32LeU);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_gt_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32GtS);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_gt_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32GtU);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_ge_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32GeS);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_ge_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32GeU);
+        set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("i32_div_s") {
         emit_operands(operands, value_locals, function)?;
         function.instruction(&Instruction::I32DivS);
@@ -253,6 +293,50 @@ fn emit_op<'db>(
     } else if name == Symbol::new("i32_rem_u") {
         emit_operands(operands, value_locals, function)?;
         function.instruction(&Instruction::I32RemU);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i64_add") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I64Add);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i64_sub") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I64Sub);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i64_mul") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I64Mul);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f32_add") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F32Add);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f32_sub") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F32Sub);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f32_mul") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F32Mul);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f32_div") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F32Div);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f64_add") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F64Add);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f64_sub") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F64Sub);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f64_mul") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F64Mul);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f64_div") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F64Div);
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("call") {
         emit_operands(operands, value_locals, function)?;
@@ -473,6 +557,12 @@ mod tests {
     use trunk_ir::{
         Attribute, Block, DialectType, Location, PathId, Region, Span, SymbolVec, idvec,
     };
+    #[cfg(feature = "wasmtime-tests")]
+    use wasm_encoder::{
+        CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection, Function,
+        FunctionSection, ImportSection, Instruction, MemorySection, MemoryType,
+        Module as WasmModule, TypeSection, ValType,
+    };
 
     #[salsa::tracked]
     fn build_basic_module(db: &dyn salsa::Database) -> core::Module<'_> {
@@ -661,6 +751,82 @@ mod tests {
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
 
+    #[salsa::tracked]
+    fn build_i64_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///i64.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i64_ty = core::I64::new(db).as_type();
+
+        let left = Operation::of_name(db, location, "wasm.i64_const")
+            .attr("value", Attribute::IntBits(40))
+            .result(i64_ty)
+            .build();
+        let right = Operation::of_name(db, location, "wasm.i64_const")
+            .attr("value", Attribute::IntBits(2))
+            .result(i64_ty)
+            .build();
+        let add = Operation::of_name(db, location, "wasm.i64_add")
+            .operand(left.result(db, 0))
+            .operand(right.result(db, 0))
+            .result(i64_ty)
+            .build();
+        let ret = Operation::of_name(db, location, "wasm.return")
+            .operand(add.result(db, 0))
+            .build();
+
+        let block = Block::new(db, location, idvec![], idvec![left, right, add, ret]);
+        let body = Region::new(db, location, idvec![block]);
+
+        let func_ty = core::Func::new(db, idvec![], i64_ty).as_type();
+        let func_op = Operation::of_name(db, location, "func.func")
+            .attr("sym_name", Attribute::Symbol(Symbol::new("main")))
+            .attr("type", Attribute::Type(func_ty))
+            .region(body)
+            .build();
+
+        let top_block = Block::new(db, location, idvec![], idvec![func_op]);
+        let module_region = Region::new(db, location, idvec![top_block]);
+        core::Module::create(db, location, Symbol::new("main"), module_region)
+    }
+
+    #[salsa::tracked]
+    fn build_i32_cmp_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///cmp.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+
+        let left = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(40))
+            .result(i32_ty)
+            .build();
+        let right = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(40))
+            .result(i32_ty)
+            .build();
+        let cmp = Operation::of_name(db, location, "wasm.i32_eq")
+            .operand(left.result(db, 0))
+            .operand(right.result(db, 0))
+            .result(i32_ty)
+            .build();
+        let ret = Operation::of_name(db, location, "wasm.return")
+            .operand(cmp.result(db, 0))
+            .build();
+
+        let block = Block::new(db, location, idvec![], idvec![left, right, cmp, ret]);
+        let body = Region::new(db, location, idvec![block]);
+
+        let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
+        let func_op = Operation::of_name(db, location, "func.func")
+            .attr("sym_name", Attribute::Symbol(Symbol::new("main")))
+            .attr("type", Attribute::Type(func_ty))
+            .region(body)
+            .build();
+
+        let top_block = Block::new(db, location, idvec![], idvec![func_op]);
+        let module_region = Region::new(db, location, idvec![top_block]);
+        core::Module::create(db, location, Symbol::new("main"), module_region)
+    }
+
     #[salsa_test]
     fn emits_basic_wasm_module(db: &salsa::DatabaseImpl) {
         let module = build_basic_module(db);
@@ -700,6 +866,20 @@ mod tests {
     }
 
     #[cfg(feature = "wasmtime-tests")]
+    #[salsa_test]
+    fn runs_i64_in_wasmtime(db: &salsa::DatabaseImpl) {
+        let module = build_i64_module(db);
+        assert_wasmtime_result(db, &module, "42");
+    }
+
+    #[cfg(feature = "wasmtime-tests")]
+    #[salsa_test]
+    fn runs_cmp_in_wasmtime(db: &salsa::DatabaseImpl) {
+        let module = build_i32_cmp_module(db);
+        assert_wasmtime_result(db, &module, "1");
+    }
+
+    #[cfg(feature = "wasmtime-tests")]
     fn assert_wasmtime_result(db: &salsa::DatabaseImpl, module: &core::Module<'_>, expected: &str) {
         let bytes = emit_wasm(db, module).expect("emit wasm");
 
@@ -729,5 +909,99 @@ mod tests {
             stdout.contains(expected),
             "expected output to contain {expected}, got: {stdout}"
         );
+    }
+
+    #[cfg(feature = "wasmtime-tests")]
+    #[salsa_test]
+    fn runs_wasi_hello_world(_db: &salsa::DatabaseImpl) {
+        let bytes = build_wasi_hello_module();
+        let mut temp = NamedTempFile::new().expect("tempfile");
+        std::io::Write::write_all(&mut temp, &bytes).expect("write wasm");
+        let path = temp.into_temp_path();
+
+        let wasmtime = std::env::var("TRIBUTE_WASMTIME").unwrap_or_else(|_| "wasmtime".to_string());
+        let output = Command::new(wasmtime)
+            .arg("run")
+            .arg("-C")
+            .arg("cache=n")
+            .arg(path.as_os_str())
+            .output()
+            .expect("run wasmtime");
+
+        assert!(
+            output.status.success(),
+            "wasmtime failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("hello"),
+            "expected output to contain hello, got: {stdout}"
+        );
+    }
+
+    #[cfg(feature = "wasmtime-tests")]
+    fn build_wasi_hello_module() -> Vec<u8> {
+        let mut types = TypeSection::new();
+        types.ty().function(
+            [ValType::I32, ValType::I32, ValType::I32, ValType::I32],
+            [ValType::I32],
+        );
+        types.ty().function([], []);
+
+        let mut imports = ImportSection::new();
+        imports.import(
+            "wasi_snapshot_preview1",
+            "fd_write",
+            EntityType::Function(0),
+        );
+
+        let mut functions = FunctionSection::new();
+        functions.function(1);
+
+        let mut memory = MemorySection::new();
+        memory.memory(MemoryType {
+            minimum: 1,
+            maximum: None,
+            memory64: false,
+            shared: false,
+            page_size_log2: None,
+        });
+
+        let mut exports = ExportSection::new();
+        exports.export("memory", ExportKind::Memory, 0);
+        exports.export("_start", ExportKind::Func, 1);
+
+        let message = b"hello\n";
+        let mut iovec = Vec::new();
+        iovec.extend_from_slice(&8u32.to_le_bytes());
+        iovec.extend_from_slice(&(message.len() as u32).to_le_bytes());
+
+        let mut data = DataSection::new();
+        data.active(0, &ConstExpr::i32_const(0), iovec.iter().copied());
+        data.active(0, &ConstExpr::i32_const(8), message.iter().copied());
+
+        let mut code = CodeSection::new();
+        let mut func = Function::new([]);
+        func.instruction(&Instruction::I32Const(1));
+        func.instruction(&Instruction::I32Const(0));
+        func.instruction(&Instruction::I32Const(1));
+        func.instruction(&Instruction::I32Const(16));
+        func.instruction(&Instruction::Call(0));
+        func.instruction(&Instruction::Drop);
+        func.instruction(&Instruction::End);
+        code.function(&func);
+
+        let mut module = WasmModule::new();
+        module.section(&types);
+        module.section(&imports);
+        module.section(&functions);
+        module.section(&memory);
+        module.section(&exports);
+        module.section(&code);
+        module.section(&data);
+
+        module.finish()
     }
 }
