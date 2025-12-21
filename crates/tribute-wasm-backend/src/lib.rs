@@ -700,21 +700,53 @@ fn emit_op<'db>(
             set_result_local(db, op, value_locals, function)?;
         }
     } else if name == Symbol::new("block") {
-        function.instruction(&Instruction::Block(BlockType::Empty));
+        let result_ty = op.results(db).first().copied();
+        let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
+        let block_type = if has_result {
+            BlockType::Result(type_to_valtype(db, result_ty.expect("block result type"))?)
+        } else {
+            BlockType::Empty
+        };
+        function.instruction(&Instruction::Block(block_type));
         let region = op
             .regions(db)
             .first()
             .ok_or_else(|| CompilationError::invalid_module("wasm.block missing body region"))?;
         emit_region_ops(db, region, value_locals, func_indices, function)?;
+        if has_result {
+            let value = region_result_value(db, region).ok_or_else(|| {
+                CompilationError::invalid_module("wasm.block body missing result value")
+            })?;
+            emit_value_get(value, value_locals, function)?;
+        }
         function.instruction(&Instruction::End);
+        if has_result {
+            set_result_local(db, op, value_locals, function)?;
+        }
     } else if name == Symbol::new("loop") {
-        function.instruction(&Instruction::Loop(BlockType::Empty));
+        let result_ty = op.results(db).first().copied();
+        let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
+        let block_type = if has_result {
+            BlockType::Result(type_to_valtype(db, result_ty.expect("loop result type"))?)
+        } else {
+            BlockType::Empty
+        };
+        function.instruction(&Instruction::Loop(block_type));
         let region = op
             .regions(db)
             .first()
             .ok_or_else(|| CompilationError::invalid_module("wasm.loop missing body region"))?;
         emit_region_ops(db, region, value_locals, func_indices, function)?;
+        if has_result {
+            let value = region_result_value(db, region).ok_or_else(|| {
+                CompilationError::invalid_module("wasm.loop body missing result value")
+            })?;
+            emit_value_get(value, value_locals, function)?;
+        }
         function.instruction(&Instruction::End);
+        if has_result {
+            set_result_local(db, op, value_locals, function)?;
+        }
     } else if name == Symbol::new("br") {
         let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
         function.instruction(&Instruction::Br(depth));
@@ -1287,6 +1319,51 @@ mod tests {
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
 
+    #[salsa::tracked]
+    fn build_loop_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///loop.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+
+        let mut loop_body = BlockBuilder::new(db, location);
+        let cond = loop_body.op(wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0)));
+        loop_body.op(wasm::br_if(
+            db,
+            location,
+            cond.result(db),
+            Attribute::IntBits(0),
+        ));
+        let loop_region = Region::new(db, location, idvec![loop_body.build()]);
+
+        let mut block = BlockBuilder::new(db, location);
+        block.op(wasm::r#loop(
+            db,
+            location,
+            nil_ty,
+            Attribute::Unit,
+            loop_region,
+        ));
+        let result = block.op(wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            Attribute::IntBits(42),
+        ));
+        block.op(wasm::r#return(db, location, vec![result.result(db)]));
+        let block = block.build();
+        let body = Region::new(db, location, idvec![block]);
+
+        let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
+        let func_op = func::func(db, location, Symbol::new("main"), func_ty, body);
+
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(func_op);
+        let top_block = top_builder.build();
+        let module_region = Region::new(db, location, idvec![top_block]);
+        core::Module::create(db, location, Symbol::new("main"), module_region)
+    }
+
     #[salsa_test]
     fn emits_basic_wasm_module(db: &salsa::DatabaseImpl) {
         let module = build_basic_module(db);
@@ -1343,6 +1420,13 @@ mod tests {
     #[salsa_test]
     fn runs_if_in_wasmtime(db: &salsa::DatabaseImpl) {
         let module = build_if_module(db);
+        assert_wasmtime_result(db, &module, "42");
+    }
+
+    #[cfg(feature = "wasmtime-tests")]
+    #[salsa_test]
+    fn runs_loop_in_wasmtime(db: &salsa::DatabaseImpl) {
+        let module = build_loop_module(db);
         assert_wasmtime_result(db, &module, "42");
     }
 
