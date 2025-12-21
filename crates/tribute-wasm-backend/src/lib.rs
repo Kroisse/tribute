@@ -1364,6 +1364,130 @@ mod tests {
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
 
+    #[salsa::tracked]
+    fn build_block_result_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///block-result.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+
+        let mut inner = BlockBuilder::new(db, location);
+        inner.op(wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            Attribute::IntBits(42),
+        ));
+        let inner_region = Region::new(db, location, idvec![inner.build()]);
+
+        let mut block = BlockBuilder::new(db, location);
+        let block_op = block.op(wasm::block(
+            db,
+            location,
+            i32_ty,
+            Attribute::Unit,
+            inner_region,
+        ));
+        block.op(wasm::r#return(db, location, vec![block_op.result(db)]));
+        let block = block.build();
+        let body = Region::new(db, location, idvec![block]);
+
+        let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
+        let func_op = func::func(db, location, Symbol::new("main"), func_ty, body);
+
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(func_op);
+        let top_block = top_builder.build();
+        let module_region = Region::new(db, location, idvec![top_block]);
+        core::Module::create(db, location, Symbol::new("main"), module_region)
+    }
+
+    #[salsa::tracked]
+    fn build_loop_result_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///loop-result.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+
+        let mut loop_body = BlockBuilder::new(db, location);
+        loop_body.op(wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            Attribute::IntBits(42),
+        ));
+        let loop_region = Region::new(db, location, idvec![loop_body.build()]);
+
+        let mut block = BlockBuilder::new(db, location);
+        let loop_op = block.op(wasm::r#loop(
+            db,
+            location,
+            i32_ty,
+            Attribute::Unit,
+            loop_region,
+        ));
+        block.op(wasm::r#return(db, location, vec![loop_op.result(db)]));
+        let block = block.build();
+        let body = Region::new(db, location, idvec![block]);
+
+        let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
+        let func_op = func::func(db, location, Symbol::new("main"), func_ty, body);
+
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(func_op);
+        let top_block = top_builder.build();
+        let module_region = Region::new(db, location, idvec![top_block]);
+        core::Module::create(db, location, Symbol::new("main"), module_region)
+    }
+
+    #[salsa::tracked]
+    fn build_br_block_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///br-block.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+
+        let mut inner = BlockBuilder::new(db, location);
+        inner.op(wasm::br(db, location, Attribute::IntBits(1)));
+        inner.op(wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0)));
+        let inner_region = Region::new(db, location, idvec![inner.build()]);
+
+        let mut outer = BlockBuilder::new(db, location);
+        outer.op(wasm::block(
+            db,
+            location,
+            nil_ty,
+            Attribute::Unit,
+            inner_region,
+        ));
+        let outer_region = Region::new(db, location, idvec![outer.build()]);
+
+        let mut block = BlockBuilder::new(db, location);
+        block.op(wasm::block(
+            db,
+            location,
+            nil_ty,
+            Attribute::Unit,
+            outer_region,
+        ));
+        let result = block.op(wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            Attribute::IntBits(42),
+        ));
+        block.op(wasm::r#return(db, location, vec![result.result(db)]));
+        let block = block.build();
+        let body = Region::new(db, location, idvec![block]);
+
+        let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
+        let func_op = func::func(db, location, Symbol::new("main"), func_ty, body);
+
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(func_op);
+        let top_block = top_builder.build();
+        let module_region = Region::new(db, location, idvec![top_block]);
+        core::Module::create(db, location, Symbol::new("main"), module_region)
+    }
+
     #[salsa_test]
     fn emits_basic_wasm_module(db: &salsa::DatabaseImpl) {
         let module = build_basic_module(db);
@@ -1425,8 +1549,29 @@ mod tests {
 
     #[cfg(feature = "wasmtime-tests")]
     #[salsa_test]
+    fn runs_block_result_in_wasmtime(db: &salsa::DatabaseImpl) {
+        let module = build_block_result_module(db);
+        assert_wasmtime_result(db, &module, "42");
+    }
+
+    #[cfg(feature = "wasmtime-tests")]
+    #[salsa_test]
+    fn runs_loop_result_in_wasmtime(db: &salsa::DatabaseImpl) {
+        let module = build_loop_result_module(db);
+        assert_wasmtime_result(db, &module, "42");
+    }
+
+    #[cfg(feature = "wasmtime-tests")]
+    #[salsa_test]
     fn runs_loop_in_wasmtime(db: &salsa::DatabaseImpl) {
         let module = build_loop_module(db);
+        assert_wasmtime_result(db, &module, "42");
+    }
+
+    #[cfg(feature = "wasmtime-tests")]
+    #[salsa_test]
+    fn runs_br_block_in_wasmtime(db: &salsa::DatabaseImpl) {
+        let module = build_br_block_module(db);
         assert_wasmtime_result(db, &module, "42");
     }
 
