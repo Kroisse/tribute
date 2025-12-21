@@ -349,8 +349,8 @@ mod tests {
             fn main() {
                 let x = 1;
                 case x {
-                    0 -> "zero",
-                    1 -> "one",
+                    0 -> "zero"
+                    1 -> "one"
                     _ -> "other"
                 }
             }
