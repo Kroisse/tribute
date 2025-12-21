@@ -44,14 +44,10 @@ pub fn compile_to_wasm<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> crate::CompilationResult<WasmBinary<'db>> {
-    // TODO: Phase 1 - Lower to wasm dialect
-    // CRITICAL: The module currently contains mid-level IR (func, arith, scf, etc.)
-    // but emit_wasm expects wasm dialect operations.
-    // Until the lowering pass is implemented in tribute-passes, this will fail
-    // for any module containing non-func/wasm operations.
-    // Future: Call lower_to_wasm(db, module) here before emit_wasm
+    // Phase 1 - Lower to wasm dialect
+    let lowered = crate::lower_wasm::lower_to_wasm(db, module);
 
-    let bytes = crate::emit_wasm(db, module)?;
+    let bytes = crate::emit_wasm(db, lowered)?;
 
     // Extract exports and imports from module
     let (exports, imports) = extract_metadata(db, module);
