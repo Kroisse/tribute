@@ -485,10 +485,9 @@ mod tests {
         );
 
         let result = compile_with_diagnostics(db, source);
-        let has_non_exhaustive = result
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("non-exhaustive") && d.severity == DiagnosticSeverity::Error);
+        let has_non_exhaustive = result.diagnostics.iter().any(|d| {
+            d.message.contains("non-exhaustive") && d.severity == DiagnosticSeverity::Error
+        });
         assert!(
             has_non_exhaustive,
             "Expected non-exhaustive case diagnostic, got: {:?}",

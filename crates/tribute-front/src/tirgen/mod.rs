@@ -145,7 +145,7 @@ mod tests {
     use salsa::Setter;
     use tree_sitter::{InputEdit, Parser, Point};
     use trunk_ir::DialectOp;
-    use trunk_ir::dialect::{func, src};
+    use trunk_ir::dialect::{case, func, src};
 
     fn lower_and_get_module<'db>(db: &'db salsa::DatabaseImpl, source: &str) -> core::Module<'db> {
         lower_from_tree(db, source)
@@ -327,6 +327,21 @@ mod tests {
         assert!(!blocks.is_empty());
     }
 
+    fn collect_ops<'db>(
+        db: &'db dyn salsa::Database,
+        region: trunk_ir::Region<'db>,
+        out: &mut Vec<trunk_ir::Operation<'db>>,
+    ) {
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter().copied() {
+                out.push(op);
+                for nested in op.regions(db).iter().copied() {
+                    collect_ops(db, nested, out);
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_case_expression() {
         let db = salsa::DatabaseImpl::default();
@@ -334,17 +349,56 @@ mod tests {
             fn main() {
                 let x = 1;
                 case x {
-                    0 { "zero" }
-                    1 { "one" }
-                    _ { "other" }
+                    0 -> "zero",
+                    1 -> "one",
+                    _ -> "other"
                 }
             }
         "#;
         let module = lower_and_get_module(&db, source);
 
-        let body_region = module.body(&db);
-        let blocks = body_region.blocks(&db);
-        assert!(!blocks.is_empty());
+        let mut ops = Vec::new();
+        collect_ops(&db, module.body(&db), &mut ops);
+
+        let case_arms = ops
+            .iter()
+            .filter(|op| op.dialect(&db) == case::DIALECT_NAME() && op.name(&db) == case::ARM())
+            .count();
+        assert_eq!(case_arms, 3, "Expected three case arms");
+    }
+
+    #[test]
+    fn test_constructor_expression() {
+        let db = salsa::DatabaseImpl::default();
+        let source = "fn main() { Some(1) }";
+        let module = lower_and_get_module(&db, source);
+
+        let mut ops = Vec::new();
+        collect_ops(&db, module.body(&db), &mut ops);
+
+        let has_constructor = ops
+            .iter()
+            .any(|op| op.dialect(&db) == src::DIALECT_NAME() && op.name(&db) == src::CONS());
+        assert!(has_constructor, "Expected a src.cons operation");
+    }
+
+    #[test]
+    fn test_use_tree() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"
+            use std::{io, fmt as f}
+            fn main() { 0 }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let mut ops = Vec::new();
+        collect_ops(&db, module.body(&db), &mut ops);
+
+        let use_count = ops
+            .iter()
+            .filter(|op| op.dialect(&db) == src::DIALECT_NAME() && op.name(&db) == src::USE())
+            .count();
+        assert_eq!(use_count, 2, "Expected two use imports");
     }
 
     #[test]

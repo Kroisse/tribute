@@ -17,8 +17,8 @@ pub mod tdnr;
 pub mod typeck;
 
 // Re-exports
-pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use case_lowering::lower_case_to_scf;
+pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use resolve::{ModuleEnv, Resolver, resolve_module};
 pub use tdnr::{MethodInfo, MethodRegistry, TdnrResolver, resolve_tdnr};
 pub use trunk_ir::rewrite::{

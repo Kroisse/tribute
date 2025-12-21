@@ -549,7 +549,6 @@ fn lower_case_expr<'db>(
         .filter(|child| child.kind() == "case_arm")
         .collect();
 
-
     // Build the body region containing case.arm operations
     let mut body_block = BlockBuilder::new(ctx.db, location);
 

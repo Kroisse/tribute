@@ -10,9 +10,11 @@
 use std::collections::HashMap;
 
 use salsa::Accumulator;
-use trunk_ir::dialect::{arith, case, core, pat, ty, adt};
 use trunk_ir::dialect::core::Module;
-use trunk_ir::{Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Type};
+use trunk_ir::dialect::{adt, arith, case, core, pat, ty};
+use trunk_ir::{
+    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Type,
+};
 use trunk_ir::{Symbol, Value, ValueDef};
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -31,10 +33,7 @@ struct ArmInfo<'db> {
     body: Region<'db>,
 }
 
-pub fn lower_case_to_scf<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Module<'db> {
+pub fn lower_case_to_scf<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     CaseLowerer::new(db).lower_module(module)
 }
 
@@ -75,11 +74,7 @@ impl<'db> CaseLowerer<'db> {
             .iter()
             .map(|block| self.lower_block(*block))
             .collect::<Vec<_>>();
-        Region::new(
-            self.db,
-            region.location(self.db),
-            IdVec::from(blocks),
-        )
+        Region::new(self.db, region.location(self.db), IdVec::from(blocks))
     }
 
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
@@ -99,15 +94,11 @@ impl<'db> CaseLowerer<'db> {
     fn lower_op(&mut self, op: Operation<'db>) -> Vec<Operation<'db>> {
         let remapped_operands = self.remap_operands(op);
 
-        if op.dialect(self.db) == case::DIALECT_NAME()
-            && op.name(self.db) == case::CASE()
-        {
+        if op.dialect(self.db) == case::DIALECT_NAME() && op.name(self.db) == case::CASE() {
             return self.lower_case(op, remapped_operands);
         }
 
-        if op.dialect(self.db) == case::DIALECT_NAME()
-            && op.name(self.db) == case::YIELD()
-        {
+        if op.dialect(self.db) == case::DIALECT_NAME() && op.name(self.db) == case::YIELD() {
             let new_op = Operation::of_name(self.db, op.location(self.db), "scf.yield")
                 .operands(remapped_operands)
                 .build();
@@ -163,8 +154,7 @@ impl<'db> CaseLowerer<'db> {
             return vec![self.rebuild_case(op, remapped_operands)];
         }
 
-        let (ops, _final_value) =
-            self.build_arm_chain(location, scrutinee, result_type, &arms);
+        let (ops, _final_value) = self.build_arm_chain(location, scrutinee, result_type, &arms);
         if let Some(last_op) = ops.last() {
             self.map_results(op, *last_op);
         }
@@ -186,9 +176,7 @@ impl<'db> CaseLowerer<'db> {
         let mut arms = Vec::new();
         for block in body_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter().copied() {
-                if op.dialect(self.db) != case::DIALECT_NAME()
-                    || op.name(self.db) != case::ARM()
-                {
+                if op.dialect(self.db) != case::DIALECT_NAME() || op.name(self.db) != case::ARM() {
                     continue;
                 }
                 let arm_location = op.location(self.db);
@@ -198,13 +186,9 @@ impl<'db> CaseLowerer<'db> {
                     .and_then(|region| self.parse_pattern(region))
                     .unwrap_or_else(|| (ArmPattern::Wildcard, false));
                 supported &= ok;
-                let body = body_region
-                    .map(|region| region)
-                    .unwrap_or_else(|| Region::new(self.db, arm_location, IdVec::new()));
-                arms.push(ArmInfo {
-                    pattern,
-                    body,
-                });
+                let body =
+                    body_region.unwrap_or_else(|| Region::new(self.db, arm_location, IdVec::new()));
+                arms.push(ArmInfo { pattern, body });
             }
         }
         if !supported {
@@ -253,10 +237,10 @@ impl<'db> CaseLowerer<'db> {
                     return Some((ArmPattern::Wildcard, false));
                 }
                 let fields_region = op.regions(self.db).first().copied();
-                if let Some(fields) = fields_region {
-                    if !self.pattern_region_is_bind_or_wildcard(fields) {
-                        return Some((ArmPattern::Wildcard, false));
-                    }
+                if fields_region
+                    .is_some_and(|fields| !self.pattern_region_is_bind_or_wildcard(fields))
+                {
+                    return Some((ArmPattern::Wildcard, false));
                 }
                 Some((ArmPattern::Variant(name), true))
             }
@@ -272,7 +256,8 @@ impl<'db> CaseLowerer<'db> {
             if op.dialect(self.db) != pat::DIALECT_NAME() {
                 return false;
             }
-            let ok = matches!(op.name(self.db), name if name == pat::BIND() || name == pat::WILDCARD());
+            let ok =
+                matches!(op.name(self.db), name if name == pat::BIND() || name == pat::WILDCARD());
             if !ok {
                 return false;
             }
@@ -413,21 +398,14 @@ impl<'db> CaseLowerer<'db> {
                     return (vec![op], value);
                 };
                 let tag_ty = core::I32::new(self.db).as_type();
-                let tag_op =
-                    adt::variant_tag(self.db, location, scrutinee, tag_ty).as_operation();
+                let tag_op = adt::variant_tag(self.db, location, scrutinee, tag_ty).as_operation();
                 let tag_value = tag_op.result(self.db, 0);
                 let tag_const =
                     arith::r#const(self.db, location, tag_ty, Attribute::IntBits(tag as u64))
                         .as_operation();
                 let tag_const_value = tag_const.result(self.db, 0);
-                let cmp_op = arith::cmp_eq(
-                    self.db,
-                    location,
-                    tag_value,
-                    tag_const_value,
-                    bool_ty,
-                )
-                .as_operation();
+                let cmp_op = arith::cmp_eq(self.db, location, tag_value, tag_const_value, bool_ty)
+                    .as_operation();
                 let cmp_value = cmp_op.result(self.db, 0);
                 (vec![tag_op, tag_const, cmp_op], cmp_value)
             }
@@ -437,10 +415,7 @@ impl<'db> CaseLowerer<'db> {
     fn value_type(&self, value: Value<'db>) -> Option<Type<'db>> {
         match value.def(self.db) {
             ValueDef::OpResult(op) => op.results(self.db).get(value.index(self.db)).copied(),
-            ValueDef::BlockArg(block) => block
-                .args(self.db)
-                .get(value.index(self.db))
-                .copied(),
+            ValueDef::BlockArg(block) => block.args(self.db).get(value.index(self.db)).copied(),
         }
     }
 
@@ -482,9 +457,7 @@ impl<'db> CaseLowerer<'db> {
     fn collect_variant_tags_in_region(&mut self, region: Region<'db>) {
         for block in region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter().copied() {
-                if op.dialect(self.db) == ty::DIALECT_NAME()
-                    && op.name(self.db) == ty::ENUM()
-                {
+                if op.dialect(self.db) == ty::DIALECT_NAME() && op.name(self.db) == ty::ENUM() {
                     self.collect_variant_tags_from_enum(op);
                 }
                 for nested in op.regions(self.db).iter().copied() {
@@ -495,8 +468,7 @@ impl<'db> CaseLowerer<'db> {
     }
 
     fn collect_variant_tags_from_enum(&mut self, op: Operation<'db>) {
-        let Some(Attribute::List(variants)) =
-            op.attributes(self.db).get(&Symbol::new("variants"))
+        let Some(Attribute::List(variants)) = op.attributes(self.db).get(&Symbol::new("variants"))
         else {
             return;
         };
@@ -518,21 +490,25 @@ impl<'db> CaseLowerer<'db> {
                 continue;
             };
             let tag = idx as u32;
-            if let Some(existing) = self.variant_tags.insert(*name, tag) {
-                if existing != tag {
-                    self.emit_error(
-                        op.location(self.db),
-                        "ambiguous variant name in enum declarations",
-                    );
-                }
+            if self
+                .variant_tags
+                .insert(*name, tag)
+                .is_some_and(|existing| existing != tag)
+            {
+                self.emit_error(
+                    op.location(self.db),
+                    "ambiguous variant name in enum declarations",
+                );
             }
-            if let Some(existing) = self.variant_owner.insert(*name, type_name) {
-                if existing != type_name {
-                    self.emit_error(
-                        op.location(self.db),
-                        "ambiguous variant name in enum declarations",
-                    );
-                }
+            if self
+                .variant_owner
+                .insert(*name, type_name)
+                .is_some_and(|existing| existing != type_name)
+            {
+                self.emit_error(
+                    op.location(self.db),
+                    "ambiguous variant name in enum declarations",
+                );
             }
             variant_names.push(*name);
         }
