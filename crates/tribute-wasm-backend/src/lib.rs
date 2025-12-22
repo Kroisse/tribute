@@ -1566,7 +1566,7 @@ mod tests {
             vec![i32_ty],
             Attribute::QualifiedName(callee),
         ));
-        main_block_builder.op(wasm::r#return(db, location, call.result(db)));
+        main_block_builder.op(wasm::r#return(db, location, call.results(db)));
         let main_block = main_block_builder.build();
         let main_body = Region::new(db, location, idvec![main_block]);
         let main_ty = core::Func::new(db, idvec![], i32_ty).as_type();

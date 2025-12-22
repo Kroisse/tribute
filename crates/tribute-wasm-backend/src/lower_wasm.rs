@@ -124,42 +124,30 @@ impl<'db> WasmLowerer<'db> {
             .blocks(self.db)
             .iter()
             .map(|block| self.lower_block(*block))
-            .collect::<Vec<_>>();
-        Region::new(self.db, region.location(self.db), IdVec::from(blocks))
+            .collect();
+        Region::new(self.db, region.location(self.db), blocks)
     }
 
     fn finish_module_body(&mut self, lowered_body: Region<'db>) -> Region<'db> {
         let blocks = lowered_body.blocks(self.db);
-        if blocks.is_empty() {
+        let Some(first_block) = blocks.first() else {
             return lowered_body;
+        };
+
+        let location = first_block.location(self.db);
+        let mut builder =
+            BlockBuilder::new(self.db, location).args(first_block.args(self.db).clone());
+
+        self.module_preamble_ops(&mut builder, location);
+        for op in first_block.operations(self.db).iter() {
+            builder.op(*op);
         }
+        self.module_data_ops(&mut builder, location);
+        self.module_extra_ops(&mut builder, location);
 
-        let mut new_blocks = IdVec::new();
-        for (idx, block) in blocks.iter().enumerate() {
-            if idx == 0 {
-                let location = block.location(self.db);
-                let mut ops = self.module_preamble_ops(location);
-                ops.extend(block.operations(self.db).iter().copied());
-                ops.extend(self.module_data_ops(location));
-                ops.extend(self.module_extra_ops(location));
-
-                let new_block = Block::new(
-                    self.db,
-                    location,
-                    block.args(self.db).clone(),
-                    IdVec::from(ops),
-                );
-                new_blocks.push(new_block);
-            } else {
-                new_blocks.push(*block);
-            }
-        }
-
-        Region::new(
-            self.db,
-            lowered_body.location(self.db),
-            IdVec::from(new_blocks),
-        )
+        let mut new_blocks = blocks.clone();
+        new_blocks[0] = builder.build();
+        Region::new(self.db, lowered_body.location(self.db), new_blocks)
     }
 
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
@@ -174,152 +162,119 @@ impl<'db> WasmLowerer<'db> {
         builder.build()
     }
 
-    fn module_preamble_ops(&mut self, location: Location<'db>) -> IdVec<Operation<'db>> {
-        let mut ops = IdVec::new();
+    fn module_preamble_ops(&mut self, builder: &mut BlockBuilder<'db>, location: Location<'db>) {
         let module_location = self.module_location.unwrap_or(location);
 
         if self.wasi_plan.needs_fd_write {
             let i32_ty = core::I32::new(self.db).as_type();
             let params = idvec![i32_ty, i32_ty, i32_ty, i32_ty];
             let import_ty = core::Func::new(self.db, params, i32_ty).as_type();
-            ops.push(
-                wasm::import_func(
-                    self.db,
-                    module_location,
-                    Attribute::String("wasi_snapshot_preview1".into()),
-                    Attribute::String("fd_write".into()),
-                    Attribute::Symbol(Symbol::new("fd_write")),
-                    Attribute::Type(import_ty),
-                )
-                .as_operation(),
-            );
+            builder.op(wasm::import_func(
+                self.db,
+                module_location,
+                Attribute::String("wasi_snapshot_preview1".into()),
+                Attribute::String("fd_write".into()),
+                Attribute::Symbol(Symbol::new("fd_write")),
+                Attribute::Type(import_ty),
+            ));
         }
 
         if self.memory_plan.needs_memory && !self.memory_plan.has_memory {
             let required_pages = self
                 .memory_plan
                 .required_pages(self.data_segments.end_offset());
-            ops.push(
-                wasm::memory(
-                    self.db,
-                    module_location,
-                    Attribute::IntBits(required_pages as u64),
-                    Attribute::Unit,
-                    Attribute::Bool(false),
-                    Attribute::Bool(false),
-                )
-                .as_operation(),
-            );
+            builder.op(wasm::memory(
+                self.db,
+                module_location,
+                Attribute::IntBits(required_pages as u64),
+                Attribute::Unit,
+                Attribute::Bool(false),
+                Attribute::Bool(false),
+            ));
             self.memory_plan.has_memory = true;
         }
-
-        ops
     }
 
-    fn module_data_ops(&mut self, location: Location<'db>) -> IdVec<Operation<'db>> {
+    fn module_data_ops(&mut self, builder: &mut BlockBuilder<'db>, location: Location<'db>) {
         let module_location = self.module_location.unwrap_or(location);
-        self.data_segments
-            .take_segments()
-            .into_iter()
-            .map(|(offset, bytes)| {
-                wasm::data(
-                    self.db,
-                    module_location,
-                    Attribute::IntBits(offset as u64),
-                    Attribute::Bytes(bytes),
-                )
-                .as_operation()
-            })
-            .collect()
+        for (offset, bytes) in self.data_segments.take_segments() {
+            builder.op(wasm::data(
+                self.db,
+                module_location,
+                Attribute::IntBits(offset as u64),
+                Attribute::Bytes(bytes),
+            ));
+        }
     }
 
-    fn module_extra_ops(&mut self, location: Location<'db>) -> IdVec<Operation<'db>> {
-        let mut ops = IdVec::new();
+    fn module_extra_ops(&mut self, builder: &mut BlockBuilder<'db>, location: Location<'db>) {
         let module_location = self.module_location.unwrap_or(location);
 
         if self.memory_plan.needs_memory
             && self.memory_plan.has_memory
             && !self.memory_plan.has_exported_memory
         {
-            ops.push(
-                wasm::export_memory(
-                    self.db,
-                    module_location,
-                    Attribute::String("memory".into()),
-                    Attribute::IntBits(0),
-                )
-                .as_operation(),
-            );
+            builder.op(wasm::export_memory(
+                self.db,
+                module_location,
+                Attribute::String("memory".into()),
+                Attribute::IntBits(0),
+            ));
             self.memory_plan.has_exported_memory = true;
         }
 
         if self.main_exports.saw_main && !self.main_exports.main_exported {
-            ops.push(
-                wasm::export_func(
-                    self.db,
-                    module_location,
-                    Attribute::String("main".into()),
-                    Attribute::QualifiedName(QualifiedName::simple(Symbol::new("main"))),
-                )
-                .as_operation(),
-            );
+            builder.op(wasm::export_func(
+                self.db,
+                module_location,
+                Attribute::String("main".into()),
+                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("main"))),
+            ));
             self.main_exports.main_exported = true;
         }
 
-        if self.wasi_plan.needs_fd_write
-            && self.main_exports.saw_main
-            && let Some(start_func) = self.build_start_function(module_location)
-        {
-            ops.push(start_func);
-            ops.push(
-                wasm::export_func(
-                    self.db,
-                    module_location,
-                    Attribute::String("_start".into()),
-                    Attribute::QualifiedName(QualifiedName::simple(Symbol::new("_start"))),
-                )
-                .as_operation(),
-            );
+        if self.wasi_plan.needs_fd_write && self.main_exports.saw_main {
+            builder.op(self.build_start_function(module_location));
+            builder.op(wasm::export_func(
+                self.db,
+                module_location,
+                Attribute::String("_start".into()),
+                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("_start"))),
+            ));
         }
-
-        ops
     }
 
-    fn build_start_function(&self, location: Location<'db>) -> Option<Operation<'db>> {
-        let nil_ty = core::Nil::new(self.db).as_type();
-        let main_result = self.main_exports.main_result_type.unwrap_or(nil_ty);
-
-        // Build wasm.call to main
-        // Note: Using Operation::of_name because result type is conditional
-        let mut call_builder = Operation::of_name(self.db, location, "wasm.call")
-            .operands(IdVec::new())
-            .attr(
-                "callee",
-                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("main"))),
-            );
-        if !self.is_nil_type(main_result) {
-            call_builder = call_builder.results(idvec![main_result]);
-        }
-        let call = call_builder.build();
+    fn build_start_function(&self, location: Location<'db>) -> func::Func<'db> {
+        let main_result = self.main_exports.main_result_type;
 
         // Collect operations for the function body
-        let mut ops: IdVec<Operation<'db>> = idvec![call];
+        let mut builder = BlockBuilder::new(self.db, location);
+
+        // Build wasm.call to main
+        let call = builder.op(wasm::call(
+            self.db,
+            location,
+            None,
+            main_result,
+            Attribute::QualifiedName(QualifiedName::simple(Symbol::new("main"))),
+        ));
 
         // Drop result if main returns non-nil (use typed helper)
-        if !self.is_nil_type(main_result) {
-            let call_val = ops.last().expect("call inserted").result(self.db, 0);
-            ops.push(wasm::drop(self.db, location, call_val).as_operation());
+        if main_result.is_some() {
+            let call_val = call.result(self.db, 0);
+            builder.op(wasm::drop(self.db, location, call_val));
         }
 
         // Return (use typed helper)
-        ops.push(wasm::r#return(self.db, location, IdVec::new()).as_operation());
+        builder.op(wasm::r#return(self.db, location, None));
 
         // Build region and func operation
-        let body_block = Block::new(self.db, location, IdVec::new(), ops);
+        let body_block = builder.build();
         let region = Region::new(self.db, location, idvec![body_block]);
-        let func_ty = core::Func::new(self.db, IdVec::new(), nil_ty).as_type();
+        let func_ty =
+            core::Func::new(self.db, idvec![], core::Nil::new(self.db).as_type()).as_type();
 
-        Some(func::func(self.db, location, Symbol::new("_start"), func_ty, region).as_operation())
+        func::func(self.db, location, Symbol::new("_start"), func_ty, region)
     }
 
     fn lower_op(&mut self, builder: &mut BlockBuilder<'db>, op: Operation<'db>) {
@@ -336,7 +291,7 @@ impl<'db> WasmLowerer<'db> {
         }
 
         if dialect == func::DIALECT_NAME() {
-            return self.lower_func_op(builder, op, name, remapped_operands);
+            return self.lower_func_op(builder, op, remapped_operands);
         }
 
         if dialect == scf::DIALECT_NAME() {
@@ -351,7 +306,7 @@ impl<'db> WasmLowerer<'db> {
         // They represent resolved local bindings whose actual values are in value_map.
         if dialect == src::DIALECT_NAME() && name == src::VAR() {
             let new_op = op.modify(self.db).operands(remapped_operands).build();
-            self.map_results(op, new_op);
+            self.map_results(&op, &new_op);
             builder.op(new_op);
             return;
         }
@@ -381,7 +336,7 @@ impl<'db> WasmLowerer<'db> {
             .operands(remapped_operands)
             .regions(IdVec::from(new_regions))
             .build();
-        self.map_results(op, new_op);
+        self.map_results(&op, &new_op);
         builder.op(new_op);
     }
 
@@ -402,7 +357,7 @@ impl<'db> WasmLowerer<'db> {
         };
 
         let mut new_op_builder =
-            Operation::of_name(self.db, location, wasm_name).operands(operands.clone());
+            Operation::of_name(self.db, location, wasm_name).operands(operands);
 
         // For const operations, copy the value attribute
         if name == arith::CONST()
@@ -415,7 +370,7 @@ impl<'db> WasmLowerer<'db> {
         // Set result types for arithmetic operations
         let new_op = new_op_builder.results(op.results(self.db).clone()).build();
 
-        self.map_results(op, new_op);
+        self.map_results(&op, &new_op);
         builder.op(new_op);
     }
 
@@ -553,7 +508,6 @@ impl<'db> WasmLowerer<'db> {
         &mut self,
         builder: &mut BlockBuilder<'db>,
         op: Operation<'db>,
-        name: Symbol,
         operands: IdVec<Value<'db>>,
     ) {
         let location = op.location(self.db);
@@ -563,36 +517,34 @@ impl<'db> WasmLowerer<'db> {
         // 1. The callee attribute is dynamic (comes from the source operation)
         // 2. Result types vary based on the called function's signature
         // 3. Typed helper would require compile-time constant attributes
-        if name == func::CALL() {
+        if let Ok(op_call) = func::Call::from_operation(self.db, op) {
             if self.lower_intrinsic_call(builder, &op, operands.clone()) {
                 return;
             }
-            let mut new_op_builder = Operation::of_name(self.db, location, "wasm.call")
-                .operands(operands)
-                .results(op.results(self.db).clone());
+            let new_op = wasm::call(
+                self.db,
+                location,
+                operands,
+                op.results(self.db).clone(),
+                Attribute::QualifiedName(op_call.callee(self.db)),
+            );
 
-            // Copy callee attribute
-            if let Some(callee) = op.attributes(self.db).get(&Symbol::new("callee")) {
-                new_op_builder = new_op_builder.attr("callee", callee.clone());
-            }
-
-            let new_op = new_op_builder.build();
-            self.map_results(op, new_op);
+            self.map_results(&op, &new_op);
             builder.op(new_op);
             return;
         }
 
         // func.return -> wasm.return
-        if name == func::RETURN() {
-            let new_op = wasm::r#return(self.db, location, operands.to_vec()).as_operation();
+        if func::Return::from_operation(self.db, op).is_ok() {
+            let new_op = wasm::r#return(self.db, location, operands.to_vec());
             builder.op(new_op);
             return;
         }
 
         // func.func - keep as-is but lower regions
         // (emit_wasm handles func.func directly)
-        if name == func::FUNC() {
-            self.record_func_metadata(&op);
+        if let Ok(op_func) = func::Func::from_operation(self.db, op) {
+            self.record_func_metadata(&op_func);
         }
         let new_regions = op
             .regions(self.db)
@@ -606,7 +558,7 @@ impl<'db> WasmLowerer<'db> {
             .operands(operands)
             .regions(IdVec::from(new_regions))
             .build();
-        self.map_results(op, new_op);
+        self.map_results(&op, &new_op);
         builder.op(new_op);
     }
 
@@ -653,7 +605,7 @@ impl<'db> WasmLowerer<'db> {
             .operands(operands)
             .regions(IdVec::from(new_regions))
             .build();
-        self.map_results(op, new_op);
+        self.map_results(&op, &new_op);
         builder.op(new_op);
     }
 
@@ -692,7 +644,7 @@ impl<'db> WasmLowerer<'db> {
         }
 
         let new_op = wasm_if.regions(IdVec::from(new_regions)).build();
-        self.map_results(op, new_op);
+        self.map_results(&op, &new_op);
         builder.op(new_op);
     }
 
@@ -757,7 +709,7 @@ impl<'db> WasmLowerer<'db> {
             .regions(idvec![block_body])
             .build();
 
-        self.map_results(op, wasm_block);
+        self.map_results(&op, &wasm_block);
         builder.op(wasm_block);
     }
 
@@ -866,7 +818,7 @@ impl<'db> WasmLowerer<'db> {
             .operands(operands)
             .regions(IdVec::from(new_regions))
             .build();
-        self.map_results(op, new_op);
+        self.map_results(&op, &new_op);
         builder.op(new_op);
     }
 
@@ -897,7 +849,7 @@ impl<'db> WasmLowerer<'db> {
             .results(op.results(self.db).clone())
             .build();
 
-        self.map_results(op, wasm_struct_new);
+        self.map_results(&op, &wasm_struct_new);
         builder.op(wasm_struct_new);
     }
 
@@ -928,7 +880,7 @@ impl<'db> WasmLowerer<'db> {
         }
         let wasm_struct_get = wasm_struct_get.results(op.results(self.db).clone()).build();
 
-        self.map_results(op, wasm_struct_get);
+        self.map_results(&op, &wasm_struct_get);
         builder.op(wasm_struct_get);
     }
 
@@ -1017,7 +969,7 @@ impl<'db> WasmLowerer<'db> {
             .build();
 
         // The tag const operation is implicit - just return the struct_new
-        self.map_results(op, wasm_variant_new);
+        self.map_results(&op, &wasm_variant_new);
         builder.op(tag_const);
         builder.op(wasm_variant_new);
     }
@@ -1044,7 +996,7 @@ impl<'db> WasmLowerer<'db> {
         }
         let wasm_tag_get = wasm_tag_get.results(op.results(self.db).clone()).build();
 
-        self.map_results(op, wasm_tag_get);
+        self.map_results(&op, &wasm_tag_get);
         builder.op(wasm_tag_get);
     }
 
@@ -1085,7 +1037,7 @@ impl<'db> WasmLowerer<'db> {
             .results(op.results(self.db).clone())
             .build();
 
-        self.map_results(op, wasm_variant_get);
+        self.map_results(&op, &wasm_variant_get);
         builder.op(wasm_variant_get);
     }
 
@@ -1114,7 +1066,7 @@ impl<'db> WasmLowerer<'db> {
             .results(op.results(self.db).clone())
             .build();
 
-        self.map_results(op, wasm_array_new);
+        self.map_results(&op, &wasm_array_new);
         builder.op(wasm_array_new);
     }
 
@@ -1136,7 +1088,7 @@ impl<'db> WasmLowerer<'db> {
         }
         let wasm_array_get = wasm_array_get.results(op.results(self.db).clone()).build();
 
-        self.map_results(op, wasm_array_get);
+        self.map_results(&op, &wasm_array_get);
         builder.op(wasm_array_get);
     }
 
@@ -1171,7 +1123,7 @@ impl<'db> WasmLowerer<'db> {
             .results(op.results(self.db).clone())
             .build();
 
-        self.map_results(op, wasm_array_len);
+        self.map_results(&op, &wasm_array_len);
         builder.op(wasm_array_len);
     }
 
@@ -1192,7 +1144,7 @@ impl<'db> WasmLowerer<'db> {
             .results(op.results(self.db).clone())
             .build();
 
-        self.map_results(op, wasm_ref_null);
+        self.map_results(&op, &wasm_ref_null);
         builder.op(wasm_ref_null);
     }
 
@@ -1208,7 +1160,7 @@ impl<'db> WasmLowerer<'db> {
             .results(op.results(self.db).clone())
             .build();
 
-        self.map_results(op, wasm_ref_is_null);
+        self.map_results(&op, &wasm_ref_is_null);
         builder.op(wasm_ref_is_null);
     }
 
@@ -1231,7 +1183,7 @@ impl<'db> WasmLowerer<'db> {
             .results(op.results(self.db).clone())
             .build();
 
-        self.map_results(op, wasm_ref_cast);
+        self.map_results(&op, &wasm_ref_cast);
         builder.op(wasm_ref_cast);
     }
 
@@ -1253,7 +1205,7 @@ impl<'db> WasmLowerer<'db> {
         let new_op = self.build_pointer_const(location, op.results(self.db).clone(), offset);
         let new_value = new_op.result(self.db, 0);
         self.data_segments.record_literal(new_value, offset, len);
-        self.map_results(op, new_op);
+        self.map_results(&op, &new_op);
         builder.op(new_op);
     }
 
@@ -1273,7 +1225,7 @@ impl<'db> WasmLowerer<'db> {
         let new_op = self.build_pointer_const(location, op.results(self.db).clone(), offset);
         let new_value = new_op.result(self.db, 0);
         self.data_segments.record_literal(new_value, offset, len);
-        self.map_results(op, new_op);
+        self.map_results(&op, &new_op);
         builder.op(new_op);
     }
 
@@ -1339,19 +1291,13 @@ impl<'db> WasmLowerer<'db> {
         false
     }
 
-    fn record_func_metadata(&mut self, op: &Operation<'db>) {
-        let attrs = op.attributes(self.db);
-        let Some(Attribute::Symbol(sym)) = attrs.get(&Symbol::new("sym_name")) else {
-            return;
-        };
-        if *sym != Symbol::new("main") {
+    fn record_func_metadata(&mut self, op: &func::Func<'db>) {
+        if op.name(self.db) != Symbol::new("main") {
             return;
         }
 
         self.main_exports.saw_main = true;
-        if let Some(Attribute::Type(ty)) = attrs.get(&Symbol::new("type"))
-            && let Some(func_ty) = core::Func::from_type(self.db, *ty)
-        {
+        if let Some(func_ty) = core::Func::from_type(self.db, op.ty(self.db)) {
             self.main_exports.main_result_type = Some(func_ty.result(self.db));
         }
     }
@@ -1415,7 +1361,7 @@ impl<'db> WasmLowerer<'db> {
         operands
     }
 
-    fn map_results(&mut self, old_op: Operation<'db>, new_op: Operation<'db>) {
+    fn map_results(&mut self, old_op: &Operation<'db>, new_op: &Operation<'db>) {
         let old_results = old_op.results(self.db);
         let new_results = new_op.results(self.db);
         let count = old_results.len().min(new_results.len());
