@@ -5,12 +5,14 @@
 
 use std::collections::HashMap;
 
+use crate::plan::{DataSegments, MainExports, MemoryPlan, WasiPlan};
+
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{adt, arith, func, scf, src, wasm};
 use trunk_ir::{
     Attribute, Block, DialectType, IdVec, Location, Operation, QualifiedName, Region, Symbol,
-    Type, Value, ValueDef,
+    Type, Value, ValueDef, idvec,
 };
 
 /// Entry point for lowering mid-level IR to wasm dialect.
@@ -131,7 +133,7 @@ impl<'db> WasmLowerer<'db> {
             return lowered_body;
         }
 
-        let mut new_blocks = Vec::new();
+        let mut new_blocks = IdVec::new();
         for (idx, block) in blocks.iter().enumerate() {
             if idx == 0 {
                 let location = block.location(self.db);
@@ -173,13 +175,13 @@ impl<'db> WasmLowerer<'db> {
         )
     }
 
-    fn module_preamble_ops(&mut self, location: Location<'db>) -> Vec<Operation<'db>> {
-        let mut ops = Vec::new();
+    fn module_preamble_ops(&mut self, location: Location<'db>) -> IdVec<Operation<'db>> {
+        let mut ops = IdVec::new();
         let module_location = self.module_location.unwrap_or(location);
 
         if self.wasi_plan.needs_fd_write {
             let i32_ty = core::I32::new(self.db).as_type();
-            let params = IdVec::from(vec![i32_ty, i32_ty, i32_ty, i32_ty]);
+            let params = idvec![i32_ty, i32_ty, i32_ty, i32_ty];
             let import_ty = core::Func::new(self.db, params, i32_ty).as_type();
             ops.push(
                 wasm::import_func(
@@ -215,7 +217,7 @@ impl<'db> WasmLowerer<'db> {
         ops
     }
 
-    fn module_data_ops(&mut self, location: Location<'db>) -> Vec<Operation<'db>> {
+    fn module_data_ops(&mut self, location: Location<'db>) -> IdVec<Operation<'db>> {
         let module_location = self.module_location.unwrap_or(location);
         self.data_segments
             .take_segments()
@@ -232,8 +234,8 @@ impl<'db> WasmLowerer<'db> {
             .collect()
     }
 
-    fn module_extra_ops(&mut self, location: Location<'db>) -> Vec<Operation<'db>> {
-        let mut ops = Vec::new();
+    fn module_extra_ops(&mut self, location: Location<'db>) -> IdVec<Operation<'db>> {
+        let mut ops = IdVec::new();
         let module_location = self.module_location.unwrap_or(location);
 
         if self.memory_plan.needs_memory
@@ -265,19 +267,20 @@ impl<'db> WasmLowerer<'db> {
             self.main_exports.main_exported = true;
         }
 
-        if self.wasi_plan.needs_fd_write && self.main_exports.saw_main {
-            if let Some(start_func) = self.build_start_function(module_location) {
-                ops.push(start_func);
-                ops.push(
-                    wasm::export_func(
-                        self.db,
-                        module_location,
-                        Attribute::String("_start".into()),
-                        Attribute::QualifiedName(QualifiedName::simple(Symbol::new("_start"))),
-                    )
-                    .as_operation(),
-                );
-            }
+        if self.wasi_plan.needs_fd_write
+            && self.main_exports.saw_main
+            && let Some(start_func) = self.build_start_function(module_location)
+        {
+            ops.push(start_func);
+            ops.push(
+                wasm::export_func(
+                    self.db,
+                    module_location,
+                    Attribute::String("_start".into()),
+                    Attribute::QualifiedName(QualifiedName::simple(Symbol::new("_start"))),
+                )
+                .as_operation(),
+            );
         }
 
         ops
@@ -287,6 +290,8 @@ impl<'db> WasmLowerer<'db> {
         let nil_ty = core::Nil::new(self.db).as_type();
         let main_result = self.main_exports.main_result_type.unwrap_or(nil_ty);
 
+        // Build wasm.call to main
+        // Note: Using Operation::of_name because result type is conditional
         let mut call_builder = Operation::of_name(self.db, location, "wasm.call")
             .operands(IdVec::new())
             .attr(
@@ -294,26 +299,31 @@ impl<'db> WasmLowerer<'db> {
                 Attribute::QualifiedName(QualifiedName::simple(Symbol::new("main"))),
             );
         if !self.is_nil_type(main_result) {
-            call_builder = call_builder.results(IdVec::from(vec![main_result]));
+            call_builder = call_builder.results(idvec![main_result]);
         }
         let call = call_builder.build();
-        let mut ops: Vec<Operation<'db>> = vec![call];
 
+        // Collect operations for the function body
+        let mut ops: IdVec<Operation<'db>> = idvec![call];
+
+        // Drop result if main returns non-nil (use typed helper)
         if !self.is_nil_type(main_result) {
             let call_val = ops.last().expect("call inserted").result(self.db, 0);
             ops.push(wasm::drop(self.db, location, call_val).as_operation());
         }
 
-        ops.push(wasm::r#return(self.db, location, Vec::new()).as_operation());
+        // Return (use typed helper)
+        ops.push(wasm::r#return(self.db, location, IdVec::new()).as_operation());
 
-        let body_block = Block::new(self.db, location, IdVec::new(), IdVec::from(ops));
-        let body = Region::new(self.db, location, IdVec::from(vec![body_block]));
+        // Build region and func operation
+        let body_block = Block::new(self.db, location, IdVec::new(), ops);
+        let region = Region::new(self.db, location, idvec![body_block]);
         let func_ty = core::Func::new(self.db, IdVec::new(), nil_ty).as_type();
 
-        Some(func::func(self.db, location, Symbol::new("_start"), func_ty, body).as_operation())
+        Some(func::func(self.db, location, Symbol::new("_start"), func_ty, region).as_operation())
     }
 
-    fn lower_op(&mut self, op: Operation<'db>) -> Vec<Operation<'db>> {
+    fn lower_op(&mut self, op: Operation<'db>) -> IdVec<Operation<'db>> {
         let remapped_operands = self.remap_operands(op);
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
@@ -343,7 +353,7 @@ impl<'db> WasmLowerer<'db> {
         if dialect == src::DIALECT_NAME() && name == src::VAR() {
             let new_op = op.modify(self.db).operands(remapped_operands).build();
             self.map_results(op, new_op);
-            return vec![new_op];
+            return idvec![new_op];
         }
 
         // Operations we're not handling should not appear in function bodies
@@ -372,7 +382,7 @@ impl<'db> WasmLowerer<'db> {
             .regions(IdVec::from(new_regions))
             .build();
         self.map_results(op, new_op);
-        vec![new_op]
+        idvec![new_op]
     }
 
     fn lower_arith_op(
@@ -380,7 +390,7 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         name: Symbol,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let location = op.location(self.db);
         let result_type = op.results(self.db).first().copied();
 
@@ -405,7 +415,7 @@ impl<'db> WasmLowerer<'db> {
         let new_op = new_op_builder.results(op.results(self.db).clone()).build();
 
         self.map_results(op, new_op);
-        vec![new_op]
+        idvec![new_op]
     }
 
     fn arith_const_to_wasm_name(&self, ty: Option<Type<'db>>) -> &'static str {
@@ -543,10 +553,14 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         name: Symbol,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let location = op.location(self.db);
 
         // func.call -> wasm.call
+        // Note: Using Operation::of_name instead of typed wasm::call helper because:
+        // 1. The callee attribute is dynamic (comes from the source operation)
+        // 2. Result types vary based on the called function's signature
+        // 3. Typed helper would require compile-time constant attributes
         if name == func::CALL() {
             if let Some(rewritten) = self.lower_intrinsic_call(&op, operands.clone()) {
                 return rewritten;
@@ -562,15 +576,13 @@ impl<'db> WasmLowerer<'db> {
 
             let new_op = new_op_builder.build();
             self.map_results(op, new_op);
-            return vec![new_op];
+            return idvec![new_op];
         }
 
         // func.return -> wasm.return
         if name == func::RETURN() {
-            let new_op = Operation::of_name(self.db, location, "wasm.return")
-                .operands(operands)
-                .build();
-            return vec![new_op];
+            let new_op = wasm::r#return(self.db, location, operands.to_vec()).as_operation();
+            return idvec![new_op];
         }
 
         // func.func - keep as-is but lower regions
@@ -591,7 +603,7 @@ impl<'db> WasmLowerer<'db> {
             .regions(IdVec::from(new_regions))
             .build();
         self.map_results(op, new_op);
-        vec![new_op]
+        idvec![new_op]
     }
 
     fn lower_scf_op(
@@ -599,7 +611,7 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         name: Symbol,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let location = op.location(self.db);
 
         if name == scf::IF() {
@@ -612,7 +624,7 @@ impl<'db> WasmLowerer<'db> {
 
         if name == scf::YIELD() {
             // Yields are implicit in wasm - remove them
-            return vec![];
+            return idvec![];
         }
 
         if name == scf::CONTINUE() {
@@ -637,7 +649,7 @@ impl<'db> WasmLowerer<'db> {
             .regions(IdVec::from(new_regions))
             .build();
         self.map_results(op, new_op);
-        vec![new_op]
+        idvec![new_op]
     }
 
     fn lower_scf_if(
@@ -645,7 +657,7 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let regions = op.regions(self.db);
         let then_region = regions
             .first()
@@ -658,10 +670,14 @@ impl<'db> WasmLowerer<'db> {
         let lowered_else = else_region.map(|r| self.lower_region_strip_yield(r));
 
         // Build wasm.if with same structure
+        // Note: Using Operation::of_name instead of typed helper because:
+        // 1. Regions are complex and already lowered from source
+        // 2. Optional else region requires conditional region attachment
+        // 3. Result types and region structure are determined at lowering time
         let mut wasm_if = Operation::of_name(self.db, location, "wasm.if").operands(operands);
 
         if let Some(result_ty) = op.results(self.db).first().copied() {
-            wasm_if = wasm_if.results(IdVec::from(vec![result_ty]));
+            wasm_if = wasm_if.results(idvec![result_ty]);
         }
 
         let mut new_regions = vec![lowered_then];
@@ -671,7 +687,7 @@ impl<'db> WasmLowerer<'db> {
 
         let new_op = wasm_if.regions(IdVec::from(new_regions)).build();
         self.map_results(op, new_op);
-        vec![new_op]
+        idvec![new_op]
     }
 
     fn lower_region_strip_yield(&mut self, region: Region<'db>) -> Region<'db> {
@@ -699,11 +715,7 @@ impl<'db> WasmLowerer<'db> {
             new_ops,
         );
 
-        Region::new(
-            self.db,
-            lowered.location(self.db),
-            IdVec::from(vec![new_block]),
-        )
+        Region::new(self.db, lowered.location(self.db), idvec![new_block])
     }
 
     fn lower_scf_loop(
@@ -711,7 +723,7 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         _operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let regions = op.regions(self.db);
         let body_region = *regions.first().expect("scf.loop missing body");
 
@@ -720,7 +732,7 @@ impl<'db> WasmLowerer<'db> {
 
         // Create wasm.loop with lowered body
         let wasm_loop = Operation::of_name(self.db, location, "wasm.loop")
-            .regions(IdVec::from(vec![lowered_body]))
+            .regions(idvec![lowered_body])
             .build();
 
         // Wrap in wasm.block for break target
@@ -730,43 +742,38 @@ impl<'db> WasmLowerer<'db> {
             .copied()
             .unwrap_or_else(|| core::Nil::new(self.db).as_type());
 
-        let block_body_block = Block::new(
-            self.db,
-            location,
-            IdVec::new(),
-            IdVec::from(vec![wasm_loop]),
-        );
-        let block_body = Region::new(self.db, location, IdVec::from(vec![block_body_block]));
+        let block_body_block = Block::new(self.db, location, IdVec::new(), idvec![wasm_loop]);
+        let block_body = Region::new(self.db, location, idvec![block_body_block]);
 
         let wasm_block = Operation::of_name(self.db, location, "wasm.block")
-            .results(IdVec::from(vec![result_ty]))
-            .regions(IdVec::from(vec![block_body]))
+            .results(idvec![result_ty])
+            .regions(idvec![block_body])
             .build();
 
         self.map_results(op, wasm_block);
-        vec![wasm_block]
+        idvec![wasm_block]
     }
 
-    fn lower_scf_continue(&mut self, location: Location<'db>) -> Vec<Operation<'db>> {
+    fn lower_scf_continue(&mut self, location: Location<'db>) -> IdVec<Operation<'db>> {
         // Branch to enclosing wasm.loop (depth 1)
         let br_op = Operation::of_name(self.db, location, "wasm.br")
             .attr("target", Attribute::IntBits(1))
             .build();
-        vec![br_op]
+        idvec![br_op]
     }
 
     fn lower_scf_break(
         &mut self,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         // Branch to enclosing wasm.block (depth 0)
         // Operand (result value) stays on stack
         let br_op = Operation::of_name(self.db, location, "wasm.br")
             .attr("target", Attribute::IntBits(0))
             .operands(operands)
             .build();
-        vec![br_op]
+        idvec![br_op]
     }
 
     fn lower_adt_op(
@@ -774,7 +781,7 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         name: Symbol,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let location = op.location(self.db);
 
         if name == adt::STRING_CONST() {
@@ -851,7 +858,7 @@ impl<'db> WasmLowerer<'db> {
             .regions(IdVec::from(new_regions))
             .build();
         self.map_results(op, new_op);
-        vec![new_op]
+        idvec![new_op]
     }
 
     fn lower_adt_struct_new(
@@ -859,14 +866,14 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         // Get the struct type from the type attribute
         let attrs = op.attributes(self.db);
         let struct_type = match attrs.get(&Symbol::new("type")) {
             Some(Attribute::Type(ty)) => *ty,
             _ => {
                 // Fallback: keep as-is if type attribute is missing
-                return vec![op];
+                return idvec![op];
             }
         };
 
@@ -880,7 +887,7 @@ impl<'db> WasmLowerer<'db> {
             .build();
 
         self.map_results(op, wasm_struct_new);
-        vec![wasm_struct_new]
+        idvec![wasm_struct_new]
     }
 
     fn lower_adt_struct_get(
@@ -888,19 +895,19 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let Some(struct_ref) = operands.first().copied() else {
-            return vec![op];
+            return idvec![op];
         };
         let field_attr = attrs.get(&Symbol::new("field"));
         let Some(field_idx) = self.field_index_from_attr(field_attr) else {
-            return vec![op];
+            return idvec![op];
         };
 
         // Create wasm.struct_get with field index
         let mut wasm_struct_get = Operation::of_name(self.db, location, "wasm.struct_get")
-            .operands(IdVec::from(vec![struct_ref]))
+            .operands(idvec![struct_ref])
             .attr("field_idx", Attribute::IntBits(field_idx as u64));
         if let Some(type_idx) = self.type_idx_for_value(struct_ref) {
             wasm_struct_get = wasm_struct_get.attr("type_idx", Attribute::IntBits(type_idx as u64));
@@ -908,7 +915,7 @@ impl<'db> WasmLowerer<'db> {
         let wasm_struct_get = wasm_struct_get.results(op.results(self.db).clone()).build();
 
         self.map_results(op, wasm_struct_get);
-        vec![wasm_struct_get]
+        idvec![wasm_struct_get]
     }
 
     fn lower_adt_struct_set(
@@ -916,14 +923,14 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let Some(struct_ref) = operands.first().copied() else {
-            return vec![op];
+            return idvec![op];
         };
         let field_attr = attrs.get(&Symbol::new("field"));
         let Some(field_idx) = self.field_index_from_attr(field_attr) else {
-            return vec![op];
+            return idvec![op];
         };
 
         let mut wasm_struct_set = Operation::of_name(self.db, location, "wasm.struct_set")
@@ -932,7 +939,7 @@ impl<'db> WasmLowerer<'db> {
         if let Some(type_idx) = self.type_idx_for_value(struct_ref) {
             wasm_struct_set = wasm_struct_set.attr("type_idx", Attribute::IntBits(type_idx as u64));
         }
-        vec![wasm_struct_set.build()]
+        idvec![wasm_struct_set.build()]
     }
 
     fn lower_adt_variant_new(
@@ -940,14 +947,14 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         // Get the variant type and tag from attributes
         let attrs = op.attributes(self.db);
         let variant_type = match attrs.get(&Symbol::new("type")) {
             Some(Attribute::Type(ty)) => *ty,
             _ => {
                 // Fallback: keep as-is if type attribute is missing
-                return vec![op];
+                return idvec![op];
             }
         };
 
@@ -957,7 +964,7 @@ impl<'db> WasmLowerer<'db> {
             Some(Attribute::String(tag_str)) => Self::name_hash_u32(tag_str),
             _ => {
                 // Fallback: keep as-is if tag is missing
-                return vec![op];
+                return idvec![op];
             }
         };
 
@@ -972,7 +979,7 @@ impl<'db> WasmLowerer<'db> {
         let tag_value = u64::from(tag);
         let tag_const = Operation::of_name(self.db, location, "wasm.i32_const")
             .attr("value", Attribute::IntBits(tag_value & 0xFFFFFFFF))
-            .results(IdVec::from(vec![core::I32::new(self.db).as_type()]))
+            .results(idvec![core::I32::new(self.db).as_type()])
             .build();
         let tag_value = tag_const.result(self.db, 0);
         variant_fields.push(tag_value);
@@ -991,7 +998,7 @@ impl<'db> WasmLowerer<'db> {
 
         // The tag const operation is implicit - just return the struct_new
         self.map_results(op, wasm_variant_new);
-        vec![tag_const, wasm_variant_new]
+        idvec![tag_const, wasm_variant_new]
     }
 
     fn lower_adt_variant_tag(
@@ -999,15 +1006,15 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         // Extract tag from variant (which is field 0 of the struct)
         let Some(variant_ref) = operands.first().copied() else {
-            return vec![op];
+            return idvec![op];
         };
 
         // Create wasm.struct_get with field_idx=0 (the tag field)
         let mut wasm_tag_get = Operation::of_name(self.db, location, "wasm.struct_get")
-            .operands(IdVec::from(vec![variant_ref]))
+            .operands(idvec![variant_ref])
             .attr("field_idx", Attribute::IntBits(0));
         if let Some(type_idx) = self.type_idx_for_value(variant_ref) {
             wasm_tag_get = wasm_tag_get.attr("type_idx", Attribute::IntBits(type_idx as u64));
@@ -1015,7 +1022,7 @@ impl<'db> WasmLowerer<'db> {
         let wasm_tag_get = wasm_tag_get.results(op.results(self.db).clone()).build();
 
         self.map_results(op, wasm_tag_get);
-        vec![wasm_tag_get]
+        idvec![wasm_tag_get]
     }
 
     fn lower_adt_variant_get(
@@ -1023,10 +1030,10 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         // Extract field from variant (field index offset by 1 because field 0 is the tag)
         let Some(variant_ref) = operands.first().copied() else {
-            return vec![op];
+            return idvec![op];
         };
 
         let attrs = op.attributes(self.db);
@@ -1034,7 +1041,7 @@ impl<'db> WasmLowerer<'db> {
 
         // Similar to struct_get, extract field index
         let Some(base_field_idx) = self.field_index_from_attr(field_attr) else {
-            return vec![op];
+            return idvec![op];
         };
 
         // Add 1 to skip the tag field
@@ -1042,7 +1049,7 @@ impl<'db> WasmLowerer<'db> {
 
         // Create wasm.struct_get with offset field index
         let mut wasm_variant_get = Operation::of_name(self.db, location, "wasm.struct_get")
-            .operands(IdVec::from(vec![variant_ref]))
+            .operands(idvec![variant_ref])
             .attr("field_idx", Attribute::IntBits(field_idx as u64));
         if let Some(type_idx) = self.type_idx_for_value(variant_ref) {
             wasm_variant_get =
@@ -1053,7 +1060,7 @@ impl<'db> WasmLowerer<'db> {
             .build();
 
         self.map_results(op, wasm_variant_get);
-        vec![wasm_variant_get]
+        idvec![wasm_variant_get]
     }
 
     fn lower_adt_array_new(
@@ -1061,10 +1068,10 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let Some(type_idx) = self.type_idx_from_attr(attrs.get(&Symbol::new("type"))) else {
-            return vec![op];
+            return idvec![op];
         };
 
         let (wasm_name, operands) = if operands.len() <= 1 {
@@ -1080,7 +1087,7 @@ impl<'db> WasmLowerer<'db> {
             .build();
 
         self.map_results(op, wasm_array_new);
-        vec![wasm_array_new]
+        idvec![wasm_array_new]
     }
 
     fn lower_adt_array_get(
@@ -1088,9 +1095,9 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let Some(array_ref) = operands.first().copied() else {
-            return vec![op];
+            return idvec![op];
         };
         let mut wasm_array_get =
             Operation::of_name(self.db, location, "wasm.array_get").operands(operands);
@@ -1100,7 +1107,7 @@ impl<'db> WasmLowerer<'db> {
         let wasm_array_get = wasm_array_get.results(op.results(self.db).clone()).build();
 
         self.map_results(op, wasm_array_get);
-        vec![wasm_array_get]
+        idvec![wasm_array_get]
     }
 
     fn lower_adt_array_set(
@@ -1108,16 +1115,16 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let Some(array_ref) = operands.first().copied() else {
-            return vec![op];
+            return idvec![op];
         };
         let mut wasm_array_set =
             Operation::of_name(self.db, location, "wasm.array_set").operands(operands);
         if let Some(type_idx) = self.type_idx_for_value(array_ref) {
             wasm_array_set = wasm_array_set.attr("type_idx", Attribute::IntBits(type_idx as u64));
         }
-        vec![wasm_array_set.build()]
+        idvec![wasm_array_set.build()]
     }
 
     fn lower_adt_array_len(
@@ -1125,24 +1132,24 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let wasm_array_len = Operation::of_name(self.db, location, "wasm.array_len")
             .operands(operands)
             .results(op.results(self.db).clone())
             .build();
 
         self.map_results(op, wasm_array_len);
-        vec![wasm_array_len]
+        idvec![wasm_array_len]
     }
 
     fn lower_adt_ref_null(
         &mut self,
         op: Operation<'db>,
         location: Location<'db>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let Some(type_idx) = self.type_idx_from_attr(attrs.get(&Symbol::new("type"))) else {
-            return vec![op];
+            return idvec![op];
         };
 
         let wasm_ref_null = Operation::of_name(self.db, location, "wasm.ref_null")
@@ -1151,7 +1158,7 @@ impl<'db> WasmLowerer<'db> {
             .build();
 
         self.map_results(op, wasm_ref_null);
-        vec![wasm_ref_null]
+        idvec![wasm_ref_null]
     }
 
     fn lower_adt_ref_is_null(
@@ -1159,14 +1166,14 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let wasm_ref_is_null = Operation::of_name(self.db, location, "wasm.ref_is_null")
             .operands(operands)
             .results(op.results(self.db).clone())
             .build();
 
         self.map_results(op, wasm_ref_is_null);
-        vec![wasm_ref_is_null]
+        idvec![wasm_ref_is_null]
     }
 
     fn lower_adt_ref_cast(
@@ -1174,10 +1181,10 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         location: Location<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let Some(type_idx) = self.type_idx_from_attr(attrs.get(&Symbol::new("type"))) else {
-            return vec![op];
+            return idvec![op];
         };
 
         let wasm_ref_cast = Operation::of_name(self.db, location, "wasm.ref_cast")
@@ -1187,17 +1194,17 @@ impl<'db> WasmLowerer<'db> {
             .build();
 
         self.map_results(op, wasm_ref_cast);
-        vec![wasm_ref_cast]
+        idvec![wasm_ref_cast]
     }
 
     fn lower_string_const(
         &mut self,
         op: Operation<'db>,
         location: Location<'db>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let Some(Attribute::String(value)) = attrs.get(&Symbol::new("value")) else {
-            return vec![op];
+            return idvec![op];
         };
         let (offset, len) = self
             .data_segments
@@ -1207,17 +1214,17 @@ impl<'db> WasmLowerer<'db> {
         let new_value = new_op.result(self.db, 0);
         self.data_segments.record_literal(new_value, offset, len);
         self.map_results(op, new_op);
-        vec![new_op]
+        idvec![new_op]
     }
 
     fn lower_bytes_const(
         &mut self,
         op: Operation<'db>,
         location: Location<'db>,
-    ) -> Vec<Operation<'db>> {
+    ) -> IdVec<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let Some(Attribute::Bytes(value)) = attrs.get(&Symbol::new("value")) else {
-            return vec![op];
+            return idvec![op];
         };
         let (offset, len) = self.data_segments.allocate_bytes(value.clone());
         self.memory_plan.needs_memory = true;
@@ -1225,14 +1232,14 @@ impl<'db> WasmLowerer<'db> {
         let new_value = new_op.result(self.db, 0);
         self.data_segments.record_literal(new_value, offset, len);
         self.map_results(op, new_op);
-        vec![new_op]
+        idvec![new_op]
     }
 
     fn lower_intrinsic_call(
         &mut self,
         op: &Operation<'db>,
         operands: IdVec<Value<'db>>,
-    ) -> Option<Vec<Operation<'db>>> {
+    ) -> Option<IdVec<Operation<'db>>> {
         let results = op.results(self.db);
         let returns_unit = results
             .first()
@@ -1266,11 +1273,11 @@ impl<'db> WasmLowerer<'db> {
                     iovec_len_const.result(self.db, 0),
                     nwritten_const.result(self.db, 0),
                 ]))
-                .results(IdVec::from(vec![i32_ty]))
+                .results(idvec![i32_ty])
                 .attr("callee", Attribute::QualifiedName(callee))
                 .build();
             let drop = Operation::of_name(self.db, location, "wasm.drop")
-                .operands(IdVec::from(vec![call.result(self.db, 0)]))
+                .operands(idvec![call.result(self.db, 0)])
                 .build();
             if !results.is_empty() {
                 let old_result = op.result(self.db, 0);
@@ -1278,7 +1285,7 @@ impl<'db> WasmLowerer<'db> {
                 self.value_map.insert(old_result, replacement);
             }
 
-            return Some(vec![
+            return Some(idvec![
                 fd_const,
                 iovec_const,
                 iovec_len_const,
@@ -1300,10 +1307,10 @@ impl<'db> WasmLowerer<'db> {
         }
 
         self.main_exports.saw_main = true;
-        if let Some(Attribute::Type(ty)) = attrs.get(&Symbol::new("type")) {
-            if let Some(func_ty) = core::Func::from_type(self.db, *ty) {
-                self.main_exports.main_result_type = Some(func_ty.result(self.db));
-            }
+        if let Some(Attribute::Type(ty)) = attrs.get(&Symbol::new("type"))
+            && let Some(func_ty) = core::Func::from_type(self.db, *ty)
+        {
+            self.main_exports.main_result_type = Some(func_ty.result(self.db));
         }
     }
 
@@ -1312,14 +1319,12 @@ impl<'db> WasmLowerer<'db> {
             self.memory_plan.has_memory = true;
         } else if name == wasm::EXPORT_MEMORY() {
             self.memory_plan.has_exported_memory = true;
-        } else if name == wasm::EXPORT_FUNC() {
-            if let Some(Attribute::String(export)) =
+        } else if name == wasm::EXPORT_FUNC()
+            && let Some(Attribute::String(export)) =
                 op.attributes(self.db).get(&Symbol::new("name"))
-            {
-                if export == "main" {
-                    self.main_exports.main_exported = true;
-                }
-            }
+            && export == "main"
+        {
+            self.main_exports.main_exported = true;
         }
     }
 
@@ -1331,7 +1336,7 @@ impl<'db> WasmLowerer<'db> {
     ) -> Operation<'db> {
         Operation::of_name(self.db, location, "wasm.i32_const")
             .attr("value", Attribute::IntBits(u64::from(value)))
-            .results(IdVec::from(vec![result_ty]))
+            .results(idvec![result_ty])
             .build()
     }
 
@@ -1411,114 +1416,6 @@ impl<'db> WasmLowerer<'db> {
         name.as_bytes()
             .iter()
             .fold(0u32, |h, &b| h.wrapping_mul(31).wrapping_add(u32::from(b)))
-    }
-}
-
-#[derive(Default)]
-struct WasiPlan {
-    needs_fd_write: bool,
-}
-
-impl WasiPlan {
-    fn new() -> Self {
-        Self::default()
-    }
-}
-
-#[derive(Default)]
-struct MemoryPlan {
-    has_memory: bool,
-    has_exported_memory: bool,
-    needs_memory: bool,
-}
-
-impl MemoryPlan {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn required_pages(&self, end_offset: u32) -> u32 {
-        std::cmp::max(1, (end_offset + 0xFFFF) / 0x10000)
-    }
-}
-
-#[derive(Default)]
-struct MainExports<'db> {
-    saw_main: bool,
-    main_result_type: Option<Type<'db>>,
-    main_exported: bool,
-}
-
-impl<'db> MainExports<'db> {
-    fn new() -> Self {
-        Self::default()
-    }
-}
-
-#[derive(Default)]
-struct DataSegments<'db> {
-    next_offset: u32,
-    segments: Vec<(u32, Vec<u8>)>,
-    literal_data: HashMap<Value<'db>, (u32, u32)>,
-    iovec_offsets: HashMap<(u32, u32), u32>,
-    nwritten_offset: Option<u32>,
-}
-
-impl<'db> DataSegments<'db> {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn end_offset(&self) -> u32 {
-        self.next_offset
-    }
-
-    fn allocate_bytes(&mut self, bytes: Vec<u8>) -> (u32, u32) {
-        let offset = Self::align_to(self.next_offset, 4);
-        let len = bytes.len() as u32;
-        self.segments.push((offset, bytes));
-        self.next_offset = offset + len;
-        (offset, len)
-    }
-
-    fn record_literal(&mut self, value: Value<'db>, offset: u32, len: u32) {
-        self.literal_data.insert(value, (offset, len));
-    }
-
-    fn literal_for(&self, value: Value<'db>) -> Option<(u32, u32)> {
-        self.literal_data.get(&value).copied()
-    }
-
-    fn ensure_iovec(&mut self, ptr: u32, len: u32) -> u32 {
-        if let Some(&offset) = self.iovec_offsets.get(&(ptr, len)) {
-            return offset;
-        }
-        let mut bytes = Vec::with_capacity(8);
-        bytes.extend_from_slice(&ptr.to_le_bytes());
-        bytes.extend_from_slice(&len.to_le_bytes());
-        let (offset, _) = self.allocate_bytes(bytes);
-        self.iovec_offsets.insert((ptr, len), offset);
-        offset
-    }
-
-    fn ensure_nwritten(&mut self) -> u32 {
-        if let Some(offset) = self.nwritten_offset {
-            return offset;
-        }
-        let (offset, _) = self.allocate_bytes(vec![0, 0, 0, 0]);
-        self.nwritten_offset = Some(offset);
-        offset
-    }
-
-    fn take_segments(&mut self) -> Vec<(u32, Vec<u8>)> {
-        std::mem::take(&mut self.segments)
-    }
-
-    fn align_to(value: u32, align: u32) -> u32 {
-        if align == 0 {
-            return value;
-        }
-        ((value + align - 1) / align) * align
     }
 }
 
