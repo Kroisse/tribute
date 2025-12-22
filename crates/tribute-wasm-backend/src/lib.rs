@@ -1258,6 +1258,11 @@ fn type_to_valtype<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Compilat
         Ok(ValType::F32)
     } else if core::F64::from_type(db, ty).is_some() {
         Ok(ValType::F64)
+    } else if core::String::from_type(db, ty).is_some()
+        || core::Bytes::from_type(db, ty).is_some()
+        || (ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == Symbol::new("ptr"))
+    {
+        Ok(ValType::I32)
     } else {
         Err(CompilationError::type_error(format!(
             "unsupported wasm value type: {}.{}",
@@ -1459,6 +1464,7 @@ mod tests {
     use std::process::Command;
     #[cfg(feature = "wasmtime-tests")]
     use tempfile::NamedTempFile;
+    use trunk_ir::dialect::adt;
     use trunk_ir::dialect::core;
     use trunk_ir::dialect::func;
     use trunk_ir::dialect::wasm;
@@ -1908,6 +1914,40 @@ mod tests {
         core::Module::create(db, location, Symbol::new("main"), module_region)
     }
 
+    #[salsa::tracked]
+    fn build_print_line_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///hello.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let string_ty = core::String::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+
+        let mut block = BlockBuilder::new(db, location);
+        let hello = block.op(adt::string_const(
+            db,
+            location,
+            string_ty,
+            "Hello world\n".to_string(),
+        ));
+        block.op(func::call(
+            db,
+            location,
+            vec![hello.result(db)],
+            nil_ty,
+            smallvec![Symbol::new("print_line")],
+        ));
+        block.op(func::r#return(db, location, Vec::new()));
+
+        let body = Region::new(db, location, idvec![block.build()]);
+        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
+        let func_op = func::func(db, location, Symbol::new("main"), func_ty, body);
+
+        let mut top_builder = BlockBuilder::new(db, location);
+        top_builder.op(func_op);
+        let top_block = top_builder.build();
+        let module_region = Region::new(db, location, idvec![top_block]);
+        core::Module::create(db, location, Symbol::new("main"), module_region)
+    }
+
     #[salsa_test]
     fn emits_basic_wasm_module(db: &salsa::DatabaseImpl) {
         let module = build_basic_module(db);
@@ -2024,6 +2064,43 @@ mod tests {
         assert!(
             stdout.contains(expected),
             "expected output to contain {expected}, got: {stdout}"
+        );
+    }
+
+    #[cfg(feature = "wasmtime-tests")]
+    fn run_wasmtime_start(bytes: &[u8]) -> String {
+        let mut temp = NamedTempFile::new().expect("tempfile");
+        std::io::Write::write_all(&mut temp, bytes).expect("write wasm");
+        let path = temp.into_temp_path();
+
+        let wasmtime = std::env::var("TRIBUTE_WASMTIME").unwrap_or_else(|_| "wasmtime".to_string());
+        let output = Command::new(wasmtime)
+            .arg("run")
+            .arg("-C")
+            .arg("cache=n")
+            .arg(path.as_os_str())
+            .output()
+            .expect("run wasmtime");
+
+        assert!(
+            output.status.success(),
+            "wasmtime failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
+
+    #[cfg(feature = "wasmtime-tests")]
+    #[salsa_test]
+    fn lowering_print_line_runs_in_wasmtime(db: &salsa::DatabaseImpl) {
+        let module = build_print_line_module(db);
+        let lowered = crate::lower_wasm::lower_to_wasm(db, module);
+        let bytes = emit_wasm(db, lowered).expect("emit wasm");
+        let output = run_wasmtime_start(&bytes);
+        assert!(
+            output.contains("Hello world\n"),
+            "expected hello world output, got: {output}"
         );
     }
 
