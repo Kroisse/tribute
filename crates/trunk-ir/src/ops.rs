@@ -237,13 +237,67 @@ macro_rules! dialect {
     // Base case: no more items
     (@parse $dialect:ident []) => {};
 
-    // Operation with optional doc and optional typed attrs.
-    // Note: doc comments must come before #[attr(...)] if both are present.
-    // Supports optional attributes: `#[attr(name?: Type)]`
+    // Operation with variadic results: `-> #[rest] identifier`
     (@parse $dialect:ident
         [$(#[doc = $doc:literal])*
          $(#[attr($($attr_tokens:tt)*)])?
-         fn $op:ident ($($operands:tt)*) $(-> $result:tt)? $({ $($region_body:tt)* })?;
+         fn $op:ident ($($operands:tt)*) -> #[rest] $result:ident $({ $($region_body:tt)* })?;
+         $($rest:tt)*]
+    ) => {
+        // Generate operation-specific helper
+        $crate::paste::paste! {
+            #[allow(non_snake_case)]
+            #[inline]
+            pub fn [<$op:upper>]() -> $crate::Symbol {
+                $crate::Symbol::new($crate::raw_ident_str!($op))
+            }
+        }
+
+        $crate::define_op! {
+            doc: [$($doc),*],
+            dialect: $dialect,
+            op: $op,
+            attr_tokens: [$($($attr_tokens)*)?],
+            operands: ($($operands)*),
+            result: [#[rest] $result],
+            regions: [$($($region_body)*)?]
+        }
+        $crate::dialect!(@parse $dialect [$($rest)*]);
+    };
+
+    // Operation with tuple results: `-> (id1, id2, ...)`
+    (@parse $dialect:ident
+        [$(#[doc = $doc:literal])*
+         $(#[attr($($attr_tokens:tt)*)])?
+         fn $op:ident ($($operands:tt)*) -> ($($result:ident),+ $(,)?) $({ $($region_body:tt)* })?;
+         $($rest:tt)*]
+    ) => {
+        // Generate operation-specific helper
+        $crate::paste::paste! {
+            #[allow(non_snake_case)]
+            #[inline]
+            pub fn [<$op:upper>]() -> $crate::Symbol {
+                $crate::Symbol::new($crate::raw_ident_str!($op))
+            }
+        }
+
+        $crate::define_op! {
+            doc: [$($doc),*],
+            dialect: $dialect,
+            op: $op,
+            attr_tokens: [$($($attr_tokens)*)?],
+            operands: ($($operands)*),
+            result: [($($result),+)],
+            regions: [$($($region_body)*)?]
+        }
+        $crate::dialect!(@parse $dialect [$($rest)*]);
+    };
+
+    // Operation with single result or no result
+    (@parse $dialect:ident
+        [$(#[doc = $doc:literal])*
+         $(#[attr($($attr_tokens:tt)*)])?
+         fn $op:ident ($($operands:tt)*) $(-> $result:ident)? $({ $($region_body:tt)* })?;
          $($rest:tt)*]
     ) => {
         // Generate operation-specific helper
@@ -330,6 +384,28 @@ macro_rules! dialect {
 /// - Accessor methods based on the operation signature
 #[macro_export]
 macro_rules! define_op {
+    // Entry point - variadic result: #[rest] identifier
+    (
+        doc: [$($doc:literal),*],
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attr_tokens: [$($attr_tokens:tt)*],
+        operands: ($($operand_tokens:tt)*),
+        result: [#[rest] $result:ident],
+        regions: [$($region_tokens:tt)*]
+    ) => {
+        $crate::define_op!(@munch_attrs
+            doc: [$($doc),*],
+            dialect: $dialect,
+            op: $op,
+            attrs: [],
+            tokens: [$($attr_tokens)*],
+            operand_tokens: [$($operand_tokens)*],
+            result: [#[rest] $result],
+            region_tokens: [$($region_tokens)*]
+        );
+    };
+
     // Entry point - parse attribute tokens into structured format
     // Supports: `name`, `name: Type`, `name?: Type` (optional)
     (
@@ -651,7 +727,7 @@ macro_rules! define_op {
             op: $op,
             attrs: $attrs,
             operands: $operands,
-            results: [],
+            results: [;],
             region_tokens: $region_tokens
         );
     };
@@ -672,7 +748,28 @@ macro_rules! define_op {
             op: $op,
             attrs: $attrs,
             operands: $operands,
-            results: [$($result),+],
+            results: [$($result),+;],
+            region_tokens: $region_tokens
+        );
+    };
+
+    // Variadic result: #[rest] result
+    (@parse_result
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        operands: $operands:tt,
+        result: [#[rest] $var:ident],
+        region_tokens: $region_tokens:tt
+    ) => {
+        $crate::define_op!(@parse_regions
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
+            operands: $operands,
+            results: [;$var],
             region_tokens: $region_tokens
         );
     };
@@ -693,7 +790,7 @@ macro_rules! define_op {
             op: $op,
             attrs: $attrs,
             operands: $operands,
-            results: [$result],
+            results: [$result;],
             region_tokens: $region_tokens
         );
     };
@@ -779,7 +876,7 @@ macro_rules! define_op {
         op: $op:ident,
         attrs: [$($attr_block:tt)*],
         operands: [$($fixed:ident),*; $($var:ident)?],
-        results: [$($result:ident),*],
+        results: [$($fixed_res:ident),*; $($var_res:ident)?],
         regions: [$($region:ident),*]
     ) => {
         $crate::paste::paste! {
@@ -807,7 +904,7 @@ macro_rules! define_op {
                 $crate::define_op!(@gen_attr_accessors $($attr_block)*);
 
                 // Result accessors
-                $crate::define_op!(@gen_result_accessors { 0 } $($result)*);
+                $crate::define_op!(@gen_result_accessors { 0 } $($fixed_res)* $(#[rest] $var_res)?);
 
                 // Region accessors
                 $crate::define_op!(@gen_region_accessor { 0 } $($region)*);
@@ -835,7 +932,7 @@ macro_rules! define_op {
                     // Attribute validation
                     $crate::define_op!(@validate_attrs op, db, $($attr_block)*);
                     // Result validation
-                    $crate::define_op!(@maybe_result_validation [$($result),*]; op, db);
+                    $crate::define_op!(@maybe_result_validation [$($fixed_res),*; $($var_res)?]; op, db);
                     // Region validation
                     $crate::define_op!(@maybe_region_validation [$($region),*]; op, db);
                     Ok(Self { op })
@@ -906,7 +1003,7 @@ macro_rules! define_op {
             attrs: [$($attr_block)*],
             fixed: [$($fixed),*],
             var: [$($var)?],
-            results: [$($result),*],
+            results: [$($fixed_res),*; $($var_res)?],
             regions: [$($region),*]
         );
     };
@@ -919,7 +1016,7 @@ macro_rules! define_op {
         attrs: [$($attr_block:tt)*],
         fixed: [$($fixed:ident),*],
         var: [$($var:ident)?],
-        results: [$($result:ident),*],
+        results: [$($fixed_res:ident),*; $($var_res:ident)?],
         regions: [$($region:ident),*]
     ) => {
         $crate::define_op!(@gen_constructor_munch
@@ -930,7 +1027,7 @@ macro_rules! define_op {
             attr_blocks: [$($attr_block)*],
             fixed: [$($fixed),*],
             var: [$($var)?],
-            results: [$($result),*],
+            results: [$($fixed_res),*; $($var_res)?],
             regions: [$($region),*]
         );
     };
@@ -1042,7 +1139,7 @@ macro_rules! define_op {
         attr_params: [$([$kind:ident $attr:ident $($attr_ty:ident)?])*],
         fixed: [$($fixed:ident),*],
         var: [$($var:ident)?],
-        results: [$($result:ident),*],
+        results: [$($fixed_res:ident),*; $($var_res:ident)?],
         regions: [$($region:ident),*]
     ) => {
         $crate::paste::paste! {
@@ -1053,7 +1150,8 @@ macro_rules! define_op {
                 location: $crate::Location<'db>,
                 $($fixed: $crate::Value<'db>,)*
                 $($var: impl IntoIterator<Item = $crate::Value<'db>>,)?
-                $($result: $crate::Type<'db>,)*
+                $($fixed_res: $crate::Type<'db>,)*
+                $($var_res: impl IntoIterator<Item = $crate::Type<'db>>,)?
                 $($attr: $crate::define_op!(@attr_param_type $kind $($attr_ty)?),)*
                 $($region: $crate::Region<'db>,)*
             ) -> [<$op:camel>]<'db> {
@@ -1063,9 +1161,12 @@ macro_rules! define_op {
                 let mut operands = $crate::idvec![$($fixed),*];
                 $(operands.extend($var);)?
                 #[allow(unused_mut)]
+                let mut results = $crate::idvec![$($fixed_res),*];
+                $(results.extend($var_res);)?
+                #[allow(unused_mut)]
                 let mut builder = $crate::Operation::of(db, location, dialect, name)
                     .operands(operands)
-                    $(.result($result))*
+                    .results(results)
                     $(.region($region))*;
                 // Add attributes
                 $(
@@ -1137,8 +1238,20 @@ macro_rules! define_op {
 
     // Result accessors - base case
     (@gen_result_accessors { $idx:expr }) => {};
-    // Result accessors - recursive
-    (@gen_result_accessors { $idx:expr } $name:ident $($rest:ident)*) => {
+    // Result accessors - variadic
+    (@gen_result_accessors { $idx:expr } #[rest] $var:ident) => {
+        #[allow(dead_code)]
+        pub fn $var(&self, db: &'db dyn salsa::Database) -> $crate::IdVec<$crate::Value<'db>> {
+            const FIXED_COUNT: usize = $idx;
+            let mut values = $crate::IdVec::new();
+            for i in FIXED_COUNT..self.op.results(db).len() {
+                values.push(self.op.result(db, i));
+            }
+            values
+        }
+    };
+    // Result accessors - fixed (recursive)
+    (@gen_result_accessors { $idx:expr } $name:ident $($rest:tt)*) => {
         #[allow(dead_code)]
         pub fn $name(&self, db: &'db dyn salsa::Database) -> $crate::Value<'db> {
             self.op.result(db, $idx)
@@ -1166,10 +1279,21 @@ macro_rules! define_op {
         $crate::define_op!(@gen_region_accessor { $idx + 1 } $($rest)*);
     };
 
-    // Result validation - empty
-    (@maybe_result_validation []; $op:ident, $db:ident) => {};
-    // Result validation - present
-    (@maybe_result_validation [$($result:ident),+]; $op:ident, $db:ident) => {
+    // Result validation - empty (no fixed, no variadic)
+    (@maybe_result_validation [;]; $op:ident, $db:ident) => {};
+    // Result validation - variadic only
+    (@maybe_result_validation [; $var:ident]; $op:ident, $db:ident) => {};
+    // Result validation - fixed only
+    (@maybe_result_validation [$($result:ident),+;]; $op:ident, $db:ident) => {
+        {
+            const EXPECTED_RESULTS: usize = $crate::define_op!(@count $($result)+);
+            if $op.results($db).len() < EXPECTED_RESULTS {
+                return Err($crate::ConversionError::MissingResult);
+            }
+        }
+    };
+    // Result validation - fixed + variadic
+    (@maybe_result_validation [$($result:ident),+; $var:ident]; $op:ident, $db:ident) => {
         {
             const EXPECTED_RESULTS: usize = $crate::define_op!(@count $($result)+);
             if $op.results($db).len() < EXPECTED_RESULTS {
