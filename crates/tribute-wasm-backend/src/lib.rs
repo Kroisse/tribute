@@ -1568,10 +1568,10 @@ mod tests {
             db,
             location,
             vec![left.result(db), right.result(db)],
-            i32_ty,
+            vec![i32_ty],
             Attribute::SymbolRef(callee),
         ));
-        main_block_builder.op(wasm::r#return(db, location, vec![call.result(db)]));
+        main_block_builder.op(wasm::r#return(db, location, call.result(db)));
         let main_block = main_block_builder.build();
         let main_body = Region::new(db, location, idvec![main_block]);
         let main_ty = core::Func::new(db, idvec![], i32_ty).as_type();
@@ -2197,10 +2197,10 @@ mod tests {
                 c_iovec_len.result(db),
                 c_nwritten.result(db),
             ],
-            i32_ty,
+            vec![i32_ty],
             Attribute::SymbolRef(callee),
         );
-        let drop = wasm::drop(db, location, call.result(db));
+        let drop = wasm::drop(db, location, call.result(db)[0]);
         let ret = wasm::r#return(db, location, Vec::new());
 
         let mut start_block_builder = BlockBuilder::new(db, location);

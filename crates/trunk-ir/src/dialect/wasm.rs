@@ -47,11 +47,11 @@ dialect! {
 
         /// `wasm.call` operation: function call.
         #[attr(callee)]
-        fn call(#[rest] args) -> result;
+        fn call(#[rest] args) -> #[rest] result;
 
         /// `wasm.call_indirect` operation: indirect function call.
         #[attr(type_idx, table)]
-        fn call_indirect(#[rest] args) -> result;
+        fn call_indirect(#[rest] args) -> #[rest] result;
 
         // === Module-level Definitions ===
 
