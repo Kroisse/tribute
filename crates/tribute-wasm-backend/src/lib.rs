@@ -15,6 +15,7 @@ use wasm_encoder::{
 
 mod errors;
 pub mod lower_wasm;
+mod plan;
 pub mod translate;
 
 pub use errors::{CompilationError, CompilationResult};
