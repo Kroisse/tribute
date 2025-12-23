@@ -78,6 +78,42 @@ ref<T>          // non-nullable
 ref<T>?         // nullable
 ```
 
+#### 식별자 타입
+
+```rust
+/// Interned 문자열 (단순 이름)
+#[salsa::interned]
+pub struct Symbol<'db> {
+    #[returns(ref)]
+    text: String,
+}
+
+/// 완전 한정 이름 (e.g., std::intrinsics::wasi::preview1::fd_write)
+#[salsa::interned]
+pub struct QualifiedName<'db> {
+    #[returns(ref)]
+    segments: SymbolVec,
+}
+
+impl<'db> QualifiedName<'db> {
+    /// base 기준 상대 경로 반환
+    pub fn relative(
+        &self,
+        db: &'db dyn Database,
+        base: &QualifiedName<'db>,
+    ) -> Option<QualifiedName<'db>>;
+
+    /// 마지막 segment (단순 이름)
+    pub fn name(&self, db: &'db dyn Database) -> Symbol<'db>;
+
+    /// 단일 segment인지 확인
+    pub fn is_simple(&self, db: &'db dyn Database) -> bool;
+}
+```
+
+- `Symbol`: 단순 식별자, interned로 비교 O(1)
+- `QualifiedName`: `::` 로 구분된 경로, `func.call`의 callee 등에서 사용
+
 ### type Dialect
 
 타입 및 ability 정의.
