@@ -3,4 +3,5 @@
 //! Each pass converts a specific dialect to wasm operations.
 
 pub mod arith_to_wasm;
+pub mod func_to_wasm;
 pub mod scf_to_wasm;

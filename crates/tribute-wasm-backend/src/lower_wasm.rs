@@ -22,6 +22,7 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     // Phase 1: Pattern-based lowering passes
     let module = crate::passes::arith_to_wasm::lower(db, module);
     let module = crate::passes::scf_to_wasm::lower(db, module);
+    let module = crate::passes::func_to_wasm::lower(db, module);
 
     // Phase 2: Remaining lowering via WasmLowerer
     let mut lowerer = WasmLowerer::new(db);
@@ -43,8 +44,8 @@ fn check_all_wasm_dialect<'db>(db: &'db dyn salsa::Database, module: &Module<'db
             let dialect = op.dialect(db);
             let name = op.name(db);
 
-            // Check func.func operations and their bodies
-            if dialect == Symbol::new("func") && name == Symbol::new("func") {
+            // Check wasm.func operations and their bodies
+            if dialect == wasm::DIALECT_NAME() && name == wasm::FUNC() {
                 check_function_body(db, op);
             }
         }
@@ -288,10 +289,24 @@ impl<'db> WasmLowerer<'db> {
         let name = op.name(self.db);
         if dialect == wasm::DIALECT_NAME() {
             self.observe_wasm_module_op(&op, name);
+
+            // Handle intrinsic calls (e.g., print_line -> fd_write)
+            if name == wasm::CALL() {
+                if self.lower_intrinsic_call(builder, &op, remapped_operands.clone()) {
+                    return;
+                }
+            }
+
+            // Handle wasm.func metadata (main function detection)
+            if name == wasm::FUNC() {
+                if let Ok(op_func) = wasm::Func::from_operation(self.db, op) {
+                    self.record_wasm_func_metadata(&op_func);
+                }
+            }
         }
 
         // Transform operations based on dialect
-        // Note: arith and scf dialects are handled by pattern-based passes before this lowerer runs
+        // Note: arith, scf, and func dialects are handled by pattern-based passes before this lowerer runs
 
         if dialect == func::DIALECT_NAME() {
             return self.lower_func_op(builder, op, remapped_operands);
@@ -345,42 +360,10 @@ impl<'db> WasmLowerer<'db> {
         op: Operation<'db>,
         operands: IdVec<Value<'db>>,
     ) {
-        let location = op.location(self.db);
+        // Note: func.call, func.return, func.func are now handled by func_to_wasm pass.
+        // This method only handles func.call_indirect, func.constant (closure support).
 
-        // func.call -> wasm.call
-        // Note: Using Operation::of_name instead of typed wasm::call helper because:
-        // 1. The callee attribute is dynamic (comes from the source operation)
-        // 2. Result types vary based on the called function's signature
-        // 3. Typed helper would require compile-time constant attributes
-        if let Ok(op_call) = func::Call::from_operation(self.db, op) {
-            if self.lower_intrinsic_call(builder, &op, operands.clone()) {
-                return;
-            }
-            let new_op = wasm::call(
-                self.db,
-                location,
-                operands,
-                op.results(self.db).clone(),
-                Attribute::QualifiedName(op_call.callee(self.db)),
-            );
-
-            self.map_results(&op, &new_op);
-            builder.op(new_op);
-            return;
-        }
-
-        // func.return -> wasm.return
-        if func::Return::from_operation(self.db, op).is_ok() {
-            let new_op = wasm::r#return(self.db, location, operands.to_vec());
-            builder.op(new_op);
-            return;
-        }
-
-        // func.func - keep as-is but lower regions
-        // (emit_wasm handles func.func directly)
-        if let Ok(op_func) = func::Func::from_operation(self.db, op) {
-            self.record_func_metadata(&op_func);
-        }
+        // Keep operation as-is but lower nested regions
         let new_regions = op
             .regions(self.db)
             .iter()
@@ -952,13 +935,13 @@ impl<'db> WasmLowerer<'db> {
         false
     }
 
-    fn record_func_metadata(&mut self, op: &func::Func<'db>) {
-        if op.name(self.db) != Symbol::new("main") {
+    fn record_wasm_func_metadata(&mut self, op: &wasm::Func<'db>) {
+        if op.sym_name(self.db) != Symbol::new("main") {
             return;
         }
 
         self.main_exports.saw_main = true;
-        if let Some(func_ty) = core::Func::from_type(self.db, op.ty(self.db)) {
+        if let Some(func_ty) = core::Func::from_type(self.db, op.r#type(self.db)) {
             self.main_exports.main_result_type = Some(func_ty.result(self.db));
         }
     }

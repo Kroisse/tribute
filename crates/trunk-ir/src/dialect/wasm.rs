@@ -53,7 +53,16 @@ dialect! {
         #[attr(type_idx, table)]
         fn call_indirect(#[rest] args) -> #[rest] results;
 
+        /// `wasm.unreachable` operation: trap / unreachable code.
+        fn unreachable();
+
         // === Module-level Definitions ===
+
+        /// `wasm.func` operation: define a function.
+        #[attr(sym_name: Symbol, r#type: Type)]
+        fn func() {
+            #[region(body)] {}
+        };
 
         /// `wasm.import_func` operation: import a function.
         #[attr(module, name, sym_name, r#type)]

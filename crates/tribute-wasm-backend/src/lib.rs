@@ -238,17 +238,16 @@ fn collect_module_info<'db>(
     let mut exports = Vec::new();
     let mut memory = None;
     let mut data = Vec::new();
-    let func_dialect = Symbol::new("func");
-    let func_name = Symbol::new("func");
     let wasm_dialect = Symbol::new("wasm");
 
     let body = module.body(db);
     for block in body.blocks(db).iter() {
         for op in block.operations(db).iter() {
-            if op.dialect(db) == func_dialect && op.name(db) == func_name {
-                funcs.push(extract_function_def(db, op)?);
-            } else if op.dialect(db) == wasm_dialect {
+            if op.dialect(db) == wasm_dialect {
                 match op.name(db) {
+                    name if name == Symbol::new("func") => {
+                        funcs.push(extract_function_def(db, op)?);
+                    }
                     name if name == Symbol::new("import_func") => {
                         imports.push(extract_import_def(db, op)?);
                     }
@@ -524,7 +523,7 @@ fn collect_gc_types<'db>(
     let body = module.body(db);
     for block in body.blocks(db).iter() {
         for op in block.operations(db).iter() {
-            if op.dialect(db) == Symbol::new("func") && op.name(db) == Symbol::new("func") {
+            if op.dialect(db) == Symbol::new("wasm") && op.name(db) == Symbol::new("func") {
                 if let Some(region) = op.regions(db).first() {
                     for block in region.blocks(db).iter() {
                         for op in block.operations(db).iter() {
@@ -624,7 +623,7 @@ fn extract_function_def<'db>(
     };
 
     let func_ty = core::Func::from_type(db, ty)
-        .ok_or_else(|| CompilationError::type_error("func.func requires core.func type"))?;
+        .ok_or_else(|| CompilationError::type_error("wasm.func requires core.func type"))?;
 
     Ok(FunctionDef {
         name,
@@ -735,11 +734,11 @@ fn emit_function<'db>(
         .op
         .regions(db)
         .first()
-        .ok_or_else(|| CompilationError::invalid_module("func.func missing body region"))?;
+        .ok_or_else(|| CompilationError::invalid_module("wasm.func missing body region"))?;
     let blocks = region.blocks(db);
     let block = blocks
         .first()
-        .ok_or_else(|| CompilationError::invalid_module("func.func has no entry block"))?;
+        .ok_or_else(|| CompilationError::invalid_module("wasm.func has no entry block"))?;
 
     let params = func_def.ty.params(db);
     if params.len() != block.args(db).len() {
