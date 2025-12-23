@@ -2,8 +2,8 @@
 
 use tree_sitter::Node;
 use trunk_ir::{
-    Attribute, Block, BlockBuilder, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
-    Type, Value,
+    Attribute, Block, BlockBuilder, DialectOp, DialectType, IdVec, Operation, QualifiedName,
+    Region, Symbol, Type, Value,
     dialect::{ability, adt, arith, case, core, list, pat, src},
     idvec,
 };
@@ -113,17 +113,11 @@ pub fn lower_expr<'db>(
         }
         "path_expression" => {
             let mut cursor = node.walk();
-            let segments: Vec<Symbol> = node
+            let path = node
                 .named_children(&mut cursor)
                 .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
                 .map(|n| Symbol::from(node_text(&n, &ctx.source)))
-                .collect();
-
-            if segments.is_empty() {
-                return None;
-            }
-
-            let path = QualifiedName::new(segments)?;
+                .collect::<Option<_>>()?;
             let op = block.op(src::path(ctx.db, location, infer_ty, path));
             Some(op.result(ctx.db))
         }
@@ -364,15 +358,11 @@ fn lower_call_expr<'db>(
         "identifier" => sym_ref(&node_text(&func_node, &ctx.source)),
         "path_expression" => {
             let mut cursor = func_node.walk();
-            let segments: Vec<Symbol> = func_node
+            func_node
                 .named_children(&mut cursor)
                 .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
                 .map(|n| node_text(&n, &ctx.source).into())
-                .collect();
-            if segments.is_empty() {
-                return None;
-            }
-            QualifiedName::new(segments)?
+                .collect::<Option<_>>()?
         }
         _ => return None,
     };
@@ -398,15 +388,11 @@ fn lower_constructor_expr<'db>(
         "type_identifier" => sym_ref(&node_text(&ctor_node, &ctx.source)),
         "path_expression" => {
             let mut cursor = ctor_node.walk();
-            let segments: Vec<Symbol> = ctor_node
+            ctor_node
                 .named_children(&mut cursor)
                 .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
                 .map(|n| node_text(&n, &ctx.source).into())
-                .collect();
-            if segments.is_empty() {
-                return None;
-            }
-            QualifiedName::new(segments)?
+                .collect::<Option<_>>()?
         }
         _ => return None,
     };
@@ -1264,35 +1250,22 @@ fn parse_operation_path<'db>(
     ctx: &CstLoweringCtx<'db>,
     node: Node,
 ) -> (Option<QualifiedName>, Symbol) {
-    let mut path_parts: Vec<Symbol> = Vec::new();
     let mut cursor = node.walk();
 
     // Collect all path components
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        if child.kind() == "identifier" || child.kind() == "type_identifier" {
-            path_parts.push(node_text(&child, &ctx.source).into());
-        }
-    }
+    let path = node
+        .named_children(&mut cursor)
+        .filter_map(|child| {
+            if is_comment(child.kind()) {
+                return None;
+            }
+            (child.kind() == "identifier" || child.kind() == "type_identifier")
+                .then(|| Symbol::from_dynamic(&node_text(&child, &ctx.source)))
+        })
+        .collect::<Option<QualifiedName>>()
+        .unwrap_or_else(|| sym_ref("unknown"));
 
-    // If it's a single identifier, treat it as ability::op where ability is inferred
-    // Otherwise, the last part is the operation name, rest is the ability path
-    if path_parts.len() <= 1 {
-        let op_name = path_parts
-            .first()
-            .copied()
-            .unwrap_or_else(|| Symbol::new("unknown"));
-        (
-            None, // Empty ability ref (to be inferred)
-            op_name,
-        )
-    } else {
-        let op_name = path_parts.pop().unwrap();
-        let ability_ref = QualifiedName::new(path_parts);
-        (ability_ref, op_name)
-    }
+    (path.parent(), path.name())
 }
 
 // =============================================================================

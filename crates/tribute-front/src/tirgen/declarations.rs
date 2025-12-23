@@ -108,16 +108,13 @@ fn collect_use_imports<'db>(
 
             if head == "self" && !base.is_empty() {
                 out.push(UseImport {
-                    path: QualifiedName::new(base.iter().copied())
+                    path: QualifiedName::try_from(base.clone())
                         .expect("base is non-empty"),
                     alias,
                 });
             } else {
-                let mut path = base.clone();
-                path.push(head);
                 out.push(UseImport {
-                    path: QualifiedName::new(path)
-                        .expect("path has at least one element"),
+                    path: QualifiedName::new(&base[..], head),
                     alias
                 });
             }

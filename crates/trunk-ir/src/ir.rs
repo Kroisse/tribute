@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 use lasso::{Rodeo, Spur};
 use parking_lot::RwLock;
 
-use crate::Location;
+use crate::{Location, SymbolVec};
 use crate::{Attribute, IdVec, Type};
 
 // ============================================================================
@@ -151,25 +151,22 @@ impl std::fmt::Display for Symbol {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct QualifiedName {
     /// Parent path segments (can be empty for simple names).
-    /// Uses SmallVec<[Symbol; 4]> to inline up to 4 parent segments.
-    parent: SmallVec<[Symbol; 4]>,
+    /// Uses SymbolVec to inline up to 4 parent segments.
+    parent: SymbolVec,
     /// The final name segment (guaranteed to exist).
     name: Symbol,
 }
 
 impl QualifiedName {
-    /// Create a new qualified name from an iterator of symbols.
-    /// Returns `None` if the iterator is empty.
-    pub fn new(segments: impl IntoIterator<Item = Symbol>) -> Option<Self> {
-        let mut parent = SmallVec::from_iter(segments);
-        let name = parent.pop()?;
-        Some(Self { parent, name })
+    /// Create a new qualified name with the given parent path and name.
+    pub fn new(parent: impl Into<SymbolVec>, name: Symbol) -> Self {
+        Self { parent: parent.into(), name }
     }
 
     /// Create a qualified name from string segments.
     /// Returns `None` if the iterator is empty.
     pub fn from_strs(segments: impl IntoIterator<Item = &'static str>) -> Option<Self> {
-        Self::new(segments.into_iter().map(Symbol::new))
+        segments.into_iter().map(Symbol::new).collect()
     }
 
     /// Create a simple (single-segment) qualified name.
@@ -188,9 +185,15 @@ impl QualifiedName {
         result
     }
 
-    /// Get the parent path (all segments except the last).
-    pub fn parent(&self) -> &[Symbol] {
+    /// Get the parent path as a slice of symbols.
+    pub fn as_parent_slice(&self) -> &[Symbol] {
         &self.parent
+    }
+
+    /// Get the parent as a QualifiedName, if it exists.
+    /// Returns `None` for simple (single-segment) names.
+    pub fn parent(&self) -> Option<QualifiedName> {
+        QualifiedName::try_from(&self.parent[..]).ok()
     }
 
     /// Get the last segment (the simple name).
@@ -241,12 +244,9 @@ impl QualifiedName {
         }
 
         // Extract remaining segments: parent[base_len..] + name
-        QualifiedName::new(
-            self.parent[base_len..]
-                .iter()
-                .copied()
-                .chain(std::iter::once(self.name)),
-        )
+        Some(QualifiedName::new(
+            &self.parent[base_len..],self.name,
+        ))
     }
 
     /// Check if this path starts with the given base path.
@@ -275,6 +275,25 @@ impl QualifiedName {
     pub fn len(&self) -> usize {
         self.parent.len() + 1
     }
+
+    /// Returns an iterator over all segments (parent + name).
+    pub fn iter(&self) -> <&Self as IntoIterator>::IntoIter {
+        self.into_iter()
+    }
+
+    /// Join this qualified name with another, creating a new qualified name.
+    ///
+    /// # Example
+    /// ```
+    /// # use trunk_ir::ir::{QualifiedName, Symbol};
+    /// let base = QualifiedName::from_strs(["std", "io"]).unwrap();
+    /// let suffix = QualifiedName::from_strs(["Reader", "new"]).unwrap();
+    /// let full = base.join(&suffix);
+    /// assert_eq!(full.to_string(), "std::io::Reader::new");
+    /// ```
+    pub fn join(&self, other: &QualifiedName) -> QualifiedName {
+        QualifiedName::new(self.iter().chain(other.parent.iter().copied()).collect::<SymbolVec>(), other.name)
+    }
 }
 
 impl std::fmt::Display for QualifiedName {
@@ -292,9 +311,87 @@ impl std::fmt::Display for QualifiedName {
     }
 }
 
+impl IntoIterator for QualifiedName {
+    type Item = Symbol;
+    type IntoIter = std::iter::Chain<
+        smallvec::IntoIter<[Symbol; 4]>,
+        std::iter::Once<Symbol>,
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.parent.into_iter().chain(std::iter::once(self.name))
+    }
+}
+
+impl<'a> IntoIterator for &'a QualifiedName {
+    type Item = Symbol;
+    type IntoIter = std::iter::Chain<
+        std::iter::Copied<std::slice::Iter<'a, Symbol>>,
+        std::iter::Once<Symbol>,
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.parent.iter().copied().chain(std::iter::once(self.name))
+    }
+}
+
+impl std::iter::Extend<Symbol> for QualifiedName {
+    fn extend<T: IntoIterator<Item = Symbol>>(&mut self, iter: T) {
+        // Move current name to parent
+        self.parent.push(self.name);
+
+        // Extend parent with all symbols from iterator
+        self.parent.extend(iter);
+
+        // Pop the last element as new name (guaranteed non-empty)
+        self.name = self.parent.pop().expect("extend maintains non-empty invariant");
+
+        // Shrink to fit to avoid wasting memory
+        self.parent.shrink_to_fit();
+    }
+}
+
+impl std::iter::FromIterator<Symbol> for Option<QualifiedName> {
+    fn from_iter<T: IntoIterator<Item = Symbol>>(iter: T) -> Self {
+        let mut parent = SymbolVec::from_iter(iter);
+        let name = parent.pop()?;
+        parent.shrink_to_fit();
+        Some(QualifiedName::new(parent, name))
+    }
+}
+
 impl From<Symbol> for QualifiedName {
     fn from(symbol: Symbol) -> Self {
         QualifiedName::simple(symbol)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmptyQualifiedNameError;
+
+impl std::fmt::Display for EmptyQualifiedNameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cannot create QualifiedName from empty collection")
+    }
+}
+
+impl std::error::Error for EmptyQualifiedNameError {}
+
+impl<'a> TryFrom<&'a [Symbol]> for QualifiedName {
+    type Error = EmptyQualifiedNameError;
+
+    fn try_from(segments: &'a [Symbol]) -> Result<Self, Self::Error> {
+        let (name, parent) = segments.split_last().ok_or(EmptyQualifiedNameError)?;
+        Ok(QualifiedName::new(SymbolVec::from_slice(parent), *name))
+    }
+}
+
+impl TryFrom<Vec<Symbol>> for QualifiedName {
+    type Error = EmptyQualifiedNameError;
+
+    fn try_from(mut segments: Vec<Symbol>) -> Result<Self, Self::Error> {
+        let name = segments.pop().ok_or(EmptyQualifiedNameError)?;
+        Ok(QualifiedName::new(SmallVec::from_vec(segments), name))
     }
 }
 
@@ -897,10 +994,212 @@ mod tests {
         }
 
         #[test]
+        fn test_extend() {
+            let mut name = QualifiedName::from_strs(["std", "io"]).unwrap();
+            name.extend([Symbol::new("Read"), Symbol::new("read")]);
+            assert_eq!(name.to_string(), "std::io::Read::read");
+
+            // Extending with empty iterator should be a no-op
+            let mut name2 = QualifiedName::simple(Symbol::new("foo"));
+            name2.extend(std::iter::empty());
+            assert_eq!(name2.to_string(), "foo");
+        }
+
+        #[test]
+        fn test_join() {
+            let base = QualifiedName::from_strs(["std", "io"]).unwrap();
+            let suffix = QualifiedName::from_strs(["Read", "read"]).unwrap();
+            let joined = base.join(&suffix);
+            assert_eq!(joined.to_string(), "std::io::Read::read");
+        }
+
+        #[test]
+        fn test_try_from_vec() {
+            let symbols = vec![Symbol::new("std"), Symbol::new("io"), Symbol::new("Read")];
+            let name = QualifiedName::try_from(symbols).unwrap();
+            assert_eq!(name.to_string(), "std::io::Read");
+        }
+
+        #[test]
+        fn test_try_from_slice() {
+            let symbols = [Symbol::new("std"), Symbol::new("io")];
+            let name = QualifiedName::try_from(&symbols[..]).unwrap();
+            assert_eq!(name.to_string(), "std::io");
+        }
+
+        #[test]
+        fn test_try_from_empty_vec_fails() {
+            let result = QualifiedName::try_from(Vec::<Symbol>::new());
+            assert_eq!(result, Err(EmptyQualifiedNameError));
+        }
+
+        #[test]
+        fn test_try_from_empty_slice_fails() {
+            let result = QualifiedName::try_from(&[][..]);
+            assert_eq!(result, Err(EmptyQualifiedNameError));
+        }
+
+        #[test]
+        fn test_from_iterator_for_option() {
+            let symbols = vec![Symbol::new("std"), Symbol::new("io"), Symbol::new("Read")];
+            let qn: Option<QualifiedName> = symbols.into_iter().collect();
+            assert_eq!(qn.unwrap().to_string(), "std::io::Read");
+
+            // Empty iterator produces None
+            let empty: Option<QualifiedName> = std::iter::empty().collect();
+            assert!(empty.is_none());
+        }
+
+        #[test]
         fn test_from_str() {
             let name: QualifiedName = "bar".into();
             assert!(name.is_simple());
             assert_eq!(name.name(), "bar");
+        }
+
+        // Property-based tests
+        #[cfg(test)]
+        mod proptests {
+            use super::*;
+            use proptest::prelude::*;
+
+            // Generate arbitrary valid Symbol identifiers
+            fn arb_symbol() -> impl Strategy<Value = Symbol> {
+                "[a-z][a-z0-9_]{0,15}"
+                    .prop_map(|s| Symbol::from_dynamic(&s))
+            }
+
+            // Generate arbitrary QualifiedName with specified number of segments
+            fn arb_qualified_name_with_len(len: impl Into<prop::collection::SizeRange>) -> impl Strategy<Value = QualifiedName> {
+                prop::collection::vec(arb_symbol(), len)
+                    .prop_map(|segments| {
+                        QualifiedName::try_from(segments)
+                            .expect("non-empty by construction")
+                    })
+            }
+
+            // Generate arbitrary QualifiedName with 1-8 segments
+            fn arb_qualified_name() -> impl Strategy<Value = QualifiedName> {
+                arb_qualified_name_with_len(1..=8)
+            }
+
+            proptest! {
+                #[test]
+                fn prop_never_empty(qn in arb_qualified_name()) {
+                    prop_assert!(qn.len() >= 1);
+                    prop_assert!(!qn.segments().is_empty());
+                }
+
+                #[test]
+                fn prop_name_equals_last_segment(qn in arb_qualified_name()) {
+                    let segments = qn.segments();
+                    prop_assert_eq!(qn.name(), *segments.last().unwrap());
+                }
+
+                #[test]
+                fn prop_segments_roundtrip(qn in arb_qualified_name()) {
+                    let segments = qn.segments();
+                    let reconstructed = segments.into_iter().collect();
+                    prop_assert_eq!(Some(qn), reconstructed);
+                }
+
+                #[test]
+                fn prop_simple_iff_one_segment(qn in arb_qualified_name()) {
+                    prop_assert_eq!(qn.is_simple(), qn.len() == 1);
+                }
+
+                #[test]
+                fn prop_parent_length(qn in arb_qualified_name()) {
+                    prop_assert_eq!(qn.as_parent_slice().len(), qn.len() - 1);
+                }
+
+                #[test]
+                fn prop_display_contains_colons(qn in arb_qualified_name()) {
+                    let display = qn.to_string();
+                    let colon_count = display.matches("::").count();
+                    prop_assert_eq!(colon_count, qn.len() - 1);
+                }
+
+                #[test]
+                fn prop_starts_with_reflexive(qn in arb_qualified_name()) {
+                    prop_assert!(qn.starts_with(&qn));
+                }
+
+                #[test]
+                fn prop_starts_with_transitive(
+                    c in arb_qualified_name(),
+                    b_extra in arb_qualified_name(),
+                    a_extra in arb_qualified_name(),
+                ) {
+                    // Build a prefix chain: c ⊆ b ⊆ a
+                    let b = c.join(&b_extra);
+                    let a = b.join(&a_extra);
+
+                    prop_assert!(a.starts_with(&b));
+                    prop_assert!(b.starts_with(&c));
+                    prop_assert!(a.starts_with(&c));
+                }
+
+                #[test]
+                fn prop_relative_some_with_proper_prefix(
+                    (a, k) in arb_qualified_name_with_len(2..=8)
+                        .prop_flat_map(|a| {
+                            let a_len = a.len();
+                            (Just(a), 1..a_len)
+                        })
+                ) {
+                    // b is a proper prefix of a (k < a.len())
+                    let b = a.iter().take(k).collect::<Option<_>>().unwrap();
+                    let rel = a.relative(&b);
+                    prop_assert!(rel.is_some());
+                    prop_assert_eq!(rel.unwrap().len(), a.len() - b.len());
+                }
+
+                #[test]
+                fn prop_relative_none_if_equal_or_same_length(
+                    (a, b) in arb_qualified_name()
+                        .prop_flat_map(|a| {
+                            let a_len = a.len();
+                            let a_clone1 = a.clone();
+                            let a_clone2 = a.clone();
+                            prop_oneof![
+                                // equal
+                                1 => Just((a_clone1.clone(), a_clone1)),
+                                // same length but not equal
+                                9 => arb_qualified_name_with_len(a_len)
+                                    .prop_map(move |b| (a_clone2.clone(), b))
+                            ]
+                        })
+                ) {
+                    // Either a == b, or a.len() == b.len() but a != b
+                    prop_assert_eq!(a.len(), b.len());
+                    prop_assert!(a.relative(&b).is_none());
+                }
+
+                #[test]
+                fn prop_relative_implies_starts_with(
+                    base in arb_qualified_name(),
+                    extra in arb_qualified_name(),
+                ) {
+                    let full = base.join(&extra);
+
+                    let rel = full.relative(&base);
+                    prop_assert_eq!(rel, Some(extra.clone()));
+                    prop_assert!(full.starts_with(&base));
+                }
+
+                #[test]
+                fn prop_relative_length(
+                    base in arb_qualified_name(),
+                    extra in arb_qualified_name(),
+                ) {
+                    let full = base.join(&extra);
+
+                    let rel = full.relative(&base).unwrap();
+                    prop_assert_eq!(rel.len(), extra.len());
+                    prop_assert_eq!(rel.len(), full.len() - base.len());
+                }
+            }
         }
     }
 }
