@@ -25,7 +25,6 @@ pub use smallvec;
 pub use ir::{Block, BlockBuilder, Operation, QualifiedName, Region, Symbol, Value, ValueDef};
 pub use location::{Location, PathId, Span, Spanned};
 pub use ops::{ConversionError, DialectOp};
-pub use qualified_name::QualifiedName;
 pub use types::{Attribute, Attrs, DialectType, Type};
 
 /// Small vector for values tracked by Salsa framework.
