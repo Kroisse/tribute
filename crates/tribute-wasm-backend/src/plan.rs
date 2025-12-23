@@ -4,11 +4,11 @@
 //! - WASI imports needed
 //! - Memory allocation planning
 //! - Function exports
-//! - Data segments and literal allocations
+//! - Data segments (runtime allocations only; string/bytes consts handled by const_to_wasm)
 
 use std::collections::HashMap;
 
-use trunk_ir::{Type, Value};
+use trunk_ir::Type;
 
 /// WASI import planning.
 ///
@@ -72,26 +72,28 @@ impl<'db> MainExports<'db> {
 
 /// Data segment allocation.
 ///
-/// Manages linear memory data segments (string literals, WASI metadata, etc.)
-/// and computes their offsets in the data section.
+/// Manages linear memory data segments for runtime allocations (WASI metadata, etc.)
+/// String/bytes constants are handled by const_to_wasm pass.
 #[derive(Default)]
-pub(crate) struct DataSegments<'db> {
+pub(crate) struct DataSegments {
     /// Next available offset for allocation.
     next_offset: u32,
     /// Data segments: (offset, bytes) pairs.
     segments: Vec<(u32, Vec<u8>)>,
-    /// Mapping from literal values to (offset, length).
-    literal_data: HashMap<Value<'db>, (u32, u32)>,
     /// Cached iovec structure offsets: (ptr, len) -> offset.
     iovec_offsets: HashMap<(u32, u32), u32>,
     /// Cached nwritten output location.
     nwritten_offset: Option<u32>,
 }
 
-impl<'db> DataSegments<'db> {
-    /// Create a new data segments allocator.
-    pub(crate) fn new() -> Self {
-        Self::default()
+impl DataSegments {
+    /// Create a new data segments allocator starting from a given offset.
+    /// Use this when const analysis has already allocated some data segments.
+    pub(crate) fn with_offset(offset: u32) -> Self {
+        Self {
+            next_offset: offset,
+            ..Default::default()
+        }
     }
 
     /// Get the current end offset (total bytes allocated so far).
@@ -106,16 +108,6 @@ impl<'db> DataSegments<'db> {
         self.segments.push((offset, bytes));
         self.next_offset = offset + len;
         (offset, len)
-    }
-
-    /// Record a literal value and its data segment location.
-    pub(crate) fn record_literal(&mut self, value: Value<'db>, offset: u32, len: u32) {
-        self.literal_data.insert(value, (offset, len));
-    }
-
-    /// Look up a recorded literal's location.
-    pub(crate) fn literal_for(&self, value: Value<'db>) -> Option<(u32, u32)> {
-        self.literal_data.get(&value).copied()
     }
 
     /// Ensure an iovec structure exists and return its offset.

@@ -9,7 +9,9 @@ use crate::plan::{DataSegments, MainExports, MemoryPlan, WasiPlan};
 
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::{adt, func, wasm};
+use trunk_ir::dialect::{func, wasm};
+
+use crate::passes::const_to_wasm::ConstAnalysis;
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::{
     Attribute, Block, DialectType, IdVec, Location, Operation, QualifiedName, Region, Symbol,
@@ -25,8 +27,12 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = crate::passes::func_to_wasm::lower(db, module);
     let module = crate::passes::adt_to_wasm::lower(db, module);
 
+    // Const analysis and lowering (string/bytes constants to data segments)
+    let const_analysis = crate::passes::const_to_wasm::analyze_consts(db, module);
+    let module = crate::passes::const_to_wasm::lower(db, module, const_analysis);
+
     // Phase 2: Remaining lowering via WasmLowerer
-    let mut lowerer = WasmLowerer::new(db);
+    let mut lowerer = WasmLowerer::new(db, const_analysis);
     let lowered = lowerer.lower_module(module);
 
     // Debug: Verify all operations are now in wasm dialect
@@ -76,19 +82,23 @@ struct WasmLowerer<'db> {
     db: &'db dyn salsa::Database,
     value_map: HashMap<Value<'db>, Value<'db>>,
     module_location: Option<Location<'db>>,
-    data_segments: DataSegments<'db>,
+    const_analysis: ConstAnalysis<'db>,
+    data_segments: DataSegments,
     memory_plan: MemoryPlan,
     wasi_plan: WasiPlan,
     main_exports: MainExports<'db>,
 }
 
 impl<'db> WasmLowerer<'db> {
-    fn new(db: &'db dyn salsa::Database) -> Self {
+    fn new(db: &'db dyn salsa::Database, const_analysis: ConstAnalysis<'db>) -> Self {
+        // Start data segment allocation after const analysis data
+        let data_segments = DataSegments::with_offset(const_analysis.total_size(db));
         Self {
             db,
             value_map: HashMap::new(),
             module_location: None,
-            data_segments: DataSegments::new(),
+            const_analysis,
+            data_segments,
             memory_plan: MemoryPlan::new(),
             wasi_plan: WasiPlan::new(),
             main_exports: MainExports::new(),
@@ -168,10 +178,16 @@ impl<'db> WasmLowerer<'db> {
             ));
         }
 
+        // Check if const analysis has data that requires memory
+        let const_size = self.const_analysis.total_size(self.db);
+        if const_size > 0 {
+            self.memory_plan.needs_memory = true;
+        }
+
         if self.memory_plan.needs_memory && !self.memory_plan.has_memory {
-            let required_pages = self
-                .memory_plan
-                .required_pages(self.data_segments.end_offset());
+            // Calculate total data size: const analysis data + runtime data segments
+            let total_data_size = const_size + self.data_segments.end_offset();
+            let required_pages = self.memory_plan.required_pages(total_data_size);
             builder.op(wasm::memory(
                 self.db,
                 module_location,
@@ -186,11 +202,23 @@ impl<'db> WasmLowerer<'db> {
 
     fn module_data_ops(&mut self, builder: &mut BlockBuilder<'db>, location: Location<'db>) {
         let module_location = self.module_location.unwrap_or(location);
+
+        // Emit data segments from const analysis (string/bytes constants)
+        for (content, offset, _len) in self.const_analysis.allocations(self.db).iter() {
+            builder.op(wasm::data(
+                self.db,
+                module_location,
+                Attribute::IntBits(u64::from(*offset)),
+                Attribute::Bytes(content.clone()),
+            ));
+        }
+
+        // Emit data segments from runtime allocations (iovec, nwritten, etc.)
         for (offset, bytes) in self.data_segments.take_segments() {
             builder.op(wasm::data(
                 self.db,
                 module_location,
-                Attribute::IntBits(offset as u64),
+                Attribute::IntBits(u64::from(offset)),
                 Attribute::Bytes(bytes),
             ));
         }
@@ -289,17 +317,6 @@ impl<'db> WasmLowerer<'db> {
             }
         }
 
-        // Handle adt.string_const and adt.bytes_const (require data segment allocation)
-        if dialect == adt::DIALECT_NAME() {
-            let location = op.location(self.db);
-            if name == adt::STRING_CONST() {
-                return self.lower_string_const(builder, op, location);
-            }
-            if name == adt::BYTES_CONST() {
-                return self.lower_bytes_const(builder, op, location);
-            }
-        }
-
         // Debug warning for unexpected dialects in function bodies
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
@@ -339,46 +356,27 @@ impl<'db> WasmLowerer<'db> {
         builder.op(new_op);
     }
 
-    fn lower_string_const(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-    ) {
-        let attrs = op.attributes(self.db);
-        let Some(Attribute::String(value)) = attrs.get(&Symbol::new("value")) else {
-            builder.op(op);
-            return;
+    /// Try to get literal pointer and length from a value's defining operation.
+    /// Returns (ptr_offset, length) if the value is from a wasm.i32_const with literal_len.
+    fn get_literal_info(&self, value: Value<'db>) -> Option<(u32, u32)> {
+        let def = value.def(self.db);
+        let trunk_ir::ValueDef::OpResult(op) = def else {
+            return None;
         };
-        let (offset, len) = self
-            .data_segments
-            .allocate_bytes(value.clone().into_bytes());
-        self.memory_plan.needs_memory = true;
-        let new_op = self.build_pointer_const(location, op.results(self.db).clone(), offset);
-        let new_value = new_op.result(self.db, 0);
-        self.data_segments.record_literal(new_value, offset, len);
-        self.map_results(&op, &new_op);
-        builder.op(new_op);
-    }
-
-    fn lower_bytes_const(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-    ) {
+        if op.dialect(self.db) != wasm::DIALECT_NAME() {
+            return None;
+        }
+        if op.name(self.db) != Symbol::new("i32_const") {
+            return None;
+        }
         let attrs = op.attributes(self.db);
-        let Some(Attribute::Bytes(value)) = attrs.get(&Symbol::new("value")) else {
-            builder.op(op);
-            return;
+        let Attribute::IntBits(ptr) = attrs.get(&Symbol::new("value"))? else {
+            return None;
         };
-        let (offset, len) = self.data_segments.allocate_bytes(value.clone());
-        self.memory_plan.needs_memory = true;
-        let new_op = self.build_pointer_const(location, op.results(self.db).clone(), offset);
-        let new_value = new_op.result(self.db, 0);
-        self.data_segments.record_literal(new_value, offset, len);
-        self.map_results(&op, &new_op);
-        builder.op(new_op);
+        let Attribute::IntBits(len) = attrs.get(&Symbol::new("literal_len"))? else {
+            return None;
+        };
+        Some((*ptr as u32, *len as u32))
     }
 
     fn lower_intrinsic_call(
@@ -397,7 +395,7 @@ impl<'db> WasmLowerer<'db> {
         if (results.is_empty() || returns_unit)
             && self.is_print_line_call(op)
             && let Some(arg) = operands.first().copied()
-            && let Some((ptr, len)) = self.data_segments.literal_for(arg)
+            && let Some((ptr, len)) = self.get_literal_info(arg)
         {
             self.wasi_plan.needs_fd_write = true;
             self.memory_plan.needs_memory = true;
@@ -477,18 +475,6 @@ impl<'db> WasmLowerer<'db> {
         Operation::of_name(self.db, location, "wasm.i32_const")
             .attr("value", Attribute::IntBits(u64::from(value)))
             .results(idvec![result_ty])
-            .build()
-    }
-
-    fn build_pointer_const(
-        &self,
-        location: Location<'db>,
-        results: IdVec<Type<'db>>,
-        offset: u32,
-    ) -> Operation<'db> {
-        Operation::of_name(self.db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(offset as u64))
-            .results(results)
             .build()
     }
 
