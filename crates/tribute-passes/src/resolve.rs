@@ -545,10 +545,6 @@ impl<'db> Resolver<'db> {
     }
 
     fn binding_from_path(&self, path: &QualifiedName) -> Option<Binding<'db>> {
-        if path.is_empty() {
-            return None;
-        }
-
         if path.is_simple() {
             return self.env.lookup(path.name()).cloned();
         }
@@ -570,10 +566,6 @@ impl<'db> Resolver<'db> {
         let Some(Attribute::QualifiedName(path)) = attrs.get(&ATTR_PATH()) else {
             return;
         };
-
-        if path.is_empty() {
-            return;
-        }
 
         let local_name = if let Some(Attribute::Symbol(alias)) = attrs.get(&ATTR_ALIAS()) {
             *alias
@@ -1158,10 +1150,6 @@ impl<'db> Resolver<'db> {
             return None;
         };
 
-        if path.is_empty() {
-            return None;
-        }
-
         let location = op.location(self.db);
         let result_ty = op.results(self.db).first().copied()?;
         let args: Vec<Value<'db>> = op.operands(self.db).iter().copied().collect();
@@ -1220,10 +1208,6 @@ impl<'db> Resolver<'db> {
         let Attribute::QualifiedName(path) = attrs.get(&ATTR_NAME())? else {
             return None;
         };
-
-        if path.is_empty() {
-            return None;
-        }
 
         let location = op.location(self.db);
         let args: Vec<Value<'db>> = op.operands(self.db).iter().copied().collect();
@@ -1403,7 +1387,7 @@ mod tests {
         let helpers = core::Module::build(db, location, Symbol::new("helpers"), |inner| {
             inner.op(simple_func(db, location, "double"));
         });
-        let path = QualifiedName::from_strs(["helpers", "double"]);
+        let path = QualifiedName::from_strs(["helpers", "double"]).unwrap();
         let alias_sym = Symbol::from_dynamic(alias.unwrap_or(""));
 
         let name = alias.unwrap_or("double");

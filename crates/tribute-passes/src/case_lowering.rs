@@ -236,9 +236,6 @@ impl<'db> CaseLowerer<'db> {
                     Attribute::QualifiedName(path) => path,
                     _ => return Some((ArmPattern::Wildcard, false)),
                 };
-                if variant_path.is_empty() {
-                    return Some((ArmPattern::Wildcard, false));
-                }
                 let name = variant_path.name();
                 if !self.variant_tags.contains_key(&name) {
                     return Some((ArmPattern::Wildcard, false));

@@ -123,7 +123,7 @@ pub fn lower_expr<'db>(
                 return None;
             }
 
-            let path = QualifiedName::new(segments);
+            let path = QualifiedName::new(segments)?;
             let op = block.op(src::path(ctx.db, location, infer_ty, path));
             Some(op.result(ctx.db))
         }
@@ -372,7 +372,7 @@ fn lower_call_expr<'db>(
             if segments.is_empty() {
                 return None;
             }
-            QualifiedName::new(segments)
+            QualifiedName::new(segments)?
         }
         _ => return None,
     };
@@ -406,7 +406,7 @@ fn lower_constructor_expr<'db>(
             if segments.is_empty() {
                 return None;
             }
-            QualifiedName::new(segments)
+            QualifiedName::new(segments)?
         }
         _ => return None,
     };
@@ -1236,6 +1236,9 @@ fn handler_pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Regi
         // Continuation name (empty Symbol for wildcard/discard)
         let cont_symbol = continuation_name.unwrap_or_else(|| Symbol::new("_"));
 
+        // If ability_ref is None, use a placeholder for inference
+        let ability_ref = ability_ref.unwrap_or_else(|| QualifiedName::simple(Symbol::new("?")));
+
         pat::helpers::handler_suspend_region(
             ctx.db,
             location,
@@ -1256,7 +1259,11 @@ fn handler_pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Regi
 }
 
 /// Parse an operation path like `State::get` into (ability_ref, op_name).
-fn parse_operation_path<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> (QualifiedName, Symbol) {
+/// Returns (None, op_name) if the ability should be inferred.
+fn parse_operation_path<'db>(
+    ctx: &CstLoweringCtx<'db>,
+    node: Node,
+) -> (Option<QualifiedName>, Symbol) {
     let mut path_parts: Vec<Symbol> = Vec::new();
     let mut cursor = node.walk();
 
@@ -1278,7 +1285,7 @@ fn parse_operation_path<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> (Qualifie
             .copied()
             .unwrap_or_else(|| Symbol::new("unknown"));
         (
-            QualifiedName::new(vec![]), // Empty ability ref (to be inferred)
+            None, // Empty ability ref (to be inferred)
             op_name,
         )
     } else {

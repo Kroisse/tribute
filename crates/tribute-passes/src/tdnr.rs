@@ -245,10 +245,6 @@ impl<'db> TdnrResolver<'db> {
             return None;
         };
 
-        if qual_name.is_empty() {
-            return None;
-        }
-
         // Single-segment name means it's a method call needing TDNR
         if !qual_name.is_simple() {
             return None; // Already qualified, shouldn't be here

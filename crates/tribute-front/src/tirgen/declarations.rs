@@ -43,10 +43,6 @@ pub fn lower_use_decl<'db>(
     collect_use_imports(ctx, tree_node, &mut Vec::new(), &mut imports);
 
     for import in imports {
-        if import.path.is_empty() {
-            continue;
-        }
-
         let alias_sym = import.alias.unwrap_or_else(|| sym(""));
 
         block.op(src::r#use(ctx.db, location, import.path, alias_sym, is_pub));
@@ -112,14 +108,16 @@ fn collect_use_imports<'db>(
 
             if head == "self" && !base.is_empty() {
                 out.push(UseImport {
-                    path: QualifiedName::new(base.iter().copied()),
+                    path: QualifiedName::new(base.iter().copied())
+                        .expect("base is non-empty"),
                     alias,
                 });
             } else {
                 let mut path = base.clone();
                 path.push(head);
                 out.push(UseImport {
-                    path: QualifiedName::new(path),
+                    path: QualifiedName::new(path)
+                        .expect("path has at least one element"),
                     alias
                 });
             }

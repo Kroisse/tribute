@@ -659,9 +659,6 @@ fn extract_export_func<'db>(
     let attrs = op.attributes(db);
     let name = attr_string(attrs, ATTR_NAME())?;
     let func = attr_symbol_ref_attr(attrs, ATTR_FUNC())?;
-    if func.is_empty() {
-        return Err(CompilationError::invalid_module("export func missing symbol"));
-    }
     let sym = func.name();
     Ok(ExportDef {
         name,
@@ -1241,9 +1238,6 @@ fn set_result_local<'db>(
 }
 
 fn resolve_callee(path: &QualifiedName, func_indices: &HashMap<Symbol, u32>) -> CompilationResult<u32> {
-    if path.is_empty() {
-        return Err(CompilationError::invalid_module("callee path is empty"));
-    }
     let name = path.name();
     func_indices
         .get(&name)
