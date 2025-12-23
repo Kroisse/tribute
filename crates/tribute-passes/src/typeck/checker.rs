@@ -19,11 +19,6 @@ use trunk_ir::{
     dialect::{ability, adt, arith, case, core, func, list, pat, src, ty},
 };
 
-/// Get the "unknown" symbol - used as fallback in error cases.
-fn unknown_sym() -> Symbol {
-    Symbol::new("unknown")
-}
-
 use super::constraint::ConstraintSet;
 use super::effect_row::{AbilityRef, EffectRow, RowVar};
 use super::solver::{SolveResult, TypeSolver};
@@ -680,9 +675,9 @@ impl<'db> TypeChecker<'db> {
                 {
                     // Extract ability reference from attributes
                     let attrs = op.attributes(self.db);
-                    if let Some(Attribute::SymbolRef(ability_path)) = attrs.get(&ability_ref_sym) {
+                    if let Some(Attribute::QualifiedName(ability_path)) = attrs.get(&ability_ref_sym) {
                         // Extract ability name from path
-                        let ability_name = ability_path.last().copied().unwrap_or(unknown_sym());
+                        let ability_name = ability_path.name();
 
                         let ability = AbilityRef::simple(ability_name);
                         if !handled.contains(&ability) {
@@ -707,13 +702,13 @@ impl<'db> TypeChecker<'db> {
             .unwrap_or_else(|| self.fresh_type_var());
 
         // Get the ability reference from attributes
-        // attr: ability_ref: SymbolRef (path to ability)
+        // attr: ability_ref: QualifiedName (path to ability)
         // attr: op: Symbol (operation name)
-        if let Some(Attribute::SymbolRef(ability_path)) =
+        if let Some(Attribute::QualifiedName(ability_path)) =
             op.attributes(self.db).get(&Symbol::new("ability_ref"))
         {
             // Extract ability name from the path (last component)
-            let ability_name = ability_path.last().copied().unwrap_or(unknown_sym());
+            let ability_name = ability_path.name();
 
             // Create ability reference (with no type params for now)
             // TODO: Extract type parameters from the ability definition

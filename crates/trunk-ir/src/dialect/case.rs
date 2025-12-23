@@ -31,8 +31,6 @@
 //! }
 //! ```
 
-use smallvec::smallvec;
-
 use crate::{Location, Symbol, dialect};
 
 dialect! {
@@ -161,7 +159,7 @@ impl<'db> Arm<'db> {
         variant_name: Symbol,
         body: crate::Region<'db>,
     ) -> Self {
-        let variant_path = smallvec![variant_name];
+        let variant_path = crate::QualifiedName::simple(variant_name);
         let fields = pattern::empty_region(db, location);
         let pattern_region = pattern::variant_region(db, location, variant_path, fields);
         arm(db, location, pattern_region, body)

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use trunk_ir::dialect::core;
 use trunk_ir::{
-    Attribute, Attrs, DialectType, IdVec, Operation, Region, Symbol, SymbolVec, Type, Value,
+    Attribute, Attrs, DialectType, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value,
     ValueDef,
 };
 use wasm_encoder::{
@@ -659,13 +659,11 @@ fn extract_export_func<'db>(
     let attrs = op.attributes(db);
     let name = attr_string(attrs, ATTR_NAME())?;
     let func = attr_symbol_ref_attr(attrs, ATTR_FUNC())?;
-    let sym = func
-        .last()
-        .ok_or_else(|| CompilationError::invalid_module("export func missing symbol"))?;
+    let sym = func.name();
     Ok(ExportDef {
         name,
         kind: ExportKind::Func,
-        target: ExportTarget::Func(*sym),
+        target: ExportTarget::Func(sym),
     })
 }
 
@@ -1239,12 +1237,10 @@ fn set_result_local<'db>(
     Ok(())
 }
 
-fn resolve_callee(path: &SymbolVec, func_indices: &HashMap<Symbol, u32>) -> CompilationResult<u32> {
-    let name = path
-        .last()
-        .ok_or_else(|| CompilationError::invalid_module("callee path is empty"))?;
+fn resolve_callee(path: &QualifiedName, func_indices: &HashMap<Symbol, u32>) -> CompilationResult<u32> {
+    let name = path.name();
     func_indices
-        .get(name)
+        .get(&name)
         .copied()
         .ok_or_else(|| CompilationError::function_not_found(&name.to_string()))
 }
@@ -1373,9 +1369,9 @@ fn attr_symbol_ref<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
     key: Symbol,
-) -> CompilationResult<&'db SymbolVec> {
+) -> CompilationResult<&'db QualifiedName> {
     match op.attributes(db).get(&key) {
-        Some(Attribute::SymbolRef(path)) => Ok(path),
+        Some(Attribute::QualifiedName(path)) => Ok(path),
         _ => Err(CompilationError::from(
             errors::CompilationErrorKind::InvalidAttribute("callee"),
         )),
@@ -1385,9 +1381,9 @@ fn attr_symbol_ref<'db>(
 fn attr_symbol_ref_attr<'db>(
     attrs: &'db Attrs<'db>,
     key: Symbol,
-) -> CompilationResult<&'db SymbolVec> {
+) -> CompilationResult<&'db QualifiedName> {
     match attrs.get(&key) {
-        Some(Attribute::SymbolRef(path)) => Ok(path),
+        Some(Attribute::QualifiedName(path)) => Ok(path),
         _ => Err(CompilationError::from(
             errors::CompilationErrorKind::MissingAttribute("symbol_ref"),
         )),
@@ -1462,9 +1458,8 @@ mod tests {
     use trunk_ir::dialect::core;
     use trunk_ir::dialect::func;
     use trunk_ir::dialect::wasm;
-    use trunk_ir::smallvec::smallvec;
     use trunk_ir::{
-        Attribute, BlockBuilder, DialectType, Location, PathId, Region, Span, SymbolVec, idvec,
+        Attribute, BlockBuilder, DialectType, Location, PathId, Region, Span, idvec,
     };
 
     #[salsa::tracked]
@@ -1556,15 +1551,15 @@ mod tests {
         ));
         let right =
             main_block_builder.op(wasm::i32_const(db, location, i32_ty, Attribute::IntBits(2)));
-        let callee: SymbolVec = smallvec![Symbol::new("add")];
+        let callee = QualifiedName::simple(Symbol::new("add"));
         let call = main_block_builder.op(wasm::call(
             db,
             location,
             vec![left.result(db), right.result(db)],
-            i32_ty,
-            Attribute::SymbolRef(callee),
+            vec![i32_ty],
+            Attribute::QualifiedName(callee),
         ));
-        main_block_builder.op(wasm::r#return(db, location, vec![call.result(db)]));
+        main_block_builder.op(wasm::r#return(db, location, call.result(db)));
         let main_block = main_block_builder.build();
         let main_body = Region::new(db, location, idvec![main_block]);
         let main_ty = core::Func::new(db, idvec![], i32_ty).as_type();
@@ -2109,7 +2104,7 @@ mod tests {
         let c_iovec_ptr = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0));
         let c_iovec_len = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1));
         let c_nwritten = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(16));
-        let callee: SymbolVec = smallvec![Symbol::new("fd_write")];
+        let callee = QualifiedName::simple(Symbol::new("fd_write"));
         let call = wasm::call(
             db,
             location,
@@ -2119,10 +2114,10 @@ mod tests {
                 c_iovec_len.result(db),
                 c_nwritten.result(db),
             ],
-            i32_ty,
-            Attribute::SymbolRef(callee),
+            vec![i32_ty],
+            Attribute::QualifiedName(callee),
         );
-        let drop = wasm::drop(db, location, call.result(db));
+        let drop = wasm::drop(db, location, call.result(db)[0]);
         let ret = wasm::r#return(db, location, Vec::new());
 
         let mut start_block_builder = BlockBuilder::new(db, location);
@@ -2142,7 +2137,7 @@ mod tests {
             db,
             location,
             Attribute::String("_start".into()),
-            Attribute::SymbolRef(smallvec![Symbol::new("_start")]),
+            Attribute::QualifiedName(QualifiedName::simple(Symbol::new("_start"))),
         );
 
         let mut top_builder = BlockBuilder::new(db, location);

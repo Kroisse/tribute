@@ -29,7 +29,7 @@ use trunk_ir::dialect::pat;
 use trunk_ir::dialect::src;
 use trunk_ir::dialect::ty;
 use trunk_ir::{
-    Attribute, Attrs, Block, DialectOp, IdVec, Operation, Region, Symbol, SymbolVec, Type, Value,
+    Attribute, Attrs, Block, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value,
     ValueDef,
 };
 
@@ -62,15 +62,15 @@ trunk_ir::symbols! {
 pub enum Binding<'db> {
     /// A function defined in this module or imported.
     Function {
-        /// Fully qualified path (e.g., ["List", "map"])
-        path: SymbolVec,
+        /// Fully qualified path (e.g., "List::map")
+        path: QualifiedName,
         /// Function type
         ty: Type<'db>,
     },
     /// A module/namespace binding (possibly with an associated type).
     Module {
-        /// Fully qualified namespace path (e.g., ["collections", "List"])
-        namespace: SymbolVec,
+        /// Fully qualified namespace path (e.g., "collections::List")
+        namespace: QualifiedName,
         /// Optional type definition for the same name.
         type_def: Option<Type<'db>>,
     },
@@ -110,7 +110,7 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Add a function definition.
-    pub fn add_function(&mut self, name: Symbol, path: SymbolVec, ty: Type<'db>) {
+    pub fn add_function(&mut self, name: Symbol, path: QualifiedName, ty: Type<'db>) {
         self.definitions
             .insert(name, Binding::Function { path, ty });
     }
@@ -206,7 +206,7 @@ fn collect_definition<'db>(
             if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
                 (attrs.get(&ATTR_SYM_NAME()), attrs.get(&ATTR_TYPE()))
             {
-                let path: SymbolVec = vec![*sym].into_iter().collect();
+                let path = QualifiedName::simple(*sym);
                 env.add_function(*sym, path, *ty);
             }
         }
@@ -544,41 +544,33 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    fn binding_from_path(&self, path: &SymbolVec) -> Option<Binding<'db>> {
-        if path.is_empty() {
-            return None;
-        }
-
-        if path.len() == 1 {
-            return self.env.lookup(path[0]).cloned();
+    fn binding_from_path(&self, path: &QualifiedName) -> Option<Binding<'db>> {
+        if path.is_simple() {
+            return self.env.lookup(path.name()).cloned();
         }
 
         // For now, only support single-level namespaces (Type::Constructor)
         // TODO: Support multi-level namespaces
-        let namespace = path[path.len() - 2];
-        let name = *path.last()?;
+        let namespace = *path.as_parent().last()?;
+        let name = path.name();
         self.env.lookup_qualified(namespace, name).cloned()
     }
 
     fn apply_use(&mut self, op: &Operation<'db>) {
         let attrs = op.attributes(self.db);
 
-        let Some(Attribute::SymbolRef(path)) = attrs.get(&ATTR_PATH()) else {
+        let Some(Attribute::QualifiedName(path)) = attrs.get(&ATTR_PATH()) else {
             return;
         };
-
-        if path.is_empty() {
-            return;
-        }
 
         let local_name = if let Some(Attribute::Symbol(alias)) = attrs.get(&ATTR_ALIAS()) {
             *alias
         } else {
-            *path.last().unwrap()
+            path.name()
         };
 
         // Check if this path represents a namespace
-        let namespace_sym = *path.last().unwrap();
+        let namespace_sym = path.name();
         let binding = self.binding_from_path(path);
 
         if self.env.has_namespace(namespace_sym) {
@@ -1097,11 +1089,11 @@ impl<'db> Resolver<'db> {
     /// Try to resolve a `src.path` operation.
     fn try_resolve_path(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let attrs = op.attributes(self.db);
-        let Attribute::SymbolRef(segments) = attrs.get(&ATTR_PATH())? else {
+        let Attribute::QualifiedName(path) = attrs.get(&ATTR_PATH())? else {
             return None;
         };
 
-        if segments.len() < 2 {
+        if path.len() < 2 {
             return None;
         }
 
@@ -1109,12 +1101,8 @@ impl<'db> Resolver<'db> {
 
         // For now, only support single-level qualified names (Type::Constructor)
         // TODO: Support multi-level paths
-        if segments.len() != 2 {
-            return None;
-        }
-
-        let namespace = segments[0];
-        let name = segments[1];
+        let namespace = *path.as_parent().last()?;
+        let name = path.name();
 
         match self.env.lookup_qualified(namespace, name)? {
             Binding::Function { path, ty } => {
@@ -1149,21 +1137,17 @@ impl<'db> Resolver<'db> {
     /// Try to resolve a `src.call` operation.
     fn try_resolve_call(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let attrs = op.attributes(self.db);
-        let Attribute::SymbolRef(path_segments) = attrs.get(&ATTR_NAME())? else {
+        let Attribute::QualifiedName(path) = attrs.get(&ATTR_NAME())? else {
             return None;
         };
-
-        if path_segments.is_empty() {
-            return None;
-        }
 
         let location = op.location(self.db);
         let result_ty = op.results(self.db).first().copied()?;
         let args: Vec<Value<'db>> = op.operands(self.db).iter().copied().collect();
 
         // Try to resolve the callee
-        let binding = if path_segments.len() == 1 {
-            let name = path_segments[0];
+        let binding = if path.is_simple() {
+            let name = path.name();
             if let Some(local) = self.lookup_local(name) {
                 let callee = match local {
                     LocalBinding::Parameter { value, .. }
@@ -1183,11 +1167,11 @@ impl<'db> Resolver<'db> {
         } else {
             // For now, only support single-level qualified calls (Type::method)
             // TODO: Support multi-level paths
-            if path_segments.len() != 2 {
+            if path.len() != 2 {
                 return None;
             }
-            let namespace = path_segments[0];
-            let name = path_segments[1];
+            let namespace = *path.as_parent().last().unwrap();
+            let name = path.name();
             self.env.lookup_qualified(namespace, name)
         }?;
 
@@ -1211,27 +1195,23 @@ impl<'db> Resolver<'db> {
     /// Try to resolve a `src.cons` operation.
     fn try_resolve_cons(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let attrs = op.attributes(self.db);
-        let Attribute::SymbolRef(path_segments) = attrs.get(&ATTR_NAME())? else {
+        let Attribute::QualifiedName(path) = attrs.get(&ATTR_NAME())? else {
             return None;
         };
-
-        if path_segments.is_empty() {
-            return None;
-        }
 
         let location = op.location(self.db);
         let args: Vec<Value<'db>> = op.operands(self.db).iter().copied().collect();
 
-        let binding = if path_segments.len() == 1 {
-            let name = path_segments[0];
+        let binding = if path.is_simple() {
+            let name = path.name();
             self.lookup_binding(name)
         } else {
             // For now, only support single-level qualified constructors (Type::Variant)
-            if path_segments.len() != 2 {
+            if path.len() != 2 {
                 return None;
             }
-            let namespace = path_segments[0];
-            let name = path_segments[1];
+            let namespace = *path.as_parent().last().unwrap();
+            let name = path.name();
             self.env.lookup_qualified(namespace, name)
         }?;
 
@@ -1284,14 +1264,8 @@ impl<'db> Resolver<'db> {
             .attributes(self.db)
             .get(&ATTR_PATH())
             .and_then(|a| {
-                if let Attribute::SymbolRef(segments) = a {
-                    Some(
-                        segments
-                            .iter()
-                            .map(|s| s.to_string())
-                            .collect::<Vec<_>>()
-                            .join("::"),
-                    )
+                if let Attribute::QualifiedName(qual_name) = a {
+                    Some(qual_name.to_string())
                 } else {
                     None
                 }
@@ -1313,14 +1287,8 @@ impl<'db> Resolver<'db> {
             .attributes(self.db)
             .get(&ATTR_NAME())
             .and_then(|a| {
-                if let Attribute::SymbolRef(segments) = a {
-                    Some(
-                        segments
-                            .iter()
-                            .map(|s| s.to_string())
-                            .collect::<Vec<_>>()
-                            .join("::"),
-                    )
+                if let Attribute::QualifiedName(qual_name) = a {
+                    Some(qual_name.to_string())
                 } else if let Attribute::Symbol(s) = a {
                     Some(s.to_string())
                 } else {
@@ -1344,14 +1312,8 @@ impl<'db> Resolver<'db> {
             .attributes(self.db)
             .get(&ATTR_NAME())
             .and_then(|a| {
-                if let Attribute::SymbolRef(segments) = a {
-                    Some(
-                        segments
-                            .iter()
-                            .map(|s| s.to_string())
-                            .collect::<Vec<_>>()
-                            .join("::"),
-                    )
+                if let Attribute::QualifiedName(qual_name) = a {
+                    Some(qual_name.to_string())
                 } else if let Attribute::Symbol(s) = a {
                     Some(s.to_string())
                 } else {
@@ -1391,7 +1353,7 @@ mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::{arith, core, func, src};
-    use trunk_ir::{Location, PathId, Span, SymbolVec, idvec};
+    use trunk_ir::{Location, PathId, QualifiedName, Span, idvec};
 
     fn test_location<'db>(db: &'db dyn salsa::Database) -> Location<'db> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -1414,11 +1376,11 @@ mod tests {
         let helpers = core::Module::build(db, location, Symbol::new("helpers"), |inner| {
             inner.op(simple_func(db, location, "double"));
         });
-        let path = SymbolVec::from(vec![Symbol::new("helpers"), Symbol::new("double")]);
+        let path = QualifiedName::from_strs(["helpers", "double"]).unwrap();
         let alias_sym = Symbol::from_dynamic(alias.unwrap_or(""));
 
         let name = alias.unwrap_or("double");
-        let call_path = SymbolVec::from(vec![Symbol::from_dynamic(name)]);
+        let call_path = QualifiedName::simple(Symbol::from_dynamic(name));
         let arg = arith::Const::i64(db, location, 1);
         let call_result_ty = src::unresolved_type(db, Symbol::new("Int"), idvec![]);
         let call = src::call(
@@ -1525,7 +1487,7 @@ mod tests {
                 && op.name(db) == "call"
                 && matches!(
                     op.attributes(db).get(&ATTR_NAME()),
-                    Some(Attribute::SymbolRef(segments)) if segments.last() == Some(&name_sym)
+                    Some(Attribute::QualifiedName(qual_name)) if qual_name.name() == name_sym
                 )
         })
     }
@@ -1541,7 +1503,7 @@ mod tests {
                 && op.name(db) == "call"
                 && matches!(
                     op.attributes(db).get(&ATTR_CALLEE()),
-                    Some(Attribute::SymbolRef(segments)) if segments.last() == Some(&name_sym)
+                    Some(Attribute::QualifiedName(qual_name)) if qual_name.name() == name_sym
                 )
         })
     }
@@ -1562,7 +1524,7 @@ mod tests {
         assert!(env.lookup(Symbol::new("hello")).is_some());
         match env.lookup(Symbol::new("hello")) {
             Some(Binding::Function { path, .. }) => {
-                assert_eq!(path.len(), 1);
+                assert!(path.is_simple());
             }
             _ => panic!("Expected function binding"),
         }

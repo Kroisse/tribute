@@ -233,12 +233,10 @@ impl<'db> CaseLowerer<'db> {
             name if name == pat::VARIANT() => {
                 let attr = op.attributes(self.db).get(&Symbol::new("variant"))?;
                 let variant_path = match attr {
-                    Attribute::SymbolRef(path) => path,
+                    Attribute::QualifiedName(path) => path,
                     _ => return Some((ArmPattern::Wildcard, false)),
                 };
-                let Some(name) = variant_path.last().copied() else {
-                    return Some((ArmPattern::Wildcard, false));
-                };
+                let name = variant_path.name();
                 if !self.variant_tags.contains_key(&name) {
                     return Some((ArmPattern::Wildcard, false));
                 }

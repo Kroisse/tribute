@@ -15,4 +15,5 @@ serde.workspace = true
 smallvec.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 salsa-test-macros = { path = "../salsa-test-macros" }

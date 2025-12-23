@@ -12,7 +12,12 @@ Located in `crates/trunk-ir/src/ir.rs`:
 - **`Block`** - Basic block with arguments and operations
 - **`Region`** - Control flow region (list of blocks)
 - **`Attribute`** - Value attributes (bool, int, float, string, type, symbol, span)
-- **`Symbol`** - Interned identifier (cheap comparison)
+- **`Symbol`** - Interned identifier (cheap comparison, 4 bytes)
+- **`QualifiedName`** - Non-empty qualified identifier (e.g., `std::List::map`)
+  - Structure: `parent: SmallVec<[Symbol; 4]>` + `name: Symbol`
+  - Size: 32 bytes (inline capacity for 4 parent segments)
+  - Construction: `QualifiedName::new()` returns `Option<Self>` (rejects empty)
+  - Always has at least one segment (guaranteed non-empty by design)
 - **`Type`** - Dialect-parametric type (dialect.name + params + attrs)
 
 ## Dialects

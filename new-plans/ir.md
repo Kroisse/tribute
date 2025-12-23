@@ -78,6 +78,67 @@ ref<T>          // non-nullable
 ref<T>?         // nullable
 ```
 
+#### 식별자 타입
+
+```rust
+/// Interned 문자열 (단순 이름)
+/// lasso::Spur로 구현되어 4바이트, O(1) 비교
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct Symbol(lasso::Spur);
+
+impl Symbol {
+    pub fn new(text: &'static str) -> Self;
+    pub fn from_dynamic(text: &str) -> Self;
+    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R;
+}
+
+/// 완전 한정 이름 (e.g., std::intrinsics::wasi::preview1::fd_write)
+/// 32바이트 (SmallVec<[Symbol; 4]> + Symbol + padding)
+/// Non-empty 구조: parent 경로(비어있을 수 있음) + name(항상 존재)
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct QualifiedName {
+    parent: SymbolVec,  // SmallVec<[Symbol; 4]>, 최대 4개까지 inline
+    name: Symbol,
+}
+
+impl QualifiedName {
+    /// 새 qualified name 생성
+    pub fn new(parent: impl Into<SymbolVec>, name: Symbol) -> Self;
+
+    /// 단일 segment 이름 생성
+    pub fn simple(name: Symbol) -> Self;
+
+    /// 모든 segments 반환
+    pub fn to_segments(&self) -> SmallVec<[Symbol; 6]>;
+
+    /// parent 경로를 slice로 반환
+    pub fn as_parent(&self) -> &[Symbol];
+
+    /// parent를 QualifiedName으로 반환 (없으면 None)
+    pub fn to_parent(&self) -> Option<QualifiedName>;
+
+    /// 마지막 segment (단순 이름)
+    pub fn name(&self) -> Symbol;
+
+    /// 단일 segment인지 확인
+    pub fn is_simple(&self) -> bool;
+
+    /// base 기준 상대 경로 반환
+    pub fn relative(&self, base: &QualifiedName) -> Option<QualifiedName>;
+
+    /// base로 시작하는지 확인
+    pub fn starts_with(&self, base: &QualifiedName) -> bool;
+
+    /// 두 경로를 연결
+    pub fn join(&self, other: &QualifiedName) -> QualifiedName;
+}
+```
+
+- `Symbol`: 단순 식별자, lasso로 interning되어 4바이트, 비교 O(1)
+- `QualifiedName`: `::` 로 구분된 경로, `func.call`의 callee 등에서 사용
+  - Symbol이 이미 interned이므로 QualifiedName 자체는 interning하지 않음
+  - 32바이트로 고정, SmallVec로 짧은 경로(≤4 segments)는 heap 할당 없음
+
 ### type Dialect
 
 타입 및 ability 정의.

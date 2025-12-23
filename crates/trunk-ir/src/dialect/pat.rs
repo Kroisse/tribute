@@ -31,7 +31,7 @@
 //! }
 //! ```
 
-use crate::SymbolVec;
+use crate::QualifiedName;
 use crate::dialect;
 
 dialect! {
@@ -54,7 +54,7 @@ dialect! {
         /// `pat.variant` operation: variant/constructor pattern.
         /// Matches a specific variant and destructures its fields.
         /// The fields region contains patterns for each field.
-        #[attr(variant: SymbolRef)]
+        #[attr(variant: QualifiedName)]
         fn variant() {
             #[region(fields)] {}
         };
@@ -122,7 +122,7 @@ dialect! {
         /// - `op`: the operation name within the ability
         /// - `args`: region containing patterns for operation arguments
         /// - `continuation`: name to bind the continuation (or empty for discard)
-        #[attr(ability_ref: SymbolRef, op: Symbol, continuation: Symbol)]
+        #[attr(ability_ref: QualifiedName, op: Symbol, continuation: Symbol)]
         fn handler_suspend() {
             #[region(args)] {}
         };
@@ -209,7 +209,7 @@ pub mod helpers {
     pub fn variant_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        variant_path: SymbolVec,
+        variant_path: QualifiedName,
         fields: Region<'db>,
     ) -> Region<'db> {
         let op = variant(db, location, variant_path, fields);
@@ -282,7 +282,7 @@ pub mod helpers {
     pub fn handler_suspend_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        ability_ref: SymbolVec,
+        ability_ref: QualifiedName,
         op_name: Symbol,
         args_pattern: Region<'db>,
         continuation_name: Symbol,

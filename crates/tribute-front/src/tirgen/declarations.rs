@@ -1,11 +1,11 @@
 //! Declaration lowering for functions, types, and modules.
 
 use tree_sitter::Node;
-use trunk_ir::Span;
 use trunk_ir::{
-    Attribute, BlockBuilder, IdVec, Symbol, SymbolVec, Type,
+    Attribute, BlockBuilder, IdVec, QualifiedName, Symbol, Type,
     dialect::{core, func, src, ty},
 };
+use trunk_ir::{Span, SymbolVec};
 
 use super::context::CstLoweringCtx;
 use super::helpers::{is_comment, node_text, sym};
@@ -21,7 +21,7 @@ use super::statements::lower_block_body;
 
 #[derive(Debug)]
 struct UseImport {
-    path: SymbolVec,
+    path: QualifiedName,
     alias: Option<Symbol>,
 }
 
@@ -43,10 +43,6 @@ pub fn lower_use_decl<'db>(
     collect_use_imports(ctx, tree_node, &mut SymbolVec::new(), &mut imports);
 
     for import in imports {
-        if import.path.is_empty() {
-            continue;
-        }
-
         let alias_sym = import.alias.unwrap_or_else(|| sym(""));
 
         block.op(src::r#use(ctx.db, location, import.path, alias_sym, is_pub));
@@ -110,16 +106,11 @@ fn collect_use_imports<'db>(
                 return;
             }
 
-            if head == "self" && !base.is_empty() {
-                out.push(UseImport {
-                    path: base.clone(),
-                    alias,
-                });
-            } else {
-                let mut path = base.clone();
-                path.push(head);
-                out.push(UseImport { path, alias });
-            }
+            let path = match base.split_last() {
+                Some((name, parent)) if head == "self" => QualifiedName::new(parent, *name),
+                _ => QualifiedName::new(&base[..], head),
+            };
+            out.push(UseImport { path, alias });
         }
         _ => {}
     }

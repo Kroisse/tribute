@@ -11,12 +11,12 @@ dialect! {
     mod src {
         /// `src.call` operation: unresolved function call.
         /// The callee name will be resolved to a concrete function reference.
-        #[attr(name: SymbolRef)]
+        #[attr(name: QualifiedName)]
         fn call(#[rest] args) -> result;
 
         /// `src.cons` operation: unresolved constructor application.
         /// The constructor name will be resolved to a struct/variant constructor.
-        #[attr(name: SymbolRef)]
+        #[attr(name: QualifiedName)]
         fn cons(#[rest] args) -> result;
 
         /// `src.var` operation: unresolved variable reference (single name).
@@ -26,7 +26,7 @@ dialect! {
 
         /// `src.path` operation: explicitly qualified path reference.
         /// Always refers to a module-level or type-level definition, never local.
-        #[attr(path: SymbolRef)]
+        #[attr(path: QualifiedName)]
         fn path() -> result;
 
         /// `src.binop` operation: unresolved binary operation.
@@ -68,7 +68,7 @@ dialect! {
 
         /// `src.use` operation: import declaration.
         /// Carries the fully qualified path and an optional local alias.
-        #[attr(path: SymbolRef, alias: Symbol, is_pub: bool)]
+        #[attr(path: QualifiedName, alias: Symbol, is_pub: bool)]
         fn r#use();
 
         /// `src.type`: an unresolved type reference that needs name resolution.

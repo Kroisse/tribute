@@ -41,7 +41,7 @@ See `.claude/rules/` for detailed documentation:
 ```bash
 # Build / Test
 cargo build
-cargo test
+cargo test --all  # Test all workspace members
 
 # If snapshot tests fail (insta)
 cargo insta review

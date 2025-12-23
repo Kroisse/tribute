@@ -7,8 +7,7 @@ use std::sync::LazyLock;
 use lasso::{Rodeo, Spur};
 use parking_lot::RwLock;
 
-use crate::Location;
-use crate::{Attribute, IdVec, Type};
+use crate::{Attribute, IdVec, Location, Type};
 
 // ============================================================================
 // Interned Types
