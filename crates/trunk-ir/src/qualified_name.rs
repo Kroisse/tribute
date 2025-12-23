@@ -235,30 +235,30 @@ impl From<Symbol> for QualifiedName {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EmptyQualifiedNameError;
+pub struct EmptyError;
 
-impl std::fmt::Display for EmptyQualifiedNameError {
+impl std::fmt::Display for EmptyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "cannot create QualifiedName from empty collection")
     }
 }
 
-impl std::error::Error for EmptyQualifiedNameError {}
+impl std::error::Error for EmptyError {}
 
 impl<'a> TryFrom<&'a [Symbol]> for QualifiedName {
-    type Error = EmptyQualifiedNameError;
+    type Error = EmptyError;
 
     fn try_from(segments: &'a [Symbol]) -> Result<Self, Self::Error> {
-        let (name, parent) = segments.split_last().ok_or(EmptyQualifiedNameError)?;
+        let (name, parent) = segments.split_last().ok_or(EmptyError)?;
         Ok(QualifiedName::new(SymbolVec::from_slice(parent), *name))
     }
 }
 
 impl TryFrom<Vec<Symbol>> for QualifiedName {
-    type Error = EmptyQualifiedNameError;
+    type Error = EmptyError;
 
     fn try_from(mut segments: Vec<Symbol>) -> Result<Self, Self::Error> {
-        let name = segments.pop().ok_or(EmptyQualifiedNameError)?;
+        let name = segments.pop().ok_or(EmptyError)?;
         Ok(QualifiedName::new(SmallVec::from_vec(segments), name))
     }
 }
@@ -395,13 +395,13 @@ mod tests {
     #[test]
     fn test_try_from_empty_vec_fails() {
         let result = QualifiedName::try_from(Vec::<Symbol>::new());
-        assert_eq!(result, Err(EmptyQualifiedNameError));
+        assert_eq!(result, Err(EmptyError));
     }
 
     #[test]
     fn test_try_from_empty_slice_fails() {
         let result = QualifiedName::try_from(&[][..]);
-        assert_eq!(result, Err(EmptyQualifiedNameError));
+        assert_eq!(result, Err(EmptyError));
     }
 
     #[test]
