@@ -331,9 +331,12 @@ impl<'db> WasmLowerer<'db> {
         }
 
         // Debug warning for unexpected dialects in function bodies
+        // Note: "func" and "adt" are allowed for edge cases:
+        // - func.call_indirect (closure support pending)
+        // - adt.string_const (handled by const_to_wasm pass)
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
-            let allowed = ["wasm", "core", "type", "ty", "src", "func", "adt"];
+            let allowed = ["wasm", "core", "type", "ty", "func", "adt"];
             if !allowed.contains(&dialect_str.as_str()) {
                 eprintln!(
                     "WARNING: Unhandled operation in lowering: {}.{} (this may cause emit errors)",

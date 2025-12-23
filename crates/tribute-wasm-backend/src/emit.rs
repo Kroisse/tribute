@@ -1565,3 +1565,276 @@ fn attr_i32_attr<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<i32>
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::{Block, Location, PathId, Region, Span, idvec};
+
+    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        Location::new(path, Span::new(0, 0))
+    }
+
+    /// Helper to extract the GcTypeDef kind for testing.
+    fn gc_type_kind(gc_type: &GcTypeDef) -> &'static str {
+        match gc_type {
+            GcTypeDef::Struct(_) => "struct",
+            GcTypeDef::Array(_) => "array",
+        }
+    }
+
+    // ========================================
+    // Test: struct_new collects field types
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_struct_new_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let i64_ty = core::I64::new(db).as_type();
+
+        // Create two field values with i32_const
+        let field0 = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(42))
+            .results(idvec![i32_ty])
+            .build();
+
+        let field1 = Operation::of_name(db, location, "wasm.i64_const")
+            .attr("value", Attribute::IntBits(100))
+            .results(idvec![i64_ty])
+            .build();
+
+        // Create struct_new with two fields
+        let struct_ty = core::I32::new(db).as_type(); // placeholder type
+        let struct_new = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![field0.result(db, 0), field1.result(db, 0)])
+            .results(idvec![struct_ty])
+            .attr("type_idx", Attribute::IntBits(0))
+            .build();
+
+        let block = Block::new(db, location, idvec![], idvec![field0, field1, struct_new]);
+        let region = Region::new(db, location, idvec![block]);
+        core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_struct_new_collects_field_types(db: &salsa::DatabaseImpl) {
+        let module = make_struct_new_module(db);
+        let (gc_types, type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
+
+        // Should have one GC type
+        assert_eq!(gc_types.len(), 1);
+        assert_eq!(gc_type_kind(&gc_types[0]), "struct");
+
+        // Type 0 should be in the map
+        let i32_ty = core::I32::new(db).as_type();
+        assert!(type_map.contains_key(&i32_ty));
+    }
+
+    // ========================================
+    // Test: array_new collects element type
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_array_new_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let f64_ty = core::F64::new(db).as_type();
+
+        // Create size value
+        let size = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(10))
+            .results(idvec![i32_ty])
+            .build();
+
+        // Create init value (f64)
+        let init = Operation::of_name(db, location, "wasm.f64_const")
+            .attr("value", Attribute::FloatBits(0.0_f64.to_bits()))
+            .results(idvec![f64_ty])
+            .build();
+
+        // Create array_new
+        let array_new = Operation::of_name(db, location, "wasm.array_new")
+            .operands(idvec![size.result(db, 0), init.result(db, 0)])
+            .results(idvec![i32_ty]) // placeholder result type
+            .attr("type_idx", Attribute::IntBits(0))
+            .build();
+
+        let block = Block::new(db, location, idvec![], idvec![size, init, array_new]);
+        let region = Region::new(db, location, idvec![block]);
+        core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_array_new_collects_element_type(db: &salsa::DatabaseImpl) {
+        let module = make_array_new_module(db);
+        let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
+
+        // Should have one GC type (array)
+        assert_eq!(gc_types.len(), 1);
+        assert_eq!(gc_type_kind(&gc_types[0]), "array");
+    }
+
+    // ========================================
+    // Test: type index deduplication
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_dedup_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create two struct_new operations with same type_idx
+        let field = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(1))
+            .results(idvec![i32_ty])
+            .build();
+
+        let struct_new1 = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![field.result(db, 0)])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(0))
+            .build();
+
+        let field2 = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(2))
+            .results(idvec![i32_ty])
+            .build();
+
+        let struct_new2 = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![field2.result(db, 0)])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(0)) // same type_idx
+            .build();
+
+        let block = Block::new(
+            db,
+            location,
+            idvec![],
+            idvec![field, struct_new1, field2, struct_new2],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_type_index_deduplication(db: &salsa::DatabaseImpl) {
+        let module = make_dedup_module(db);
+        let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
+
+        // Should have only one GC type (same type_idx used twice)
+        assert_eq!(gc_types.len(), 1);
+        assert_eq!(gc_type_kind(&gc_types[0]), "struct");
+    }
+
+    // ========================================
+    // Test: field count mismatch error
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_field_count_mismatch_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create struct_new with 1 field
+        let field = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(1))
+            .results(idvec![i32_ty])
+            .build();
+
+        let struct_new1 = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![field.result(db, 0)])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(0))
+            .build();
+
+        // Create another struct_new with 2 fields (same type_idx)
+        let field2a = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(2))
+            .results(idvec![i32_ty])
+            .build();
+
+        let field2b = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(3))
+            .results(idvec![i32_ty])
+            .build();
+
+        let struct_new2 = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![field2a.result(db, 0), field2b.result(db, 0)])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(0)) // same type_idx, different field count
+            .build();
+
+        let block = Block::new(
+            db,
+            location,
+            idvec![],
+            idvec![field, struct_new1, field2a, field2b, struct_new2],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_field_count_mismatch_error(db: &salsa::DatabaseImpl) {
+        let module = make_field_count_mismatch_module(db);
+        let result = collect_gc_types(db, module);
+
+        // Should return an error due to field count mismatch
+        assert!(result.is_err());
+        let err = result.err().expect("expected error");
+        assert!(err.to_string().contains("field count mismatch"));
+    }
+
+    // ========================================
+    // Test: nested operations in function body
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_func_with_struct_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
+
+        // Create struct_new inside function body
+        let field = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(42))
+            .results(idvec![i32_ty])
+            .build();
+
+        let struct_new = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![field.result(db, 0)])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(0))
+            .build();
+
+        let func_return = Operation::of_name(db, location, "wasm.return").build();
+
+        let body_block = Block::new(db, location, idvec![], idvec![field, struct_new, func_return]);
+        let body_region = Region::new(db, location, idvec![body_block]);
+
+        // Create wasm.func
+        let wasm_func = Operation::of_name(db, location, "wasm.func")
+            .attr("sym_name", Attribute::Symbol(Symbol::new("test_fn")))
+            .attr("type", Attribute::Type(func_ty))
+            .region(body_region)
+            .build();
+
+        let block = Block::new(db, location, idvec![], idvec![wasm_func]);
+        let region = Region::new(db, location, idvec![block]);
+        core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_nested_operations_in_function_body(db: &salsa::DatabaseImpl) {
+        let module = make_func_with_struct_module(db);
+        let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
+
+        // Should find the struct type from inside the function body
+        assert_eq!(gc_types.len(), 1);
+        assert_eq!(gc_type_kind(&gc_types[0]), "struct");
+    }
+}
+

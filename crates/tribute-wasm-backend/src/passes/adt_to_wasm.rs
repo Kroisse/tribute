@@ -185,12 +185,11 @@ impl RewritePattern for VariantTagPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::VARIANT_TAG() {
+        let Ok(_variant_tag) = adt::VariantTag::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let location = op.location(db);
-        let attrs = op.attributes(db);
 
         // Tag is always field 0
         let mut struct_get = Operation::of_name(db, location, "wasm.struct_get")
@@ -199,7 +198,7 @@ impl RewritePattern for VariantTagPattern {
             .results(op.results(db).clone());
 
         // Preserve type attribute
-        if let Some(ty_attr) = attrs.get(&Symbol::new("type")) {
+        if let Some(ty_attr) = op.attributes(db).get(&Symbol::new("type")) {
             struct_get = struct_get.attr("type", ty_attr.clone());
         }
 
@@ -216,18 +215,17 @@ impl RewritePattern for VariantGetPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::VARIANT_GET() {
+        let Ok(variant_get) = adt::VariantGet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let location = op.location(db);
-        let attrs = op.attributes(db);
 
         // Get field index and add 1 (to skip tag field)
-        let field_idx = match attrs.get(&Symbol::new("field")) {
-            Some(Attribute::IntBits(idx)) => *idx + 1,
-            _ => return RewriteResult::Unchanged,
+        let Attribute::IntBits(idx) = variant_get.field(db) else {
+            return RewriteResult::Unchanged;
         };
+        let field_idx = idx + 1;
 
         let mut struct_get = Operation::of_name(db, location, "wasm.struct_get")
             .operands(op.operands(db).clone())
@@ -235,7 +233,7 @@ impl RewritePattern for VariantGetPattern {
             .results(op.results(db).clone());
 
         // Preserve type attribute
-        if let Some(ty_attr) = attrs.get(&Symbol::new("type")) {
+        if let Some(ty_attr) = op.attributes(db).get(&Symbol::new("type")) {
             struct_get = struct_get.attr("type", ty_attr.clone());
         }
 

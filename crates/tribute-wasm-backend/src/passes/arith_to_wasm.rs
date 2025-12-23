@@ -457,10 +457,16 @@ fn type_suffix<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> &'st
             } else if name == Symbol::new("f64") {
                 "f64"
             } else {
-                "i32" // Default to i32
+                #[cfg(debug_assertions)]
+                eprintln!("WARNING: Unknown type '{}' in arith_to_wasm, defaulting to i32", name);
+                "i32"
             }
         }
-        None => "i32",
+        None => {
+            #[cfg(debug_assertions)]
+            eprintln!("WARNING: No type in arith_to_wasm, defaulting to i32");
+            "i32"
+        }
     }
 }
 

@@ -163,7 +163,9 @@ fn get_literal_info(db: &dyn salsa::Database, value: trunk_ir::Value<'_>) -> Opt
     let Attribute::IntBits(len) = attrs.get(&Symbol::new("literal_len"))? else {
         return None;
     };
-    Some((*ptr as u32, *len as u32))
+    let ptr_u32 = u32::try_from(*ptr).ok()?;
+    let len_u32 = u32::try_from(*len).ok()?;
+    Some((ptr_u32, len_u32))
 }
 
 /// Lower intrinsic calls using pre-computed analysis.
@@ -276,13 +278,13 @@ impl RewritePattern for PrintLinePattern {
         let drop_op = wasm::drop(db, location, call.result(db, 0));
 
         // Use Expand to emit all operations
-        // Note: if print_line returns a value, use Erase with nwritten_const result
         let results = op.results(db);
         if results.is_empty()
             || (results.len() == 1
                 && results[0].dialect(db) == core::DIALECT_NAME()
                 && results[0].name(db) == Symbol::new("nil"))
         {
+            // Void: emit operations and drop the fd_write result
             RewriteResult::Expand(vec![
                 fd_const.operation(),
                 iovec_const.operation(),
@@ -292,10 +294,14 @@ impl RewritePattern for PrintLinePattern {
                 drop_op.operation(),
             ])
         } else {
-            // If print_line returns a value, map it to nwritten_const result
-            RewriteResult::Erase {
-                replacement_values: vec![nwritten_const.result(db)],
-            }
+            // Non-void: emit operations, call result becomes the replacement value
+            RewriteResult::Expand(vec![
+                fd_const.operation(),
+                iovec_const.operation(),
+                iovec_len_const.operation(),
+                nwritten_const.operation(),
+                call,
+            ])
         }
     }
 }
@@ -368,13 +374,36 @@ mod tests {
         ops.iter().map(|op| op.full_name(db)).collect()
     }
 
+    /// Extract callee names from all wasm.call operations in the module.
+    #[salsa::tracked]
+    fn extract_callees(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
+        let analysis = analyze_intrinsics(db, module, 0);
+        let lowered = lower(db, module, analysis);
+        let body = lowered.body(db);
+        let ops = body.blocks(db)[0].operations(db);
+        ops.iter()
+            .filter_map(|op| {
+                let Ok(call) = wasm::Call::from_operation(db, *op) else {
+                    return None;
+                };
+                let Attribute::QualifiedName(callee) = call.callee(db) else {
+                    return None;
+                };
+                Some(callee.name().to_string())
+            })
+            .collect()
+    }
+
     #[salsa_test]
     fn test_print_line_to_fd_write(db: &salsa::DatabaseImpl) {
         let module = make_print_line_module(db);
         let op_names = lower_and_check(db, module);
+        let callees = extract_callees(db, module);
 
-        // Should have: i32_const (string), then fd_write sequence
+        // Should have wasm.call operations
         assert!(op_names.iter().any(|n| n == "wasm.call"));
         // The call should be to fd_write, not print_line
+        assert!(callees.contains(&"fd_write".to_string()));
+        assert!(!callees.contains(&"print_line".to_string()));
     }
 }
