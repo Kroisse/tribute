@@ -389,5 +389,90 @@ dialect! {
         /// `wasm.ref_test` operation: test reference type.
         #[attr(target_type)]
         fn ref_test(r#ref) -> result;
+
+        // === Type Conversions (Integer) ===
+
+        /// `wasm.i32_wrap_i64` operation: wrap i64 to i32 (truncate).
+        fn i32_wrap_i64(operand) -> result;
+
+        /// `wasm.i64_extend_i32_s` operation: sign-extend i32 to i64.
+        fn i64_extend_i32_s(operand) -> result;
+
+        /// `wasm.i64_extend_i32_u` operation: zero-extend i32 to i64.
+        fn i64_extend_i32_u(operand) -> result;
+
+        // === Type Conversions (Float to Int) ===
+
+        /// `wasm.i32_trunc_f32_s` operation: truncate f32 to i32 (signed).
+        fn i32_trunc_f32_s(operand) -> result;
+
+        /// `wasm.i32_trunc_f32_u` operation: truncate f32 to i32 (unsigned).
+        fn i32_trunc_f32_u(operand) -> result;
+
+        /// `wasm.i32_trunc_f64_s` operation: truncate f64 to i32 (signed).
+        fn i32_trunc_f64_s(operand) -> result;
+
+        /// `wasm.i32_trunc_f64_u` operation: truncate f64 to i32 (unsigned).
+        fn i32_trunc_f64_u(operand) -> result;
+
+        /// `wasm.i64_trunc_f32_s` operation: truncate f32 to i64 (signed).
+        fn i64_trunc_f32_s(operand) -> result;
+
+        /// `wasm.i64_trunc_f32_u` operation: truncate f32 to i64 (unsigned).
+        fn i64_trunc_f32_u(operand) -> result;
+
+        /// `wasm.i64_trunc_f64_s` operation: truncate f64 to i64 (signed).
+        fn i64_trunc_f64_s(operand) -> result;
+
+        /// `wasm.i64_trunc_f64_u` operation: truncate f64 to i64 (unsigned).
+        fn i64_trunc_f64_u(operand) -> result;
+
+        // === Type Conversions (Int to Float) ===
+
+        /// `wasm.f32_convert_i32_s` operation: convert i32 to f32 (signed).
+        fn f32_convert_i32_s(operand) -> result;
+
+        /// `wasm.f32_convert_i32_u` operation: convert i32 to f32 (unsigned).
+        fn f32_convert_i32_u(operand) -> result;
+
+        /// `wasm.f32_convert_i64_s` operation: convert i64 to f32 (signed).
+        fn f32_convert_i64_s(operand) -> result;
+
+        /// `wasm.f32_convert_i64_u` operation: convert i64 to f32 (unsigned).
+        fn f32_convert_i64_u(operand) -> result;
+
+        /// `wasm.f64_convert_i32_s` operation: convert i32 to f64 (signed).
+        fn f64_convert_i32_s(operand) -> result;
+
+        /// `wasm.f64_convert_i32_u` operation: convert i32 to f64 (unsigned).
+        fn f64_convert_i32_u(operand) -> result;
+
+        /// `wasm.f64_convert_i64_s` operation: convert i64 to f64 (signed).
+        fn f64_convert_i64_s(operand) -> result;
+
+        /// `wasm.f64_convert_i64_u` operation: convert i64 to f64 (unsigned).
+        fn f64_convert_i64_u(operand) -> result;
+
+        // === Type Conversions (Float to Float) ===
+
+        /// `wasm.f32_demote_f64` operation: demote f64 to f32.
+        fn f32_demote_f64(operand) -> result;
+
+        /// `wasm.f64_promote_f32` operation: promote f32 to f64.
+        fn f64_promote_f32(operand) -> result;
+
+        // === Reinterpretations (Bitcast) ===
+
+        /// `wasm.i32_reinterpret_f32` operation: reinterpret f32 bits as i32.
+        fn i32_reinterpret_f32(operand) -> result;
+
+        /// `wasm.i64_reinterpret_f64` operation: reinterpret f64 bits as i64.
+        fn i64_reinterpret_f64(operand) -> result;
+
+        /// `wasm.f32_reinterpret_i32` operation: reinterpret i32 bits as f32.
+        fn f32_reinterpret_i32(operand) -> result;
+
+        /// `wasm.f64_reinterpret_i64` operation: reinterpret i64 bits as f64.
+        fn f64_reinterpret_i64(operand) -> result;
     }
 }

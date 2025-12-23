@@ -1232,6 +1232,111 @@ fn emit_op<'db>(
         emit_operands(operands, value_locals, function)?;
         function.instruction(&Instruction::F64Ge);
         set_result_local(db, op, value_locals, function)?;
+    // === Type Conversions (Integer) ===
+    } else if name == Symbol::new("i32_wrap_i64") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32WrapI64);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i64_extend_i32_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I64ExtendI32S);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i64_extend_i32_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I64ExtendI32U);
+        set_result_local(db, op, value_locals, function)?;
+    // === Type Conversions (Float to Int) ===
+    } else if name == Symbol::new("i32_trunc_f32_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32TruncF32S);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_trunc_f32_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32TruncF32U);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_trunc_f64_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32TruncF64S);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i32_trunc_f64_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32TruncF64U);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i64_trunc_f32_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I64TruncF32S);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i64_trunc_f32_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I64TruncF32U);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i64_trunc_f64_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I64TruncF64S);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i64_trunc_f64_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I64TruncF64U);
+        set_result_local(db, op, value_locals, function)?;
+    // === Type Conversions (Int to Float) ===
+    } else if name == Symbol::new("f32_convert_i32_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F32ConvertI32S);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f32_convert_i32_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F32ConvertI32U);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f32_convert_i64_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F32ConvertI64S);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f32_convert_i64_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F32ConvertI64U);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f64_convert_i32_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F64ConvertI32S);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f64_convert_i32_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F64ConvertI32U);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f64_convert_i64_s") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F64ConvertI64S);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f64_convert_i64_u") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F64ConvertI64U);
+        set_result_local(db, op, value_locals, function)?;
+    // === Type Conversions (Float to Float) ===
+    } else if name == Symbol::new("f32_demote_f64") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F32DemoteF64);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f64_promote_f32") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F64PromoteF32);
+        set_result_local(db, op, value_locals, function)?;
+    // === Reinterpretations (Bitcast) ===
+    } else if name == Symbol::new("i32_reinterpret_f32") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I32ReinterpretF32);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("i64_reinterpret_f64") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::I64ReinterpretF64);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f32_reinterpret_i32") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F32ReinterpretI32);
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("f64_reinterpret_i64") {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(&Instruction::F64ReinterpretI64);
+        set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("if") {
         let result_ty = op.results(db).first().copied();
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));

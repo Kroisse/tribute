@@ -3,6 +3,8 @@
 //! `new-plans/ir.md` defines TrunkIR as the compiler's central multi-level dialect IR.
 //! This crate provides IR definitions for the multi-level dialect system.
 
+#![recursion_limit = "512"]
+
 // === Dialect modules ===
 pub mod dialect;
 

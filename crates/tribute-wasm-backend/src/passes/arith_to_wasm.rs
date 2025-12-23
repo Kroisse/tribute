@@ -6,6 +6,7 @@
 //! - `arith.cmp_*` -> `wasm.{type}_{cmp}`
 //! - `arith.neg` -> `wasm.{f32,f64}_neg` or 0 - x for integers
 //! - `arith.{and,or,xor,shl,shr,shru}` -> `wasm.i{32,64}_{op}`
+//! - `arith.{cast,trunc,extend,convert}` -> appropriate wasm conversion ops
 
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, core};
@@ -20,6 +21,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(ArithCmpPattern)
         .add_pattern(ArithNegPattern)
         .add_pattern(ArithBitwisePattern)
+        .add_pattern(ArithConversionPattern)
         .apply(db, module)
         .module
 }
@@ -386,6 +388,95 @@ impl RewritePattern for ArithBitwisePattern {
     }
 }
 
+/// Pattern for `arith.{cast,trunc,extend,convert}` -> wasm conversion ops
+struct ArithConversionPattern;
+
+impl RewritePattern for ArithConversionPattern {
+    fn match_and_rewrite<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+    ) -> RewriteResult<'db> {
+        if op.dialect(db) != arith::DIALECT_NAME() {
+            return RewriteResult::Unchanged;
+        }
+
+        let name = op.name(db);
+        let is_conv = name == arith::CAST()
+            || name == arith::TRUNC()
+            || name == arith::EXTEND()
+            || name == arith::CONVERT();
+
+        if !is_conv {
+            return RewriteResult::Unchanged;
+        }
+
+        // Get source type from operand
+        let src_ty = op
+            .operands(db)
+            .first()
+            .and_then(|v| value_type(db, *v));
+        let src_suffix = type_suffix(db, src_ty);
+
+        // Get destination type from result
+        let dst_ty = op.results(db).first().copied();
+        let dst_suffix = type_suffix(db, dst_ty);
+
+        let wasm_op_name = if name == arith::CAST() {
+            // cast: integer sign extension/truncation (i32 <-> i64)
+            match (src_suffix, dst_suffix) {
+                ("i64", "i32") => "wasm.i32_wrap_i64",
+                ("i32", "i64") => "wasm.i64_extend_i32_s", // signed extension by default
+                _ => return RewriteResult::Unchanged, // unsupported cast
+            }
+        } else if name == arith::TRUNC() {
+            // trunc: float -> int truncation (signed by default)
+            match (src_suffix, dst_suffix) {
+                ("f32", "i32") => "wasm.i32_trunc_f32_s",
+                ("f64", "i32") => "wasm.i32_trunc_f64_s",
+                ("f32", "i64") => "wasm.i64_trunc_f32_s",
+                ("f64", "i64") => "wasm.i64_trunc_f64_s",
+                ("i64", "i32") => "wasm.i32_wrap_i64", // integer truncation
+                _ => return RewriteResult::Unchanged,
+            }
+        } else if name == arith::EXTEND() {
+            // extend: smaller -> larger type
+            match (src_suffix, dst_suffix) {
+                ("i32", "i64") => "wasm.i64_extend_i32_s", // signed by default
+                ("f32", "f64") => "wasm.f64_promote_f32",
+                _ => return RewriteResult::Unchanged,
+            }
+        } else if name == arith::CONVERT() {
+            // convert: int <-> float conversion
+            match (src_suffix, dst_suffix) {
+                // int to float (signed by default)
+                ("i32", "f32") => "wasm.f32_convert_i32_s",
+                ("i32", "f64") => "wasm.f64_convert_i32_s",
+                ("i64", "f32") => "wasm.f32_convert_i64_s",
+                ("i64", "f64") => "wasm.f64_convert_i64_s",
+                // float to int (signed by default)
+                ("f32", "i32") => "wasm.i32_trunc_f32_s",
+                ("f64", "i32") => "wasm.i32_trunc_f64_s",
+                ("f32", "i64") => "wasm.i64_trunc_f32_s",
+                ("f64", "i64") => "wasm.i64_trunc_f64_s",
+                // float to float
+                ("f32", "f64") => "wasm.f64_promote_f32",
+                ("f64", "f32") => "wasm.f32_demote_f64",
+                _ => return RewriteResult::Unchanged,
+            }
+        } else {
+            return RewriteResult::Unchanged;
+        };
+
+        let new_op = Operation::of_name(db, op.location(db), wasm_op_name)
+            .operands(op.operands(db).clone())
+            .results(op.results(db).clone())
+            .build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
 /// Get the wasm type suffix from a type.
 fn type_suffix<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> &'static str {
     match ty {
@@ -471,5 +562,101 @@ mod tests {
         assert!(op_names.iter().all(|n| n.starts_with("wasm.")));
         assert!(op_names.iter().any(|n| n == "wasm.i32_const"));
         assert!(op_names.iter().any(|n| n == "wasm.i32_add"));
+    }
+
+    #[salsa::tracked]
+    fn make_convert_i32_to_f64_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let f64_ty = core::F64::new(db).as_type();
+
+        // Create arith.const for i32 operand
+        let int_const = arith::Const::i32(db, location, 42);
+
+        // Create arith.convert to convert i32 -> f64
+        let convert = arith::convert(db, location, int_const.result(db), f64_ty);
+
+        let block = Block::new(
+            db,
+            location,
+            idvec![],
+            idvec![int_const.as_operation(), convert.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_arith_convert_i32_to_f64(db: &salsa::DatabaseImpl) {
+        let module = make_convert_i32_to_f64_module(db);
+        let op_names = lower_and_check(db, module);
+
+        // Should have wasm.i32_const and wasm.f64_convert_i32_s
+        assert!(op_names.iter().all(|n| n.starts_with("wasm.")));
+        assert!(op_names.iter().any(|n| n == "wasm.i32_const"));
+        assert!(op_names.iter().any(|n| n == "wasm.f64_convert_i32_s"));
+    }
+
+    #[salsa::tracked]
+    fn make_extend_i32_to_i64_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i64_ty = core::I64::new(db).as_type();
+
+        // Create arith.const for i32 operand
+        let int_const = arith::Const::i32(db, location, 100);
+
+        // Create arith.extend to extend i32 -> i64
+        let extend = arith::extend(db, location, int_const.result(db), i64_ty);
+
+        let block = Block::new(
+            db,
+            location,
+            idvec![],
+            idvec![int_const.as_operation(), extend.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_arith_extend_i32_to_i64(db: &salsa::DatabaseImpl) {
+        let module = make_extend_i32_to_i64_module(db);
+        let op_names = lower_and_check(db, module);
+
+        // Should have wasm.i32_const and wasm.i64_extend_i32_s
+        assert!(op_names.iter().all(|n| n.starts_with("wasm.")));
+        assert!(op_names.iter().any(|n| n == "wasm.i32_const"));
+        assert!(op_names.iter().any(|n| n == "wasm.i64_extend_i32_s"));
+    }
+
+    #[salsa::tracked]
+    fn make_trunc_f64_to_i32_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create arith.const for f64 operand
+        let float_const = arith::Const::f64(db, location, 3.14);
+
+        // Create arith.trunc to truncate f64 -> i32
+        let trunc = arith::trunc(db, location, float_const.result(db), i32_ty);
+
+        let block = Block::new(
+            db,
+            location,
+            idvec![],
+            idvec![float_const.as_operation(), trunc.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_arith_trunc_f64_to_i32(db: &salsa::DatabaseImpl) {
+        let module = make_trunc_f64_to_i32_module(db);
+        let op_names = lower_and_check(db, module);
+
+        // Should have wasm.f64_const and wasm.i32_trunc_f64_s
+        assert!(op_names.iter().all(|n| n.starts_with("wasm.")));
+        assert!(op_names.iter().any(|n| n == "wasm.f64_const"));
+        assert!(op_names.iter().any(|n| n == "wasm.i32_trunc_f64_s"));
     }
 }
