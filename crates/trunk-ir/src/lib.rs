@@ -10,6 +10,7 @@ pub mod dialect;
 pub mod ir;
 pub mod location;
 pub mod ops;
+pub mod qualified_name;
 pub mod rewrite;
 pub mod type_interface;
 pub mod types;
@@ -21,9 +22,10 @@ pub use paste;
 // Re-export smallvec for use in macros and external crates
 pub use smallvec;
 
-pub use ir::{Block, BlockBuilder, Operation, QualifiedName, Region, Symbol, Value, ValueDef};
+pub use ir::{Block, BlockBuilder, Operation, Region, Symbol, Value, ValueDef};
 pub use location::{Location, PathId, Span, Spanned};
 pub use ops::{ConversionError, DialectOp};
+pub use qualified_name::{EmptyQualifiedNameError, QualifiedName};
 pub use types::{Attribute, Attrs, DialectType, Type};
 
 /// Small vector for values tracked by Salsa framework.
