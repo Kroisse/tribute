@@ -22,9 +22,6 @@ use trunk_ir::{
 /// Entry point for lowering mid-level IR to wasm dialect.
 #[salsa::tracked]
 pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    // Strip source dialect metadata markers (src.var with resolved_local)
-    let module = crate::passes::src_to_wasm::lower(db, module);
-
     // Phase 1: Pattern-based lowering passes
     let module = crate::passes::arith_to_wasm::lower(db, module);
     let module = crate::passes::scf_to_wasm::lower(db, module);
@@ -344,9 +341,9 @@ impl<'db> WasmLowerer<'db> {
         }
 
         // Debug warning for unexpected dialects in function bodies
-        // Note: "func" and "adt" are allowed for edge cases:
-        // - func.call_indirect (closure support pending)
-        // - adt.string_const (handled by const_to_wasm pass)
+        // Note: Some dialects are allowed for edge cases:
+        // - "func": func.call_indirect (closure support pending)
+        // - "adt": adt.string_const (handled by const_to_wasm pass)
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
             let allowed = ["wasm", "core", "type", "ty", "func", "adt", "case", "scf"];

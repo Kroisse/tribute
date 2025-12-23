@@ -8,4 +8,3 @@ pub mod const_to_wasm;
 pub mod func_to_wasm;
 pub mod intrinsic_to_wasm;
 pub mod scf_to_wasm;
-pub mod src_to_wasm;
