@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::func;
 use trunk_ir::{
-    Attribute, Block, DialectOp, IdVec, Operation, Region, Symbol, SymbolVec, Type, Value,
+    Attribute, Block, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value
 };
 
 // =============================================================================
@@ -37,7 +37,7 @@ pub struct MethodInfo<'db> {
     /// The method name (e.g., "len", "map")
     pub name: Symbol,
     /// The full function path to call
-    pub func_path: SymbolVec,
+    pub func_path: QualifiedName,
     /// The function type
     pub func_type: Type<'db>,
 }
@@ -241,20 +241,20 @@ impl<'db> TdnrResolver<'db> {
 
         // Get method name from attributes
         let attrs = op.attributes(self.db);
-        let Attribute::SymbolRef(name_segments) = attrs.get(&Symbol::new("name"))? else {
+        let Attribute::QualifiedName(qual_name) = attrs.get(&Symbol::new("name"))? else {
             return None;
         };
 
-        if name_segments.is_empty() {
+        if qual_name.is_empty() {
             return None;
         }
 
         // Single-segment name means it's a method call needing TDNR
-        if name_segments.len() != 1 {
+        if !qual_name.is_simple() {
             return None; // Already qualified, shouldn't be here
         }
 
-        let method_name = name_segments[0];
+        let method_name = qual_name.name();
         let receiver = operands[0];
 
         // Get the receiver's type

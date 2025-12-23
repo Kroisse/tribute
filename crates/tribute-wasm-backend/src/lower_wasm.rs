@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{adt, arith, func, scf, src};
 use trunk_ir::{
-    Attribute, Block, DialectType, IdVec, Location, Operation, Region, Symbol, Type, Value,
-    ValueDef,
+    Attribute, Block, DialectType, IdVec, Location, Operation, Region, Symbol, Type,
+    Value, ValueDef,
 };
 
 /// Entry point for lowering mid-level IR to wasm dialect.

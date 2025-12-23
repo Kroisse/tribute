@@ -2,8 +2,8 @@
 
 use tree_sitter::Node;
 use trunk_ir::{
-    Attribute, Block, BlockBuilder, DialectOp, DialectType, IdVec, Operation, Region, Symbol,
-    SymbolVec, Type, Value,
+    Attribute, Block, BlockBuilder, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
+    Type, Value,
     dialect::{ability, adt, arith, case, core, list, pat, src},
     idvec,
 };
@@ -123,7 +123,7 @@ pub fn lower_expr<'db>(
                 return None;
             }
 
-            let path: SymbolVec = segments.into_iter().collect();
+            let path = QualifiedName::new(segments);
             let op = block.op(src::path(ctx.db, location, infer_ty, path));
             Some(op.result(ctx.db))
         }
@@ -360,11 +360,11 @@ fn lower_call_expr<'db>(
 
     // Use field-based access for function
     let func_node = node.child_by_field_name("function")?;
-    let func_path: SymbolVec = match func_node.kind() {
+    let func_path: QualifiedName = match func_node.kind() {
         "identifier" => sym_ref(&node_text(&func_node, &ctx.source)),
         "path_expression" => {
             let mut cursor = func_node.walk();
-            let segments: SymbolVec = func_node
+            let segments: Vec<Symbol> = func_node
                 .named_children(&mut cursor)
                 .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
                 .map(|n| node_text(&n, &ctx.source).into())
@@ -372,7 +372,7 @@ fn lower_call_expr<'db>(
             if segments.is_empty() {
                 return None;
             }
-            segments
+            QualifiedName::new(segments)
         }
         _ => return None,
     };
@@ -394,11 +394,11 @@ fn lower_constructor_expr<'db>(
     let infer_ty = ctx.fresh_type_var();
 
     let ctor_node = node.child_by_field_name("constructor")?;
-    let ctor_path: SymbolVec = match ctor_node.kind() {
+    let ctor_path: QualifiedName = match ctor_node.kind() {
         "type_identifier" => sym_ref(&node_text(&ctor_node, &ctx.source)),
         "path_expression" => {
             let mut cursor = ctor_node.walk();
-            let segments: SymbolVec = ctor_node
+            let segments: Vec<Symbol> = ctor_node
                 .named_children(&mut cursor)
                 .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
                 .map(|n| node_text(&n, &ctx.source).into())
@@ -406,7 +406,7 @@ fn lower_constructor_expr<'db>(
             if segments.is_empty() {
                 return None;
             }
-            segments
+            QualifiedName::new(segments)
         }
         _ => return None,
     };
@@ -719,7 +719,7 @@ fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'db> 
             }
 
             let name = ctor_name.unwrap_or_else(|| Symbol::new("_"));
-            let variant_path = idvec![name];
+            let variant_path = QualifiedName::simple(name);
             let fields_region = ops_to_region(ctx.db, location, field_ops);
             pat::helpers::variant_region(ctx.db, location, variant_path, fields_region)
         }
@@ -1256,8 +1256,8 @@ fn handler_pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Regi
 }
 
 /// Parse an operation path like `State::get` into (ability_ref, op_name).
-fn parse_operation_path<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> (SymbolVec, Symbol) {
-    let mut path_parts = SymbolVec::new();
+fn parse_operation_path<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> (QualifiedName, Symbol) {
+    let mut path_parts: Vec<Symbol> = Vec::new();
     let mut cursor = node.walk();
 
     // Collect all path components
@@ -1278,12 +1278,12 @@ fn parse_operation_path<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> (SymbolVe
             .copied()
             .unwrap_or_else(|| Symbol::new("unknown"));
         (
-            SymbolVec::new(), // Empty ability ref (to be inferred)
+            QualifiedName::new(vec![]), // Empty ability ref (to be inferred)
             op_name,
         )
     } else {
         let op_name = path_parts.pop().unwrap();
-        let ability_ref: SymbolVec = path_parts;
+        let ability_ref = QualifiedName::new(path_parts);
         (ability_ref, op_name)
     }
 }

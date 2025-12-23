@@ -6,7 +6,7 @@ use std::hash::{Hash, Hasher};
 use ropey::Rope;
 use tree_sitter::{Node, Tree};
 use trunk_ir::Span;
-use trunk_ir::{Symbol, SymbolVec, idvec};
+use trunk_ir::{QualifiedName, Symbol};
 
 // =============================================================================
 // Parsed CST (Salsa-cacheable)
@@ -62,8 +62,8 @@ pub fn sym(name: &str) -> Symbol {
 }
 
 /// Create a symbol reference (path) from a single name.
-pub fn sym_ref(name: &str) -> SymbolVec {
-    idvec![Symbol::from_dynamic(name)]
+pub fn sym_ref(name: &str) -> QualifiedName {
+    QualifiedName::simple(Symbol::from_dynamic(name))
 }
 
 // =============================================================================
