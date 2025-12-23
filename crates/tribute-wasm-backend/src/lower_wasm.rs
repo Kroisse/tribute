@@ -5,17 +5,18 @@
 
 use std::collections::HashMap;
 
-use crate::plan::{DataSegments, MainExports, MemoryPlan, WasiPlan};
+use crate::plan::{MainExports, MemoryPlan};
 
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{func, wasm};
 
 use crate::passes::const_to_wasm::ConstAnalysis;
+use crate::passes::intrinsic_to_wasm::IntrinsicAnalysis;
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::{
     Attribute, Block, DialectType, IdVec, Location, Operation, QualifiedName, Region, Symbol,
-    Type, Value, idvec,
+    Value, idvec,
 };
 
 /// Entry point for lowering mid-level IR to wasm dialect.
@@ -31,8 +32,13 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let const_analysis = crate::passes::const_to_wasm::analyze_consts(db, module);
     let module = crate::passes::const_to_wasm::lower(db, module, const_analysis);
 
+    // Intrinsic analysis and lowering (print_line -> fd_write)
+    let intrinsic_analysis =
+        crate::passes::intrinsic_to_wasm::analyze_intrinsics(db, module, const_analysis.total_size(db));
+    let module = crate::passes::intrinsic_to_wasm::lower(db, module, intrinsic_analysis);
+
     // Phase 2: Remaining lowering via WasmLowerer
-    let mut lowerer = WasmLowerer::new(db, const_analysis);
+    let mut lowerer = WasmLowerer::new(db, const_analysis, intrinsic_analysis);
     let lowered = lowerer.lower_module(module);
 
     // Debug: Verify all operations are now in wasm dialect
@@ -83,24 +89,24 @@ struct WasmLowerer<'db> {
     value_map: HashMap<Value<'db>, Value<'db>>,
     module_location: Option<Location<'db>>,
     const_analysis: ConstAnalysis<'db>,
-    data_segments: DataSegments,
+    intrinsic_analysis: IntrinsicAnalysis<'db>,
     memory_plan: MemoryPlan,
-    wasi_plan: WasiPlan,
     main_exports: MainExports<'db>,
 }
 
 impl<'db> WasmLowerer<'db> {
-    fn new(db: &'db dyn salsa::Database, const_analysis: ConstAnalysis<'db>) -> Self {
-        // Start data segment allocation after const analysis data
-        let data_segments = DataSegments::with_offset(const_analysis.total_size(db));
+    fn new(
+        db: &'db dyn salsa::Database,
+        const_analysis: ConstAnalysis<'db>,
+        intrinsic_analysis: IntrinsicAnalysis<'db>,
+    ) -> Self {
         Self {
             db,
             value_map: HashMap::new(),
             module_location: None,
             const_analysis,
-            data_segments,
+            intrinsic_analysis,
             memory_plan: MemoryPlan::new(),
-            wasi_plan: WasiPlan::new(),
             main_exports: MainExports::new(),
         }
     }
@@ -164,7 +170,8 @@ impl<'db> WasmLowerer<'db> {
     fn module_preamble_ops(&mut self, builder: &mut BlockBuilder<'db>, location: Location<'db>) {
         let module_location = self.module_location.unwrap_or(location);
 
-        if self.wasi_plan.needs_fd_write {
+        // Emit fd_write import if intrinsics need it
+        if self.intrinsic_analysis.needs_fd_write(self.db) {
             let i32_ty = core::I32::new(self.db).as_type();
             let params = idvec![i32_ty, i32_ty, i32_ty, i32_ty];
             let import_ty = core::Func::new(self.db, params, i32_ty).as_type();
@@ -178,15 +185,16 @@ impl<'db> WasmLowerer<'db> {
             ));
         }
 
-        // Check if const analysis has data that requires memory
+        // Check if any analysis has data that requires memory
         let const_size = self.const_analysis.total_size(self.db);
-        if const_size > 0 {
+        let intrinsic_size = self.intrinsic_analysis.total_size(self.db);
+        if const_size > 0 || intrinsic_size > 0 {
             self.memory_plan.needs_memory = true;
         }
 
         if self.memory_plan.needs_memory && !self.memory_plan.has_memory {
-            // Calculate total data size: const analysis data + runtime data segments
-            let total_data_size = const_size + self.data_segments.end_offset();
+            // Calculate total data size: const analysis + intrinsic analysis
+            let total_data_size = const_size + intrinsic_size;
             let required_pages = self.memory_plan.required_pages(total_data_size);
             builder.op(wasm::memory(
                 self.db,
@@ -213,13 +221,26 @@ impl<'db> WasmLowerer<'db> {
             ));
         }
 
-        // Emit data segments from runtime allocations (iovec, nwritten, etc.)
-        for (offset, bytes) in self.data_segments.take_segments() {
+        // Emit data segments from intrinsic analysis (iovec structures)
+        for (ptr, len, offset) in self.intrinsic_analysis.iovec_allocations(self.db).iter() {
+            let mut iovec_bytes = Vec::with_capacity(8);
+            iovec_bytes.extend_from_slice(&ptr.to_le_bytes());
+            iovec_bytes.extend_from_slice(&len.to_le_bytes());
             builder.op(wasm::data(
                 self.db,
                 module_location,
-                Attribute::IntBits(u64::from(offset)),
-                Attribute::Bytes(bytes),
+                Attribute::IntBits(u64::from(*offset)),
+                Attribute::Bytes(iovec_bytes),
+            ));
+        }
+
+        // Emit nwritten buffer if needed
+        if let Some(nwritten_offset) = self.intrinsic_analysis.nwritten_offset(self.db) {
+            builder.op(wasm::data(
+                self.db,
+                module_location,
+                Attribute::IntBits(u64::from(nwritten_offset)),
+                Attribute::Bytes(vec![0, 0, 0, 0]),
             ));
         }
     }
@@ -250,7 +271,7 @@ impl<'db> WasmLowerer<'db> {
             self.main_exports.main_exported = true;
         }
 
-        if self.wasi_plan.needs_fd_write && self.main_exports.saw_main {
+        if self.intrinsic_analysis.needs_fd_write(self.db) && self.main_exports.saw_main {
             builder.op(self.build_start_function(module_location));
             builder.op(wasm::export_func(
                 self.db,
@@ -298,21 +319,13 @@ impl<'db> WasmLowerer<'db> {
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
 
-        // Handle wasm dialect metadata collection and intrinsic calls
+        // Handle wasm dialect metadata collection
         if dialect == wasm::DIALECT_NAME() {
             self.observe_wasm_module_op(&op, name);
 
             if name == wasm::FUNC() {
                 if let Ok(op_func) = wasm::Func::from_operation(self.db, op) {
                     self.record_wasm_func_metadata(&op_func);
-                }
-            }
-
-            // Handle intrinsic calls (e.g., print_line -> fd_write)
-            if name == wasm::CALL() {
-                let remapped_operands = self.remap_operands(op);
-                if self.lower_intrinsic_call(builder, &op, remapped_operands) {
-                    return;
                 }
             }
         }
@@ -356,91 +369,6 @@ impl<'db> WasmLowerer<'db> {
         builder.op(new_op);
     }
 
-    /// Try to get literal pointer and length from a value's defining operation.
-    /// Returns (ptr_offset, length) if the value is from a wasm.i32_const with literal_len.
-    fn get_literal_info(&self, value: Value<'db>) -> Option<(u32, u32)> {
-        let def = value.def(self.db);
-        let trunk_ir::ValueDef::OpResult(op) = def else {
-            return None;
-        };
-        if op.dialect(self.db) != wasm::DIALECT_NAME() {
-            return None;
-        }
-        if op.name(self.db) != Symbol::new("i32_const") {
-            return None;
-        }
-        let attrs = op.attributes(self.db);
-        let Attribute::IntBits(ptr) = attrs.get(&Symbol::new("value"))? else {
-            return None;
-        };
-        let Attribute::IntBits(len) = attrs.get(&Symbol::new("literal_len"))? else {
-            return None;
-        };
-        Some((*ptr as u32, *len as u32))
-    }
-
-    fn lower_intrinsic_call(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: &Operation<'db>,
-        operands: IdVec<Value<'db>>,
-    ) -> bool {
-        let results = op.results(self.db);
-        let returns_unit = results
-            .first()
-            .copied()
-            .map(|ty| self.is_nil_type(ty))
-            .unwrap_or(false);
-
-        if (results.is_empty() || returns_unit)
-            && self.is_print_line_call(op)
-            && let Some(arg) = operands.first().copied()
-            && let Some((ptr, len)) = self.get_literal_info(arg)
-        {
-            self.wasi_plan.needs_fd_write = true;
-            self.memory_plan.needs_memory = true;
-
-            let location = op.location(self.db);
-            let i32_ty = core::I32::new(self.db).as_type();
-            let iovec_ptr = self.data_segments.ensure_iovec(ptr, len);
-            let nwritten_ptr = self.data_segments.ensure_nwritten();
-
-            let fd_const = self.wasm_i32_const(location, 1, i32_ty);
-            let iovec_const = self.wasm_i32_const(location, iovec_ptr, i32_ty);
-            let iovec_len_const = self.wasm_i32_const(location, 1, i32_ty);
-            let nwritten_const = self.wasm_i32_const(location, nwritten_ptr, i32_ty);
-
-            let callee = QualifiedName::simple(Symbol::new("fd_write"));
-            let call = Operation::of_name(self.db, location, "wasm.call")
-                .operands(IdVec::from(vec![
-                    fd_const.result(self.db, 0),
-                    iovec_const.result(self.db, 0),
-                    iovec_len_const.result(self.db, 0),
-                    nwritten_const.result(self.db, 0),
-                ]))
-                .results(idvec![i32_ty])
-                .attr("callee", Attribute::QualifiedName(callee))
-                .build();
-            let drop = Operation::of_name(self.db, location, "wasm.drop")
-                .operands(idvec![call.result(self.db, 0)])
-                .build();
-            if !results.is_empty() {
-                let old_result = op.result(self.db, 0);
-                let replacement = nwritten_const.result(self.db, 0);
-                self.value_map.insert(old_result, replacement);
-            }
-
-            builder.op(fd_const);
-            builder.op(iovec_const);
-            builder.op(iovec_len_const);
-            builder.op(nwritten_const);
-            builder.op(call);
-            builder.op(drop);
-            return true;
-        }
-        false
-    }
-
     fn record_wasm_func_metadata(&mut self, op: &wasm::Func<'db>) {
         if op.sym_name(self.db) != Symbol::new("main") {
             return;
@@ -464,30 +392,6 @@ impl<'db> WasmLowerer<'db> {
         {
             self.main_exports.main_exported = true;
         }
-    }
-
-    fn wasm_i32_const(
-        &self,
-        location: Location<'db>,
-        value: u32,
-        result_ty: Type<'db>,
-    ) -> Operation<'db> {
-        Operation::of_name(self.db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(u64::from(value)))
-            .results(idvec![result_ty])
-            .build()
-    }
-
-    fn is_print_line_call(&self, op: &Operation<'db>) -> bool {
-        let attrs = op.attributes(self.db);
-        let Some(Attribute::QualifiedName(path)) = attrs.get(&Symbol::new("callee")) else {
-            return false;
-        };
-        path.name() == Symbol::new("print_line")
-    }
-
-    fn is_nil_type(&self, ty: Type<'db>) -> bool {
-        ty.dialect(self.db) == core::DIALECT_NAME() && ty.name(self.db) == Symbol::new("nil")
     }
 
     fn remap_operands(&self, op: Operation<'db>) -> IdVec<Value<'db>> {

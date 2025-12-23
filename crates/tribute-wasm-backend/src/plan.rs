@@ -1,29 +1,12 @@
 //! WebAssembly lowering plan metadata.
 //!
 //! Tracks module-level planning decisions during wasm lowering:
-//! - WASI imports needed
 //! - Memory allocation planning
 //! - Function exports
-//! - Data segments (runtime allocations only; string/bytes consts handled by const_to_wasm)
-
-use std::collections::HashMap;
+//!
+//! Note: WASI imports and data segments are now handled by intrinsic_to_wasm and const_to_wasm passes.
 
 use trunk_ir::Type;
-
-/// WASI import planning.
-///
-/// Tracks whether WASI functions need to be imported during lowering.
-#[derive(Default)]
-pub(crate) struct WasiPlan {
-    pub(crate) needs_fd_write: bool,
-}
-
-impl WasiPlan {
-    /// Create a new WASI plan.
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-}
 
 /// Linear memory planning.
 ///
@@ -67,82 +50,5 @@ impl<'db> MainExports<'db> {
     /// Create a new main exports tracker.
     pub(crate) fn new() -> Self {
         Self::default()
-    }
-}
-
-/// Data segment allocation.
-///
-/// Manages linear memory data segments for runtime allocations (WASI metadata, etc.)
-/// String/bytes constants are handled by const_to_wasm pass.
-#[derive(Default)]
-pub(crate) struct DataSegments {
-    /// Next available offset for allocation.
-    next_offset: u32,
-    /// Data segments: (offset, bytes) pairs.
-    segments: Vec<(u32, Vec<u8>)>,
-    /// Cached iovec structure offsets: (ptr, len) -> offset.
-    iovec_offsets: HashMap<(u32, u32), u32>,
-    /// Cached nwritten output location.
-    nwritten_offset: Option<u32>,
-}
-
-impl DataSegments {
-    /// Create a new data segments allocator starting from a given offset.
-    /// Use this when const analysis has already allocated some data segments.
-    pub(crate) fn with_offset(offset: u32) -> Self {
-        Self {
-            next_offset: offset,
-            ..Default::default()
-        }
-    }
-
-    /// Get the current end offset (total bytes allocated so far).
-    pub(crate) fn end_offset(&self) -> u32 {
-        self.next_offset
-    }
-
-    /// Allocate bytes in a data segment and return (offset, length).
-    pub(crate) fn allocate_bytes(&mut self, bytes: Vec<u8>) -> (u32, u32) {
-        let offset = Self::align_to(self.next_offset, 4);
-        let len = bytes.len() as u32;
-        self.segments.push((offset, bytes));
-        self.next_offset = offset + len;
-        (offset, len)
-    }
-
-    /// Ensure an iovec structure exists and return its offset.
-    pub(crate) fn ensure_iovec(&mut self, ptr: u32, len: u32) -> u32 {
-        if let Some(&offset) = self.iovec_offsets.get(&(ptr, len)) {
-            return offset;
-        }
-        let mut bytes = Vec::with_capacity(8);
-        bytes.extend_from_slice(&ptr.to_le_bytes());
-        bytes.extend_from_slice(&len.to_le_bytes());
-        let (offset, _) = self.allocate_bytes(bytes);
-        self.iovec_offsets.insert((ptr, len), offset);
-        offset
-    }
-
-    /// Ensure the nwritten output location exists and return its offset.
-    pub(crate) fn ensure_nwritten(&mut self) -> u32 {
-        if let Some(offset) = self.nwritten_offset {
-            return offset;
-        }
-        let (offset, _) = self.allocate_bytes(vec![0, 0, 0, 0]);
-        self.nwritten_offset = Some(offset);
-        offset
-    }
-
-    /// Take all collected data segments.
-    pub(crate) fn take_segments(&mut self) -> Vec<(u32, Vec<u8>)> {
-        std::mem::take(&mut self.segments)
-    }
-
-    /// Align a value to the given power-of-2 alignment.
-    fn align_to(value: u32, align: u32) -> u32 {
-        if align == 0 {
-            return value;
-        }
-        value.div_ceil(align) * align
     }
 }
