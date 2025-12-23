@@ -4,6 +4,7 @@
 //! a WebAssembly binary using the `wasm_encoder` crate.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use trunk_ir::dialect::core;
 use trunk_ir::{
@@ -40,6 +41,129 @@ trunk_ir::symbols! {
     ATTR_OFFSET => "offset",
     ATTR_BYTES => "bytes",
 }
+
+/// Simple wasm operations that follow the pattern:
+/// emit operands → single instruction → set result local
+static SIMPLE_OPS: LazyLock<HashMap<Symbol, Instruction<'static>>> = LazyLock::new(|| {
+    [
+        // i32 arithmetic
+        ("i32_add", Instruction::I32Add),
+        ("i32_sub", Instruction::I32Sub),
+        ("i32_mul", Instruction::I32Mul),
+        ("i32_div_s", Instruction::I32DivS),
+        ("i32_div_u", Instruction::I32DivU),
+        ("i32_rem_s", Instruction::I32RemS),
+        ("i32_rem_u", Instruction::I32RemU),
+        // i32 comparison
+        ("i32_eq", Instruction::I32Eq),
+        ("i32_ne", Instruction::I32Ne),
+        ("i32_lt_s", Instruction::I32LtS),
+        ("i32_lt_u", Instruction::I32LtU),
+        ("i32_le_s", Instruction::I32LeS),
+        ("i32_le_u", Instruction::I32LeU),
+        ("i32_gt_s", Instruction::I32GtS),
+        ("i32_gt_u", Instruction::I32GtU),
+        ("i32_ge_s", Instruction::I32GeS),
+        ("i32_ge_u", Instruction::I32GeU),
+        // i32 bitwise
+        ("i32_and", Instruction::I32And),
+        ("i32_or", Instruction::I32Or),
+        ("i32_xor", Instruction::I32Xor),
+        ("i32_shl", Instruction::I32Shl),
+        ("i32_shr_s", Instruction::I32ShrS),
+        ("i32_shr_u", Instruction::I32ShrU),
+        // i64 arithmetic
+        ("i64_add", Instruction::I64Add),
+        ("i64_sub", Instruction::I64Sub),
+        ("i64_mul", Instruction::I64Mul),
+        ("i64_div_s", Instruction::I64DivS),
+        ("i64_div_u", Instruction::I64DivU),
+        ("i64_rem_s", Instruction::I64RemS),
+        ("i64_rem_u", Instruction::I64RemU),
+        // i64 comparison
+        ("i64_eq", Instruction::I64Eq),
+        ("i64_ne", Instruction::I64Ne),
+        ("i64_lt_s", Instruction::I64LtS),
+        ("i64_lt_u", Instruction::I64LtU),
+        ("i64_le_s", Instruction::I64LeS),
+        ("i64_le_u", Instruction::I64LeU),
+        ("i64_gt_s", Instruction::I64GtS),
+        ("i64_gt_u", Instruction::I64GtU),
+        ("i64_ge_s", Instruction::I64GeS),
+        ("i64_ge_u", Instruction::I64GeU),
+        // i64 bitwise
+        ("i64_and", Instruction::I64And),
+        ("i64_or", Instruction::I64Or),
+        ("i64_xor", Instruction::I64Xor),
+        ("i64_shl", Instruction::I64Shl),
+        ("i64_shr_s", Instruction::I64ShrS),
+        ("i64_shr_u", Instruction::I64ShrU),
+        // f32 arithmetic
+        ("f32_add", Instruction::F32Add),
+        ("f32_sub", Instruction::F32Sub),
+        ("f32_mul", Instruction::F32Mul),
+        ("f32_div", Instruction::F32Div),
+        ("f32_neg", Instruction::F32Neg),
+        // f32 comparison
+        ("f32_eq", Instruction::F32Eq),
+        ("f32_ne", Instruction::F32Ne),
+        ("f32_lt", Instruction::F32Lt),
+        ("f32_le", Instruction::F32Le),
+        ("f32_gt", Instruction::F32Gt),
+        ("f32_ge", Instruction::F32Ge),
+        // f64 arithmetic
+        ("f64_add", Instruction::F64Add),
+        ("f64_sub", Instruction::F64Sub),
+        ("f64_mul", Instruction::F64Mul),
+        ("f64_div", Instruction::F64Div),
+        ("f64_neg", Instruction::F64Neg),
+        // f64 comparison
+        ("f64_eq", Instruction::F64Eq),
+        ("f64_ne", Instruction::F64Ne),
+        ("f64_lt", Instruction::F64Lt),
+        ("f64_le", Instruction::F64Le),
+        ("f64_gt", Instruction::F64Gt),
+        ("f64_ge", Instruction::F64Ge),
+        // Integer conversions
+        ("i32_wrap_i64", Instruction::I32WrapI64),
+        ("i64_extend_i32_s", Instruction::I64ExtendI32S),
+        ("i64_extend_i32_u", Instruction::I64ExtendI32U),
+        // Float to int conversions
+        ("i32_trunc_f32_s", Instruction::I32TruncF32S),
+        ("i32_trunc_f32_u", Instruction::I32TruncF32U),
+        ("i32_trunc_f64_s", Instruction::I32TruncF64S),
+        ("i32_trunc_f64_u", Instruction::I32TruncF64U),
+        ("i64_trunc_f32_s", Instruction::I64TruncF32S),
+        ("i64_trunc_f32_u", Instruction::I64TruncF32U),
+        ("i64_trunc_f64_s", Instruction::I64TruncF64S),
+        ("i64_trunc_f64_u", Instruction::I64TruncF64U),
+        // Int to float conversions
+        ("f32_convert_i32_s", Instruction::F32ConvertI32S),
+        ("f32_convert_i32_u", Instruction::F32ConvertI32U),
+        ("f32_convert_i64_s", Instruction::F32ConvertI64S),
+        ("f32_convert_i64_u", Instruction::F32ConvertI64U),
+        ("f64_convert_i32_s", Instruction::F64ConvertI32S),
+        ("f64_convert_i32_u", Instruction::F64ConvertI32U),
+        ("f64_convert_i64_s", Instruction::F64ConvertI64S),
+        ("f64_convert_i64_u", Instruction::F64ConvertI64U),
+        // Float to float conversions
+        ("f32_demote_f64", Instruction::F32DemoteF64),
+        ("f64_promote_f32", Instruction::F64PromoteF32),
+        // Reinterpretations
+        ("i32_reinterpret_f32", Instruction::I32ReinterpretF32),
+        ("i64_reinterpret_f64", Instruction::I64ReinterpretF64),
+        ("f32_reinterpret_i32", Instruction::F32ReinterpretI32),
+        ("f64_reinterpret_i64", Instruction::F64ReinterpretI64),
+        // Misc
+        ("drop", Instruction::Drop),
+        ("return", Instruction::Return),
+        ("ref_is_null", Instruction::RefIsNull),
+        ("array_len", Instruction::ArrayLen),
+    ]
+    .into_iter()
+    .map(|(k, v)| (Symbol::new(k), v))
+    .collect()
+});
 
 struct FunctionDef<'db> {
     name: Symbol,
@@ -941,6 +1065,15 @@ fn emit_op<'db>(
     let name = op.name(db);
     let operands = op.operands(db);
 
+    // Fast path: simple operations (emit operands → instruction → set result)
+    if let Some(instr) = SIMPLE_OPS.get(&name) {
+        emit_operands(operands, value_locals, function)?;
+        function.instruction(instr);
+        set_result_local(db, op, value_locals, function)?;
+        return Ok(());
+    }
+
+    // Special cases: const, control flow, calls, locals, GC ops
     if name == Symbol::new("i32_const") {
         let value = attr_i32(db, op, ATTR_VALUE())?;
         function.instruction(&Instruction::I32Const(value));
@@ -956,383 +1089,6 @@ fn emit_op<'db>(
     } else if name == Symbol::new("f64_const") {
         let value = attr_f64(db, op, ATTR_VALUE())?;
         function.instruction(&Instruction::F64Const(value.into()));
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_add") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32Add);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_sub") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32Sub);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_mul") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32Mul);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_eq") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32Eq);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_ne") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32Ne);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_lt_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32LtS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_lt_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32LtU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_le_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32LeS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_le_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32LeU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_gt_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32GtS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_gt_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32GtU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_ge_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32GeS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_ge_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32GeU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_div_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32DivS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_div_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32DivU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_rem_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32RemS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_rem_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32RemU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_add") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64Add);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_sub") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64Sub);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_mul") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64Mul);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_div_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64DivS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_div_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64DivU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_rem_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64RemS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_rem_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64RemU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_eq") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64Eq);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_ne") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64Ne);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_lt_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64LtS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_lt_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64LtU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_le_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64LeS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_le_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64LeU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_gt_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64GtS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_gt_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64GtU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_ge_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64GeS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_ge_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64GeU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_and") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32And);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_or") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32Or);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_xor") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32Xor);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_shl") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32Shl);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_shr_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32ShrS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_shr_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32ShrU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_and") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64And);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_or") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64Or);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_xor") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64Xor);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_shl") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64Shl);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_shr_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64ShrS);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_shr_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64ShrU);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_add") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32Add);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_sub") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32Sub);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_mul") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32Mul);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_div") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32Div);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_add") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64Add);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_sub") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64Sub);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_mul") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64Mul);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_div") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64Div);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_neg") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32Neg);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_neg") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64Neg);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_eq") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32Eq);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_ne") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32Ne);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_lt") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32Lt);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_le") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32Le);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_gt") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32Gt);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_ge") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32Ge);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_eq") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64Eq);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_ne") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64Ne);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_lt") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64Lt);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_le") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64Le);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_gt") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64Gt);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_ge") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64Ge);
-        set_result_local(db, op, value_locals, function)?;
-    // === Type Conversions (Integer) ===
-    } else if name == Symbol::new("i32_wrap_i64") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32WrapI64);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_extend_i32_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64ExtendI32S);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_extend_i32_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64ExtendI32U);
-        set_result_local(db, op, value_locals, function)?;
-    // === Type Conversions (Float to Int) ===
-    } else if name == Symbol::new("i32_trunc_f32_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32TruncF32S);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_trunc_f32_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32TruncF32U);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_trunc_f64_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32TruncF64S);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i32_trunc_f64_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32TruncF64U);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_trunc_f32_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64TruncF32S);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_trunc_f32_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64TruncF32U);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_trunc_f64_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64TruncF64S);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_trunc_f64_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64TruncF64U);
-        set_result_local(db, op, value_locals, function)?;
-    // === Type Conversions (Int to Float) ===
-    } else if name == Symbol::new("f32_convert_i32_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32ConvertI32S);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_convert_i32_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32ConvertI32U);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_convert_i64_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32ConvertI64S);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_convert_i64_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32ConvertI64U);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_convert_i32_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64ConvertI32S);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_convert_i32_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64ConvertI32U);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_convert_i64_s") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64ConvertI64S);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_convert_i64_u") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64ConvertI64U);
-        set_result_local(db, op, value_locals, function)?;
-    // === Type Conversions (Float to Float) ===
-    } else if name == Symbol::new("f32_demote_f64") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32DemoteF64);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_promote_f32") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64PromoteF32);
-        set_result_local(db, op, value_locals, function)?;
-    // === Reinterpretations (Bitcast) ===
-    } else if name == Symbol::new("i32_reinterpret_f32") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I32ReinterpretF32);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("i64_reinterpret_f64") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::I64ReinterpretF64);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f32_reinterpret_i32") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F32ReinterpretI32);
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("f64_reinterpret_i64") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::F64ReinterpretI64);
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("if") {
         let result_ty = op.results(db).first().copied();
@@ -1446,9 +1202,6 @@ fn emit_op<'db>(
         emit_operands(operands, value_locals, function)?;
         let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
         function.instruction(&Instruction::BrIf(depth));
-    } else if name == Symbol::new("drop") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::Drop);
     } else if name == Symbol::new("call") {
         emit_operands(operands, value_locals, function)?;
         let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
@@ -1460,9 +1213,6 @@ fn emit_op<'db>(
         let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
         let target = resolve_callee(callee, func_indices)?;
         function.instruction(&Instruction::ReturnCall(target));
-    } else if name == Symbol::new("return") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::Return);
     } else if name == Symbol::new("local_get") {
         let index = attr_local_index(db, op)?;
         function.instruction(&Instruction::LocalGet(index));
@@ -1531,20 +1281,12 @@ fn emit_op<'db>(
         let type_idx = get_type_idx_from_attrs(&attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArraySet(type_idx));
-    } else if name == Symbol::new("array_len") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::ArrayLen);
-        set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("ref_null") {
         let attrs = op.attributes(db);
         let heap_type = attr_heap_type(&attrs, ATTR_HEAP_TYPE()).ok().or_else(|| {
             get_type_idx_from_attrs(&attrs).map(HeapType::Concrete)
         }).ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
         function.instruction(&Instruction::RefNull(heap_type));
-        set_result_local(db, op, value_locals, function)?;
-    } else if name == Symbol::new("ref_is_null") {
-        emit_operands(operands, value_locals, function)?;
-        function.instruction(&Instruction::RefIsNull);
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("ref_cast") {
         emit_operands(operands, value_locals, function)?;
