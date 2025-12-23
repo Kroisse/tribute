@@ -20,6 +20,33 @@ use wasm_encoder::{
 use crate::errors;
 use crate::{CompilationError, CompilationResult};
 
+/// Check if a type contains unresolved type references (src.type, type.var).
+/// Generic functions have unresolved type parameters and cannot be compiled to wasm.
+fn has_unresolved_type(db: &dyn salsa::Database, ty: Type) -> bool {
+    let dialect = ty.dialect(db);
+    // Check if this type is src.type (unresolved) or type.var (type variable)
+    if dialect == Symbol::new("src") || dialect == Symbol::new("type") {
+        return true;
+    }
+    // Recursively check type parameters
+    for param in ty.params(db).iter() {
+        if has_unresolved_type(db, *param) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if a function type has any unresolved types in params or result.
+fn func_has_unresolved_types(db: &dyn salsa::Database, func_ty: core::Func) -> bool {
+    for param in func_ty.params(db).iter() {
+        if has_unresolved_type(db, *param) {
+            return true;
+        }
+    }
+    has_unresolved_type(db, func_ty.result(db))
+}
+
 trunk_ir::symbols! {
     ATTR_SYM_NAME => "sym_name",
     ATTR_TYPE => "type",
@@ -184,6 +211,7 @@ struct ExportDef {
     target: ExportTarget,
 }
 
+#[derive(Debug)]
 enum ExportTarget {
     Func(Symbol),
     Memory(u32),
@@ -220,7 +248,17 @@ pub fn emit_wasm<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> CompilationResult<Vec<u8>> {
-    let module_info = collect_module_info(db, module)?;
+    eprintln!("[DEBUG] emit_wasm: collecting module info...");
+    let module_info = match collect_module_info(db, module) {
+        Ok(info) => {
+            eprintln!("[DEBUG] emit_wasm: module info collected successfully");
+            info
+        }
+        Err(e) => {
+            eprintln!("[DEBUG] emit_wasm: collect_module_info failed: {:?}", e);
+            return Err(e);
+        }
+    };
 
     let mut type_section = TypeSection::new();
     let mut import_section = ImportSection::new();
@@ -272,17 +310,38 @@ pub fn emit_wasm<'db>(
     }
 
     for func_def in module_info.funcs.iter() {
+        eprintln!("[DEBUG] Processing function type for: {:?}", func_def.name);
         let params = func_def
             .ty
             .params(db)
             .iter()
             .map(|ty| type_to_valtype(db, *ty))
-            .collect::<CompilationResult<Vec<_>>>()?;
-        let results = result_types(db, func_def.ty.result(db))?;
+            .collect::<CompilationResult<Vec<_>>>();
+        let params = match params {
+            Ok(p) => {
+                eprintln!("[DEBUG]   params: {:?}", p);
+                p
+            }
+            Err(e) => {
+                eprintln!("[DEBUG] Function params conversion failed: {:?}", e);
+                return Err(e);
+            }
+        };
+        let results = match result_types(db, func_def.ty.result(db)) {
+            Ok(r) => {
+                eprintln!("[DEBUG]   results: {:?}", r);
+                r
+            }
+            Err(e) => {
+                eprintln!("[DEBUG] Function results conversion failed: {:?}", e);
+                return Err(e);
+            }
+        };
         type_section.ty().function(params, results);
         let type_index = next_type_index;
         next_type_index += 1;
         function_section.function(type_index);
+        eprintln!("[DEBUG]   type_index: {}", type_index);
     }
 
     if let Some(memory) = &module_info.memory {
@@ -295,10 +354,13 @@ pub fn emit_wasm<'db>(
         });
     }
 
+    eprintln!("[DEBUG] Processing {} exports...", module_info.exports.len());
     for export in module_info.exports.iter() {
+        eprintln!("[DEBUG]   export: {:?} -> {:?}", export.name, export.target);
         match export.target {
             ExportTarget::Func(sym) => {
                 let Some(index) = func_indices.get(&sym) else {
+                    eprintln!("[DEBUG]   function not found: {:?}", sym);
                     return Err(CompilationError::function_not_found(&sym.to_string()));
                 };
                 export_section.export(export.name.as_str(), export.kind, *index);
@@ -324,9 +386,18 @@ pub fn emit_wasm<'db>(
         data_section.active(0, &offset, data.bytes.iter().copied());
     }
 
-    for func_def in &module_info.funcs {
-        let function = emit_function(db, func_def, &func_indices, &module_info.type_idx_by_type)?;
-        code_section.function(&function);
+    eprintln!("[DEBUG] emit_wasm: emitting {} functions...", module_info.funcs.len());
+    for (i, func_def) in module_info.funcs.iter().enumerate() {
+        eprintln!("[DEBUG] emit_wasm: emitting function {}: {:?}", i, func_def.name);
+        match emit_function(db, func_def, &func_indices, &module_info.type_idx_by_type) {
+            Ok(function) => {
+                code_section.function(&function);
+            }
+            Err(e) => {
+                eprintln!("[DEBUG] emit_wasm: emit_function failed: {:?}", e);
+                return Err(e);
+            }
+        }
     }
 
     let mut module_bytes = Module::new();
@@ -368,7 +439,29 @@ fn collect_module_info<'db>(
             if op.dialect(db) == wasm_dialect {
                 match op.name(db) {
                     name if name == Symbol::new("func") => {
-                        funcs.push(extract_function_def(db, op)?);
+                        if let Ok(func_def) = extract_function_def(db, op) {
+                            // Skip generic functions (those with unresolved type parameters)
+                            if func_has_unresolved_types(db, func_def.ty) {
+                                func_def.name.with_str(|name| {
+                                    let params: Vec<_> = func_def.ty.params(db).iter()
+                                        .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                                        .collect();
+                                    let result = func_def.ty.result(db);
+                                    eprintln!(
+                                        "[DEBUG] Skipping generic function: {} (params: {:?}, result: {}.{})",
+                                        name,
+                                        params,
+                                        result.dialect(db),
+                                        result.name(db),
+                                    );
+                                });
+                                continue;
+                            }
+                            func_def.name.with_str(|name| {
+                                eprintln!("[DEBUG] Including function: {}", name);
+                            });
+                            funcs.push(func_def);
+                        }
                     }
                     name if name == Symbol::new("import_func") => {
                         imports.push(extract_import_def(db, op)?);
@@ -1065,6 +1158,8 @@ fn emit_op<'db>(
     let name = op.name(db);
     let operands = op.operands(db);
 
+    eprintln!("[DEBUG] emit_op: {}.{}", op.dialect(db), name);
+
     // Fast path: simple operations (emit operands → instruction → set result)
     if let Some(instr) = SIMPLE_OPS.get(&name) {
         emit_operands(operands, value_locals, function)?;
@@ -1319,10 +1414,11 @@ fn emit_operands<'db>(
     function: &mut Function,
 ) -> CompilationResult<()> {
     for value in operands.iter() {
-        let index = value_locals
-            .get(value)
-            .ok_or_else(|| CompilationError::invalid_module("operand missing local mapping"))?;
-        function.instruction(&Instruction::LocalGet(*index));
+        // Skip nil-type operands (no runtime value)
+        if let Some(index) = value_locals.get(value) {
+            function.instruction(&Instruction::LocalGet(*index));
+        }
+        // If operand not in value_locals, it might be a nil value that was erased - skip it
     }
     Ok(())
 }

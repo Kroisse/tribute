@@ -5,7 +5,7 @@ use trunk_ir::{
     Attribute, BlockBuilder, IdVec, QualifiedName, Symbol, Type,
     dialect::{core, func, src, ty},
 };
-use trunk_ir::{Span, SymbolVec};
+use trunk_ir::Span;
 
 use super::context::CstLoweringCtx;
 use super::helpers::{is_comment, node_text, sym};
