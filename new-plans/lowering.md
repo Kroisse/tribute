@@ -288,59 +288,6 @@ impl RewritePattern for StructNewPattern {
 
 ---
 
-## QualifiedName
-
-완전 한정 이름을 표현하는 interned 타입. `func.call`의 callee 등에서 사용.
-
-```rust
-/// 완전 한정 이름 (e.g., std::intrinsics::wasi::preview1::fd_write)
-#[salsa::interned]
-pub struct QualifiedName<'db> {
-    #[returns(ref)]
-    segments: SymbolVec,
-}
-
-impl<'db> QualifiedName<'db> {
-    /// base 기준 상대 경로 반환
-    ///
-    /// std::intrinsics::wasi::preview1::fd_write
-    ///   .relative(std::intrinsics::wasi::preview1)
-    ///   → Some(fd_write)
-    pub fn relative(
-        &self,
-        db: &'db dyn Database,
-        base: &QualifiedName<'db>,
-    ) -> Option<QualifiedName<'db>> {
-        let segs = self.segments(db);
-        let base_segs = base.segments(db);
-
-        if segs.starts_with(base_segs) {
-            Some(QualifiedName::new(db, &segs[base_segs.len()..]))
-        } else {
-            None
-        }
-    }
-
-    /// 마지막 segment (단순 이름)
-    pub fn name(&self, db: &'db dyn Database) -> Symbol<'db> {
-        *self.segments(db).last().unwrap()
-    }
-
-    /// 단일 segment인지 확인
-    pub fn is_simple(&self, db: &'db dyn Database) -> bool {
-        self.segments(db).len() == 1
-    }
-}
-```
-
-**특징:**
-
-- Salsa interned: 동일 경로는 같은 ID, 비교 O(1)
-- `Symbol`의 시퀀스: 각 segment도 interned
-- 경로 연산: `relative`, `name`, `is_simple` 등
-
----
-
 ## Salsa-native Analysis
 
 ### MLIR과의 비교
