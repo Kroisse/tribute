@@ -66,9 +66,11 @@ impl RewritePattern for FuncCallPattern {
         };
 
         // Build wasm.call with same callee and operands
-        let new_op = Operation::of_name(db, op.location(db), "wasm.call")
-            .operands(op.operands(db).clone())
-            .results(op.results(db).clone())
+        // Note: we use modify() but need to update the callee attribute format
+        let new_op = op
+            .modify(db)
+            .dialect_str("wasm")
+            .name_str("call")
             .attr("callee", Attribute::QualifiedName(call_op.callee(db)))
             .build();
 
@@ -113,8 +115,10 @@ impl RewritePattern for FuncTailCallPattern {
         };
 
         // Build wasm.return_call with same callee and operands
-        let new_op = Operation::of_name(db, op.location(db), "wasm.return_call")
-            .operands(op.operands(db).clone())
+        let new_op = op
+            .modify(db)
+            .dialect_str("wasm")
+            .name_str("return_call")
             .attr("callee", Attribute::QualifiedName(tail_call_op.callee(db)))
             .build();
 

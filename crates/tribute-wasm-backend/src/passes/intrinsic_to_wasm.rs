@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectType, Operation, QualifiedName, Symbol};
+use trunk_ir::{Attribute, DialectOp, DialectType, Operation, QualifiedName, Symbol};
 
 /// Result of intrinsic analysis - tracks WASI needs and data segment allocations.
 #[salsa::tracked]
@@ -215,12 +215,11 @@ impl RewritePattern for PrintLinePattern {
         op: &Operation<'a>,
     ) -> RewriteResult<'a> {
         // Check if this is wasm.call to print_line
-        if op.dialect(db) != wasm::DIALECT_NAME() || op.name(db) != wasm::CALL() {
+        let Ok(call_op) = wasm::Call::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
-        let attrs = op.attributes(db);
-        let Some(Attribute::QualifiedName(callee)) = attrs.get(&Symbol::new("callee")) else {
+        let Attribute::QualifiedName(callee) = call_op.callee(db) else {
             return RewriteResult::Unchanged;
         };
         if callee.name() != Symbol::new("print_line") {
@@ -255,41 +254,26 @@ impl RewritePattern for PrintLinePattern {
         // result = wasm.call(fd_write, fd_const, iovec_const, iovec_len_const, nwritten_const)
         // wasm.drop(result)
 
-        let fd_const = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(1)) // stdout
-            .results(trunk_ir::idvec![i32_ty])
-            .build();
-
-        let iovec_const = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(u64::from(iovec_offset)))
-            .results(trunk_ir::idvec![i32_ty])
-            .build();
-
-        let iovec_len_const = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(1)) // one iovec entry
-            .results(trunk_ir::idvec![i32_ty])
-            .build();
-
-        let nwritten_const = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(u64::from(nwritten_offset)))
-            .results(trunk_ir::idvec![i32_ty])
-            .build();
+        let fd_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1)); // stdout
+        let iovec_const =
+            wasm::i32_const(db, location, i32_ty, Attribute::IntBits(u64::from(iovec_offset)));
+        let iovec_len_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1)); // one iovec entry
+        let nwritten_const =
+            wasm::i32_const(db, location, i32_ty, Attribute::IntBits(u64::from(nwritten_offset)));
 
         let fd_write_callee = QualifiedName::simple(Symbol::new("fd_write"));
         let call = Operation::of_name(db, location, "wasm.call")
             .operands(trunk_ir::idvec![
-                fd_const.result(db, 0),
-                iovec_const.result(db, 0),
-                iovec_len_const.result(db, 0),
-                nwritten_const.result(db, 0),
+                fd_const.result(db),
+                iovec_const.result(db),
+                iovec_len_const.result(db),
+                nwritten_const.result(db),
             ])
             .results(trunk_ir::idvec![i32_ty])
             .attr("callee", Attribute::QualifiedName(fd_write_callee))
             .build();
 
-        let drop_op = Operation::of_name(db, location, "wasm.drop")
-            .operands(trunk_ir::idvec![call.result(db, 0)])
-            .build();
+        let drop_op = wasm::drop(db, location, call.result(db, 0));
 
         // Use Expand to emit all operations
         // Note: if print_line returns a value, use Erase with nwritten_const result
@@ -300,17 +284,17 @@ impl RewritePattern for PrintLinePattern {
                 && results[0].name(db) == Symbol::new("nil"))
         {
             RewriteResult::Expand(vec![
-                fd_const,
-                iovec_const,
-                iovec_len_const,
-                nwritten_const,
+                fd_const.operation(),
+                iovec_const.operation(),
+                iovec_len_const.operation(),
+                nwritten_const.operation(),
                 call,
-                drop_op,
+                drop_op.operation(),
             ])
         } else {
             // If print_line returns a value, map it to nwritten_const result
             RewriteResult::Erase {
-                replacement_values: vec![nwritten_const.result(db, 0)],
+                replacement_values: vec![nwritten_const.result(db)],
             }
         }
     }

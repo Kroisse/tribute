@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectType, Operation, Symbol};
+use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
 /// Result of const analysis - maps content to allocated offset.
 #[salsa::tracked]
@@ -158,16 +158,11 @@ impl RewritePattern for StringConstPattern {
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
     ) -> RewriteResult<'a> {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::STRING_CONST() {
-            return RewriteResult::Unchanged;
-        }
-
-        let attrs = op.attributes(db);
-        let Some(Attribute::String(value)) = attrs.get(&Symbol::new("value")) else {
+        let Ok(string_const) = adt::StringConst::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
-        let content = value.clone().into_bytes();
+        let content = string_const.value(db).clone().into_bytes();
 
         let Some((offset, len)) = lookup_offset(&self.allocations, &content) else {
             return RewriteResult::Unchanged;
@@ -203,12 +198,11 @@ impl RewritePattern for BytesConstPattern {
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
     ) -> RewriteResult<'a> {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::BYTES_CONST() {
+        let Ok(bytes_const) = adt::BytesConst::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
-        let attrs = op.attributes(db);
-        let Some(Attribute::Bytes(value)) = attrs.get(&Symbol::new("value")) else {
+        let Attribute::Bytes(value) = bytes_const.value(db) else {
             return RewriteResult::Unchanged;
         };
 
