@@ -36,9 +36,9 @@ impl RewritePattern for FuncFuncPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != func::DIALECT_NAME() || op.name(db) != func::FUNC() {
+        let Ok(_func_op) = func::Func::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         // wasm.func has the same structure: sym_name, type attributes, body region
         // PatternApplicator will recursively process the body region
@@ -61,18 +61,15 @@ impl RewritePattern for FuncCallPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != func::DIALECT_NAME() || op.name(db) != func::CALL() {
+        let Ok(call_op) = func::Call::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
-
-        let op_call = func::Call::from_operation(db, *op).expect("already matched func.call");
-        let location = op.location(db);
+        };
 
         // Build wasm.call with same callee and operands
-        let new_op = Operation::of_name(db, location, "wasm.call")
+        let new_op = Operation::of_name(db, op.location(db), "wasm.call")
             .operands(op.operands(db).clone())
             .results(op.results(db).clone())
-            .attr("callee", Attribute::QualifiedName(op_call.callee(db)))
+            .attr("callee", Attribute::QualifiedName(call_op.callee(db)))
             .build();
 
         RewriteResult::Replace(new_op)
@@ -88,9 +85,9 @@ impl RewritePattern for FuncReturnPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != func::DIALECT_NAME() || op.name(db) != func::RETURN() {
+        let Ok(_return_op) = func::Return::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let new_op = op
             .modify(db)
@@ -111,17 +108,14 @@ impl RewritePattern for FuncTailCallPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != func::DIALECT_NAME() || op.name(db) != func::TAIL_CALL() {
+        let Ok(tail_call_op) = func::TailCall::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
-
-        let op_tail = func::TailCall::from_operation(db, *op).expect("already matched func.tail_call");
-        let location = op.location(db);
+        };
 
         // Build wasm.return_call with same callee and operands
-        let new_op = Operation::of_name(db, location, "wasm.return_call")
+        let new_op = Operation::of_name(db, op.location(db), "wasm.return_call")
             .operands(op.operands(db).clone())
-            .attr("callee", Attribute::QualifiedName(op_tail.callee(db)))
+            .attr("callee", Attribute::QualifiedName(tail_call_op.callee(db)))
             .build();
 
         RewriteResult::Replace(new_op)
@@ -137,9 +131,9 @@ impl RewritePattern for FuncUnreachablePattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != func::DIALECT_NAME() || op.name(db) != func::UNREACHABLE() {
+        let Ok(_unreachable_op) = func::Unreachable::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let new_op = op
             .modify(db)

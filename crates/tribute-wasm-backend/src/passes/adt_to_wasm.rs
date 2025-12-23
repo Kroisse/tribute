@@ -23,7 +23,7 @@
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectType, Operation, Symbol, idvec};
+use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, idvec};
 
 /// Lower adt dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -54,9 +54,9 @@ impl RewritePattern for StructNewPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::STRUCT_NEW() {
+        let Ok(_struct_new) = adt::StructNew::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         // Keep type attribute, emit will convert to type_idx
         let new_op = op
@@ -78,27 +78,23 @@ impl RewritePattern for StructGetPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::STRUCT_GET() {
+        let Ok(struct_get) = adt::StructGet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
-
-        let location = op.location(db);
-        let attrs = op.attributes(db);
+        };
 
         // Get field index (can be IntBits or String name)
-        let field_idx = match attrs.get(&Symbol::new("field")) {
-            Some(Attribute::IntBits(idx)) => *idx,
-            _ => return RewriteResult::Unchanged,
+        let Attribute::IntBits(field_idx) = struct_get.field(db) else {
+            return RewriteResult::Unchanged;
         };
 
         // Build wasm.struct_get with renamed attributes
-        let mut builder = Operation::of_name(db, location, "wasm.struct_get")
+        let mut builder = Operation::of_name(db, op.location(db), "wasm.struct_get")
             .operands(op.operands(db).clone())
             .results(op.results(db).clone())
             .attr("field_idx", Attribute::IntBits(field_idx));
 
         // Preserve type attribute (will be converted to type_idx at emit time)
-        if let Some(ty_attr) = attrs.get(&Symbol::new("type")) {
+        if let Some(ty_attr) = op.attributes(db).get(&Symbol::new("type")) {
             builder = builder.attr("type", ty_attr.clone());
         }
 
@@ -115,26 +111,22 @@ impl RewritePattern for StructSetPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::STRUCT_SET() {
+        let Ok(struct_set) = adt::StructSet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
-
-        let location = op.location(db);
-        let attrs = op.attributes(db);
+        };
 
         // Get field index
-        let field_idx = match attrs.get(&Symbol::new("field")) {
-            Some(Attribute::IntBits(idx)) => *idx,
-            _ => return RewriteResult::Unchanged,
+        let Attribute::IntBits(field_idx) = struct_set.field(db) else {
+            return RewriteResult::Unchanged;
         };
 
         // Build wasm.struct_set with renamed attributes
-        let mut builder = Operation::of_name(db, location, "wasm.struct_set")
+        let mut builder = Operation::of_name(db, op.location(db), "wasm.struct_set")
             .operands(op.operands(db).clone())
             .attr("field_idx", Attribute::IntBits(field_idx));
 
         // Preserve type attribute
-        if let Some(ty_attr) = attrs.get(&Symbol::new("type")) {
+        if let Some(ty_attr) = op.attributes(db).get(&Symbol::new("type")) {
             builder = builder.attr("type", ty_attr.clone());
         }
 
@@ -153,21 +145,13 @@ impl RewritePattern for VariantNewPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::VARIANT_NEW() {
+        let Ok(variant_new) = adt::VariantNew::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let location = op.location(db);
-        let attrs = op.attributes(db);
-        let operands = op.operands(db);
-
-        // Get tag value from attribute
-        let tag = match attrs.get(&Symbol::new("tag")) {
-            Some(Attribute::IntBits(tag)) => *tag as u32,
-            Some(Attribute::Symbol(tag_sym)) => name_hash_u32(&tag_sym.to_string()),
-            Some(Attribute::String(tag_str)) => name_hash_u32(tag_str),
-            _ => return RewriteResult::Unchanged,
-        };
+        let tag_sym = variant_new.tag(db);
+        let tag = name_hash_u32(&tag_sym.to_string());
 
         let i32_ty = core::I32::new(db).as_type();
 
@@ -179,21 +163,18 @@ impl RewritePattern for VariantNewPattern {
 
         // Build operands: tag + original fields
         let mut variant_fields = idvec![tag_const.result(db, 0)];
-        for &operand in operands.iter() {
+        for &operand in variant_new.fields(db).iter() {
             variant_fields.push(operand);
         }
 
         // Create wasm.struct_new with type attribute preserved
-        let mut struct_new = Operation::of_name(db, location, "wasm.struct_new")
+        let struct_new = Operation::of_name(db, location, "wasm.struct_new")
             .operands(variant_fields)
-            .results(op.results(db).clone());
+            .results(op.results(db).clone())
+            .attr("type", Attribute::Type(variant_new.r#type(db)))
+            .build();
 
-        // Preserve type attribute
-        if let Some(ty_attr) = attrs.get(&Symbol::new("type")) {
-            struct_new = struct_new.attr("type", ty_attr.clone());
-        }
-
-        RewriteResult::Expand(vec![tag_const, struct_new.build()])
+        RewriteResult::Expand(vec![tag_const, struct_new])
     }
 }
 

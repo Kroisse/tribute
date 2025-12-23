@@ -11,7 +11,7 @@
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, core};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectType, Operation, Symbol, Type};
+use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type};
 
 /// Lower arith dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -35,9 +35,9 @@ impl RewritePattern for ArithConstPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != arith::DIALECT_NAME() || op.name(db) != arith::CONST() {
+        let Ok(const_op) = arith::Const::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let result_ty = op.results(db).first().copied();
         let wasm_op_name = match type_suffix(db, result_ty) {
@@ -48,15 +48,12 @@ impl RewritePattern for ArithConstPattern {
             _ => "wasm.i32_const",
         };
 
-        let mut builder = Operation::of_name(db, op.location(db), wasm_op_name)
-            .results(op.results(db).clone());
+        let new_op = Operation::of_name(db, op.location(db), wasm_op_name)
+            .results(op.results(db).clone())
+            .attr("value", const_op.value(db).clone())
+            .build();
 
-        // Copy value attribute
-        if let Some(value) = op.attributes(db).get(&Symbol::new("value")) {
-            builder = builder.attr("value", value.clone());
-        }
-
-        RewriteResult::Replace(builder.build())
+        RewriteResult::Replace(new_op)
     }
 }
 
@@ -243,15 +240,14 @@ impl RewritePattern for ArithNegPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != arith::DIALECT_NAME() || op.name(db) != arith::NEG() {
+        let Ok(neg_op) = arith::Neg::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let result_ty = op.results(db).first().copied();
         let suffix = type_suffix(db, result_ty);
         let location = op.location(db);
-        // Note: op is already remapped by PatternApplicator
-        let operand = op.operands(db).first().copied();
+        let operand = neg_op.operand(db);
 
         match suffix {
             "f32" => {
@@ -277,13 +273,8 @@ impl RewritePattern for ArithNegPattern {
                     .build();
                 let zero_val = zero.result(db, 0);
 
-                let sub_operands = match operand {
-                    Some(val) => trunk_ir::idvec![zero_val, val],
-                    None => trunk_ir::idvec![zero_val],
-                };
-
                 let sub = Operation::of_name(db, location, "wasm.i64_sub")
-                    .operands(sub_operands)
+                    .operands(trunk_ir::idvec![zero_val, operand])
                     .results(op.results(db).clone())
                     .build();
 
@@ -298,13 +289,8 @@ impl RewritePattern for ArithNegPattern {
                     .build();
                 let zero_val = zero.result(db, 0);
 
-                let sub_operands = match operand {
-                    Some(val) => trunk_ir::idvec![zero_val, val],
-                    None => trunk_ir::idvec![zero_val],
-                };
-
                 let sub = Operation::of_name(db, location, "wasm.i32_sub")
-                    .operands(sub_operands)
+                    .operands(trunk_ir::idvec![zero_val, operand])
                     .results(op.results(db).clone())
                     .build();
 

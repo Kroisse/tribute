@@ -10,7 +10,7 @@
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::scf;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, Block, DialectType, IdVec, Operation, Region, idvec};
+use trunk_ir::{Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, idvec};
 
 /// Lower scf dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -33,15 +33,13 @@ impl RewritePattern for ScfIfPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != scf::DIALECT_NAME() || op.name(db) != scf::IF() {
+        let Ok(_if_op) = scf::If::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
-
-        let location = op.location(db);
+        };
 
         // wasm.if has the same structure: cond operand, result, then/else regions
         // PatternApplicator will recursively process the regions
-        let new_op = Operation::of_name(db, location, "wasm.if")
+        let new_op = Operation::of_name(db, op.location(db), "wasm.if")
             .operands(op.operands(db).clone())
             .results(op.results(db).clone())
             .regions(op.regions(db).clone())
@@ -64,16 +62,12 @@ impl RewritePattern for ScfLoopPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != scf::DIALECT_NAME() || op.name(db) != scf::LOOP() {
-            return RewriteResult::Unchanged;
-        }
-
-        let location = op.location(db);
-        let body_region = op.regions(db).first().copied();
-
-        let Some(body) = body_region else {
+        let Ok(loop_op) = scf::Loop::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
+
+        let location = op.location(db);
+        let body = loop_op.body(db);
 
         // Create wasm.loop with the body region
         // PatternApplicator will recursively process the body
@@ -113,9 +107,9 @@ impl RewritePattern for ScfYieldPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != scf::DIALECT_NAME() || op.name(db) != scf::YIELD() {
+        let Ok(_yield_op) = scf::Yield::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         // Erase the yield - values are already on the stack
         RewriteResult::Erase {
@@ -135,14 +129,12 @@ impl RewritePattern for ScfContinuePattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != scf::DIALECT_NAME() || op.name(db) != scf::CONTINUE() {
+        let Ok(_continue_op) = scf::Continue::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
-
-        let location = op.location(db);
+        };
 
         // Branch to loop (depth 1: block=0, loop=1)
-        let br_op = Operation::of_name(db, location, "wasm.br")
+        let br_op = Operation::of_name(db, op.location(db), "wasm.br")
             .attr("target", Attribute::IntBits(1))
             .build();
 
@@ -161,14 +153,12 @@ impl RewritePattern for ScfBreakPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != scf::DIALECT_NAME() || op.name(db) != scf::BREAK() {
+        let Ok(_break_op) = scf::Break::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
-
-        let location = op.location(db);
+        };
 
         // Branch to block (depth 0) with result value
-        let br_op = Operation::of_name(db, location, "wasm.br")
+        let br_op = Operation::of_name(db, op.location(db), "wasm.br")
             .attr("target", Attribute::IntBits(0))
             .operands(op.operands(db).clone())
             .build();
