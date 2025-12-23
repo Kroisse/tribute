@@ -135,6 +135,127 @@ impl std::fmt::Display for Symbol {
 }
 
 // ============================================================================
+// Qualified Names
+// ============================================================================
+
+/// A fully qualified name consisting of path segments.
+///
+/// Examples: `std::intrinsics::wasi::preview1::fd_write`, `List::map`
+///
+/// Used for function callees, type references, and other qualified identifiers.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct QualifiedName {
+    segments: smallvec::SmallVec<[Symbol; 4]>,
+}
+
+impl QualifiedName {
+    /// Create a new qualified name from an iterator of symbols.
+    pub fn new(segments: impl IntoIterator<Item = Symbol>) -> Self {
+        Self {
+            segments: segments.into_iter().collect(),
+        }
+    }
+
+    /// Create a qualified name from string segments.
+    pub fn from_strs(segments: impl IntoIterator<Item = &'static str>) -> Self {
+        Self::new(segments.into_iter().map(Symbol::new))
+    }
+
+    /// Create a simple (single-segment) qualified name.
+    pub fn simple(name: Symbol) -> Self {
+        Self {
+            segments: smallvec::smallvec![name],
+        }
+    }
+
+    /// Get the segments of this qualified name.
+    pub fn segments(&self) -> &[Symbol] {
+        &self.segments
+    }
+
+    /// Get the last segment (the simple name).
+    ///
+    /// Panics if the qualified name is empty.
+    pub fn name(&self) -> Symbol {
+        *self.segments.last().expect("QualifiedName cannot be empty")
+    }
+
+    /// Check if this is a simple (single-segment) name.
+    pub fn is_simple(&self) -> bool {
+        self.segments.len() == 1
+    }
+
+    /// Get the path relative to a base path.
+    ///
+    /// Returns `Some` if this path starts with `base`, containing the remaining segments.
+    /// Returns `None` if this path does not start with `base`.
+    ///
+    /// # Example
+    /// ```
+    /// use trunk_ir::{QualifiedName, Symbol};
+    ///
+    /// let full = QualifiedName::from_strs(["std", "intrinsics", "wasi", "fd_write"]);
+    /// let base = QualifiedName::from_strs(["std", "intrinsics", "wasi"]);
+    ///
+    /// let relative = full.relative(&base).unwrap();
+    /// assert!(relative.is_simple());
+    /// assert_eq!(relative.name(), "fd_write");
+    /// ```
+    pub fn relative(&self, base: &QualifiedName) -> Option<QualifiedName> {
+        if self.segments.len() <= base.segments.len() {
+            return None;
+        }
+        if !self.segments.starts_with(&base.segments) {
+            return None;
+        }
+        Some(QualifiedName::new(
+            self.segments[base.segments.len()..].iter().copied(),
+        ))
+    }
+
+    /// Check if this path starts with the given base path.
+    pub fn starts_with(&self, base: &QualifiedName) -> bool {
+        self.segments.starts_with(&base.segments)
+    }
+
+    /// Get the number of segments.
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Check if this qualified name is empty.
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+}
+
+impl std::fmt::Display for QualifiedName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut first = true;
+        for seg in &self.segments {
+            if !first {
+                write!(f, "::")?;
+            }
+            first = false;
+            write!(f, "{}", seg)?;
+        }
+        Ok(())
+    }
+}
+
+impl From<Symbol> for QualifiedName {
+    fn from(symbol: Symbol) -> Self {
+        QualifiedName::simple(symbol)
+    }
+}
+
+impl From<&'static str> for QualifiedName {
+    fn from(text: &'static str) -> Self {
+        QualifiedName::simple(Symbol::new(text))
+    }
+}
+
+// ============================================================================
 // SSA Values
 // ============================================================================
 
@@ -635,6 +756,91 @@ mod tests {
 
             // Verify the underlying operation has 2 results
             assert_eq!(multi.results(db).len(), 2);
+        }
+    }
+
+    mod qualified_name_tests {
+        use super::*;
+
+        #[test]
+        fn test_simple_name() {
+            let name = QualifiedName::simple(Symbol::new("foo"));
+            assert!(name.is_simple());
+            assert_eq!(name.name(), "foo");
+            assert_eq!(name.len(), 1);
+            assert_eq!(name.to_string(), "foo");
+        }
+
+        #[test]
+        fn test_qualified_name() {
+            let name = QualifiedName::from_strs(["std", "intrinsics", "wasi", "fd_write"]);
+            assert!(!name.is_simple());
+            assert_eq!(name.name(), "fd_write");
+            assert_eq!(name.len(), 4);
+            assert_eq!(name.to_string(), "std::intrinsics::wasi::fd_write");
+        }
+
+        #[test]
+        fn test_relative() {
+            let full = QualifiedName::from_strs(["std", "intrinsics", "wasi", "fd_write"]);
+            let base = QualifiedName::from_strs(["std", "intrinsics", "wasi"]);
+
+            let relative = full.relative(&base).unwrap();
+            assert!(relative.is_simple());
+            assert_eq!(relative.name(), "fd_write");
+        }
+
+        #[test]
+        fn test_relative_multi_segment() {
+            let full =
+                QualifiedName::from_strs(["std", "intrinsics", "wasi", "preview1", "fd_write"]);
+            let base = QualifiedName::from_strs(["std", "intrinsics"]);
+
+            let relative = full.relative(&base).unwrap();
+            assert_eq!(relative.len(), 3);
+            assert_eq!(relative.to_string(), "wasi::preview1::fd_write");
+        }
+
+        #[test]
+        fn test_relative_no_match() {
+            let full = QualifiedName::from_strs(["std", "intrinsics", "wasi"]);
+            let base = QualifiedName::from_strs(["core", "intrinsics"]);
+
+            assert!(full.relative(&base).is_none());
+        }
+
+        #[test]
+        fn test_relative_same_length() {
+            let full = QualifiedName::from_strs(["std", "intrinsics"]);
+            let base = QualifiedName::from_strs(["std", "intrinsics"]);
+
+            // Same length should return None (no remaining segments)
+            assert!(full.relative(&base).is_none());
+        }
+
+        #[test]
+        fn test_starts_with() {
+            let name = QualifiedName::from_strs(["std", "intrinsics", "wasi", "fd_write"]);
+            let prefix = QualifiedName::from_strs(["std", "intrinsics"]);
+            let other = QualifiedName::from_strs(["core", "intrinsics"]);
+
+            assert!(name.starts_with(&prefix));
+            assert!(!name.starts_with(&other));
+        }
+
+        #[test]
+        fn test_from_symbol() {
+            let sym = Symbol::new("foo");
+            let name: QualifiedName = sym.into();
+            assert!(name.is_simple());
+            assert_eq!(name.name(), "foo");
+        }
+
+        #[test]
+        fn test_from_str() {
+            let name: QualifiedName = "bar".into();
+            assert!(name.is_simple());
+            assert_eq!(name.name(), "bar");
         }
     }
 }
