@@ -65,7 +65,7 @@ macro_rules! raw_ident_str {
 /// - `Type` → `Attribute::Type`
 /// - `String` → `Attribute::String`
 /// - `Symbol` → `Attribute::Symbol`
-/// - `SymbolRef` → `Attribute::SymbolRef`
+/// - `QualifiedName` → `Attribute::QualifiedName`
 #[macro_export]
 macro_rules! attr_type_helper {
     // Rust type for parameter
@@ -74,7 +74,7 @@ macro_rules! attr_type_helper {
     (@rust_type Type) => { $crate::Type<'db> };
     (@rust_type String) => { std::string::String };
     (@rust_type Symbol) => { $crate::Symbol };
-    (@rust_type SymbolRef) => { $crate::SymbolVec };
+    (@rust_type QualifiedName) => { $crate::QualifiedName };
 
     // Convert Rust value to Attribute
     (@to_attr any, $val:expr) => { $val };
@@ -82,7 +82,7 @@ macro_rules! attr_type_helper {
     (@to_attr Type, $val:expr) => { $crate::Attribute::Type($val) };
     (@to_attr String, $val:expr) => { $crate::Attribute::String($val) };
     (@to_attr Symbol, $val:expr) => { $crate::Attribute::Symbol($val) };
-    (@to_attr SymbolRef, $val:expr) => { $crate::Attribute::SymbolRef($val) };
+    (@to_attr QualifiedName, $val:expr) => { $crate::Attribute::QualifiedName($val) };
 
     // Convert Attribute to Rust value
     (@from_attr any, $attr:expr) => { $attr.clone() };
@@ -110,10 +110,10 @@ macro_rules! attr_type_helper {
             _ => panic!("expected Symbol attribute"),
         }
     };
-    (@from_attr SymbolRef, $attr:expr) => {
+    (@from_attr QualifiedName, $attr:expr) => {
         match $attr {
-            $crate::Attribute::SymbolRef(v) => v.clone(),
-            _ => panic!("expected SymbolRef attribute"),
+            $crate::Attribute::QualifiedName(v) => v.clone(),
+            _ => panic!("expected QualifiedName attribute"),
         }
     };
 }

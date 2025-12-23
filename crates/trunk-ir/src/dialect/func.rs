@@ -14,7 +14,7 @@ dialect! {
         };
 
         /// `func.call` operation: direct call to a function symbol.
-        #[attr(callee: SymbolRef)]
+        #[attr(callee: QualifiedName)]
         fn call(#[rest] args) -> result;
 
         /// `func.call_indirect` operation: indirect call via function value.
@@ -22,7 +22,7 @@ dialect! {
         fn call_indirect(callee, #[rest] args) -> result;
 
         /// `func.tail_call` operation: tail call (does not return).
-        #[attr(callee: SymbolRef)]
+        #[attr(callee: QualifiedName)]
         fn tail_call(#[rest] args);
 
         /// `func.return` operation: returns values from a function.
@@ -30,7 +30,7 @@ dialect! {
 
         /// `func.constant` operation: creates a function value from symbol.
         /// Used to get a first-class function reference for indirect calls.
-        #[attr(func_ref: SymbolRef)]
+        #[attr(func_ref: QualifiedName)]
         fn constant() -> result;
 
         /// `func.unreachable` operation: marks unreachable code (trap).

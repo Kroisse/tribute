@@ -10,7 +10,7 @@ dialect! {
     mod closure {
         /// `closure.new` operation: creates a closure with captured values.
         /// The func_ref points to a lifted lambda function that takes env as first arg.
-        #[attr(func_ref: SymbolRef)]
+        #[attr(func_ref: QualifiedName)]
         fn new(#[rest] captures) -> result;
 
         /// `closure.func` operation: extracts funcref from closure.

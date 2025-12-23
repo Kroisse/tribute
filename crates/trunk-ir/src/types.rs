@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{IdVec, Span, Symbol, SymbolVec, dialect::core};
+use crate::{IdVec, QualifiedName, Span, Symbol, dialect::core};
 
 /// Trait for dialect-specific type wrappers.
 ///
@@ -98,8 +98,8 @@ pub enum Attribute<'db> {
     Type(Type<'db>),
     /// Single interned symbol (e.g., "foo").
     Symbol(Symbol),
-    /// Symbol reference path (e.g., ["module", "func_name"])
-    SymbolRef(SymbolVec),
+    /// Qualified name path (e.g., "std::intrinsics::wasi::fd_write")
+    QualifiedName(QualifiedName),
     /// List of attributes (for arrays of values like switch cases).
     List(Vec<Attribute<'db>>),
     /// Source span (for tracking source locations in attributes).
@@ -127,5 +127,11 @@ impl From<bool> for Attribute<'_> {
 impl<'db> From<Vec<Attribute<'db>>> for Attribute<'db> {
     fn from(value: Vec<Attribute<'db>>) -> Self {
         Attribute::List(value)
+    }
+}
+
+impl From<QualifiedName> for Attribute<'_> {
+    fn from(value: QualifiedName) -> Self {
+        Attribute::QualifiedName(value)
     }
 }
