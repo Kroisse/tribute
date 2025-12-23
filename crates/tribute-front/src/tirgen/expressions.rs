@@ -1265,7 +1265,7 @@ fn parse_operation_path<'db>(
         .collect::<Option<QualifiedName>>()
         .unwrap_or_else(|| sym_ref("unknown"));
 
-    (path.parent(), path.name())
+    (path.to_parent(), path.name())
 }
 
 // =============================================================================

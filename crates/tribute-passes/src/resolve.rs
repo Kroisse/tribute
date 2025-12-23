@@ -551,7 +551,7 @@ impl<'db> Resolver<'db> {
 
         // For now, only support single-level namespaces (Type::Constructor)
         // TODO: Support multi-level namespaces
-        let namespace = *path.as_parent_slice().last()?;
+        let namespace = *path.as_parent().last()?;
         let name = path.name();
         self.env.lookup_qualified(namespace, name).cloned()
     }
@@ -1101,7 +1101,7 @@ impl<'db> Resolver<'db> {
 
         // For now, only support single-level qualified names (Type::Constructor)
         // TODO: Support multi-level paths
-        let namespace = *path.as_parent_slice().last()?;
+        let namespace = *path.as_parent().last()?;
         let name = path.name();
 
         match self.env.lookup_qualified(namespace, name)? {
@@ -1170,7 +1170,7 @@ impl<'db> Resolver<'db> {
             if path.len() != 2 {
                 return None;
             }
-            let namespace = *path.as_parent_slice().last().unwrap();
+            let namespace = *path.as_parent().last().unwrap();
             let name = path.name();
             self.env.lookup_qualified(namespace, name)
         }?;
@@ -1210,7 +1210,7 @@ impl<'db> Resolver<'db> {
             if path.len() != 2 {
                 return None;
             }
-            let namespace = *path.as_parent_slice().last().unwrap();
+            let namespace = *path.as_parent().last().unwrap();
             let name = path.name();
             self.env.lookup_qualified(namespace, name)
         }?;

@@ -186,13 +186,13 @@ impl QualifiedName {
     }
 
     /// Get the parent path as a slice of symbols.
-    pub fn as_parent_slice(&self) -> &[Symbol] {
+    pub fn as_parent(&self) -> &[Symbol] {
         &self.parent
     }
 
     /// Get the parent as a QualifiedName, if it exists.
     /// Returns `None` for simple (single-segment) names.
-    pub fn parent(&self) -> Option<QualifiedName> {
+    pub fn to_parent(&self) -> Option<QualifiedName> {
         QualifiedName::try_from(&self.parent[..]).ok()
     }
 
@@ -1110,7 +1110,7 @@ mod tests {
 
                 #[test]
                 fn prop_parent_length(qn in arb_qualified_name()) {
-                    prop_assert_eq!(qn.as_parent_slice().len(), qn.len() - 1);
+                    prop_assert_eq!(qn.as_parent().len(), qn.len() - 1);
                 }
 
                 #[test]
