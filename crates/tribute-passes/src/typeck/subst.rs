@@ -317,7 +317,7 @@ mod tests {
             println!("{}block[{}]:", prefix, bi);
             // Print block args
             for (i, ty) in block.args(db).iter().enumerate() {
-                let ty_name = format!("{}.{}", ty.dialect(db).to_string(), ty.name(db).to_string());
+                let ty_name = format!("{}.{}", ty.dialect(db), ty.name(db));
                 let is_var = ty::is_var(db, *ty);
                 println!("{}  arg[{}]: {} (is_var: {})", prefix, i, ty_name, is_var);
             }
@@ -325,8 +325,7 @@ mod tests {
             for op in block.operations(db).iter() {
                 println!("{}  {}", prefix, op.full_name(db));
                 for (i, ty) in op.results(db).iter().enumerate() {
-                    let ty_name =
-                        format!("{}.{}", ty.dialect(db).to_string(), ty.name(db).to_string());
+                    let ty_name = format!("{}.{}", ty.dialect(db), ty.name(db));
                     let is_var = ty::is_var(db, *ty);
                     println!(
                         "{}    result[{}]: {} (is_var: {})",

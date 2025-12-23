@@ -39,6 +39,10 @@ impl CompilationError {
     pub fn function_not_found(name: &str) -> Self {
         CompilationErrorKind::FunctionNotFound(name.to_string()).into()
     }
+
+    pub fn missing_attribute(attr: &'static str) -> Self {
+        CompilationErrorKind::MissingAttribute(attr).into()
+    }
 }
 
 #[derive(Clone, Display, Debug, PartialEq)]

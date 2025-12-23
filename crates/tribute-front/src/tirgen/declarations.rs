@@ -40,7 +40,7 @@ pub fn lower_use_decl<'db>(
     };
 
     let mut imports = Vec::new();
-    collect_use_imports(ctx, tree_node, &mut SymbolVec::new(), &mut imports);
+    collect_use_imports(ctx, tree_node, &mut Vec::new(), &mut imports);
 
     for import in imports {
         let alias_sym = import.alias.unwrap_or_else(|| sym(""));
@@ -52,7 +52,7 @@ pub fn lower_use_decl<'db>(
 fn collect_use_imports<'db>(
     ctx: &CstLoweringCtx<'db>,
     node: Node,
-    base: &mut SymbolVec,
+    base: &mut Vec<Symbol>,
     out: &mut Vec<UseImport>,
 ) {
     match node.kind() {

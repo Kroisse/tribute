@@ -47,13 +47,22 @@ dialect! {
 
         /// `wasm.call` operation: function call.
         #[attr(callee)]
-        fn call(#[rest] args) -> #[rest] result;
+        fn call(#[rest] args) -> #[rest] results;
 
         /// `wasm.call_indirect` operation: indirect function call.
         #[attr(type_idx, table)]
-        fn call_indirect(#[rest] args) -> #[rest] result;
+        fn call_indirect(#[rest] args) -> #[rest] results;
+
+        /// `wasm.unreachable` operation: trap / unreachable code.
+        fn unreachable();
 
         // === Module-level Definitions ===
+
+        /// `wasm.func` operation: define a function.
+        #[attr(sym_name: Symbol, r#type: Type)]
+        fn func() {
+            #[region(body)] {}
+        };
 
         /// `wasm.import_func` operation: import a function.
         #[attr(module, name, sym_name, r#type)]
@@ -149,6 +158,90 @@ dialect! {
         /// `wasm.i64_mul` operation: i64 multiplication.
         fn i64_mul(lhs, rhs) -> result;
 
+        /// `wasm.i64_div_s` operation: i64 signed division.
+        fn i64_div_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_div_u` operation: i64 unsigned division.
+        fn i64_div_u(lhs, rhs) -> result;
+
+        /// `wasm.i64_rem_s` operation: i64 signed remainder.
+        fn i64_rem_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_rem_u` operation: i64 unsigned remainder.
+        fn i64_rem_u(lhs, rhs) -> result;
+
+        // === Integer Comparison (i64) ===
+
+        /// `wasm.i64_eq` operation: i64 equality.
+        fn i64_eq(lhs, rhs) -> result;
+
+        /// `wasm.i64_ne` operation: i64 inequality.
+        fn i64_ne(lhs, rhs) -> result;
+
+        /// `wasm.i64_lt_s` operation: i64 signed less than.
+        fn i64_lt_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_lt_u` operation: i64 unsigned less than.
+        fn i64_lt_u(lhs, rhs) -> result;
+
+        /// `wasm.i64_le_s` operation: i64 signed less or equal.
+        fn i64_le_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_le_u` operation: i64 unsigned less or equal.
+        fn i64_le_u(lhs, rhs) -> result;
+
+        /// `wasm.i64_gt_s` operation: i64 signed greater than.
+        fn i64_gt_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_gt_u` operation: i64 unsigned greater than.
+        fn i64_gt_u(lhs, rhs) -> result;
+
+        /// `wasm.i64_ge_s` operation: i64 signed greater or equal.
+        fn i64_ge_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_ge_u` operation: i64 unsigned greater or equal.
+        fn i64_ge_u(lhs, rhs) -> result;
+
+        // === Integer Bitwise (i32) ===
+
+        /// `wasm.i32_and` operation: i32 bitwise AND.
+        fn i32_and(lhs, rhs) -> result;
+
+        /// `wasm.i32_or` operation: i32 bitwise OR.
+        fn i32_or(lhs, rhs) -> result;
+
+        /// `wasm.i32_xor` operation: i32 bitwise XOR.
+        fn i32_xor(lhs, rhs) -> result;
+
+        /// `wasm.i32_shl` operation: i32 shift left.
+        fn i32_shl(lhs, rhs) -> result;
+
+        /// `wasm.i32_shr_s` operation: i32 signed shift right.
+        fn i32_shr_s(lhs, rhs) -> result;
+
+        /// `wasm.i32_shr_u` operation: i32 unsigned shift right.
+        fn i32_shr_u(lhs, rhs) -> result;
+
+        // === Integer Bitwise (i64) ===
+
+        /// `wasm.i64_and` operation: i64 bitwise AND.
+        fn i64_and(lhs, rhs) -> result;
+
+        /// `wasm.i64_or` operation: i64 bitwise OR.
+        fn i64_or(lhs, rhs) -> result;
+
+        /// `wasm.i64_xor` operation: i64 bitwise XOR.
+        fn i64_xor(lhs, rhs) -> result;
+
+        /// `wasm.i64_shl` operation: i64 shift left.
+        fn i64_shl(lhs, rhs) -> result;
+
+        /// `wasm.i64_shr_s` operation: i64 signed shift right.
+        fn i64_shr_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_shr_u` operation: i64 unsigned shift right.
+        fn i64_shr_u(lhs, rhs) -> result;
+
         // === Floating Point (f32) ===
 
         /// `wasm.f32_const` operation: f32 constant.
@@ -167,6 +260,29 @@ dialect! {
         /// `wasm.f32_div` operation: f32 division.
         fn f32_div(lhs, rhs) -> result;
 
+        /// `wasm.f32_neg` operation: f32 negation.
+        fn f32_neg(operand) -> result;
+
+        // === Floating Point Comparison (f32) ===
+
+        /// `wasm.f32_eq` operation: f32 equality.
+        fn f32_eq(lhs, rhs) -> result;
+
+        /// `wasm.f32_ne` operation: f32 inequality.
+        fn f32_ne(lhs, rhs) -> result;
+
+        /// `wasm.f32_lt` operation: f32 less than.
+        fn f32_lt(lhs, rhs) -> result;
+
+        /// `wasm.f32_le` operation: f32 less or equal.
+        fn f32_le(lhs, rhs) -> result;
+
+        /// `wasm.f32_gt` operation: f32 greater than.
+        fn f32_gt(lhs, rhs) -> result;
+
+        /// `wasm.f32_ge` operation: f32 greater or equal.
+        fn f32_ge(lhs, rhs) -> result;
+
         // === Floating Point (f64) ===
 
         /// `wasm.f64_const` operation: f64 constant.
@@ -184,6 +300,29 @@ dialect! {
 
         /// `wasm.f64_div` operation: f64 division.
         fn f64_div(lhs, rhs) -> result;
+
+        /// `wasm.f64_neg` operation: f64 negation.
+        fn f64_neg(operand) -> result;
+
+        // === Floating Point Comparison (f64) ===
+
+        /// `wasm.f64_eq` operation: f64 equality.
+        fn f64_eq(lhs, rhs) -> result;
+
+        /// `wasm.f64_ne` operation: f64 inequality.
+        fn f64_ne(lhs, rhs) -> result;
+
+        /// `wasm.f64_lt` operation: f64 less than.
+        fn f64_lt(lhs, rhs) -> result;
+
+        /// `wasm.f64_le` operation: f64 less or equal.
+        fn f64_le(lhs, rhs) -> result;
+
+        /// `wasm.f64_gt` operation: f64 greater than.
+        fn f64_gt(lhs, rhs) -> result;
+
+        /// `wasm.f64_ge` operation: f64 greater or equal.
+        fn f64_ge(lhs, rhs) -> result;
 
         // === Local Variables ===
 
@@ -250,5 +389,90 @@ dialect! {
         /// `wasm.ref_test` operation: test reference type.
         #[attr(target_type)]
         fn ref_test(r#ref) -> result;
+
+        // === Type Conversions (Integer) ===
+
+        /// `wasm.i32_wrap_i64` operation: wrap i64 to i32 (truncate).
+        fn i32_wrap_i64(operand) -> result;
+
+        /// `wasm.i64_extend_i32_s` operation: sign-extend i32 to i64.
+        fn i64_extend_i32_s(operand) -> result;
+
+        /// `wasm.i64_extend_i32_u` operation: zero-extend i32 to i64.
+        fn i64_extend_i32_u(operand) -> result;
+
+        // === Type Conversions (Float to Int) ===
+
+        /// `wasm.i32_trunc_f32_s` operation: truncate f32 to i32 (signed).
+        fn i32_trunc_f32_s(operand) -> result;
+
+        /// `wasm.i32_trunc_f32_u` operation: truncate f32 to i32 (unsigned).
+        fn i32_trunc_f32_u(operand) -> result;
+
+        /// `wasm.i32_trunc_f64_s` operation: truncate f64 to i32 (signed).
+        fn i32_trunc_f64_s(operand) -> result;
+
+        /// `wasm.i32_trunc_f64_u` operation: truncate f64 to i32 (unsigned).
+        fn i32_trunc_f64_u(operand) -> result;
+
+        /// `wasm.i64_trunc_f32_s` operation: truncate f32 to i64 (signed).
+        fn i64_trunc_f32_s(operand) -> result;
+
+        /// `wasm.i64_trunc_f32_u` operation: truncate f32 to i64 (unsigned).
+        fn i64_trunc_f32_u(operand) -> result;
+
+        /// `wasm.i64_trunc_f64_s` operation: truncate f64 to i64 (signed).
+        fn i64_trunc_f64_s(operand) -> result;
+
+        /// `wasm.i64_trunc_f64_u` operation: truncate f64 to i64 (unsigned).
+        fn i64_trunc_f64_u(operand) -> result;
+
+        // === Type Conversions (Int to Float) ===
+
+        /// `wasm.f32_convert_i32_s` operation: convert i32 to f32 (signed).
+        fn f32_convert_i32_s(operand) -> result;
+
+        /// `wasm.f32_convert_i32_u` operation: convert i32 to f32 (unsigned).
+        fn f32_convert_i32_u(operand) -> result;
+
+        /// `wasm.f32_convert_i64_s` operation: convert i64 to f32 (signed).
+        fn f32_convert_i64_s(operand) -> result;
+
+        /// `wasm.f32_convert_i64_u` operation: convert i64 to f32 (unsigned).
+        fn f32_convert_i64_u(operand) -> result;
+
+        /// `wasm.f64_convert_i32_s` operation: convert i32 to f64 (signed).
+        fn f64_convert_i32_s(operand) -> result;
+
+        /// `wasm.f64_convert_i32_u` operation: convert i32 to f64 (unsigned).
+        fn f64_convert_i32_u(operand) -> result;
+
+        /// `wasm.f64_convert_i64_s` operation: convert i64 to f64 (signed).
+        fn f64_convert_i64_s(operand) -> result;
+
+        /// `wasm.f64_convert_i64_u` operation: convert i64 to f64 (unsigned).
+        fn f64_convert_i64_u(operand) -> result;
+
+        // === Type Conversions (Float to Float) ===
+
+        /// `wasm.f32_demote_f64` operation: demote f64 to f32.
+        fn f32_demote_f64(operand) -> result;
+
+        /// `wasm.f64_promote_f32` operation: promote f32 to f64.
+        fn f64_promote_f32(operand) -> result;
+
+        // === Reinterpretations (Bitcast) ===
+
+        /// `wasm.i32_reinterpret_f32` operation: reinterpret f32 bits as i32.
+        fn i32_reinterpret_f32(operand) -> result;
+
+        /// `wasm.i64_reinterpret_f64` operation: reinterpret f64 bits as i64.
+        fn i64_reinterpret_f64(operand) -> result;
+
+        /// `wasm.f32_reinterpret_i32` operation: reinterpret i32 bits as f32.
+        fn f32_reinterpret_i32(operand) -> result;
+
+        /// `wasm.f64_reinterpret_i64` operation: reinterpret i64 bits as f64.
+        fn f64_reinterpret_i64(operand) -> result;
     }
 }

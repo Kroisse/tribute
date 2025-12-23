@@ -150,6 +150,19 @@ pub trait DialectOp<'db>: Sized + Copy {
     fn as_operation(&self) -> Operation<'db>;
 }
 
+impl<'db> DialectOp<'db> for Operation<'db> {
+    fn from_operation(
+        _db: &'db dyn salsa::Database,
+        op: Operation<'db>,
+    ) -> Result<Self, ConversionError> {
+        Ok(op)
+    }
+
+    fn as_operation(&self) -> Operation<'db> {
+        *self
+    }
+}
+
 /// Macro to define operations and types in a dialect.
 ///
 /// Uses Rust-like syntax for better IDE support and rustfmt compatibility.

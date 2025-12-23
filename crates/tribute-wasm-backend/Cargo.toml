@@ -11,6 +11,7 @@ trunk-ir.workspace = true
 wasm-encoder.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
 salsa-test-macros = { path = "../salsa-test-macros" }
 tempfile.workspace = true
 

@@ -134,6 +134,9 @@ impl std::fmt::Display for Symbol {
     }
 }
 
+// Re-export QualifiedName from qualified_name module
+pub use crate::qualified_name::QualifiedName;
+
 // ============================================================================
 // SSA Values
 // ============================================================================
