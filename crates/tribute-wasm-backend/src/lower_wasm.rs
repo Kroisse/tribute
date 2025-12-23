@@ -13,7 +13,7 @@ use trunk_ir::dialect::{adt, func, src, wasm};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::{
     Attribute, Block, DialectType, IdVec, Location, Operation, QualifiedName, Region, Symbol,
-    Type, Value, ValueDef, idvec,
+    Type, Value, idvec,
 };
 
 /// Entry point for lowering mid-level IR to wasm dialect.
@@ -23,6 +23,7 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = crate::passes::arith_to_wasm::lower(db, module);
     let module = crate::passes::scf_to_wasm::lower(db, module);
     let module = crate::passes::func_to_wasm::lower(db, module);
+    let module = crate::passes::adt_to_wasm::lower(db, module);
 
     // Phase 2: Remaining lowering via WasmLowerer
     let mut lowerer = WasmLowerer::new(db);
@@ -74,10 +75,6 @@ fn check_function_body<'db>(db: &'db dyn salsa::Database, func_op: &Operation<'d
 struct WasmLowerer<'db> {
     db: &'db dyn salsa::Database,
     value_map: HashMap<Value<'db>, Value<'db>>,
-    /// Maps Types to their WasmGC type indices
-    type_registry: HashMap<Type<'db>, u32>,
-    /// Counter for next type index to assign
-    next_type_idx: u32,
     module_location: Option<Location<'db>>,
     data_segments: DataSegments<'db>,
     memory_plan: MemoryPlan,
@@ -90,25 +87,11 @@ impl<'db> WasmLowerer<'db> {
         Self {
             db,
             value_map: HashMap::new(),
-            type_registry: HashMap::new(),
-            next_type_idx: 0,
             module_location: None,
             data_segments: DataSegments::new(),
             memory_plan: MemoryPlan::new(),
             wasi_plan: WasiPlan::new(),
             main_exports: MainExports::new(),
-        }
-    }
-
-    /// Get or create a type index for a given type
-    fn get_type_index(&mut self, ty: Type<'db>) -> u32 {
-        if let Some(&idx) = self.type_registry.get(&ty) {
-            idx
-        } else {
-            let idx = self.next_type_idx;
-            self.type_registry.insert(ty, idx);
-            self.next_type_idx += 1;
-            idx
         }
     }
 
@@ -387,6 +370,10 @@ impl<'db> WasmLowerer<'db> {
         name: Symbol,
         operands: IdVec<Value<'db>>,
     ) {
+        // Note: Most ADT operations are now handled by adt_to_wasm pass.
+        // Only string_const and bytes_const remain here because they require
+        // data segment allocation (stateful).
+
         let location = op.location(self.db);
 
         if name == adt::STRING_CONST() {
@@ -397,59 +384,8 @@ impl<'db> WasmLowerer<'db> {
             return self.lower_bytes_const(builder, op, location);
         }
 
-        if name == adt::STRUCT_NEW() {
-            return self.lower_adt_struct_new(builder, op, location, operands);
-        }
-
-        if name == adt::STRUCT_GET() {
-            return self.lower_adt_struct_get(builder, op, location, operands);
-        }
-
-        if name == adt::STRUCT_SET() {
-            return self.lower_adt_struct_set(builder, op, location, operands);
-        }
-
-        if name == adt::VARIANT_NEW() {
-            return self.lower_adt_variant_new(builder, op, location, operands);
-        }
-
-        if name == adt::VARIANT_TAG() {
-            return self.lower_adt_variant_tag(builder, op, location, operands);
-        }
-
-        if name == adt::VARIANT_GET() {
-            return self.lower_adt_variant_get(builder, op, location, operands);
-        }
-
-        if name == adt::ARRAY_NEW() {
-            return self.lower_adt_array_new(builder, op, location, operands);
-        }
-
-        if name == adt::ARRAY_GET() {
-            return self.lower_adt_array_get(builder, op, location, operands);
-        }
-
-        if name == adt::ARRAY_SET() {
-            return self.lower_adt_array_set(builder, op, location, operands);
-        }
-
-        if name == adt::ARRAY_LEN() {
-            return self.lower_adt_array_len(builder, op, location, operands);
-        }
-
-        if name == adt::REF_NULL() {
-            return self.lower_adt_ref_null(builder, op, location);
-        }
-
-        if name == adt::REF_IS_NULL() {
-            return self.lower_adt_ref_is_null(builder, op, location, operands);
-        }
-
-        if name == adt::REF_CAST() {
-            return self.lower_adt_ref_cast(builder, op, location, operands);
-        }
-
-        // Unhandled ADT operations - keep as-is with region lowering
+        // Other ADT operations should have been converted by adt_to_wasm pass.
+        // Keep as-is with region lowering (shouldn't happen in practice).
         let new_regions = op
             .regions(self.db)
             .iter()
@@ -464,371 +400,6 @@ impl<'db> WasmLowerer<'db> {
             .build();
         self.map_results(&op, &new_op);
         builder.op(new_op);
-    }
-
-    fn lower_adt_struct_new(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        // Get the struct type from the type attribute
-        let attrs = op.attributes(self.db);
-        let struct_type = match attrs.get(&Symbol::new("type")) {
-            Some(Attribute::Type(ty)) => *ty,
-            _ => {
-                // Fallback: keep as-is if type attribute is missing
-                builder.op(op);
-                return;
-            }
-        };
-
-        let type_idx = self.get_type_index(struct_type);
-
-        // Create wasm.struct_new with type index
-        let wasm_struct_new = Operation::of_name(self.db, location, "wasm.struct_new")
-            .operands(operands)
-            .attr("type_idx", Attribute::IntBits(type_idx as u64))
-            .results(op.results(self.db).clone())
-            .build();
-
-        self.map_results(&op, &wasm_struct_new);
-        builder.op(wasm_struct_new);
-    }
-
-    fn lower_adt_struct_get(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        let attrs = op.attributes(self.db);
-        let Some(struct_ref) = operands.first().copied() else {
-            builder.op(op);
-            return;
-        };
-        let field_attr = attrs.get(&Symbol::new("field"));
-        let Some(field_idx) = self.field_index_from_attr(field_attr) else {
-            builder.op(op);
-            return;
-        };
-
-        // Create wasm.struct_get with field index
-        let mut wasm_struct_get = Operation::of_name(self.db, location, "wasm.struct_get")
-            .operands(idvec![struct_ref])
-            .attr("field_idx", Attribute::IntBits(field_idx as u64));
-        if let Some(type_idx) = self.type_idx_for_value(struct_ref) {
-            wasm_struct_get = wasm_struct_get.attr("type_idx", Attribute::IntBits(type_idx as u64));
-        }
-        let wasm_struct_get = wasm_struct_get.results(op.results(self.db).clone()).build();
-
-        self.map_results(&op, &wasm_struct_get);
-        builder.op(wasm_struct_get);
-    }
-
-    fn lower_adt_struct_set(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        let attrs = op.attributes(self.db);
-        let Some(struct_ref) = operands.first().copied() else {
-            builder.op(op);
-            return;
-        };
-        let field_attr = attrs.get(&Symbol::new("field"));
-        let Some(field_idx) = self.field_index_from_attr(field_attr) else {
-            builder.op(op);
-            return;
-        };
-
-        let mut wasm_struct_set = Operation::of_name(self.db, location, "wasm.struct_set")
-            .operands(operands)
-            .attr("field_idx", Attribute::IntBits(field_idx as u64));
-        if let Some(type_idx) = self.type_idx_for_value(struct_ref) {
-            wasm_struct_set = wasm_struct_set.attr("type_idx", Attribute::IntBits(type_idx as u64));
-        }
-        builder.op(wasm_struct_set.build());
-    }
-
-    fn lower_adt_variant_new(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        // Get the variant type and tag from attributes
-        let attrs = op.attributes(self.db);
-        let variant_type = match attrs.get(&Symbol::new("type")) {
-            Some(Attribute::Type(ty)) => *ty,
-            _ => {
-                // Fallback: keep as-is if type attribute is missing
-                builder.op(op);
-                return;
-            }
-        };
-
-        let tag = match attrs.get(&Symbol::new("tag")) {
-            Some(Attribute::IntBits(tag)) => *tag as u32,
-            Some(Attribute::Symbol(tag_sym)) => Self::name_hash_u32(&tag_sym.to_string()),
-            Some(Attribute::String(tag_str)) => Self::name_hash_u32(tag_str),
-            _ => {
-                // Fallback: keep as-is if tag is missing
-                builder.op(op);
-                return;
-            }
-        };
-
-        let type_idx = self.get_type_index(variant_type);
-
-        // Variants are represented as structs with an i32 tag field (field 0) + payload fields
-        // We need to insert the tag as the first field
-        let mut variant_fields = IdVec::new();
-
-        // First field is the tag (as i32 const)
-        // If the tag isn't a direct discriminant, we fall back to a deterministic hash.
-        let tag_value = u64::from(tag);
-        let tag_const = Operation::of_name(self.db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(tag_value & 0xFFFFFFFF))
-            .results(idvec![core::I32::new(self.db).as_type()])
-            .build();
-        let tag_value = tag_const.result(self.db, 0);
-        variant_fields.push(tag_value);
-
-        // Add payload fields
-        for &operand in operands.iter() {
-            variant_fields.push(operand);
-        }
-
-        // Create wasm.struct_new for the variant (includes tag + fields)
-        let wasm_variant_new = Operation::of_name(self.db, location, "wasm.struct_new")
-            .operands(variant_fields)
-            .attr("type_idx", Attribute::IntBits(type_idx as u64))
-            .results(op.results(self.db).clone())
-            .build();
-
-        // The tag const operation is implicit - just return the struct_new
-        self.map_results(&op, &wasm_variant_new);
-        builder.op(tag_const);
-        builder.op(wasm_variant_new);
-    }
-
-    fn lower_adt_variant_tag(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        // Extract tag from variant (which is field 0 of the struct)
-        let Some(variant_ref) = operands.first().copied() else {
-            builder.op(op);
-            return;
-        };
-
-        // Create wasm.struct_get with field_idx=0 (the tag field)
-        let mut wasm_tag_get = Operation::of_name(self.db, location, "wasm.struct_get")
-            .operands(idvec![variant_ref])
-            .attr("field_idx", Attribute::IntBits(0));
-        if let Some(type_idx) = self.type_idx_for_value(variant_ref) {
-            wasm_tag_get = wasm_tag_get.attr("type_idx", Attribute::IntBits(type_idx as u64));
-        }
-        let wasm_tag_get = wasm_tag_get.results(op.results(self.db).clone()).build();
-
-        self.map_results(&op, &wasm_tag_get);
-        builder.op(wasm_tag_get);
-    }
-
-    fn lower_adt_variant_get(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        // Extract field from variant (field index offset by 1 because field 0 is the tag)
-        let Some(variant_ref) = operands.first().copied() else {
-            builder.op(op);
-            return;
-        };
-
-        let attrs = op.attributes(self.db);
-        let field_attr = attrs.get(&Symbol::new("field"));
-
-        // Similar to struct_get, extract field index
-        let Some(base_field_idx) = self.field_index_from_attr(field_attr) else {
-            builder.op(op);
-            return;
-        };
-
-        // Add 1 to skip the tag field
-        let field_idx = base_field_idx + 1;
-
-        // Create wasm.struct_get with offset field index
-        let mut wasm_variant_get = Operation::of_name(self.db, location, "wasm.struct_get")
-            .operands(idvec![variant_ref])
-            .attr("field_idx", Attribute::IntBits(field_idx as u64));
-        if let Some(type_idx) = self.type_idx_for_value(variant_ref) {
-            wasm_variant_get =
-                wasm_variant_get.attr("type_idx", Attribute::IntBits(type_idx as u64));
-        }
-        let wasm_variant_get = wasm_variant_get
-            .results(op.results(self.db).clone())
-            .build();
-
-        self.map_results(&op, &wasm_variant_get);
-        builder.op(wasm_variant_get);
-    }
-
-    fn lower_adt_array_new(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        let attrs = op.attributes(self.db);
-        let Some(type_idx) = self.type_idx_from_attr(attrs.get(&Symbol::new("type"))) else {
-            builder.op(op);
-            return;
-        };
-
-        let (wasm_name, operands) = if operands.len() <= 1 {
-            ("wasm.array_new_default", operands)
-        } else {
-            ("wasm.array_new", operands)
-        };
-
-        let wasm_array_new = Operation::of_name(self.db, location, wasm_name)
-            .operands(operands)
-            .attr("type_idx", Attribute::IntBits(type_idx as u64))
-            .results(op.results(self.db).clone())
-            .build();
-
-        self.map_results(&op, &wasm_array_new);
-        builder.op(wasm_array_new);
-    }
-
-    fn lower_adt_array_get(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        let Some(array_ref) = operands.first().copied() else {
-            builder.op(op);
-            return;
-        };
-        let mut wasm_array_get =
-            Operation::of_name(self.db, location, "wasm.array_get").operands(operands);
-        if let Some(type_idx) = self.type_idx_for_value(array_ref) {
-            wasm_array_get = wasm_array_get.attr("type_idx", Attribute::IntBits(type_idx as u64));
-        }
-        let wasm_array_get = wasm_array_get.results(op.results(self.db).clone()).build();
-
-        self.map_results(&op, &wasm_array_get);
-        builder.op(wasm_array_get);
-    }
-
-    fn lower_adt_array_set(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        let Some(array_ref) = operands.first().copied() else {
-            builder.op(op);
-            return;
-        };
-        let mut wasm_array_set =
-            Operation::of_name(self.db, location, "wasm.array_set").operands(operands);
-        if let Some(type_idx) = self.type_idx_for_value(array_ref) {
-            wasm_array_set = wasm_array_set.attr("type_idx", Attribute::IntBits(type_idx as u64));
-        }
-        builder.op(wasm_array_set.build());
-    }
-
-    fn lower_adt_array_len(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        let wasm_array_len = Operation::of_name(self.db, location, "wasm.array_len")
-            .operands(operands)
-            .results(op.results(self.db).clone())
-            .build();
-
-        self.map_results(&op, &wasm_array_len);
-        builder.op(wasm_array_len);
-    }
-
-    fn lower_adt_ref_null(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-    ) {
-        let attrs = op.attributes(self.db);
-        let Some(type_idx) = self.type_idx_from_attr(attrs.get(&Symbol::new("type"))) else {
-            builder.op(op);
-            return;
-        };
-
-        let wasm_ref_null = Operation::of_name(self.db, location, "wasm.ref_null")
-            .attr("heap_type", Attribute::IntBits(type_idx as u64))
-            .results(op.results(self.db).clone())
-            .build();
-
-        self.map_results(&op, &wasm_ref_null);
-        builder.op(wasm_ref_null);
-    }
-
-    fn lower_adt_ref_is_null(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        let wasm_ref_is_null = Operation::of_name(self.db, location, "wasm.ref_is_null")
-            .operands(operands)
-            .results(op.results(self.db).clone())
-            .build();
-
-        self.map_results(&op, &wasm_ref_is_null);
-        builder.op(wasm_ref_is_null);
-    }
-
-    fn lower_adt_ref_cast(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        location: Location<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        let attrs = op.attributes(self.db);
-        let Some(type_idx) = self.type_idx_from_attr(attrs.get(&Symbol::new("type"))) else {
-            builder.op(op);
-            return;
-        };
-
-        let wasm_ref_cast = Operation::of_name(self.db, location, "wasm.ref_cast")
-            .operands(operands)
-            .attr("target_type", Attribute::IntBits(type_idx as u64))
-            .results(op.results(self.db).clone())
-            .build();
-
-        self.map_results(&op, &wasm_ref_cast);
-        builder.op(wasm_ref_cast);
     }
 
     fn lower_string_const(
@@ -1014,40 +585,6 @@ impl<'db> WasmLowerer<'db> {
             let new_val = new_op.result(self.db, i);
             self.value_map.insert(old_val, new_val);
         }
-    }
-
-    fn value_type(&self, value: Value<'db>) -> Option<Type<'db>> {
-        match value.def(self.db) {
-            ValueDef::OpResult(op) => op.results(self.db).get(value.index(self.db)).copied(),
-            ValueDef::BlockArg(block) => block.args(self.db).get(value.index(self.db)).copied(),
-        }
-    }
-
-    fn type_idx_for_value(&mut self, value: Value<'db>) -> Option<u32> {
-        let ty = self.value_type(value)?;
-        Some(self.get_type_index(ty))
-    }
-
-    fn type_idx_from_attr(&mut self, attr: Option<&Attribute<'db>>) -> Option<u32> {
-        match attr {
-            Some(Attribute::Type(ty)) => Some(self.get_type_index(*ty)),
-            _ => None,
-        }
-    }
-
-    fn field_index_from_attr(&self, attr: Option<&Attribute<'db>>) -> Option<u32> {
-        match attr {
-            Some(Attribute::IntBits(idx)) => Some(*idx as u32),
-            Some(Attribute::Symbol(sym)) => Some(Self::name_hash_u32(&sym.to_string())),
-            Some(Attribute::String(name)) => Some(Self::name_hash_u32(name)),
-            _ => None,
-        }
-    }
-
-    fn name_hash_u32(name: &str) -> u32 {
-        name.as_bytes()
-            .iter()
-            .fold(0u32, |h, &b| h.wrapping_mul(31).wrapping_add(u32::from(b)))
     }
 }
 
