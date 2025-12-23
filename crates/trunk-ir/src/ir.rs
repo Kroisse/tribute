@@ -178,7 +178,7 @@ impl QualifiedName {
     }
 
     /// Get all segments of this qualified name (parent + name).
-    pub fn segments(&self) -> SmallVec<[Symbol; 6]> {
+    pub fn to_segments(&self) -> SmallVec<[Symbol; 6]> {
         let mut result = SmallVec::with_capacity(self.parent.len() + 1);
         result.extend_from_slice(&self.parent);
         result.push(self.name);
@@ -1087,18 +1087,18 @@ mod tests {
                 #[test]
                 fn prop_never_empty(qn in arb_qualified_name()) {
                     prop_assert!(qn.len() >= 1);
-                    prop_assert!(!qn.segments().is_empty());
+                    prop_assert!(!qn.to_segments().is_empty());
                 }
 
                 #[test]
                 fn prop_name_equals_last_segment(qn in arb_qualified_name()) {
-                    let segments = qn.segments();
+                    let segments = qn.to_segments();
                     prop_assert_eq!(qn.name(), *segments.last().unwrap());
                 }
 
                 #[test]
                 fn prop_segments_roundtrip(qn in arb_qualified_name()) {
-                    let segments = qn.segments();
+                    let segments = qn.to_segments();
                     let reconstructed = segments.into_iter().collect();
                     prop_assert_eq!(Some(qn), reconstructed);
                 }

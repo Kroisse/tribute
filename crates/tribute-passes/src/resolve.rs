@@ -551,11 +551,7 @@ impl<'db> Resolver<'db> {
 
         // For now, only support single-level namespaces (Type::Constructor)
         // TODO: Support multi-level namespaces
-        let segments = path.segments();
-        if segments.len() < 2 {
-            return None;
-        }
-        let namespace = segments[segments.len() - 2];
+        let namespace = *path.as_parent_slice().last()?;
         let name = path.name();
         self.env.lookup_qualified(namespace, name).cloned()
     }
@@ -1105,13 +1101,8 @@ impl<'db> Resolver<'db> {
 
         // For now, only support single-level qualified names (Type::Constructor)
         // TODO: Support multi-level paths
-        if path.len() != 2 {
-            return None;
-        }
-
-        let segments = path.segments();
-        let namespace = segments[0];
-        let name = segments[1];
+        let namespace = *path.as_parent_slice().last()?;
+        let name = path.name();
 
         match self.env.lookup_qualified(namespace, name)? {
             Binding::Function { path, ty } => {
@@ -1179,9 +1170,8 @@ impl<'db> Resolver<'db> {
             if path.len() != 2 {
                 return None;
             }
-            let segments = path.segments();
-            let namespace = segments[0];
-            let name = segments[1];
+            let namespace = *path.as_parent_slice().last().unwrap();
+            let name = path.name();
             self.env.lookup_qualified(namespace, name)
         }?;
 
@@ -1220,9 +1210,8 @@ impl<'db> Resolver<'db> {
             if path.len() != 2 {
                 return None;
             }
-            let segments = path.segments();
-            let namespace = segments[0];
-            let name = segments[1];
+            let namespace = *path.as_parent_slice().last().unwrap();
+            let name = path.name();
             self.env.lookup_qualified(namespace, name)
         }?;
 
