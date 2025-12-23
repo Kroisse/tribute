@@ -9,7 +9,7 @@ use crate::plan::{DataSegments, MainExports, MemoryPlan, WasiPlan};
 
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::{adt, func, src, wasm};
+use trunk_ir::dialect::{adt, func, wasm};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::{
     Attribute, Block, DialectType, IdVec, Location, Operation, QualifiedName, Region, Symbol,
@@ -267,52 +267,44 @@ impl<'db> WasmLowerer<'db> {
     }
 
     fn lower_op(&mut self, builder: &mut BlockBuilder<'db>, op: Operation<'db>) {
-        let remapped_operands = self.remap_operands(op);
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
+
+        // Handle wasm dialect metadata collection and intrinsic calls
         if dialect == wasm::DIALECT_NAME() {
             self.observe_wasm_module_op(&op, name);
 
-            // Handle intrinsic calls (e.g., print_line -> fd_write)
-            if name == wasm::CALL() {
-                if self.lower_intrinsic_call(builder, &op, remapped_operands.clone()) {
-                    return;
-                }
-            }
-
-            // Handle wasm.func metadata (main function detection)
             if name == wasm::FUNC() {
                 if let Ok(op_func) = wasm::Func::from_operation(self.db, op) {
                     self.record_wasm_func_metadata(&op_func);
                 }
             }
+
+            // Handle intrinsic calls (e.g., print_line -> fd_write)
+            if name == wasm::CALL() {
+                let remapped_operands = self.remap_operands(op);
+                if self.lower_intrinsic_call(builder, &op, remapped_operands) {
+                    return;
+                }
+            }
         }
 
-        // Transform operations based on dialect
-        // Note: arith, scf, and func dialects are handled by pattern-based passes before this lowerer runs
-
-        if dialect == func::DIALECT_NAME() {
-            return self.lower_func_op(builder, op, remapped_operands);
-        }
-
+        // Handle adt.string_const and adt.bytes_const (require data segment allocation)
         if dialect == adt::DIALECT_NAME() {
-            return self.lower_adt_op(builder, op, name, remapped_operands);
+            let location = op.location(self.db);
+            if name == adt::STRING_CONST() {
+                return self.lower_string_const(builder, op, location);
+            }
+            if name == adt::BYTES_CONST() {
+                return self.lower_bytes_const(builder, op, location);
+            }
         }
 
-        // src.var operations are intentionally preserved for IDE hover information.
-        // They represent resolved local bindings whose actual values are in value_map.
-        if dialect == src::DIALECT_NAME() && name == src::VAR() {
-            let new_op = op.modify(self.db).operands(remapped_operands).build();
-            self.map_results(&op, &new_op);
-            builder.op(new_op);
-            return;
-        }
-
-        // Operations we're not handling should not appear in function bodies
-        // They should have been processed by earlier pipeline stages
+        // Debug warning for unexpected dialects in function bodies
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
-            if !["wasm", "core", "type", "ty", "src"].contains(&dialect_str.as_str()) {
+            let allowed = ["wasm", "core", "type", "ty", "src", "func", "adt"];
+            if !allowed.contains(&dialect_str.as_str()) {
                 eprintln!(
                     "WARNING: Unhandled operation in lowering: {}.{} (this may cause emit errors)",
                     dialect, name
@@ -320,82 +312,27 @@ impl<'db> WasmLowerer<'db> {
             }
         }
 
-        // Keep other operations as-is (recursively lower regions)
-        let new_regions = op
+        // Default: preserve operation with remapped operands and recursively lowered regions
+        self.preserve_op_with_lowered_regions(builder, op);
+    }
+
+    /// Preserve an operation as-is, but remap operands and recursively lower nested regions.
+    fn preserve_op_with_lowered_regions(
+        &mut self,
+        builder: &mut BlockBuilder<'db>,
+        op: Operation<'db>,
+    ) {
+        let remapped_operands = self.remap_operands(op);
+        let new_regions: Vec<_> = op
             .regions(self.db)
             .iter()
             .copied()
             .map(|region| self.lower_region(region))
-            .collect::<Vec<_>>();
+            .collect();
 
         let new_op = op
             .modify(self.db)
             .operands(remapped_operands)
-            .regions(IdVec::from(new_regions))
-            .build();
-        self.map_results(&op, &new_op);
-        builder.op(new_op);
-    }
-
-    fn lower_func_op(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        operands: IdVec<Value<'db>>,
-    ) {
-        // Note: func.call, func.return, func.func are now handled by func_to_wasm pass.
-        // This method only handles func.call_indirect, func.constant (closure support).
-
-        // Keep operation as-is but lower nested regions
-        let new_regions = op
-            .regions(self.db)
-            .iter()
-            .copied()
-            .map(|region| self.lower_region(region))
-            .collect::<Vec<_>>();
-
-        let new_op = op
-            .modify(self.db)
-            .operands(operands)
-            .regions(IdVec::from(new_regions))
-            .build();
-        self.map_results(&op, &new_op);
-        builder.op(new_op);
-    }
-
-    fn lower_adt_op(
-        &mut self,
-        builder: &mut BlockBuilder<'db>,
-        op: Operation<'db>,
-        name: Symbol,
-        operands: IdVec<Value<'db>>,
-    ) {
-        // Note: Most ADT operations are now handled by adt_to_wasm pass.
-        // Only string_const and bytes_const remain here because they require
-        // data segment allocation (stateful).
-
-        let location = op.location(self.db);
-
-        if name == adt::STRING_CONST() {
-            return self.lower_string_const(builder, op, location);
-        }
-
-        if name == adt::BYTES_CONST() {
-            return self.lower_bytes_const(builder, op, location);
-        }
-
-        // Other ADT operations should have been converted by adt_to_wasm pass.
-        // Keep as-is with region lowering (shouldn't happen in practice).
-        let new_regions = op
-            .regions(self.db)
-            .iter()
-            .copied()
-            .map(|region| self.lower_region(region))
-            .collect::<Vec<_>>();
-
-        let new_op = op
-            .modify(self.db)
-            .operands(operands)
             .regions(IdVec::from(new_regions))
             .build();
         self.map_results(&op, &new_op);
