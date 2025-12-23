@@ -1,11 +1,11 @@
 //! Declaration lowering for functions, types, and modules.
 
 use tree_sitter::Node;
-use trunk_ir::Span;
 use trunk_ir::{
     Attribute, BlockBuilder, IdVec, QualifiedName, Symbol, Type,
     dialect::{core, func, src, ty},
 };
+use trunk_ir::{Span, SymbolVec};
 
 use super::context::CstLoweringCtx;
 use super::helpers::{is_comment, node_text, sym};
@@ -40,7 +40,7 @@ pub fn lower_use_decl<'db>(
     };
 
     let mut imports = Vec::new();
-    collect_use_imports(ctx, tree_node, &mut Vec::new(), &mut imports);
+    collect_use_imports(ctx, tree_node, &mut SymbolVec::new(), &mut imports);
 
     for import in imports {
         let alias_sym = import.alias.unwrap_or_else(|| sym(""));
@@ -52,7 +52,7 @@ pub fn lower_use_decl<'db>(
 fn collect_use_imports<'db>(
     ctx: &CstLoweringCtx<'db>,
     node: Node,
-    base: &mut Vec<Symbol>,
+    base: &mut SymbolVec,
     out: &mut Vec<UseImport>,
 ) {
     match node.kind() {
@@ -106,18 +106,11 @@ fn collect_use_imports<'db>(
                 return;
             }
 
-            if head == "self" && !base.is_empty() {
-                out.push(UseImport {
-                    path: QualifiedName::try_from(base.clone())
-                        .expect("base is non-empty"),
-                    alias,
-                });
-            } else {
-                out.push(UseImport {
-                    path: QualifiedName::new(&base[..], head),
-                    alias
-                });
-            }
+            let path = match base.split_last() {
+                Some((name, parent)) if head == "self" => QualifiedName::new(parent, *name),
+                _ => QualifiedName::new(&base[..], head),
+            };
+            out.push(UseImport { path, alias });
         }
         _ => {}
     }

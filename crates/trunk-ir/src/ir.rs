@@ -9,8 +9,6 @@ use parking_lot::RwLock;
 
 use crate::{Attribute, IdVec, Location, Type};
 
-pub use crate::qualified_name::{EmptyQualifiedNameError, QualifiedName};
-
 // ============================================================================
 // Interned Types
 // ============================================================================
@@ -639,5 +637,4 @@ mod tests {
             assert_eq!(multi.results(db).len(), 2);
         }
     }
-
 }
