@@ -414,16 +414,3 @@ impl<'db> WasmLowerer<'db> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_lower_arith_const() {
-        // Basic test placeholder
-    }
-
-    #[test]
-    fn test_lower_arith_add() {
-        // Basic test placeholder
-    }
-}

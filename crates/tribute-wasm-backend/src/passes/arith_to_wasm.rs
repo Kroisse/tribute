@@ -509,8 +509,57 @@ fn value_type<'db>(db: &'db dyn salsa::Database, value: trunk_ir::Value<'db>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use insta::assert_snapshot;
     use salsa_test_macros::salsa_test;
     use trunk_ir::{Block, DialectOp, Location, PathId, Region, Span, idvec};
+
+    /// Format module operations for snapshot testing
+    fn format_module_ops(db: &dyn salsa::Database, module: &Module<'_>) -> String {
+        let body = module.body(db);
+        let ops = &body.blocks(db)[0].operations(db);
+        ops.iter()
+            .map(|op| format_op(db, op))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Format a single operation for snapshot testing
+    fn format_op(db: &dyn salsa::Database, op: &trunk_ir::Operation<'_>) -> String {
+        let name = op.full_name(db);
+        let operands = op.operands(db);
+        let results = op.results(db);
+        let attrs = op.attributes(db);
+
+        let mut parts = vec![name];
+
+        // Add key attributes
+        for (key, attr) in attrs.iter() {
+            if key.to_string() == "value" {
+                parts.push(format!("value={}", format_attr(attr)));
+            }
+        }
+
+        // Add operand count
+        if !operands.is_empty() {
+            parts.push(format!("operands={}", operands.len()));
+        }
+
+        // Add result types
+        if !results.is_empty() {
+            let result_types: Vec<_> = results.iter().map(|t| t.name(db).to_string()).collect();
+            parts.push(format!("-> {}", result_types.join(", ")));
+        }
+
+        parts.join(" ")
+    }
+
+    fn format_attr(attr: &trunk_ir::Attribute<'_>) -> String {
+        match attr {
+            trunk_ir::Attribute::IntBits(v) => format!("{}", *v as i64),
+            trunk_ir::Attribute::FloatBits(v) => format!("{}", f64::from_bits(*v)),
+            _ => "...".to_string(),
+        }
+    }
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -546,22 +595,22 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn lower_and_check(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
+    fn format_lowered_module<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> String {
         let lowered = lower(db, module);
-        let body = lowered.body(db);
-        let ops = body.blocks(db)[0].operations(db);
-        ops.iter().map(|op| op.full_name(db)).collect()
+        format_module_ops(db, &lowered)
     }
 
     #[salsa_test]
     fn test_arith_const_to_wasm(db: &salsa::DatabaseImpl) {
         let module = make_arith_add_module(db);
-        let op_names = lower_and_check(db, module);
+        let formatted = format_lowered_module(db, module);
 
-        // Should have wasm.i32_const, wasm.i32_const, wasm.i32_add
-        assert!(op_names.iter().all(|n| n.starts_with("wasm.")));
-        assert!(op_names.iter().any(|n| n == "wasm.i32_const"));
-        assert!(op_names.iter().any(|n| n == "wasm.i32_add"));
+        // Snapshot test for visual verification
+        assert_snapshot!(formatted, @r###"
+        wasm.i32_const value=1 -> i32
+        wasm.i32_const value=2 -> i32
+        wasm.i32_add operands=2 -> i32
+        "###);
     }
 
     #[salsa::tracked]
@@ -588,12 +637,12 @@ mod tests {
     #[salsa_test]
     fn test_arith_convert_i32_to_f64(db: &salsa::DatabaseImpl) {
         let module = make_convert_i32_to_f64_module(db);
-        let op_names = lower_and_check(db, module);
+        let formatted = format_lowered_module(db, module);
 
-        // Should have wasm.i32_const and wasm.f64_convert_i32_s
-        assert!(op_names.iter().all(|n| n.starts_with("wasm.")));
-        assert!(op_names.iter().any(|n| n == "wasm.i32_const"));
-        assert!(op_names.iter().any(|n| n == "wasm.f64_convert_i32_s"));
+        assert_snapshot!(formatted, @r###"
+        wasm.i32_const value=42 -> i32
+        wasm.f64_convert_i32_s operands=1 -> f64
+        "###);
     }
 
     #[salsa::tracked]
@@ -620,12 +669,12 @@ mod tests {
     #[salsa_test]
     fn test_arith_extend_i32_to_i64(db: &salsa::DatabaseImpl) {
         let module = make_extend_i32_to_i64_module(db);
-        let op_names = lower_and_check(db, module);
+        let formatted = format_lowered_module(db, module);
 
-        // Should have wasm.i32_const and wasm.i64_extend_i32_s
-        assert!(op_names.iter().all(|n| n.starts_with("wasm.")));
-        assert!(op_names.iter().any(|n| n == "wasm.i32_const"));
-        assert!(op_names.iter().any(|n| n == "wasm.i64_extend_i32_s"));
+        assert_snapshot!(formatted, @r###"
+        wasm.i32_const value=100 -> i32
+        wasm.i64_extend_i32_s operands=1 -> i64
+        "###);
     }
 
     #[salsa::tracked]
@@ -652,11 +701,11 @@ mod tests {
     #[salsa_test]
     fn test_arith_trunc_f64_to_i32(db: &salsa::DatabaseImpl) {
         let module = make_trunc_f64_to_i32_module(db);
-        let op_names = lower_and_check(db, module);
+        let formatted = format_lowered_module(db, module);
 
-        // Should have wasm.f64_const and wasm.i32_trunc_f64_s
-        assert!(op_names.iter().all(|n| n.starts_with("wasm.")));
-        assert!(op_names.iter().any(|n| n == "wasm.f64_const"));
-        assert!(op_names.iter().any(|n| n == "wasm.i32_trunc_f64_s"));
+        assert_snapshot!(formatted, @r###"
+        wasm.f64_const value=3.14 -> f64
+        wasm.i32_trunc_f64_s operands=1 -> i32
+        "###);
     }
 }
