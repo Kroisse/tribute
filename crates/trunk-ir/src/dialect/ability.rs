@@ -28,7 +28,7 @@ dialect! {
         ///
         /// Invokes an operation from an ability, capturing the current continuation
         /// until a handler is found. Returns when resumed by a handler.
-        #[attr(ability_ref: SymbolRef, op: Symbol)]
+        #[attr(ability_ref: QualifiedName, op: Symbol)]
         fn perform(#[rest] args) -> result;
 
         /// `ability.prompt` operation: runs body in a delimited context.
