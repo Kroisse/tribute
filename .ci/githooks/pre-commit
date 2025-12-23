@@ -6,7 +6,7 @@ echo "Running pre-commit checks..."
 
 echo "Running clippy..."
 # Limit clippy output to first 20 errors and use compact format
-if ! cargo clippy --all --message-format=short -- -D warnings 2>&1 | head -n 40; then
+if ! cargo clippy --all --tests --message-format=short -- -D warnings 2>&1 | head -n 40; then
     echo ""
     echo "❌ Clippy failed with warnings/errors. Fix the issues above and try again."
     echo "   Run 'cargo clippy --all' to see all issues."
