@@ -31,7 +31,7 @@ pub struct ApplyResult<'db> {
 /// # use salsa::DatabaseImpl;
 /// # use trunk_ir::{Block, Location, Operation, PathId, Region, Span, Symbol, idvec};
 /// # use trunk_ir::dialect::core::Module;
-/// use trunk_ir::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
+/// use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 ///
 /// struct RenamePattern;
 ///
@@ -40,7 +40,6 @@ pub struct ApplyResult<'db> {
 ///         &self,
 ///         db: &'db dyn salsa::Database,
 ///         op: &Operation<'db>,
-///         _ctx: &mut RewriteContext<'db>,
 ///     ) -> RewriteResult<'db> {
 ///         if op.dialect(db) != "test" || op.name(db) != "source" {
 ///             return RewriteResult::Unchanged;
@@ -201,7 +200,7 @@ impl PatternApplicator {
 
         // Step 2: Try each pattern
         for pattern in &self.patterns {
-            match pattern.match_and_rewrite(db, &remapped_op, ctx) {
+            match pattern.match_and_rewrite(db, &remapped_op) {
                 RewriteResult::Unchanged => continue,
 
                 RewriteResult::Replace(new_op) => {
@@ -282,7 +281,6 @@ mod tests {
             &self,
             db: &'db dyn salsa::Database,
             op: &Operation<'db>,
-            _ctx: &mut RewriteContext<'db>,
         ) -> RewriteResult<'db> {
             if op.dialect(db) != "test" || op.name(db) != "source" {
                 return RewriteResult::Unchanged;

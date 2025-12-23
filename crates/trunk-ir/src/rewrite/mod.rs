@@ -9,7 +9,7 @@
 //! The rewriter operates on TrunkIR operations through three key components:
 //!
 //! - [`RewritePattern`]: Trait for defining transformation patterns
-//! - [`RewriteContext`]: Tracks value mappings during rewrites
+//! - [`RewriteContext`]: Tracks value mappings during rewrites (internal to applicator)
 //! - [`PatternApplicator`]: Drives pattern application to fixpoint
 //!
 //! # Usage
@@ -19,7 +19,7 @@
 //! # use salsa::DatabaseImpl;
 //! # use trunk_ir::{Block, Location, Operation, PathId, Region, Span, Symbol, idvec};
 //! # use trunk_ir::dialect::core::Module;
-//! use trunk_ir::rewrite::{PatternApplicator, RewriteContext, RewritePattern, RewriteResult};
+//! use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 //!
 //! struct RenamePattern;
 //!
@@ -28,8 +28,8 @@
 //!         &self,
 //!         db: &'db dyn salsa::Database,
 //!         op: &Operation<'db>,
-//!         _ctx: &mut RewriteContext<'db>,
 //!     ) -> RewriteResult<'db> {
+//!         // Note: op.operands() are already remapped by the applicator
 //!         if op.dialect(db) != "test" || op.name(db) != "source" {
 //!             return RewriteResult::Unchanged;
 //!         }

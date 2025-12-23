@@ -149,6 +149,90 @@ dialect! {
         /// `wasm.i64_mul` operation: i64 multiplication.
         fn i64_mul(lhs, rhs) -> result;
 
+        /// `wasm.i64_div_s` operation: i64 signed division.
+        fn i64_div_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_div_u` operation: i64 unsigned division.
+        fn i64_div_u(lhs, rhs) -> result;
+
+        /// `wasm.i64_rem_s` operation: i64 signed remainder.
+        fn i64_rem_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_rem_u` operation: i64 unsigned remainder.
+        fn i64_rem_u(lhs, rhs) -> result;
+
+        // === Integer Comparison (i64) ===
+
+        /// `wasm.i64_eq` operation: i64 equality.
+        fn i64_eq(lhs, rhs) -> result;
+
+        /// `wasm.i64_ne` operation: i64 inequality.
+        fn i64_ne(lhs, rhs) -> result;
+
+        /// `wasm.i64_lt_s` operation: i64 signed less than.
+        fn i64_lt_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_lt_u` operation: i64 unsigned less than.
+        fn i64_lt_u(lhs, rhs) -> result;
+
+        /// `wasm.i64_le_s` operation: i64 signed less or equal.
+        fn i64_le_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_le_u` operation: i64 unsigned less or equal.
+        fn i64_le_u(lhs, rhs) -> result;
+
+        /// `wasm.i64_gt_s` operation: i64 signed greater than.
+        fn i64_gt_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_gt_u` operation: i64 unsigned greater than.
+        fn i64_gt_u(lhs, rhs) -> result;
+
+        /// `wasm.i64_ge_s` operation: i64 signed greater or equal.
+        fn i64_ge_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_ge_u` operation: i64 unsigned greater or equal.
+        fn i64_ge_u(lhs, rhs) -> result;
+
+        // === Integer Bitwise (i32) ===
+
+        /// `wasm.i32_and` operation: i32 bitwise AND.
+        fn i32_and(lhs, rhs) -> result;
+
+        /// `wasm.i32_or` operation: i32 bitwise OR.
+        fn i32_or(lhs, rhs) -> result;
+
+        /// `wasm.i32_xor` operation: i32 bitwise XOR.
+        fn i32_xor(lhs, rhs) -> result;
+
+        /// `wasm.i32_shl` operation: i32 shift left.
+        fn i32_shl(lhs, rhs) -> result;
+
+        /// `wasm.i32_shr_s` operation: i32 signed shift right.
+        fn i32_shr_s(lhs, rhs) -> result;
+
+        /// `wasm.i32_shr_u` operation: i32 unsigned shift right.
+        fn i32_shr_u(lhs, rhs) -> result;
+
+        // === Integer Bitwise (i64) ===
+
+        /// `wasm.i64_and` operation: i64 bitwise AND.
+        fn i64_and(lhs, rhs) -> result;
+
+        /// `wasm.i64_or` operation: i64 bitwise OR.
+        fn i64_or(lhs, rhs) -> result;
+
+        /// `wasm.i64_xor` operation: i64 bitwise XOR.
+        fn i64_xor(lhs, rhs) -> result;
+
+        /// `wasm.i64_shl` operation: i64 shift left.
+        fn i64_shl(lhs, rhs) -> result;
+
+        /// `wasm.i64_shr_s` operation: i64 signed shift right.
+        fn i64_shr_s(lhs, rhs) -> result;
+
+        /// `wasm.i64_shr_u` operation: i64 unsigned shift right.
+        fn i64_shr_u(lhs, rhs) -> result;
+
         // === Floating Point (f32) ===
 
         /// `wasm.f32_const` operation: f32 constant.
@@ -167,6 +251,29 @@ dialect! {
         /// `wasm.f32_div` operation: f32 division.
         fn f32_div(lhs, rhs) -> result;
 
+        /// `wasm.f32_neg` operation: f32 negation.
+        fn f32_neg(operand) -> result;
+
+        // === Floating Point Comparison (f32) ===
+
+        /// `wasm.f32_eq` operation: f32 equality.
+        fn f32_eq(lhs, rhs) -> result;
+
+        /// `wasm.f32_ne` operation: f32 inequality.
+        fn f32_ne(lhs, rhs) -> result;
+
+        /// `wasm.f32_lt` operation: f32 less than.
+        fn f32_lt(lhs, rhs) -> result;
+
+        /// `wasm.f32_le` operation: f32 less or equal.
+        fn f32_le(lhs, rhs) -> result;
+
+        /// `wasm.f32_gt` operation: f32 greater than.
+        fn f32_gt(lhs, rhs) -> result;
+
+        /// `wasm.f32_ge` operation: f32 greater or equal.
+        fn f32_ge(lhs, rhs) -> result;
+
         // === Floating Point (f64) ===
 
         /// `wasm.f64_const` operation: f64 constant.
@@ -184,6 +291,29 @@ dialect! {
 
         /// `wasm.f64_div` operation: f64 division.
         fn f64_div(lhs, rhs) -> result;
+
+        /// `wasm.f64_neg` operation: f64 negation.
+        fn f64_neg(operand) -> result;
+
+        // === Floating Point Comparison (f64) ===
+
+        /// `wasm.f64_eq` operation: f64 equality.
+        fn f64_eq(lhs, rhs) -> result;
+
+        /// `wasm.f64_ne` operation: f64 inequality.
+        fn f64_ne(lhs, rhs) -> result;
+
+        /// `wasm.f64_lt` operation: f64 less than.
+        fn f64_lt(lhs, rhs) -> result;
+
+        /// `wasm.f64_le` operation: f64 less or equal.
+        fn f64_le(lhs, rhs) -> result;
+
+        /// `wasm.f64_gt` operation: f64 greater than.
+        fn f64_gt(lhs, rhs) -> result;
+
+        /// `wasm.f64_ge` operation: f64 greater or equal.
+        fn f64_ge(lhs, rhs) -> result;
 
         // === Local Variables ===
 

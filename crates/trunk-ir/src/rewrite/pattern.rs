@@ -5,7 +5,6 @@
 
 use crate::Operation;
 
-use super::context::RewriteContext;
 use super::result::RewriteResult;
 
 /// A pattern that can match and transform IR operations.
@@ -14,13 +13,17 @@ use super::result::RewriteResult;
 /// implements `match_and_rewrite` which both checks if the pattern
 /// applies and performs the transformation in one step.
 ///
+/// The `PatternApplicator` handles all value remapping automatically:
+/// - Operands are remapped before calling `match_and_rewrite`
+/// - Results are mapped after the pattern returns
+///
 /// # Example
 ///
 /// ```
 /// # use salsa::Database;
 /// # use salsa::DatabaseImpl;
 /// # use trunk_ir::{Location, Operation, PathId, Span};
-/// use trunk_ir::rewrite::{RewriteContext, RewritePattern, RewriteResult};
+/// use trunk_ir::rewrite::{RewritePattern, RewriteResult};
 ///
 /// struct RenamePattern;
 ///
@@ -29,7 +32,6 @@ use super::result::RewriteResult;
 ///         &self,
 ///         db: &'db dyn salsa::Database,
 ///         op: &Operation<'db>,
-///         _ctx: &mut RewriteContext<'db>,
 ///     ) -> RewriteResult<'db> {
 ///         if op.dialect(db) != "test" || op.name(db) != "source" {
 ///             return RewriteResult::Unchanged;
@@ -46,8 +48,7 @@ use super::result::RewriteResult;
 /// # }
 /// # #[salsa::tracked]
 /// # fn rewrite_once(db: &dyn salsa::Database, op: Operation<'_>) -> String {
-/// #     let mut ctx = RewriteContext::new();
-/// #     let result = RenamePattern.match_and_rewrite(db, &op, &mut ctx);
+/// #     let result = RenamePattern.match_and_rewrite(db, &op);
 /// #     match result {
 /// #         RewriteResult::Replace(new_op) => new_op.full_name(db),
 /// #         _ => "unchanged".to_string(),
@@ -65,13 +66,12 @@ pub trait RewritePattern {
     /// Returns `RewriteResult::Unchanged` if the pattern doesn't apply.
     /// Otherwise returns the transformation result.
     ///
-    /// The context can be used to look up mapped values for operands
-    /// and to register new value mappings for results.
+    /// Note: The operation's operands are already remapped by the applicator.
+    /// Patterns should use `op.operands(db)` directly without additional remapping.
     fn match_and_rewrite<'db>(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        ctx: &mut RewriteContext<'db>,
     ) -> RewriteResult<'db>;
 
     /// Optional: return a human-readable name for debugging.
