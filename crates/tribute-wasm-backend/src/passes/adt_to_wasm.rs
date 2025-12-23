@@ -22,6 +22,7 @@
 
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
+use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, idvec};
 
@@ -156,13 +157,10 @@ impl RewritePattern for VariantNewPattern {
         let i32_ty = core::I32::new(db).as_type();
 
         // Create tag constant
-        let tag_const = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(u64::from(tag)))
-            .results(idvec![i32_ty])
-            .build();
+        let tag_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(u64::from(tag)));
 
         // Build operands: tag + original fields
-        let mut variant_fields = idvec![tag_const.result(db, 0)];
+        let mut variant_fields = idvec![tag_const.result(db)];
         for &operand in variant_new.fields(db).iter() {
             variant_fields.push(operand);
         }
@@ -174,7 +172,7 @@ impl RewritePattern for VariantNewPattern {
             .attr("type", Attribute::Type(variant_new.r#type(db)))
             .build();
 
-        RewriteResult::Expand(vec![tag_const, struct_new])
+        RewriteResult::Expand(vec![tag_const.operation(), struct_new])
     }
 }
 

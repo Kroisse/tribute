@@ -9,7 +9,7 @@
 //! - `arith.{cast,trunc,extend,convert}` -> appropriate wasm conversion ops
 
 use trunk_ir::dialect::core::Module;
-use trunk_ir::dialect::{arith, core};
+use trunk_ir::dialect::{arith, core, wasm};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type};
 
@@ -251,50 +251,30 @@ impl RewritePattern for ArithNegPattern {
 
         match suffix {
             "f32" => {
-                let new_op = Operation::of_name(db, location, "wasm.f32_neg")
-                    .operands(op.operands(db).clone())
-                    .results(op.results(db).clone())
-                    .build();
-                RewriteResult::Replace(new_op)
+                let f32_ty = result_ty.unwrap_or_else(|| core::F32::new(db).as_type());
+                let new_op = wasm::f32_neg(db, location, operand, f32_ty);
+                RewriteResult::Replace(new_op.operation())
             }
             "f64" => {
-                let new_op = Operation::of_name(db, location, "wasm.f64_neg")
-                    .operands(op.operands(db).clone())
-                    .results(op.results(db).clone())
-                    .build();
-                RewriteResult::Replace(new_op)
+                let f64_ty = result_ty.unwrap_or_else(|| core::F64::new(db).as_type());
+                let new_op = wasm::f64_neg(db, location, operand, f64_ty);
+                RewriteResult::Replace(new_op.operation())
             }
             "i64" => {
                 // For i64: 0 - x
                 let i64_ty = core::I64::new(db).as_type();
-                let zero = Operation::of_name(db, location, "wasm.i64_const")
-                    .attr("value", Attribute::IntBits(0))
-                    .results(trunk_ir::idvec![i64_ty])
-                    .build();
-                let zero_val = zero.result(db, 0);
-
-                let sub = Operation::of_name(db, location, "wasm.i64_sub")
-                    .operands(trunk_ir::idvec![zero_val, operand])
-                    .results(op.results(db).clone())
-                    .build();
-
-                RewriteResult::Expand(vec![zero, sub])
+                let zero = wasm::i64_const(db, location, i64_ty, Attribute::IntBits(0));
+                let zero_val = zero.result(db);
+                let sub = wasm::i64_sub(db, location, zero_val, operand, i64_ty);
+                RewriteResult::Expand(vec![zero.operation(), sub.operation()])
             }
             _ => {
                 // Default to i32: 0 - x
                 let i32_ty = core::I32::new(db).as_type();
-                let zero = Operation::of_name(db, location, "wasm.i32_const")
-                    .attr("value", Attribute::IntBits(0))
-                    .results(trunk_ir::idvec![i32_ty])
-                    .build();
-                let zero_val = zero.result(db, 0);
-
-                let sub = Operation::of_name(db, location, "wasm.i32_sub")
-                    .operands(trunk_ir::idvec![zero_val, operand])
-                    .results(op.results(db).clone())
-                    .build();
-
-                RewriteResult::Expand(vec![zero, sub])
+                let zero = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0));
+                let zero_val = zero.result(db);
+                let sub = wasm::i32_sub(db, location, zero_val, operand, i32_ty);
+                RewriteResult::Expand(vec![zero.operation(), sub.operation()])
             }
         }
     }

@@ -8,7 +8,7 @@
 //! - `scf.break` -> `wasm.br(target=0)` (branch to block)
 
 use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::scf;
+use trunk_ir::dialect::{scf, wasm};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, idvec};
 
@@ -191,18 +191,15 @@ mod tests {
         let else_region = Region::new(db, location, idvec![else_block]);
 
         // Create a dummy condition value
-        let cond_const = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(1))
-            .results(idvec![i32_ty])
-            .build();
+        let cond_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1));
 
         let scf_if = Operation::of_name(db, location, "scf.if")
-            .operands(idvec![cond_const.result(db, 0)])
+            .operands(idvec![cond_const.result(db)])
             .results(idvec![i32_ty])
             .regions(idvec![then_region, else_region])
             .build();
 
-        let block = Block::new(db, location, idvec![], idvec![cond_const, scf_if]);
+        let block = Block::new(db, location, idvec![], idvec![cond_const.operation(), scf_if]);
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
     }
