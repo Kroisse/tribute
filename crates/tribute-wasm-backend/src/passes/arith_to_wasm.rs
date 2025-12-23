@@ -8,6 +8,8 @@
 //! - `arith.{and,or,xor,shl,shr,shru}` -> `wasm.i{32,64}_{op}`
 //! - `arith.{cast,trunc,extend,convert}` -> appropriate wasm conversion ops
 
+use tracing::warn;
+
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, core, wasm};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
@@ -474,13 +476,13 @@ fn type_suffix<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> &'st
                 "nil"
             } else {
                 #[cfg(debug_assertions)]
-                eprintln!("WARNING: Unknown type '{}' in arith_to_wasm, defaulting to i32", name);
+                warn!("Unknown type '{}' in arith_to_wasm, defaulting to i32", name);
                 "i32"
             }
         }
         None => {
             #[cfg(debug_assertions)]
-            eprintln!("WARNING: No type in arith_to_wasm, defaulting to i32");
+            warn!("No type in arith_to_wasm, defaulting to i32");
             "i32"
         }
     }

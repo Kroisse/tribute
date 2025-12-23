@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use tracing::{error, warn};
+
 use crate::plan::{MainExports, MemoryPlan};
 
 use trunk_ir::DialectOp;
@@ -72,8 +74,8 @@ fn check_function_body<'db>(db: &'db dyn salsa::Database, func_op: &Operation<'d
             for op in block.operations(db).iter() {
                 let dialect = op.dialect(db);
                 if dialect != Symbol::new("wasm") {
-                    eprintln!(
-                        "ERROR: Found non-wasm operation in function body: {}.{}",
+                    error!(
+                        "Found non-wasm operation in function body: {}.{}",
                         dialect,
                         op.name(db)
                     );
@@ -348,8 +350,8 @@ impl<'db> WasmLowerer<'db> {
             let dialect_str = dialect.to_string();
             let allowed = ["wasm", "core", "type", "ty", "func", "adt", "case", "scf"];
             if !allowed.contains(&dialect_str.as_str()) {
-                eprintln!(
-                    "WARNING: Unhandled operation in lowering: {}.{} (this may cause emit errors)",
+                warn!(
+                    "Unhandled operation in lowering: {}.{} (this may cause emit errors)",
                     dialect, name
                 );
             }

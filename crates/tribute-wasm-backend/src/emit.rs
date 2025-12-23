@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use tracing::debug;
+
 use trunk_ir::dialect::core;
 use trunk_ir::{
     Attribute, Attrs, DialectType, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value,
@@ -248,14 +250,14 @@ pub fn emit_wasm<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> CompilationResult<Vec<u8>> {
-    eprintln!("[DEBUG] emit_wasm: collecting module info...");
+    debug!("emit_wasm: collecting module info...");
     let module_info = match collect_module_info(db, module) {
         Ok(info) => {
-            eprintln!("[DEBUG] emit_wasm: module info collected successfully");
+            debug!("emit_wasm: module info collected successfully");
             info
         }
         Err(e) => {
-            eprintln!("[DEBUG] emit_wasm: collect_module_info failed: {:?}", e);
+            debug!("emit_wasm: collect_module_info failed: {:?}", e);
             return Err(e);
         }
     };
@@ -310,7 +312,7 @@ pub fn emit_wasm<'db>(
     }
 
     for func_def in module_info.funcs.iter() {
-        eprintln!("[DEBUG] Processing function type for: {:?}", func_def.name);
+        debug!("Processing function type for: {:?}", func_def.name);
         let params = func_def
             .ty
             .params(db)
@@ -319,21 +321,21 @@ pub fn emit_wasm<'db>(
             .collect::<CompilationResult<Vec<_>>>();
         let params = match params {
             Ok(p) => {
-                eprintln!("[DEBUG]   params: {:?}", p);
+                debug!("  params: {:?}", p);
                 p
             }
             Err(e) => {
-                eprintln!("[DEBUG] Function params conversion failed: {:?}", e);
+                debug!("Function params conversion failed: {:?}", e);
                 return Err(e);
             }
         };
         let results = match result_types(db, func_def.ty.result(db)) {
             Ok(r) => {
-                eprintln!("[DEBUG]   results: {:?}", r);
+                debug!("  results: {:?}", r);
                 r
             }
             Err(e) => {
-                eprintln!("[DEBUG] Function results conversion failed: {:?}", e);
+                debug!("Function results conversion failed: {:?}", e);
                 return Err(e);
             }
         };
@@ -341,7 +343,7 @@ pub fn emit_wasm<'db>(
         let type_index = next_type_index;
         next_type_index += 1;
         function_section.function(type_index);
-        eprintln!("[DEBUG]   type_index: {}", type_index);
+        debug!("  type_index: {}", type_index);
     }
 
     if let Some(memory) = &module_info.memory {
@@ -354,13 +356,13 @@ pub fn emit_wasm<'db>(
         });
     }
 
-    eprintln!("[DEBUG] Processing {} exports...", module_info.exports.len());
+    debug!("Processing {} exports...", module_info.exports.len());
     for export in module_info.exports.iter() {
-        eprintln!("[DEBUG]   export: {:?} -> {:?}", export.name, export.target);
+        debug!("  export: {:?} -> {:?}", export.name, export.target);
         match export.target {
             ExportTarget::Func(sym) => {
                 let Some(index) = func_indices.get(&sym) else {
-                    eprintln!("[DEBUG]   function not found: {:?}", sym);
+                    debug!("  function not found: {:?}", sym);
                     return Err(CompilationError::function_not_found(&sym.to_string()));
                 };
                 export_section.export(export.name.as_str(), export.kind, *index);
@@ -386,15 +388,15 @@ pub fn emit_wasm<'db>(
         data_section.active(0, &offset, data.bytes.iter().copied());
     }
 
-    eprintln!("[DEBUG] emit_wasm: emitting {} functions...", module_info.funcs.len());
+    debug!("emit_wasm: emitting {} functions...", module_info.funcs.len());
     for (i, func_def) in module_info.funcs.iter().enumerate() {
-        eprintln!("[DEBUG] emit_wasm: emitting function {}: {:?}", i, func_def.name);
+        debug!("emit_wasm: emitting function {}: {:?}", i, func_def.name);
         match emit_function(db, func_def, &func_indices, &module_info.type_idx_by_type) {
             Ok(function) => {
                 code_section.function(&function);
             }
             Err(e) => {
-                eprintln!("[DEBUG] emit_wasm: emit_function failed: {:?}", e);
+                debug!("emit_wasm: emit_function failed: {:?}", e);
                 return Err(e);
             }
         }
@@ -447,8 +449,8 @@ fn collect_module_info<'db>(
                                         .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
                                         .collect();
                                     let result = func_def.ty.result(db);
-                                    eprintln!(
-                                        "[DEBUG] Skipping generic function: {} (params: {:?}, result: {}.{})",
+                                    debug!(
+                                        "Skipping generic function: {} (params: {:?}, result: {}.{})",
                                         name,
                                         params,
                                         result.dialect(db),
@@ -458,7 +460,7 @@ fn collect_module_info<'db>(
                                 continue;
                             }
                             func_def.name.with_str(|name| {
-                                eprintln!("[DEBUG] Including function: {}", name);
+                                debug!("Including function: {}", name);
                             });
                             funcs.push(func_def);
                         }
@@ -1158,7 +1160,7 @@ fn emit_op<'db>(
     let name = op.name(db);
     let operands = op.operands(db);
 
-    eprintln!("[DEBUG] emit_op: {}.{}", op.dialect(db), name);
+    debug!("emit_op: {}.{}", op.dialect(db), name);
 
     // Fast path: simple operations (emit operands → instruction → set result)
     if let Some(instr) = SIMPLE_OPS.get(&name) {
