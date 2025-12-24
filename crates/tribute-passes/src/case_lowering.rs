@@ -13,7 +13,7 @@ use salsa::Accumulator;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{adt, arith, case, core, pat, ty};
 use trunk_ir::{
-    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Type,
+    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, SymbolVec, Type
 };
 use trunk_ir::{Symbol, Value, ValueDef};
 
@@ -43,7 +43,7 @@ struct CaseLowerer<'db> {
     value_map: HashMap<Value<'db>, Value<'db>>,
     variant_tags: HashMap<Symbol, u32>,
     variant_owner: HashMap<Symbol, Symbol>,
-    enum_variants: HashMap<Symbol, Vec<Symbol>>,
+    enum_variants: HashMap<Symbol, SymbolVec>,
     /// Current arm's pattern bindings: binding name -> bound value (scrutinee)
     current_arm_bindings: HashMap<Symbol, Value<'db>>,
 }
@@ -291,13 +291,13 @@ impl<'db> CaseLowerer<'db> {
     /// Extract binding names from a pattern region.
     /// For simple `pat.bind("x")` patterns, returns the binding name.
     /// For variant patterns with bindings, returns all nested binding names.
-    fn extract_bindings_from_pattern(&self, region: Region<'db>) -> Vec<Symbol> {
-        let mut bindings = Vec::new();
+    fn extract_bindings_from_pattern(&self, region: Region<'db>) -> SymbolVec {
+        let mut bindings = SymbolVec::new();
         self.collect_bindings_recursive(region, &mut bindings);
         bindings
     }
 
-    fn collect_bindings_recursive(&self, region: Region<'db>, bindings: &mut Vec<Symbol>) {
+    fn collect_bindings_recursive(&self, region: Region<'db>, bindings: &mut SymbolVec) {
         for block in region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter().copied() {
                 if op.dialect(self.db) == pat::DIALECT_NAME() && op.name(self.db) == pat::BIND() {
@@ -324,7 +324,7 @@ impl<'db> CaseLowerer<'db> {
         }
 
         let mut owner: Option<Symbol> = None;
-        let mut seen_variants: Vec<Symbol> = Vec::new();
+        let mut seen_variants = SymbolVec::new();
 
         for arm in arms {
             let ArmPattern::Variant(variant) = arm.pattern else {
@@ -576,7 +576,7 @@ impl<'db> CaseLowerer<'db> {
             })
             .unwrap_or_else(|| Symbol::new("_"));
 
-        let mut variant_names = Vec::new();
+        let mut variant_names = SymbolVec::new();
         for (idx, variant) in variants.iter().enumerate() {
             let Attribute::List(parts) = variant else {
                 continue;
