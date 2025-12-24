@@ -60,15 +60,13 @@ static REGISTRY: LazyLock<PureOpRegistry> = LazyLock::new(|| {
 pub struct PureOps;
 
 impl PureOps {
-    /// Register a pure operation.
+    /// Register a pure operation (internal use by macro).
     ///
-    /// Use with `inventory::submit!`:
+    /// Use the `register_pure_op!` macro instead:
+    /// ```ignore
+    /// register_pure_op!(arith.add);
     /// ```
-    /// # use trunk_ir::op_interface::PureOps;
-    /// inventory::submit! {
-    ///     PureOps::register("arith", "add")
-    /// }
-    /// ```
+    #[doc(hidden)]
     pub const fn register(dialect: &'static str, op_name: &'static str) -> PureOpRegistration {
         PureOpRegistration { dialect, op_name }
     }
@@ -91,6 +89,37 @@ impl PureOps {
     pub fn is_removable<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> bool {
         Self::is_pure(db, op)
     }
+}
+
+/// Register a pure operation with simplified syntax.
+///
+/// # Example
+/// ```ignore
+/// register_pure_op!(arith.add);
+/// register_pure_op!(adt.struct_new);
+/// ```
+///
+/// This expands to both the trait implementation and inventory registration:
+/// ```ignore
+/// impl op_interface::Pure for dialect::arith::Add<'_> {}
+/// inventory::submit! {
+///     op_interface::PureOps::register("arith", "add")
+/// }
+/// ```
+#[macro_export]
+macro_rules! register_pure_op {
+    ($dialect:ident . $op_name:ident) => {
+        ::paste::paste! {
+            impl $crate::op_interface::Pure for $crate::dialect::$dialect::[<$op_name:camel>]<'_> {}
+
+            ::inventory::submit! {
+                $crate::op_interface::PureOps::register(
+                    stringify!($dialect),
+                    stringify!($op_name)
+                )
+            }
+        }
+    };
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 //! Operations for persistent list (RRB tree-backed) manipulation.
 //! All operations that return a list or element carry `elem_type` for type information.
 
-use crate::{dialect, op_interface};
+use crate::dialect;
 
 dialect! {
     mod list {
@@ -60,28 +60,16 @@ dialect! {
     }
 }
 
-// === Pure trait implementations ===
+// === Pure operation registrations ===
 // All list operations are pure (persistent data structure - returns new lists)
 
-impl<'db> op_interface::Pure for New<'db> {}
-impl<'db> op_interface::Pure for Get<'db> {}
-impl<'db> op_interface::Pure for Len<'db> {}
-impl<'db> op_interface::Pure for ViewFront<'db> {}
-impl<'db> op_interface::Pure for ViewBack<'db> {}
-impl<'db> op_interface::Pure for Set<'db> {}
-impl<'db> op_interface::Pure for PushFront<'db> {}
-impl<'db> op_interface::Pure for PushBack<'db> {}
-impl<'db> op_interface::Pure for Concat<'db> {}
-impl<'db> op_interface::Pure for Slice<'db> {}
-
-// Register pure operations for runtime lookup
-inventory::submit! { op_interface::PureOps::register("list", "new") }
-inventory::submit! { op_interface::PureOps::register("list", "get") }
-inventory::submit! { op_interface::PureOps::register("list", "len") }
-inventory::submit! { op_interface::PureOps::register("list", "view_front") }
-inventory::submit! { op_interface::PureOps::register("list", "view_back") }
-inventory::submit! { op_interface::PureOps::register("list", "set") }
-inventory::submit! { op_interface::PureOps::register("list", "push_front") }
-inventory::submit! { op_interface::PureOps::register("list", "push_back") }
-inventory::submit! { op_interface::PureOps::register("list", "concat") }
-inventory::submit! { op_interface::PureOps::register("list", "slice") }
+crate::register_pure_op!(list.new);
+crate::register_pure_op!(list.get);
+crate::register_pure_op!(list.len);
+crate::register_pure_op!(list.view_front);
+crate::register_pure_op!(list.view_back);
+crate::register_pure_op!(list.set);
+crate::register_pure_op!(list.push_front);
+crate::register_pure_op!(list.push_back);
+crate::register_pure_op!(list.concat);
+crate::register_pure_op!(list.slice);

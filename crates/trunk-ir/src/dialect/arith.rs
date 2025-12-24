@@ -1,7 +1,7 @@
 //! Arithmetic dialect operations.
 
 use super::core;
-use crate::{Attribute, DialectType, Location, dialect, op_interface};
+use crate::{Attribute, DialectType, Location, dialect};
 
 dialect! {
     mod arith {
@@ -129,54 +129,29 @@ impl<'db> Const<'db> {
     }
 }
 
-// === Pure trait implementations ===
+// === Pure operation registrations ===
 // All arith operations are pure (no side effects)
 
-impl<'db> op_interface::Pure for Const<'db> {}
-impl<'db> op_interface::Pure for Add<'db> {}
-impl<'db> op_interface::Pure for Sub<'db> {}
-impl<'db> op_interface::Pure for Mul<'db> {}
-impl<'db> op_interface::Pure for Div<'db> {}
-impl<'db> op_interface::Pure for Rem<'db> {}
-impl<'db> op_interface::Pure for Neg<'db> {}
-impl<'db> op_interface::Pure for CmpEq<'db> {}
-impl<'db> op_interface::Pure for CmpNe<'db> {}
-impl<'db> op_interface::Pure for CmpLt<'db> {}
-impl<'db> op_interface::Pure for CmpLe<'db> {}
-impl<'db> op_interface::Pure for CmpGt<'db> {}
-impl<'db> op_interface::Pure for CmpGe<'db> {}
-impl<'db> op_interface::Pure for And<'db> {}
-impl<'db> op_interface::Pure for Or<'db> {}
-impl<'db> op_interface::Pure for Xor<'db> {}
-impl<'db> op_interface::Pure for Shl<'db> {}
-impl<'db> op_interface::Pure for Shr<'db> {}
-impl<'db> op_interface::Pure for Shru<'db> {}
-impl<'db> op_interface::Pure for Cast<'db> {}
-impl<'db> op_interface::Pure for Trunc<'db> {}
-impl<'db> op_interface::Pure for Extend<'db> {}
-impl<'db> op_interface::Pure for Convert<'db> {}
-
-// Register pure operations for runtime lookup
-inventory::submit! { op_interface::PureOps::register("arith", "const") }
-inventory::submit! { op_interface::PureOps::register("arith", "add") }
-inventory::submit! { op_interface::PureOps::register("arith", "sub") }
-inventory::submit! { op_interface::PureOps::register("arith", "mul") }
-inventory::submit! { op_interface::PureOps::register("arith", "div") }
-inventory::submit! { op_interface::PureOps::register("arith", "rem") }
-inventory::submit! { op_interface::PureOps::register("arith", "neg") }
-inventory::submit! { op_interface::PureOps::register("arith", "cmp_eq") }
-inventory::submit! { op_interface::PureOps::register("arith", "cmp_ne") }
-inventory::submit! { op_interface::PureOps::register("arith", "cmp_lt") }
-inventory::submit! { op_interface::PureOps::register("arith", "cmp_le") }
-inventory::submit! { op_interface::PureOps::register("arith", "cmp_gt") }
-inventory::submit! { op_interface::PureOps::register("arith", "cmp_ge") }
-inventory::submit! { op_interface::PureOps::register("arith", "and") }
-inventory::submit! { op_interface::PureOps::register("arith", "or") }
-inventory::submit! { op_interface::PureOps::register("arith", "xor") }
-inventory::submit! { op_interface::PureOps::register("arith", "shl") }
-inventory::submit! { op_interface::PureOps::register("arith", "shr") }
-inventory::submit! { op_interface::PureOps::register("arith", "shru") }
-inventory::submit! { op_interface::PureOps::register("arith", "cast") }
-inventory::submit! { op_interface::PureOps::register("arith", "trunc") }
-inventory::submit! { op_interface::PureOps::register("arith", "extend") }
-inventory::submit! { op_interface::PureOps::register("arith", "convert") }
+crate::register_pure_op!(arith.r#const);
+crate::register_pure_op!(arith.add);
+crate::register_pure_op!(arith.sub);
+crate::register_pure_op!(arith.mul);
+crate::register_pure_op!(arith.div);
+crate::register_pure_op!(arith.rem);
+crate::register_pure_op!(arith.neg);
+crate::register_pure_op!(arith.cmp_eq);
+crate::register_pure_op!(arith.cmp_ne);
+crate::register_pure_op!(arith.cmp_lt);
+crate::register_pure_op!(arith.cmp_le);
+crate::register_pure_op!(arith.cmp_gt);
+crate::register_pure_op!(arith.cmp_ge);
+crate::register_pure_op!(arith.and);
+crate::register_pure_op!(arith.or);
+crate::register_pure_op!(arith.xor);
+crate::register_pure_op!(arith.shl);
+crate::register_pure_op!(arith.shr);
+crate::register_pure_op!(arith.shru);
+crate::register_pure_op!(arith.cast);
+crate::register_pure_op!(arith.trunc);
+crate::register_pure_op!(arith.extend);
+crate::register_pure_op!(arith.convert);

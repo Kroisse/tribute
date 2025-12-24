@@ -2,7 +2,7 @@
 //!
 //! Low-level memory operations for FFI and runtime support.
 
-use crate::{dialect, op_interface};
+use crate::dialect;
 
 dialect! {
     mod mem {
@@ -20,13 +20,9 @@ dialect! {
     }
 }
 
-// === Pure trait implementations ===
+// === Pure operation registrations ===
 // mem.data and mem.load are pure (non-mutating memory operations)
 // mem.store is NOT pure (it modifies memory)
 
-impl<'db> op_interface::Pure for Data<'db> {}
-impl<'db> op_interface::Pure for Load<'db> {}
-
-// Register pure operations for runtime lookup
-inventory::submit! { op_interface::PureOps::register("mem", "data") }
-inventory::submit! { op_interface::PureOps::register("mem", "load") }
+crate::register_pure_op!(mem.data);
+crate::register_pure_op!(mem.load);
