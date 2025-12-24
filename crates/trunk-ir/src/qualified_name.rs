@@ -144,6 +144,14 @@ impl QualifiedName {
         self.parent.len() + 1
     }
 
+    /// Check if this QualifiedName is empty.
+    ///
+    /// This always returns false, since QualifiedName is non-empty by design.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
     /// Returns an iterator over all segments (parent + name).
     pub fn iter(&self) -> <&Self as IntoIterator>::IntoIter {
         self.into_iter()

@@ -4,7 +4,7 @@
 //! Closures combine a function reference with captured environment values.
 //! This dialect is lowered to target-specific representations (wasm/clif).
 
-use crate::dialect;
+use crate::{dialect, op_interface};
 
 dialect! {
     mod closure {
@@ -20,3 +20,15 @@ dialect! {
         fn env(closure) -> result;
     }
 }
+
+// === Pure trait implementations ===
+// All closure operations are pure
+
+impl<'db> op_interface::Pure for New<'db> {}
+impl<'db> op_interface::Pure for Func<'db> {}
+impl<'db> op_interface::Pure for Env<'db> {}
+
+// Register pure operations for runtime lookup
+inventory::submit! { op_interface::PureOps::register("closure", "new") }
+inventory::submit! { op_interface::PureOps::register("closure", "func") }
+inventory::submit! { op_interface::PureOps::register("closure", "env") }

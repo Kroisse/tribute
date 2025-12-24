@@ -2,7 +2,7 @@
 use super::core;
 use crate::{
     Attribute, DialectOp, DialectType, IdVec, Location, Operation, Region, Span, Symbol, Type,
-    dialect, idvec, ir::BlockBuilder,
+    dialect, idvec, ir::BlockBuilder, op_interface,
 };
 
 dialect! {
@@ -136,3 +136,11 @@ impl<'db> Return<'db> {
         r#return(db, location, vec![value])
     }
 }
+
+// === Pure trait implementations ===
+// Only func.constant is pure (it just creates a reference)
+
+impl<'db> op_interface::Pure for Constant<'db> {}
+
+// Register pure operations for runtime lookup
+inventory::submit! { op_interface::PureOps::register("func", "constant") }

@@ -4,7 +4,7 @@
 
 use std::fmt::Write;
 
-use crate::dialect;
+use crate::{dialect, op_interface};
 use crate::type_interface::Printable;
 
 dialect! {
@@ -80,7 +80,51 @@ dialect! {
     }
 }
 
-// === Printable interface registrations ===
+// === Pure trait implementations ===
+// Struct operations: new and get are pure (set modifies)
+// Variant operations: new, tag, and get are pure
+// Array operations: new, get, and len are pure (set modifies)
+// Reference operations: all are pure
+// Literal operations: all are pure
+
+impl<'db> op_interface::Pure for StructNew<'db> {}
+impl<'db> op_interface::Pure for StructGet<'db> {}
+
+impl<'db> op_interface::Pure for VariantNew<'db> {}
+impl<'db> op_interface::Pure for VariantTag<'db> {}
+impl<'db> op_interface::Pure for VariantGet<'db> {}
+
+impl<'db> op_interface::Pure for ArrayNew<'db> {}
+impl<'db> op_interface::Pure for ArrayGet<'db> {}
+impl<'db> op_interface::Pure for ArrayLen<'db> {}
+
+impl<'db> op_interface::Pure for RefNull<'db> {}
+impl<'db> op_interface::Pure for RefIsNull<'db> {}
+impl<'db> op_interface::Pure for RefCast<'db> {}
+
+impl<'db> op_interface::Pure for StringConst<'db> {}
+impl<'db> op_interface::Pure for BytesConst<'db> {}
+
+// Register pure operations for runtime lookup
+inventory::submit! { op_interface::PureOps::register("adt", "struct_new") }
+inventory::submit! { op_interface::PureOps::register("adt", "struct_get") }
+
+inventory::submit! { op_interface::PureOps::register("adt", "variant_new") }
+inventory::submit! { op_interface::PureOps::register("adt", "variant_tag") }
+inventory::submit! { op_interface::PureOps::register("adt", "variant_get") }
+
+inventory::submit! { op_interface::PureOps::register("adt", "array_new") }
+inventory::submit! { op_interface::PureOps::register("adt", "array_get") }
+inventory::submit! { op_interface::PureOps::register("adt", "array_len") }
+
+inventory::submit! { op_interface::PureOps::register("adt", "ref_null") }
+inventory::submit! { op_interface::PureOps::register("adt", "ref_is_null") }
+inventory::submit! { op_interface::PureOps::register("adt", "ref_cast") }
+
+inventory::submit! { op_interface::PureOps::register("adt", "string_const") }
+inventory::submit! { op_interface::PureOps::register("adt", "bytes_const") }
+
+// === Printable interface registrations ==="
 
 // adt.* types -> "Name" or "Name(params...)" with capitalized first letter
 // This uses Prefix("") as a catch-all for any adt type
