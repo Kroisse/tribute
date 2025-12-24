@@ -124,7 +124,7 @@ inventory::submit! { op_interface::PureOps::register("adt", "ref_cast") }
 inventory::submit! { op_interface::PureOps::register("adt", "string_const") }
 inventory::submit! { op_interface::PureOps::register("adt", "bytes_const") }
 
-// === Printable interface registrations ==="
+// === Printable interface registrations ===
 
 // adt.* types -> "Name" or "Name(params...)" with capitalized first letter
 // This uses Prefix("") as a catch-all for any adt type
