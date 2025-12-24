@@ -136,3 +136,8 @@ impl<'db> Return<'db> {
         r#return(db, location, vec![value])
     }
 }
+
+// === Pure operation registrations ===
+// Only func.constant is pure (it just creates a reference)
+
+crate::register_pure_op!(func.constant);

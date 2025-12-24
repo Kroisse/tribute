@@ -140,8 +140,17 @@ impl QualifiedName {
     /// Get the number of segments (parent + name).
     ///
     /// This is always at least 1, since QualifiedName is non-empty by design.
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.parent.len() + 1
+    }
+
+    /// Check if this QualifiedName is empty.
+    ///
+    /// This always returns false, since QualifiedName is non-empty by design.
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        false
     }
 
     /// Returns an iterator over all segments (parent + name).

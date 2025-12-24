@@ -20,3 +20,10 @@ dialect! {
         fn env(closure) -> result;
     }
 }
+
+// === Pure operation registrations ===
+// All closure operations are pure
+
+crate::register_pure_op!(closure.new);
+crate::register_pure_op!(closure.func);
+crate::register_pure_op!(closure.env);

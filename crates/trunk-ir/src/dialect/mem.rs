@@ -19,3 +19,10 @@ dialect! {
         fn store(ptr, value);
     }
 }
+
+// === Pure operation registrations ===
+// mem.data and mem.load are pure (non-mutating memory operations)
+// mem.store is NOT pure (it modifies memory)
+
+crate::register_pure_op!(mem.data);
+crate::register_pure_op!(mem.load);

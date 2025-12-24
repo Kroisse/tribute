@@ -59,3 +59,17 @@ dialect! {
         fn slice(list, start, end) -> result;
     }
 }
+
+// === Pure operation registrations ===
+// All list operations are pure (persistent data structure - returns new lists)
+
+crate::register_pure_op!(list.new);
+crate::register_pure_op!(list.get);
+crate::register_pure_op!(list.len);
+crate::register_pure_op!(list.view_front);
+crate::register_pure_op!(list.view_back);
+crate::register_pure_op!(list.set);
+crate::register_pure_op!(list.push_front);
+crate::register_pure_op!(list.push_back);
+crate::register_pure_op!(list.concat);
+crate::register_pure_op!(list.slice);
