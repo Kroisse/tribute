@@ -39,7 +39,10 @@ impl PureOpRegistry {
     }
 
     fn lookup(&self, dialect: Symbol, op_name: Symbol) -> bool {
-        self.pure_ops.get(&(dialect, op_name)).copied().unwrap_or(false)
+        self.pure_ops
+            .get(&(dialect, op_name))
+            .copied()
+            .unwrap_or(false)
     }
 }
 

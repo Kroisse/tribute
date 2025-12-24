@@ -4,4 +4,4 @@
 
 pub mod dce;
 
-pub use dce::{eliminate_dead_code, eliminate_dead_code_with_config, DceConfig, DceResult};
+pub use dce::{DceConfig, DceResult, eliminate_dead_code, eliminate_dead_code_with_config};

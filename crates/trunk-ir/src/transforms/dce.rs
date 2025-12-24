@@ -185,29 +185,28 @@ impl<'db> DcePass<'db> {
 
         for &op in block.operations(self.db).iter() {
             // First, process nested regions
-            let op_with_processed_regions = if self.config.recursive
-                && !op.regions(self.db).is_empty()
-            {
-                let mut region_changed = false;
-                let new_regions: IdVec<Region<'db>> = op
-                    .regions(self.db)
-                    .iter()
-                    .map(|region| {
-                        let (new_region, rc) = self.sweep_region(region);
-                        region_changed |= rc;
-                        new_region
-                    })
-                    .collect();
+            let op_with_processed_regions =
+                if self.config.recursive && !op.regions(self.db).is_empty() {
+                    let mut region_changed = false;
+                    let new_regions: IdVec<Region<'db>> = op
+                        .regions(self.db)
+                        .iter()
+                        .map(|region| {
+                            let (new_region, rc) = self.sweep_region(region);
+                            region_changed |= rc;
+                            new_region
+                        })
+                        .collect();
 
-                if region_changed {
-                    changed = true;
-                    op.modify(self.db).regions(new_regions).build()
+                    if region_changed {
+                        changed = true;
+                        op.modify(self.db).regions(new_regions).build()
+                    } else {
+                        op
+                    }
                 } else {
                     op
-                }
-            } else {
-                op
-            };
+                };
 
             // Check if operation is dead
             if self.is_dead(&op_with_processed_regions) {

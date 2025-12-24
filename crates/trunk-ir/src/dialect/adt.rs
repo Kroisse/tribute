@@ -4,8 +4,8 @@
 
 use std::fmt::Write;
 
-use crate::{dialect, op_interface};
 use crate::type_interface::Printable;
+use crate::{dialect, op_interface};
 
 dialect! {
     mod adt {

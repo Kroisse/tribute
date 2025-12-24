@@ -30,8 +30,8 @@ use trunk_ir::dialect::pat;
 use trunk_ir::dialect::src;
 use trunk_ir::dialect::ty;
 use trunk_ir::{
-    Attribute, Attrs, Block, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region,
-    Symbol, Type, Value, ValueDef,
+    Attribute, Attrs, Block, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type,
+    Value, ValueDef,
 };
 
 // =============================================================================
