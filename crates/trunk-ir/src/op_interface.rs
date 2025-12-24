@@ -3,7 +3,7 @@
 //! This module provides an interface system similar to `type_interface.rs` but for operations.
 //! It uses the `inventory` crate to build a registry of operation properties at compile time.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use crate::{Operation, Symbol};
@@ -28,21 +28,18 @@ inventory::collect!(PureOpRegistration);
 /// Internal registry built from inventory at first access.
 struct PureOpRegistry {
     /// Lookup: (dialect, op_name) -> is_pure
-    pure_ops: HashMap<(Symbol, Symbol), bool>,
+    pure_ops: HashSet<(Symbol, Symbol)>,
 }
 
 impl PureOpRegistry {
     fn new() -> Self {
         Self {
-            pure_ops: HashMap::new(),
+            pure_ops: HashSet::new(),
         }
     }
 
     fn lookup(&self, dialect: Symbol, op_name: Symbol) -> bool {
-        self.pure_ops
-            .get(&(dialect, op_name))
-            .copied()
-            .unwrap_or(false)
+        self.pure_ops.contains(&(dialect, op_name))
     }
 }
 
@@ -53,7 +50,7 @@ static REGISTRY: LazyLock<PureOpRegistry> = LazyLock::new(|| {
     for reg in inventory::iter::<PureOpRegistration> {
         let dialect = Symbol::from_dynamic(reg.dialect);
         let op_name = Symbol::from_dynamic(reg.op_name);
-        registry.pure_ops.insert((dialect, op_name), true);
+        registry.pure_ops.insert((dialect, op_name));
     }
 
     registry
