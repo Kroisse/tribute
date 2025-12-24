@@ -10,7 +10,7 @@ use crate::op_interface::PureOps;
 use crate::{Block, IdVec, Operation, Region, Value};
 
 /// Configuration for dead code elimination.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DceConfig {
     /// Maximum iterations before giving up.
     /// Default: 100
@@ -18,6 +18,15 @@ pub struct DceConfig {
     /// Whether to recursively process nested regions.
     /// Default: true
     pub recursive: bool,
+}
+
+impl Default for DceConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: 100,
+            recursive: true,
+        }
+    }
 }
 
 impl DceConfig {

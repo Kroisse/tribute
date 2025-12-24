@@ -81,11 +81,12 @@ impl PureOps {
         REGISTRY.lookup(dialect, op_name)
     }
 
-    /// Check if an operation can be safely removed by DCE.
+    /// Check if an operation is pure and eligible for DCE removal.
     ///
-    /// An operation is removable if:
-    /// 1. It is registered as pure (no side effects)
-    /// 2. Its results are not used elsewhere
+    /// Returns true if the operation is registered as pure (has no side effects).
+    ///
+    /// Note: This only checks purity. The caller must separately verify that
+    /// the operation's results are unused before removing it.
     pub fn is_removable<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> bool {
         Self::is_pure(db, op)
     }
