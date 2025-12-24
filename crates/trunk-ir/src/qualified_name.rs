@@ -3,8 +3,8 @@
 //! A qualified name is a non-empty sequence of symbols representing a fully qualified identifier,
 //! such as `std::intrinsics::wasi::fd_write` or `List::map`.
 
-use crate::ir::Symbol;
 use crate::SymbolVec;
+use crate::ir::Symbol;
 use smallvec::SmallVec;
 
 /// A fully qualified name consisting of path segments.
@@ -27,7 +27,10 @@ pub struct QualifiedName {
 impl QualifiedName {
     /// Create a new qualified name with the given parent path and name.
     pub fn new(parent: impl Into<SymbolVec>, name: Symbol) -> Self {
-        Self { parent: parent.into(), name }
+        Self {
+            parent: parent.into(),
+            name,
+        }
     }
 
     /// Create a qualified name from string segments.
@@ -111,9 +114,7 @@ impl QualifiedName {
         }
 
         // Extract remaining segments: parent[base_len..] + name
-        Some(QualifiedName::new(
-            &self.parent[base_len..],self.name,
-        ))
+        Some(QualifiedName::new(&self.parent[base_len..], self.name))
     }
 
     /// Check if this path starts with the given base path.
@@ -160,7 +161,12 @@ impl QualifiedName {
     /// assert_eq!(full.to_string(), "std::io::Reader::new");
     /// ```
     pub fn join(&self, other: &QualifiedName) -> QualifiedName {
-        QualifiedName::new(self.iter().chain(other.parent.iter().copied()).collect::<SymbolVec>(), other.name)
+        QualifiedName::new(
+            self.iter()
+                .chain(other.parent.iter().copied())
+                .collect::<SymbolVec>(),
+            other.name,
+        )
     }
 }
 
@@ -181,10 +187,7 @@ impl std::fmt::Display for QualifiedName {
 
 impl IntoIterator for QualifiedName {
     type Item = Symbol;
-    type IntoIter = std::iter::Chain<
-        smallvec::IntoIter<[Symbol; 4]>,
-        std::iter::Once<Symbol>,
-    >;
+    type IntoIter = std::iter::Chain<smallvec::IntoIter<[Symbol; 4]>, std::iter::Once<Symbol>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.parent.into_iter().chain(std::iter::once(self.name))
@@ -193,13 +196,14 @@ impl IntoIterator for QualifiedName {
 
 impl<'a> IntoIterator for &'a QualifiedName {
     type Item = Symbol;
-    type IntoIter = std::iter::Chain<
-        std::iter::Copied<std::slice::Iter<'a, Symbol>>,
-        std::iter::Once<Symbol>,
-    >;
+    type IntoIter =
+        std::iter::Chain<std::iter::Copied<std::slice::Iter<'a, Symbol>>, std::iter::Once<Symbol>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.parent.iter().copied().chain(std::iter::once(self.name))
+        self.parent
+            .iter()
+            .copied()
+            .chain(std::iter::once(self.name))
     }
 }
 
@@ -212,7 +216,10 @@ impl std::iter::Extend<Symbol> for QualifiedName {
         self.parent.extend(iter);
 
         // Pop the last element as new name (guaranteed non-empty)
-        self.name = self.parent.pop().expect("extend maintains non-empty invariant");
+        self.name = self
+            .parent
+            .pop()
+            .expect("extend maintains non-empty invariant");
 
         // Shrink to fit to avoid wasting memory
         self.parent.shrink_to_fit();
@@ -314,8 +321,8 @@ mod tests {
 
     #[test]
     fn test_relative_multi_segment() {
-        let full =
-            QualifiedName::from_strs(["std", "intrinsics", "wasi", "preview1", "fd_write"]).unwrap();
+        let full = QualifiedName::from_strs(["std", "intrinsics", "wasi", "preview1", "fd_write"])
+            .unwrap();
         let base = QualifiedName::from_strs(["std", "intrinsics"]).unwrap();
 
         let relative = full.relative(&base).unwrap();
@@ -430,17 +437,16 @@ mod tests {
 
         // Generate arbitrary valid Symbol identifiers
         fn arb_symbol() -> impl Strategy<Value = Symbol> {
-            "[a-z][a-z0-9_]{0,15}"
-                .prop_map(|s| Symbol::from_dynamic(&s))
+            "[a-z][a-z0-9_]{0,15}".prop_map(|s| Symbol::from_dynamic(&s))
         }
 
         // Generate arbitrary QualifiedName with specified number of segments
-        fn arb_qualified_name_with_len(len: impl Into<prop::collection::SizeRange>) -> impl Strategy<Value = QualifiedName> {
-            prop::collection::vec(arb_symbol(), len)
-                .prop_map(|segments| {
-                    QualifiedName::try_from(segments)
-                        .expect("non-empty by construction")
-                })
+        fn arb_qualified_name_with_len(
+            len: impl Into<prop::collection::SizeRange>,
+        ) -> impl Strategy<Value = QualifiedName> {
+            prop::collection::vec(arb_symbol(), len).prop_map(|segments| {
+                QualifiedName::try_from(segments).expect("non-empty by construction")
+            })
         }
 
         // Generate arbitrary QualifiedName with 1-8 segments

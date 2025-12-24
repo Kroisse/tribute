@@ -675,7 +675,9 @@ impl<'db> TypeChecker<'db> {
                 {
                     // Extract ability reference from attributes
                     let attrs = op.attributes(self.db);
-                    if let Some(Attribute::QualifiedName(ability_path)) = attrs.get(&ability_ref_sym) {
+                    if let Some(Attribute::QualifiedName(ability_path)) =
+                        attrs.get(&ability_ref_sym)
+                    {
                         // Extract ability name from path
                         let ability_name = ability_path.name();
 

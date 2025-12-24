@@ -174,10 +174,7 @@ impl RewritePattern for ArithCmpPattern {
         }
 
         // Get operand type to determine wasm type
-        let operand_ty = op
-            .operands(db)
-            .first()
-            .and_then(|v| value_type(db, *v));
+        let operand_ty = op.operands(db).first().and_then(|v| value_type(db, *v));
         let suffix = type_suffix(db, operand_ty);
         let is_integer = matches!(suffix, "i32" | "i64");
 
@@ -390,10 +387,7 @@ impl RewritePattern for ArithConversionPattern {
         }
 
         // Get source type from operand
-        let src_ty = op
-            .operands(db)
-            .first()
-            .and_then(|v| value_type(db, *v));
+        let src_ty = op.operands(db).first().and_then(|v| value_type(db, *v));
         let src_suffix = type_suffix(db, src_ty);
 
         // Get destination type from result
@@ -405,7 +399,7 @@ impl RewritePattern for ArithConversionPattern {
             match (src_suffix, dst_suffix) {
                 ("i64", "i32") => "wasm.i32_wrap_i64",
                 ("i32", "i64") => "wasm.i64_extend_i32_s", // signed extension by default
-                _ => return RewriteResult::Unchanged, // unsupported cast
+                _ => return RewriteResult::Unchanged,      // unsupported cast
             }
         } else if name == arith::TRUNC() {
             // trunc: float -> int truncation (signed by default)
@@ -476,7 +470,10 @@ fn type_suffix<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> &'st
                 "nil"
             } else {
                 #[cfg(debug_assertions)]
-                warn!("Unknown type '{}' in arith_to_wasm, defaulting to i32", name);
+                warn!(
+                    "Unknown type '{}' in arith_to_wasm, defaulting to i32",
+                    name
+                );
                 "i32"
             }
         }
@@ -578,7 +575,11 @@ mod tests {
             db,
             location,
             idvec![],
-            idvec![const1.as_operation(), const2.as_operation(), add.as_operation()],
+            idvec![
+                const1.as_operation(),
+                const2.as_operation(),
+                add.as_operation()
+            ],
         );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)

@@ -36,7 +36,10 @@ impl<'db> ConstAnalysis<'db> {
 
 /// Analyze a module to collect all string/bytes constants and allocate offsets.
 #[salsa::tracked]
-pub fn analyze_consts<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> ConstAnalysis<'db> {
+pub fn analyze_consts<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> ConstAnalysis<'db> {
     let mut allocations: Vec<(Vec<u8>, u32, u32)> = Vec::new();
     let mut seen: HashMap<Vec<u8>, usize> = HashMap::new();
     let mut next_offset: u32 = 0;

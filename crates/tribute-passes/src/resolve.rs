@@ -778,10 +778,7 @@ impl<'db> Resolver<'db> {
             let result = func_ty.result(self.db);
 
             // Resolve all parameter types
-            let resolved_params: IdVec<_> = params
-                .iter()
-                .map(|p| self.resolve_type(*p))
-                .collect();
+            let resolved_params: IdVec<_> = params.iter().map(|p| self.resolve_type(*p)).collect();
 
             // Resolve result type
             let resolved_result = self.resolve_type(result);

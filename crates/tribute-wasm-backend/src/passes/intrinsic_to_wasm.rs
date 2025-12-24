@@ -257,11 +257,19 @@ impl RewritePattern for PrintLinePattern {
         // wasm.drop(result)
 
         let fd_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1)); // stdout
-        let iovec_const =
-            wasm::i32_const(db, location, i32_ty, Attribute::IntBits(u64::from(iovec_offset)));
+        let iovec_const = wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            Attribute::IntBits(u64::from(iovec_offset)),
+        );
         let iovec_len_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1)); // one iovec entry
-        let nwritten_const =
-            wasm::i32_const(db, location, i32_ty, Attribute::IntBits(u64::from(nwritten_offset)));
+        let nwritten_const = wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            Attribute::IntBits(u64::from(nwritten_offset)),
+        );
 
         let fd_write_callee = QualifiedName::simple(Symbol::new("fd_write"));
         let call = Operation::of_name(db, location, "wasm.call")

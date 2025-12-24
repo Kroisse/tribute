@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::func;
 use trunk_ir::{
-    Attribute, Block, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value
+    Attribute, Block, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value,
 };
 
 // =============================================================================

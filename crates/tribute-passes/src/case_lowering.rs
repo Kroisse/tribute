@@ -13,7 +13,7 @@ use salsa::Accumulator;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{adt, arith, case, core, pat, ty};
 use trunk_ir::{
-    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, SymbolVec, Type
+    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, SymbolVec, Type,
 };
 use trunk_ir::{Symbol, Value, ValueDef};
 
@@ -213,7 +213,11 @@ impl<'db> CaseLowerer<'db> {
                 supported &= ok;
                 let body =
                     body_region.unwrap_or_else(|| Region::new(self.db, arm_location, IdVec::new()));
-                arms.push(ArmInfo { pattern, pattern_region, body });
+                arms.push(ArmInfo {
+                    pattern,
+                    pattern_region,
+                    body,
+                });
             }
         }
         if !supported {
@@ -374,11 +378,7 @@ impl<'db> CaseLowerer<'db> {
     /// For simple bind patterns, the scrutinee IS the bound value.
     /// For variant patterns with nested bindings, we use the scrutinee for now
     /// (full destructuring support would require more complex handling).
-    fn lower_arm_body(
-        &mut self,
-        scrutinee: Value<'db>,
-        arm: &ArmInfo<'db>,
-    ) -> Region<'db> {
+    fn lower_arm_body(&mut self, scrutinee: Value<'db>, arm: &ArmInfo<'db>) -> Region<'db> {
         // Extract bindings from pattern and map them to scrutinee
         // For simple `x` or `Some(x)` patterns, x gets the scrutinee value
         // (More sophisticated handling would destruct variants first)

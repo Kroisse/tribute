@@ -200,7 +200,12 @@ mod tests {
             .regions(idvec![then_region, else_region])
             .build();
 
-        let block = Block::new(db, location, idvec![], idvec![cond_const.operation(), scf_if]);
+        let block = Block::new(
+            db,
+            location,
+            idvec![],
+            idvec![cond_const.operation(), scf_if],
+        );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
     }

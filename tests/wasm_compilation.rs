@@ -24,11 +24,7 @@ use tree_sitter::Parser;
 use tribute::{SourceCst, stage_lower_to_wasm};
 
 /// Helper to create a source file from code
-fn source_from_code<'db>(
-    db: &'db dyn salsa::Database,
-    name: &str,
-    code: &str,
-) -> SourceCst {
+fn source_from_code<'db>(db: &'db dyn salsa::Database, name: &str, code: &str) -> SourceCst {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_tribute::LANGUAGE.into())

@@ -42,11 +42,7 @@ impl RewritePattern for FuncFuncPattern {
 
         // wasm.func has the same structure: sym_name, type attributes, body region
         // PatternApplicator will recursively process the body region
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("func")
-            .build();
+        let new_op = op.modify(db).dialect_str("wasm").name_str("func").build();
 
         RewriteResult::Replace(new_op)
     }
@@ -91,11 +87,7 @@ impl RewritePattern for FuncReturnPattern {
             return RewriteResult::Unchanged;
         };
 
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("return")
-            .build();
+        let new_op = op.modify(db).dialect_str("wasm").name_str("return").build();
 
         RewriteResult::Replace(new_op)
     }
@@ -154,7 +146,9 @@ mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::core;
-    use trunk_ir::{Block, DialectType, Location, PathId, QualifiedName, Region, Span, Symbol, idvec};
+    use trunk_ir::{
+        Block, DialectType, Location, PathId, QualifiedName, Region, Span, Symbol, idvec,
+    };
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());

@@ -35,8 +35,11 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = crate::passes::const_to_wasm::lower(db, module, const_analysis);
 
     // Intrinsic analysis and lowering (print_line -> fd_write)
-    let intrinsic_analysis =
-        crate::passes::intrinsic_to_wasm::analyze_intrinsics(db, module, const_analysis.total_size(db));
+    let intrinsic_analysis = crate::passes::intrinsic_to_wasm::analyze_intrinsics(
+        db,
+        module,
+        const_analysis.total_size(db),
+    );
     let module = crate::passes::intrinsic_to_wasm::lower(db, module, intrinsic_analysis);
 
     // Phase 2: Remaining lowering via WasmLowerer
@@ -288,9 +291,10 @@ impl<'db> WasmLowerer<'db> {
         let nil_ty = core::Nil::new(self.db).as_type();
 
         // Normalize result type: nil has no runtime representation in wasm
-        let main_result = self.main_exports.main_result_type.and_then(|ty| {
-            if ty == nil_ty { None } else { Some(ty) }
-        });
+        let main_result = self
+            .main_exports
+            .main_result_type
+            .and_then(|ty| if ty == nil_ty { None } else { Some(ty) });
 
         // Collect operations for the function body
         let mut builder = BlockBuilder::new(self.db, location);

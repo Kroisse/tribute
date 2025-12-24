@@ -388,7 +388,10 @@ pub fn emit_wasm<'db>(
         data_section.active(0, &offset, data.bytes.iter().copied());
     }
 
-    debug!("emit_wasm: emitting {} functions...", module_info.funcs.len());
+    debug!(
+        "emit_wasm: emitting {} functions...",
+        module_info.funcs.len()
+    );
     for (i, func_def) in module_info.funcs.iter().enumerate() {
         debug!("emit_wasm: emitting function {}: {:?}", i, func_def.name);
         match emit_function(db, func_def, &func_indices, &module_info.type_idx_by_type) {
@@ -1097,7 +1100,14 @@ fn emit_region_ops<'db>(
     }
     let block = &blocks[0];
     for op in block.operations(db).iter() {
-        emit_op(db, op, value_locals, func_indices, type_idx_by_type, function)?;
+        emit_op(
+            db,
+            op,
+            value_locals,
+            func_indices,
+            type_idx_by_type,
+            function,
+        )?;
     }
     Ok(())
 }
@@ -1213,7 +1223,14 @@ fn emit_op<'db>(
         } else {
             None
         };
-        emit_region_ops(db, then_region, value_locals, func_indices, type_idx_by_type, function)?;
+        emit_region_ops(
+            db,
+            then_region,
+            value_locals,
+            func_indices,
+            type_idx_by_type,
+            function,
+        )?;
         if let Some(value) = then_result {
             emit_value_get(value, value_locals, function)?;
         }
@@ -1226,7 +1243,14 @@ fn emit_op<'db>(
                 None
             };
             function.instruction(&Instruction::Else);
-            emit_region_ops(db, else_region, value_locals, func_indices, type_idx_by_type, function)?;
+            emit_region_ops(
+                db,
+                else_region,
+                value_locals,
+                func_indices,
+                type_idx_by_type,
+                function,
+            )?;
             if let Some(value) = else_result {
                 emit_value_get(value, value_locals, function)?;
             }
@@ -1252,7 +1276,14 @@ fn emit_op<'db>(
             .regions(db)
             .first()
             .ok_or_else(|| CompilationError::invalid_module("wasm.block missing body region"))?;
-        emit_region_ops(db, region, value_locals, func_indices, type_idx_by_type, function)?;
+        emit_region_ops(
+            db,
+            region,
+            value_locals,
+            func_indices,
+            type_idx_by_type,
+            function,
+        )?;
         if has_result {
             let value = region_result_value(db, region).ok_or_else(|| {
                 CompilationError::invalid_module("wasm.block body missing result value")
@@ -1276,7 +1307,14 @@ fn emit_op<'db>(
             .regions(db)
             .first()
             .ok_or_else(|| CompilationError::invalid_module("wasm.loop missing body region"))?;
-        emit_region_ops(db, region, value_locals, func_indices, type_idx_by_type, function)?;
+        emit_region_ops(
+            db,
+            region,
+            value_locals,
+            func_indices,
+            type_idx_by_type,
+            function,
+        )?;
         if has_result {
             let value = region_result_value(db, region).ok_or_else(|| {
                 CompilationError::invalid_module("wasm.loop body missing result value")
@@ -1380,25 +1418,28 @@ fn emit_op<'db>(
         function.instruction(&Instruction::ArraySet(type_idx));
     } else if name == Symbol::new("ref_null") {
         let attrs = op.attributes(db);
-        let heap_type = attr_heap_type(&attrs, ATTR_HEAP_TYPE()).ok().or_else(|| {
-            get_type_idx_from_attrs(&attrs).map(HeapType::Concrete)
-        }).ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
+        let heap_type = attr_heap_type(&attrs, ATTR_HEAP_TYPE())
+            .ok()
+            .or_else(|| get_type_idx_from_attrs(&attrs).map(HeapType::Concrete))
+            .ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
         function.instruction(&Instruction::RefNull(heap_type));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("ref_cast") {
         emit_operands(operands, value_locals, function)?;
         let attrs = op.attributes(db);
-        let heap_type = attr_heap_type(&attrs, ATTR_TARGET_TYPE()).ok().or_else(|| {
-            get_type_idx_from_attrs(&attrs).map(HeapType::Concrete)
-        }).ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
+        let heap_type = attr_heap_type(&attrs, ATTR_TARGET_TYPE())
+            .ok()
+            .or_else(|| get_type_idx_from_attrs(&attrs).map(HeapType::Concrete))
+            .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
         function.instruction(&Instruction::RefCastNullable(heap_type));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("ref_test") {
         emit_operands(operands, value_locals, function)?;
         let attrs = op.attributes(db);
-        let heap_type = attr_heap_type(&attrs, ATTR_TARGET_TYPE()).ok().or_else(|| {
-            get_type_idx_from_attrs(&attrs).map(HeapType::Concrete)
-        }).ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
+        let heap_type = attr_heap_type(&attrs, ATTR_TARGET_TYPE())
+            .ok()
+            .or_else(|| get_type_idx_from_attrs(&attrs).map(HeapType::Concrete))
+            .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
         function.instruction(&Instruction::RefTestNullable(heap_type));
         set_result_local(db, op, value_locals, function)?;
     } else {
@@ -1448,7 +1489,10 @@ fn set_result_local<'db>(
     Ok(())
 }
 
-fn resolve_callee(path: &QualifiedName, func_indices: &HashMap<Symbol, u32>) -> CompilationResult<u32> {
+fn resolve_callee(
+    path: &QualifiedName,
+    func_indices: &HashMap<Symbol, u32>,
+) -> CompilationResult<u32> {
     let name = path.name();
     func_indices
         .get(&name)
@@ -1910,7 +1954,12 @@ mod tests {
 
         let func_return = Operation::of_name(db, location, "wasm.return").build();
 
-        let body_block = Block::new(db, location, idvec![], idvec![field, struct_new, func_return]);
+        let body_block = Block::new(
+            db,
+            location,
+            idvec![],
+            idvec![field, struct_new, func_return],
+        );
         let body_region = Region::new(db, location, idvec![body_block]);
 
         // Create wasm.func
@@ -1935,4 +1984,3 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
     }
 }
-

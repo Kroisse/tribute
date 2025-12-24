@@ -88,7 +88,10 @@ impl RewritePattern for StructGetPattern {
         // Get field index (can be IntBits or String name)
         let Attribute::IntBits(field_idx) = struct_get.field(db) else {
             #[cfg(debug_assertions)]
-            warn!("StructGetPattern expects IntBits field index, got {:?}", struct_get.field(db));
+            warn!(
+                "StructGetPattern expects IntBits field index, got {:?}",
+                struct_get.field(db)
+            );
             return RewriteResult::Unchanged;
         };
 
@@ -123,7 +126,10 @@ impl RewritePattern for StructSetPattern {
         // Get field index
         let Attribute::IntBits(field_idx) = struct_set.field(db) else {
             #[cfg(debug_assertions)]
-            warn!("StructSetPattern expects IntBits field index, got {:?}", struct_set.field(db));
+            warn!(
+                "StructSetPattern expects IntBits field index, got {:?}",
+                struct_set.field(db)
+            );
             return RewriteResult::Unchanged;
         };
 
@@ -230,7 +236,10 @@ impl RewritePattern for VariantGetPattern {
         // Get field index and add 1 (to skip tag field)
         let Attribute::IntBits(idx) = variant_get.field(db) else {
             #[cfg(debug_assertions)]
-            warn!("VariantGetPattern expects IntBits field index, got {:?}", variant_get.field(db));
+            warn!(
+                "VariantGetPattern expects IntBits field index, got {:?}",
+                variant_get.field(db)
+            );
             return RewriteResult::Unchanged;
         };
         let field_idx = idx + 1;
