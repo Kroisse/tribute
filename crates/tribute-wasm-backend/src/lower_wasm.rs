@@ -5,11 +5,13 @@
 
 use std::collections::HashMap;
 
+use tracing::{error, warn};
+
 use crate::plan::{MainExports, MemoryPlan};
 
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::{func, wasm};
+use trunk_ir::dialect::wasm;
 
 use crate::passes::const_to_wasm::ConstAnalysis;
 use crate::passes::intrinsic_to_wasm::IntrinsicAnalysis;
@@ -72,8 +74,8 @@ fn check_function_body<'db>(db: &'db dyn salsa::Database, func_op: &Operation<'d
             for op in block.operations(db).iter() {
                 let dialect = op.dialect(db);
                 if dialect != Symbol::new("wasm") {
-                    eprintln!(
-                        "ERROR: Found non-wasm operation in function body: {}.{}",
+                    error!(
+                        "Found non-wasm operation in function body: {}.{}",
                         dialect,
                         op.name(db)
                     );
@@ -282,8 +284,13 @@ impl<'db> WasmLowerer<'db> {
         }
     }
 
-    fn build_start_function(&self, location: Location<'db>) -> func::Func<'db> {
-        let main_result = self.main_exports.main_result_type;
+    fn build_start_function(&self, location: Location<'db>) -> Operation<'db> {
+        let nil_ty = core::Nil::new(self.db).as_type();
+
+        // Normalize result type: nil has no runtime representation in wasm
+        let main_result = self.main_exports.main_result_type.and_then(|ty| {
+            if ty == nil_ty { None } else { Some(ty) }
+        });
 
         // Collect operations for the function body
         let mut builder = BlockBuilder::new(self.db, location);
@@ -297,7 +304,7 @@ impl<'db> WasmLowerer<'db> {
             Attribute::QualifiedName(QualifiedName::simple(Symbol::new("main"))),
         ));
 
-        // Drop result if main returns non-nil (use typed helper)
+        // Drop result if main returns a value
         if main_result.is_some() {
             let call_val = call.result(self.db, 0);
             builder.op(wasm::drop(self.db, location, call_val));
@@ -312,7 +319,12 @@ impl<'db> WasmLowerer<'db> {
         let func_ty =
             core::Func::new(self.db, idvec![], core::Nil::new(self.db).as_type()).as_type();
 
-        func::func(self.db, location, Symbol::new("_start"), func_ty, region)
+        // Create wasm.func directly (not func.func) since we're past the func_to_wasm pass
+        Operation::of_name(self.db, location, "wasm.func")
+            .attr("sym_name", Attribute::Symbol(Symbol::new("_start")))
+            .attr("type", Attribute::Type(func_ty))
+            .region(region)
+            .build()
     }
 
     fn lower_op(&mut self, builder: &mut BlockBuilder<'db>, op: Operation<'db>) {
@@ -331,15 +343,15 @@ impl<'db> WasmLowerer<'db> {
         }
 
         // Debug warning for unexpected dialects in function bodies
-        // Note: "func" and "adt" are allowed for edge cases:
-        // - func.call_indirect (closure support pending)
-        // - adt.string_const (handled by const_to_wasm pass)
+        // Note: Some dialects are allowed for edge cases:
+        // - "func": func.call_indirect (closure support pending)
+        // - "adt": adt.string_const (handled by const_to_wasm pass)
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
-            let allowed = ["wasm", "core", "type", "ty", "func", "adt"];
+            let allowed = ["wasm", "core", "type", "ty", "func", "adt", "case", "scf"];
             if !allowed.contains(&dialect_str.as_str()) {
-                eprintln!(
-                    "WARNING: Unhandled operation in lowering: {}.{} (this may cause emit errors)",
+                warn!(
+                    "Unhandled operation in lowering: {}.{} (this may cause emit errors)",
                     dialect, name
                 );
             }

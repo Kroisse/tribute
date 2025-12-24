@@ -8,7 +8,7 @@
 //! - `scf.break` -> `wasm.br(target=0)` (branch to block)
 
 use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::{scf, wasm};
+use trunk_ir::dialect::scf;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, idvec};
 
@@ -171,6 +171,7 @@ impl RewritePattern for ScfBreakPattern {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
+    use trunk_ir::dialect::wasm;
     use trunk_ir::{Location, PathId, Span};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {

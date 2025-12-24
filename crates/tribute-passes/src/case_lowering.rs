@@ -13,7 +13,7 @@ use salsa::Accumulator;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{adt, arith, case, core, pat, ty};
 use trunk_ir::{
-    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Type,
+    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, SymbolVec, Type
 };
 use trunk_ir::{Symbol, Value, ValueDef};
 
@@ -30,6 +30,7 @@ enum ArmPattern<'db> {
 #[derive(Debug, Clone)]
 struct ArmInfo<'db> {
     pattern: ArmPattern<'db>,
+    pattern_region: Option<Region<'db>>,
     body: Region<'db>,
 }
 
@@ -42,7 +43,9 @@ struct CaseLowerer<'db> {
     value_map: HashMap<Value<'db>, Value<'db>>,
     variant_tags: HashMap<Symbol, u32>,
     variant_owner: HashMap<Symbol, Symbol>,
-    enum_variants: HashMap<Symbol, Vec<Symbol>>,
+    enum_variants: HashMap<Symbol, SymbolVec>,
+    /// Current arm's pattern bindings: binding name -> bound value (scrutinee)
+    current_arm_bindings: HashMap<Symbol, Value<'db>>,
 }
 
 impl<'db> CaseLowerer<'db> {
@@ -53,6 +56,7 @@ impl<'db> CaseLowerer<'db> {
             variant_tags: HashMap::new(),
             variant_owner: HashMap::new(),
             enum_variants: HashMap::new(),
+            current_arm_bindings: HashMap::new(),
         }
     }
 
@@ -103,6 +107,21 @@ impl<'db> CaseLowerer<'db> {
                 .operands(remapped_operands)
                 .build();
             return vec![new_op];
+        }
+
+        // Handle case.bind: replace with the bound value from pattern matching
+        if op.dialect(self.db) == case::DIALECT_NAME() && op.name(self.db) == case::BIND() {
+            if let Some(Attribute::Symbol(name)) = op.attributes(self.db).get(&Symbol::new("name"))
+            {
+                if let Some(&bound_value) = self.current_arm_bindings.get(name) {
+                    // Map case.bind result to the bound value (scrutinee or destructured value)
+                    let bind_result = op.result(self.db, 0);
+                    self.value_map.insert(bind_result, bound_value);
+                    // Erase the case.bind operation - value is remapped
+                    return vec![];
+                }
+            }
+            // If binding not found, keep the operation (shouldn't happen in well-formed IR)
         }
 
         let new_regions = op
@@ -194,7 +213,7 @@ impl<'db> CaseLowerer<'db> {
                 supported &= ok;
                 let body =
                     body_region.unwrap_or_else(|| Region::new(self.db, arm_location, IdVec::new()));
-                arms.push(ArmInfo { pattern, body });
+                arms.push(ArmInfo { pattern, pattern_region, body });
             }
         }
         if !supported {
@@ -269,6 +288,33 @@ impl<'db> CaseLowerer<'db> {
         true
     }
 
+    /// Extract binding names from a pattern region.
+    /// For simple `pat.bind("x")` patterns, returns the binding name.
+    /// For variant patterns with bindings, returns all nested binding names.
+    fn extract_bindings_from_pattern(&self, region: Region<'db>) -> SymbolVec {
+        let mut bindings = SymbolVec::new();
+        self.collect_bindings_recursive(region, &mut bindings);
+        bindings
+    }
+
+    fn collect_bindings_recursive(&self, region: Region<'db>, bindings: &mut SymbolVec) {
+        for block in region.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter().copied() {
+                if op.dialect(self.db) == pat::DIALECT_NAME() && op.name(self.db) == pat::BIND() {
+                    if let Some(Attribute::Symbol(name)) =
+                        op.attributes(self.db).get(&Symbol::new("name"))
+                    {
+                        bindings.push(*name);
+                    }
+                }
+                // Recurse into nested regions (for variant fields, etc.)
+                for nested_region in op.regions(self.db).iter().copied() {
+                    self.collect_bindings_recursive(nested_region, bindings);
+                }
+            }
+        }
+    }
+
     fn is_exhaustive(&self, arms: &[ArmInfo<'db>]) -> bool {
         if matches!(
             arms.last().map(|arm| &arm.pattern),
@@ -278,7 +324,7 @@ impl<'db> CaseLowerer<'db> {
         }
 
         let mut owner: Option<Symbol> = None;
-        let mut seen_variants: Vec<Symbol> = Vec::new();
+        let mut seen_variants = SymbolVec::new();
 
         for arm in arms {
             let ArmPattern::Variant(variant) = arm.pattern else {
@@ -324,6 +370,34 @@ impl<'db> CaseLowerer<'db> {
         }
     }
 
+    /// Lower an arm body with pattern bindings set up.
+    /// For simple bind patterns, the scrutinee IS the bound value.
+    /// For variant patterns with nested bindings, we use the scrutinee for now
+    /// (full destructuring support would require more complex handling).
+    fn lower_arm_body(
+        &mut self,
+        scrutinee: Value<'db>,
+        arm: &ArmInfo<'db>,
+    ) -> Region<'db> {
+        // Extract bindings from pattern and map them to scrutinee
+        // For simple `x` or `Some(x)` patterns, x gets the scrutinee value
+        // (More sophisticated handling would destruct variants first)
+        if let Some(pattern_region) = arm.pattern_region {
+            let bindings = self.extract_bindings_from_pattern(pattern_region);
+            for name in bindings {
+                self.current_arm_bindings.insert(name, scrutinee);
+            }
+        }
+
+        // Lower the body with bindings in scope
+        let result = self.lower_region(arm.body);
+
+        // Clear bindings after processing this arm
+        self.current_arm_bindings.clear();
+
+        result
+    }
+
     fn build_arm_chain(
         &mut self,
         location: Location<'db>,
@@ -333,7 +407,7 @@ impl<'db> CaseLowerer<'db> {
     ) -> (Vec<Operation<'db>>, Value<'db>) {
         if arms.len() == 1 {
             let (cond_ops, cond) = self.build_condition_ops(location, scrutinee, &arms[0].pattern);
-            let body_region = self.lower_region(arms[0].body);
+            let body_region = self.lower_arm_body(scrutinee, &arms[0]);
             let then_region = body_region;
             // Single-arm cases are irrefutable; reuse the body for the else branch.
             let else_region = body_region;
@@ -349,7 +423,7 @@ impl<'db> CaseLowerer<'db> {
         }
 
         let (cond_ops, cond) = self.build_condition_ops(location, scrutinee, &arms[0].pattern);
-        let then_region = self.lower_region(arms[0].body);
+        let then_region = self.lower_arm_body(scrutinee, &arms[0]);
         let else_region = self.build_else_region(location, scrutinee, result_type, &arms[1..]);
 
         let if_op = Operation::of_name(self.db, location, "scf.if")
@@ -372,7 +446,7 @@ impl<'db> CaseLowerer<'db> {
         arms: &[ArmInfo<'db>],
     ) -> Region<'db> {
         if arms.len() == 1 {
-            return self.lower_region(arms[0].body);
+            return self.lower_arm_body(scrutinee, &arms[0]);
         }
 
         let (mut ops, value) = self.build_arm_chain(location, scrutinee, result_type, arms);
@@ -502,7 +576,7 @@ impl<'db> CaseLowerer<'db> {
             })
             .unwrap_or_else(|| Symbol::new("_"));
 
-        let mut variant_names = Vec::new();
+        let mut variant_names = SymbolVec::new();
         for (idx, variant) in variants.iter().enumerate() {
             let Attribute::List(parts) = variant else {
                 continue;

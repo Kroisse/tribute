@@ -8,6 +8,8 @@
 //! - `arith.{and,or,xor,shl,shr,shru}` -> `wasm.i{32,64}_{op}`
 //! - `arith.{cast,trunc,extend,convert}` -> appropriate wasm conversion ops
 
+use tracing::warn;
+
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, core, wasm};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
@@ -40,7 +42,17 @@ impl RewritePattern for ArithConstPattern {
         };
 
         let result_ty = op.results(db).first().copied();
-        let wasm_op_name = match type_suffix(db, result_ty) {
+
+        // Skip nil type constants - they produce no runtime value
+        let type_name = type_suffix(db, result_ty);
+        if type_name == "nil" {
+            // Nil constants are erased at runtime (no wasm equivalent)
+            return RewriteResult::Erase {
+                replacement_values: vec![],
+            };
+        }
+
+        let wasm_op_name = match type_name {
             "i32" => "wasm.i32_const",
             "i64" => "wasm.i64_const",
             "f32" => "wasm.f32_const",
@@ -456,15 +468,21 @@ fn type_suffix<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> &'st
                 "f32"
             } else if name == Symbol::new("f64") {
                 "f64"
+            } else if name == Symbol::new("i1") {
+                // Boolean type - represented as i32 in wasm
+                "i32"
+            } else if name == Symbol::new("nil") {
+                // Nil/void type - no runtime value
+                "nil"
             } else {
                 #[cfg(debug_assertions)]
-                eprintln!("WARNING: Unknown type '{}' in arith_to_wasm, defaulting to i32", name);
+                warn!("Unknown type '{}' in arith_to_wasm, defaulting to i32", name);
                 "i32"
             }
         }
         None => {
             #[cfg(debug_assertions)]
-            eprintln!("WARNING: No type in arith_to_wasm, defaulting to i32");
+            warn!("No type in arith_to_wasm, defaulting to i32");
             "i32"
         }
     }

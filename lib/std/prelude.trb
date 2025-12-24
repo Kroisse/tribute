@@ -113,7 +113,7 @@ pub mod Result {
 }
 
 /// Print a line to standard output.
-/// This is a placeholder implementation.
+/// This is handled as an intrinsic by the wasm backend.
 fn print_line(message: String) -> Nil {
     Nil
 }

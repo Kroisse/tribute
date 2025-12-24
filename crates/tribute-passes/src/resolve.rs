@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
 use trunk_ir::dialect::adt;
+use trunk_ir::dialect::arith;
 use trunk_ir::dialect::case;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func;
@@ -29,8 +30,8 @@ use trunk_ir::dialect::pat;
 use trunk_ir::dialect::src;
 use trunk_ir::dialect::ty;
 use trunk_ir::{
-    Attribute, Attrs, Block, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value,
-    ValueDef,
+    Attribute, Attrs, Block, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region,
+    Symbol, Type, Value, ValueDef,
 };
 
 // =============================================================================
@@ -520,6 +521,7 @@ impl<'db> Resolver<'db> {
             "Nat" => *core::I64::new(self.db), // Nat is implemented as i64 for now
             "String" => *core::String::new(self.db),
             "Bytes" => *core::Bytes::new(self.db),
+            "Nil" => *core::Nil::new(self.db),
             _ => {
                 // Look up user-defined types in the environment
                 if let Some(binding) = self.lookup_binding(name) {
@@ -755,7 +757,41 @@ impl<'db> Resolver<'db> {
             new_regions.push(self.resolve_region(region));
         }
 
-        op.modify(self.db).regions(new_regions).build()
+        // Resolve the function type attribute
+        let attrs = op.attributes(self.db);
+        let mut builder = op.modify(self.db).regions(new_regions);
+
+        // Update the type attribute if present
+        if let Some(Attribute::Type(func_ty)) = attrs.get(&ATTR_TYPE()) {
+            let resolved_ty = self.resolve_func_type(*func_ty);
+            builder = builder.attr(ATTR_TYPE(), Attribute::Type(resolved_ty));
+        }
+
+        builder.build()
+    }
+
+    /// Resolve a function type (params and result).
+    fn resolve_func_type(&self, ty: Type<'db>) -> Type<'db> {
+        // Check if this is a func type (core.func)
+        if let Some(func_ty) = core::Func::from_type(self.db, ty) {
+            let params = func_ty.params(self.db);
+            let result = func_ty.result(self.db);
+
+            // Resolve all parameter types
+            let resolved_params: IdVec<_> = params
+                .iter()
+                .map(|p| self.resolve_type(*p))
+                .collect();
+
+            // Resolve result type
+            let resolved_result = self.resolve_type(result);
+
+            // Create resolved function type
+            *core::Func::new(self.db, resolved_params, resolved_result)
+        } else {
+            // Not a func type, just resolve it normally
+            self.resolve_type(ty)
+        }
     }
 
     /// Resolve a case.arm operation with pattern bindings.
@@ -1014,6 +1050,21 @@ impl<'db> Resolver<'db> {
         let name = *sym;
         let location = op.location(self.db);
 
+        // Special case: Nil is the unit value (built-in)
+        if name.to_string() == "Nil" {
+            let nil_ty = core::Nil::new(self.db).as_type();
+            // Create a unit value constant - arith.const with nil type produces no runtime value
+            let const_op = arith::r#const(self.db, location, nil_ty, Attribute::Unit);
+            let new_operation = const_op.as_operation();
+
+            // Map old result to new result
+            let old_result = op.result(self.db, 0);
+            let new_result = new_operation.result(self.db, 0);
+            self.map_value(old_result, new_result);
+
+            return Some(vec![new_operation]);
+        }
+
         // First, check local scopes (function parameters, let bindings, pattern bindings)
         if let Some(local) = self.lookup_local(name) {
             match local {
@@ -1034,12 +1085,17 @@ impl<'db> Resolver<'db> {
                     return Some(vec![new_operation]);
                 }
                 LocalBinding::PatternBinding { ty } => {
-                    // Pattern binding - value comes from pattern matching
-                    // Keep src.var as is with resolved type; no value remapping yet
+                    // Pattern binding - use case.bind to extract value from pattern matching
+                    // This produces proper SSA form: case.bind result is the pattern-bound value
                     let resolved_ty = self.resolve_type(*ty);
-                    let new_op = src::var(self.db, location, resolved_ty, *sym);
-                    let new_operation = self.mark_resolved_local(new_op.as_operation());
-                    return Some(vec![new_operation]);
+                    let bind_op = case::bind(self.db, location, resolved_ty, *sym);
+
+                    // Remap old result to case.bind result (proper SSA value)
+                    let old_result = op.result(self.db, 0);
+                    let new_result = bind_op.as_operation().result(self.db, 0);
+                    self.map_value(old_result, new_result);
+
+                    return Some(vec![bind_op.as_operation()]);
                 }
             }
         }

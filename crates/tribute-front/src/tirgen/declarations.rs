@@ -2,10 +2,9 @@
 
 use tree_sitter::Node;
 use trunk_ir::{
-    Attribute, BlockBuilder, IdVec, QualifiedName, Symbol, Type,
+    Attribute, BlockBuilder, IdVec, QualifiedName, Span, Symbol, SymbolVec, Type,
     dialect::{core, func, src, ty},
 };
-use trunk_ir::{Span, SymbolVec};
 
 use super::context::CstLoweringCtx;
 use super::helpers::{is_comment, node_text, sym};
@@ -40,7 +39,7 @@ pub fn lower_use_decl<'db>(
     };
 
     let mut imports = Vec::new();
-    collect_use_imports(ctx, tree_node, &mut Vec::new(), &mut imports);
+    collect_use_imports(ctx, tree_node, &mut SymbolVec::new(), &mut imports);
 
     for import in imports {
         let alias_sym = import.alias.unwrap_or_else(|| sym(""));
@@ -52,7 +51,7 @@ pub fn lower_use_decl<'db>(
 fn collect_use_imports<'db>(
     ctx: &CstLoweringCtx<'db>,
     node: Node,
-    base: &mut Vec<Symbol>,
+    base: &mut SymbolVec,
     out: &mut Vec<UseImport>,
 ) {
     match node.kind() {
@@ -592,9 +591,9 @@ pub fn lower_mod_body<'db>(
 pub fn parse_parameter_list<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     node: Node,
-) -> (Vec<Symbol>, Vec<Type<'db>>) {
+) -> (SymbolVec, Vec<Type<'db>>) {
     let mut cursor = node.walk();
-    let mut names = Vec::new();
+    let mut names = SymbolVec::new();
     let mut types = Vec::new();
 
     for child in node.named_children(&mut cursor) {

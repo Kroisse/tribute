@@ -1395,6 +1395,7 @@ dependencies = [
  "salsa",
  "salsa-test-macros",
  "tempfile",
+ "tracing",
  "trunk-ir",
  "wasm-encoder",
 ]
