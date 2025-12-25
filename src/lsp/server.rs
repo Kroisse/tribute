@@ -165,9 +165,6 @@ impl LspServer {
     }
 
     fn document_symbols(&self, params: DocumentSymbolParams) -> Option<DocumentSymbolResponse> {
-        use trunk_ir::DialectOp;
-        use trunk_ir::dialect::core;
-
         let uri = &params.text_document.uri;
         let source_cst = self.db.source_cst(uri)?;
         let rope = source_cst.text(&self.db);
@@ -175,8 +172,7 @@ impl LspServer {
         self.db
             .attach(|db| {
                 let module = compile(db, source_cst);
-                let core_module = core::Module::from_operation(db, module.as_operation()).ok()?;
-                Some(extract_symbols_from_module(db, &core_module, rope))
+                Some(extract_symbols_from_module(db, &module, rope))
             })
             .map(DocumentSymbolResponse::Nested)
     }
@@ -441,7 +437,17 @@ fn extract_symbol_from_operation<'db>(
     rope: &Rope,
 ) -> Option<DocumentSymbol> {
     use trunk_ir::DialectOp;
-    use trunk_ir::dialect::{func, ty};
+    use trunk_ir::dialect::{core, func, ty};
+
+    if let Ok(module_op) = core::Module::from_operation(db, *op) {
+        return Some(create_symbol(
+            module_op.sym_name(db),
+            SymbolKind::MODULE,
+            op.location(db).span,
+            rope,
+            extract_symbols_from_module(db, &module_op, rope),
+        ));
+    }
 
     // Try function
     if let Ok(func_op) = func::Func::from_operation(db, *op) {
@@ -450,6 +456,7 @@ fn extract_symbol_from_operation<'db>(
             SymbolKind::FUNCTION,
             op.location(db).span,
             rope,
+            vec![],
         ));
     }
 
@@ -460,6 +467,7 @@ fn extract_symbol_from_operation<'db>(
             SymbolKind::STRUCT,
             op.location(db).span,
             rope,
+            vec![],
         ));
     }
 
@@ -470,6 +478,7 @@ fn extract_symbol_from_operation<'db>(
             SymbolKind::ENUM,
             op.location(db).span,
             rope,
+            vec![],
         ));
     }
 
@@ -480,6 +489,7 @@ fn extract_symbol_from_operation<'db>(
             SymbolKind::INTERFACE,
             op.location(db).span,
             rope,
+            vec![],
         ));
     }
 
@@ -492,9 +502,15 @@ fn create_symbol(
     kind: SymbolKind,
     span: trunk_ir::Span,
     rope: &Rope,
+    children: Vec<DocumentSymbol>,
 ) -> DocumentSymbol {
     let range = span_to_range(rope, span);
     let selection_range = range; // TODO: Use name span when available
+    let children = if children.is_empty() {
+        None
+    } else {
+        Some(children)
+    };
 
     DocumentSymbol {
         name: name.to_string(),
@@ -503,7 +519,7 @@ fn create_symbol(
         tags: None,
         range,
         selection_range,
-        children: None,
+        children,
         #[allow(deprecated)]
         deprecated: None,
     }
