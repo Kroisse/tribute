@@ -3,6 +3,7 @@ name = "tribute-front"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "Front-end utilities for Tribute (CST parsing and text helpers)"
 
 [dependencies]

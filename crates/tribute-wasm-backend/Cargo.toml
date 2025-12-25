@@ -3,6 +3,7 @@ name = "tribute-wasm-backend"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 
 [dependencies]
 derive_more.workspace = true

@@ -3,6 +3,7 @@ name = "trunk-ir"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "TrunkIR: A multi-level dialect IR system"
 
 [dependencies]
