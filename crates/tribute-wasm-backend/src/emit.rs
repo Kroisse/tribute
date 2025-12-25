@@ -22,36 +22,6 @@ use wasm_encoder::{
 use crate::errors;
 use crate::{CompilationError, CompilationResult};
 
-/// Check if a type contains unresolved type references (src.type, type.var).
-/// Generic functions have unresolved type parameters and cannot be compiled to wasm.
-fn has_unresolved_type(db: &dyn salsa::Database, ty: Type) -> bool {
-    // Check if this type is src.type (unresolved) or type.var (type variable)
-    // Note: type.int and type.nat are concrete types, not unresolved
-    if ty.dialect(db) == Symbol::new("src") {
-        return true;
-    }
-    if ty::is_var(db, ty) {
-        return true;
-    }
-    // Recursively check type parameters
-    for param in ty.params(db).iter() {
-        if has_unresolved_type(db, *param) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Check if a function type has any unresolved types in params or result.
-fn func_has_unresolved_types(db: &dyn salsa::Database, func_ty: core::Func) -> bool {
-    for param in func_ty.params(db).iter() {
-        if has_unresolved_type(db, *param) {
-            return true;
-        }
-    }
-    has_unresolved_type(db, func_ty.result(db))
-}
-
 trunk_ir::symbols! {
     ATTR_SYM_NAME => "sym_name",
     ATTR_TYPE => "type",
@@ -246,6 +216,8 @@ struct ModuleInfo<'db> {
     data: Vec<DataDef>,
     gc_types: Vec<GcTypeDef>,
     type_idx_by_type: HashMap<Type<'db>, u32>,
+    /// Function type lookup map for boxing/unboxing at call sites.
+    func_types: HashMap<QualifiedName, core::Func<'db>>,
 }
 
 enum GcTypeDef {
@@ -401,7 +373,13 @@ pub fn emit_wasm<'db>(
     );
     for (i, func_def) in module_info.funcs.iter().enumerate() {
         debug!("emit_wasm: emitting function {}: {:?}", i, func_def.name);
-        match emit_function(db, func_def, &func_indices, &module_info.type_idx_by_type) {
+        match emit_function(
+            db,
+            func_def,
+            &func_indices,
+            &module_info.type_idx_by_type,
+            &module_info.func_types,
+        ) {
             Ok(function) => {
                 code_section.function(&function);
             }
@@ -452,23 +430,8 @@ fn collect_module_info<'db>(
                 match op.name(db) {
                     name if name == Symbol::new("func") => {
                         if let Ok(func_def) = extract_function_def(db, op) {
-                            // Skip generic functions (those with unresolved type parameters)
-                            if func_has_unresolved_types(db, func_def.ty) {
-                                func_def.name.with_str(|name| {
-                                    let params: Vec<_> = func_def.ty.params(db).iter()
-                                        .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
-                                        .collect();
-                                    let result = func_def.ty.result(db);
-                                    debug!(
-                                        "Skipping generic function: {} (params: {:?}, result: {}.{})",
-                                        name,
-                                        params,
-                                        result.dialect(db),
-                                        result.name(db),
-                                    );
-                                });
-                                continue;
-                            }
+                            // With uniform representation, generic functions are included.
+                            // Type variables (type.var) are mapped to anyref.
                             func_def.name.with_str(|name| {
                                 debug!("Including function: {}", name);
                             });
@@ -498,6 +461,20 @@ fn collect_module_info<'db>(
 
     let (gc_types, type_idx_by_type) = collect_gc_types(db, module)?;
 
+    // Build function type lookup map for boxing/unboxing.
+    // Use module path + function name as the qualified name.
+    let module_name = module.name(db);
+    let parent: trunk_ir::SymbolVec = trunk_ir::smallvec::smallvec![module_name];
+    let mut func_types = HashMap::new();
+    for func in &funcs {
+        let qualified = QualifiedName::new(parent.clone(), func.name);
+        func_types.insert(qualified, func.ty);
+    }
+    for import in &imports {
+        let qualified = QualifiedName::new(parent.clone(), import.sym);
+        func_types.insert(qualified, import.ty);
+    }
+
     Ok(ModuleInfo {
         imports,
         funcs,
@@ -506,6 +483,7 @@ fn collect_module_info<'db>(
         data,
         gc_types,
         type_idx_by_type,
+        func_types,
     })
 }
 
@@ -1022,6 +1000,7 @@ fn emit_function<'db>(
     func_def: &FunctionDef<'db>,
     func_indices: &HashMap<Symbol, u32>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
+    func_types: &HashMap<QualifiedName, core::Func<'db>>,
 ) -> CompilationResult<Function> {
     debug!("=== emit_function: {:?} ===", func_def.name);
     let region = func_def
@@ -1060,6 +1039,7 @@ fn emit_function<'db>(
         &value_locals,
         func_indices,
         type_idx_by_type,
+        func_types,
         &mut function,
     )?;
 
@@ -1116,6 +1096,7 @@ fn emit_region_ops<'db>(
     value_locals: &HashMap<Value<'db>, u32>,
     func_indices: &HashMap<Symbol, u32>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
+    func_types: &HashMap<QualifiedName, core::Func<'db>>,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let blocks = region.blocks(db);
@@ -1130,6 +1111,7 @@ fn emit_region_ops<'db>(
             value_locals,
             func_indices,
             type_idx_by_type,
+            func_types,
             function,
         )?;
     }
@@ -1168,6 +1150,7 @@ fn emit_op<'db>(
     value_locals: &HashMap<Value<'db>, u32>,
     func_indices: &HashMap<Symbol, u32>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
+    func_types: &HashMap<QualifiedName, core::Func<'db>>,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let wasm_dialect = Symbol::new("wasm");
@@ -1259,6 +1242,7 @@ fn emit_op<'db>(
             value_locals,
             func_indices,
             type_idx_by_type,
+            func_types,
             function,
         )?;
         if let Some(value) = then_result {
@@ -1279,6 +1263,7 @@ fn emit_op<'db>(
                 value_locals,
                 func_indices,
                 type_idx_by_type,
+                func_types,
                 function,
             )?;
             if let Some(value) = else_result {
@@ -1312,6 +1297,7 @@ fn emit_op<'db>(
             value_locals,
             func_indices,
             type_idx_by_type,
+            func_types,
             function,
         )?;
         if has_result {
@@ -1343,6 +1329,7 @@ fn emit_op<'db>(
             value_locals,
             func_indices,
             type_idx_by_type,
+            func_types,
             function,
         )?;
         if has_result {
@@ -1368,10 +1355,30 @@ fn emit_op<'db>(
         let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
         function.instruction(&Instruction::BrIf(depth));
     } else if name == Symbol::new("call") {
-        emit_operands(db, operands, value_locals, function)?;
         let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
         let target = resolve_callee(callee, func_indices)?;
+
+        // Check if we need boxing for generic function calls
+        if let Some(callee_ty) = func_types.get(callee) {
+            let param_types = callee_ty.params(db);
+            emit_operands_with_boxing(db, operands, &param_types, value_locals, function)?;
+        } else {
+            emit_operands(db, operands, value_locals, function)?;
+        }
+
         function.instruction(&Instruction::Call(target));
+
+        // Check if we need unboxing for the return value
+        if let Some(callee_ty) = func_types.get(callee) {
+            let return_ty = callee_ty.result(db);
+            // If callee returns anyref (type.var) but we expect concrete type, unbox
+            if ty::is_var(db, return_ty)
+                && let Some(result_ty) = op.results(db).first()
+            {
+                emit_unboxing(db, *result_ty, function)?;
+            }
+        }
+
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("return_call") {
         emit_operands(db, operands, value_locals, function)?;
@@ -1540,6 +1547,128 @@ fn emit_operands<'db>(
     Ok(())
 }
 
+/// Emit operands with boxing when calling generic functions.
+/// If a parameter expects anyref (type.var) but the operand is a concrete type (Int, Float),
+/// we need to box the value.
+fn emit_operands_with_boxing<'db>(
+    db: &'db dyn salsa::Database,
+    operands: &IdVec<Value<'db>>,
+    param_types: &IdVec<Type<'db>>,
+    value_locals: &HashMap<Value<'db>, u32>,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    let mut param_iter = param_types.iter();
+
+    for value in operands.iter() {
+        // Skip nil type values - they have no runtime representation
+        if let Some(ty) = value_type(db, *value)
+            && is_nil_type(db, ty)
+        {
+            continue;
+        }
+
+        // Emit the value (local.get)
+        emit_value(db, *value, value_locals, function)?;
+
+        // Check if boxing is needed
+        // If parameter expects anyref (type.var), box the operand
+        if let Some(&param_ty) = param_iter.next()
+            && ty::is_var(db, param_ty)
+            && let Some(operand_ty) = value_type(db, *value)
+        {
+            emit_boxing(db, operand_ty, function)?;
+        }
+    }
+    Ok(())
+}
+
+/// Emit a single value (local.get or block arg fallback).
+fn emit_value<'db>(
+    db: &'db dyn salsa::Database,
+    value: Value<'db>,
+    value_locals: &HashMap<Value<'db>, u32>,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    // Try direct lookup first
+    if let Some(index) = value_locals.get(&value) {
+        function.instruction(&Instruction::LocalGet(*index));
+        return Ok(());
+    }
+
+    // Handle stale block argument references
+    if let ValueDef::BlockArg(_block_id) = value.def(db) {
+        let index = value.index(db) as u32;
+        function.instruction(&Instruction::LocalGet(index));
+        return Ok(());
+    }
+
+    // If operand not found and not a block arg, this is an error
+    Err(CompilationError::invalid_module(
+        "stale SSA value in wasm backend (missing local mapping)",
+    ))
+}
+
+/// Emit boxing instructions to convert a concrete type to anyref.
+/// - Int (i64) → i31ref: truncate to i32 and use ref.i31
+/// - Float (f64) → BoxedF64 struct (TODO: requires BoxedF64 type to be defined)
+fn emit_boxing<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    if ty::Int::from_type(db, ty).is_some() || ty::Nat::from_type(db, ty).is_some() {
+        // Int/Nat (i64) → i31ref
+        // Truncate i64 to i32, then convert to i31ref
+        // Note: This only works correctly for values that fit in 31 bits!
+        // Phase 1 limitation: values outside -2^30..2^30 will be incorrect
+        function.instruction(&Instruction::I32WrapI64);
+        function.instruction(&Instruction::RefI31);
+        Ok(())
+    } else if core::F64::from_type(db, ty).is_some() {
+        // Float (f64) → BoxedF64 struct
+        // TODO: This requires defining BoxedF64 type and using struct.new
+        // For now, return an error
+        Err(CompilationError::unsupported_feature(
+            "Float boxing not yet implemented",
+        ))
+    } else {
+        // For reference types (structs, etc.), no boxing needed - they're already subtypes of anyref
+        // Just leave the value as-is on the stack
+        Ok(())
+    }
+}
+
+/// Emit unboxing instructions to convert anyref to a concrete type.
+/// - i31ref → Int (i64): extract i32 and extend to i64
+fn emit_unboxing<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    if ty::Int::from_type(db, ty).is_some() {
+        // anyref (i31ref) → Int (i64)
+        // Extract i32 from i31ref, then sign-extend to i64
+        function.instruction(&Instruction::I31GetS);
+        function.instruction(&Instruction::I64ExtendI32S);
+        Ok(())
+    } else if ty::Nat::from_type(db, ty).is_some() {
+        // anyref (i31ref) → Nat (i64)
+        // Extract u32 from i31ref, then zero-extend to i64
+        function.instruction(&Instruction::I31GetU);
+        function.instruction(&Instruction::I64ExtendI32U);
+        Ok(())
+    } else if core::F64::from_type(db, ty).is_some() {
+        // anyref (BoxedF64) → Float (f64)
+        // TODO: This requires BoxedF64 type and struct.get
+        Err(CompilationError::unsupported_feature(
+            "Float unboxing not yet implemented",
+        ))
+    } else {
+        // For reference types, assume no unboxing needed
+        Ok(())
+    }
+}
+
 fn value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
     match value.def(db) {
         ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
@@ -1594,6 +1723,10 @@ fn type_to_valtype<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Compilat
         || (ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == Symbol::new("ptr"))
     {
         Ok(ValType::I32)
+    } else if ty::is_var(db, ty) {
+        // Generic type variables use anyref (uniform representation)
+        // Values must be boxed when passed to generic functions
+        Ok(ValType::Ref(RefType::ANYREF))
     } else {
         Err(CompilationError::type_error(format!(
             "unsupported wasm value type: {}.{}",
