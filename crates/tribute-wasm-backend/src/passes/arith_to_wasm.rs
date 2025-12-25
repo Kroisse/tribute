@@ -524,7 +524,7 @@ mod tests {
 
         // Add key attributes
         for (key, attr) in attrs.iter() {
-            if *key == Symbol::new("value") {
+            if *key == "value" {
                 parts.push(format!("value={}", format_attr(attr)));
             }
         }

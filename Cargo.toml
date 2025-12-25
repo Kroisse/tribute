@@ -57,6 +57,7 @@ license.workspace = true
 
 [dependencies]
 clap.workspace = true
+crossbeam-channel = "0.5"
 dashmap.workspace = true
 fluent-uri.workspace = true
 lsp-server.workspace = true

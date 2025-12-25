@@ -6,6 +6,7 @@
 
 mod pretty;
 mod server;
+mod tracing_layer;
 mod type_index;
 
 pub use server::serve;

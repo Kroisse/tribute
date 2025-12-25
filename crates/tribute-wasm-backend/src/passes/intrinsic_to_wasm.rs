@@ -78,13 +78,12 @@ pub fn analyze_intrinsics<'db>(
             *needs_fd_write = true;
 
             // Allocate iovec if not already done
-            use std::collections::hash_map::Entry;
-            if let Entry::Vacant(e) = iovec_map.entry((ptr, len)) {
+            iovec_map.entry((ptr, len)).or_insert_with(|| {
                 let offset = align_to(*next_offset, 4);
-                e.insert(offset);
                 iovec_allocations.push((ptr, len, offset));
                 *next_offset = offset + 8; // iovec is 8 bytes (ptr + len)
-            }
+                offset
+            });
         }
 
         // Recurse into regions

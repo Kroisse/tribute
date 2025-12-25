@@ -8,21 +8,23 @@ use std::io;
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, MarkupContent, MarkupKind, PublishDiagnosticsParams, ServerCapabilities,
+    DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, Hover,
+    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, MarkupContent,
+    MarkupKind, PublishDiagnosticsParams, ServerCapabilities, SymbolKind,
     TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
     TextDocumentSyncOptions, Uri,
     notification::{
         DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
         PublishDiagnostics,
     },
-    request::HoverRequest,
+    request::{DocumentSymbolRequest, HoverRequest},
 };
 use ropey::Rope;
 use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
 use super::pretty::print_type;
+use super::tracing_layer::LspLayer;
 use super::type_index::TypeIndex;
 use tribute::{TributeDatabaseImpl, compile, database::parse_with_thread_local};
 
@@ -65,6 +67,10 @@ impl LspServer {
             let result = self.hover(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
+        } else if let Some((id, params)) = cast_request::<DocumentSymbolRequest>(req) {
+            let result = self.document_symbols(params);
+            let response = Response::new_ok(id, result);
+            self.connection.sender.send(Message::Response(response))?;
         }
         Ok(())
     }
@@ -89,6 +95,8 @@ impl LspServer {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let uri = params.text_document.uri;
         let text = params.text_document.text;
+
+        tracing::info!(uri = ?uri, "Document opened");
 
         let rope = Rope::from_str(&text);
         self.db.open_document(&uri, rope);
@@ -132,6 +140,12 @@ impl LspServer {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
+        tracing::debug!(
+            line = position.line,
+            character = position.character,
+            "Hover request"
+        );
+
         let rope = self.db.source_cst(uri)?.text(&self.db).clone();
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
@@ -147,6 +161,8 @@ impl LspServer {
             })
         })?;
 
+        tracing::debug!(type_str = %type_str, "Found type information");
+
         let contents = HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
             value: format!("```tribute\n{}\n```", type_str),
@@ -157,6 +173,28 @@ impl LspServer {
             contents,
             range: Some(range),
         })
+    }
+
+    fn document_symbols(&self, params: DocumentSymbolParams) -> Option<DocumentSymbolResponse> {
+        let uri = &params.text_document.uri;
+        let source_cst = self.db.source_cst(uri)?;
+        let rope = source_cst.text(&self.db);
+
+        tracing::debug!(uri = ?uri, "Document symbols request");
+
+        let result = self
+            .db
+            .attach(|db| {
+                let module = compile(db, source_cst);
+                Some(extract_symbols_from_module(db, &module, rope))
+            })
+            .map(DocumentSymbolResponse::Nested);
+
+        if let Some(DocumentSymbolResponse::Nested(ref symbols)) = result {
+            tracing::debug!(count = symbols.len(), "Found document symbols");
+        }
+
+        result
     }
 
     fn publish_diagnostics(&self, uri: &Uri) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -269,8 +307,26 @@ impl LspServer {
 }
 
 /// Start the LSP server.
-pub fn serve() -> Result<(), Box<dyn Error + Send + Sync>> {
+pub fn serve(log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let (connection, io_threads) = Connection::stdio();
+
+    // Initialize tracing with LSP layer
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let lsp_layer = LspLayer::new(&connection);
+
+    // Parse log level from CLI argument
+    let env_filter = log_level
+        .parse::<tracing_subscriber::EnvFilter>()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(lsp_layer)
+        .init();
+
+    tracing::info!(log_level, "Tribute LSP server starting");
 
     // Server capabilities
     let capabilities = ServerCapabilities {
@@ -282,6 +338,7 @@ pub fn serve() -> Result<(), Box<dyn Error + Send + Sync>> {
             },
         )),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
+        document_symbol_provider: Some(lsp_types::OneOf::Left(true)),
         ..Default::default()
     };
 
@@ -393,5 +450,115 @@ fn cast_notification<N: lsp_types::notification::Notification>(
         serde_json::from_value(notif.params).ok()
     } else {
         None
+    }
+}
+
+/// Extract all symbols from a TrunkIR module.
+fn extract_symbols_from_module<'db>(
+    db: &'db dyn salsa::Database,
+    module: &trunk_ir::dialect::core::Module<'db>,
+    rope: &Rope,
+) -> Vec<DocumentSymbol> {
+    module
+        .body(db)
+        .blocks(db)
+        .iter()
+        .flat_map(|block| block.operations(db))
+        .filter_map(|op| extract_symbol_from_operation(db, op, rope))
+        .collect()
+}
+
+/// Extract a DocumentSymbol from a single operation, if applicable.
+fn extract_symbol_from_operation<'db>(
+    db: &'db dyn salsa::Database,
+    op: &trunk_ir::Operation<'db>,
+    rope: &Rope,
+) -> Option<DocumentSymbol> {
+    use trunk_ir::DialectOp;
+    use trunk_ir::dialect::{core, func, ty};
+
+    if let Ok(module_op) = core::Module::from_operation(db, *op) {
+        return Some(create_symbol(
+            module_op.sym_name(db),
+            SymbolKind::MODULE,
+            op.location(db).span,
+            rope,
+            extract_symbols_from_module(db, &module_op, rope),
+        ));
+    }
+
+    // Try function
+    if let Ok(func_op) = func::Func::from_operation(db, *op) {
+        return Some(create_symbol(
+            func_op.sym_name(db),
+            SymbolKind::FUNCTION,
+            op.location(db).span,
+            rope,
+            vec![],
+        ));
+    }
+
+    // Try struct
+    if let Ok(struct_op) = ty::Struct::from_operation(db, *op) {
+        return Some(create_symbol(
+            struct_op.name(db),
+            SymbolKind::STRUCT,
+            op.location(db).span,
+            rope,
+            vec![],
+        ));
+    }
+
+    // Try enum
+    if let Ok(enum_op) = ty::Enum::from_operation(db, *op) {
+        return Some(create_symbol(
+            enum_op.name(db),
+            SymbolKind::ENUM,
+            op.location(db).span,
+            rope,
+            vec![],
+        ));
+    }
+
+    // Try ability
+    if let Ok(ability_op) = ty::Ability::from_operation(db, *op) {
+        return Some(create_symbol(
+            ability_op.name(db),
+            SymbolKind::INTERFACE,
+            op.location(db).span,
+            rope,
+            vec![],
+        ));
+    }
+
+    None
+}
+
+/// Create a DocumentSymbol with the given parameters.
+fn create_symbol(
+    name: trunk_ir::Symbol,
+    kind: SymbolKind,
+    span: trunk_ir::Span,
+    rope: &Rope,
+    children: Vec<DocumentSymbol>,
+) -> DocumentSymbol {
+    let range = span_to_range(rope, span);
+    let selection_range = range; // TODO: Use name span when available
+    let children = if children.is_empty() {
+        None
+    } else {
+        Some(children)
+    };
+
+    DocumentSymbol {
+        name: name.to_string(),
+        detail: None,
+        kind,
+        tags: None,
+        range,
+        selection_range,
+        children,
+        #[allow(deprecated)]
+        deprecated: None,
     }
 }
