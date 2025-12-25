@@ -24,13 +24,21 @@ pub fn parse_nat_literal(text: &str) -> Option<u64> {
 }
 
 /// Parse an integer literal (signed).
+/// Phase 1: values must fit in i64; BigInt support will be added later.
 pub fn parse_int_literal(text: &str) -> Option<i64> {
     let text = text.replace('_', "");
     // Handle explicit + or - prefix
     if let Some(rest) = text.strip_prefix('+') {
-        parse_nat_literal(rest).map(|n| n as i64)
+        parse_nat_literal(rest).and_then(|n| i64::try_from(n).ok())
     } else if let Some(rest) = text.strip_prefix('-') {
-        parse_nat_literal(rest).map(|n| -(n as i64))
+        // Handle i64::MIN edge case: -9223372036854775808
+        parse_nat_literal(rest).and_then(|n| {
+            if n == (i64::MAX as u64) + 1 {
+                Some(i64::MIN)
+            } else {
+                i64::try_from(n).ok().map(|v| -v)
+            }
+        })
     } else {
         text.parse().ok()
     }

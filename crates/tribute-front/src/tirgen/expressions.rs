@@ -36,7 +36,9 @@ pub fn lower_expr<'db>(
         "nat_literal" => {
             let value = parse_nat_literal(&node_text(&node, &ctx.source))?;
             // Natural numbers are represented as Int (arbitrary precision)
-            let op = block.op(int_const(ctx.db, location, value as i64));
+            // Phase 1: values must fit in i64; BigInt support will be added later
+            let value = i64::try_from(value).ok()?;
+            let op = block.op(int_const(ctx.db, location, value));
             Some(op.result(ctx.db))
         }
         "int_literal" => {
