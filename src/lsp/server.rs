@@ -166,122 +166,16 @@ impl LspServer {
 
     fn document_symbols(&self, params: DocumentSymbolParams) -> Option<DocumentSymbolResponse> {
         use trunk_ir::DialectOp;
-        use trunk_ir::dialect::{core, func, ty};
+        use trunk_ir::dialect::core;
 
         let uri = &params.text_document.uri;
         let source_cst = self.db.source_cst(uri)?;
         let rope = source_cst.text(&self.db);
 
-        // Run Salsa compilation
         let symbols = self.db.attach(|db| {
             let module = compile(db, source_cst);
-
-            // Extract module name and body
             let core_module = core::Module::from_operation(db, module.as_operation()).ok()?;
-            let body = core_module.body(db);
-
-            let mut symbols = Vec::new();
-
-            // Iterate through top-level operations
-            for block in body.blocks(db).iter() {
-                for op in block.operations(db).iter() {
-                    // Try to extract as function definition
-                    if let Ok(func_op) = func::Func::from_operation(db, *op) {
-                        let name = func_op.sym_name(db).to_string();
-                        let location = op.location(db);
-                        let span = location.span;
-
-                        let range = span_to_range(rope, span);
-                        let selection_range = range; // TODO: Use name span when available
-
-                        symbols.push(DocumentSymbol {
-                            name,
-                            detail: None,
-                            kind: SymbolKind::FUNCTION,
-                            tags: None,
-                            range,
-                            selection_range,
-                            children: None,
-                            #[allow(deprecated)]
-                            deprecated: Some(false),
-                        });
-                    }
-
-                    // Try to extract as struct definition
-                    if let Ok(struct_op) = ty::Struct::from_operation(db, *op) {
-                        if let trunk_ir::Attribute::Symbol(sym) = struct_op.sym_name(db) {
-                            let name = sym.to_string();
-                            let location = op.location(db);
-                            let span = location.span;
-
-                            let range = span_to_range(rope, span);
-                            let selection_range = range;
-
-                            symbols.push(DocumentSymbol {
-                                name,
-                                detail: None,
-                                kind: SymbolKind::STRUCT,
-                                tags: None,
-                                range,
-                                selection_range,
-                                children: None,
-                                #[allow(deprecated)]
-                                deprecated: Some(false),
-                            });
-                        }
-                    }
-
-                    // Try to extract as enum definition
-                    if let Ok(enum_op) = ty::Enum::from_operation(db, *op) {
-                        if let trunk_ir::Attribute::Symbol(sym) = enum_op.sym_name(db) {
-                            let name = sym.to_string();
-                            let location = op.location(db);
-                            let span = location.span;
-
-                            let range = span_to_range(rope, span);
-                            let selection_range = range;
-
-                            symbols.push(DocumentSymbol {
-                                name,
-                                detail: None,
-                                kind: SymbolKind::ENUM,
-                                tags: None,
-                                range,
-                                selection_range,
-                                children: None,
-                                #[allow(deprecated)]
-                                deprecated: Some(false),
-                            });
-                        }
-                    }
-
-                    // Try to extract as ability definition
-                    if let Ok(ability_op) = ty::Ability::from_operation(db, *op) {
-                        if let trunk_ir::Attribute::Symbol(sym) = ability_op.sym_name(db) {
-                            let name = sym.to_string();
-                            let location = op.location(db);
-                            let span = location.span;
-
-                            let range = span_to_range(rope, span);
-                            let selection_range = range;
-
-                            symbols.push(DocumentSymbol {
-                                name,
-                                detail: None,
-                                kind: SymbolKind::INTERFACE,
-                                tags: None,
-                                range,
-                                selection_range,
-                                children: None,
-                                #[allow(deprecated)]
-                                deprecated: Some(false),
-                            });
-                        }
-                    }
-                }
-            }
-
-            Some(symbols)
+            extract_symbols_from_module(db, &core_module, rope)
         })?;
 
         Some(DocumentSymbolResponse::Nested(symbols))
@@ -522,5 +416,106 @@ fn cast_notification<N: lsp_types::notification::Notification>(
         serde_json::from_value(notif.params).ok()
     } else {
         None
+    }
+}
+
+/// Extract all symbols from a TrunkIR module.
+fn extract_symbols_from_module<'db>(
+    db: &'db dyn salsa::Database,
+    module: &trunk_ir::dialect::core::Module<'db>,
+    rope: &Rope,
+) -> Option<Vec<DocumentSymbol>> {
+    let body = module.body(db);
+    let mut symbols = Vec::new();
+
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if let Some(symbol) = extract_symbol_from_operation(db, op, rope) {
+                symbols.push(symbol);
+            }
+        }
+    }
+
+    Some(symbols)
+}
+
+/// Extract a DocumentSymbol from a single operation, if applicable.
+fn extract_symbol_from_operation<'db>(
+    db: &'db dyn salsa::Database,
+    op: &trunk_ir::Operation<'db>,
+    rope: &Rope,
+) -> Option<DocumentSymbol> {
+    use trunk_ir::DialectOp;
+    use trunk_ir::dialect::{func, ty};
+
+    // Try function
+    if let Ok(func_op) = func::Func::from_operation(db, *op) {
+        return Some(create_symbol(
+            func_op.sym_name(db).to_string(),
+            SymbolKind::FUNCTION,
+            op.location(db).span,
+            rope,
+        ));
+    }
+
+    // Try struct
+    if let Ok(struct_op) = ty::Struct::from_operation(db, *op) {
+        if let trunk_ir::Attribute::Symbol(sym) = struct_op.sym_name(db) {
+            return Some(create_symbol(
+                sym.to_string(),
+                SymbolKind::STRUCT,
+                op.location(db).span,
+                rope,
+            ));
+        }
+    }
+
+    // Try enum
+    if let Ok(enum_op) = ty::Enum::from_operation(db, *op) {
+        if let trunk_ir::Attribute::Symbol(sym) = enum_op.sym_name(db) {
+            return Some(create_symbol(
+                sym.to_string(),
+                SymbolKind::ENUM,
+                op.location(db).span,
+                rope,
+            ));
+        }
+    }
+
+    // Try ability
+    if let Ok(ability_op) = ty::Ability::from_operation(db, *op) {
+        if let trunk_ir::Attribute::Symbol(sym) = ability_op.sym_name(db) {
+            return Some(create_symbol(
+                sym.to_string(),
+                SymbolKind::INTERFACE,
+                op.location(db).span,
+                rope,
+            ));
+        }
+    }
+
+    None
+}
+
+/// Create a DocumentSymbol with the given parameters.
+fn create_symbol(
+    name: String,
+    kind: SymbolKind,
+    span: trunk_ir::Span,
+    rope: &Rope,
+) -> DocumentSymbol {
+    let range = span_to_range(rope, span);
+    let selection_range = range; // TODO: Use name span when available
+
+    DocumentSymbol {
+        name,
+        detail: None,
+        kind,
+        tags: None,
+        range,
+        selection_range,
+        children: None,
+        #[allow(deprecated)]
+        deprecated: Some(false),
     }
 }
