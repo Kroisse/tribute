@@ -35,6 +35,33 @@ See `.claude/rules/` for detailed documentation:
 ## Commit Guidelines
 
 - Follow the Conventional Commits format.
+- Issue titles should not use prefix (e.g., `feat:`). Use labels instead.
+
+## GitHub Issues
+
+Implementation tasks are tracked in GitHub Issues. Use `gh issue list` to browse.
+
+### Labels
+
+| Label | Description |
+|-------|-------------|
+| `ability` | Effect system and abilities (#23-26) |
+| `type-system` | Type checking and inference |
+| `syntax` | Parser and syntax features |
+| `lsp` | Language Server Protocol (#31-37) |
+| `wasm` | WebAssembly backend (#38-41) |
+| `good first issue` | Good for newcomers |
+| `enhancement` | New feature |
+| `bug` | Something isn't working |
+
+### Finding Work
+
+```bash
+gh issue list                        # All open issues
+gh issue list --label "good first issue"  # Beginner-friendly
+gh issue list --label ability        # Effect system work
+gh issue list --label wasm           # Wasm backend work
+```
 
 ## Common Commands
 
