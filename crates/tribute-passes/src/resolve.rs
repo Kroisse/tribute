@@ -539,10 +539,10 @@ impl<'db> Resolver<'db> {
         let name_str = name.to_string();
         match &*name_str {
             // Primitive types
-            "Int" => *core::I64::new(self.db),
+            "Int" => *ty::Int::new(self.db),
             "Bool" => *core::I1::new(self.db),
             "Float" => *core::F64::new(self.db),
-            "Nat" => *core::I64::new(self.db), // Nat is implemented as i64 for now
+            "Nat" => *ty::Nat::new(self.db),
             "String" => *core::String::new(self.db),
             "Bytes" => *core::Bytes::new(self.db),
             "Nil" => *core::Nil::new(self.db),

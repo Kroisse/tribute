@@ -566,12 +566,11 @@ inventory::submit! { Printable::implement("core", "bytes", |_, _, f| f.write_str
 // ptr -> "Ptr"
 inventory::submit! { Printable::implement("core", "ptr", |_, _, f| f.write_str("Ptr")) }
 
-// Integer types: i1 -> "Bool", i64 -> "Int", i{N} -> "I{N}"
+// Integer types: i1 -> "Bool", i{N} -> "I{N}"
 inventory::submit! {
     Printable::implement_prefix("core", "i", |db, ty, f| {
         ty.name(db).with_str(|name| match name {
             "i1" => f.write_str("Bool"),
-            "i64" => f.write_str("Int"),
             _ => write!(f, "I{}", &name[1..]),
         })
     })

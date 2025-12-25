@@ -10,7 +10,7 @@ use trunk_ir::{
 
 use super::context::CstLoweringCtx;
 use super::declarations::parse_parameter_list;
-use super::helpers::{is_comment, node_text, sym, sym_ref};
+use super::helpers::{int_const, is_comment, node_text, sym, sym_ref};
 use super::literals::{
     parse_bytes_literal, parse_float_literal, parse_int_literal, parse_nat_literal,
     parse_rune_literal, parse_string_literal,
@@ -35,12 +35,13 @@ pub fn lower_expr<'db>(
         // === Literals ===
         "nat_literal" => {
             let value = parse_nat_literal(&node_text(&node, &ctx.source))?;
-            let op = block.op(arith::Const::u64(ctx.db, location, value));
+            // Natural numbers are represented as Int (arbitrary precision)
+            let op = block.op(int_const(ctx.db, location, value as i64));
             Some(op.result(ctx.db))
         }
         "int_literal" => {
             let value = parse_int_literal(&node_text(&node, &ctx.source))?;
-            let op = block.op(arith::Const::i64(ctx.db, location, value));
+            let op = block.op(int_const(ctx.db, location, value));
             Some(op.result(ctx.db))
         }
         "float_literal" => {

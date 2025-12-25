@@ -467,6 +467,9 @@ fn type_suffix<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> &'st
             } else if name == Symbol::new("i1") {
                 // Boolean type - represented as i32 in wasm
                 "i32"
+            } else if name == Symbol::new("int") || name == Symbol::new("nat") {
+                // Arbitrary precision Int/Nat - lowered to i64 for Phase 1
+                "i64"
             } else if name == Symbol::new("nil") {
                 // Nil/void type - no runtime value
                 "nil"

@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 
 use tracing::debug;
 
-use trunk_ir::dialect::core;
+use trunk_ir::dialect::{core, ty};
 use trunk_ir::{
     Attribute, Attrs, DialectType, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value,
     ValueDef,
@@ -25,9 +25,12 @@ use crate::{CompilationError, CompilationResult};
 /// Check if a type contains unresolved type references (src.type, type.var).
 /// Generic functions have unresolved type parameters and cannot be compiled to wasm.
 fn has_unresolved_type(db: &dyn salsa::Database, ty: Type) -> bool {
-    let dialect = ty.dialect(db);
     // Check if this type is src.type (unresolved) or type.var (type variable)
-    if dialect == Symbol::new("src") || dialect == Symbol::new("type") {
+    // Note: type.int and type.nat are concrete types, not unresolved
+    if ty.dialect(db) == Symbol::new("src") {
+        return true;
+    }
+    if ty::is_var(db, ty) {
         return true;
     }
     // Recursively check type parameters
@@ -820,7 +823,12 @@ fn collect_gc_types<'db>(
     let to_field_type = |ty: Type<'db>, type_idx_by_type: &HashMap<_, _>| -> FieldType {
         let element_type = if core::I32::from_type(db, ty).is_some() {
             StorageType::Val(ValType::I32)
-        } else if core::I64::from_type(db, ty).is_some() {
+        } else if core::I64::from_type(db, ty).is_some()
+            || ty::Int::from_type(db, ty).is_some()
+            || ty::Nat::from_type(db, ty).is_some()
+        {
+            // Int/Nat (arbitrary precision) is lowered to i64 for Phase 1
+            // TODO: Implement i31ref/BigInt hybrid for WasmGC
             StorageType::Val(ValType::I64)
         } else if core::F32::from_type(db, ty).is_some() {
             StorageType::Val(ValType::F32)
@@ -1566,7 +1574,12 @@ fn resolve_callee(
 fn type_to_valtype<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> CompilationResult<ValType> {
     if core::I32::from_type(db, ty).is_some() {
         Ok(ValType::I32)
-    } else if core::I64::from_type(db, ty).is_some() {
+    } else if core::I64::from_type(db, ty).is_some()
+        || ty::Int::from_type(db, ty).is_some()
+        || ty::Nat::from_type(db, ty).is_some()
+    {
+        // Int/Nat (arbitrary precision) is lowered to i64 for Phase 1
+        // TODO: Implement i31ref/BigInt hybrid for WasmGC
         Ok(ValType::I64)
     } else if core::F32::from_type(db, ty).is_some() {
         Ok(ValType::F32)
