@@ -1074,7 +1074,7 @@ impl<'db> Resolver<'db> {
         let location = op.location(self.db);
 
         // Special case: Nil is the unit value (built-in)
-        if name == Symbol::new("Nil") {
+        if name == "Nil" {
             let nil_ty = core::Nil::new(self.db).as_type();
             // Create a unit value constant - arith.const with nil type produces no runtime value
             let const_op = arith::r#const(self.db, location, nil_ty, Attribute::Unit);

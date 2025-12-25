@@ -133,6 +133,7 @@ impl<'db> CaseLowerer<'db> {
             // Erase the case.bind operation - value is remapped
             return vec![];
         }
+        // If binding not found, keep the operation (shouldn't happen in well-formed IR)
 
         let new_regions = op
             .regions(self.db)

@@ -7,10 +7,9 @@ use std::path::PathBuf;
 #[command(name = "tribute")]
 #[command(about = "Tribute programming language compiler", long_about = None)]
 pub struct Cli {
-    /// Set log filter (e.g., "debug", "tribute_passes::typeck=trace")
-    /// Overrides RUST_LOG environment variable
-    #[arg(long, global = true)]
-    pub log: Option<String>,
+    /// Log level filter (e.g., "debug", "info", "tribute=debug", "tribute::lsp=trace")
+    #[arg(long, default_value = "warn", global = true)]
+    pub log: String,
 
     #[command(subcommand)]
     pub command: Command,

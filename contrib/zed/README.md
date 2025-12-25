@@ -31,6 +31,47 @@ Zed editor extension providing syntax highlighting and LSP support for the Tribu
 - Language Server Protocol (LSP) support:
   - Hover information (type display)
   - Diagnostics (errors and warnings)
+  - Document symbols (outline view)
+
+## Configuration
+
+### LSP Log Level
+
+To adjust the LSP server log level, add the following to your Zed `settings.json` (open with `Cmd+,` or `Ctrl+,`):
+
+```json
+{
+  "lsp": {
+    "tribute-lsp": {
+      "settings": {
+        "log_level": "debug"
+      }
+    }
+  }
+}
+```
+
+Available log levels:
+- `"error"` - Only errors
+- `"warn"` - Warnings and errors (default)
+- `"info"` - General information
+- `"debug"` - Detailed debugging information
+- `"trace"` - Very detailed trace information
+
+You can also use module-specific filters:
+```json
+{
+  "lsp": {
+    "tribute-lsp": {
+      "settings": {
+        "log_level": "tribute::lsp=trace,info"
+      }
+    }
+  }
+}
+```
+
+LSP logs can be viewed via `Cmd+Shift+P` → "lsp: open log".
 
 ## Development
 

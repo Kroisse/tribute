@@ -24,6 +24,7 @@ use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
 use super::pretty::print_type;
+use super::tracing_layer::LspLayer;
 use super::type_index::TypeIndex;
 use tribute::{TributeDatabaseImpl, compile, database::parse_with_thread_local};
 
@@ -95,6 +96,8 @@ impl LspServer {
         let uri = params.text_document.uri;
         let text = params.text_document.text;
 
+        tracing::info!(uri = ?uri, "Document opened");
+
         let rope = Rope::from_str(&text);
         self.db.open_document(&uri, rope);
 
@@ -137,6 +140,12 @@ impl LspServer {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
+        tracing::debug!(
+            line = position.line,
+            character = position.character,
+            "Hover request"
+        );
+
         let rope = self.db.source_cst(uri)?.text(&self.db).clone();
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
@@ -151,6 +160,8 @@ impl LspServer {
                 (type_str, entry.span)
             })
         })?;
+
+        tracing::debug!(type_str = %type_str, "Found type information");
 
         let contents = HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
@@ -169,12 +180,21 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
         let rope = source_cst.text(&self.db);
 
-        self.db
+        tracing::debug!(uri = ?uri, "Document symbols request");
+
+        let result = self
+            .db
             .attach(|db| {
                 let module = compile(db, source_cst);
                 Some(extract_symbols_from_module(db, &module, rope))
             })
-            .map(DocumentSymbolResponse::Nested)
+            .map(DocumentSymbolResponse::Nested);
+
+        if let Some(DocumentSymbolResponse::Nested(ref symbols)) = result {
+            tracing::debug!(count = symbols.len(), "Found document symbols");
+        }
+
+        result
     }
 
     fn publish_diagnostics(&self, uri: &Uri) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -287,8 +307,26 @@ impl LspServer {
 }
 
 /// Start the LSP server.
-pub fn serve() -> Result<(), Box<dyn Error + Send + Sync>> {
+pub fn serve(log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let (connection, io_threads) = Connection::stdio();
+
+    // Initialize tracing with LSP layer
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let lsp_layer = LspLayer::new(&connection);
+
+    // Parse log level from CLI argument
+    let env_filter = log_level
+        .parse::<tracing_subscriber::EnvFilter>()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+
+    tracing_subscriber::registry()
+        .with(lsp_layer)
+        .with(env_filter)
+        .init();
+
+    tracing::info!(log_level, "Tribute LSP server starting");
 
     // Server capabilities
     let capabilities = ServerCapabilities {
