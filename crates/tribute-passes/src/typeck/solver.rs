@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use tracing::{debug, trace};
 use trunk_ir::{Attribute, IdVec, Symbol, Type, dialect::ty};
 
 use super::constraint::{Constraint, ConstraintSet, TypeVar};
@@ -90,6 +91,7 @@ impl<'db> TypeSubst<'db> {
 
     /// Insert a type variable binding.
     pub fn insert(&mut self, var_id: u64, ty: Type<'db>) {
+        trace!(var_id, ?ty, "inserting type substitution");
         self.types.insert(var_id, ty);
     }
 
@@ -103,15 +105,23 @@ impl<'db> TypeSubst<'db> {
         self.types.contains_key(&var_id)
     }
 
+    /// Get the number of substitutions.
+    pub fn len(&self) -> usize {
+        self.types.len()
+    }
+
     /// Apply this substitution to a type, resolving type variables.
     pub fn apply(&self, db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
         // If it's a type variable, look it up
         if ty::is_var(db, ty) {
-            if let Some(Attribute::IntBits(id)) = ty.get_attr(db, Symbol::new("id"))
-                && let Some(resolved) = self.get(*id)
-            {
-                // Recursively apply in case the resolved type also has variables
-                return self.apply(db, resolved);
+            if let Some(Attribute::IntBits(id)) = ty.get_attr(db, Symbol::new("id")) {
+                if let Some(resolved) = self.get(*id) {
+                    trace!(id, ?resolved, "applying type substitution");
+                    // Recursively apply in case the resolved type also has variables
+                    return self.apply(db, resolved);
+                } else {
+                    trace!(id, "type variable not in substitution map");
+                }
             }
             return ty;
         }
@@ -213,9 +223,12 @@ impl<'db> TypeSolver<'db> {
 
     /// Solve a set of constraints.
     pub fn solve(&mut self, constraints: ConstraintSet<'db>) -> SolveResult<'db, ()> {
-        for constraint in constraints.into_constraints() {
+        let constraint_list: Vec<_> = constraints.into_constraints().collect();
+        debug!(num_constraints = constraint_list.len(), "solving constraints");
+        for constraint in constraint_list {
             self.solve_one(constraint)?;
         }
+        debug!(num_substitutions = self.type_subst.len(), "solved constraints");
         Ok(())
     }
 
