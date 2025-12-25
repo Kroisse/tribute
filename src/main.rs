@@ -10,6 +10,7 @@ use salsa::Database;
 use std::path::PathBuf;
 use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{compile_with_diagnostics, stage_lower_to_wasm, stage_resolve};
+use tribute_passes::diagnostic::Diagnostic;
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_passes::resolve::build_env;
 
@@ -72,15 +73,24 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                         }
                     }
                 } else {
-                    // Collect and show accumulated diagnostics
-                    let result = compile_with_diagnostics(db, source);
-                    if !result.diagnostics.is_empty() {
-                        println!("Diagnostics ({} total):", result.diagnostics.len());
-                        for diag in &result.diagnostics {
+                    // Collect diagnostics from wasm lowering
+                    let wasm_diags: Vec<_> = stage_lower_to_wasm::accumulated::<Diagnostic>(db, source);
+                    if !wasm_diags.is_empty() {
+                        println!("WebAssembly compilation errors:");
+                        for diag in &wasm_diags {
                             println!("  [{:?}] {}", diag.phase, diag.message);
                         }
                     } else {
-                        eprintln!("✗ WebAssembly compilation failed (lowering or emission error)");
+                        // Try getting frontend diagnostics
+                        let result = compile_with_diagnostics(db, source);
+                        if !result.diagnostics.is_empty() {
+                            println!("Diagnostics ({} total):", result.diagnostics.len());
+                            for diag in &result.diagnostics {
+                                println!("  [{:?}] {}", diag.phase, diag.message);
+                            }
+                        } else {
+                            eprintln!("✗ WebAssembly compilation failed (unknown error)");
+                        }
                     }
                     std::process::exit(1);
                 }
