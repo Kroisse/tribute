@@ -451,7 +451,7 @@ fn extract_symbol_from_operation<'db>(
     // Try function
     if let Ok(func_op) = func::Func::from_operation(db, *op) {
         return Some(create_symbol(
-            func_op.sym_name(db).to_string(),
+            func_op.sym_name(db),
             SymbolKind::FUNCTION,
             op.location(db).span,
             rope,
@@ -460,38 +460,32 @@ fn extract_symbol_from_operation<'db>(
 
     // Try struct
     if let Ok(struct_op) = ty::Struct::from_operation(db, *op) {
-        if let trunk_ir::Attribute::Symbol(sym) = struct_op.sym_name(db) {
-            return Some(create_symbol(
-                sym.to_string(),
-                SymbolKind::STRUCT,
-                op.location(db).span,
-                rope,
-            ));
-        }
+        return Some(create_symbol(
+            struct_op.name(db),
+            SymbolKind::STRUCT,
+            op.location(db).span,
+            rope,
+        ));
     }
 
     // Try enum
     if let Ok(enum_op) = ty::Enum::from_operation(db, *op) {
-        if let trunk_ir::Attribute::Symbol(sym) = enum_op.sym_name(db) {
-            return Some(create_symbol(
-                sym.to_string(),
-                SymbolKind::ENUM,
-                op.location(db).span,
-                rope,
-            ));
-        }
+        return Some(create_symbol(
+            enum_op.name(db),
+            SymbolKind::ENUM,
+            op.location(db).span,
+            rope,
+        ));
     }
 
     // Try ability
     if let Ok(ability_op) = ty::Ability::from_operation(db, *op) {
-        if let trunk_ir::Attribute::Symbol(sym) = ability_op.sym_name(db) {
-            return Some(create_symbol(
-                sym.to_string(),
-                SymbolKind::INTERFACE,
-                op.location(db).span,
-                rope,
-            ));
-        }
+        return Some(create_symbol(
+            ability_op.name(db),
+            SymbolKind::INTERFACE,
+            op.location(db).span,
+            rope,
+        ));
     }
 
     None
@@ -499,7 +493,7 @@ fn extract_symbol_from_operation<'db>(
 
 /// Create a DocumentSymbol with the given parameters.
 fn create_symbol(
-    name: String,
+    name: trunk_ir::Symbol,
     kind: SymbolKind,
     span: trunk_ir::Span,
     rope: &Rope,
@@ -508,7 +502,7 @@ fn create_symbol(
     let selection_range = range; // TODO: Use name span when available
 
     DocumentSymbol {
-        name,
+        name: name.to_string(),
         detail: None,
         kind,
         tags: None,
