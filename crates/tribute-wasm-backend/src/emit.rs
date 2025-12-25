@@ -1011,6 +1011,7 @@ fn emit_function<'db>(
     func_indices: &HashMap<Symbol, u32>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
 ) -> CompilationResult<Function> {
+    debug!("=== emit_function: {:?} ===", func_def.name);
     let region = func_def
         .op
         .regions(db)
@@ -1471,6 +1472,7 @@ fn emit_operands<'db>(
     for value in operands.iter() {
         // Try direct lookup first
         if let Some(index) = value_locals.get(value) {
+            debug!("  emit_operands: found value {:?} -> local {}", value.def(db), index);
             function.instruction(&Instruction::LocalGet(*index));
             continue;
         }
@@ -1479,13 +1481,18 @@ fn emit_operands<'db>(
         // The resolver creates operands that reference OLD block arguments, but value_locals
         // only contains NEW block arguments. For block args, we can use the index directly
         // since parameters are always locals 0, 1, 2, etc.
-        if let ValueDef::BlockArg(_) = value.def(db) {
+        if let ValueDef::BlockArg(block_id) = value.def(db) {
             let index = value.index(db) as u32;
+            debug!("  emit_operands: BlockArg fallback {:?} -> local {}", block_id, index);
             function.instruction(&Instruction::LocalGet(index));
             continue;
         }
 
-        // If operand not found and not a block arg, skip (might be nil value that was erased)
+        // If operand not found and not a block arg, this is an ERROR - stale value reference!
+        if let ValueDef::OpResult(stale_op) = value.def(db) {
+            debug!("  emit_operands: STALE OpResult! op={}.{}", stale_op.dialect(db), stale_op.name(db));
+            debug!("    value_locals has {} entries", value_locals.len());
+        }
     }
     Ok(())
 }

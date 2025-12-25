@@ -3,8 +3,6 @@
 //! This pass transforms mid-level IR operations (func, arith, scf, adt) to
 //! wasm dialect operations. Phase 1 handles basic arithmetic and function calls.
 
-use std::collections::HashMap;
-
 use tracing::{error, warn};
 
 use crate::plan::{MainExports, MemoryPlan};
@@ -13,6 +11,7 @@ use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::src;
 use trunk_ir::dialect::wasm;
+use trunk_ir::rewrite::RewriteContext;
 
 use crate::passes::const_to_wasm::ConstAnalysis;
 use crate::passes::intrinsic_to_wasm::IntrinsicAnalysis;
@@ -26,9 +25,12 @@ use trunk_ir::{
 #[salsa::tracked]
 pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     // Phase 1: Pattern-based lowering passes
+    tracing::debug!("=== BEFORE arith_to_wasm ===\n{:?}", module);
     let module = crate::passes::arith_to_wasm::lower(db, module);
+    tracing::debug!("=== AFTER arith_to_wasm ===\n{:?}", module);
     let module = crate::passes::scf_to_wasm::lower(db, module);
     let module = crate::passes::func_to_wasm::lower(db, module);
+    tracing::debug!("=== AFTER func_to_wasm ===\n{:?}", module);
     let module = crate::passes::adt_to_wasm::lower(db, module);
 
     // Const analysis and lowering (string/bytes constants to data segments)
@@ -96,7 +98,7 @@ fn check_function_body<'db>(db: &'db dyn salsa::Database, func_op: &Operation<'d
 /// Lowers mid-level IR to wasm dialect operations.
 struct WasmLowerer<'db> {
     db: &'db dyn salsa::Database,
-    value_map: HashMap<Value<'db>, Value<'db>>,
+    ctx: RewriteContext<'db>,
     module_location: Option<Location<'db>>,
     const_analysis: ConstAnalysis<'db>,
     intrinsic_analysis: IntrinsicAnalysis<'db>,
@@ -112,7 +114,7 @@ impl<'db> WasmLowerer<'db> {
     ) -> Self {
         Self {
             db,
-            value_map: HashMap::new(),
+            ctx: RewriteContext::new(),
             module_location: None,
             const_analysis,
             intrinsic_analysis,
@@ -383,7 +385,7 @@ impl<'db> WasmLowerer<'db> {
         builder: &mut BlockBuilder<'db>,
         op: Operation<'db>,
     ) {
-        let remapped_operands = self.remap_operands(op);
+        let remapped_operands = self.remap_operand_values(op);
         let new_regions: Vec<_> = op
             .regions(self.db)
             .iter()
@@ -396,7 +398,7 @@ impl<'db> WasmLowerer<'db> {
             .operands(remapped_operands)
             .regions(IdVec::from(new_regions))
             .build();
-        self.map_results(&op, &new_op);
+        self.ctx.map_results(self.db, &op, &new_op);
         builder.op(new_op);
     }
 
@@ -425,23 +427,11 @@ impl<'db> WasmLowerer<'db> {
         }
     }
 
-    fn remap_operands(&self, op: Operation<'db>) -> IdVec<Value<'db>> {
+    fn remap_operand_values(&self, op: Operation<'db>) -> IdVec<Value<'db>> {
         let mut operands = IdVec::new();
         for &operand in op.operands(self.db).iter() {
-            let mapped = self.value_map.get(&operand).copied().unwrap_or(operand);
-            operands.push(mapped);
+            operands.push(self.ctx.lookup(operand));
         }
         operands
-    }
-
-    fn map_results(&mut self, old_op: &Operation<'db>, new_op: &Operation<'db>) {
-        let old_results = old_op.results(self.db);
-        let new_results = new_op.results(self.db);
-        let count = old_results.len().min(new_results.len());
-        for i in 0..count {
-            let old_val = old_op.result(self.db, i);
-            let new_val = new_op.result(self.db, i);
-            self.value_map.insert(old_val, new_val);
-        }
     }
 }

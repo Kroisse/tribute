@@ -189,6 +189,7 @@ impl PatternApplicator {
     /// 2. Try each pattern in order
     /// 3. If a pattern matches, apply it and record mappings
     /// 4. Recursively rewrite any nested regions
+    /// 5. Map original operation results to final operation results
     fn rewrite_operation<'db>(
         &self,
         db: &'db dyn salsa::Database,
@@ -205,29 +206,32 @@ impl PatternApplicator {
 
                 RewriteResult::Replace(new_op) => {
                     ctx.record_change();
-                    ctx.map_results(db, &remapped_op, &new_op);
                     // Recursively rewrite regions in the new operation
                     let final_op = self.rewrite_op_regions(db, &new_op, ctx);
+                    // Map ORIGINAL op results to FINAL op results
+                    ctx.map_results(db, op, &final_op);
                     return vec![final_op];
                 }
 
                 RewriteResult::Expand(ops) => {
                     ctx.record_change();
-                    if let Some(first) = ops.first() {
-                        ctx.map_results(db, &remapped_op, first);
-                    }
                     // Recursively rewrite regions in all new operations
-                    return ops
+                    let final_ops: Vec<_> = ops
                         .into_iter()
-                        .map(|op| self.rewrite_op_regions(db, &op, ctx))
+                        .map(|expanded_op| self.rewrite_op_regions(db, &expanded_op, ctx))
                         .collect();
+                    // Map ORIGINAL op results to first expanded op results
+                    if let Some(first) = final_ops.first() {
+                        ctx.map_results(db, op, first);
+                    }
+                    return final_ops;
                 }
 
                 RewriteResult::Erase { replacement_values } => {
                     ctx.record_change();
-                    // Map each result to its replacement value
+                    // Map ORIGINAL op results to replacement values
                     for (i, val) in replacement_values.into_iter().enumerate() {
-                        let old_val = remapped_op.result(db, i);
+                        let old_val = op.result(db, i);
                         ctx.map_value(old_val, val);
                     }
                     return vec![];
@@ -237,6 +241,13 @@ impl PatternApplicator {
 
         // Step 3: No pattern matched - recursively process regions
         let final_op = self.rewrite_op_regions(db, &remapped_op, ctx);
+
+        // Step 4: Map ORIGINAL op results to FINAL op results if they differ
+        // This is critical when operands were remapped but no pattern matched
+        if final_op != *op {
+            ctx.map_results(db, op, &final_op);
+        }
+
         vec![final_op]
     }
 

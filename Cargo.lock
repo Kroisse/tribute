@@ -1487,6 +1487,7 @@ dependencies = [
  "salsa-test-macros",
  "serde",
  "smallvec",
+ "tracing",
 ]
 
 [[package]]

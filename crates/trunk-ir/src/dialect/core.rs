@@ -97,6 +97,70 @@ impl<'db> Module<'db> {
     }
 }
 
+impl std::fmt::Debug for Module<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        salsa::with_attached_database(|db| {
+            let name = self.name(db);
+            let body = self.body(db);
+
+            let mut operations = Vec::new();
+            for block in body.blocks(db).iter() {
+                for op in block.operations(db).iter() {
+                    operations.push(*op);
+                }
+            }
+
+            f.debug_struct(&format!("Module({})", name))
+                .field("operations", &debug_helpers::OperationList { db, ops: &operations })
+                .finish()
+        })
+        .unwrap_or_else(|| write!(f, "Module(<no database attached>)"))
+    }
+}
+
+mod debug_helpers {
+    use super::*;
+
+    pub(super) struct OperationList<'a, 'db> {
+        pub(super) db: &'db dyn salsa::Database,
+        pub(super) ops: &'a [crate::Operation<'db>],
+    }
+
+    impl std::fmt::Debug for OperationList<'_, '_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut list = f.debug_list();
+            for op in self.ops {
+                list.entry(&OpDebug { db: self.db, op: *op });
+            }
+            list.finish()
+        }
+    }
+
+    struct OpDebug<'db> {
+        db: &'db dyn salsa::Database,
+        op: crate::Operation<'db>,
+    }
+
+    impl std::fmt::Debug for OpDebug<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            use crate::DialectOp;
+
+            // Try func.func first
+            if let Ok(func_op) = crate::dialect::func::Func::from_operation(self.db, self.op) {
+                return func_op.fmt(f);
+            }
+
+            // Try nested module
+            if let Ok(module_op) = Module::from_operation(self.db, self.op) {
+                return module_op.fmt(f);
+            }
+
+            // Default: show operation name
+            write!(f, "{}.{}", self.op.dialect(self.db), self.op.name(self.db))
+        }
+    }
+}
+
 // === Core type constructors ===
 
 // === Integer type wrapper ===
