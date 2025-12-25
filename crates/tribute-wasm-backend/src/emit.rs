@@ -1560,6 +1560,9 @@ fn emit_operands_with_boxing<'db>(
     let mut param_iter = param_types.iter();
 
     for value in operands.iter() {
+        // Get the corresponding parameter type first (must stay synchronized with operands)
+        let param_ty = param_iter.next();
+
         // Skip nil type values - they have no runtime representation
         if let Some(ty) = value_type(db, *value)
             && is_nil_type(db, ty)
@@ -1572,7 +1575,7 @@ fn emit_operands_with_boxing<'db>(
 
         // Check if boxing is needed
         // If parameter expects anyref (type.var), box the operand
-        if let Some(&param_ty) = param_iter.next()
+        if let Some(&param_ty) = param_ty
             && ty::is_var(db, param_ty)
             && let Some(operand_ty) = value_type(db, *value)
         {
@@ -1620,7 +1623,7 @@ fn emit_boxing<'db>(
         // Int/Nat (i64) → i31ref
         // Truncate i64 to i32, then convert to i31ref
         // Note: This only works correctly for values that fit in 31 bits!
-        // Phase 1 limitation: values outside -2^30..2^30 will be incorrect
+        // Phase 1 limitation: values outside -2^30..2^30-1 will be incorrect
         function.instruction(&Instruction::I32WrapI64);
         function.instruction(&Instruction::RefI31);
         Ok(())
