@@ -1,0 +1,6 @@
+// Basic generic identity function
+fn identity(x: a) -> a { x }
+
+fn main() -> Int {
+    identity(42)
+}
