@@ -18,18 +18,9 @@ use tribute_passes::resolve::build_env;
 fn main() {
     let cli = Cli::parse();
 
-    // Initialize tracing with filter from --log argument
-    let env_filter = EnvFilter::try_new(&cli.log).unwrap_or_else(|e| {
-        eprintln!("Invalid log filter '{}': {}", cli.log, e);
-        EnvFilter::new("warn")
-    });
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .with_writer(std::io::stderr)
-        .init();
-
     match cli.command {
         Command::Serve => {
+            // LSP server initializes its own tracing with LspLayer
             if let Err(e) = lsp::serve(&cli.log) {
                 eprintln!("LSP server error: {e}");
                 std::process::exit(1);
@@ -40,12 +31,25 @@ fn main() {
             output,
             target,
         } => {
+            init_tracing(&cli.log);
             compile_file(file, output, &target);
         }
         Command::Debug { file, show_env } => {
+            init_tracing(&cli.log);
             debug_file(file, show_env);
         }
     }
+}
+
+fn init_tracing(log_filter: &str) {
+    let env_filter = EnvFilter::try_new(log_filter).unwrap_or_else(|e| {
+        eprintln!("Invalid log filter '{}': {}", log_filter, e);
+        EnvFilter::new("warn")
+    });
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stderr)
+        .init();
 }
 
 fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str) {
