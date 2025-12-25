@@ -10,8 +10,8 @@ use salsa::Database;
 use std::path::PathBuf;
 use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{compile_with_diagnostics, stage_lower_to_wasm, stage_resolve};
-use tribute_passes::diagnostic::Diagnostic;
 use tribute::{SourceCst, TributeDatabaseImpl};
+use tribute_passes::diagnostic::Diagnostic;
 use tribute_passes::resolve::build_env;
 
 fn main() {
@@ -74,7 +74,8 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                     }
                 } else {
                     // Collect diagnostics from wasm lowering
-                    let wasm_diags: Vec<_> = stage_lower_to_wasm::accumulated::<Diagnostic>(db, source);
+                    let wasm_diags: Vec<_> =
+                        stage_lower_to_wasm::accumulated::<Diagnostic>(db, source);
                     if !wasm_diags.is_empty() {
                         println!("WebAssembly compilation errors:");
                         for diag in &wasm_diags {
