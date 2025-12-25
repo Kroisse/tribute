@@ -191,6 +191,10 @@ static SIMPLE_OPS: LazyLock<HashMap<Symbol, Instruction<'static>>> = LazyLock::n
         ("return", Instruction::Return),
         ("ref_is_null", Instruction::RefIsNull),
         ("array_len", Instruction::ArrayLen),
+        // i31ref (WasmGC fixnum)
+        ("ref_i31", Instruction::RefI31),
+        ("i31_get_s", Instruction::I31GetS),
+        ("i31_get_u", Instruction::I31GetU),
     ]
     .into_iter()
     .map(|(k, v)| (Symbol::new(k), v))
