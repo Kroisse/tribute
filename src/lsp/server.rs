@@ -322,8 +322,8 @@ pub fn serve(log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
 
     tracing_subscriber::registry()
-        .with(lsp_layer)
         .with(env_filter)
+        .with(lsp_layer)
         .init();
 
     tracing::info!(log_level, "Tribute LSP server starting");

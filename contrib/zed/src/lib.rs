@@ -17,11 +17,11 @@ impl zed::Extension for TributeExtension {
             .which("tribute")
             .unwrap_or_else(|| format!("{}/target/debug/tribute", worktree.root_path()));
 
-        // Read log level from LSP settings, default to "info"
+        // Read log level from LSP settings, default to "warn"
         let log_level = LspSettings::for_worktree(language_server_id.as_ref(), worktree)?
             .settings
             .and_then(|settings| settings.get("log_level").and_then(|v| v.as_str().map(String::from)))
-            .unwrap_or_else(|| "info".to_string());
+            .unwrap_or_else(|| "warn".to_string());
 
         Ok(zed::Command {
             command,
