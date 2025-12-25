@@ -45,6 +45,8 @@ trunk-ir = { path = "crates/trunk-ir" }
 unsynn = "0.3.0"
 quote = "1.0"
 wasm-encoder = "0.243.0"
+wasmtime = "40.0"
+wasmtime-wasi = "40.0"
 
 [package]
 name = "tribute"
@@ -74,3 +76,5 @@ tree-sitter-tribute.workspace = true
 [dev-dependencies]
 insta.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
