@@ -56,6 +56,10 @@ dialect! {
         /// `wasm.unreachable` operation: trap / unreachable code.
         fn unreachable();
 
+        /// `wasm.nop` operation: no-op placeholder for nil constants.
+        /// Preserves SSA form without runtime effect.
+        fn nop() -> result;
+
         // === Module-level Definitions ===
 
         /// `wasm.func` operation: define a function.
