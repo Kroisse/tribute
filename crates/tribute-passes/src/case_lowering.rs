@@ -14,7 +14,8 @@ use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{adt, arith, case, core, pat, ty};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
-    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region, SymbolVec, Type,
+    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region,
+    SymbolVec, Type,
 };
 use trunk_ir::{Symbol, Value, ValueDef};
 
@@ -88,7 +89,8 @@ impl<'db> CaseLowerer<'db> {
 
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
         // Register block arg types for value_type lookups
-        self.block_arg_types.insert(block.id(self.db), block.args(self.db).clone());
+        self.block_arg_types
+            .insert(block.id(self.db), block.args(self.db).clone());
 
         let mut new_ops = IdVec::new();
         for op in block.operations(self.db).iter().copied() {
@@ -120,18 +122,16 @@ impl<'db> CaseLowerer<'db> {
         }
 
         // Handle case.bind: replace with the bound value from pattern matching
-        if op.dialect(self.db) == case::DIALECT_NAME() && op.name(self.db) == case::BIND() {
-            if let Some(Attribute::Symbol(name)) = op.attributes(self.db).get(&Symbol::new("name"))
-            {
-                if let Some(&bound_value) = self.current_arm_bindings.get(name) {
-                    // Map case.bind result to the bound value (scrutinee or destructured value)
-                    let bind_result = op.result(self.db, 0);
-                    self.ctx.map_value(bind_result, bound_value);
-                    // Erase the case.bind operation - value is remapped
-                    return vec![];
-                }
-            }
-            // If binding not found, keep the operation (shouldn't happen in well-formed IR)
+        if op.dialect(self.db) == case::DIALECT_NAME()
+            && op.name(self.db) == case::BIND()
+            && let Some(Attribute::Symbol(name)) = op.attributes(self.db).get(&Symbol::new("name"))
+            && let Some(&bound_value) = self.current_arm_bindings.get(name)
+        {
+            // Map case.bind result to the bound value (scrutinee or destructured value)
+            let bind_result = op.result(self.db, 0);
+            self.ctx.map_value(bind_result, bound_value);
+            // Erase the case.bind operation - value is remapped
+            return vec![];
         }
 
         let new_regions = op
@@ -314,12 +314,12 @@ impl<'db> CaseLowerer<'db> {
     fn collect_bindings_recursive(&self, region: Region<'db>, bindings: &mut SymbolVec) {
         for block in region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter().copied() {
-                if op.dialect(self.db) == pat::DIALECT_NAME() && op.name(self.db) == pat::BIND() {
-                    if let Some(Attribute::Symbol(name)) =
+                if op.dialect(self.db) == pat::DIALECT_NAME()
+                    && op.name(self.db) == pat::BIND()
+                    && let Some(Attribute::Symbol(name)) =
                         op.attributes(self.db).get(&Symbol::new("name"))
-                    {
-                        bindings.push(*name);
-                    }
+                {
+                    bindings.push(*name);
                 }
                 // Recurse into nested regions (for variant fields, etc.)
                 for nested_region in op.regions(self.db).iter().copied() {
@@ -465,7 +465,13 @@ impl<'db> CaseLowerer<'db> {
             .build();
         ops.push(yield_op);
 
-        let block = Block::new(self.db, BlockId::fresh(), location, IdVec::new(), IdVec::from(ops));
+        let block = Block::new(
+            self.db,
+            BlockId::fresh(),
+            location,
+            IdVec::new(),
+            IdVec::from(ops),
+        );
         Region::new(self.db, location, IdVec::from(vec![block]))
     }
 

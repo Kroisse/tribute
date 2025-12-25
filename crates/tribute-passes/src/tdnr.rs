@@ -157,7 +157,8 @@ impl<'db> TdnrResolver<'db> {
     /// Resolve a block.
     fn resolve_block(&mut self, block: &Block<'db>) -> Block<'db> {
         // Register block arg types for get_value_type lookups
-        self.block_arg_types.insert(block.id(self.db), block.args(self.db).clone());
+        self.block_arg_types
+            .insert(block.id(self.db), block.args(self.db).clone());
 
         let new_ops: IdVec<Operation<'db>> = block
             .operations(self.db)

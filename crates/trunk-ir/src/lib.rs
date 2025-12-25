@@ -26,7 +26,9 @@ pub use paste;
 // Re-export smallvec for use in macros and external crates
 pub use smallvec;
 
-pub use ir::{Block, BlockBuilder, BlockId, Operation, QualifiedName, Region, Symbol, Value, ValueDef};
+pub use ir::{
+    Block, BlockBuilder, BlockId, Operation, QualifiedName, Region, Symbol, Value, ValueDef,
+};
 pub use location::{Location, PathId, Span, Spanned};
 pub use ops::{ConversionError, DialectOp};
 pub use types::{Attribute, Attrs, DialectType, Type};

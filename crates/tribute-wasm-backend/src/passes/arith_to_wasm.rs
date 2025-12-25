@@ -524,7 +524,7 @@ mod tests {
 
         // Add key attributes
         for (key, attr) in attrs.iter() {
-            if key.to_string() == "value" {
+            if *key == Symbol::new("value") {
                 parts.push(format!("value={}", format_attr(attr)));
             }
         }
@@ -680,7 +680,7 @@ mod tests {
         let i32_ty = core::I32::new(db).as_type();
 
         // Create arith.const for f64 operand
-        let float_const = arith::Const::f64(db, location, 3.14);
+        let float_const = arith::Const::f64(db, location, 3.5);
 
         // Create arith.trunc to truncate f64 -> i32
         let trunc = arith::trunc(db, location, float_const.result(db), i32_ty);
@@ -702,7 +702,7 @@ mod tests {
         let formatted = format_lowered_module(db, module);
 
         assert_snapshot!(formatted, @r###"
-        wasm.f64_const value=3.14 -> f64
+        wasm.f64_const value=3.5 -> f64
         wasm.i32_trunc_f64_s operands=1 -> i32
         "###);
     }

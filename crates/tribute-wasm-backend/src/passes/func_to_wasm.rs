@@ -183,7 +183,13 @@ mod tests {
         // Create func.return inside func.func body
         let func_return = Operation::of_name(db, location, "func.return").build();
 
-        let body_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_return]);
+        let body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![func_return],
+        );
         let body_region = Region::new(db, location, idvec![body_block]);
 
         // Create func.func

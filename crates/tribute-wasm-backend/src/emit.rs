@@ -625,7 +625,7 @@ fn collect_gc_types<'db>(
         let name = op.name(db);
         if name == Symbol::new("struct_new") {
             let attrs = op.attributes(db);
-            let Some(type_idx) = get_type_idx(&attrs, &mut type_idx_by_type, &mut next_type_idx)
+            let Some(type_idx) = get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx)
             else {
                 return Ok(());
             };
@@ -654,7 +654,7 @@ fn collect_gc_types<'db>(
             }
         } else if name == Symbol::new("struct_get") {
             let attrs = op.attributes(db);
-            let Some(type_idx) = get_type_idx(&attrs, &mut type_idx_by_type, &mut next_type_idx)
+            let Some(type_idx) = get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx)
             else {
                 return Ok(());
             };
@@ -680,7 +680,7 @@ fn collect_gc_types<'db>(
             }
         } else if name == Symbol::new("struct_set") {
             let attrs = op.attributes(db);
-            let Some(type_idx) = get_type_idx(&attrs, &mut type_idx_by_type, &mut next_type_idx)
+            let Some(type_idx) = get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx)
             else {
                 return Ok(());
             };
@@ -711,7 +711,7 @@ fn collect_gc_types<'db>(
             }
         } else if name == Symbol::new("array_new") || name == Symbol::new("array_new_default") {
             let attrs = op.attributes(db);
-            let Some(type_idx) = get_type_idx(&attrs, &mut type_idx_by_type, &mut next_type_idx)
+            let Some(type_idx) = get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx)
             else {
                 return Ok(());
             };
@@ -730,7 +730,7 @@ fn collect_gc_types<'db>(
             }
         } else if name == Symbol::new("array_get") {
             let attrs = op.attributes(db);
-            let Some(type_idx) = get_type_idx(&attrs, &mut type_idx_by_type, &mut next_type_idx)
+            let Some(type_idx) = get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx)
             else {
                 return Ok(());
             };
@@ -749,7 +749,7 @@ fn collect_gc_types<'db>(
             }
         } else if name == Symbol::new("array_set") {
             let attrs = op.attributes(db);
-            let Some(type_idx) = get_type_idx(&attrs, &mut type_idx_by_type, &mut next_type_idx)
+            let Some(type_idx) = get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx)
             else {
                 return Ok(());
             };
@@ -778,13 +778,13 @@ fn collect_gc_types<'db>(
             let attrs = op.attributes(db);
             // Try specific attribute names first, then fall back to generic "type" attribute
             let type_idx = if name == Symbol::new("ref_null") {
-                attr_u32(&attrs, ATTR_HEAP_TYPE())
+                attr_u32(attrs, ATTR_HEAP_TYPE())
                     .ok()
-                    .or_else(|| get_type_idx(&attrs, &mut type_idx_by_type, &mut next_type_idx))
+                    .or_else(|| get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx))
             } else {
-                attr_u32(&attrs, ATTR_TARGET_TYPE())
+                attr_u32(attrs, ATTR_TARGET_TYPE())
                     .ok()
-                    .or_else(|| get_type_idx(&attrs, &mut type_idx_by_type, &mut next_type_idx))
+                    .or_else(|| get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx))
             };
             let Some(type_idx) = type_idx else {
                 return Ok(());
@@ -1382,14 +1382,14 @@ fn emit_op<'db>(
     } else if name == Symbol::new("struct_new") {
         emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
-        let type_idx = get_type_idx_from_attrs(&attrs)
+        let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::StructNew(type_idx));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("struct_get") {
         emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
-        let type_idx = get_type_idx_from_attrs(&attrs)
+        let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         let field_idx = attr_u32(attrs, ATTR_FIELD_IDX())?;
         function.instruction(&Instruction::StructGet {
@@ -1400,7 +1400,7 @@ fn emit_op<'db>(
     } else if name == Symbol::new("struct_set") {
         emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
-        let type_idx = get_type_idx_from_attrs(&attrs)
+        let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         let field_idx = attr_u32(attrs, ATTR_FIELD_IDX())?;
         function.instruction(&Instruction::StructSet {
@@ -1410,53 +1410,53 @@ fn emit_op<'db>(
     } else if name == Symbol::new("array_new") {
         emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
-        let type_idx = get_type_idx_from_attrs(&attrs)
+        let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayNew(type_idx));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("array_new_default") {
         emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
-        let type_idx = get_type_idx_from_attrs(&attrs)
+        let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayNewDefault(type_idx));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("array_get") {
         emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
-        let type_idx = get_type_idx_from_attrs(&attrs)
+        let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayGet(type_idx));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("array_set") {
         emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
-        let type_idx = get_type_idx_from_attrs(&attrs)
+        let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArraySet(type_idx));
     } else if name == Symbol::new("ref_null") {
         let attrs = op.attributes(db);
-        let heap_type = attr_heap_type(&attrs, ATTR_HEAP_TYPE())
+        let heap_type = attr_heap_type(attrs, ATTR_HEAP_TYPE())
             .ok()
-            .or_else(|| get_type_idx_from_attrs(&attrs).map(HeapType::Concrete))
+            .or_else(|| get_type_idx_from_attrs(attrs).map(HeapType::Concrete))
             .ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
         function.instruction(&Instruction::RefNull(heap_type));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("ref_cast") {
         emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
-        let heap_type = attr_heap_type(&attrs, ATTR_TARGET_TYPE())
+        let heap_type = attr_heap_type(attrs, ATTR_TARGET_TYPE())
             .ok()
-            .or_else(|| get_type_idx_from_attrs(&attrs).map(HeapType::Concrete))
+            .or_else(|| get_type_idx_from_attrs(attrs).map(HeapType::Concrete))
             .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
         function.instruction(&Instruction::RefCastNullable(heap_type));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("ref_test") {
         emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
-        let heap_type = attr_heap_type(&attrs, ATTR_TARGET_TYPE())
+        let heap_type = attr_heap_type(attrs, ATTR_TARGET_TYPE())
             .ok()
-            .or_else(|| get_type_idx_from_attrs(&attrs).map(HeapType::Concrete))
+            .or_else(|| get_type_idx_from_attrs(attrs).map(HeapType::Concrete))
             .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
         function.instruction(&Instruction::RefTestNullable(heap_type));
         set_result_local(db, op, value_locals, function)?;
@@ -1477,16 +1477,23 @@ fn emit_operands<'db>(
 ) -> CompilationResult<()> {
     for value in operands.iter() {
         // Skip nil type values - they have no runtime representation
-        if let Some(ty) = value_type(db, *value) {
-            if is_nil_type(db, ty) {
-                debug!("  emit_operands: skipping nil type value {:?}", value.def(db));
-                continue;
-            }
+        if let Some(ty) = value_type(db, *value)
+            && is_nil_type(db, ty)
+        {
+            debug!(
+                "  emit_operands: skipping nil type value {:?}",
+                value.def(db)
+            );
+            continue;
         }
 
         // Try direct lookup first
         if let Some(index) = value_locals.get(value) {
-            debug!("  emit_operands: found value {:?} -> local {}", value.def(db), index);
+            debug!(
+                "  emit_operands: found value {:?} -> local {}",
+                value.def(db),
+                index
+            );
             function.instruction(&Instruction::LocalGet(*index));
             continue;
         }
@@ -1497,7 +1504,10 @@ fn emit_operands<'db>(
         // since parameters are always locals 0, 1, 2, etc.
         if let ValueDef::BlockArg(block_id) = value.def(db) {
             let index = value.index(db) as u32;
-            debug!("  emit_operands: BlockArg fallback {:?} -> local {}", block_id, index);
+            debug!(
+                "  emit_operands: BlockArg fallback {:?} -> local {}",
+                block_id, index
+            );
             function.instruction(&Instruction::LocalGet(index));
             continue;
         }
@@ -1808,7 +1818,13 @@ mod tests {
             .attr("type_idx", Attribute::IntBits(0))
             .build();
 
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![field0, field1, struct_new]);
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![field0, field1, struct_new],
+        );
         let region = Region::new(db, location, idvec![block]);
         core::Module::create(db, location, "test".into(), region)
     }
@@ -1856,7 +1872,13 @@ mod tests {
             .attr("type_idx", Attribute::IntBits(0))
             .build();
 
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![size, init, array_new]);
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![size, init, array_new],
+        );
         let region = Region::new(db, location, idvec![block]);
         core::Module::create(db, location, "test".into(), region)
     }

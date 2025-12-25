@@ -249,7 +249,13 @@ mod tests {
             .results(idvec![ptr_ty])
             .build();
 
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![string_const]);
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![string_const],
+        );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
     }

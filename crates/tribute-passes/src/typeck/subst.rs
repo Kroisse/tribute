@@ -50,7 +50,12 @@ impl<'db, 'a> SubstApplier<'db, 'a> {
     fn apply_to_module(&mut self, module: core::Module<'db>) -> core::Module<'db> {
         let body = module.body(self.db);
         let new_body = self.apply_to_region(&body);
-        core::Module::create(self.db, module.location(self.db), module.name(self.db), new_body)
+        core::Module::create(
+            self.db,
+            module.location(self.db),
+            module.name(self.db),
+            new_body,
+        )
     }
 
     fn apply_to_region(&mut self, region: &Region<'db>) -> Region<'db> {
@@ -79,7 +84,13 @@ impl<'db, 'a> SubstApplier<'db, 'a> {
             .map(|op| self.apply_to_operation(op))
             .collect();
 
-        Block::new(self.db, block.id(self.db), block.location(self.db), new_args, new_ops)
+        Block::new(
+            self.db,
+            block.id(self.db),
+            block.location(self.db),
+            new_args,
+            new_ops,
+        )
     }
 
     fn apply_to_operation(&mut self, op: &Operation<'db>) -> Operation<'db> {

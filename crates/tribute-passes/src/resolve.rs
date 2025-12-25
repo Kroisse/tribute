@@ -662,7 +662,13 @@ impl<'db> Resolver<'db> {
             .flat_map(|op| self.resolve_operation(op))
             .collect();
 
-        Block::new(self.db, block.id(self.db), block.location(self.db), new_args, new_ops)
+        Block::new(
+            self.db,
+            block.id(self.db),
+            block.location(self.db),
+            new_args,
+            new_ops,
+        )
     }
 
     /// Resolve a single operation.
@@ -1012,7 +1018,13 @@ impl<'db> Resolver<'db> {
             .flat_map(|(_, op)| self.resolve_operation(op))
             .collect();
 
-        Block::new(self.db, block.id(self.db), block.location(self.db), new_args, new_ops)
+        Block::new(
+            self.db,
+            block.id(self.db),
+            block.location(self.db),
+            new_args,
+            new_ops,
+        )
     }
 
     /// Recursively resolve regions and types within an operation.
@@ -1062,7 +1074,7 @@ impl<'db> Resolver<'db> {
         let location = op.location(self.db);
 
         // Special case: Nil is the unit value (built-in)
-        if name.to_string() == "Nil" {
+        if name == Symbol::new("Nil") {
             let nil_ty = core::Nil::new(self.db).as_type();
             // Create a unit value constant - arith.const with nil type produces no runtime value
             let const_op = arith::r#const(self.db, location, nil_ty, Attribute::Unit);

@@ -492,7 +492,8 @@ mod tests {
     // Test the new define_op! macro
     mod define_op_tests {
         use crate::{
-            Attribute, BlockId, DialectType, Location, PathId, Region, Span, dialect, dialect::core, idvec,
+            Attribute, BlockId, DialectType, Location, PathId, Region, Span, dialect,
+            dialect::core, idvec,
         };
         use salsa_test_macros::salsa_test;
 

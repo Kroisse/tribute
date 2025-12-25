@@ -210,10 +210,10 @@ impl<'db> TypeChecker<'db> {
         max_row_var_id: &mut Option<u64>,
     ) {
         // Check for type variable
-        if ty::is_var(self.db, ty) {
-            if let Some(Attribute::IntBits(id)) = ty.get_attr(self.db, Symbol::new("id")) {
-                *max_type_var_id = Some(max_type_var_id.map_or(*id, |current| current.max(*id)));
-            }
+        if ty::is_var(self.db, ty)
+            && let Some(Attribute::IntBits(id)) = ty.get_attr(self.db, Symbol::new("id"))
+        {
+            *max_type_var_id = Some(max_type_var_id.map_or(*id, |current| current.max(*id)));
         }
 
         // Check for effect row with tail variable
@@ -414,8 +414,7 @@ impl<'db> TypeChecker<'db> {
                 if let Some(func_ty_value) = func_type
                     && let Some(func_ty) = core::Func::from_type(self.db, func_ty_value)
                 {
-                    self.entry_block_arg_types =
-                        func_ty.params(self.db).iter().copied().collect();
+                    self.entry_block_arg_types = func_ty.params(self.db).iter().copied().collect();
                 } else {
                     // Fallback to entry block's declared arg types
                     self.entry_block_arg_types =
@@ -544,7 +543,12 @@ impl<'db> TypeChecker<'db> {
         // Both operands should have the same type as the result
         for (i, operand) in operands.iter().enumerate() {
             if let Some(op_type) = self.get_type(*operand) {
-                trace!(operand_index = i, ?op_type, ?result_type, "constraining arith binop operand");
+                trace!(
+                    operand_index = i,
+                    ?op_type,
+                    ?result_type,
+                    "constraining arith binop operand"
+                );
                 self.constrain_eq(op_type, result_type);
             } else {
                 trace!(
@@ -1063,7 +1067,13 @@ pub fn typecheck_module_per_function<'db>(
         }
     }
 
-    let new_block = Block::new(db, block.id(db), block.location(db), block.args(db).clone(), new_ops);
+    let new_block = Block::new(
+        db,
+        block.id(db),
+        block.location(db),
+        block.args(db).clone(),
+        new_ops,
+    );
     let new_body = Region::new(db, body.location(db), IdVec::from(vec![new_block]));
 
     core::Module::create(db, module.location(db), module.name(db), new_body)

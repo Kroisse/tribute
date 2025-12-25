@@ -224,11 +224,17 @@ impl<'db> TypeSolver<'db> {
     /// Solve a set of constraints.
     pub fn solve(&mut self, constraints: ConstraintSet<'db>) -> SolveResult<'db, ()> {
         let constraint_list = constraints.into_constraints();
-        debug!(num_constraints = constraint_list.len(), "solving constraints");
+        debug!(
+            num_constraints = constraint_list.len(),
+            "solving constraints"
+        );
         for constraint in constraint_list {
             self.solve_one(constraint)?;
         }
-        debug!(num_substitutions = self.type_subst.len(), "solved constraints");
+        debug!(
+            num_substitutions = self.type_subst.len(),
+            "solved constraints"
+        );
         Ok(())
     }
 

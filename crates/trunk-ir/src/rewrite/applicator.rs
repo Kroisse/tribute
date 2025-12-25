@@ -179,7 +179,13 @@ impl PatternApplicator {
             .flat_map(|op| self.rewrite_operation(db, op, ctx))
             .collect();
 
-        Block::new(db, block.id(db), block.location(db), block.args(db).clone(), new_ops)
+        Block::new(
+            db,
+            block.id(db),
+            block.location(db),
+            block.args(db).clone(),
+            new_ops,
+        )
     }
 
     /// Rewrite a single operation.

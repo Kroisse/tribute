@@ -68,29 +68,22 @@ pub fn analyze_intrinsics<'db>(
         iovec_allocations: &mut Vec<(u32, u32, u32)>,
         next_offset: &mut u32,
     ) {
-        let dialect = op.dialect(db);
-        let name = op.name(db);
-
         // Check for wasm.call to print_line
-        if dialect == wasm::DIALECT_NAME() && name == wasm::CALL() {
-            let attrs = op.attributes(db);
-            if let Some(Attribute::QualifiedName(callee)) = attrs.get(&Symbol::new("callee")) {
-                if callee.name() == Symbol::new("print_line") {
-                    // Check if argument has literal_len (is a string literal)
-                    if let Some(arg) = op.operands(db).first() {
-                        if let Some((ptr, len)) = get_literal_info(db, *arg) {
-                            *needs_fd_write = true;
+        if let Ok(call) = wasm::Call::from_operation(db, *op)
+            && let Attribute::QualifiedName(callee) = call.callee(db)
+            && callee.name() == Symbol::new("print_line")
+            && let Some(arg) = op.operands(db).first()
+            && let Some((ptr, len)) = get_literal_info(db, *arg)
+        {
+            *needs_fd_write = true;
 
-                            // Allocate iovec if not already done
-                            if !iovec_map.contains_key(&(ptr, len)) {
-                                let offset = align_to(*next_offset, 4);
-                                iovec_map.insert((ptr, len), offset);
-                                iovec_allocations.push((ptr, len, offset));
-                                *next_offset = offset + 8; // iovec is 8 bytes (ptr + len)
-                            }
-                        }
-                    }
-                }
+            // Allocate iovec if not already done
+            use std::collections::hash_map::Entry;
+            if let Entry::Vacant(e) = iovec_map.entry((ptr, len)) {
+                let offset = align_to(*next_offset, 4);
+                e.insert(offset);
+                iovec_allocations.push((ptr, len, offset));
+                *next_offset = offset + 8; // iovec is 8 bytes (ptr + len)
             }
         }
 
@@ -348,7 +341,13 @@ mod tests {
             )
             .build();
 
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![string_const, print_line]);
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![string_const, print_line],
+        );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
     }

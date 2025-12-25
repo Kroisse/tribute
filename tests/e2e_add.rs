@@ -19,14 +19,14 @@ fn test_add_compiles_and_runs() {
         let source_file = SourceCst::from_path(db, "add.trb", source_code.clone(), tree);
 
         // Run full compilation pipeline including WASM lowering
-        let wasm_binary = stage_lower_to_wasm(db, source_file)
-            .expect("WASM compilation failed");
+        let wasm_binary = stage_lower_to_wasm(db, source_file).expect("WASM compilation failed");
 
         // Execute with wasmtime (no WASI needed for add.trb)
         let engine = wasmtime::Engine::default();
         let module = wasmtime::Module::new(&engine, wasm_binary.bytes(db)).unwrap();
         let mut store = wasmtime::Store::new(&engine, ());
-        let instance = wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
+        let instance =
+            wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
 
         // Call main directly (add.trb doesn't use print_line, so no _start is generated)
         // Note: Tribute's Int type compiles to i64 in WASM

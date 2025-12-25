@@ -111,7 +111,13 @@ impl std::fmt::Debug for Module<'_> {
             }
 
             f.debug_struct(&format!("Module({})", name))
-                .field("operations", &debug_helpers::OperationList { db, ops: &operations })
+                .field(
+                    "operations",
+                    &debug_helpers::OperationList {
+                        db,
+                        ops: &operations,
+                    },
+                )
                 .finish()
         })
         .unwrap_or_else(|| write!(f, "Module(<no database attached>)"))
@@ -130,7 +136,10 @@ mod debug_helpers {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             let mut list = f.debug_list();
             for op in self.ops {
-                list.entry(&OpDebug { db: self.db, op: *op });
+                list.entry(&OpDebug {
+                    db: self.db,
+                    op: *op,
+                });
             }
             list.finish()
         }

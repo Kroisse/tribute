@@ -466,7 +466,7 @@ mod tests {
         proptest! {
             #[test]
             fn prop_never_empty(qn in arb_qualified_name()) {
-                prop_assert!(qn.len() >= 1);
+                prop_assert!(!qn.is_empty());
                 prop_assert!(!qn.to_segments().is_empty());
             }
 

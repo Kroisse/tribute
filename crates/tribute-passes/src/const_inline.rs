@@ -120,10 +120,10 @@ impl<'db> ConstInliner<'db> {
         let remapped_op = self.remap_operands(op);
 
         // Check if this is a resolved const reference
-        if self.is_resolved_const(&remapped_op) {
-            if let Some(inlined) = self.inline_const_ref(&remapped_op) {
-                return vec![inlined];
-            }
+        if self.is_resolved_const(&remapped_op)
+            && let Some(inlined) = self.inline_const_ref(&remapped_op)
+        {
+            return vec![inlined];
         }
 
         // Not a const reference - recursively process regions

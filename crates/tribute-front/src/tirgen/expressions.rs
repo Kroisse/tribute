@@ -2,8 +2,8 @@
 
 use tree_sitter::Node;
 use trunk_ir::{
-    Attribute, Block, BlockBuilder, BlockId, DialectOp, DialectType, IdVec, Operation, QualifiedName,
-    Region, Symbol, Type, Value,
+    Attribute, Block, BlockBuilder, BlockId, DialectOp, DialectType, IdVec, Operation,
+    QualifiedName, Region, Symbol, Type, Value,
     dialect::{ability, adt, arith, case, core, list, pat, src},
     idvec,
 };
@@ -814,7 +814,13 @@ fn ops_to_region<'db>(
     location: trunk_ir::Location<'db>,
     ops: Vec<Operation<'db>>,
 ) -> Region<'db> {
-    let block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::from(ops));
+    let block = Block::new(
+        db,
+        BlockId::fresh(),
+        location,
+        IdVec::new(),
+        IdVec::from(ops),
+    );
     Region::new(db, location, IdVec::from(vec![block]))
 }
 

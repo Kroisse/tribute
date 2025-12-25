@@ -352,10 +352,8 @@ impl<'db> WasmLowerer<'db> {
         if dialect == wasm::DIALECT_NAME() {
             self.observe_wasm_module_op(&op, name);
 
-            if name == wasm::FUNC() {
-                if let Ok(op_func) = wasm::Func::from_operation(self.db, op) {
-                    self.record_wasm_func_metadata(&op_func);
-                }
+            if let Ok(op_func) = wasm::Func::from_operation(self.db, op) {
+                self.record_wasm_func_metadata(&op_func);
             }
         }
 
@@ -366,7 +364,9 @@ impl<'db> WasmLowerer<'db> {
         // - "src": src.var operations kept for LSP (filtered above)
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
-            let allowed = ["wasm", "core", "type", "ty", "func", "adt", "case", "scf", "src"];
+            let allowed = [
+                "wasm", "core", "type", "ty", "func", "adt", "case", "scf", "src",
+            ];
             if !allowed.contains(&dialect_str.as_str()) {
                 warn!(
                     "Unhandled operation in lowering: {}.{} (this may cause emit errors)",

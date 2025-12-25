@@ -10,7 +10,9 @@
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::scf;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, idvec};
+use trunk_ir::{
+    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, idvec,
+};
 
 /// Lower scf dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -82,7 +84,13 @@ impl RewritePattern for ScfLoopPattern {
             .copied()
             .unwrap_or_else(|| core::Nil::new(db).as_type());
 
-        let block_body_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![wasm_loop]);
+        let block_body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            IdVec::new(),
+            idvec![wasm_loop],
+        );
         let block_body = Region::new(db, location, idvec![block_body_block]);
 
         let wasm_block = Operation::of_name(db, location, "wasm.block")
