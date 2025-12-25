@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
+use tracing::{debug, trace};
 use trunk_ir::{
     Attribute, DialectOp, DialectType, Operation, Region, Symbol, Type, Value,
     dialect::{ability, adt, arith, case, core, func, list, pat, src, ty},
@@ -90,6 +91,7 @@ impl<'db> TypeChecker<'db> {
 
     /// Add a type equality constraint.
     pub fn constrain_eq(&mut self, t1: Type<'db>, t2: Type<'db>) {
+        trace!(?t1, ?t2, "adding type constraint");
         self.constraints.add_type_eq(t1, t2);
     }
 
@@ -125,64 +127,97 @@ impl<'db> TypeChecker<'db> {
 
     /// Check a module.
     pub fn check_module(&mut self, module: &core::Module<'db>) {
-        self.seed_row_var_counter(module);
+        self.seed_var_counters(module);
         let body = module.body(self.db);
         self.check_region(&body);
     }
 
-    fn seed_row_var_counter(&mut self, module: &core::Module<'db>) {
+    fn seed_var_counters(&mut self, module: &core::Module<'db>) {
         let body = module.body(self.db);
-        let mut max_id: Option<u64> = None;
-        self.collect_row_vars_in_region(&body, &mut max_id);
-        if let Some(id) = max_id {
+        let mut max_type_var_id: Option<u64> = None;
+        let mut max_row_var_id: Option<u64> = None;
+        self.collect_vars_in_region(&body, &mut max_type_var_id, &mut max_row_var_id);
+
+        if let Some(id) = max_type_var_id {
+            self.next_type_var = self.next_type_var.max(id + 1);
+        }
+        if let Some(id) = max_row_var_id {
             self.next_row_var = self.next_row_var.max(id + 1);
         }
     }
 
-    fn collect_row_vars_in_region(&self, region: &Region<'db>, max_id: &mut Option<u64>) {
+    fn collect_vars_in_region(
+        &self,
+        region: &Region<'db>,
+        max_type_var_id: &mut Option<u64>,
+        max_row_var_id: &mut Option<u64>,
+    ) {
         for block in region.blocks(self.db).iter() {
             for &arg in block.args(self.db).iter() {
-                self.collect_row_vars_in_type(arg, max_id);
+                self.collect_vars_in_type(arg, max_type_var_id, max_row_var_id);
             }
             for op in block.operations(self.db).iter() {
-                self.collect_row_vars_in_operation(op, max_id);
+                self.collect_vars_in_operation(op, max_type_var_id, max_row_var_id);
             }
         }
     }
 
-    fn collect_row_vars_in_operation(&self, op: &Operation<'db>, max_id: &mut Option<u64>) {
+    fn collect_vars_in_operation(
+        &self,
+        op: &Operation<'db>,
+        max_type_var_id: &mut Option<u64>,
+        max_row_var_id: &mut Option<u64>,
+    ) {
         for &ty in op.results(self.db).iter() {
-            self.collect_row_vars_in_type(ty, max_id);
+            self.collect_vars_in_type(ty, max_type_var_id, max_row_var_id);
         }
         for attr in op.attributes(self.db).values() {
-            self.collect_row_vars_in_attr(attr, max_id);
+            self.collect_vars_in_attr(attr, max_type_var_id, max_row_var_id);
         }
         for region in op.regions(self.db).iter() {
-            self.collect_row_vars_in_region(region, max_id);
+            self.collect_vars_in_region(region, max_type_var_id, max_row_var_id);
         }
     }
 
-    fn collect_row_vars_in_type(&self, ty: Type<'db>, max_id: &mut Option<u64>) {
+    fn collect_vars_in_type(
+        &self,
+        ty: Type<'db>,
+        max_type_var_id: &mut Option<u64>,
+        max_row_var_id: &mut Option<u64>,
+    ) {
+        // Check for type variable
+        if ty::is_var(self.db, ty) {
+            if let Some(Attribute::IntBits(id)) = ty.get_attr(self.db, Symbol::new("id")) {
+                *max_type_var_id = Some(max_type_var_id.map_or(*id, |current| current.max(*id)));
+            }
+        }
+
+        // Check for effect row with tail variable
         if let Some(effect_row) = core::EffectRowType::from_type(self.db, ty)
             && let Some(tail) = effect_row.tail_var(self.db)
         {
-            *max_id = Some(max_id.map_or(tail, |current| current.max(tail)));
+            *max_row_var_id = Some(max_row_var_id.map_or(tail, |current| current.max(tail)));
         }
 
         for &param in ty.params(self.db).iter() {
-            self.collect_row_vars_in_type(param, max_id);
+            self.collect_vars_in_type(param, max_type_var_id, max_row_var_id);
         }
         for attr in ty.attrs(self.db).values() {
-            self.collect_row_vars_in_attr(attr, max_id);
+            self.collect_vars_in_attr(attr, max_type_var_id, max_row_var_id);
         }
     }
 
-    fn collect_row_vars_in_attr(&self, attr: &Attribute<'db>, max_id: &mut Option<u64>) {
+    fn collect_vars_in_attr(
+        &self,
+        attr: &Attribute<'db>,
+        max_type_var_id: &mut Option<u64>,
+        max_row_var_id: &mut Option<u64>,
+    ) {
         match attr {
-            Attribute::Type(ty) => self.collect_row_vars_in_type(*ty, max_id),
+            Attribute::Type(ty) => self.collect_vars_in_type(*ty, max_type_var_id, max_row_var_id),
             Attribute::List(items) => {
                 for item in items {
-                    self.collect_row_vars_in_attr(item, max_id);
+                    self.collect_vars_in_attr(item, max_type_var_id, max_row_var_id);
                 }
             }
             _ => {}
@@ -192,6 +227,17 @@ impl<'db> TypeChecker<'db> {
     /// Check a region (sequence of blocks).
     pub fn check_region(&mut self, region: &Region<'db>) {
         for block in region.blocks(self.db).iter() {
+            // Record block argument types (e.g., function parameters)
+            let num_args = block.args(self.db).len();
+            if num_args > 0 {
+                trace!(num_args, "recording block arguments");
+            }
+            for (i, &arg_ty) in block.args(self.db).iter().enumerate() {
+                let arg_value = block.arg(self.db, i);
+                trace!(?arg_value, ?arg_ty, "recording block arg type");
+                self.record_type(arg_value, arg_ty);
+            }
+
             for op in block.operations(self.db).iter() {
                 self.check_operation(op);
             }
@@ -204,6 +250,7 @@ impl<'db> TypeChecker<'db> {
     pub fn check_operation(&mut self, op: &Operation<'db>) {
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
+        trace!(%dialect, %name, "checking operation");
 
         // Dispatch by dialect first, then by operation name
         // Use cached static symbols to avoid interner write locks
@@ -447,6 +494,8 @@ impl<'db> TypeChecker<'db> {
         for operand in operands.iter() {
             if let Some(op_type) = self.get_type(*operand) {
                 self.constrain_eq(op_type, result_type);
+            } else {
+                trace!(?operand, "operand type not found in value_types");
             }
         }
 
