@@ -18,6 +18,8 @@ crate::symbols! {
 
 dialect! {
     mod r#type {
+        // === Type definition operations ===
+
         /// `type.struct` operation: defines a struct type.
         ///
         /// Attributes:
@@ -41,6 +43,16 @@ dialect! {
         /// - `operations`: Operation signatures as [(name, signature)] pairs
         #[attr(sym_name, operations)]
         fn ability() -> result;
+
+        // === Tribute language primitive types ===
+
+        /// `type.int` type: arbitrary precision integer (Fixnum/Bignum hybrid).
+        /// At runtime, represented as i31ref (fixnum) or BigInt struct (bignum).
+        type int;
+
+        /// `type.nat` type: arbitrary precision natural number (non-negative).
+        /// Semantically a subset of Int, but may have optimized representation.
+        type nat;
     }
 }
 
@@ -94,6 +106,12 @@ inventory::submit! {
 
 // type.error -> "<error>"
 inventory::submit! { Printable::implement("type", "error", |_, _, f| f.write_str("<error>")) }
+
+// type.int -> "Int"
+inventory::submit! { Printable::implement("type", "int", |_, _, f| f.write_str("Int")) }
+
+// type.nat -> "Nat"
+inventory::submit! { Printable::implement("type", "nat", |_, _, f| f.write_str("Nat")) }
 
 /// Convert a variable ID to a readable name (a, b, c, ..., t0, t1, ...).
 fn fmt_var_id(f: &mut Formatter<'_>, id: u64) -> std::fmt::Result {

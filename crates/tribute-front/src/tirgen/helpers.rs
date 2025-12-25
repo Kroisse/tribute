@@ -6,7 +6,8 @@ use std::hash::{Hash, Hasher};
 use ropey::Rope;
 use tree_sitter::{Node, Tree};
 use trunk_ir::Span;
-use trunk_ir::{QualifiedName, Symbol};
+use trunk_ir::dialect::{arith, ty};
+use trunk_ir::{DialectType, Location, QualifiedName, Symbol};
 
 // =============================================================================
 // Parsed CST (Salsa-cacheable)
@@ -89,4 +90,19 @@ pub fn node_text<'a>(node: &Node, source: &'a Rope) -> Cow<'a, str> {
 /// Create a Span from a tree-sitter Node.
 pub fn span_from_node(node: &Node) -> Span {
     Span::new(node.start_byte(), node.end_byte())
+}
+
+// =============================================================================
+// Tribute-specific IR Helpers
+// =============================================================================
+
+/// Create an arbitrary precision Int constant operation.
+///
+/// The value is stored as i64 for now (will be promoted to BigInt if needed at runtime).
+pub fn int_const<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    value: i64,
+) -> arith::Const<'db> {
+    arith::r#const(db, location, ty::Int::new(db).as_type(), value.into())
 }

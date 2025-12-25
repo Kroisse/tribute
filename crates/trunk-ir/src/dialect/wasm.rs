@@ -394,6 +394,18 @@ dialect! {
         #[attr(target_type)]
         fn ref_test(r#ref) -> result;
 
+        // === WasmGC: i31ref (Fixnum) ===
+
+        /// `wasm.ref_i31` operation: create i31ref from i32.
+        /// The i32 value must fit in 31 bits (range: [-2^30, 2^30)).
+        fn ref_i31(value) -> result;
+
+        /// `wasm.i31_get_s` operation: extract signed i32 from i31ref.
+        fn i31_get_s(r#ref) -> result;
+
+        /// `wasm.i31_get_u` operation: extract unsigned i32 from i31ref.
+        fn i31_get_u(r#ref) -> result;
+
         // === Type Conversions (Integer) ===
 
         /// `wasm.i32_wrap_i64` operation: wrap i64 to i32 (truncate).
@@ -478,5 +490,28 @@ dialect! {
 
         /// `wasm.f64_reinterpret_i64` operation: reinterpret i64 bits as f64.
         fn f64_reinterpret_i64(operand) -> result;
+
+        // === WasmGC Types ===
+
+        /// `wasm.anyref` type: top reference type (all GC references).
+        type anyref;
+
+        /// `wasm.eqref` type: reference types supporting equality comparison.
+        type eqref;
+
+        /// `wasm.i31ref` type: 31-bit unboxed integer reference (fixnum).
+        type i31ref;
+
+        /// `wasm.structref` type: reference to any struct.
+        type structref;
+
+        /// `wasm.arrayref` type: reference to any array.
+        type arrayref;
+
+        /// `wasm.funcref` type: reference to any function.
+        type funcref;
+
+        /// `wasm.externref` type: external reference (host objects).
+        type externref;
     }
 }

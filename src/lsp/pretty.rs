@@ -15,13 +15,14 @@ pub fn print_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func, I64, Nil};
+    use trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func, Nil};
+    use trunk_ir::dialect::ty::Int;
     use trunk_ir::{IdVec, Symbol, idvec};
 
     #[salsa_test]
     fn test_print_basic_types(db: &salsa::DatabaseImpl) {
-        // Int (i64)
-        let int_ty = *I64::new(db);
+        // Int (arbitrary precision)
+        let int_ty = *Int::new(db);
         assert_eq!(print_type(db, int_ty), "Int");
 
         // Nil
@@ -31,7 +32,7 @@ mod tests {
 
     #[salsa_test]
     fn test_print_function_type(db: &salsa::DatabaseImpl) {
-        let int_ty = *I64::new(db);
+        let int_ty = *Int::new(db);
 
         // fn(Int, Int) -> Int
         let func_ty = *Func::new(db, idvec![int_ty, int_ty], int_ty);
