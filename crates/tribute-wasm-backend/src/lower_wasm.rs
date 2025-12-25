@@ -11,6 +11,7 @@ use crate::plan::{MainExports, MemoryPlan};
 
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
+use trunk_ir::dialect::src;
 use trunk_ir::dialect::wasm;
 
 use crate::passes::const_to_wasm::ConstAnalysis;
@@ -76,6 +77,10 @@ fn check_function_body<'db>(db: &'db dyn salsa::Database, func_op: &Operation<'d
         for block in body_region.blocks(db).iter() {
             for op in block.operations(db).iter() {
                 let dialect = op.dialect(db);
+                // Skip src.var - kept for LSP hover support, no runtime effect
+                if dialect == src::DIALECT_NAME() && op.name(db) == src::VAR() {
+                    continue;
+                }
                 if dialect != Symbol::new("wasm") {
                     error!(
                         "Found non-wasm operation in function body: {}.{}",
@@ -335,6 +340,12 @@ impl<'db> WasmLowerer<'db> {
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
 
+        // Skip src.var operations - they're kept for LSP hover support but have no runtime effect.
+        // The resolver marks them as resolved_local and maps their results to actual values.
+        if dialect == src::DIALECT_NAME() && name == src::VAR() {
+            return;
+        }
+
         // Handle wasm dialect metadata collection
         if dialect == wasm::DIALECT_NAME() {
             self.observe_wasm_module_op(&op, name);
@@ -350,9 +361,10 @@ impl<'db> WasmLowerer<'db> {
         // Note: Some dialects are allowed for edge cases:
         // - "func": func.call_indirect (closure support pending)
         // - "adt": adt.string_const (handled by const_to_wasm pass)
+        // - "src": src.var operations kept for LSP (filtered above)
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
-            let allowed = ["wasm", "core", "type", "ty", "func", "adt", "case", "scf"];
+            let allowed = ["wasm", "core", "type", "ty", "func", "adt", "case", "scf", "src"];
             if !allowed.contains(&dialect_str.as_str()) {
                 warn!(
                     "Unhandled operation in lowering: {}.{} (this may cause emit errors)",

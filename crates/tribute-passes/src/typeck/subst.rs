@@ -58,7 +58,7 @@ fn apply_subst_to_block<'db>(
         .map(|op| apply_subst_to_operation(db, op, subst))
         .collect();
 
-    Block::new(db, block.location(db), new_args, new_ops)
+    Block::new(db, block.id(db), block.location(db), new_args, new_ops)
 }
 
 /// Apply type substitution to an operation.
@@ -149,7 +149,7 @@ mod tests {
     use crate::typeck::TypeChecker;
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::{arith, core, func};
-    use trunk_ir::{Attribute, Location, PathId, Span, idvec};
+    use trunk_ir::{Attribute, BlockId, Location, PathId, Span, idvec};
 
     /// Helper to create a module with an operation that has type variable 42 as result.
     #[salsa::tracked]
@@ -165,7 +165,7 @@ mod tests {
             .build();
 
         // Build block containing the operation
-        let block = Block::new(db, location, idvec![], idvec![op]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
 
         // Build region containing the block
         let region = Region::new(db, location, idvec![block]);
@@ -188,7 +188,7 @@ mod tests {
             .build();
 
         // Build block containing the operation
-        let block = Block::new(db, location, idvec![], idvec![op]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
 
         // Build region containing the block
         let region = Region::new(db, location, idvec![block]);
@@ -211,7 +211,7 @@ mod tests {
             .build();
 
         // Build block containing the operation
-        let block = Block::new(db, location, idvec![], idvec![op]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
 
         // Build region containing the block
         let region = Region::new(db, location, idvec![block]);

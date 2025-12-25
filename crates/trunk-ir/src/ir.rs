@@ -138,6 +138,31 @@ impl std::fmt::Display for Symbol {
 pub use crate::qualified_name::QualifiedName;
 
 // ============================================================================
+// Block Identity
+// ============================================================================
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Global counter for generating unique block IDs.
+static NEXT_BLOCK_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Stable block identifier that survives block recreation.
+///
+/// Unlike `Block` (which is a Salsa tracked struct with identity tied to creation),
+/// `BlockId` is a simple u64 that can be preserved when a block is recreated
+/// during IR transformations. This allows block arguments to maintain stable
+/// identity across rewrites.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct BlockId(pub u64);
+
+impl BlockId {
+    /// Generate a fresh unique block ID.
+    pub fn fresh() -> Self {
+        BlockId(NEXT_BLOCK_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+// ============================================================================
 // SSA Values
 // ============================================================================
 
@@ -145,7 +170,7 @@ pub use crate::qualified_name::QualifiedName;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum ValueDef<'db> {
     OpResult(Operation<'db>),
-    BlockArg(Block<'db>),
+    BlockArg(BlockId),
 }
 
 /// SSA value: a definition point plus an index.
@@ -232,6 +257,8 @@ impl<'db> Operation<'db> {
 
 #[salsa::tracked(debug)]
 pub struct Block<'db> {
+    /// Stable identifier that survives block recreation during IR transformations.
+    pub id: BlockId,
     pub location: Location<'db>,
     #[returns(ref)]
     pub args: IdVec<Type<'db>>,
@@ -240,8 +267,10 @@ pub struct Block<'db> {
 }
 
 impl<'db> Block<'db> {
+    /// Get a Value representing block argument at the given index.
+    /// Uses BlockId for stable identity across block recreations.
     pub fn arg(self, db: &'db dyn salsa::Database, index: usize) -> Value<'db> {
-        Value::new(db, ValueDef::BlockArg(self), index)
+        Value::new(db, ValueDef::BlockArg(self.id(db)), index)
     }
 }
 
@@ -367,19 +396,28 @@ impl<'db> OperationBuilder<'db> {
 /// Builder for constructing Block instances.
 pub struct BlockBuilder<'db> {
     db: &'db dyn salsa::Database,
+    id: BlockId,
     location: Location<'db>,
     args: IdVec<Type<'db>>,
     operations: IdVec<Operation<'db>>,
 }
 
 impl<'db> BlockBuilder<'db> {
+    /// Create a new BlockBuilder with a fresh BlockId.
     pub fn new(db: &'db dyn salsa::Database, location: Location<'db>) -> Self {
         Self {
             db,
+            id: BlockId::fresh(),
             location,
             args: Default::default(),
             operations: Default::default(),
         }
+    }
+
+    /// Set a specific BlockId (used when recreating a block to preserve identity).
+    pub fn id(mut self, id: BlockId) -> Self {
+        self.id = id;
+        self
     }
 
     pub fn args(mut self, args: IdVec<Type<'db>>) -> Self {
@@ -399,7 +437,7 @@ impl<'db> BlockBuilder<'db> {
     }
 
     pub fn build(self) -> Block<'db> {
-        Block::new(self.db, self.location, self.args, self.operations)
+        Block::new(self.db, self.id, self.location, self.args, self.operations)
     }
 }
 
@@ -454,7 +492,7 @@ mod tests {
     // Test the new define_op! macro
     mod define_op_tests {
         use crate::{
-            Attribute, DialectType, Location, PathId, Region, Span, dialect, dialect::core, idvec,
+            Attribute, BlockId, DialectType, Location, PathId, Region, Span, dialect, dialect::core, idvec,
         };
         use salsa_test_macros::salsa_test;
 
@@ -548,7 +586,7 @@ mod tests {
             let path = PathId::new(db, "file:///test.trb".to_owned());
             let location = Location::new(path, Span::new(0, 0));
 
-            let block = crate::Block::new(db, location, idvec![], idvec![]);
+            let block = crate::Block::new(db, BlockId::fresh(), location, idvec![], idvec![]);
             let region = Region::new(db, location, idvec![block]);
 
             container(db, location, Attribute::String("test".to_string()), region)

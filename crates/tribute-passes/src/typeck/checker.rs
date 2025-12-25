@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
-use tracing::{debug, trace};
+use tracing::trace;
 use trunk_ir::{
     Attribute, DialectOp, DialectType, Operation, Region, Symbol, Type, Value,
     dialect::{ability, adt, arith, case, core, func, list, pat, src, ty},
@@ -50,6 +50,10 @@ pub struct TypeChecker<'db> {
     next_row_var: u64,
     /// Current effect row (effects performed by current expression).
     current_effect: EffectRow<'db>,
+    /// Entry block argument types for the current function being checked.
+    /// Used as fallback for block argument lookups when the resolver creates
+    /// stale block references (issue #43).
+    entry_block_arg_types: Vec<Type<'db>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -62,6 +66,7 @@ impl<'db> TypeChecker<'db> {
             next_type_var: 0,
             next_row_var: 0,
             current_effect: EffectRow::empty(),
+            entry_block_arg_types: Vec::new(),
         }
     }
 
@@ -85,8 +90,27 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Get the type of a value.
+    ///
+    /// For block arguments, this also tries a fallback lookup by argument index
+    /// to handle stale block references created by the resolver (issue #43).
     pub fn get_type(&self, value: Value<'db>) -> Option<Type<'db>> {
-        self.value_types.get(&value).copied()
+        // Direct lookup first
+        if let Some(ty) = self.value_types.get(&value).copied() {
+            return Some(ty);
+        }
+
+        // For BlockArg, try entry block arg types as fallback.
+        // This handles the case where the resolver creates block arguments
+        // that reference old blocks, but the actual types are recorded for
+        // the new blocks created during resolution.
+        if let trunk_ir::ValueDef::BlockArg(_) = value.def(self.db) {
+            let index = value.index(self.db);
+            if index < self.entry_block_arg_types.len() {
+                return Some(self.entry_block_arg_types[index]);
+            }
+        }
+
+        None
     }
 
     /// Add a type equality constraint.
@@ -378,11 +402,38 @@ impl<'db> TypeChecker<'db> {
         let results = op.results(self.db);
         let func_type = results.first().copied();
 
+        // Save current entry block arg types (for nested functions)
+        let saved_entry_args = std::mem::take(&mut self.entry_block_arg_types);
+
         // Check the body
         let regions = op.regions(self.db);
         if let Some(body) = regions.first() {
+            // Set up entry block argument types from function signature or entry block
+            if let Some(entry_block) = body.blocks(self.db).first() {
+                // Get parameter types from function type if available
+                if let Some(func_ty_value) = func_type
+                    && let Some(func_ty) = core::Func::from_type(self.db, func_ty_value)
+                {
+                    self.entry_block_arg_types =
+                        func_ty.params(self.db).iter().copied().collect();
+                } else {
+                    // Fallback to entry block's declared arg types
+                    self.entry_block_arg_types =
+                        entry_block.args(self.db).iter().copied().collect();
+                }
+
+                // Record types for the actual entry block arguments (for direct lookups)
+                for (i, &arg_ty) in entry_block.args(self.db).iter().enumerate() {
+                    let arg_value = entry_block.arg(self.db, i);
+                    self.record_type(arg_value, arg_ty);
+                }
+            }
+
             self.check_region(body);
         }
+
+        // Restore entry block arg types
+        self.entry_block_arg_types = saved_entry_args;
 
         // Record result type
         if let Some(ty) = func_type {
@@ -491,11 +542,17 @@ impl<'db> TypeChecker<'db> {
             .unwrap_or_else(|| self.fresh_type_var());
 
         // Both operands should have the same type as the result
-        for operand in operands.iter() {
+        for (i, operand) in operands.iter().enumerate() {
             if let Some(op_type) = self.get_type(*operand) {
+                trace!(operand_index = i, ?op_type, ?result_type, "constraining arith binop operand");
                 self.constrain_eq(op_type, result_type);
             } else {
-                trace!(?operand, "operand type not found in value_types");
+                trace!(
+                    operand_index = i,
+                    ?operand,
+                    entry_block_arg_count = self.entry_block_arg_types.len(),
+                    "operand type not found - fallback may have failed"
+                );
             }
         }
 
@@ -1006,7 +1063,7 @@ pub fn typecheck_module_per_function<'db>(
         }
     }
 
-    let new_block = Block::new(db, block.location(db), block.args(db).clone(), new_ops);
+    let new_block = Block::new(db, block.id(db), block.location(db), block.args(db).clone(), new_ops);
     let new_body = Region::new(db, body.location(db), IdVec::from(vec![new_block]));
 
     core::Module::create(db, module.location(db), module.name(db), new_body)

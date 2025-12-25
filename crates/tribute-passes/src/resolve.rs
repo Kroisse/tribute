@@ -638,7 +638,7 @@ impl<'db> Resolver<'db> {
             .flat_map(|op| self.resolve_operation(op))
             .collect();
 
-        Block::new(self.db, block.location(self.db), new_args, new_ops)
+        Block::new(self.db, block.id(self.db), block.location(self.db), new_args, new_ops)
     }
 
     /// Resolve a single operation.
@@ -951,7 +951,7 @@ impl<'db> Resolver<'db> {
         for (i, (name, op)) in param_declarations.iter().enumerate() {
             if i < block_args.len() {
                 // Create block argument value
-                let block_arg = Value::new(self.db, ValueDef::BlockArg(*block), i);
+                let block_arg = Value::new(self.db, ValueDef::BlockArg(block.id(self.db)), i);
                 let param_ty = block_args[i];
 
                 // Add to local scope
@@ -983,7 +983,7 @@ impl<'db> Resolver<'db> {
             .flat_map(|(_, op)| self.resolve_operation(op))
             .collect();
 
-        Block::new(self.db, block.location(self.db), new_args, new_ops)
+        Block::new(self.db, block.id(self.db), block.location(self.db), new_args, new_ops)
     }
 
     /// Remap operands using the current value map.
@@ -1229,10 +1229,15 @@ impl<'db> Resolver<'db> {
         }?;
 
         match binding {
-            Binding::Function { path, .. } => {
+            Binding::Function { path, ty: func_ty } => {
                 // Direct function call
+                // Use the callee function's return type instead of the src.call's type variable
+                // Also resolve the return type (it may be src.type that needs resolution)
+                let call_result_ty = core::Func::from_type(self.db, *func_ty)
+                    .map(|f| self.resolve_type(f.result(self.db)))
+                    .unwrap_or(result_ty);
                 // func::call(db, location, args, result_type, callee)
-                let new_op = func::call(self.db, location, args, result_ty, path.clone());
+                let new_op = func::call(self.db, location, args, call_result_ty, path.clone());
                 let new_operation = new_op.as_operation();
 
                 let old_result = op.result(self.db, 0);

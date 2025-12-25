@@ -147,7 +147,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::core;
     use trunk_ir::{
-        Block, DialectType, Location, PathId, QualifiedName, Region, Span, Symbol, idvec,
+        Block, BlockId, DialectType, Location, PathId, QualifiedName, Region, Span, Symbol, idvec,
     };
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
@@ -169,7 +169,7 @@ mod tests {
             .results(idvec![i32_ty])
             .build();
 
-        let block = Block::new(db, location, idvec![], idvec![func_call]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_call]);
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
     }
@@ -183,7 +183,7 @@ mod tests {
         // Create func.return inside func.func body
         let func_return = Operation::of_name(db, location, "func.return").build();
 
-        let body_block = Block::new(db, location, idvec![], idvec![func_return]);
+        let body_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_return]);
         let body_region = Region::new(db, location, idvec![body_block]);
 
         // Create func.func
@@ -193,7 +193,7 @@ mod tests {
             .region(body_region)
             .build();
 
-        let block = Block::new(db, location, idvec![], idvec![func_func]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_func]);
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
     }

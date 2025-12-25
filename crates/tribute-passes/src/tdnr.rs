@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::func;
 use trunk_ir::{
-    Attribute, Block, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value,
+    Attribute, Block, BlockId, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value,
 };
 
 // =============================================================================
@@ -113,6 +113,8 @@ pub struct TdnrResolver<'db> {
     registry: MethodRegistry<'db>,
     /// Maps old values to their replacements.
     value_map: HashMap<Value<'db>, Value<'db>>,
+    /// Block argument types indexed by BlockId
+    block_arg_types: HashMap<BlockId, IdVec<Type<'db>>>,
 }
 
 impl<'db> TdnrResolver<'db> {
@@ -122,6 +124,7 @@ impl<'db> TdnrResolver<'db> {
             db,
             registry,
             value_map: HashMap::new(),
+            block_arg_types: HashMap::new(),
         }
     }
 
@@ -161,6 +164,9 @@ impl<'db> TdnrResolver<'db> {
 
     /// Resolve a block.
     fn resolve_block(&mut self, block: &Block<'db>) -> Block<'db> {
+        // Register block arg types for get_value_type lookups
+        self.block_arg_types.insert(block.id(self.db), block.args(self.db).clone());
+
         let new_ops: IdVec<Operation<'db>> = block
             .operations(self.db)
             .iter()
@@ -169,6 +175,7 @@ impl<'db> TdnrResolver<'db> {
 
         Block::new(
             self.db,
+            block.id(self.db),
             block.location(self.db),
             block.args(self.db).clone(),
             new_ops,
@@ -294,11 +301,10 @@ impl<'db> TdnrResolver<'db> {
                 let index = value.index(self.db);
                 results.get(index).copied()
             }
-            ValueDef::BlockArg(block) => {
-                let args = block.args(self.db);
-                let index = value.index(self.db);
-                args.get(index).copied()
-            }
+            ValueDef::BlockArg(block_id) => self
+                .block_arg_types
+                .get(&block_id)
+                .and_then(|args| args.get(value.index(self.db)).copied()),
         }
     }
 }

@@ -29,7 +29,7 @@ pub struct ApplyResult<'db> {
 /// ```
 /// # use salsa::Database;
 /// # use salsa::DatabaseImpl;
-/// # use trunk_ir::{Block, Location, Operation, PathId, Region, Span, Symbol, idvec};
+/// # use trunk_ir::{Block, BlockId, Location, Operation, PathId, Region, Span, Symbol, idvec};
 /// # use trunk_ir::dialect::core::Module;
 /// use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 ///
@@ -53,7 +53,7 @@ pub struct ApplyResult<'db> {
 /// #     let path = PathId::new(db, "file:///test.trb".to_owned());
 /// #     let location = Location::new(path, Span::new(0, 0));
 /// #     let op = Operation::of_name(db, location, "test.source").build();
-/// #     let block = Block::new(db, location, idvec![], idvec![op]);
+/// #     let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
 /// #     let region = Region::new(db, location, idvec![block]);
 /// #     Module::create(db, location, Symbol::new("test"), region)
 /// # }
@@ -179,7 +179,7 @@ impl PatternApplicator {
             .flat_map(|op| self.rewrite_operation(db, op, ctx))
             .collect();
 
-        Block::new(db, block.location(db), block.args(db).clone(), new_ops)
+        Block::new(db, block.id(db), block.location(db), block.args(db).clone(), new_ops)
     }
 
     /// Rewrite a single operation.
@@ -270,7 +270,7 @@ impl Default for PatternApplicator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Attribute, Location, PathId, Span, idvec};
+    use crate::{Attribute, BlockId, Location, PathId, Span, idvec};
     use salsa_test_macros::salsa_test;
 
     /// A simple test pattern that rewrites `test.source` → `test.target`.
@@ -302,7 +302,7 @@ mod tests {
         let op = Operation::of_name(db, location, "test.source")
             .attr("value", Attribute::IntBits(42))
             .build();
-        let block = Block::new(db, location, idvec![], idvec![op]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
     }
@@ -314,7 +314,7 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
 
         let op = Operation::of_name(db, location, "other.op").build();
-        let block = Block::new(db, location, idvec![], idvec![op]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
     }

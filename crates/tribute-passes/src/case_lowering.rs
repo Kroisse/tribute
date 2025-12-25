@@ -13,7 +13,7 @@ use salsa::Accumulator;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{adt, arith, case, core, pat, ty};
 use trunk_ir::{
-    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, SymbolVec, Type,
+    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region, SymbolVec, Type,
 };
 use trunk_ir::{Symbol, Value, ValueDef};
 
@@ -46,6 +46,8 @@ struct CaseLowerer<'db> {
     enum_variants: HashMap<Symbol, SymbolVec>,
     /// Current arm's pattern bindings: binding name -> bound value (scrutinee)
     current_arm_bindings: HashMap<Symbol, Value<'db>>,
+    /// Block argument types indexed by BlockId
+    block_arg_types: HashMap<BlockId, IdVec<Type<'db>>>,
 }
 
 impl<'db> CaseLowerer<'db> {
@@ -57,6 +59,7 @@ impl<'db> CaseLowerer<'db> {
             variant_owner: HashMap::new(),
             enum_variants: HashMap::new(),
             current_arm_bindings: HashMap::new(),
+            block_arg_types: HashMap::new(),
         }
     }
 
@@ -82,6 +85,9 @@ impl<'db> CaseLowerer<'db> {
     }
 
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
+        // Register block arg types for value_type lookups
+        self.block_arg_types.insert(block.id(self.db), block.args(self.db).clone());
+
         let mut new_ops = IdVec::new();
         for op in block.operations(self.db).iter().copied() {
             let rewritten = self.lower_op(op);
@@ -89,6 +95,7 @@ impl<'db> CaseLowerer<'db> {
         }
         Block::new(
             self.db,
+            block.id(self.db),
             block.location(self.db),
             block.args(self.db).clone(),
             new_ops,
@@ -455,7 +462,7 @@ impl<'db> CaseLowerer<'db> {
             .build();
         ops.push(yield_op);
 
-        let block = Block::new(self.db, location, IdVec::new(), IdVec::from(ops));
+        let block = Block::new(self.db, BlockId::fresh(), location, IdVec::new(), IdVec::from(ops));
         Region::new(self.db, location, IdVec::from(vec![block]))
     }
 
@@ -510,7 +517,10 @@ impl<'db> CaseLowerer<'db> {
     fn value_type(&self, value: Value<'db>) -> Option<Type<'db>> {
         match value.def(self.db) {
             ValueDef::OpResult(op) => op.results(self.db).get(value.index(self.db)).copied(),
-            ValueDef::BlockArg(block) => block.args(self.db).get(value.index(self.db)).copied(),
+            ValueDef::BlockArg(block_id) => self
+                .block_arg_types
+                .get(&block_id)
+                .and_then(|args| args.get(value.index(self.db)).copied()),
         }
     }
 
