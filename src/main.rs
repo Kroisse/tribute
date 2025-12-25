@@ -16,13 +16,17 @@ use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_passes::resolve::build_env;
 
 fn main() {
-    // Initialize tracing with env_logger-style filtering via RUST_LOG
+    let cli = Cli::parse();
+
+    // Initialize tracing with filter from --log or RUST_LOG env var
+    let env_filter = match &cli.log {
+        Some(filter) => EnvFilter::try_new(filter).expect("invalid log filter"),
+        None => EnvFilter::from_default_env(),
+    };
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(env_filter)
         .with_writer(std::io::stderr)
         .init();
-
-    let cli = Cli::parse();
 
     match cli.command {
         Command::Serve => {
