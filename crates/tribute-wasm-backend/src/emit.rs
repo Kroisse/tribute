@@ -1490,8 +1490,15 @@ fn emit_operands<'db>(
 
         // If operand not found and not a block arg, this is an ERROR - stale value reference!
         if let ValueDef::OpResult(stale_op) = value.def(db) {
-            debug!("  emit_operands: STALE OpResult! op={}.{}", stale_op.dialect(db), stale_op.name(db));
-            debug!("    value_locals has {} entries", value_locals.len());
+            debug!(
+                "  emit_operands: STALE OpResult! op={}.{}; value_locals has {} entries",
+                stale_op.dialect(db),
+                stale_op.name(db),
+                value_locals.len(),
+            );
+            return Err(CompilationError::invalid_module(
+                "stale SSA value in wasm backend (missing local mapping)",
+            ));
         }
     }
     Ok(())
