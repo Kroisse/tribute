@@ -1381,9 +1381,19 @@ fn emit_op<'db>(
 
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("return_call") {
-        emit_operands(db, operands, value_locals, function)?;
         let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
         let target = resolve_callee(callee, func_indices)?;
+
+        // Check if we need boxing for generic function calls
+        if let Some(callee_ty) = func_types.get(callee) {
+            let param_types = callee_ty.params(db);
+            emit_operands_with_boxing(db, operands, &param_types, value_locals, function)?;
+        } else {
+            emit_operands(db, operands, value_locals, function)?;
+        }
+
+        // Note: Return unboxing is not needed for tail calls since
+        // the caller's return type should match the callee's.
         function.instruction(&Instruction::ReturnCall(target));
     } else if name == Symbol::new("local_get") {
         let index = attr_local_index(db, op)?;
