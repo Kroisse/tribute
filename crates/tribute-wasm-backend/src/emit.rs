@@ -1184,6 +1184,12 @@ fn emit_op<'db>(
 
     debug!("emit_op: {}.{}", op.dialect(db), name);
 
+    // Skip wasm.nop - it's a placeholder for nil constants
+    // No WASM instruction is emitted, and nil values have no local mapping
+    if name == Symbol::new("nop") {
+        return Ok(());
+    }
+
     // Fast path: simple operations (emit operands → instruction → set result)
     if let Some(instr) = SIMPLE_OPS.get(&name) {
         emit_operands(db, operands, value_locals, function)?;
@@ -1470,6 +1476,14 @@ fn emit_operands<'db>(
     function: &mut Function,
 ) -> CompilationResult<()> {
     for value in operands.iter() {
+        // Skip nil type values - they have no runtime representation
+        if let Some(ty) = value_type(db, *value) {
+            if is_nil_type(db, ty) {
+                debug!("  emit_operands: skipping nil type value {:?}", value.def(db));
+                continue;
+            }
+        }
+
         // Try direct lookup first
         if let Some(index) = value_locals.get(value) {
             debug!("  emit_operands: found value {:?} -> local {}", value.def(db), index);

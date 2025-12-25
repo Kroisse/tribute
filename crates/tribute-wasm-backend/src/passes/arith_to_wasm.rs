@@ -43,13 +43,15 @@ impl RewritePattern for ArithConstPattern {
 
         let result_ty = op.results(db).first().copied();
 
-        // Skip nil type constants - they produce no runtime value
+        // Handle nil type constants specially
         let type_name = type_suffix(db, result_ty);
         if type_name == "nil" {
-            // Nil constants are erased at runtime (no wasm equivalent)
-            return RewriteResult::Erase {
-                replacement_values: vec![],
-            };
+            // Nil constants have no runtime representation, but we need to preserve
+            // SSA form for operations that reference them. Use wasm.nop which has
+            // no runtime effect but maintains the value reference.
+            let result_ty = result_ty.unwrap();
+            let nop = wasm::nop(db, op.location(db), result_ty);
+            return RewriteResult::Replace(nop.as_operation());
         }
 
         let wasm_op_name = match type_name {
