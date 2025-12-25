@@ -15,7 +15,10 @@
 //! lower_cst ─► Module (src.* ops, type.var)
 //!     │
 //!     ▼
-//! stage_resolve ─► Module (resolved references, some src.call for UFCS)
+//! stage_resolve ─► Module (resolved references, const refs marked)
+//!     │
+//!     ▼
+//! stage_const_inline ─► Module (const values inlined)
 //!     │
 //!     ▼
 //! stage_typecheck ─► Module (concrete types)
@@ -55,6 +58,7 @@ use salsa::Accumulator;
 use tree_sitter::Parser;
 use tribute_front::source_file::parse_with_rope;
 use tribute_front::{lower_cst, parse_cst};
+use tribute_passes::const_inline::inline_module;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::lower_case_to_scf;
 use tribute_passes::resolve::{Resolver, build_env};
@@ -200,6 +204,20 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Mo
     resolver.resolve_module(&module)
 }
 
+/// Stage 3.5: Inline constant values.
+///
+/// This pass inlines constant values at their use sites:
+/// - Finds `src.var` operations marked with `resolved_const=true`
+/// - Replaces them with `arith.const` operations containing the inlined value
+///
+/// This happens after name resolution (which marks const references)
+/// but before type checking (which needs the concrete inlined values).
+#[salsa::tracked]
+pub fn stage_const_inline<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = stage_resolve(db, source);
+    inline_module(db, &module)
+}
+
 /// Stage 4: Infer and check types.
 ///
 /// This pass:
@@ -209,8 +227,8 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Mo
 /// - Reports type errors
 #[salsa::tracked]
 pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    // Get the resolved module from the previous stage
-    let module = stage_resolve(db, source);
+    // Get the module with inlined constants from the previous stage
+    let module = stage_const_inline(db, source);
 
     let mut checker = TypeChecker::new(db);
     checker.check_module(&module);

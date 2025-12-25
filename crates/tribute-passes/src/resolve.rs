@@ -52,6 +52,8 @@ trunk_ir::symbols! {
     ATTR_CALLEE => "callee",
     ATTR_REST_NAME => "rest_name",
     ATTR_RESOLVED_LOCAL => "resolved_local",
+    ATTR_VALUE => "value",
+    ATTR_RESOLVED_CONST => "resolved_const",
 }
 
 // =============================================================================
@@ -87,6 +89,15 @@ pub enum Binding<'db> {
     /// A type alias or definition.
     TypeDef {
         /// The defined type
+        ty: Type<'db>,
+    },
+    /// A constant definition.
+    Const {
+        /// Constant name
+        name: Symbol,
+        /// Constant value (to be inlined)
+        value: Attribute<'db>,
+        /// Constant type
         ty: Type<'db>,
     },
 }
@@ -131,6 +142,12 @@ impl<'db> ModuleEnv<'db> {
     /// Add a type definition.
     pub fn add_type(&mut self, name: Symbol, ty: Type<'db>) {
         self.definitions.insert(name, Binding::TypeDef { ty });
+    }
+
+    /// Add a constant definition.
+    pub fn add_const(&mut self, name: Symbol, value: Attribute<'db>, ty: Type<'db>) {
+        self.definitions
+            .insert(name, Binding::Const { name, value, ty });
     }
 
     /// Add a qualified name to a namespace.
@@ -242,6 +259,22 @@ fn collect_definition<'db>(
                 // Extract variants from the operation's regions or attributes
                 // Each variant becomes a constructor in the type's namespace
                 collect_enum_constructors(db, env, op, *sym, ty);
+            }
+        }
+        (d, n) if d == src::DIALECT_NAME() && n == src::CONST() => {
+            // Const definition
+            let attrs = op.attributes(db);
+
+            if let (Some(Attribute::Symbol(sym)), Some(value)) =
+                (attrs.get(&ATTR_NAME()), attrs.get(&ATTR_VALUE()))
+            {
+                // Get the type from the operation result
+                let ty = op
+                    .results(db)
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| ty::var(db, std::collections::BTreeMap::new()));
+                env.add_const(*sym, value.clone(), ty);
             }
         }
         (d, n) if d == core::DIALECT_NAME() && n == core::MODULE() => {
@@ -1132,6 +1165,26 @@ impl<'db> Resolver<'db> {
 
                 Some(vec![new_operation])
             }
+            Binding::Const { value, ty, .. } => {
+                // Mark as resolved const reference (inlining happens in a separate pass)
+                let resolved_ty = self.resolve_type(*ty);
+
+                // Keep src.var but mark it as a resolved const reference
+                // Store the const value in an attribute for the inlining pass
+                let new_op = op
+                    .modify(self.db)
+                    .results(std::iter::once(resolved_ty).collect())
+                    .attr(ATTR_RESOLVED_CONST(), Attribute::Bool(true))
+                    .attr(ATTR_VALUE(), value.clone())
+                    .build();
+
+                // Map old result to new result
+                let old_result = op.result(self.db, 0);
+                let new_result = new_op.result(self.db, 0);
+                self.map_value(old_result, new_result);
+
+                Some(vec![new_op])
+            }
             Binding::TypeDef { .. } | Binding::Module { .. } => {
                 // Type used in value position - error (leave unresolved for diagnostics)
                 None
@@ -1182,6 +1235,12 @@ impl<'db> Resolver<'db> {
                 self.map_value(old_result, new_result);
 
                 Some(new_operation)
+            }
+            Binding::Const { .. } => {
+                // Qualified const reference (e.g., Module::CONST)
+                // Not commonly used, but handle similarly to unqualified const
+                // For now, leave unresolved (could be implemented if needed)
+                None
             }
             Binding::TypeDef { .. } | Binding::Module { .. } => None,
         }
@@ -1241,7 +1300,13 @@ impl<'db> Resolver<'db> {
 
                 Some(new_operation)
             }
-            Binding::Constructor { .. } | Binding::TypeDef { .. } | Binding::Module { .. } => None,
+            Binding::Constructor { .. }
+            | Binding::TypeDef { .. }
+            | Binding::Module { .. }
+            | Binding::Const { .. } => {
+                // Const cannot be called as a function
+                None
+            }
         }
     }
 
@@ -1402,7 +1467,7 @@ pub fn resolve_module<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) -
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::{arith, core, func, src};
@@ -1658,5 +1723,106 @@ mod tests {
             has_func_call_named(db, &ops, "double"),
             "expected func.call to helpers::double"
         );
+    }
+
+    #[salsa::tracked]
+    fn module_with_const_definition(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let max_size_sym = Symbol::new("MAX_SIZE");
+        let int_ty = *core::I64::new(db);
+
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            let const_op =
+                src::r#const(db, location, int_ty, max_size_sym, Attribute::IntBits(1024));
+            top.op(const_op);
+        })
+    }
+
+    #[salsa::tracked]
+    pub fn module_with_const_reference(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let max_size_sym = Symbol::new("MAX_SIZE");
+        let int_ty = *core::I64::new(db);
+
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            let const_op =
+                src::r#const(db, location, int_ty, max_size_sym, Attribute::IntBits(1024));
+            top.op(const_op);
+
+            let func_op = func::Func::build(db, location, "test", idvec![], int_ty, |entry| {
+                let const_ref = entry.op(src::var(db, location, int_ty, max_size_sym));
+                entry.op(func::Return::value(db, location, const_ref.result(db)));
+            });
+            top.op(func_op);
+        })
+    }
+
+    #[salsa::tracked]
+    pub fn resolve_const_reference_module(db: &dyn salsa::Database) -> Module<'_> {
+        let module = module_with_const_reference(db);
+        resolve_module(db, &module)
+    }
+
+    #[salsa_test]
+    fn test_const_definition_collected(db: &salsa::DatabaseImpl) {
+        let module = module_with_const_definition(db);
+        let env = build_env(db, &module);
+        let max_size_sym = Symbol::new("MAX_SIZE");
+        let binding = env.lookup(max_size_sym);
+
+        assert!(binding.is_some(), "const MAX_SIZE should be in environment");
+        match binding {
+            Some(Binding::Const { name, value, ty }) => {
+                assert_eq!(*name, max_size_sym, "const name should match");
+                assert_eq!(
+                    ty.dialect(db),
+                    Symbol::new("core"),
+                    "const type should be concrete"
+                );
+                assert_eq!(
+                    *value,
+                    Attribute::IntBits(1024),
+                    "const value should be 1024"
+                );
+            }
+            _ => panic!("Expected Const binding, got {:?}", binding),
+        }
+    }
+
+    #[salsa_test]
+    fn test_const_reference_resolved(db: &salsa::DatabaseImpl) {
+        let resolved = resolve_const_reference_module(db);
+
+        let mut ops = Vec::new();
+        collect_ops(db, &resolved.body(db), &mut ops);
+
+        let max_size_sym = Symbol::new("MAX_SIZE");
+        let const_refs: Vec<_> = ops
+            .iter()
+            .filter(|op| {
+                op.dialect(db) == "src"
+                    && op.name(db) == "var"
+                    && matches!(
+                        op.attributes(db).get(&ATTR_NAME()),
+                        Some(Attribute::Symbol(sym)) if *sym == max_size_sym
+                    )
+            })
+            .collect();
+
+        assert!(!const_refs.is_empty(), "should find const reference");
+
+        for const_ref in const_refs {
+            let attrs = const_ref.attributes(db);
+            assert_eq!(
+                attrs.get(&ATTR_RESOLVED_CONST()),
+                Some(&Attribute::Bool(true)),
+                "const reference should be marked with resolved_const"
+            );
+            assert_eq!(
+                attrs.get(&ATTR_VALUE()),
+                Some(&Attribute::IntBits(1024)),
+                "const reference should have value attribute for inlining pass"
+            );
+        }
     }
 }

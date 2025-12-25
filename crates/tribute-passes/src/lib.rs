@@ -12,12 +12,14 @@ pub mod diagnostic;
 
 // === TrunkIR passes ===
 pub mod case_lowering;
+pub mod const_inline;
 pub mod resolve;
 pub mod tdnr;
 pub mod typeck;
 
 // Re-exports
 pub use case_lowering::lower_case_to_scf;
+pub use const_inline::{ConstInliner, inline_module};
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use resolve::{ModuleEnv, Resolver, resolve_module};
 pub use tdnr::{MethodInfo, MethodRegistry, TdnrResolver, resolve_tdnr};
