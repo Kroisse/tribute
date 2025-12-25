@@ -24,19 +24,16 @@ See **[../new-plans/](../new-plans/)** directory:
 
 ## Implementation Plans
 
-### Completed
-
-| Plan | Description |
-|------|-------------|
-| [01-syntax-modernization.md](01-syntax-modernization.md) | ✅ S-expression → C-style syntax transition |
-| [01.01-string-interpolation.md](01.01-string-interpolation.md) | ✅ String interpolation (`\{expr}`) |
-
-### Planned
+### Active
 
 | Plan | Description | Priority |
 |------|-------------|----------|
-| [02.04-wasm-translation.md](02.04-wasm-translation.md) | End-to-end Wasm translation plan | High |
-| [03-lsp-implementation.md](03-lsp-implementation.md) | LSP server implementation | Medium |
+| [02.04-wasm-translation.md](02.04-wasm-translation.md) | Wasm backend (see #38-41 for remaining work) | High |
+
+### Future
+
+| Plan | Description | Priority |
+|------|-------------|----------|
 | [05-standard-library.md](05-standard-library.md) | Standard library (ability-based) | Medium |
 | [06-package-manager.md](06-package-manager.md) | Package manager | Medium |
 | [07-testing-framework.md](07-testing-framework.md) | Testing framework | Medium |
@@ -59,7 +56,7 @@ See **[../new-plans/](../new-plans/)** directory:
 
 ### Future Phases
 
-1. **Ability System**: Algebraic effects via evidence passing
+1. **Ability System**: Algebraic effects via evidence passing (see #23-26)
 2. **Cranelift Backend**: libmprompt + Boehm GC integration
 3. **WasmGC Backend**: Stack Switching support
-4. **Developer Tools**: LSP, package manager, documentation
+4. **Developer Tools**: LSP (see #31-37), package manager, documentation
