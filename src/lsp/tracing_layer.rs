@@ -1,4 +1,12 @@
 //! Tracing layer that forwards events to LSP window/logMessage.
+//!
+//! Currently disabled due to interference with LSP stdio communication.
+//! TODO: Investigate using a separate thread for log forwarding.
+
+#![allow(dead_code)]
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::Sender;
 use lsp_server::{Connection, Message, Notification};
@@ -8,16 +16,40 @@ use tracing::{Level, Metadata, Subscriber};
 use tracing_subscriber::Layer;
 
 /// A tracing layer that sends log messages to the LSP client.
+///
+/// Before `mark_initialized()` is called, messages are dropped.
+/// After initialization, messages are sent immediately.
 pub struct LspLayer {
     sender: Sender<Message>,
+    initialized: Arc<AtomicBool>,
+}
+
+/// Handle to mark the LspLayer as initialized.
+#[derive(Clone)]
+pub struct LspLayerHandle {
+    initialized: Arc<AtomicBool>,
+}
+
+impl LspLayerHandle {
+    /// Mark the layer as initialized. Messages will now be sent.
+    pub fn mark_initialized(&self) {
+        self.initialized.store(true, Ordering::SeqCst);
+    }
 }
 
 impl LspLayer {
-    /// Create a new LSP tracing layer.
-    pub fn new(connection: &Connection) -> Self {
-        Self {
+    /// Create a new LSP tracing layer and a handle to control it.
+    pub fn new(connection: &Connection) -> (Self, LspLayerHandle) {
+        let initialized = Arc::new(AtomicBool::new(false));
+
+        let layer = Self {
             sender: connection.sender.clone(),
-        }
+            initialized: Arc::clone(&initialized),
+        };
+
+        let handle = LspLayerHandle { initialized };
+
+        (layer, handle)
     }
 
     fn level_to_message_type(level: &Level) -> MessageType {
@@ -71,7 +103,11 @@ impl<S: Subscriber> Layer<S> for LspLayer {
         };
 
         let notif = Notification::new(LogMessage::METHOD.to_string(), params);
-        let _ = self.sender.send(Message::Notification(notif));
+
+        if self.initialized.load(Ordering::SeqCst) {
+            let _ = self.sender.send(Message::Notification(notif));
+        }
+        // Drop messages before initialization
     }
 
     fn enabled(

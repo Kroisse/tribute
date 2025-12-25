@@ -24,7 +24,6 @@ use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
 use super::pretty::print_type;
-use super::tracing_layer::LspLayer;
 use super::type_index::TypeIndex;
 use tribute::{TributeDatabaseImpl, compile, database::parse_with_thread_local};
 
@@ -63,12 +62,18 @@ impl LspServer {
     }
 
     fn handle_request(&mut self, req: Request) -> Result<(), Box<dyn Error + Send + Sync>> {
+        tracing::debug!(method = %req.method, "Received request");
+
         if let Some((id, params)) = cast_request::<HoverRequest>(req.clone()) {
             let result = self.hover(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
         } else if let Some((id, params)) = cast_request::<DocumentSymbolRequest>(req) {
             let result = self.document_symbols(params);
+            tracing::debug!(symbols = ?result.as_ref().map(|r| match r {
+                DocumentSymbolResponse::Flat(v) => v.len(),
+                DocumentSymbolResponse::Nested(v) => v.len(),
+            }), "Document symbols response");
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
         }
@@ -307,26 +312,8 @@ impl LspServer {
 }
 
 /// Start the LSP server.
-pub fn serve(log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub fn serve(_log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let (connection, io_threads) = Connection::stdio();
-
-    // Initialize tracing with LSP layer
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-
-    let lsp_layer = LspLayer::new(&connection);
-
-    // Parse log level from CLI argument
-    let env_filter = log_level
-        .parse::<tracing_subscriber::EnvFilter>()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
-
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(lsp_layer)
-        .init();
-
-    tracing::info!(log_level, "Tribute LSP server starting");
 
     // Server capabilities
     let capabilities = ServerCapabilities {
@@ -342,7 +329,7 @@ pub fn serve(log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         ..Default::default()
     };
 
-    let server_capabilities = serde_json::to_value(capabilities)?;
+    let server_capabilities = serde_json::to_value(&capabilities)?;
     let init_params = connection.initialize(server_capabilities)?;
     let _params: InitializeParams = serde_json::from_value(init_params)?;
 
