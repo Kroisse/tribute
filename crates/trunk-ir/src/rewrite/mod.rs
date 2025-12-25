@@ -17,7 +17,7 @@
 //! ```
 //! # use salsa::Database;
 //! # use salsa::DatabaseImpl;
-//! # use trunk_ir::{Block, Location, Operation, PathId, Region, Span, Symbol, idvec};
+//! # use trunk_ir::{Block, BlockId, Location, Operation, PathId, Region, Span, Symbol, idvec};
 //! # use trunk_ir::dialect::core::Module;
 //! use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 //!
@@ -42,7 +42,7 @@
 //! #     let path = PathId::new(db, "file:///test.trb".to_owned());
 //! #     let location = Location::new(path, Span::new(0, 0));
 //! #     let op = Operation::of_name(db, location, "test.source").build();
-//! #     let block = Block::new(db, location, idvec![], idvec![op]);
+//! #     let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
 //! #     let region = Region::new(db, location, idvec![block]);
 //! #     Module::create(db, location, Symbol::new("test"), region)
 //! # }

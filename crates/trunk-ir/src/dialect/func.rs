@@ -121,6 +121,56 @@ impl<'db> Func<'db> {
     }
 }
 
+impl std::fmt::Debug for Func<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        salsa::with_attached_database(|db| {
+            let name = self.name(db);
+            let ty = self.ty(db);
+
+            // Build signature string
+            let signature = if let Some(func_ty) = core::Func::from_type(db, ty) {
+                let params = func_ty.params(db);
+                let result = func_ty.result(db);
+
+                let params_str = params
+                    .iter()
+                    .map(|p| format!("{}.{}", p.dialect(db), p.name(db)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                format!(
+                    "@{}({}) -> {}.{}",
+                    name,
+                    params_str,
+                    result.dialect(db),
+                    result.name(db)
+                )
+            } else {
+                format!("@{} : {:?}", name, ty)
+            };
+
+            // Collect body operations
+            let body = self.body(db);
+            let ops: Vec<_> = body
+                .blocks(db)
+                .first()
+                .map(|block| {
+                    block
+                        .operations(db)
+                        .iter()
+                        .map(|op| format!("{}.{}", op.dialect(db), op.name(db)))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            f.debug_struct(&format!("func {}", signature))
+                .field("body", &ops)
+                .finish()
+        })
+        .unwrap_or_else(|| write!(f, "func @<no database attached>"))
+    }
+}
+
 impl<'db> Return<'db> {
     /// Create a new return with no values.
     pub fn empty(db: &'db dyn salsa::Database, location: Location<'db>) -> Self {

@@ -70,6 +70,10 @@ gh issue list --label wasm           # Wasm backend work
 cargo build
 cargo test --all  # Test all workspace members
 
+# Enable debug logging (use --log instead of RUST_LOG)
+cargo run -- --log=debug compile file.trb
+cargo run -- --log=tribute_passes::typeck=trace compile file.trb
+
 # If snapshot tests fail (insta)
 cargo insta review
 

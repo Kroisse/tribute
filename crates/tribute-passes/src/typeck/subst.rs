@@ -5,6 +5,7 @@
 
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::ty;
+use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{Block, IdVec, Operation, Region, Type};
 
 use super::solver::TypeSubst;
@@ -16,10 +17,8 @@ pub fn apply_subst_to_module<'db>(
     module: core::Module<'db>,
     subst: &TypeSubst<'db>,
 ) -> core::Module<'db> {
-    let body = module.body(db);
-    let new_body = apply_subst_to_region(db, &body, subst);
-
-    core::Module::create(db, module.location(db), module.name(db), new_body)
+    let mut applier = SubstApplier::new(db, subst);
+    applier.apply_to_module(module)
 }
 
 /// Apply type substitution to a region.
@@ -28,71 +27,103 @@ pub fn apply_subst_to_region<'db>(
     region: &Region<'db>,
     subst: &TypeSubst<'db>,
 ) -> Region<'db> {
-    let location = region.location(db);
-    let new_blocks: IdVec<Block<'db>> = region
-        .blocks(db)
-        .iter()
-        .map(|block| apply_subst_to_block(db, block, subst))
-        .collect();
-
-    Region::new(db, location, new_blocks)
+    let mut applier = SubstApplier::new(db, subst);
+    applier.apply_to_region(region)
 }
 
-/// Apply type substitution to a block.
-fn apply_subst_to_block<'db>(
+/// Applies type substitution while tracking value mappings.
+struct SubstApplier<'db, 'a> {
     db: &'db dyn salsa::Database,
-    block: &Block<'db>,
-    subst: &TypeSubst<'db>,
-) -> Block<'db> {
-    // Substitute block argument types
-    let new_args: IdVec<Type<'db>> = block
-        .args(db)
-        .iter()
-        .map(|&ty| subst.apply(db, ty))
-        .collect();
-
-    // Substitute operations
-    let new_ops: IdVec<Operation<'db>> = block
-        .operations(db)
-        .iter()
-        .map(|op| apply_subst_to_operation(db, op, subst))
-        .collect();
-
-    Block::new(db, block.location(db), new_args, new_ops)
+    subst: &'a TypeSubst<'db>,
+    ctx: RewriteContext<'db>,
 }
 
-/// Apply type substitution to an operation.
-fn apply_subst_to_operation<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    subst: &TypeSubst<'db>,
-) -> Operation<'db> {
-    // Substitute result types
-    let new_results: IdVec<Type<'db>> = op
-        .results(db)
-        .iter()
-        .map(|&ty| subst.apply(db, ty))
-        .collect();
-
-    // Recursively process regions (for nested operations like if/match/function bodies)
-    let new_regions: IdVec<Region<'db>> = op
-        .regions(db)
-        .iter()
-        .map(|region| apply_subst_to_region(db, region, subst))
-        .collect();
-
-    // Check if anything changed
-    let results_changed = op.results(db).as_slice() != new_results.as_slice();
-    let regions_changed = op.regions(db).as_slice() != new_regions.as_slice();
-
-    if !results_changed && !regions_changed {
-        return *op;
+impl<'db, 'a> SubstApplier<'db, 'a> {
+    fn new(db: &'db dyn salsa::Database, subst: &'a TypeSubst<'db>) -> Self {
+        Self {
+            db,
+            subst,
+            ctx: RewriteContext::new(),
+        }
     }
 
-    op.modify(db)
-        .results(new_results)
-        .regions(new_regions)
-        .build()
+    fn apply_to_module(&mut self, module: core::Module<'db>) -> core::Module<'db> {
+        let body = module.body(self.db);
+        let new_body = self.apply_to_region(&body);
+        core::Module::create(self.db, module.location(self.db), module.name(self.db), new_body)
+    }
+
+    fn apply_to_region(&mut self, region: &Region<'db>) -> Region<'db> {
+        let location = region.location(self.db);
+        let new_blocks: IdVec<Block<'db>> = region
+            .blocks(self.db)
+            .iter()
+            .map(|block| self.apply_to_block(block))
+            .collect();
+
+        Region::new(self.db, location, new_blocks)
+    }
+
+    fn apply_to_block(&mut self, block: &Block<'db>) -> Block<'db> {
+        // Substitute block argument types
+        let new_args: IdVec<Type<'db>> = block
+            .args(self.db)
+            .iter()
+            .map(|&ty| self.subst.apply(self.db, ty))
+            .collect();
+
+        // Substitute operations
+        let new_ops: IdVec<Operation<'db>> = block
+            .operations(self.db)
+            .iter()
+            .map(|op| self.apply_to_operation(op))
+            .collect();
+
+        Block::new(self.db, block.id(self.db), block.location(self.db), new_args, new_ops)
+    }
+
+    fn apply_to_operation(&mut self, op: &Operation<'db>) -> Operation<'db> {
+        // First, remap operands from previous transformations
+        let remapped_op = self.ctx.remap_operands(self.db, op);
+
+        // If operands were remapped, map old results to new results
+        if remapped_op != *op {
+            self.ctx.map_results(self.db, op, &remapped_op);
+        }
+
+        // Substitute result types
+        let new_results: IdVec<Type<'db>> = remapped_op
+            .results(self.db)
+            .iter()
+            .map(|&ty| self.subst.apply(self.db, ty))
+            .collect();
+
+        // Recursively process regions (for nested operations like if/match/function bodies)
+        let new_regions: IdVec<Region<'db>> = remapped_op
+            .regions(self.db)
+            .iter()
+            .map(|region| self.apply_to_region(region))
+            .collect();
+
+        // Check if anything changed
+        let results_changed = remapped_op.results(self.db).as_slice() != new_results.as_slice();
+        let regions_changed = remapped_op.regions(self.db).as_slice() != new_regions.as_slice();
+
+        if !results_changed && !regions_changed {
+            return remapped_op;
+        }
+
+        let new_op = remapped_op
+            .modify(self.db)
+            .results(new_results)
+            .regions(new_regions)
+            .build();
+
+        // Map old results to new results
+        self.ctx.map_results(self.db, &remapped_op, &new_op);
+
+        new_op
+    }
 }
 
 /// Check if a type contains any type variables.
@@ -149,7 +180,7 @@ mod tests {
     use crate::typeck::TypeChecker;
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::{arith, core, func};
-    use trunk_ir::{Attribute, Location, PathId, Span, idvec};
+    use trunk_ir::{Attribute, BlockId, Location, PathId, Span, idvec};
 
     /// Helper to create a module with an operation that has type variable 42 as result.
     #[salsa::tracked]
@@ -165,7 +196,7 @@ mod tests {
             .build();
 
         // Build block containing the operation
-        let block = Block::new(db, location, idvec![], idvec![op]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
 
         // Build region containing the block
         let region = Region::new(db, location, idvec![block]);
@@ -188,7 +219,7 @@ mod tests {
             .build();
 
         // Build block containing the operation
-        let block = Block::new(db, location, idvec![], idvec![op]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
 
         // Build region containing the block
         let region = Region::new(db, location, idvec![block]);
@@ -211,7 +242,7 @@ mod tests {
             .build();
 
         // Build block containing the operation
-        let block = Block::new(db, location, idvec![], idvec![op]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
 
         // Build region containing the block
         let region = Region::new(db, location, idvec![block]);

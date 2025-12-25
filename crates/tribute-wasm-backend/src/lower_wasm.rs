@@ -3,15 +3,15 @@
 //! This pass transforms mid-level IR operations (func, arith, scf, adt) to
 //! wasm dialect operations. Phase 1 handles basic arithmetic and function calls.
 
-use std::collections::HashMap;
-
 use tracing::{error, warn};
 
 use crate::plan::{MainExports, MemoryPlan};
 
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
+use trunk_ir::dialect::src;
 use trunk_ir::dialect::wasm;
+use trunk_ir::rewrite::RewriteContext;
 
 use crate::passes::const_to_wasm::ConstAnalysis;
 use crate::passes::intrinsic_to_wasm::IntrinsicAnalysis;
@@ -25,9 +25,12 @@ use trunk_ir::{
 #[salsa::tracked]
 pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     // Phase 1: Pattern-based lowering passes
+    tracing::debug!("=== BEFORE arith_to_wasm ===\n{:?}", module);
     let module = crate::passes::arith_to_wasm::lower(db, module);
+    tracing::debug!("=== AFTER arith_to_wasm ===\n{:?}", module);
     let module = crate::passes::scf_to_wasm::lower(db, module);
     let module = crate::passes::func_to_wasm::lower(db, module);
+    tracing::debug!("=== AFTER func_to_wasm ===\n{:?}", module);
     let module = crate::passes::adt_to_wasm::lower(db, module);
 
     // Const analysis and lowering (string/bytes constants to data segments)
@@ -76,6 +79,10 @@ fn check_function_body<'db>(db: &'db dyn salsa::Database, func_op: &Operation<'d
         for block in body_region.blocks(db).iter() {
             for op in block.operations(db).iter() {
                 let dialect = op.dialect(db);
+                // Skip src.var - kept for LSP hover support, no runtime effect
+                if dialect == src::DIALECT_NAME() && op.name(db) == src::VAR() {
+                    continue;
+                }
                 if dialect != Symbol::new("wasm") {
                     error!(
                         "Found non-wasm operation in function body: {}.{}",
@@ -91,7 +98,7 @@ fn check_function_body<'db>(db: &'db dyn salsa::Database, func_op: &Operation<'d
 /// Lowers mid-level IR to wasm dialect operations.
 struct WasmLowerer<'db> {
     db: &'db dyn salsa::Database,
-    value_map: HashMap<Value<'db>, Value<'db>>,
+    ctx: RewriteContext<'db>,
     module_location: Option<Location<'db>>,
     const_analysis: ConstAnalysis<'db>,
     intrinsic_analysis: IntrinsicAnalysis<'db>,
@@ -107,7 +114,7 @@ impl<'db> WasmLowerer<'db> {
     ) -> Self {
         Self {
             db,
-            value_map: HashMap::new(),
+            ctx: RewriteContext::new(),
             module_location: None,
             const_analysis,
             intrinsic_analysis,
@@ -335,6 +342,12 @@ impl<'db> WasmLowerer<'db> {
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
 
+        // Skip src.var operations - they're kept for LSP hover support but have no runtime effect.
+        // The resolver marks them as resolved_local and maps their results to actual values.
+        if dialect == src::DIALECT_NAME() && name == src::VAR() {
+            return;
+        }
+
         // Handle wasm dialect metadata collection
         if dialect == wasm::DIALECT_NAME() {
             self.observe_wasm_module_op(&op, name);
@@ -350,9 +363,10 @@ impl<'db> WasmLowerer<'db> {
         // Note: Some dialects are allowed for edge cases:
         // - "func": func.call_indirect (closure support pending)
         // - "adt": adt.string_const (handled by const_to_wasm pass)
+        // - "src": src.var operations kept for LSP (filtered above)
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
-            let allowed = ["wasm", "core", "type", "ty", "func", "adt", "case", "scf"];
+            let allowed = ["wasm", "core", "type", "ty", "func", "adt", "case", "scf", "src"];
             if !allowed.contains(&dialect_str.as_str()) {
                 warn!(
                     "Unhandled operation in lowering: {}.{} (this may cause emit errors)",
@@ -371,7 +385,7 @@ impl<'db> WasmLowerer<'db> {
         builder: &mut BlockBuilder<'db>,
         op: Operation<'db>,
     ) {
-        let remapped_operands = self.remap_operands(op);
+        let remapped_operands = self.remap_operand_values(op);
         let new_regions: Vec<_> = op
             .regions(self.db)
             .iter()
@@ -384,7 +398,7 @@ impl<'db> WasmLowerer<'db> {
             .operands(remapped_operands)
             .regions(IdVec::from(new_regions))
             .build();
-        self.map_results(&op, &new_op);
+        self.ctx.map_results(self.db, &op, &new_op);
         builder.op(new_op);
     }
 
@@ -413,23 +427,11 @@ impl<'db> WasmLowerer<'db> {
         }
     }
 
-    fn remap_operands(&self, op: Operation<'db>) -> IdVec<Value<'db>> {
+    fn remap_operand_values(&self, op: Operation<'db>) -> IdVec<Value<'db>> {
         let mut operands = IdVec::new();
         for &operand in op.operands(self.db).iter() {
-            let mapped = self.value_map.get(&operand).copied().unwrap_or(operand);
-            operands.push(mapped);
+            operands.push(self.ctx.lookup(operand));
         }
         operands
-    }
-
-    fn map_results(&mut self, old_op: &Operation<'db>, new_op: &Operation<'db>) {
-        let old_results = old_op.results(self.db);
-        let new_results = new_op.results(self.db);
-        let count = old_results.len().min(new_results.len());
-        for i in 0..count {
-            let old_val = old_op.result(self.db, i);
-            let new_val = new_op.result(self.db, i);
-            self.value_map.insert(old_val, new_val);
-        }
     }
 }

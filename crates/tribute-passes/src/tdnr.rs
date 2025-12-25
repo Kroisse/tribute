@@ -21,8 +21,10 @@ use std::collections::HashMap;
 
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::func;
+use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
-    Attribute, Block, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value,
+    Attribute, Block, BlockId, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type,
+    Value,
 };
 
 // =============================================================================
@@ -111,8 +113,10 @@ pub fn builtin_methods<'db>(_db: &'db dyn salsa::Database) -> MethodRegistry<'db
 pub struct TdnrResolver<'db> {
     db: &'db dyn salsa::Database,
     registry: MethodRegistry<'db>,
-    /// Maps old values to their replacements.
-    value_map: HashMap<Value<'db>, Value<'db>>,
+    /// Rewrite context for value mapping.
+    ctx: RewriteContext<'db>,
+    /// Block argument types indexed by BlockId
+    block_arg_types: HashMap<BlockId, IdVec<Type<'db>>>,
 }
 
 impl<'db> TdnrResolver<'db> {
@@ -121,18 +125,9 @@ impl<'db> TdnrResolver<'db> {
         Self {
             db,
             registry,
-            value_map: HashMap::new(),
+            ctx: RewriteContext::new(),
+            block_arg_types: HashMap::new(),
         }
-    }
-
-    /// Look up a mapped value, or return the original.
-    fn lookup_value(&self, old: Value<'db>) -> Value<'db> {
-        self.value_map.get(&old).copied().unwrap_or(old)
-    }
-
-    /// Map a value from old to new.
-    fn map_value(&mut self, old: Value<'db>, new: Value<'db>) {
-        self.value_map.insert(old, new);
     }
 
     /// Resolve a module with TDNR.
@@ -161,6 +156,9 @@ impl<'db> TdnrResolver<'db> {
 
     /// Resolve a block.
     fn resolve_block(&mut self, block: &Block<'db>) -> Block<'db> {
+        // Register block arg types for get_value_type lookups
+        self.block_arg_types.insert(block.id(self.db), block.args(self.db).clone());
+
         let new_ops: IdVec<Operation<'db>> = block
             .operations(self.db)
             .iter()
@@ -169,6 +167,7 @@ impl<'db> TdnrResolver<'db> {
 
         Block::new(
             self.db,
+            block.id(self.db),
             block.location(self.db),
             block.args(self.db).clone(),
             new_ops,
@@ -178,43 +177,36 @@ impl<'db> TdnrResolver<'db> {
     /// Resolve a single operation.
     fn resolve_operation(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
         // First, remap operands
-        let remapped_op = self.remap_operands(op);
+        let remapped_op = self.ctx.remap_operands(self.db, op);
+
+        // If operands were remapped, map old results to new results
+        if remapped_op != *op {
+            self.ctx.map_results(self.db, op, &remapped_op);
+        }
 
         let dialect = remapped_op.dialect(self.db);
         let op_name = remapped_op.name(self.db);
 
         if dialect == "src" && op_name == "call" {
             if let Some(resolved) = self.try_resolve_method_call(&remapped_op) {
+                self.ctx.map_results(self.db, &remapped_op, &resolved);
                 vec![resolved]
             } else {
                 // Still unresolved - keep as is (will be an error later)
-                vec![self.resolve_op_regions(&remapped_op)]
+                let final_op = self.resolve_op_regions(&remapped_op);
+                if final_op != remapped_op {
+                    self.ctx.map_results(self.db, &remapped_op, &final_op);
+                }
+                vec![final_op]
             }
         } else {
             // Recursively process regions
-            vec![self.resolve_op_regions(&remapped_op)]
-        }
-    }
-
-    /// Remap operands using the value map.
-    fn remap_operands(&self, op: &Operation<'db>) -> Operation<'db> {
-        let operands = op.operands(self.db);
-        let mut new_operands: IdVec<Value<'db>> = IdVec::new();
-        let mut changed = false;
-
-        for &operand in operands.iter() {
-            let mapped = self.lookup_value(operand);
-            new_operands.push(mapped);
-            if mapped != operand {
-                changed = true;
+            let final_op = self.resolve_op_regions(&remapped_op);
+            if final_op != remapped_op {
+                self.ctx.map_results(self.db, &remapped_op, &final_op);
             }
+            vec![final_op]
         }
-
-        if !changed {
-            return *op;
-        }
-
-        op.modify(self.db).operands(new_operands).build()
     }
 
     /// Recursively resolve regions within an operation.
@@ -276,7 +268,7 @@ impl<'db> TdnrResolver<'db> {
         // Map old result to new result
         let old_result = op.result(self.db, 0);
         let new_result = new_operation.result(self.db, 0);
-        self.map_value(old_result, new_result);
+        self.ctx.map_value(old_result, new_result);
 
         Some(new_operation)
     }
@@ -294,11 +286,10 @@ impl<'db> TdnrResolver<'db> {
                 let index = value.index(self.db);
                 results.get(index).copied()
             }
-            ValueDef::BlockArg(block) => {
-                let args = block.args(self.db);
-                let index = value.index(self.db);
-                args.get(index).copied()
-            }
+            ValueDef::BlockArg(block_id) => self
+                .block_arg_types
+                .get(&block_id)
+                .and_then(|args| args.get(value.index(self.db)).copied()),
         }
     }
 }

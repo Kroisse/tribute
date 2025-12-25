@@ -12,8 +12,9 @@ use std::collections::HashMap;
 use salsa::Accumulator;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{adt, arith, case, core, pat, ty};
+use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
-    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, SymbolVec, Type,
+    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region, SymbolVec, Type,
 };
 use trunk_ir::{Symbol, Value, ValueDef};
 
@@ -40,23 +41,27 @@ pub fn lower_case_to_scf<'db>(db: &'db dyn salsa::Database, module: Module<'db>)
 
 struct CaseLowerer<'db> {
     db: &'db dyn salsa::Database,
-    value_map: HashMap<Value<'db>, Value<'db>>,
+    /// Rewrite context for value mapping.
+    ctx: RewriteContext<'db>,
     variant_tags: HashMap<Symbol, u32>,
     variant_owner: HashMap<Symbol, Symbol>,
     enum_variants: HashMap<Symbol, SymbolVec>,
     /// Current arm's pattern bindings: binding name -> bound value (scrutinee)
     current_arm_bindings: HashMap<Symbol, Value<'db>>,
+    /// Block argument types indexed by BlockId
+    block_arg_types: HashMap<BlockId, IdVec<Type<'db>>>,
 }
 
 impl<'db> CaseLowerer<'db> {
     fn new(db: &'db dyn salsa::Database) -> Self {
         Self {
             db,
-            value_map: HashMap::new(),
+            ctx: RewriteContext::new(),
             variant_tags: HashMap::new(),
             variant_owner: HashMap::new(),
             enum_variants: HashMap::new(),
             current_arm_bindings: HashMap::new(),
+            block_arg_types: HashMap::new(),
         }
     }
 
@@ -82,6 +87,9 @@ impl<'db> CaseLowerer<'db> {
     }
 
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
+        // Register block arg types for value_type lookups
+        self.block_arg_types.insert(block.id(self.db), block.args(self.db).clone());
+
         let mut new_ops = IdVec::new();
         for op in block.operations(self.db).iter().copied() {
             let rewritten = self.lower_op(op);
@@ -89,6 +97,7 @@ impl<'db> CaseLowerer<'db> {
         }
         Block::new(
             self.db,
+            block.id(self.db),
             block.location(self.db),
             block.args(self.db).clone(),
             new_ops,
@@ -96,7 +105,8 @@ impl<'db> CaseLowerer<'db> {
     }
 
     fn lower_op(&mut self, op: Operation<'db>) -> Vec<Operation<'db>> {
-        let remapped_operands = self.remap_operands(op);
+        let remapped_op = self.ctx.remap_operands(self.db, &op);
+        let remapped_operands = remapped_op.operands(self.db).clone();
 
         if op.dialect(self.db) == case::DIALECT_NAME() && op.name(self.db) == case::CASE() {
             return self.lower_case(op, remapped_operands);
@@ -116,7 +126,7 @@ impl<'db> CaseLowerer<'db> {
                 if let Some(&bound_value) = self.current_arm_bindings.get(name) {
                     // Map case.bind result to the bound value (scrutinee or destructured value)
                     let bind_result = op.result(self.db, 0);
-                    self.value_map.insert(bind_result, bound_value);
+                    self.ctx.map_value(bind_result, bound_value);
                     // Erase the case.bind operation - value is remapped
                     return vec![];
                 }
@@ -136,7 +146,7 @@ impl<'db> CaseLowerer<'db> {
             .operands(remapped_operands)
             .regions(IdVec::from(new_regions))
             .build();
-        self.map_results(op, new_op);
+        self.ctx.map_results(self.db, &op, &new_op);
         vec![new_op]
     }
 
@@ -181,7 +191,7 @@ impl<'db> CaseLowerer<'db> {
 
         let (ops, _final_value) = self.build_arm_chain(location, scrutinee, result_type, &arms);
         if let Some(last_op) = ops.last() {
-            self.map_results(op, *last_op);
+            self.ctx.map_results(self.db, &op, last_op);
         }
         ops
     }
@@ -192,7 +202,7 @@ impl<'db> CaseLowerer<'db> {
         remapped_operands: IdVec<Value<'db>>,
     ) -> Operation<'db> {
         let new_op = op.modify(self.db).operands(remapped_operands).build();
-        self.map_results(op, new_op);
+        self.ctx.map_results(self.db, &op, &new_op);
         new_op
     }
 
@@ -455,7 +465,7 @@ impl<'db> CaseLowerer<'db> {
             .build();
         ops.push(yield_op);
 
-        let block = Block::new(self.db, location, IdVec::new(), IdVec::from(ops));
+        let block = Block::new(self.db, BlockId::fresh(), location, IdVec::new(), IdVec::from(ops));
         Region::new(self.db, location, IdVec::from(vec![block]))
     }
 
@@ -510,27 +520,10 @@ impl<'db> CaseLowerer<'db> {
     fn value_type(&self, value: Value<'db>) -> Option<Type<'db>> {
         match value.def(self.db) {
             ValueDef::OpResult(op) => op.results(self.db).get(value.index(self.db)).copied(),
-            ValueDef::BlockArg(block) => block.args(self.db).get(value.index(self.db)).copied(),
-        }
-    }
-
-    fn remap_operands(&self, op: Operation<'db>) -> IdVec<Value<'db>> {
-        let mut operands = IdVec::new();
-        for &operand in op.operands(self.db).iter() {
-            let mapped = self.value_map.get(&operand).copied().unwrap_or(operand);
-            operands.push(mapped);
-        }
-        operands
-    }
-
-    fn map_results(&mut self, old_op: Operation<'db>, new_op: Operation<'db>) {
-        let old_results = old_op.results(self.db);
-        let new_results = new_op.results(self.db);
-        let count = old_results.len().min(new_results.len());
-        for i in 0..count {
-            let old_val = old_op.result(self.db, i);
-            let new_val = new_op.result(self.db, i);
-            self.value_map.insert(old_val, new_val);
+            ValueDef::BlockArg(block_id) => self
+                .block_arg_types
+                .get(&block_id)
+                .and_then(|args| args.get(value.index(self.db)).copied()),
         }
     }
 

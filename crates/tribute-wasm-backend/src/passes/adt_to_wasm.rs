@@ -439,7 +439,7 @@ fn name_hash_u32(name: &str) -> u32 {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, Location, PathId, Region, Span, idvec};
+    use trunk_ir::{Block, BlockId, Location, PathId, Region, Span, idvec};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -457,7 +457,7 @@ mod tests {
             .results(idvec![i32_ty])
             .build();
 
-        let block = Block::new(db, location, idvec![], idvec![struct_new]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![struct_new]);
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
     }

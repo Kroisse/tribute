@@ -29,6 +29,7 @@ use trunk_ir::dialect::func;
 use trunk_ir::dialect::pat;
 use trunk_ir::dialect::src;
 use trunk_ir::dialect::ty;
+use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
     Attribute, Attrs, Block, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region,
     Symbol, Type, Value, ValueDef,
@@ -380,8 +381,8 @@ pub enum LocalBinding<'db> {
 pub struct Resolver<'db> {
     db: &'db dyn salsa::Database,
     env: ModuleEnv<'db>,
-    /// Maps old values to their replacements during transformation.
-    value_map: HashMap<Value<'db>, Value<'db>>,
+    /// Rewrite context for value mapping.
+    ctx: RewriteContext<'db>,
     /// Import scope stack (for use declarations).
     import_scopes: Vec<HashMap<Symbol, Binding<'db>>>,
     /// Local scope stack (for function parameters, let bindings).
@@ -397,7 +398,7 @@ impl<'db> Resolver<'db> {
         Self {
             db,
             env,
-            value_map: HashMap::new(),
+            ctx: RewriteContext::new(),
             import_scopes: vec![HashMap::new()],
             local_scopes: Vec::new(),
             report_unresolved: false,
@@ -411,7 +412,7 @@ impl<'db> Resolver<'db> {
         Self {
             db,
             env,
-            value_map: HashMap::new(),
+            ctx: RewriteContext::new(),
             import_scopes: vec![HashMap::new()],
             local_scopes: Vec::new(),
             report_unresolved: true,
@@ -421,16 +422,6 @@ impl<'db> Resolver<'db> {
     /// Get the environment.
     pub fn env(&self) -> &ModuleEnv<'db> {
         &self.env
-    }
-
-    /// Look up a mapped value, or return the original if not mapped.
-    fn lookup_value(&self, old: Value<'db>) -> Value<'db> {
-        self.value_map.get(&old).copied().unwrap_or(old)
-    }
-
-    /// Map a value from old to new.
-    fn map_value(&mut self, old: Value<'db>, new: Value<'db>) {
-        self.value_map.insert(old, new);
     }
 
     /// Push a new local scope.
@@ -671,7 +662,7 @@ impl<'db> Resolver<'db> {
             .flat_map(|op| self.resolve_operation(op))
             .collect();
 
-        Block::new(self.db, block.location(self.db), new_args, new_ops)
+        Block::new(self.db, block.id(self.db), block.location(self.db), new_args, new_ops)
     }
 
     /// Resolve a single operation.
@@ -680,7 +671,12 @@ impl<'db> Resolver<'db> {
     /// or multiple ops if expanded.
     fn resolve_operation(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
         // First, remap operands from previous transformations
-        let remapped_op = self.remap_operands(op);
+        let remapped_op = self.ctx.remap_operands(self.db, op);
+
+        // If operands were remapped, map old results to new results
+        if remapped_op != *op {
+            self.ctx.map_results(self.db, op, &remapped_op);
+        }
 
         let dialect = remapped_op.dialect(self.db);
         let op_name = remapped_op.name(self.db);
@@ -984,7 +980,7 @@ impl<'db> Resolver<'db> {
         for (i, (name, op)) in param_declarations.iter().enumerate() {
             if i < block_args.len() {
                 // Create block argument value
-                let block_arg = Value::new(self.db, ValueDef::BlockArg(*block), i);
+                let block_arg = Value::new(self.db, ValueDef::BlockArg(block.id(self.db)), i);
                 let param_ty = block_args[i];
 
                 // Add to local scope
@@ -998,7 +994,7 @@ impl<'db> Resolver<'db> {
 
                 // Map the src.var result to the block argument
                 let old_result = op.result(self.db, 0);
-                self.map_value(old_result, block_arg);
+                self.ctx.map_value(old_result, block_arg);
             }
         }
 
@@ -1016,28 +1012,7 @@ impl<'db> Resolver<'db> {
             .flat_map(|(_, op)| self.resolve_operation(op))
             .collect();
 
-        Block::new(self.db, block.location(self.db), new_args, new_ops)
-    }
-
-    /// Remap operands using the current value map.
-    fn remap_operands(&self, op: &Operation<'db>) -> Operation<'db> {
-        let operands = op.operands(self.db);
-        let mut new_operands: IdVec<Value<'db>> = IdVec::new();
-        let mut changed = false;
-
-        for &operand in operands.iter() {
-            let mapped = self.lookup_value(operand);
-            new_operands.push(mapped);
-            if mapped != operand {
-                changed = true;
-            }
-        }
-
-        if !changed {
-            return *op;
-        }
-
-        op.modify(self.db).operands(new_operands).build()
+        Block::new(self.db, block.id(self.db), block.location(self.db), new_args, new_ops)
     }
 
     /// Recursively resolve regions and types within an operation.
@@ -1060,10 +1035,16 @@ impl<'db> Resolver<'db> {
             return *op;
         }
 
-        op.modify(self.db)
+        let new_op = op
+            .modify(self.db)
             .results(new_results)
             .regions(new_regions)
-            .build()
+            .build();
+
+        // Map old results to new results so subsequent operations can find them
+        self.ctx.map_results(self.db, op, &new_op);
+
+        new_op
     }
 
     /// Try to resolve a `src.var` operation.
@@ -1090,7 +1071,7 @@ impl<'db> Resolver<'db> {
             // Map old result to new result
             let old_result = op.result(self.db, 0);
             let new_result = new_operation.result(self.db, 0);
-            self.map_value(old_result, new_result);
+            self.ctx.map_value(old_result, new_result);
 
             return Some(vec![new_operation]);
         }
@@ -1109,7 +1090,7 @@ impl<'db> Resolver<'db> {
                     // Map old result to the actual bound value (not the new src.var's result)
                     // This ensures use sites get the correct value
                     let old_result = op.result(self.db, 0);
-                    self.map_value(old_result, *value);
+                    self.ctx.map_value(old_result, *value);
 
                     // Return the new src.var to keep it in IR for hover
                     return Some(vec![new_operation]);
@@ -1123,7 +1104,7 @@ impl<'db> Resolver<'db> {
                     // Remap old result to case.bind result (proper SSA value)
                     let old_result = op.result(self.db, 0);
                     let new_result = bind_op.as_operation().result(self.db, 0);
-                    self.map_value(old_result, new_result);
+                    self.ctx.map_value(old_result, new_result);
 
                     return Some(vec![bind_op.as_operation()]);
                 }
@@ -1141,7 +1122,7 @@ impl<'db> Resolver<'db> {
                 // Map old result to new result
                 let old_result = op.result(self.db, 0);
                 let new_result = new_operation.result(self.db, 0);
-                self.map_value(old_result, new_result);
+                self.ctx.map_value(old_result, new_result);
 
                 Some(vec![new_operation])
             }
@@ -1161,7 +1142,7 @@ impl<'db> Resolver<'db> {
                 // Map old result to new result
                 let old_result = op.result(self.db, 0);
                 let new_result = new_operation.result(self.db, 0);
-                self.map_value(old_result, new_result);
+                self.ctx.map_value(old_result, new_result);
 
                 Some(vec![new_operation])
             }
@@ -1217,7 +1198,7 @@ impl<'db> Resolver<'db> {
 
                 let old_result = op.result(self.db, 0);
                 let new_result = new_operation.result(self.db, 0);
-                self.map_value(old_result, new_result);
+                self.ctx.map_value(old_result, new_result);
 
                 Some(new_operation)
             }
@@ -1232,7 +1213,7 @@ impl<'db> Resolver<'db> {
 
                 let old_result = op.result(self.db, 0);
                 let new_result = new_operation.result(self.db, 0);
-                self.map_value(old_result, new_result);
+                self.ctx.map_value(old_result, new_result);
 
                 Some(new_operation)
             }
@@ -1271,7 +1252,7 @@ impl<'db> Resolver<'db> {
 
                 let old_result = op.result(self.db, 0);
                 let new_result = new_operation.result(self.db, 0);
-                self.map_value(old_result, new_result);
+                self.ctx.map_value(old_result, new_result);
 
                 return Some(new_operation);
             }
@@ -1288,15 +1269,20 @@ impl<'db> Resolver<'db> {
         }?;
 
         match binding {
-            Binding::Function { path, .. } => {
+            Binding::Function { path, ty: func_ty } => {
                 // Direct function call
+                // Use the callee function's return type instead of the src.call's type variable
+                // Also resolve the return type (it may be src.type that needs resolution)
+                let call_result_ty = core::Func::from_type(self.db, *func_ty)
+                    .map(|f| self.resolve_type(f.result(self.db)))
+                    .unwrap_or(result_ty);
                 // func::call(db, location, args, result_type, callee)
-                let new_op = func::call(self.db, location, args, result_ty, path.clone());
+                let new_op = func::call(self.db, location, args, call_result_ty, path.clone());
                 let new_operation = new_op.as_operation();
 
                 let old_result = op.result(self.db, 0);
                 let new_result = new_operation.result(self.db, 0);
-                self.map_value(old_result, new_result);
+                self.ctx.map_value(old_result, new_result);
 
                 Some(new_operation)
             }
@@ -1343,7 +1329,7 @@ impl<'db> Resolver<'db> {
 
                 let old_result = op.result(self.db, 0);
                 let new_result = new_operation.result(self.db, 0);
-                self.map_value(old_result, new_result);
+                self.ctx.map_value(old_result, new_result);
 
                 Some(new_operation)
             }

@@ -1011,6 +1011,7 @@ fn emit_function<'db>(
     func_indices: &HashMap<Symbol, u32>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
 ) -> CompilationResult<Function> {
+    debug!("=== emit_function: {:?} ===", func_def.name);
     let region = func_def
         .op
         .regions(db)
@@ -1073,7 +1074,18 @@ fn assign_locals_in_region<'db>(
                 .copied()
                 .filter(|ty| !is_nil_type(db, *ty))
             {
-                let val_type = type_to_valtype(db, result_ty)?;
+                let val_type = match type_to_valtype(db, result_ty) {
+                    Ok(vt) => vt,
+                    Err(e) => {
+                        debug!(
+                            "type_to_valtype failed for op {}.{}: {:?}",
+                            op.dialect(db),
+                            op.name(db),
+                            e
+                        );
+                        return Err(e);
+                    }
+                };
                 let local_index = param_count + locals.len() as u32;
                 value_locals.insert(op.result(db, 0), local_index);
                 locals.push(val_type);
@@ -1174,7 +1186,7 @@ fn emit_op<'db>(
 
     // Fast path: simple operations (emit operands → instruction → set result)
     if let Some(instr) = SIMPLE_OPS.get(&name) {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         function.instruction(instr);
         set_result_local(db, op, value_locals, function)?;
         return Ok(());
@@ -1210,7 +1222,7 @@ fn emit_op<'db>(
                 "wasm.if expects a single condition operand",
             ));
         }
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         function.instruction(&Instruction::If(block_type));
         let regions = op.regions(db);
         let then_region = regions
@@ -1334,17 +1346,17 @@ fn emit_op<'db>(
                 "wasm.br_if expects a single condition operand",
             ));
         }
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
         function.instruction(&Instruction::BrIf(depth));
     } else if name == Symbol::new("call") {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
         let target = resolve_callee(callee, func_indices)?;
         function.instruction(&Instruction::Call(target));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("return_call") {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
         let target = resolve_callee(callee, func_indices)?;
         function.instruction(&Instruction::ReturnCall(target));
@@ -1354,22 +1366,22 @@ fn emit_op<'db>(
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("local_set") {
         let index = attr_local_index(db, op)?;
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         function.instruction(&Instruction::LocalSet(index));
     } else if name == Symbol::new("local_tee") {
         let index = attr_local_index(db, op)?;
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         function.instruction(&Instruction::LocalTee(index));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("struct_new") {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(&attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::StructNew(type_idx));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("struct_get") {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(&attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
@@ -1380,7 +1392,7 @@ fn emit_op<'db>(
         });
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("struct_set") {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(&attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
@@ -1390,28 +1402,28 @@ fn emit_op<'db>(
             field_index: field_idx,
         });
     } else if name == Symbol::new("array_new") {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(&attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayNew(type_idx));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("array_new_default") {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(&attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayNewDefault(type_idx));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("array_get") {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(&attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayGet(type_idx));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("array_set") {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(&attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
@@ -1425,7 +1437,7 @@ fn emit_op<'db>(
         function.instruction(&Instruction::RefNull(heap_type));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("ref_cast") {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
         let heap_type = attr_heap_type(&attrs, ATTR_TARGET_TYPE())
             .ok()
@@ -1434,7 +1446,7 @@ fn emit_op<'db>(
         function.instruction(&Instruction::RefCastNullable(heap_type));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("ref_test") {
-        emit_operands(operands, value_locals, function)?;
+        emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
         let heap_type = attr_heap_type(&attrs, ATTR_TARGET_TYPE())
             .ok()
@@ -1452,16 +1464,42 @@ fn emit_op<'db>(
 }
 
 fn emit_operands<'db>(
+    db: &'db dyn salsa::Database,
     operands: &IdVec<Value<'db>>,
     value_locals: &HashMap<Value<'db>, u32>,
     function: &mut Function,
 ) -> CompilationResult<()> {
     for value in operands.iter() {
-        // Skip nil-type operands (no runtime value)
+        // Try direct lookup first
         if let Some(index) = value_locals.get(value) {
+            debug!("  emit_operands: found value {:?} -> local {}", value.def(db), index);
             function.instruction(&Instruction::LocalGet(*index));
+            continue;
         }
-        // If operand not in value_locals, it might be a nil value that was erased - skip it
+
+        // Handle stale block argument references (issue #43)
+        // The resolver creates operands that reference OLD block arguments, but value_locals
+        // only contains NEW block arguments. For block args, we can use the index directly
+        // since parameters are always locals 0, 1, 2, etc.
+        if let ValueDef::BlockArg(block_id) = value.def(db) {
+            let index = value.index(db) as u32;
+            debug!("  emit_operands: BlockArg fallback {:?} -> local {}", block_id, index);
+            function.instruction(&Instruction::LocalGet(index));
+            continue;
+        }
+
+        // If operand not found and not a block arg, this is an ERROR - stale value reference!
+        if let ValueDef::OpResult(stale_op) = value.def(db) {
+            debug!(
+                "  emit_operands: STALE OpResult! op={}.{}; value_locals has {} entries",
+                stale_op.dialect(db),
+                stale_op.name(db),
+                value_locals.len(),
+            );
+            return Err(CompilationError::invalid_module(
+                "stale SSA value in wasm backend (missing local mapping)",
+            ));
+        }
     }
     Ok(())
 }
@@ -1469,7 +1507,8 @@ fn emit_operands<'db>(
 fn value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
     match value.def(db) {
         ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
-        ValueDef::BlockArg(block) => block.args(db).get(value.index(db)).copied(),
+        // BlockArg type lookup requires block context; callers handle None
+        ValueDef::BlockArg(_block_id) => None,
     }
 }
 
@@ -1711,7 +1750,7 @@ fn attr_i32_attr<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<i32>
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, Location, PathId, Region, Span, idvec};
+    use trunk_ir::{Block, BlockId, Location, PathId, Region, Span, idvec};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -1755,7 +1794,7 @@ mod tests {
             .attr("type_idx", Attribute::IntBits(0))
             .build();
 
-        let block = Block::new(db, location, idvec![], idvec![field0, field1, struct_new]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![field0, field1, struct_new]);
         let region = Region::new(db, location, idvec![block]);
         core::Module::create(db, location, "test".into(), region)
     }
@@ -1803,7 +1842,7 @@ mod tests {
             .attr("type_idx", Attribute::IntBits(0))
             .build();
 
-        let block = Block::new(db, location, idvec![], idvec![size, init, array_new]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![size, init, array_new]);
         let region = Region::new(db, location, idvec![block]);
         core::Module::create(db, location, "test".into(), region)
     }
@@ -1852,6 +1891,7 @@ mod tests {
 
         let block = Block::new(
             db,
+            BlockId::fresh(),
             location,
             idvec![],
             idvec![field, struct_new1, field2, struct_new2],
@@ -1910,6 +1950,7 @@ mod tests {
 
         let block = Block::new(
             db,
+            BlockId::fresh(),
             location,
             idvec![],
             idvec![field, struct_new1, field2a, field2b, struct_new2],
@@ -1956,6 +1997,7 @@ mod tests {
 
         let body_block = Block::new(
             db,
+            BlockId::fresh(),
             location,
             idvec![],
             idvec![field, struct_new, func_return],
@@ -1969,7 +2011,7 @@ mod tests {
             .region(body_region)
             .build();
 
-        let block = Block::new(db, location, idvec![], idvec![wasm_func]);
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
         let region = Region::new(db, location, idvec![block]);
         core::Module::create(db, location, "test".into(), region)
     }

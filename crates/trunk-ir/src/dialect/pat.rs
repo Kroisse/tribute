@@ -154,7 +154,7 @@ dialect! {
 pub mod helpers {
     use super::*;
     use crate::Location;
-    use crate::{Attribute, Block, DialectOp, IdVec, Operation, Region, Symbol};
+    use crate::{Attribute, Block, BlockId, DialectOp, IdVec, Operation, Region, Symbol};
 
     /// Create a wildcard pattern region (`_`).
     pub fn wildcard_region<'db>(
@@ -252,7 +252,13 @@ pub mod helpers {
         Region::new(
             db,
             location,
-            IdVec::from(vec![Block::new(db, location, IdVec::new(), IdVec::new())]),
+            IdVec::from(vec![Block::new(
+                db,
+                BlockId::fresh(),
+                location,
+                IdVec::new(),
+                IdVec::new(),
+            )]),
         )
     }
 
@@ -262,7 +268,13 @@ pub mod helpers {
         location: Location<'db>,
         op: Operation<'db>,
     ) -> Region<'db> {
-        let block = Block::new(db, location, IdVec::new(), IdVec::from(vec![op]));
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            IdVec::new(),
+            IdVec::from(vec![op]),
+        );
         Region::new(db, location, IdVec::from(vec![block]))
     }
 

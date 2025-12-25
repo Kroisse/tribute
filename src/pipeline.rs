@@ -67,7 +67,7 @@ use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 use tribute_wasm_backend::{WasmBinary, compile_to_wasm};
 use trunk_ir::Span;
 use trunk_ir::dialect::core::Module;
-use trunk_ir::{Block, IdVec, Region, Symbol};
+use trunk_ir::{Block, BlockId, IdVec, Region, Symbol};
 
 // =============================================================================
 // Standard Library Prelude
@@ -126,6 +126,7 @@ pub fn merge_with_prelude<'db>(
 
         let merged_block = Block::new(
             db,
+            BlockId::fresh(),
             user_block.location(db),
             user_block.args(db).clone(),
             combined_ops,

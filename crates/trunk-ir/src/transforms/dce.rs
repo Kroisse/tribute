@@ -229,6 +229,7 @@ impl<'db> DcePass<'db> {
 
         let new_block = Block::new(
             self.db,
+            block.id(self.db),
             block.location(self.db),
             block.args(self.db).clone(),
             new_ops,

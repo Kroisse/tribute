@@ -10,7 +10,8 @@ use crate::{IdVec, Operation, Value};
 /// Context for IR rewriting.
 ///
 /// Tracks value mappings when operations are transformed, allowing
-/// subsequent operations to reference the new values.
+/// subsequent operations to reference the new values. Also tracks
+/// the number of changes made for fixpoint detection.
 pub struct RewriteContext<'db> {
     /// Maps old values to their replacements.
     value_map: HashMap<Value<'db>, Value<'db>>,

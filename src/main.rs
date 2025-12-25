@@ -8,6 +8,7 @@ use cli::{Cli, Command};
 use ropey::Rope;
 use salsa::Database;
 use std::path::PathBuf;
+use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{compile_with_diagnostics, stage_lower_to_wasm, stage_resolve};
 use tribute::{SourceCst, TributeDatabaseImpl};
@@ -16,6 +17,16 @@ use tribute_passes::resolve::build_env;
 
 fn main() {
     let cli = Cli::parse();
+
+    // Initialize tracing with filter from --log or RUST_LOG env var
+    let env_filter = match &cli.log {
+        Some(filter) => EnvFilter::try_new(filter).expect("invalid log filter"),
+        None => EnvFilter::from_default_env(),
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(std::io::stderr)
+        .init();
 
     match cli.command {
         Command::Serve => {

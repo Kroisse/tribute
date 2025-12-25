@@ -489,7 +489,8 @@ fn type_suffix<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> &'st
 fn value_type<'db>(db: &'db dyn salsa::Database, value: trunk_ir::Value<'db>) -> Option<Type<'db>> {
     match value.def(db) {
         trunk_ir::ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
-        trunk_ir::ValueDef::BlockArg(block) => block.args(db).get(value.index(db)).copied(),
+        // BlockArg type lookup requires block context; callers handle None
+        trunk_ir::ValueDef::BlockArg(_block_id) => None,
     }
 }
 
@@ -498,7 +499,7 @@ mod tests {
     use super::*;
     use insta::assert_snapshot;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, DialectOp, Location, PathId, Region, Span, idvec};
+    use trunk_ir::{Block, BlockId, DialectOp, Location, PathId, Region, Span, idvec};
 
     /// Format module operations for snapshot testing
     fn format_module_ops(db: &dyn salsa::Database, module: &Module<'_>) -> String {
@@ -573,6 +574,7 @@ mod tests {
 
         let block = Block::new(
             db,
+            BlockId::fresh(),
             location,
             idvec![],
             idvec![
@@ -617,6 +619,7 @@ mod tests {
 
         let block = Block::new(
             db,
+            BlockId::fresh(),
             location,
             idvec![],
             idvec![int_const.as_operation(), convert.as_operation()],
@@ -649,6 +652,7 @@ mod tests {
 
         let block = Block::new(
             db,
+            BlockId::fresh(),
             location,
             idvec![],
             idvec![int_const.as_operation(), extend.as_operation()],
@@ -681,6 +685,7 @@ mod tests {
 
         let block = Block::new(
             db,
+            BlockId::fresh(),
             location,
             idvec![],
             idvec![float_const.as_operation(), trunc.as_operation()],

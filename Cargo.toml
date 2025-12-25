@@ -33,6 +33,7 @@ smallvec = { version = "1.13", features = ["union", "const_generics", "serde"] }
 target-lexicon = "0.13"
 tempfile = "3.8"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tree-sitter = "0.25.6"
 tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute", tag = "v0.2.2" }
 tribute-cranelift = { path = "crates/tribute-cranelift" }
@@ -44,6 +45,8 @@ trunk-ir = { path = "crates/trunk-ir" }
 unsynn = "0.3.0"
 quote = "1.0"
 wasm-encoder = "0.243.0"
+wasmtime = "40.0"
+wasmtime-wasi = "40.0"
 
 [package]
 name = "tribute"
@@ -62,6 +65,7 @@ ropey.workspace = true
 salsa.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 tribute-front.workspace = true
 tribute-passes.workspace = true
 tribute-wasm-backend.workspace = true
@@ -72,3 +76,5 @@ tree-sitter-tribute.workspace = true
 [dev-dependencies]
 insta.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
