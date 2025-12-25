@@ -104,6 +104,7 @@ impl<'db> ConstInliner<'db> {
 
         Block::new(
             self.db,
+            block.id(self.db),
             block.location(self.db),
             block.args(self.db).clone(),
             new_ops,

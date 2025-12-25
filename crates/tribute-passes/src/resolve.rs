@@ -1162,7 +1162,7 @@ impl<'db> Resolver<'db> {
                 // Map old result to new result
                 let old_result = op.result(self.db, 0);
                 let new_result = new_op.result(self.db, 0);
-                self.map_value(old_result, new_result);
+                self.ctx.map_value(old_result, new_result);
 
                 Some(vec![new_op])
             }
