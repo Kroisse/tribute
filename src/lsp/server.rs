@@ -172,13 +172,13 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
         let rope = source_cst.text(&self.db);
 
-        let symbols = self.db.attach(|db| {
-            let module = compile(db, source_cst);
-            let core_module = core::Module::from_operation(db, module.as_operation()).ok()?;
-            extract_symbols_from_module(db, &core_module, rope)
-        })?;
-
-        Some(DocumentSymbolResponse::Nested(symbols))
+        self.db
+            .attach(|db| {
+                let module = compile(db, source_cst);
+                let core_module = core::Module::from_operation(db, module.as_operation()).ok()?;
+                Some(extract_symbols_from_module(db, &core_module, rope))
+            })
+            .map(DocumentSymbolResponse::Nested)
     }
 
     fn publish_diagnostics(&self, uri: &Uri) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -424,19 +424,14 @@ fn extract_symbols_from_module<'db>(
     db: &'db dyn salsa::Database,
     module: &trunk_ir::dialect::core::Module<'db>,
     rope: &Rope,
-) -> Option<Vec<DocumentSymbol>> {
-    let body = module.body(db);
-    let mut symbols = Vec::new();
-
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if let Some(symbol) = extract_symbol_from_operation(db, op, rope) {
-                symbols.push(symbol);
-            }
-        }
-    }
-
-    Some(symbols)
+) -> Vec<DocumentSymbol> {
+    module
+        .body(db)
+        .blocks(db)
+        .iter()
+        .flat_map(|block| block.operations(db))
+        .filter_map(|op| extract_symbol_from_operation(db, op, rope))
+        .collect()
 }
 
 /// Extract a DocumentSymbol from a single operation, if applicable.
@@ -510,6 +505,6 @@ fn create_symbol(
         selection_range,
         children: None,
         #[allow(deprecated)]
-        deprecated: Some(false),
+        deprecated: None,
     }
 }
