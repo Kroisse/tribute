@@ -2,8 +2,9 @@
 
 use tree_sitter::Node;
 use trunk_ir::{
-    Attribute, BlockBuilder, IdVec, QualifiedName, Span, Symbol, SymbolVec, Type,
-    dialect::{core, func, src, ty},
+    Attribute, BlockBuilder, DialectType, IdVec, QualifiedName, Span, Symbol, SymbolVec, Type,
+    dialect::{adt, core, func, src, ty},
+    idvec,
 };
 
 use super::context::CstLoweringCtx;
@@ -186,39 +187,291 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
 // Type Declaration Lowering
 // =============================================================================
 
-/// Lower a struct declaration to type.struct.
+/// Lower a struct declaration to type.struct and a module containing field accessors.
+///
+/// For a struct like `struct User { name: String, age: Int }`, this generates:
+/// 1. The type.struct definition
+/// 2. A module named `User` containing:
+///    - `fn name(self: User) -> String` (getter)
+///    - `mod name { fn set(...), fn modify(...) }`
+///    - `fn age(self: User) -> Int` (getter)
+///    - `mod age { fn set(...), fn modify(...) }`
 pub fn lower_struct_decl<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     node: Node,
-) -> Option<ty::Struct<'db>> {
+) -> Option<(ty::Struct<'db>, core::Module<'db>)> {
     let location = ctx.location(&node);
-    let infer_ty = ctx.fresh_type_var();
+    let struct_ty = ctx.fresh_type_var();
 
     // Use field-based access
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
     let name = node_text(&name_node, &ctx.source).to_string();
+    let type_name = sym(&name);
     let fields = parse_struct_fields(ctx, body_node);
+
+    // Build fields attribute for the struct definition
     let fields_attr = Attribute::List(
         fields
-            .into_iter()
+            .iter()
             .map(|(field_name, field_type)| {
                 Attribute::List(vec![
-                    Attribute::Symbol(sym(&field_name)),
-                    Attribute::Symbol(sym(&format!("{:?}", field_type))),
+                    Attribute::Symbol(sym(field_name)),
+                    Attribute::Type(*field_type),
                 ])
             })
             .collect(),
     );
 
-    Some(ty::r#struct(
+    // Create the struct definition operation
+    let struct_op = ty::r#struct(
         ctx.db,
         location,
-        infer_ty,
-        Attribute::Symbol(sym(&name)),
+        struct_ty,
+        Attribute::Symbol(type_name),
         fields_attr,
-    ))
+    );
+
+    // Create a module with the same name as the struct, containing field accessors
+    let fields_clone = fields.clone();
+    let accessors_module = core::Module::build(ctx.db, location, type_name, |module_builder| {
+        for (idx, (field_name, field_type)) in fields_clone.iter().enumerate() {
+            let field_sym = sym(field_name);
+
+            // Generate getter: fn field_name(self: StructType) -> FieldType
+            let getter =
+                generate_field_getter(ctx, location, struct_ty, field_sym, *field_type, idx);
+            module_builder.op(getter);
+
+            // Generate field module containing set and modify
+            let field_module = generate_field_module(
+                ctx,
+                location,
+                struct_ty,
+                field_sym,
+                *field_type,
+                idx,
+                &fields_clone,
+            );
+            module_builder.op(field_module);
+        }
+    });
+
+    Some((struct_op, accessors_module))
+}
+
+/// Generate a field getter function.
+///
+/// Creates: `fn field_name(self: StructType) -> FieldType { adt.struct_get(self, field_index) }`
+fn generate_field_getter<'db>(
+    ctx: &CstLoweringCtx<'db>,
+    location: trunk_ir::Location<'db>,
+    struct_ty: Type<'db>,
+    field_name: Symbol,
+    field_type: Type<'db>,
+    field_index: usize,
+) -> func::Func<'db> {
+    func::Func::build(
+        ctx.db,
+        location,
+        QualifiedName::simple(field_name),
+        idvec![struct_ty],
+        field_type,
+        |entry| {
+            let self_value = entry.block_arg(ctx.db, 0);
+            let field_value = entry.op(adt::struct_get(
+                ctx.db,
+                location,
+                self_value,
+                field_type,
+                Attribute::IntBits(field_index as u64),
+            ));
+            entry.op(func::Return::value(
+                ctx.db,
+                location,
+                field_value.result(ctx.db),
+            ));
+        },
+    )
+}
+
+/// Generate a field module containing set and modify functions.
+///
+/// Creates:
+/// ```text
+/// mod field_name {
+///     fn set(self: StructType, value: FieldType) -> StructType { ... }
+///     fn modify(self: StructType, f: fn(FieldType) -> FieldType) -> StructType { ... }
+/// }
+/// ```
+fn generate_field_module<'db>(
+    ctx: &CstLoweringCtx<'db>,
+    location: trunk_ir::Location<'db>,
+    struct_ty: Type<'db>,
+    field_name: Symbol,
+    field_type: Type<'db>,
+    field_index: usize,
+    all_fields: &[(String, Type<'db>)],
+) -> core::Module<'db> {
+    let all_fields = all_fields.to_vec();
+
+    core::Module::build(ctx.db, location, field_name, |module_builder| {
+        // Generate set function
+        let set_fn = generate_field_set(
+            ctx,
+            location,
+            struct_ty,
+            field_type,
+            field_index,
+            &all_fields,
+        );
+        module_builder.op(set_fn);
+
+        // Generate modify function
+        let modify_fn = generate_field_modify(
+            ctx,
+            location,
+            struct_ty,
+            field_type,
+            field_index,
+            &all_fields,
+        );
+        module_builder.op(modify_fn);
+    })
+}
+
+/// Generate a field setter function.
+///
+/// Creates: `fn set(self: StructType, value: FieldType) -> StructType`
+/// Implementation: Create a new struct with all fields copied except the target field.
+fn generate_field_set<'db>(
+    ctx: &CstLoweringCtx<'db>,
+    location: trunk_ir::Location<'db>,
+    struct_ty: Type<'db>,
+    field_type: Type<'db>,
+    field_index: usize,
+    all_fields: &[(String, Type<'db>)],
+) -> func::Func<'db> {
+    let all_fields = all_fields.to_vec();
+
+    func::Func::build(
+        ctx.db,
+        location,
+        QualifiedName::simple(sym("set")),
+        idvec![struct_ty, field_type],
+        struct_ty,
+        |entry| {
+            let self_value = entry.block_arg(ctx.db, 0);
+            let new_value = entry.block_arg(ctx.db, 1);
+
+            // Build new struct with updated field
+            let mut field_values = Vec::new();
+            for (i, (_, fty)) in all_fields.iter().enumerate() {
+                if i == field_index {
+                    field_values.push(new_value);
+                } else {
+                    let extracted = entry.op(adt::struct_get(
+                        ctx.db,
+                        location,
+                        self_value,
+                        *fty,
+                        Attribute::IntBits(i as u64),
+                    ));
+                    field_values.push(extracted.result(ctx.db));
+                }
+            }
+
+            let new_struct = entry.op(adt::struct_new(
+                ctx.db,
+                location,
+                field_values,
+                struct_ty,
+                struct_ty,
+            ));
+            entry.op(func::Return::value(
+                ctx.db,
+                location,
+                new_struct.result(ctx.db),
+            ));
+        },
+    )
+}
+
+/// Generate a field modify function.
+///
+/// Creates: `fn modify(self: StructType, f: fn(FieldType) -> FieldType) -> StructType`
+/// Implementation: Get current value, apply f, then set.
+fn generate_field_modify<'db>(
+    ctx: &CstLoweringCtx<'db>,
+    location: trunk_ir::Location<'db>,
+    struct_ty: Type<'db>,
+    field_type: Type<'db>,
+    field_index: usize,
+    all_fields: &[(String, Type<'db>)],
+) -> func::Func<'db> {
+    let all_fields = all_fields.to_vec();
+    let fn_type = core::Func::new(ctx.db, idvec![field_type], field_type).as_type();
+
+    func::Func::build(
+        ctx.db,
+        location,
+        QualifiedName::simple(sym("modify")),
+        idvec![struct_ty, fn_type],
+        struct_ty,
+        |entry| {
+            let self_value = entry.block_arg(ctx.db, 0);
+            let f_value = entry.block_arg(ctx.db, 1);
+
+            // Get current field value
+            let current = entry.op(adt::struct_get(
+                ctx.db,
+                location,
+                self_value,
+                field_type,
+                Attribute::IntBits(field_index as u64),
+            ));
+
+            // Apply f to get new value
+            let new_field_value = entry.op(func::call_indirect(
+                ctx.db,
+                location,
+                f_value,
+                vec![current.result(ctx.db)],
+                field_type,
+            ));
+
+            // Build new struct with updated field
+            let mut field_values = Vec::new();
+            for (i, (_, fty)) in all_fields.iter().enumerate() {
+                if i == field_index {
+                    field_values.push(new_field_value.result(ctx.db));
+                } else {
+                    let extracted = entry.op(adt::struct_get(
+                        ctx.db,
+                        location,
+                        self_value,
+                        *fty,
+                        Attribute::IntBits(i as u64),
+                    ));
+                    field_values.push(extracted.result(ctx.db));
+                }
+            }
+
+            let new_struct = entry.op(adt::struct_new(
+                ctx.db,
+                location,
+                field_values,
+                struct_ty,
+                struct_ty,
+            ));
+            entry.op(func::Return::value(
+                ctx.db,
+                location,
+                new_struct.result(ctx.db),
+            ));
+        },
+    )
 }
 
 /// Parse struct fields from struct_body or record_fields.
@@ -228,6 +481,23 @@ fn parse_struct_fields<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Vec<(S
 
     for child in node.named_children(&mut cursor) {
         if is_comment(child.kind()) {
+            continue;
+        }
+        // Handle struct_fields wrapper (struct_body -> struct_fields -> struct_field)
+        if child.kind() == "struct_fields" {
+            let mut inner_cursor = child.walk();
+            for field_child in child.named_children(&mut inner_cursor) {
+                if field_child.kind() == "struct_field"
+                    && let Some(name_node) = field_child.child_by_field_name("name")
+                {
+                    let field_name = node_text(&name_node, &ctx.source).to_string();
+                    let field_type = field_child
+                        .child_by_field_name("type")
+                        .map(|t| ctx.resolve_type_node(t))
+                        .unwrap_or_else(|| ctx.fresh_type_var());
+                    fields.push((field_name, field_type));
+                }
+            }
             continue;
         }
         if child.kind() == "struct_field" || child.kind() == "record_field" {
@@ -572,8 +842,9 @@ pub fn lower_mod_body<'db>(
                 }
             }
             "struct_declaration" => {
-                if let Some(struct_op) = lower_struct_decl(ctx, child) {
+                if let Some((struct_op, accessors_module)) = lower_struct_decl(ctx, child) {
                     builder.op(struct_op);
+                    builder.op(accessors_module);
                 }
             }
             "enum_declaration" => {

@@ -102,8 +102,9 @@ fn lower_cst_impl<'db>(
                     }
                 }
                 "struct_declaration" => {
-                    if let Some(struct_op) = lower_struct_decl(&mut ctx, child) {
+                    if let Some((struct_op, getters_module)) = lower_struct_decl(&mut ctx, child) {
                         top.op(struct_op);
+                        top.op(getters_module);
                     }
                 }
                 "enum_declaration" => {
@@ -461,9 +462,44 @@ mod tests {
         let blocks = body_region.blocks(&db);
         assert!(!blocks.is_empty());
 
-        // Should have at least 2 operations (struct and function)
+        // Should have 3 operations: type.struct, core.module (accessors), func.func (main)
         let ops = blocks[0].operations(&db);
-        assert!(ops.len() >= 2, "Should have struct and function");
+        assert!(
+            ops.len() >= 3,
+            "Should have struct, accessor module, and function"
+        );
+
+        // Verify we have the struct type
+        assert_eq!(ops[0].full_name(&db), "type.struct");
+
+        // Verify we have the accessor module
+        assert_eq!(ops[1].full_name(&db), "core.module");
+
+        // Check the accessor module contents
+        use trunk_ir::{DialectOp, dialect::core};
+        if let Ok(accessor_module) = core::Module::from_operation(&db, ops[1]) {
+            // Should contain getter functions and field modules for x and y
+            let accessor_body = accessor_module.body(&db);
+            let accessor_blocks = accessor_body.blocks(&db);
+            assert!(
+                !accessor_blocks.is_empty(),
+                "Accessor module should have at least one block"
+            );
+
+            let accessor_ops = accessor_blocks[0].operations(&db);
+            // For 2 fields: 2 getters + 2 field modules = 4 ops
+            assert_eq!(
+                accessor_ops.len(),
+                4,
+                "Accessor module should have 2 getters and 2 field modules"
+            );
+
+            // Verify operation types: getter, module, getter, module
+            assert_eq!(accessor_ops[0].full_name(&db), "func.func");
+            assert_eq!(accessor_ops[1].full_name(&db), "core.module");
+            assert_eq!(accessor_ops[2].full_name(&db), "func.func");
+            assert_eq!(accessor_ops[3].full_name(&db), "core.module");
+        }
     }
 
     #[test]

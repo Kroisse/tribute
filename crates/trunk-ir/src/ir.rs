@@ -430,6 +430,12 @@ impl<'db> BlockBuilder<'db> {
         self
     }
 
+    /// Get a Value representing block argument at the given index.
+    /// This can be used before the block is built to reference block arguments.
+    pub fn block_arg(&self, db: &'db dyn salsa::Database, index: usize) -> Value<'db> {
+        Value::new(db, ValueDef::BlockArg(self.id), index)
+    }
+
     /// Add an operation to the block and return it for capturing.
     pub fn op<Op: crate::DialectOp<'db>>(&mut self, operation: Op) -> Op {
         self.operations.push(operation.as_operation());
