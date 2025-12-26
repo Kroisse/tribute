@@ -435,6 +435,71 @@ mod tests {
     }
 
     #[test]
+    fn test_prefixed_string_literal() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"fn main() { s"hello" }"#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        assert!(!blocks.is_empty());
+    }
+
+    #[test]
+    fn test_raw_string_literal() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"fn main() { rs"hello" }"#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        assert!(!blocks.is_empty());
+    }
+
+    #[test]
+    fn test_raw_bytes_literal() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"fn main() { br"hello" }"#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        assert!(!blocks.is_empty());
+    }
+
+    #[test]
+    fn test_raw_interpolated_string_literal() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"
+            fn main() {
+                let name = "World";
+                rs"Hello, \{name}!"
+            }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        assert!(!blocks.is_empty());
+    }
+
+    #[test]
+    fn test_raw_interpolated_bytes_literal() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"
+            fn main() {
+                let chunk = "data";
+                rb"chunk: \{chunk}"
+            }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        assert!(!blocks.is_empty());
+    }
+
+    #[test]
     fn test_wildcard_pattern() {
         let db = salsa::DatabaseImpl::default();
         let source = "fn main() { let _ = 42; 0 }";

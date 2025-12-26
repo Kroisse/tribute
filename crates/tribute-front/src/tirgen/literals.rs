@@ -77,24 +77,42 @@ pub fn parse_rune_literal(text: &str) -> Option<char> {
     }
 }
 
+fn strip_prefixes<'a>(text: &'a str, prefixes: &[&str]) -> &'a str {
+    for prefix in prefixes {
+        if let Some(rest) = text.strip_prefix(prefix) {
+            return rest;
+        }
+    }
+    text
+}
+
 /// Parse a string literal (handling escapes).
 pub fn parse_string_literal(node: Node, source: &Rope) -> String {
     let text = node_text(&node, source);
+    let text = text.as_ref();
 
     match node.kind() {
         "raw_string" => {
-            // r"..." or r#"..."#
-            extract_raw_string_content(&text)
+            // r"...", rs"...", sr"..."
+            let content = strip_prefixes(text, &["rs", "sr", "r"]);
+            extract_raw_string_content(content)
+        }
+        "raw_interpolated_string" => {
+            // rs"...", sr"..."
+            let content = strip_prefixes(text, &["rs", "sr"]);
+            extract_raw_string_content(content)
         }
         "multiline_string" => {
-            // #"..."#
-            extract_multiline_string_content(&text)
+            // #"..."# or s#"..."#
+            let content = text.strip_prefix('s').unwrap_or(text);
+            extract_multiline_string_content(content)
         }
         "string" => {
-            // Regular "..." with escapes
-            extract_string_content(&text)
+            // Regular "..." or s"..."
+            let content = text.strip_prefix('s').unwrap_or(text);
+            extract_string_content(content)
         }
-        _ => text.into_owned(),
+        _ => text.to_owned(),
     }
 }
 
@@ -104,12 +122,11 @@ pub fn parse_bytes_literal(node: Node, source: &Rope) -> Vec<u8> {
 
     match node.kind() {
         "raw_bytes" => {
-            // rb"..." or rb#"..."#
-            if let Some(content) = text.strip_prefix("rb") {
-                extract_raw_string_content(content).into_bytes()
-            } else {
-                Vec::new()
-            }
+            // rb"...", br"..."
+            let content = text.strip_prefix("rb").or_else(|| text.strip_prefix("br"));
+            content
+                .map(|value| extract_raw_string_content(value).into_bytes())
+                .unwrap_or_default()
         }
         "multiline_bytes" => {
             // b#"..."#
