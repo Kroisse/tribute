@@ -22,6 +22,11 @@ use wasm_encoder::{
 use crate::errors;
 use crate::{CompilationError, CompilationResult};
 
+/// Type index for BoxedF64 (Float wrapper for polymorphic contexts).
+/// This is always index 0 in the GC type section.
+/// Later, BigInt can be index 1 when implemented.
+const BOXED_F64_IDX: u32 = 0;
+
 trunk_ir::symbols! {
     ATTR_SYM_NAME => "sym_name",
     ATTR_TYPE => "type",
@@ -527,6 +532,9 @@ fn collect_module_info<'db>(
     })
 }
 
+/// Collect GC types (structs, arrays) and return:
+/// - Vec<GcTypeDef>: The GC type definitions (BoxedF64 is always at index 0)
+/// - HashMap<Type, u32>: Mapping from Type to type index
 fn collect_gc_types<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
@@ -559,7 +567,9 @@ fn collect_gc_types<'db>(
     let wasm_dialect = Symbol::new("wasm");
     let mut builders: Vec<GcTypeBuilder<'db>> = Vec::new();
     let mut type_idx_by_type: HashMap<Type<'db>, u32> = HashMap::new();
-    let mut next_type_idx: u32 = 0;
+
+    // Start at 1 since index 0 is reserved for BoxedF64 (see BOXED_F64_IDX constant)
+    let mut next_type_idx: u32 = 1;
 
     fn ensure_builder<'db, 'a>(
         builders: &'a mut Vec<GcTypeBuilder<'db>>,
@@ -926,6 +936,14 @@ fn collect_gc_types<'db>(
         }
     }
 
+    // Insert BoxedF64 at index 0 (BOXED_F64_IDX)
+    // BoxedF64 is a struct with a single f64 field for Float boxing
+    let boxed_f64_type = GcTypeDef::Struct(vec![FieldType {
+        element_type: StorageType::Val(ValType::F64),
+        mutable: false,
+    }]);
+    result.insert(0, boxed_f64_type);
+
     Ok((result, type_idx_by_type))
 }
 
@@ -1094,7 +1112,14 @@ fn emit_function<'db>(
 
     let param_count = params.len() as u32;
 
-    assign_locals_in_region(db, region, param_count, &mut locals, &mut value_locals)?;
+    assign_locals_in_region(
+        db,
+        region,
+        param_count,
+        &mut locals,
+        &mut value_locals,
+        func_types,
+    )?;
 
     let mut function = Function::new(compress_locals(&locals));
 
@@ -1119,6 +1144,7 @@ fn assign_locals_in_region<'db>(
     param_count: u32,
     locals: &mut Vec<ValType>,
     value_locals: &mut HashMap<Value<'db>, u32>,
+    func_types: &HashMap<QualifiedName, core::Func<'db>>,
 ) -> CompilationResult<()> {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
@@ -1131,7 +1157,11 @@ fn assign_locals_in_region<'db>(
                 .copied()
                 .filter(|ty| !is_nil_type(db, *ty))
             {
-                let val_type = match type_to_valtype(db, result_ty) {
+                // For generic function calls, infer the concrete return type from operands.
+                // This ensures the local is typed correctly for unboxed values.
+                let effective_ty = infer_call_result_type(db, op, result_ty, func_types);
+
+                let val_type = match type_to_valtype(db, effective_ty) {
                     Ok(vt) => vt,
                     Err(e) => {
                         debug!(
@@ -1148,7 +1178,7 @@ fn assign_locals_in_region<'db>(
                 locals.push(val_type);
             }
             for nested in op.regions(db).iter() {
-                assign_locals_in_region(db, nested, param_count, locals, value_locals)?;
+                assign_locals_in_region(db, nested, param_count, locals, value_locals, func_types)?;
             }
         }
     }
@@ -1436,11 +1466,18 @@ fn emit_op<'db>(
         // Check if we need unboxing for the return value
         if let Some(callee_ty) = func_types.get(callee) {
             let return_ty = callee_ty.result(db);
-            // If callee returns anyref (type.var) but we expect concrete type, unbox
-            if ty::is_var(db, return_ty)
-                && let Some(result_ty) = op.results(db).first()
-            {
-                emit_unboxing(db, *result_ty, function)?;
+            // If callee returns anyref (type.var), we need to unbox to the expected concrete type.
+            // Since type inference doesn't propagate instantiated types to the IR,
+            // we infer the result type from the first operand's type (works for identity-like functions).
+            if ty::is_var(db, return_ty) {
+                // Try to infer concrete type from first operand
+                if let Some(operand_ty) = operands
+                    .first()
+                    .and_then(|v| value_type(db, *v))
+                    .filter(|ty| !ty::is_var(db, *ty))
+                {
+                    emit_unboxing(db, operand_ty, function)?;
+                }
             }
         }
 
@@ -1650,8 +1687,7 @@ fn emit_operands_with_boxing<'db>(
 
         // Check if boxing is needed
         // If parameter expects anyref (type.var), box the operand
-        if let Some(&param_ty) = param_ty
-            && ty::is_var(db, param_ty)
+        if param_ty.is_some_and(|ty| ty::is_var(db, *ty))
             && let Some(operand_ty) = value_type(db, *value)
         {
             emit_boxing(db, operand_ty, function)?;
@@ -1688,7 +1724,7 @@ fn emit_value<'db>(
 
 /// Emit boxing instructions to convert a concrete type to anyref.
 /// - Int (i64) → i31ref: truncate to i32 and use ref.i31
-/// - Float (f64) → BoxedF64 struct (TODO: requires BoxedF64 type to be defined)
+/// - Float (f64) → BoxedF64 struct: wrap in a struct with single f64 field
 fn emit_boxing<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
@@ -1704,11 +1740,9 @@ fn emit_boxing<'db>(
         Ok(())
     } else if core::F64::from_type(db, ty).is_some() {
         // Float (f64) → BoxedF64 struct
-        // TODO: This requires defining BoxedF64 type and using struct.new
-        // For now, return an error
-        Err(CompilationError::unsupported_feature(
-            "Float boxing not yet implemented",
-        ))
+        // Create a struct with the f64 value
+        function.instruction(&Instruction::StructNew(BOXED_F64_IDX));
+        Ok(())
     } else {
         // For reference types (structs, etc.), no boxing needed - they're already subtypes of anyref
         // Just leave the value as-is on the stack
@@ -1718,29 +1752,37 @@ fn emit_boxing<'db>(
 
 /// Emit unboxing instructions to convert anyref to a concrete type.
 /// - i31ref → Int (i64): extract i32 and extend to i64
+/// - BoxedF64 → Float (f64): cast and extract f64 field
 fn emit_unboxing<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
     if ty::Int::from_type(db, ty).is_some() {
-        // anyref (i31ref) → Int (i64)
-        // Extract i32 from i31ref, then sign-extend to i64
+        // anyref → i31ref → Int (i64)
+        // Cast anyref to i31ref, extract i32, then sign-extend to i64
+        function.instruction(&Instruction::RefCastNullable(HeapType::I31));
         function.instruction(&Instruction::I31GetS);
         function.instruction(&Instruction::I64ExtendI32S);
         Ok(())
     } else if ty::Nat::from_type(db, ty).is_some() {
-        // anyref (i31ref) → Nat (i64)
-        // Extract u32 from i31ref, then zero-extend to i64
+        // anyref → i31ref → Nat (i64)
+        // Cast anyref to i31ref, extract u32, then zero-extend to i64
+        function.instruction(&Instruction::RefCastNullable(HeapType::I31));
         function.instruction(&Instruction::I31GetU);
         function.instruction(&Instruction::I64ExtendI32U);
         Ok(())
     } else if core::F64::from_type(db, ty).is_some() {
-        // anyref (BoxedF64) → Float (f64)
-        // TODO: This requires BoxedF64 type and struct.get
-        Err(CompilationError::unsupported_feature(
-            "Float unboxing not yet implemented",
-        ))
+        // anyref → BoxedF64 → Float (f64)
+        // Cast to BoxedF64 struct, then extract f64 field
+        function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(
+            BOXED_F64_IDX,
+        )));
+        function.instruction(&Instruction::StructGet {
+            struct_type_index: BOXED_F64_IDX,
+            field_index: 0,
+        });
+        Ok(())
     } else {
         // For reference types, assume no unboxing needed
         Ok(())
@@ -1753,6 +1795,51 @@ fn value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Ty
         // BlockArg type lookup requires block context; callers handle None
         ValueDef::BlockArg(_block_id) => None,
     }
+}
+
+/// Infer the actual result type for a call operation.
+/// For generic function calls where the IR result type is `type.var`,
+/// we infer the concrete type from the operand types.
+fn infer_call_result_type<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    result_ty: Type<'db>,
+    func_types: &HashMap<QualifiedName, core::Func<'db>>,
+) -> Type<'db> {
+    // Only handle wasm.call operations
+    if op.dialect(db) != Symbol::new("wasm") || op.name(db) != Symbol::new("call") {
+        return result_ty;
+    }
+
+    // Get the callee
+    let callee = match attr_symbol_ref(db, op, ATTR_CALLEE()) {
+        Ok(c) => c,
+        Err(_) => return result_ty,
+    };
+
+    // Look up the callee's function type
+    let callee_ty = match func_types.get(callee) {
+        Some(ty) => ty,
+        None => return result_ty,
+    };
+
+    // Check if the callee returns type.var (generic)
+    let return_ty = callee_ty.result(db);
+    if !ty::is_var(db, return_ty) {
+        return result_ty;
+    }
+
+    // Infer concrete type from first operand (works for identity-like functions)
+    if let Some(operand_ty) = op
+        .operands(db)
+        .first()
+        .and_then(|v| value_type(db, *v))
+        .filter(|ty| !ty::is_var(db, *ty))
+    {
+        return operand_ty;
+    }
+
+    result_ty
 }
 
 fn set_result_local<'db>(
@@ -2062,11 +2149,14 @@ mod tests {
         let module = make_struct_new_module(db);
         let (gc_types, type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
 
-        // Should have one GC type
-        assert_eq!(gc_types.len(), 1);
+        // Should have 2 GC types: BoxedF64 at index 0 + 1 user struct
+        assert_eq!(gc_types.len(), 2);
+        // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
+        // Index 1 is the user struct
+        assert_eq!(gc_type_kind(&gc_types[1]), "struct");
 
-        // Type 0 should be in the map
+        // Type should be in the map
         let i32_ty = core::I32::new(db).as_type();
         assert!(type_map.contains_key(&i32_ty));
     }
@@ -2116,9 +2206,12 @@ mod tests {
         let module = make_array_new_module(db);
         let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
 
-        // Should have one GC type (array)
-        assert_eq!(gc_types.len(), 1);
-        assert_eq!(gc_type_kind(&gc_types[0]), "array");
+        // Should have 2 GC types: BoxedF64 at index 0 + 1 user array
+        assert_eq!(gc_types.len(), 2);
+        // Index 0 is BoxedF64 (struct)
+        assert_eq!(gc_type_kind(&gc_types[0]), "struct");
+        // Index 1 is the user array
+        assert_eq!(gc_type_kind(&gc_types[1]), "array");
     }
 
     // ========================================
@@ -2169,9 +2262,12 @@ mod tests {
         let module = make_dedup_module(db);
         let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
 
-        // Should have only one GC type (same type_idx used twice)
-        assert_eq!(gc_types.len(), 1);
+        // Should have 2 GC types: BoxedF64 + 1 user struct (same type_idx used twice)
+        assert_eq!(gc_types.len(), 2);
+        // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
+        // Index 1 is the deduplicated user struct
+        assert_eq!(gc_type_kind(&gc_types[1]), "struct");
     }
 
     // ========================================
@@ -2287,7 +2383,11 @@ mod tests {
         let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
 
         // Should find the struct type from inside the function body
-        assert_eq!(gc_types.len(), 1);
+        // (2 types: BoxedF64 at index 0 + 1 user struct)
+        assert_eq!(gc_types.len(), 2);
+        // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
+        // Index 1 is the user struct from inside the function body
+        assert_eq!(gc_type_kind(&gc_types[1]), "struct");
     }
 }
