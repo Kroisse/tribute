@@ -149,26 +149,7 @@ impl<'db> GlobalDcePass<'db> {
                 // Handle nested core.module
                 if dialect == self.dialect_core && name == self.sym_module {
                     if self.config.recursive {
-                        // Get module name to build path
-                        let nested_name =
-                            op.attributes(self.db)
-                                .get(&self.sym_name_attr)
-                                .and_then(|attr| {
-                                    if let Attribute::Symbol(s) = attr {
-                                        Some(*s)
-                                    } else {
-                                        None
-                                    }
-                                });
-
-                        let new_path: Vec<Symbol> = if let Some(n) = nested_name {
-                            let mut p = module_path.to_vec();
-                            p.push(n);
-                            p
-                        } else {
-                            module_path.to_vec()
-                        };
-
+                        let new_path = self.extend_module_path(op, module_path);
                         for nested_region in op.regions(self.db).iter() {
                             self.analyze_region(nested_region, &new_path);
                         }
@@ -227,14 +208,23 @@ impl<'db> GlobalDcePass<'db> {
         }
     }
 
-    /// Extract the target function from wasm.export_func.
-    fn extract_export_func_target(&self, op: &Operation<'db>) -> Option<QualifiedName> {
-        let func_attr = op.attributes(self.db).get(&self.sym_func_attr)?;
-        match func_attr {
+    /// Extract a qualified name from an attribute by key.
+    fn extract_qualified_name_attr(
+        &self,
+        op: &Operation<'db>,
+        key: &Symbol,
+    ) -> Option<QualifiedName> {
+        let attr = op.attributes(self.db).get(key)?;
+        match attr {
             Attribute::Symbol(s) => Some(QualifiedName::simple(*s)),
             Attribute::QualifiedName(qn) => Some(qn.clone()),
             _ => None,
         }
+    }
+
+    /// Extract the target function from wasm.export_func.
+    fn extract_export_func_target(&self, op: &Operation<'db>) -> Option<QualifiedName> {
+        self.extract_qualified_name_attr(op, &self.sym_func_attr)
     }
 
     /// Analyze a function body to find all callees.
@@ -275,21 +265,33 @@ impl<'db> GlobalDcePass<'db> {
 
     /// Extract callee from func.call or func.tail_call.
     fn extract_callee(&self, op: &Operation<'db>) -> Option<QualifiedName> {
-        let callee_attr = op.attributes(self.db).get(&self.sym_callee)?;
-        match callee_attr {
-            Attribute::Symbol(s) => Some(QualifiedName::simple(*s)),
-            Attribute::QualifiedName(qn) => Some(qn.clone()),
-            _ => None,
-        }
+        self.extract_qualified_name_attr(op, &self.sym_callee)
     }
 
     /// Extract func_ref from func.constant.
     fn extract_func_ref(&self, op: &Operation<'db>) -> Option<QualifiedName> {
-        let func_ref_attr = op.attributes(self.db).get(&self.sym_func_ref)?;
-        match func_ref_attr {
-            Attribute::Symbol(s) => Some(QualifiedName::simple(*s)),
-            Attribute::QualifiedName(qn) => Some(qn.clone()),
-            _ => None,
+        self.extract_qualified_name_attr(op, &self.sym_func_ref)
+    }
+
+    /// Extend the module path with the nested module's name.
+    fn extend_module_path(&self, op: &Operation<'db>, current_path: &[Symbol]) -> Vec<Symbol> {
+        let nested_name = op
+            .attributes(self.db)
+            .get(&self.sym_name_attr)
+            .and_then(|attr| {
+                if let Attribute::Symbol(s) = attr {
+                    Some(*s)
+                } else {
+                    None
+                }
+            });
+
+        if let Some(n) = nested_name {
+            let mut p = current_path.to_vec();
+            p.push(n);
+            p
+        } else {
+            current_path.to_vec()
         }
     }
 
@@ -366,24 +368,7 @@ impl<'db> GlobalDcePass<'db> {
                     // Handle nested core.module
                     if dialect == self.dialect_core && name == self.sym_module {
                         if self.config.recursive {
-                            let nested_name = op
-                                .attributes(self.db)
-                                .get(&self.sym_name_attr)
-                                .and_then(|attr| {
-                                    if let Attribute::Symbol(s) = attr {
-                                        Some(*s)
-                                    } else {
-                                        None
-                                    }
-                                });
-
-                            let new_path: Vec<Symbol> = if let Some(n) = nested_name {
-                                let mut p = module_path.to_vec();
-                                p.push(n);
-                                p
-                            } else {
-                                module_path.to_vec()
-                            };
+                            let new_path = self.extend_module_path(op, module_path);
 
                             // Process nested module regions
                             let new_regions: IdVec<Region<'db>> = op
@@ -444,7 +429,7 @@ impl<'db> GlobalDcePass<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialect::{arith, core, func};
+    use crate::dialect::{arith, core, func, wasm};
     use crate::{DialectType, Location, PathId, Span, idvec};
     use salsa_test_macros::salsa_test;
 
@@ -729,5 +714,135 @@ mod tests {
     fn extra_entry_points_config(db: &salsa::DatabaseImpl) {
         let removed_count = run_dce_custom_entry(db);
         assert_eq!(removed_count, 0);
+    }
+
+    // Additional tests for wasm.export_func and recursive config
+
+    #[salsa::tracked]
+    fn build_wasm_export<'db>(db: &'db dyn salsa::Database) -> core::Module<'db> {
+        let loc = test_location(db);
+        core::Module::build(db, loc, "test".into(), |top| {
+            // exported_func is exported via wasm.export_func
+            top.op(func::Func::build(
+                db,
+                loc,
+                "exported_func",
+                idvec![],
+                core::Nil::new(db).as_type(),
+                |entry| {
+                    entry.op(func::Return::empty(db, loc));
+                },
+            ));
+            // wasm.export_func marks exported_func as an entry point
+            top.op(wasm::export_func(
+                db,
+                loc,
+                Attribute::String("my_export".into()),
+                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("exported_func"))),
+            ));
+            // unused_func has no references
+            top.op(func::Func::build(
+                db,
+                loc,
+                "unused_func",
+                idvec![],
+                core::Nil::new(db).as_type(),
+                |entry| {
+                    entry.op(func::Return::empty(db, loc));
+                },
+            ));
+        })
+    }
+
+    #[salsa::tracked]
+    fn run_dce_wasm_export(db: &dyn salsa::Database) -> usize {
+        let module = build_wasm_export(db);
+        let result = eliminate_dead_functions(db, module);
+        result.removed_count
+    }
+
+    #[salsa_test]
+    fn keeps_wasm_exported_function(db: &salsa::DatabaseImpl) {
+        // wasm.export_func should mark the function as an entry point
+        let removed_count = run_dce_wasm_export(db);
+        assert_eq!(removed_count, 1); // Only unused_func should be removed
+    }
+
+    #[salsa::tracked]
+    fn build_nested_module<'db>(db: &'db dyn salsa::Database) -> core::Module<'db> {
+        let loc = test_location(db);
+        core::Module::build(db, loc, "test".into(), |top| {
+            // Top-level main (entry point)
+            top.op(func::Func::build(
+                db,
+                loc,
+                "main",
+                idvec![],
+                core::Nil::new(db).as_type(),
+                |entry| {
+                    entry.op(func::Return::empty(db, loc));
+                },
+            ));
+            // Nested module with its own main (entry point) and unused function
+            top.op(core::Module::build(db, loc, "nested".into(), |nested| {
+                nested.op(func::Func::build(
+                    db,
+                    loc,
+                    "main",
+                    idvec![],
+                    core::Nil::new(db).as_type(),
+                    |entry| {
+                        entry.op(func::Return::empty(db, loc));
+                    },
+                ));
+                nested.op(func::Func::build(
+                    db,
+                    loc,
+                    "unused_in_nested",
+                    idvec![],
+                    core::Nil::new(db).as_type(),
+                    |entry| {
+                        entry.op(func::Return::empty(db, loc));
+                    },
+                ));
+            }));
+        })
+    }
+
+    #[salsa::tracked]
+    fn run_dce_nested_recursive(db: &dyn salsa::Database) -> usize {
+        let module = build_nested_module(db);
+        let config = GlobalDceConfig {
+            extra_entry_points: vec![],
+            recursive: true,
+        };
+        let result = eliminate_dead_functions_with_config(db, module, config);
+        result.removed_count
+    }
+
+    #[salsa::tracked]
+    fn run_dce_nested_non_recursive(db: &dyn salsa::Database) -> usize {
+        let module = build_nested_module(db);
+        let config = GlobalDceConfig {
+            extra_entry_points: vec![],
+            recursive: false,
+        };
+        let result = eliminate_dead_functions_with_config(db, module, config);
+        result.removed_count
+    }
+
+    #[salsa_test]
+    fn recursive_removes_nested_unused(db: &salsa::DatabaseImpl) {
+        // With recursive=true, unused_in_nested should be removed
+        // nested::main is an entry point, so it stays
+        let removed_count = run_dce_nested_recursive(db);
+        assert_eq!(removed_count, 1); // unused_in_nested removed
+    }
+
+    #[salsa_test]
+    fn non_recursive_keeps_nested(db: &salsa::DatabaseImpl) {
+        // With recursive=false, nested modules are not processed
+        let removed_count = run_dce_nested_non_recursive(db);
+        assert_eq!(removed_count, 0); // Nothing removed (nested module not analyzed)
     }
 }
