@@ -3,6 +3,7 @@
 mod cli;
 mod lsp;
 
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use clap::Parser;
 use cli::{Cli, Command};
 use ropey::Rope;
@@ -12,8 +13,37 @@ use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{compile_with_diagnostics, stage_lower_to_wasm, stage_resolve};
 use tribute::{SourceCst, TributeDatabaseImpl};
-use tribute_passes::diagnostic::Diagnostic;
+use tribute_passes::diagnostic::{CompilationPhase, Diagnostic};
 use tribute_passes::resolve::build_env;
+
+/// Print a diagnostic using ariadne for pretty output.
+fn print_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) {
+    let start = diag.span.start;
+    let end = diag.span.end.max(start + 1);
+
+    let color = match diag.phase {
+        CompilationPhase::Parsing => Color::Red,
+        CompilationPhase::TirGeneration => Color::Yellow,
+        CompilationPhase::NameResolution => Color::Yellow,
+        CompilationPhase::TypeChecking => Color::Magenta,
+        CompilationPhase::Lowering => Color::Cyan,
+        CompilationPhase::Optimization => Color::Blue,
+    };
+
+    let source_text: String = source.to_string();
+
+    Report::build(ReportKind::Error, (file_path, start..end))
+        .with_code(format!("{:?}", diag.phase))
+        .with_message(&diag.message)
+        .with_label(
+            Label::new((file_path, start..end))
+                .with_message(&diag.message)
+                .with_color(color),
+        )
+        .finish()
+        .eprint((file_path, Source::from(source_text)))
+        .ok();
+}
 
 fn main() {
     let cli = Cli::parse();
@@ -88,21 +118,22 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                         }
                     }
                 } else {
+                    let file_path = input_path.display().to_string();
+                    let source_text = source.text(db);
+
                     // Collect diagnostics from wasm lowering
                     let wasm_diags: Vec<_> =
                         stage_lower_to_wasm::accumulated::<Diagnostic>(db, source);
                     if !wasm_diags.is_empty() {
-                        println!("WebAssembly compilation errors:");
                         for diag in &wasm_diags {
-                            println!("  [{:?}] {}", diag.phase, diag.message);
+                            print_diagnostic(diag, source_text, &file_path);
                         }
                     } else {
                         // Try getting frontend diagnostics
                         let result = compile_with_diagnostics(db, source);
                         if !result.diagnostics.is_empty() {
-                            println!("Diagnostics ({} total):", result.diagnostics.len());
                             for diag in &result.diagnostics {
-                                println!("  [{:?}] {}", diag.phase, diag.message);
+                                print_diagnostic(diag, source_text, &file_path);
                             }
                         } else {
                             eprintln!("✗ WebAssembly compilation failed (unknown error)");
@@ -118,9 +149,10 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                 if result.diagnostics.is_empty() {
                     println!("✓ Compiled successfully");
                 } else {
-                    println!("Diagnostics ({} total):", result.diagnostics.len());
+                    let file_path = input_path.display().to_string();
+                    let source_text = source.text(db);
                     for diag in &result.diagnostics {
-                        println!("  [{:?}] {}", diag.phase, diag.message);
+                        print_diagnostic(diag, source_text, &file_path);
                     }
                     std::process::exit(1);
                 }
