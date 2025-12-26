@@ -77,6 +77,30 @@ Two-phase resolution:
    - `expr.method(args)` → `Type::method(expr, args)`
    - Requires inferred type information
 
+## Dialect Operation Matching
+
+When matching dialect operations, prefer typed wrappers over manual dialect/name comparison:
+
+```rust
+// ✅ Preferred: Use from_operation for type-safe matching
+if let Ok(bind_op) = pat::Bind::from_operation(db, op) {
+    let name = bind_op.name(db);
+    // ...
+}
+
+// ❌ Avoid: Manual dialect and name comparison
+let dialect = op.dialect(db);
+let op_name = op.name(db);
+if dialect == pat::DIALECT_NAME() && op_name == pat::BIND() {
+    // ...
+}
+```
+
+Benefits of typed wrappers:
+- Type-safe access to operation attributes
+- Compile-time verification of operation structure
+- Cleaner, more readable code
+
 ## Bindings
 
 Three kinds of bindings in `resolve.rs`:

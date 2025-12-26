@@ -623,10 +623,10 @@ fn lower_case_arm<'db>(
     Some(case::arm(ctx.db, location, pattern_region, body_region))
 }
 
-/// Convert a pattern node to a pattern region for case arms.
+/// Convert a pattern node to a pattern region for case arms and let bindings.
 ///
 /// Creates a region containing pattern operations from the `pat` dialect.
-fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'db> {
+pub fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'db> {
     let location = ctx.location(&node);
 
     match node.kind() {

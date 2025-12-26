@@ -770,6 +770,10 @@ impl<'db> Resolver<'db> {
                 self.pop_import_scope();
                 vec![resolved]
             }
+            (d, n) if d == src::DIALECT_NAME() && n == src::LET() => {
+                // Handle let binding with pattern region
+                self.resolve_let(&remapped_op)
+            }
             (d, n) if d == case::DIALECT_NAME() && n == case::ARM() => {
                 // Handle case arm with pattern bindings
                 vec![self.resolve_case_arm(&remapped_op)]
@@ -870,6 +874,87 @@ impl<'db> Resolver<'db> {
         new_regions.push(new_body);
 
         op.modify(self.db).regions(new_regions).build()
+    }
+
+    /// Resolve a src.let operation with pattern bindings.
+    ///
+    /// src.let has one operand (the bound value) and one pattern region.
+    /// Pattern bindings are extracted and added to local scope.
+    /// The src.let operation is erased from output (bindings are tracked in scope).
+    fn resolve_let(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
+        let operands = op.operands(self.db);
+        let regions = op.regions(self.db);
+
+        if operands.is_empty() || regions.is_empty() {
+            return Vec::new();
+        }
+
+        // Look up the bound value (may have been remapped by previous transformations)
+        let bound_value = self.ctx.lookup(operands[0]);
+        let pattern_region = &regions[0];
+
+        // Collect let bindings from pattern region
+        // For simple patterns like pat.bind("x"), bind x directly to the value
+        // For complex patterns, we need extraction operations
+        self.collect_let_bindings(pattern_region, bound_value);
+
+        // src.let is erased from output - the bindings are tracked in scope
+        Vec::new()
+    }
+
+    /// Collect let bindings from a pattern region for src.let.
+    ///
+    /// Unlike case arm pattern bindings (which use PatternBinding and case.bind),
+    /// let bindings map names directly to values or extraction results.
+    fn collect_let_bindings(&mut self, region: &Region<'db>, value: Value<'db>) {
+        for block in region.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter() {
+                self.collect_let_binding_from_op(op, value);
+            }
+        }
+    }
+
+    /// Collect a single let binding from a pattern operation.
+    fn collect_let_binding_from_op(&mut self, op: &Operation<'db>, value: Value<'db>) {
+        // Use a type variable - typechecker will infer the actual type
+        let infer_ty = || trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
+
+        if let Ok(bind_op) = pat::Bind::from_operation(self.db, *op) {
+            // pat.bind("x") - bind x to the value
+            let name = bind_op.name(self.db);
+            self.add_local(
+                name,
+                LocalBinding::LetBinding {
+                    value,
+                    ty: infer_ty(),
+                },
+            );
+        } else if let Ok(as_pat_op) = pat::AsPat::from_operation(self.db, *op) {
+            // pat.as_pat: bind the name to value, then recurse on inner pattern
+            let name = as_pat_op.name(self.db);
+            self.add_local(
+                name,
+                LocalBinding::LetBinding {
+                    value,
+                    ty: infer_ty(),
+                },
+            );
+            // Recurse on inner pattern with the same value
+            self.collect_let_bindings(&as_pat_op.inner(self.db), value);
+        } else if pat::Wildcard::from_operation(self.db, *op).is_ok() {
+            // Wildcard pattern - no binding needed
+        } else if let Ok(tuple_op) = pat::Tuple::from_operation(self.db, *op) {
+            // TODO: Handle tuple patterns by generating extraction operations
+            // For now, fall through to nested regions which may have bindings
+            // Each element in the tuple needs extraction - for now just recurse
+            // with the same value (not fully correct for extraction)
+            self.collect_let_bindings(&tuple_op.elements(self.db), value);
+        } else {
+            // Other pattern ops may have nested regions with bindings
+            for region in op.regions(self.db).iter() {
+                self.collect_let_bindings(region, value);
+            }
+        }
     }
 
     /// Collect pattern bindings from a pattern region.
@@ -1853,6 +1938,103 @@ pub mod tests {
                 attrs.get(&ATTR_VALUE()),
                 Some(&Attribute::IntBits(1024)),
                 "const reference should have value attribute for inlining pass"
+            );
+        }
+    }
+
+    /// Create a module with a let binding: fn main() { let x = 42; x }
+    #[salsa::tracked]
+    fn module_with_let_binding(db: &dyn salsa::Database) -> Module<'_> {
+        use trunk_ir::dialect::pat;
+
+        let location = test_location(db);
+        let infer_ty = trunk_ir::dialect::ty::var(db, std::collections::BTreeMap::new());
+
+        // Pre-create the pattern region outside the closure
+        let pattern_region = pat::helpers::bind_region(db, location, Symbol::new("x"));
+
+        // Create the main function with let binding
+        let main_func = func::Func::build(
+            db,
+            location,
+            "main",
+            idvec![],
+            *core::I64::new(db),
+            |entry| {
+                // %0 = arith.const 42
+                let const_val = entry.op(arith::Const::i64(db, location, 42));
+
+                // src.let(%0) { pat.bind("x") }
+                entry.op(src::r#let(
+                    db,
+                    location,
+                    const_val.result(db),
+                    pattern_region,
+                ));
+
+                // %1 = src.var("x")
+                let var_ref = entry.op(src::var(db, location, infer_ty, Symbol::new("x")));
+
+                // return %1
+                entry.op(func::Return::value(db, location, var_ref.result(db)));
+            },
+        );
+
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            top.op(main_func);
+        })
+    }
+
+    #[salsa::tracked]
+    fn resolve_let_binding_module(db: &dyn salsa::Database) -> Module<'_> {
+        let module = module_with_let_binding(db);
+        resolve_module(db, &module)
+    }
+
+    #[salsa_test]
+    fn test_let_binding_resolved(db: &salsa::DatabaseImpl) {
+        let resolved = resolve_let_binding_module(db);
+
+        let mut ops = Vec::new();
+        collect_ops(db, &resolved.body(db), &mut ops);
+
+        // After resolution:
+        // 1. src.let should be erased
+        // 2. src.var("x") should be marked as resolved_local
+        // 3. The value mapping should connect the var to the const result
+
+        // Check that src.let is erased
+        let let_ops: Vec<_> = ops
+            .iter()
+            .filter(|op| op.dialect(db) == "src" && op.name(db) == "let")
+            .collect();
+        assert!(
+            let_ops.is_empty(),
+            "src.let should be erased after resolution"
+        );
+
+        // Check that src.var("x") is resolved
+        let x_sym = Symbol::new("x");
+        let var_refs: Vec<_> = ops
+            .iter()
+            .filter(|op| {
+                op.dialect(db) == "src"
+                    && op.name(db) == "var"
+                    && matches!(
+                        op.attributes(db).get(&ATTR_NAME()),
+                        Some(Attribute::Symbol(sym)) if *sym == x_sym
+                    )
+            })
+            .collect();
+
+        assert!(!var_refs.is_empty(), "should find src.var(x) reference");
+
+        for var_ref in var_refs {
+            let attrs = var_ref.attributes(db);
+            assert_eq!(
+                attrs.get(&ATTR_RESOLVED_LOCAL()),
+                Some(&Attribute::Bool(true)),
+                "let binding reference should be marked as resolved_local"
             );
         }
     }

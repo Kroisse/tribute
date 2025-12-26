@@ -46,6 +46,13 @@ dialect! {
         /// Used to specify the result value of a `src.block`.
         fn r#yield(value);
 
+        /// `src.let` operation: let binding with pattern matching.
+        /// Binds the value operand to names defined in the pattern region.
+        /// The pattern region uses `pat.*` operations (pat.bind, pat.tuple, etc.).
+        fn r#let(value) {
+            #[region(pattern)] {}
+        };
+
         /// `src.lambda` operation: lambda expression.
         /// Represents an anonymous function before capture analysis.
         /// The `type` attribute holds the function type (params -> result).

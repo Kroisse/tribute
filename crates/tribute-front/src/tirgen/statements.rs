@@ -7,7 +7,7 @@ use trunk_ir::{
 };
 
 use super::context::CstLoweringCtx;
-use super::expressions::lower_expr;
+use super::expressions::{lower_expr, pattern_to_region};
 use super::helpers::{is_comment, node_text, sym_ref};
 
 // =============================================================================
@@ -45,11 +45,16 @@ pub fn lower_block_body<'db>(
 }
 
 /// Lower a let statement.
+///
+/// Generates a `src.let` operation with a pattern region for name resolution,
+/// and also calls `bind_pattern` to register bindings in the lowering context.
 pub fn lower_let_statement<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) {
+    let location = ctx.location(&node);
+
     // Use field-based access
     let Some(pattern_node) = node.child_by_field_name("pattern") else {
         return;
@@ -59,6 +64,11 @@ pub fn lower_let_statement<'db>(
     };
 
     if let Some(value) = lower_expr(ctx, block, value_node) {
+        // Generate src.let with pattern region for resolver
+        let pattern_region = pattern_to_region(ctx, pattern_node);
+        block.op(src::r#let(ctx.db, location, value, pattern_region));
+
+        // Also bind in context for tirgen's own use during lowering
         bind_pattern(ctx, block, pattern_node, value);
     }
 }
