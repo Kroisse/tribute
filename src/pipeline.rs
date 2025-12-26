@@ -220,9 +220,31 @@ fn emit_parse_errors(db: &dyn salsa::Database, cst: &tribute_front::ParsedCst) {
     while let Some(node) = stack.pop() {
         if node.is_error() || node.is_missing() {
             let message = if node.is_missing() {
-                "Missing syntax element".to_string()
+                // For missing nodes, show what kind was expected
+                let kind = node.kind();
+                let parent_ctx = node
+                    .parent()
+                    .map(|p| format!(" in {}", format_node_kind(p.kind())))
+                    .unwrap_or_default();
+                format!("missing {}{}", format_node_kind(kind), parent_ctx)
             } else {
-                "Syntax error".to_string()
+                // For error nodes, try to provide context
+                let parent = node.parent();
+                let parent_kind = parent.map(|p| p.kind()).unwrap_or("source_file");
+
+                // Check what unexpected content was found
+                let content_preview = if node.end_byte() > node.start_byte() {
+                    // We don't have direct access to source here, so just note there's content
+                    " (unexpected token)".to_string()
+                } else {
+                    String::new()
+                };
+
+                format!(
+                    "syntax error{} while parsing {}",
+                    content_preview,
+                    format_node_kind(parent_kind)
+                )
             };
             Diagnostic {
                 message,
@@ -239,6 +261,12 @@ fn emit_parse_errors(db: &dyn salsa::Database, cst: &tribute_front::ParsedCst) {
             stack.push(child);
         }
     }
+}
+
+/// Format a tree-sitter node kind into a human-readable name.
+fn format_node_kind(kind: &str) -> String {
+    // Convert snake_case to space-separated words
+    kind.replace('_', " ")
 }
 
 /// Stage 3.5: Inline constant values.
@@ -498,7 +526,7 @@ mod tests {
         let has_parse_error = result.diagnostics.iter().any(|d| {
             d.severity == DiagnosticSeverity::Error
                 && d.phase == CompilationPhase::Parsing
-                && d.message.contains("Syntax error")
+                && d.message.contains("syntax error")
         });
         assert!(
             has_parse_error,

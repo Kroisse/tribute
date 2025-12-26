@@ -15,6 +15,49 @@ use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_passes::diagnostic::Diagnostic;
 use tribute_passes::resolve::build_env;
 
+/// Format a diagnostic with source location and context.
+fn format_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) -> String {
+    let start = diag.span.start;
+    let end = diag.span.end;
+
+    // Convert byte offset to line/column (0-indexed)
+    let line = source.byte_to_line(start.min(source.len_bytes().saturating_sub(1)));
+    let line_start = source.line_to_byte(line);
+    let col = start.saturating_sub(line_start);
+
+    // Get the source line
+    let line_text = source.line(line).to_string();
+    let line_text = line_text.trim_end(); // Remove trailing newline
+
+    // Calculate end column for underline
+    let end_col = if end > start {
+        let end_line = source.byte_to_line(end.min(source.len_bytes().saturating_sub(1)));
+        if end_line == line {
+            end.saturating_sub(line_start)
+        } else {
+            line_text.len()
+        }
+    } else {
+        col + 1
+    };
+
+    // Build the underline with carets
+    let underline_len = end_col.saturating_sub(col).max(1);
+    let underline = format!("{}{}", " ".repeat(col), "^".repeat(underline_len));
+
+    format!(
+        "error[{:?}]: {}\n  --> {}:{}:{}\n   |\n{:>3}| {}\n   | {}",
+        diag.phase,
+        diag.message,
+        file_path,
+        line + 1, // 1-indexed for display
+        col + 1,  // 1-indexed for display
+        line + 1,
+        line_text,
+        underline
+    )
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -88,21 +131,24 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                         }
                     }
                 } else {
+                    let file_path = input_path.display().to_string();
+                    let source_text = source.text(db);
+
                     // Collect diagnostics from wasm lowering
                     let wasm_diags: Vec<_> =
                         stage_lower_to_wasm::accumulated::<Diagnostic>(db, source);
                     if !wasm_diags.is_empty() {
-                        println!("WebAssembly compilation errors:");
+                        eprintln!();
                         for diag in &wasm_diags {
-                            println!("  [{:?}] {}", diag.phase, diag.message);
+                            eprintln!("{}\n", format_diagnostic(diag, source_text, &file_path));
                         }
                     } else {
                         // Try getting frontend diagnostics
                         let result = compile_with_diagnostics(db, source);
                         if !result.diagnostics.is_empty() {
-                            println!("Diagnostics ({} total):", result.diagnostics.len());
+                            eprintln!();
                             for diag in &result.diagnostics {
-                                println!("  [{:?}] {}", diag.phase, diag.message);
+                                eprintln!("{}\n", format_diagnostic(diag, source_text, &file_path));
                             }
                         } else {
                             eprintln!("✗ WebAssembly compilation failed (unknown error)");
@@ -118,9 +164,11 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                 if result.diagnostics.is_empty() {
                     println!("✓ Compiled successfully");
                 } else {
-                    println!("Diagnostics ({} total):", result.diagnostics.len());
+                    let file_path = input_path.display().to_string();
+                    let source_text = source.text(db);
+                    eprintln!();
                     for diag in &result.diagnostics {
-                        println!("  [{:?}] {}", diag.phase, diag.message);
+                        eprintln!("{}\n", format_diagnostic(diag, source_text, &file_path));
                     }
                     std::process::exit(1);
                 }
