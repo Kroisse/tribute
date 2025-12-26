@@ -78,22 +78,26 @@ Number     ::= NatLiteral | IntLiteral | FloatLiteral
 // String literals
 String       ::= 's'? '"' StringContent* '"'              // "..." 또는 s"..."
                | 's'? '#'+ '"' StringContent* '"' '#'+    // s#"..."# (multiline)
-RawString    ::= 'r' 's'? '"' RawContent* '"'             // r"..." 또는 rs"..."
-               | 'r' 's'? '#'+ '"' RawContent* '"' '#'+   // r#"..."# (multiline)
-               | 's' 'r' '"' RawContent* '"'              // sr"..."
-               | 's' 'r' '#'+ '"' RawContent* '"' '#'+    // sr#"..."#
+RawString    ::= 'r' '"' RawStringContent* '"'            // r"..."
+               | 'r' '#'+ '"' RawStringContent* '"' '#'+  // r#"..."# (multiline)
+               | 'r' 's' '"' RawStringContent* '"'        // rs"..."
+               | 'r' 's' '#'+ '"' RawStringContent* '"' '#'+ // rs#"..."#
+               | 's' 'r' '"' RawStringContent* '"'        // sr"..."
+               | 's' 'r' '#'+ '"' RawStringContent* '"' '#'+ // sr#"..."#
 
 // Bytes literals
 Bytes        ::= 'b' '"' BytesContent* '"'                // b"..."
                | 'b' '#'+ '"' BytesContent* '"' '#'+      // b#"..."# (multiline)
-RawBytes     ::= 'r' 'b' '"' RawContent* '"'              // rb"..."
-               | 'r' 'b' '#'+ '"' RawContent* '"' '#'+    // rb#"..."# (multiline)
-               | 'b' 'r' '"' RawContent* '"'              // br"..."
-               | 'b' 'r' '#'+ '"' RawContent* '"' '#'+    // br#"..."#
+RawBytes     ::= 'r' 'b' '"' RawBytesContent* '"'         // rb"..."
+               | 'r' 'b' '#'+ '"' RawBytesContent* '"' '#'+ // rb#"..."# (multiline)
+               | 'b' 'r' '"' RawBytesContent* '"'         // br"..."
+               | 'b' 'r' '#'+ '"' RawBytesContent* '"' '#'+ // br#"..."#
 
-StringContent ::= TextChar | EscapeSeq | StringInterpolation
-BytesContent  ::= ByteChar | EscapeSeq | BytesInterpolation
-RawContent    ::= Any*                                    // escape 처리 안 함
+StringContent     ::= TextChar | EscapeSeq | StringInterpolation
+BytesContent      ::= ByteChar | EscapeSeq | BytesInterpolation
+RawStringContent  ::= RawChar | StringInterpolation       // escape 처리 안 함
+RawBytesContent   ::= RawChar | BytesInterpolation        // escape 처리 안 함
+RawChar           ::= Any
 
 EscapeSeq    ::= '\' ('n' | 'r' | 't' | '0' | '"' | '\' | 'x' HexDigit{2} | 'u' HexDigit{4})
 StringInterpolation ::= '\{' Expression '}'   // Expression은 String 타입

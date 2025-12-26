@@ -674,10 +674,34 @@ fn literal_to_attribute<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Option<At
             let s = parse_string_literal(actual_node, &ctx.source);
             Some(Attribute::String(s))
         }
+        "raw_interpolated_string" => {
+            if has_interpolation(actual_node) {
+                None
+            } else {
+                let s = parse_string_literal(actual_node, &ctx.source);
+                Some(Attribute::String(s))
+            }
+        }
         "true" => Some(Attribute::Bool(true)),
         "false" => Some(Attribute::Bool(false)),
         _ => None, // Non-literal expressions not supported in const
     }
+}
+
+fn has_interpolation(node: Node) -> bool {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "interpolation"
+            | "multiline_interpolation"
+            | "bytes_interpolation"
+            | "multiline_bytes_interpolation" => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Unwrap expression wrapper nodes to get the actual literal node.

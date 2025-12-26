@@ -145,8 +145,9 @@ mod tests {
     use super::*;
     use salsa::Setter;
     use tree_sitter::{InputEdit, Parser, Point};
+    use trunk_ir::Attribute;
     use trunk_ir::DialectOp;
-    use trunk_ir::dialect::{case, func, src};
+    use trunk_ir::dialect::{adt, case, func, src};
 
     fn lower_and_get_module<'db>(db: &'db salsa::DatabaseImpl, source: &str) -> core::Module<'db> {
         lower_from_tree(db, source)
@@ -343,6 +344,35 @@ mod tests {
         }
     }
 
+    fn collect_string_const_values<'db>(
+        db: &'db dyn salsa::Database,
+        module: core::Module<'db>,
+    ) -> Vec<String> {
+        let mut ops = Vec::new();
+        collect_ops(db, module.body(db), &mut ops);
+        ops.iter()
+            .filter_map(|op| adt::StringConst::from_operation(db, *op).ok())
+            .map(|string_const| string_const.value(db).clone())
+            .collect()
+    }
+
+    fn collect_bytes_const_values<'db>(
+        db: &'db dyn salsa::Database,
+        module: core::Module<'db>,
+    ) -> Vec<Vec<u8>> {
+        let mut ops = Vec::new();
+        collect_ops(db, module.body(db), &mut ops);
+        ops.iter()
+            .filter_map(|op| adt::BytesConst::from_operation(db, *op).ok())
+            .filter_map(|bytes_const| {
+                let Attribute::Bytes(value) = bytes_const.value(db) else {
+                    return None;
+                };
+                Some(value.clone())
+            })
+            .collect()
+    }
+
     #[test]
     fn test_case_expression() {
         let db = salsa::DatabaseImpl::default();
@@ -430,9 +460,90 @@ mod tests {
         let source = r#"fn main() { "hello" }"#;
         let module = lower_and_get_module(&db, source);
 
-        let body_region = module.body(&db);
-        let blocks = body_region.blocks(&db);
-        assert!(!blocks.is_empty());
+        let values = collect_string_const_values(&db, module);
+        assert!(
+            values.iter().any(|value| value == "hello"),
+            "Expected a string const with value \"hello\""
+        );
+    }
+
+    #[test]
+    fn test_prefixed_string_literal() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"fn main() { s"hello" }"#;
+        let module = lower_and_get_module(&db, source);
+
+        let values = collect_string_const_values(&db, module);
+        assert!(
+            values.iter().any(|value| value == "hello"),
+            "Expected a string const with value \"hello\""
+        );
+    }
+
+    #[test]
+    fn test_raw_string_literal() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"fn main() { rs"hello" }"#;
+        let module = lower_and_get_module(&db, source);
+
+        let values = collect_string_const_values(&db, module);
+        assert!(
+            values.iter().any(|value| value == "hello"),
+            "Expected a string const with value \"hello\""
+        );
+    }
+
+    #[test]
+    fn test_raw_bytes_literal() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"fn main() { br"hello" }"#;
+        let module = lower_and_get_module(&db, source);
+
+        let values = collect_bytes_const_values(&db, module);
+        assert!(
+            values.iter().any(|value| value.as_slice() == b"hello"),
+            "Expected a bytes const with value \"hello\""
+        );
+    }
+
+    #[test]
+    fn test_raw_interpolated_string_literal() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"
+            fn main() {
+                let name = "World";
+                rs"Hello, \{name}!"
+            }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let values = collect_string_const_values(&db, module);
+        assert!(
+            values.iter().any(|value| value == "Hello, "),
+            "Expected a string const prefix"
+        );
+        assert!(
+            values.iter().any(|value| value == "!"),
+            "Expected a string const suffix"
+        );
+    }
+
+    #[test]
+    fn test_raw_interpolated_bytes_literal() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"
+            fn main() {
+                let chunk = "data";
+                rb"chunk: \{chunk}"
+            }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let values = collect_bytes_const_values(&db, module);
+        assert!(
+            values.iter().any(|value| value.as_slice() == b"chunk: "),
+            "Expected a bytes const prefix"
+        );
     }
 
     #[test]

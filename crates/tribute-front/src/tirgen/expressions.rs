@@ -192,10 +192,14 @@ pub fn lower_expr<'db>(
         "handle_expression" => lower_handle_expr(ctx, block, node),
 
         // === Interpolated strings ===
-        "string_interpolation" => lower_string_interpolation(ctx, block, node),
+        "string_interpolation" | "raw_interpolated_string" => {
+            lower_string_interpolation(ctx, block, node)
+        }
 
         // === Interpolated bytes ===
-        "bytes_interpolation" => lower_bytes_interpolation(ctx, block, node),
+        "bytes_interpolation" | "raw_interpolated_bytes" => {
+            lower_bytes_interpolation(ctx, block, node)
+        }
 
         // Unknown expression type - return None
         _ => None,
@@ -1318,7 +1322,7 @@ fn lower_string_interpolation<'db>(
         }
 
         let value = match child.kind() {
-            "string_segment" | "multiline_string_segment" => {
+            "string_segment" | "multiline_string_segment" | "raw_interpolated_string_segment" => {
                 // Regular string content
                 let content = node_text(&child, &ctx.source);
                 let op = block.op(adt::string_const(
@@ -1397,7 +1401,7 @@ fn lower_bytes_interpolation<'db>(
         }
 
         let value = match child.kind() {
-            "bytes_segment" | "multiline_bytes_segment" => {
+            "bytes_segment" | "multiline_bytes_segment" | "raw_interpolated_bytes_segment" => {
                 // Regular bytes content
                 let content = node_text(&child, &ctx.source);
                 let op = block.op(adt::bytes_const(
