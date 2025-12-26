@@ -196,6 +196,7 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Mo
         let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
         return Module::build(db, location, Symbol::new("main"), |_| {});
     };
+    emit_parse_errors(db, &cst);
     let user_module = lower_cst(db, source, cst);
 
     // Merge prelude definitions into the user module
@@ -207,6 +208,36 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Mo
     // Resolve names in the module
     let mut resolver = Resolver::new(db, env);
     resolver.resolve_module(&module)
+}
+
+fn emit_parse_errors(db: &dyn salsa::Database, cst: &tribute_front::ParsedCst) {
+    let root = cst.root_node();
+    if !root.has_error() {
+        return;
+    }
+
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.is_error() || node.is_missing() {
+            let message = if node.is_missing() {
+                "Missing syntax element".to_string()
+            } else {
+                "Syntax error".to_string()
+            };
+            Diagnostic {
+                message,
+                span: Span::new(node.start_byte(), node.end_byte()),
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Parsing,
+            }
+            .accumulate(db);
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
 }
 
 /// Stage 3.5: Inline constant values.
@@ -454,6 +485,23 @@ mod tests {
         assert!(
             has_unresolved_error,
             "Expected unresolved name error, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[salsa_test]
+    fn test_parse_error_diagnostic(db: &salsa::DatabaseImpl) {
+        let source = source_from_str("test.trb", "fn identity(a)(x: a) -> a { x }");
+        let result = compile_with_diagnostics(db, source);
+
+        let has_parse_error = result.diagnostics.iter().any(|d| {
+            d.severity == DiagnosticSeverity::Error
+                && d.phase == CompilationPhase::Parsing
+                && d.message.contains("Syntax error")
+        });
+        assert!(
+            has_parse_error,
+            "Expected parse error diagnostic, got: {:?}",
             result.diagnostics
         );
     }
