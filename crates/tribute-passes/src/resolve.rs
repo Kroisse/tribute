@@ -301,12 +301,13 @@ fn collect_definition<'db>(
                 // 1. Parent's namespace (for lookup_qualified)
                 // 2. Parent's definitions with full path (for lookup_path)
                 // TODO: Handle visibility (only pub items should be accessible)
+                let module_prefix = QualifiedName::simple(*sym);
                 for (qn, binding) in mod_env.definitions.iter() {
                     // Add to namespace for backward compatibility
                     env.add_to_namespace(*sym, qn.name(), binding.clone());
-                    // Also add to definitions with the full qualified path
-                    // The function already has its full path set by tirgen
-                    env.definitions.insert(qn.clone(), binding.clone());
+                    // Add to definitions with the full qualified path (module::name)
+                    let full_path = module_prefix.join(qn);
+                    env.definitions.insert(full_path, binding.clone());
                 }
 
                 // Also add nested namespaces (e.g., mod::submod::item)

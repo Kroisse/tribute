@@ -2269,8 +2269,9 @@ mod tests {
         let body_region = Region::new(db, location, idvec![body_block]);
 
         // Create wasm.func
+        let test_name = QualifiedName::simple(Symbol::new("test_fn"));
         let wasm_func = Operation::of_name(db, location, "wasm.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("test_fn")))
+            .attr("sym_name", Attribute::QualifiedName(test_name))
             .attr("type", Attribute::Type(func_ty))
             .region(body_region)
             .build();

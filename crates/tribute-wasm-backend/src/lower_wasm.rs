@@ -331,8 +331,9 @@ impl<'db> WasmLowerer<'db> {
             core::Func::new(self.db, idvec![], core::Nil::new(self.db).as_type()).as_type();
 
         // Create wasm.func directly (not func.func) since we're past the func_to_wasm pass
+        let start_name = QualifiedName::simple(Symbol::new("_start"));
         Operation::of_name(self.db, location, "wasm.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("_start")))
+            .attr("sym_name", Attribute::QualifiedName(start_name))
             .attr("type", Attribute::Type(func_ty))
             .region(region)
             .build()
