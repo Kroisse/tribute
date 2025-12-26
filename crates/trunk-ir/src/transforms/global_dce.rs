@@ -1,4 +1,4 @@
-//! Function-level Dead Code Elimination (DCE) pass.
+//! Global Dead Code Elimination (DCE) pass.
 //!
 //! This pass removes function definitions that are not reachable from entry points.
 //! Entry points include:
@@ -17,9 +17,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::dialect::core;
 use crate::{Attribute, Block, IdVec, Operation, QualifiedName, Region, Symbol};
 
-/// Configuration for function-level dead code elimination.
+/// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
-pub struct FuncDceConfig {
+pub struct GlobalDceConfig {
     /// Additional entry point function names (besides main/_start).
     pub extra_entry_points: Vec<String>,
     /// Whether to recursively process nested modules.
@@ -27,7 +27,7 @@ pub struct FuncDceConfig {
     pub recursive: bool,
 }
 
-impl Default for FuncDceConfig {
+impl Default for GlobalDceConfig {
     fn default() -> Self {
         Self {
             extra_entry_points: Vec::new(),
@@ -36,8 +36,8 @@ impl Default for FuncDceConfig {
     }
 }
 
-/// Result of running function-level DCE.
-pub struct FuncDceResult<'db> {
+/// Result of running global DCE.
+pub struct GlobalDceResult<'db> {
     /// The transformed module with dead functions removed.
     pub module: core::Module<'db>,
     /// Number of functions removed.
@@ -50,23 +50,23 @@ pub struct FuncDceResult<'db> {
 pub fn eliminate_dead_functions<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
-) -> FuncDceResult<'db> {
-    eliminate_dead_functions_with_config(db, module, FuncDceConfig::default())
+) -> GlobalDceResult<'db> {
+    eliminate_dead_functions_with_config(db, module, GlobalDceConfig::default())
 }
 
 /// Eliminate unreachable functions with custom configuration.
 pub fn eliminate_dead_functions_with_config<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
-    config: FuncDceConfig,
-) -> FuncDceResult<'db> {
-    FuncDcePass::new(db, config).run(module)
+    config: GlobalDceConfig,
+) -> GlobalDceResult<'db> {
+    GlobalDcePass::new(db, config).run(module)
 }
 
-/// Internal function DCE pass implementation.
-struct FuncDcePass<'db> {
+/// Internal global DCE pass implementation.
+struct GlobalDcePass<'db> {
     db: &'db dyn salsa::Database,
-    config: FuncDceConfig,
+    config: GlobalDceConfig,
     /// All function definitions found in the module.
     /// Key: function's qualified name, Value: the func.func operation
     functions: HashMap<QualifiedName, Operation<'db>>,
@@ -93,8 +93,8 @@ struct FuncDcePass<'db> {
     dialect_core: Symbol,
 }
 
-impl<'db> FuncDcePass<'db> {
-    fn new(db: &'db dyn salsa::Database, config: FuncDceConfig) -> Self {
+impl<'db> GlobalDcePass<'db> {
+    fn new(db: &'db dyn salsa::Database, config: GlobalDceConfig) -> Self {
         Self {
             db,
             config,
@@ -121,7 +121,7 @@ impl<'db> FuncDcePass<'db> {
         }
     }
 
-    fn run(mut self, module: core::Module<'db>) -> FuncDceResult<'db> {
+    fn run(mut self, module: core::Module<'db>) -> GlobalDceResult<'db> {
         // Phase 1: Collect all function definitions and build call graph
         self.analyze_region(&module.body(self.db), &[]);
 
@@ -131,7 +131,7 @@ impl<'db> FuncDcePass<'db> {
         // Phase 3: Remove unreachable functions
         let (new_module, removed) = self.remove_dead_functions(module, &reachable);
 
-        FuncDceResult {
+        GlobalDceResult {
             module: new_module,
             removed_count: removed.len(),
             removed_functions: removed,
@@ -687,7 +687,7 @@ mod tests {
     #[salsa::tracked]
     fn run_dce_custom_entry(db: &dyn salsa::Database) -> usize {
         let module = build_custom_entry(db);
-        let config = FuncDceConfig {
+        let config = GlobalDceConfig {
             extra_entry_points: vec!["custom_init".to_string()],
             recursive: true,
         };
