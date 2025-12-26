@@ -441,10 +441,293 @@ impl<'db> FuncDcePass<'db> {
     }
 }
 
-// TODO: Add unit tests for function-level DCE
-// Tests should cover:
-// - Removing unreachable functions
-// - Keeping functions called from entry points
-// - Keeping exported functions
-// - Handling nested modules
-// - Transitive call graph analysis
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dialect::{arith, core, func};
+    use crate::{DialectType, Location, PathId, Span, idvec};
+    use salsa_test_macros::salsa_test;
+
+    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        Location::new(path, Span::new(0, 0))
+    }
+
+    // Helper tracked functions to build test modules (required by Salsa)
+
+    #[salsa::tracked]
+    fn build_main_and_unused<'db>(db: &'db dyn salsa::Database) -> core::Module<'db> {
+        let loc = test_location(db);
+        core::Module::build(db, loc, "test".into(), |top| {
+            top.op(func::Func::build(
+                db,
+                loc,
+                "main",
+                idvec![],
+                core::Nil::new(db).as_type(),
+                |entry| {
+                    entry.op(func::Return::empty(db, loc));
+                },
+            ));
+            top.op(func::Func::build(
+                db,
+                loc,
+                "unused",
+                idvec![],
+                core::Nil::new(db).as_type(),
+                |entry| {
+                    entry.op(func::Return::empty(db, loc));
+                },
+            ));
+        })
+    }
+
+    #[salsa::tracked]
+    fn build_main_calls_helper<'db>(db: &'db dyn salsa::Database) -> core::Module<'db> {
+        let loc = test_location(db);
+        core::Module::build(db, loc, "test".into(), |top| {
+            top.op(func::Func::build(
+                db,
+                loc,
+                "helper",
+                idvec![],
+                core::I32::new(db).as_type(),
+                |entry| {
+                    let c = entry.op(arith::Const::i32(db, loc, 42));
+                    entry.op(func::Return::value(db, loc, c.result(db)));
+                },
+            ));
+            top.op(func::Func::build(
+                db,
+                loc,
+                "main",
+                idvec![],
+                core::I32::new(db).as_type(),
+                |entry| {
+                    let callee = QualifiedName::simple(Symbol::new("helper"));
+                    let call = entry.op(func::call(
+                        db,
+                        loc,
+                        std::iter::empty(),
+                        core::I32::new(db).as_type(),
+                        callee,
+                    ));
+                    entry.op(func::Return::value(db, loc, call.result(db)));
+                },
+            ));
+        })
+    }
+
+    #[salsa::tracked]
+    fn build_transitive_calls<'db>(db: &'db dyn salsa::Database) -> core::Module<'db> {
+        let loc = test_location(db);
+        core::Module::build(db, loc, "test".into(), |top| {
+            top.op(func::Func::build(
+                db,
+                loc,
+                "leaf",
+                idvec![],
+                core::I32::new(db).as_type(),
+                |entry| {
+                    let c = entry.op(arith::Const::i32(db, loc, 1));
+                    entry.op(func::Return::value(db, loc, c.result(db)));
+                },
+            ));
+            top.op(func::Func::build(
+                db,
+                loc,
+                "middle",
+                idvec![],
+                core::I32::new(db).as_type(),
+                |entry| {
+                    let callee = QualifiedName::simple(Symbol::new("leaf"));
+                    let call = entry.op(func::call(
+                        db,
+                        loc,
+                        std::iter::empty(),
+                        core::I32::new(db).as_type(),
+                        callee,
+                    ));
+                    entry.op(func::Return::value(db, loc, call.result(db)));
+                },
+            ));
+            top.op(func::Func::build(
+                db,
+                loc,
+                "main",
+                idvec![],
+                core::I32::new(db).as_type(),
+                |entry| {
+                    let callee = QualifiedName::simple(Symbol::new("middle"));
+                    let call = entry.op(func::call(
+                        db,
+                        loc,
+                        std::iter::empty(),
+                        core::I32::new(db).as_type(),
+                        callee,
+                    ));
+                    entry.op(func::Return::value(db, loc, call.result(db)));
+                },
+            ));
+            top.op(func::Func::build(
+                db,
+                loc,
+                "unreachable",
+                idvec![],
+                core::Nil::new(db).as_type(),
+                |entry| {
+                    entry.op(func::Return::empty(db, loc));
+                },
+            ));
+        })
+    }
+
+    #[salsa::tracked]
+    fn build_func_constant_ref<'db>(db: &'db dyn salsa::Database) -> core::Module<'db> {
+        let loc = test_location(db);
+        core::Module::build(db, loc, "test".into(), |top| {
+            top.op(func::Func::build(
+                db,
+                loc,
+                "callback",
+                idvec![],
+                core::Nil::new(db).as_type(),
+                |entry| {
+                    entry.op(func::Return::empty(db, loc));
+                },
+            ));
+            top.op(func::Func::build(
+                db,
+                loc,
+                "main",
+                idvec![],
+                core::Nil::new(db).as_type(),
+                |entry| {
+                    let func_ref = QualifiedName::simple(Symbol::new("callback"));
+                    let func_ty = core::Func::new(db, idvec![], core::Nil::new(db).as_type());
+                    let _const_op = entry.op(func::constant(db, loc, func_ty.as_type(), func_ref));
+                    entry.op(func::Return::empty(db, loc));
+                },
+            ));
+        })
+    }
+
+    #[salsa::tracked]
+    fn build_start_entry<'db>(db: &'db dyn salsa::Database) -> core::Module<'db> {
+        let loc = test_location(db);
+        core::Module::build(db, loc, "test".into(), |top| {
+            top.op(func::Func::build(
+                db,
+                loc,
+                "_start",
+                idvec![],
+                core::Nil::new(db).as_type(),
+                |entry| {
+                    entry.op(func::Return::empty(db, loc));
+                },
+            ));
+        })
+    }
+
+    #[salsa::tracked]
+    fn build_custom_entry<'db>(db: &'db dyn salsa::Database) -> core::Module<'db> {
+        let loc = test_location(db);
+        core::Module::build(db, loc, "test".into(), |top| {
+            top.op(func::Func::build(
+                db,
+                loc,
+                "custom_init",
+                idvec![],
+                core::Nil::new(db).as_type(),
+                |entry| {
+                    entry.op(func::Return::empty(db, loc));
+                },
+            ));
+        })
+    }
+
+    // Tracked wrapper functions that call eliminate_dead_functions
+    // (required because DCE creates new tracked structs)
+
+    #[salsa::tracked]
+    fn run_dce_main_and_unused(db: &dyn salsa::Database) -> usize {
+        let module = build_main_and_unused(db);
+        let result = eliminate_dead_functions(db, module);
+        result.removed_count
+    }
+
+    #[salsa::tracked]
+    fn run_dce_main_calls_helper(db: &dyn salsa::Database) -> usize {
+        let module = build_main_calls_helper(db);
+        let result = eliminate_dead_functions(db, module);
+        result.removed_count
+    }
+
+    #[salsa::tracked]
+    fn run_dce_transitive_calls(db: &dyn salsa::Database) -> usize {
+        let module = build_transitive_calls(db);
+        let result = eliminate_dead_functions(db, module);
+        result.removed_count
+    }
+
+    #[salsa::tracked]
+    fn run_dce_func_constant_ref(db: &dyn salsa::Database) -> usize {
+        let module = build_func_constant_ref(db);
+        let result = eliminate_dead_functions(db, module);
+        result.removed_count
+    }
+
+    #[salsa::tracked]
+    fn run_dce_start_entry(db: &dyn salsa::Database) -> usize {
+        let module = build_start_entry(db);
+        let result = eliminate_dead_functions(db, module);
+        result.removed_count
+    }
+
+    #[salsa::tracked]
+    fn run_dce_custom_entry(db: &dyn salsa::Database) -> usize {
+        let module = build_custom_entry(db);
+        let config = FuncDceConfig {
+            extra_entry_points: vec!["custom_init".to_string()],
+            recursive: true,
+        };
+        let result = eliminate_dead_functions_with_config(db, module, config);
+        result.removed_count
+    }
+
+    #[salsa_test]
+    fn removes_unreachable_function(db: &salsa::DatabaseImpl) {
+        let removed_count = run_dce_main_and_unused(db);
+        assert_eq!(removed_count, 1);
+    }
+
+    #[salsa_test]
+    fn keeps_called_function(db: &salsa::DatabaseImpl) {
+        let removed_count = run_dce_main_calls_helper(db);
+        assert_eq!(removed_count, 0);
+    }
+
+    #[salsa_test]
+    fn keeps_transitive_calls(db: &salsa::DatabaseImpl) {
+        let removed_count = run_dce_transitive_calls(db);
+        assert_eq!(removed_count, 1);
+    }
+
+    #[salsa_test]
+    fn keeps_func_constant_reference(db: &salsa::DatabaseImpl) {
+        let removed_count = run_dce_func_constant_ref(db);
+        assert_eq!(removed_count, 0);
+    }
+
+    #[salsa_test]
+    fn handles_start_entry_point(db: &salsa::DatabaseImpl) {
+        let removed_count = run_dce_start_entry(db);
+        assert_eq!(removed_count, 0);
+    }
+
+    #[salsa_test]
+    fn extra_entry_points_config(db: &salsa::DatabaseImpl) {
+        let removed_count = run_dce_custom_entry(db);
+        assert_eq!(removed_count, 0);
+    }
+}
