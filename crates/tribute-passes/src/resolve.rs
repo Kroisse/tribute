@@ -916,48 +916,43 @@ impl<'db> Resolver<'db> {
 
     /// Collect a single let binding from a pattern operation.
     fn collect_let_binding_from_op(&mut self, op: &Operation<'db>, value: Value<'db>) {
-        let dialect = op.dialect(self.db);
-        let op_name = op.name(self.db);
+        // Use a type variable - typechecker will infer the actual type
+        let infer_ty = || trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
 
-        match (dialect, op_name) {
-            (d, n) if d == pat::DIALECT_NAME() && n == pat::BIND() => {
-                // pat.bind("x") - bind x to the value
-                let attrs = op.attributes(self.db);
-                if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_NAME()) {
-                    // Use a type variable - typechecker will infer the actual type
-                    let ty = trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
-                    self.add_local(*sym, LocalBinding::LetBinding { value, ty });
-                }
-            }
-            (d, n) if d == pat::DIALECT_NAME() && n == pat::AS_PAT() => {
-                // pat.as_pat: bind the name to value, then recurse on inner pattern
-                let attrs = op.attributes(self.db);
-                if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_NAME()) {
-                    let ty = trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
-                    self.add_local(*sym, LocalBinding::LetBinding { value, ty });
-                }
-                // Recurse on inner pattern with the same value
-                for region in op.regions(self.db).iter() {
-                    self.collect_let_bindings(region, value);
-                }
-            }
-            (d, n) if d == pat::DIALECT_NAME() && n == pat::WILDCARD() => {
-                // Wildcard pattern - no binding needed
-            }
-            (d, n) if d == pat::DIALECT_NAME() && n == pat::TUPLE() => {
-                // TODO: Handle tuple patterns by generating extraction operations
-                // For now, fall through to nested regions which may have bindings
-                for region in op.regions(self.db).iter() {
-                    // Each element in the tuple needs extraction - for now just recurse
-                    // with the same value (not fully correct for extraction)
-                    self.collect_let_bindings(region, value);
-                }
-            }
-            _ => {
-                // Other pattern ops may have nested regions with bindings
-                for region in op.regions(self.db).iter() {
-                    self.collect_let_bindings(region, value);
-                }
+        if let Ok(bind_op) = pat::Bind::from_operation(self.db, *op) {
+            // pat.bind("x") - bind x to the value
+            let name = bind_op.name(self.db);
+            self.add_local(
+                name,
+                LocalBinding::LetBinding {
+                    value,
+                    ty: infer_ty(),
+                },
+            );
+        } else if let Ok(as_pat_op) = pat::AsPat::from_operation(self.db, *op) {
+            // pat.as_pat: bind the name to value, then recurse on inner pattern
+            let name = as_pat_op.name(self.db);
+            self.add_local(
+                name,
+                LocalBinding::LetBinding {
+                    value,
+                    ty: infer_ty(),
+                },
+            );
+            // Recurse on inner pattern with the same value
+            self.collect_let_bindings(&as_pat_op.inner(self.db), value);
+        } else if pat::Wildcard::from_operation(self.db, *op).is_ok() {
+            // Wildcard pattern - no binding needed
+        } else if let Ok(tuple_op) = pat::Tuple::from_operation(self.db, *op) {
+            // TODO: Handle tuple patterns by generating extraction operations
+            // For now, fall through to nested regions which may have bindings
+            // Each element in the tuple needs extraction - for now just recurse
+            // with the same value (not fully correct for extraction)
+            self.collect_let_bindings(&tuple_op.elements(self.db), value);
+        } else {
+            // Other pattern ops may have nested regions with bindings
+            for region in op.regions(self.db).iter() {
+                self.collect_let_bindings(region, value);
             }
         }
     }
