@@ -572,4 +572,35 @@ mod tests {
             result.diagnostics
         );
     }
+
+    #[salsa_test]
+    fn test_tdnr_struct_field_access(db: &salsa::DatabaseImpl) {
+        // Test that TDNR resolves user.name to User::name(user)
+        let source = source_from_str(
+            "test.trb",
+            r#"
+            struct User {
+                name: String,
+                age: Int,
+            }
+
+            fn get_name(user: User) -> String {
+                user.name
+            }
+            "#,
+        );
+
+        let result = compile_with_diagnostics(db, source);
+
+        // Should compile without unresolved errors - TDNR should resolve user.name
+        let has_unresolved_name = result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("unresolved") && d.message.contains("name"));
+        assert!(
+            !has_unresolved_name,
+            "TDNR should resolve user.name to User::name(user), got: {:?}",
+            result.diagnostics
+        );
+    }
 }
