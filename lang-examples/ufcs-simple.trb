@@ -1,0 +1,9 @@
+// Simple UFCS test with top-level function
+fn double(x: Int) -> Int {
+    x + x
+}
+
+fn main() -> Int {
+    // Simple UFCS: 21.double() -> double(21)
+    21.double()
+}

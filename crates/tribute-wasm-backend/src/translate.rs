@@ -38,6 +38,10 @@ pub struct WasmBinary<'db> {
 /// 2. Emits the wasm dialect to a WebAssembly binary
 /// 3. Collects metadata (exports, imports) for tooling integration
 ///
+/// Note: Dead code elimination (DCE) is performed earlier in the pipeline
+/// (stage_dce) before this function is called, ensuring unused functions
+/// are already removed before lowering.
+///
 /// Memoization is automatic via Salsa's incremental compilation system.
 #[salsa::tracked]
 pub fn compile_to_wasm<'db>(

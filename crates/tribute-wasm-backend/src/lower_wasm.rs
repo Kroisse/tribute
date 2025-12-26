@@ -187,13 +187,14 @@ impl<'db> WasmLowerer<'db> {
             let i32_ty = core::I32::new(self.db).as_type();
             let params = idvec![i32_ty, i32_ty, i32_ty, i32_ty];
             let import_ty = core::Func::new(self.db, params, i32_ty).as_type();
+            let fd_write_name = QualifiedName::simple(Symbol::new("fd_write"));
             builder.op(wasm::import_func(
                 self.db,
                 module_location,
-                Attribute::String("wasi_snapshot_preview1".into()),
-                Attribute::String("fd_write".into()),
-                Attribute::Symbol(Symbol::new("fd_write")),
-                Attribute::Type(import_ty),
+                Symbol::new("wasi_snapshot_preview1"),
+                Symbol::new("fd_write"),
+                fd_write_name,
+                import_ty,
             ));
         }
 
@@ -331,8 +332,9 @@ impl<'db> WasmLowerer<'db> {
             core::Func::new(self.db, idvec![], core::Nil::new(self.db).as_type()).as_type();
 
         // Create wasm.func directly (not func.func) since we're past the func_to_wasm pass
+        let start_name = QualifiedName::simple(Symbol::new("_start"));
         Operation::of_name(self.db, location, "wasm.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("_start")))
+            .attr("sym_name", Attribute::QualifiedName(start_name))
             .attr("type", Attribute::Type(func_ty))
             .region(region)
             .build()
@@ -403,7 +405,9 @@ impl<'db> WasmLowerer<'db> {
     }
 
     fn record_wasm_func_metadata(&mut self, op: &wasm::Func<'db>) {
-        if op.sym_name(self.db) != Symbol::new("main") {
+        let sym_name = op.sym_name(self.db);
+        // Only match root-level main, not foo::main
+        if !(sym_name.is_simple() && sym_name.name() == Symbol::new("main")) {
             return;
         }
 

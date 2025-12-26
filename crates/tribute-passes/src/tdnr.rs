@@ -3,11 +3,15 @@
 //! This pass resolves remaining `src.call` operations that couldn't be resolved
 //! during initial name resolution because they require type information.
 //!
-//! ## Examples
+//! ## UFCS Resolution
+//!
+//! UFCS (Uniform Function Call Syntax) transforms `x.method(y)` into `method(x, y)`,
+//! then finds the function `method` in the current namespace where the first
+//! parameter type matches the receiver's type.
 //!
 //! ```text
-//! x.len()           // src.call(x, "len") → List::len(x) based on x's type
-//! list.map(f)       // src.call(list, f, "map") → List::map(list, f)
+//! x.len()           // src.call(x, "len") → len(x) where first param matches x's type
+//! list.map(f)       // src.call(list, f, "map") → map(list, f)
 //! ```
 //!
 //! ## Pipeline Position
@@ -19,91 +23,14 @@
 
 use std::collections::HashMap;
 
-use trunk_ir::dialect::core::Module;
+use crate::resolve::{Binding, ModuleEnv, build_env};
+use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func;
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
-    Attribute, Block, BlockId, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type,
+    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
     Value,
 };
-
-// =============================================================================
-// Method Registry
-// =============================================================================
-
-/// Information about a method that can be called on a type.
-#[derive(Clone, Debug)]
-pub struct MethodInfo<'db> {
-    /// The type this method belongs to (e.g., `List(a)`)
-    pub receiver_type: Type<'db>,
-    /// The method name (e.g., "len", "map")
-    pub name: Symbol,
-    /// The full function path to call
-    pub func_path: QualifiedName,
-    /// The function type
-    pub func_type: Type<'db>,
-}
-
-/// Registry of methods available for types.
-///
-/// Maps (type_dialect, type_name) → method_name → MethodInfo
-#[derive(Debug, Default)]
-pub struct MethodRegistry<'db> {
-    /// Methods indexed by (type_dialect, type_name, method_name)
-    methods: HashMap<(Symbol, Symbol, Symbol), MethodInfo<'db>>,
-}
-
-impl<'db> MethodRegistry<'db> {
-    /// Create a new empty registry.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Register a method for a type.
-    pub fn register(&mut self, db: &'db dyn salsa::Database, info: MethodInfo<'db>) {
-        let key = (
-            info.receiver_type.dialect(db),
-            info.receiver_type.name(db),
-            info.name,
-        );
-        self.methods.insert(key, info);
-    }
-
-    /// Look up a method by receiver type and name.
-    pub fn lookup(
-        &self,
-        db: &'db dyn salsa::Database,
-        receiver_type: Type<'db>,
-        method_name: Symbol,
-    ) -> Option<&MethodInfo<'db>> {
-        let dialect = receiver_type.dialect(db);
-        let type_name = receiver_type.name(db);
-        let key = (dialect, type_name, method_name);
-        self.methods.get(&key)
-    }
-}
-
-// =============================================================================
-// Built-in Methods
-// =============================================================================
-
-/// Build a registry with built-in methods for core types.
-pub fn builtin_methods<'db>(_db: &'db dyn salsa::Database) -> MethodRegistry<'db> {
-    // TODO: Register built-in methods for core types
-    // For now, return empty registry
-    //
-    // Example registrations would look like:
-    // let mut registry = MethodRegistry::new();
-    // registry.register(db, MethodInfo {
-    //     receiver_type: list_type,
-    //     name: Symbol::new("len"),
-    //     func_path: idvec![Symbol::new("List"), Symbol::new("len")],
-    //     func_type: ...,
-    // });
-    // registry
-
-    MethodRegistry::new()
-}
 
 // =============================================================================
 // TDNR Resolver
@@ -112,19 +39,20 @@ pub fn builtin_methods<'db>(_db: &'db dyn salsa::Database) -> MethodRegistry<'db
 /// TDNR resolver context.
 pub struct TdnrResolver<'db> {
     db: &'db dyn salsa::Database,
-    registry: MethodRegistry<'db>,
+    /// Module environment for function lookups.
+    env: ModuleEnv<'db>,
     /// Rewrite context for value mapping.
     ctx: RewriteContext<'db>,
-    /// Block argument types indexed by BlockId
+    /// Block argument types indexed by BlockId.
     block_arg_types: HashMap<BlockId, IdVec<Type<'db>>>,
 }
 
 impl<'db> TdnrResolver<'db> {
-    /// Create a new TDNR resolver.
-    pub fn new(db: &'db dyn salsa::Database, registry: MethodRegistry<'db>) -> Self {
+    /// Create a new TDNR resolver with the given module environment.
+    pub fn new(db: &'db dyn salsa::Database, env: ModuleEnv<'db>) -> Self {
         Self {
             db,
-            registry,
+            env,
             ctx: RewriteContext::new(),
             block_arg_types: HashMap::new(),
         }
@@ -225,7 +153,14 @@ impl<'db> TdnrResolver<'db> {
         op.modify(self.db).regions(new_regions).build()
     }
 
-    /// Try to resolve a `src.call` as a method call using TDNR.
+    /// Try to resolve a `src.call` as a UFCS method call.
+    ///
+    /// For `x.method(y)` (represented as `src.call` with receiver `x` and name `method`):
+    /// 1. Look up `method` in the module environment
+    /// 2. If it's a function and its first parameter matches `x`'s type, resolve it
+    /// 3. Transform to `func.call(method, x, y, ...)`
+    ///
+    /// Also supports qualified names: `x.foo::bar(y)` → `foo::bar(x, y)`
     fn try_resolve_method_call(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let operands = op.operands(self.db);
         if operands.is_empty() {
@@ -238,32 +173,49 @@ impl<'db> TdnrResolver<'db> {
             return None;
         };
 
-        // Single-segment name means it's a method call needing TDNR
-        if !qual_name.is_simple() {
-            return None; // Already qualified, shouldn't be here
-        }
-
-        let method_name = qual_name.name();
         let receiver = operands[0];
 
         // Get the receiver's type
         let receiver_type = self.get_value_type(receiver)?;
 
-        // Look up the method
-        let method_info = self.registry.lookup(self.db, receiver_type, method_name)?;
+        // Look up the function - handle both simple and qualified names
+        let (func_path, func_ty) = if qual_name.is_simple() {
+            // Simple name: look up directly
+            let binding = self.env.lookup(qual_name.name())?;
+            let Binding::Function { path, ty } = binding else {
+                return None;
+            };
+            (path.clone(), *ty)
+        } else {
+            // Qualified name: look up by full path, fall back to namespace lookup
+            let binding = self.env.lookup_path(qual_name).or_else(|| {
+                // Fall back to namespace lookup for enum variants, etc.
+                let namespace = *qual_name.as_parent().last()?;
+                self.env.lookup_qualified(namespace, qual_name.name())
+            })?;
+            let Binding::Function { ty, .. } = binding else {
+                return None;
+            };
+            // Use the full qualified name for the call
+            (qual_name.clone(), *ty)
+        };
+
+        // Check if the first parameter type matches the receiver type
+        let func_type = core::Func::from_type(self.db, func_ty)?;
+        let params = func_type.params(self.db);
+        let first_param = params.first()?;
+
+        // Match receiver type with first parameter type
+        if !self.types_compatible(receiver_type, *first_param) {
+            return None;
+        }
 
         // Create func.call with the resolved function
         let location = op.location(self.db);
         let result_ty = op.results(self.db).first().copied()?;
         let args: Vec<Value<'db>> = operands.iter().copied().collect();
 
-        let new_op = func::call(
-            self.db,
-            location,
-            args,
-            result_ty,
-            method_info.func_path.clone(),
-        );
+        let new_op = func::call(self.db, location, args, result_ty, func_path);
         let new_operation = new_op.as_operation();
 
         // Map old result to new result
@@ -272,6 +224,15 @@ impl<'db> TdnrResolver<'db> {
         self.ctx.map_value(old_result, new_result);
 
         Some(new_operation)
+    }
+
+    /// Check if two types are compatible for UFCS resolution.
+    ///
+    /// For now, this uses simple equality. A more sophisticated implementation
+    /// could consider type variables and subtyping.
+    fn types_compatible(&self, actual: Type<'db>, expected: Type<'db>) -> bool {
+        // Simple equality check - both types should be concrete after typecheck
+        actual == expected
     }
 
     /// Get the type of a value.
@@ -300,9 +261,13 @@ impl<'db> TdnrResolver<'db> {
 // =============================================================================
 
 /// Run TDNR on a module.
+///
+/// This builds a `ModuleEnv` from the module and uses it for UFCS resolution.
+/// For `x.method(y)`, it looks up `method` in the environment and checks
+/// if the first parameter type matches `x`'s type.
 pub fn resolve_tdnr<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    let registry = builtin_methods(db);
-    let mut resolver = TdnrResolver::new(db, registry);
+    let env = build_env(db, &module);
+    let mut resolver = TdnrResolver::new(db, env);
     resolver.resolve_module(&module)
 }
 
@@ -311,9 +276,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_method_registry() {
-        // Basic smoke test
-        let registry: MethodRegistry<'_> = MethodRegistry::new();
-        assert!(registry.methods.is_empty());
+    fn test_module_env_lookup() {
+        // Basic smoke test - ModuleEnv is used for UFCS resolution
+        let env: ModuleEnv<'_> = ModuleEnv::new();
+        assert!(env.lookup(Symbol::new("nonexistent")).is_none());
     }
 }

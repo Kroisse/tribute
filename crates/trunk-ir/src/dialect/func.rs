@@ -1,14 +1,14 @@
 //! Function dialect operations.
 use super::core;
 use crate::{
-    Attribute, DialectOp, DialectType, IdVec, Location, Operation, Region, Span, Symbol, Type,
-    dialect, idvec, ir::BlockBuilder,
+    Attribute, DialectOp, DialectType, IdVec, Location, Operation, QualifiedName, Region, Span,
+    Symbol, Type, dialect, idvec, ir::BlockBuilder,
 };
 
 dialect! {
     mod func {
         /// `func.func` operation: defines a function.
-        #[attr(sym_name: Symbol, r#type: Type)]
+        #[attr(sym_name: QualifiedName, r#type: Type)]
         fn func() {
             #[region(body)] {}
         };
@@ -43,7 +43,7 @@ impl<'db> Func<'db> {
     pub fn build(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &str,
+        name: impl Into<QualifiedName>,
         params: IdVec<Type<'db>>,
         result: Type<'db>,
         f: impl FnOnce(&mut BlockBuilder<'db>),
@@ -55,7 +55,7 @@ impl<'db> Func<'db> {
     pub fn build_with_effect(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &str,
+        name: impl Into<QualifiedName>,
         params: IdVec<Type<'db>>,
         result: Type<'db>,
         effect: Option<Type<'db>>,
@@ -68,7 +68,7 @@ impl<'db> Func<'db> {
     pub fn build_with_name_span(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &str,
+        name: impl Into<QualifiedName>,
         name_span: Option<Span>,
         params: IdVec<Type<'db>>,
         result: Type<'db>,
@@ -84,7 +84,7 @@ impl<'db> Func<'db> {
     pub fn build_with_name_span_and_effect(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &str,
+        name: impl Into<QualifiedName>,
         name_span: Option<Span>,
         params: IdVec<Type<'db>>,
         result: Type<'db>,
@@ -96,7 +96,7 @@ impl<'db> Func<'db> {
         let region = Region::new(db, location, idvec![entry.build()]);
 
         let mut builder = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::from_dynamic(name)))
+            .attr("sym_name", Attribute::QualifiedName(name.into()))
             .attr(
                 "type",
                 Attribute::Type(core::Func::with_effect(db, params, result, effect).as_type()),
@@ -110,8 +110,13 @@ impl<'db> Func<'db> {
         Func::from_operation(db, builder.build()).expect("valid func.func operation")
     }
 
-    /// Get the function name.
+    /// Get the function's simple name (last segment of qualified name).
     pub fn name(&self, db: &'db dyn salsa::Database) -> Symbol {
+        self.sym_name(db).name()
+    }
+
+    /// Get the full qualified name.
+    pub fn qualified_name(&self, db: &'db dyn salsa::Database) -> QualifiedName {
         self.sym_name(db)
     }
 

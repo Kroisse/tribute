@@ -63,13 +63,13 @@ dialect! {
         // === Module-level Definitions ===
 
         /// `wasm.func` operation: define a function.
-        #[attr(sym_name: Symbol, r#type: Type)]
+        #[attr(sym_name: QualifiedName, r#type: Type)]
         fn func() {
             #[region(body)] {}
         };
 
         /// `wasm.import_func` operation: import a function.
-        #[attr(module, name, sym_name, r#type)]
+        #[attr(module: Symbol, name: Symbol, sym_name: QualifiedName, r#type: Type)]
         fn import_func();
 
         /// `wasm.export_func` operation: export a function by symbol.

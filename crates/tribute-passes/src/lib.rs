@@ -22,7 +22,7 @@ pub use case_lowering::lower_case_to_scf;
 pub use const_inline::{ConstInliner, inline_module};
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use resolve::{ModuleEnv, Resolver, resolve_module};
-pub use tdnr::{MethodInfo, MethodRegistry, TdnrResolver, resolve_tdnr};
+pub use tdnr::{TdnrResolver, resolve_tdnr};
 pub use trunk_ir::rewrite::{
     ApplyResult, PatternApplicator, RewriteContext, RewritePattern, RewriteResult,
 };

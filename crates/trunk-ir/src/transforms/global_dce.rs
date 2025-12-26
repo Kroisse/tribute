@@ -201,10 +201,12 @@ impl<'db> GlobalDcePass<'db> {
         module_path: &[Symbol],
     ) -> Option<QualifiedName> {
         let sym_name = op.attributes(self.db).get(&self.sym_sym_name)?;
-        if let Attribute::Symbol(name) = sym_name {
-            Some(QualifiedName::new(module_path.to_vec(), *name))
-        } else {
-            None
+        match sym_name {
+            // Legacy: sym_name as Symbol (combine with module_path)
+            Attribute::Symbol(name) => Some(QualifiedName::new(module_path.to_vec(), *name)),
+            // New: sym_name as QualifiedName (use directly)
+            Attribute::QualifiedName(qn) => Some(qn.clone()),
+            _ => None,
         }
     }
 

@@ -477,7 +477,7 @@ fn extract_symbol_from_operation<'db>(
     // Try function
     if let Ok(func_op) = func::Func::from_operation(db, *op) {
         return Some(create_symbol(
-            func_op.sym_name(db),
+            func_op.name(db),
             SymbolKind::FUNCTION,
             op.location(db).span,
             rope,

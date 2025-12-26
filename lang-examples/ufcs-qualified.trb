@@ -1,0 +1,12 @@
+// UFCS with qualified name test
+// 21.math::double() should resolve to math::double(21)
+
+mod math {
+    fn double(x: Int) -> Int {
+        x + x
+    }
+}
+
+fn main() -> Int {
+    21.math::double()
+}

@@ -1,0 +1,10 @@
+// Simplest zero-arg method test
+
+fn double(x: Int) -> Int {
+    x + x
+}
+
+// Direct test: parameter.method()
+fn main() -> Int {
+    21.double()
+}
