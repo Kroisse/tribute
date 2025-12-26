@@ -3,6 +3,7 @@
 mod cli;
 mod lsp;
 
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use clap::Parser;
 use cli::{Cli, Command};
 use ropey::Rope;
@@ -12,50 +13,36 @@ use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{compile_with_diagnostics, stage_lower_to_wasm, stage_resolve};
 use tribute::{SourceCst, TributeDatabaseImpl};
-use tribute_passes::diagnostic::Diagnostic;
+use tribute_passes::diagnostic::{CompilationPhase, Diagnostic};
 use tribute_passes::resolve::build_env;
 
-/// Format a diagnostic with source location and context.
-fn format_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) -> String {
+/// Print a diagnostic using ariadne for pretty output.
+fn print_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) {
     let start = diag.span.start;
-    let end = diag.span.end;
+    let end = diag.span.end.max(start + 1);
 
-    // Convert byte offset to line/column (0-indexed)
-    let line = source.byte_to_line(start.min(source.len_bytes().saturating_sub(1)));
-    let line_start = source.line_to_byte(line);
-    let col = start.saturating_sub(line_start);
-
-    // Get the source line
-    let line_text = source.line(line).to_string();
-    let line_text = line_text.trim_end(); // Remove trailing newline
-
-    // Calculate end column for underline
-    let end_col = if end > start {
-        let end_line = source.byte_to_line(end.min(source.len_bytes().saturating_sub(1)));
-        if end_line == line {
-            end.saturating_sub(line_start)
-        } else {
-            line_text.len()
-        }
-    } else {
-        col + 1
+    let color = match diag.phase {
+        CompilationPhase::Parsing => Color::Red,
+        CompilationPhase::TirGeneration => Color::Yellow,
+        CompilationPhase::NameResolution => Color::Yellow,
+        CompilationPhase::TypeChecking => Color::Magenta,
+        CompilationPhase::Lowering => Color::Cyan,
+        CompilationPhase::Optimization => Color::Blue,
     };
 
-    // Build the underline with carets
-    let underline_len = end_col.saturating_sub(col).max(1);
-    let underline = format!("{}{}", " ".repeat(col), "^".repeat(underline_len));
+    let source_text: String = source.to_string();
 
-    format!(
-        "error[{:?}]: {}\n  --> {}:{}:{}\n   |\n{:>3}| {}\n   | {}",
-        diag.phase,
-        diag.message,
-        file_path,
-        line + 1, // 1-indexed for display
-        col + 1,  // 1-indexed for display
-        line + 1,
-        line_text,
-        underline
-    )
+    Report::build(ReportKind::Error, (file_path, start..end))
+        .with_code(format!("{:?}", diag.phase))
+        .with_message(&diag.message)
+        .with_label(
+            Label::new((file_path, start..end))
+                .with_message(&diag.message)
+                .with_color(color),
+        )
+        .finish()
+        .eprint((file_path, Source::from(source_text)))
+        .ok();
 }
 
 fn main() {
@@ -138,17 +125,15 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                     let wasm_diags: Vec<_> =
                         stage_lower_to_wasm::accumulated::<Diagnostic>(db, source);
                     if !wasm_diags.is_empty() {
-                        eprintln!();
                         for diag in &wasm_diags {
-                            eprintln!("{}\n", format_diagnostic(diag, source_text, &file_path));
+                            print_diagnostic(diag, source_text, &file_path);
                         }
                     } else {
                         // Try getting frontend diagnostics
                         let result = compile_with_diagnostics(db, source);
                         if !result.diagnostics.is_empty() {
-                            eprintln!();
                             for diag in &result.diagnostics {
-                                eprintln!("{}\n", format_diagnostic(diag, source_text, &file_path));
+                                print_diagnostic(diag, source_text, &file_path);
                             }
                         } else {
                             eprintln!("✗ WebAssembly compilation failed (unknown error)");
@@ -166,9 +151,8 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                 } else {
                     let file_path = input_path.display().to_string();
                     let source_text = source.text(db);
-                    eprintln!();
                     for diag in &result.diagnostics {
-                        eprintln!("{}\n", format_diagnostic(diag, source_text, &file_path));
+                        print_diagnostic(diag, source_text, &file_path);
                     }
                     std::process::exit(1);
                 }
