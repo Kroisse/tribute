@@ -1,0 +1,11 @@
+// Zero-arg method WITHOUT parentheses
+// According to spec: x.f should work as shorthand for x.f()
+
+fn double(x: Int) -> Int {
+    x + x
+}
+
+// Test without parens: 21.double
+fn main() -> Int {
+    21.double
+}

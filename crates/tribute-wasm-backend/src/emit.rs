@@ -172,13 +172,13 @@ static SIMPLE_OPS: LazyLock<HashMap<Symbol, Instruction<'static>>> = LazyLock::n
 });
 
 struct FunctionDef<'db> {
-    name: Symbol,
+    name: QualifiedName,
     ty: core::Func<'db>,
     op: Operation<'db>,
 }
 
 struct ImportFuncDef<'db> {
-    sym: Symbol,
+    sym: QualifiedName,
     module: String,
     name: String,
     ty: core::Func<'db>,
@@ -192,7 +192,7 @@ struct ExportDef {
 
 #[derive(Debug)]
 enum ExportTarget {
-    Func(Symbol),
+    Func(QualifiedName),
     Memory(u32),
 }
 
@@ -249,16 +249,16 @@ pub fn emit_wasm<'db>(
     let mut code_section = CodeSection::new();
     let mut data_section = DataSection::new();
 
-    let mut func_indices = HashMap::new();
+    let mut func_indices: HashMap<QualifiedName, u32> = HashMap::new();
     let gc_type_count = module_info.gc_types.len() as u32;
     let mut next_type_index = gc_type_count;
 
     for (index, import_def) in module_info.imports.iter().enumerate() {
-        func_indices.insert(import_def.sym, index as u32);
+        func_indices.insert(import_def.sym.clone(), index as u32);
     }
     let import_count = module_info.imports.len() as u32;
     for (index, func_def) in module_info.funcs.iter().enumerate() {
-        func_indices.insert(func_def.name, import_count + index as u32);
+        func_indices.insert(func_def.name.clone(), import_count + index as u32);
     }
 
     for gc_type in &module_info.gc_types {
@@ -338,16 +338,16 @@ pub fn emit_wasm<'db>(
     debug!("Processing {} exports...", module_info.exports.len());
     for export in module_info.exports.iter() {
         debug!("  export: {:?} -> {:?}", export.name, export.target);
-        match export.target {
+        match &export.target {
             ExportTarget::Func(sym) => {
-                let Some(index) = func_indices.get(&sym) else {
+                let Some(index) = func_indices.get(sym) else {
                     debug!("  function not found: {:?}", sym);
                     return Err(CompilationError::function_not_found(&sym.to_string()));
                 };
                 export_section.export(export.name.as_str(), export.kind, *index);
             }
             ExportTarget::Memory(index) => {
-                export_section.export(export.name.as_str(), export.kind, index);
+                export_section.export(export.name.as_str(), export.kind, *index);
             }
         }
     }
@@ -356,9 +356,9 @@ pub fn emit_wasm<'db>(
             let Some(index) = func_indices.get(&func_def.name) else {
                 continue;
             };
-            func_def.name.with_str(|name| {
-                export_section.export(name, ExportKind::Func, *index);
-            });
+            // Export with simple name (last segment of qualified name)
+            let name = func_def.name.name().to_string();
+            export_section.export(&name, ExportKind::Func, *index);
         }
     }
 
@@ -412,6 +412,76 @@ pub fn emit_wasm<'db>(
     Ok(module_bytes.finish())
 }
 
+/// Recursively collect wasm operations from a region, including nested core.module operations.
+/// WebAssembly doesn't support nested modules, so we flatten all functions from namespaced
+/// modules into a single list.
+fn collect_wasm_ops_from_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    funcs: &mut Vec<FunctionDef<'db>>,
+    imports: &mut Vec<ImportFuncDef<'db>>,
+    exports: &mut Vec<ExportDef>,
+    memory: &mut Option<MemoryDef>,
+    data: &mut Vec<DataDef>,
+) -> CompilationResult<()> {
+    let wasm_dialect = Symbol::new("wasm");
+    let core_dialect = Symbol::new("core");
+    let module_name = Symbol::new("module");
+
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            let dialect = op.dialect(db);
+            let name = op.name(db);
+
+            // Recurse into nested core.module operations
+            if dialect == core_dialect && name == module_name {
+                for nested_region in op.regions(db).iter() {
+                    collect_wasm_ops_from_region(
+                        db,
+                        nested_region,
+                        funcs,
+                        imports,
+                        exports,
+                        memory,
+                        data,
+                    )?;
+                }
+                continue;
+            }
+
+            // Collect wasm operations
+            if dialect == wasm_dialect {
+                match name {
+                    n if n == Symbol::new("func") => {
+                        if let Ok(func_def) = extract_function_def(db, op) {
+                            debug!("Including function: {}", func_def.name);
+                            funcs.push(func_def);
+                        }
+                    }
+                    n if n == Symbol::new("import_func") => {
+                        imports.push(extract_import_def(db, op)?);
+                    }
+                    n if n == Symbol::new("export_func") => {
+                        exports.push(extract_export_func(db, op)?);
+                    }
+                    n if n == Symbol::new("export_memory") => {
+                        exports.push(extract_export_memory(db, op)?);
+                    }
+                    n if n == Symbol::new("memory") => {
+                        *memory = Some(extract_memory_def(db, op)?);
+                    }
+                    n if n == Symbol::new("data") => {
+                        data.push(extract_data_def(db, op)?);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn collect_module_info<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
@@ -421,58 +491,28 @@ fn collect_module_info<'db>(
     let mut exports = Vec::new();
     let mut memory = None;
     let mut data = Vec::new();
-    let wasm_dialect = Symbol::new("wasm");
 
-    let body = module.body(db);
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if op.dialect(db) == wasm_dialect {
-                match op.name(db) {
-                    name if name == Symbol::new("func") => {
-                        if let Ok(func_def) = extract_function_def(db, op) {
-                            // With uniform representation, generic functions are included.
-                            // Type variables (type.var) are mapped to anyref.
-                            func_def.name.with_str(|name| {
-                                debug!("Including function: {}", name);
-                            });
-                            funcs.push(func_def);
-                        }
-                    }
-                    name if name == Symbol::new("import_func") => {
-                        imports.push(extract_import_def(db, op)?);
-                    }
-                    name if name == Symbol::new("export_func") => {
-                        exports.push(extract_export_func(db, op)?);
-                    }
-                    name if name == Symbol::new("export_memory") => {
-                        exports.push(extract_export_memory(db, op)?);
-                    }
-                    name if name == Symbol::new("memory") => {
-                        memory = Some(extract_memory_def(db, op)?);
-                    }
-                    name if name == Symbol::new("data") => {
-                        data.push(extract_data_def(db, op)?);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+    // Recursively collect wasm operations from the module and any nested core.module operations.
+    collect_wasm_ops_from_region(
+        db,
+        &module.body(db),
+        &mut funcs,
+        &mut imports,
+        &mut exports,
+        &mut memory,
+        &mut data,
+    )?;
 
     let (gc_types, type_idx_by_type) = collect_gc_types(db, module)?;
 
     // Build function type lookup map for boxing/unboxing.
-    // Use module path + function name as the qualified name.
-    let module_name = module.name(db);
-    let parent: trunk_ir::SymbolVec = trunk_ir::smallvec::smallvec![module_name];
+    // Use the qualified name already stored in func/import definitions.
     let mut func_types = HashMap::new();
     for func in &funcs {
-        let qualified = QualifiedName::new(parent.clone(), func.name);
-        func_types.insert(qualified, func.ty);
+        func_types.insert(func.name.clone(), func.ty);
     }
     for import in &imports {
-        let qualified = QualifiedName::new(parent.clone(), import.sym);
-        func_types.insert(qualified, import.ty);
+        func_types.insert(import.sym.clone(), import.ty);
     }
 
     Ok(ModuleInfo {
@@ -785,22 +825,48 @@ fn collect_gc_types<'db>(
         Ok(())
     };
 
-    let body = module.body(db);
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if op.dialect(db) == Symbol::new("wasm") && op.name(db) == Symbol::new("func") {
-                if let Some(region) = op.regions(db).first() {
-                    for block in region.blocks(db).iter() {
-                        for op in block.operations(db).iter() {
-                            visit_op(op)?;
+    // Recursively visit operations, including nested core.module operations.
+    fn visit_region<'db>(
+        db: &'db dyn salsa::Database,
+        region: &Region<'db>,
+        visit_op: &mut impl FnMut(&Operation<'db>) -> CompilationResult<()>,
+    ) -> CompilationResult<()> {
+        let wasm_dialect = Symbol::new("wasm");
+        let core_dialect = Symbol::new("core");
+        let module_name = Symbol::new("module");
+        let func_name = Symbol::new("func");
+
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                let dialect = op.dialect(db);
+                let name = op.name(db);
+
+                // Recurse into nested core.module operations
+                if dialect == core_dialect && name == module_name {
+                    for nested_region in op.regions(db).iter() {
+                        visit_region(db, nested_region, visit_op)?;
+                    }
+                    continue;
+                }
+
+                // Visit wasm.func body
+                if dialect == wasm_dialect && name == func_name {
+                    if let Some(func_region) = op.regions(db).first() {
+                        for block in func_region.blocks(db).iter() {
+                            for inner_op in block.operations(db).iter() {
+                                visit_op(inner_op)?;
+                            }
                         }
                     }
+                } else {
+                    visit_op(op)?;
                 }
-            } else {
-                visit_op(op)?;
             }
         }
+        Ok(())
     }
+
+    visit_region(db, &module.body(db), &mut visit_op)?;
 
     let to_field_type = |ty: Type<'db>, type_idx_by_type: &HashMap<_, _>| -> FieldType {
         let element_type = if core::I32::from_type(db, ty).is_some() {
@@ -876,7 +942,7 @@ fn extract_function_def<'db>(
     })?;
 
     let name = match name_attr {
-        Attribute::Symbol(sym) => *sym,
+        Attribute::QualifiedName(qn) => qn.clone(),
         _ => {
             return Err(CompilationError::from(
                 errors::CompilationErrorKind::InvalidAttribute("sym_name"),
@@ -916,7 +982,7 @@ fn extract_import_def<'db>(
         .ok_or_else(|| CompilationError::type_error("wasm.import_func requires core.func type"))?;
 
     Ok(ImportFuncDef {
-        sym,
+        sym: sym.into(), // Convert Symbol to QualifiedName
         module,
         name,
         ty: func_ty,
@@ -930,11 +996,10 @@ fn extract_export_func<'db>(
     let attrs = op.attributes(db);
     let name = attr_string(attrs, ATTR_NAME())?;
     let func = attr_symbol_ref_attr(attrs, ATTR_FUNC())?;
-    let sym = func.name();
     Ok(ExportDef {
         name,
         kind: ExportKind::Func,
-        target: ExportTarget::Func(sym),
+        target: ExportTarget::Func(func.clone()),
     })
 }
 
@@ -998,7 +1063,7 @@ fn extract_data_def<'db>(
 fn emit_function<'db>(
     db: &'db dyn salsa::Database,
     func_def: &FunctionDef<'db>,
-    func_indices: &HashMap<Symbol, u32>,
+    func_indices: &HashMap<QualifiedName, u32>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
     func_types: &HashMap<QualifiedName, core::Func<'db>>,
 ) -> CompilationResult<Function> {
@@ -1094,7 +1159,7 @@ fn emit_region_ops<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
     value_locals: &HashMap<Value<'db>, u32>,
-    func_indices: &HashMap<Symbol, u32>,
+    func_indices: &HashMap<QualifiedName, u32>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
     func_types: &HashMap<QualifiedName, core::Func<'db>>,
     function: &mut Function,
@@ -1148,7 +1213,7 @@ fn emit_op<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
     value_locals: &HashMap<Value<'db>, u32>,
-    func_indices: &HashMap<Symbol, u32>,
+    func_indices: &HashMap<QualifiedName, u32>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
     func_types: &HashMap<QualifiedName, core::Func<'db>>,
     function: &mut Function,
@@ -1708,17 +1773,17 @@ fn set_result_local<'db>(
 
 fn resolve_callee(
     path: &QualifiedName,
-    func_indices: &HashMap<Symbol, u32>,
+    func_indices: &HashMap<QualifiedName, u32>,
 ) -> CompilationResult<u32> {
-    let name = path.name();
     func_indices
-        .get(&name)
+        .get(path)
         .copied()
-        .ok_or_else(|| CompilationError::function_not_found(&name.to_string()))
+        .ok_or_else(|| CompilationError::function_not_found(&path.to_string()))
 }
 
 fn type_to_valtype<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> CompilationResult<ValType> {
-    if core::I32::from_type(db, ty).is_some() {
+    if core::I32::from_type(db, ty).is_some() || core::I1::from_type(db, ty).is_some() {
+        // core.i1 (Bool) is represented as i32 in WebAssembly
         Ok(ValType::I32)
     } else if core::I64::from_type(db, ty).is_some()
         || ty::Int::from_type(db, ty).is_some()

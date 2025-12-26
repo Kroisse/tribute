@@ -63,7 +63,7 @@ dialect! {
         // === Module-level Definitions ===
 
         /// `wasm.func` operation: define a function.
-        #[attr(sym_name: Symbol, r#type: Type)]
+        #[attr(sym_name: QualifiedName, r#type: Type)]
         fn func() {
             #[region(body)] {}
         };

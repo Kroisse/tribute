@@ -79,3 +79,6 @@ insta.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
+
+[patch."https://github.com/Kroisse/tree-sitter-tribute"]
+tree-sitter-tribute = { path = "../tree-sitter-tribute" }

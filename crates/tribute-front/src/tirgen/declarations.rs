@@ -127,7 +127,9 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
-    let name = node_text(&name_node, &ctx.source).to_string();
+    let name_str = node_text(&name_node, &ctx.source);
+    let name_sym = Symbol::from_dynamic(&name_str);
+    let qualified_name = ctx.qualified_name(name_sym);
     let name_span = Some(Span {
         start: name_node.start_byte(),
         end: name_node.end_byte(),
@@ -153,7 +155,7 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
     Some(func::Func::build_with_name_span_and_effect(
         ctx.db,
         location,
-        &name,
+        qualified_name,
         name_span,
         params.clone(),
         result,
@@ -528,6 +530,9 @@ pub fn lower_mod_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
     let _is_pub = find_child_by_kind(node, "visibility_marker").is_some();
     // TODO: Parse visibility modifier (pub, pub(pkg), pub(super))
 
+    // Enter module scope for qualified name generation
+    ctx.enter_module(name);
+
     // Build the module with its body
     let module = core::Module::build(ctx.db, location, name, |mod_builder| {
         if let Some(body) = body_node {
@@ -536,6 +541,9 @@ pub fn lower_mod_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
         // File-based modules (no body) will be handled later in the pipeline
         // when we have package/file loading infrastructure
     });
+
+    // Exit module scope
+    ctx.exit_module();
 
     // TODO: Track visibility (_is_pub) for name resolution
     Some(module)

@@ -432,6 +432,10 @@ fn collect_argument_list<'db>(
 }
 
 /// Lower a method call expression (UFCS).
+///
+/// Handles both simple and qualified method names:
+/// - `x.foo()` → `foo(x)`
+/// - `x.math::double()` → `math::double(x)`
 fn lower_method_call_expr<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
@@ -443,7 +447,27 @@ fn lower_method_call_expr<'db>(
     // Use field-based access
     let receiver_node = node.child_by_field_name("receiver")?;
     let method_node = node.child_by_field_name("method")?;
-    let method_name = node_text(&method_node, &ctx.source).to_string();
+
+    // Handle method_path: may contain path_segment nodes followed by identifier
+    // e.g., "double" → just identifier
+    // e.g., "math::double" → path_segment(math) + identifier(double)
+    let method_path: QualifiedName = {
+        let mut cursor = method_node.walk();
+        method_node
+            .named_children(&mut cursor)
+            .filter_map(|n| match n.kind() {
+                "identifier" | "type_identifier" => Some(node_text(&n, &ctx.source).into()),
+                "path_segment" => {
+                    // path_segment contains an identifier or type_identifier
+                    let mut inner = n.walk();
+                    n.named_children(&mut inner)
+                        .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
+                        .map(|c| node_text(&c, &ctx.source).into())
+                }
+                _ => None,
+            })
+            .collect::<Option<_>>()?
+    };
 
     // Lower receiver first
     let receiver = lower_expr(ctx, block, receiver_node)?;
@@ -455,13 +479,7 @@ fn lower_method_call_expr<'db>(
     let mut all_args = vec![receiver];
     all_args.extend(args);
 
-    let op = block.op(src::call(
-        ctx.db,
-        location,
-        all_args,
-        infer_ty,
-        sym_ref(&method_name),
-    ));
+    let op = block.op(src::call(ctx.db, location, all_args, infer_ty, method_path));
     Some(op.result(ctx.db))
 }
 

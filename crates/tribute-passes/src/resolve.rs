@@ -108,9 +108,9 @@ pub enum Binding<'db> {
 /// Tracks all names visible in the current module.
 #[derive(Debug, Default)]
 pub struct ModuleEnv<'db> {
-    /// Names defined in this module.
-    definitions: HashMap<Symbol, Binding<'db>>,
-    /// Names imported via `use` statements.
+    /// Names defined in this module (qualified path → binding).
+    definitions: HashMap<QualifiedName, Binding<'db>>,
+    /// Names imported via `use` statements (simple name → binding).
     imports: HashMap<Symbol, Binding<'db>>,
     /// Qualified paths (namespace → name → binding).
     namespaces: HashMap<Symbol, HashMap<Symbol, Binding<'db>>>,
@@ -123,9 +123,9 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Add a function definition.
-    pub fn add_function(&mut self, name: Symbol, path: QualifiedName, ty: Type<'db>) {
+    pub fn add_function(&mut self, path: QualifiedName, ty: Type<'db>) {
         self.definitions
-            .insert(name, Binding::Function { path, ty });
+            .insert(path.clone(), Binding::Function { path, ty });
     }
 
     /// Add a type constructor.
@@ -137,18 +137,19 @@ impl<'db> ModuleEnv<'db> {
         params: IdVec<Type<'db>>,
     ) {
         self.definitions
-            .insert(name, Binding::Constructor { ty, tag, params });
+            .insert(name.into(), Binding::Constructor { ty, tag, params });
     }
 
     /// Add a type definition.
     pub fn add_type(&mut self, name: Symbol, ty: Type<'db>) {
-        self.definitions.insert(name, Binding::TypeDef { ty });
+        self.definitions
+            .insert(name.into(), Binding::TypeDef { ty });
     }
 
     /// Add a constant definition.
     pub fn add_const(&mut self, name: Symbol, value: Attribute<'db>, ty: Type<'db>) {
         self.definitions
-            .insert(name, Binding::Const { name, value, ty });
+            .insert(name.into(), Binding::Const { name, value, ty });
     }
 
     /// Add a qualified name to a namespace.
@@ -161,8 +162,8 @@ impl<'db> ModuleEnv<'db> {
 
     /// Look up an unqualified name.
     pub fn lookup(&self, name: Symbol) -> Option<&Binding<'db>> {
-        // First check local definitions
-        if let Some(b) = self.definitions.get(&name) {
+        // First check local definitions (simple name → QualifiedName::simple)
+        if let Some(b) = self.definitions.get(&QualifiedName::simple(name)) {
             return Some(b);
         }
         // Then check imports
@@ -171,7 +172,13 @@ impl<'db> ModuleEnv<'db> {
 
     /// Look up a qualified path (e.g., "List::map").
     pub fn lookup_qualified(&self, namespace: Symbol, name: Symbol) -> Option<&Binding<'db>> {
+        // Fall back to namespace lookup (for enum variants, etc.)
         self.namespaces.get(&namespace)?.get(&name)
+    }
+
+    /// Look up by full qualified name path.
+    pub fn lookup_path(&self, path: &QualifiedName) -> Option<&Binding<'db>> {
+        self.definitions.get(path)
     }
 
     /// Check whether a namespace exists (e.g., "collections::List").
@@ -222,11 +229,10 @@ fn collect_definition<'db>(
             // Function definition
             let attrs = op.attributes(db);
 
-            if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
+            if let (Some(Attribute::QualifiedName(qn)), Some(Attribute::Type(ty))) =
                 (attrs.get(&ATTR_SYM_NAME()), attrs.get(&ATTR_TYPE()))
             {
-                let path = QualifiedName::simple(*sym);
-                env.add_function(*sym, path, *ty);
+                env.add_function(qn.clone(), *ty);
             }
         }
         (d, n) if d == ty::DIALECT_NAME() && n == ty::STRUCT() => {
@@ -291,10 +297,16 @@ fn collect_definition<'db>(
                     }
                 }
 
-                // Add module's exported definitions to parent's namespace
+                // Add module's exported definitions to both:
+                // 1. Parent's namespace (for lookup_qualified)
+                // 2. Parent's definitions with full path (for lookup_path)
                 // TODO: Handle visibility (only pub items should be accessible)
-                for (name, binding) in mod_env.definitions.iter() {
-                    env.add_to_namespace(*sym, *name, binding.clone());
+                for (qn, binding) in mod_env.definitions.iter() {
+                    // Add to namespace for backward compatibility
+                    env.add_to_namespace(*sym, qn.name(), binding.clone());
+                    // Also add to definitions with the full qualified path
+                    // The function already has its full path set by tirgen
+                    env.definitions.insert(qn.clone(), binding.clone());
                 }
 
                 // Also add nested namespaces (e.g., mod::submod::item)
@@ -1198,12 +1210,14 @@ impl<'db> Resolver<'db> {
 
         let location = op.location(self.db);
 
-        // For now, only support single-level qualified names (Type::Constructor)
-        // TODO: Support multi-level paths
-        let namespace = *path.as_parent().last()?;
-        let name = path.name();
+        // First try direct lookup in definitions, then fall back to namespace lookup
+        let binding = self.env.lookup_path(path).or_else(|| {
+            // Fall back to namespace lookup for enum variants, etc.
+            let namespace = *path.as_parent().last()?;
+            self.env.lookup_qualified(namespace, path.name())
+        })?;
 
-        match self.env.lookup_qualified(namespace, name)? {
+        match binding {
             Binding::Function { path, ty } => {
                 let new_op = func::constant(self.db, location, *ty, path.clone());
                 let new_operation = new_op.as_operation();
@@ -1251,6 +1265,8 @@ impl<'db> Resolver<'db> {
         let args: Vec<Value<'db>> = op.operands(self.db).iter().copied().collect();
 
         // Try to resolve the callee
+        // Track whether this is a qualified path (affects which path to use in the call)
+        let is_qualified = !path.is_simple();
         let binding = if path.is_simple() {
             let name = path.name();
             if let Some(local) = self.lookup_local(name) {
@@ -1270,26 +1286,34 @@ impl<'db> Resolver<'db> {
             }
             self.lookup_binding(name)
         } else {
-            // For now, only support single-level qualified calls (Type::method)
-            // TODO: Support multi-level paths
-            if path.len() != 2 {
-                return None;
-            }
-            let namespace = *path.as_parent().last().unwrap();
-            let name = path.name();
-            self.env.lookup_qualified(namespace, name)
+            // First try direct lookup in definitions, then fall back to namespace lookup
+            self.env.lookup_path(path).or_else(|| {
+                // Fall back to namespace lookup for enum variants, etc.
+                let namespace = *path.as_parent().last()?;
+                self.env.lookup_qualified(namespace, path.name())
+            })
         }?;
 
         match binding {
-            Binding::Function { path, ty: func_ty } => {
+            Binding::Function {
+                path: binding_path,
+                ty: func_ty,
+            } => {
                 // Direct function call
                 // Use the callee function's return type instead of the src.call's type variable
                 // Also resolve the return type (it may be src.type that needs resolution)
                 let call_result_ty = core::Func::from_type(self.db, *func_ty)
                     .map(|f| self.resolve_type(f.result(self.db)))
                     .unwrap_or(result_ty);
+                // For qualified calls, use the original path (e.g., math::double)
+                // The binding's stored path may just be the simple name (double)
+                let callee_path = if is_qualified {
+                    path.clone()
+                } else {
+                    binding_path.clone()
+                };
                 // func::call(db, location, args, result_type, callee)
-                let new_op = func::call(self.db, location, args, call_result_ty, path.clone());
+                let new_op = func::call(self.db, location, args, call_result_ty, callee_path);
                 let new_operation = new_op.as_operation();
 
                 let old_result = op.result(self.db, 0);
@@ -1481,10 +1505,18 @@ pub mod tests {
         location: Location<'db>,
         name: &str,
     ) -> func::Func<'db> {
-        func::Func::build(db, location, name, idvec![], *core::I64::new(db), |entry| {
-            let value = entry.op(arith::Const::i64(db, location, 42));
-            entry.op(func::Return::value(db, location, value.result(db)));
-        })
+        let name_sym = Symbol::from_dynamic(name);
+        func::Func::build(
+            db,
+            location,
+            name_sym,
+            idvec![],
+            *core::I64::new(db),
+            |entry| {
+                let value = entry.op(arith::Const::i64(db, location, 42));
+                entry.op(func::Return::value(db, location, value.result(db)));
+            },
+        )
     }
 
     fn module_with_use_call<'db>(db: &'db dyn salsa::Database, alias: Option<&str>) -> Module<'db> {

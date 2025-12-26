@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use ropey::Rope;
 use tree_sitter::Node;
 use trunk_ir::{
-    DialectType, IdVec, Symbol, Type, Value,
+    DialectType, IdVec, QualifiedName, Symbol, SymbolVec, Type, Value,
     dialect::{core, ty},
 };
 use trunk_ir::{Location, PathId};
@@ -25,6 +25,8 @@ pub struct CstLoweringCtx<'db> {
     next_type_var_id: u64,
     /// Counter for generating unique effect row variable IDs.
     next_row_var_id: u64,
+    /// Current module path for qualified name generation.
+    module_path: SymbolVec,
 }
 
 impl<'db> CstLoweringCtx<'db> {
@@ -37,7 +39,23 @@ impl<'db> CstLoweringCtx<'db> {
             type_var_bindings: HashMap::new(),
             next_type_var_id: 0,
             next_row_var_id: 0,
+            module_path: SymbolVec::new(),
         }
+    }
+
+    /// Create a qualified name by prepending the current module path.
+    pub fn qualified_name(&self, name: Symbol) -> QualifiedName {
+        QualifiedName::new(self.module_path.clone(), name)
+    }
+
+    /// Enter a module scope.
+    pub fn enter_module(&mut self, name: Symbol) {
+        self.module_path.push(name);
+    }
+
+    /// Exit a module scope.
+    pub fn exit_module(&mut self) {
+        self.module_path.pop();
     }
 
     /// Generate a fresh type variable with a unique ID.

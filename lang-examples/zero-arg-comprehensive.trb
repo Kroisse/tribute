@@ -1,0 +1,38 @@
+// Comprehensive zero-arg method tests
+
+fn add_one(x: Int) -> Int {
+    x + 1
+}
+
+fn multiply_by_two(x: Int) -> Int {
+    x + x
+}
+
+// Test 1: Simple UFCS with parens
+fn test1() -> Int {
+    5.add_one()  // 6
+}
+
+// Test 2: Simple UFCS without parens
+fn test2() -> Int {
+    5.add_one  // 6
+}
+
+// Test 3: Chained UFCS with parens
+fn test3() -> Int {
+    5.add_one().multiply_by_two()  // (5+1)*2 = 12
+}
+
+// Test 4: Chained UFCS without parens
+fn test4() -> Int {
+    5.add_one.multiply_by_two  // (5+1)*2 = 12
+}
+
+// Test 5: Mixed (some with parens, some without)
+fn test5() -> Int {
+    5.add_one().multiply_by_two  // (5+1)*2 = 12
+}
+
+fn main() -> Int {
+    test1()
+}

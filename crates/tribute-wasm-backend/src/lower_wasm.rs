@@ -403,7 +403,9 @@ impl<'db> WasmLowerer<'db> {
     }
 
     fn record_wasm_func_metadata(&mut self, op: &wasm::Func<'db>) {
-        if op.sym_name(self.db) != Symbol::new("main") {
+        let sym_name = op.sym_name(self.db);
+        // Only match root-level main, not foo::main
+        if !(sym_name.is_simple() && sym_name.name() == Symbol::new("main")) {
             return;
         }
 

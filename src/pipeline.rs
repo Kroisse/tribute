@@ -29,6 +29,9 @@
 //!     ▼
 //! stage_lower_case ─► Module (case.case lowered to scf.if)
 //!     │
+//!     ▼
+//! stage_dce ─► Module (dead code eliminated)
+//!     │
 //!     ├─► [No target] ─► Full Tribute module (diagnostic/analysis)
 //!     │
 //!     └─► [target: wasm] ─► stage_lower_to_wasm ─► WasmBinary (WebAssembly bytes)
@@ -67,6 +70,7 @@ use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 use tribute_wasm_backend::{WasmBinary, compile_to_wasm};
 use trunk_ir::Span;
 use trunk_ir::dialect::core::Module;
+use trunk_ir::transforms::eliminate_dead_functions;
 use trunk_ir::{Block, BlockId, IdVec, Region, Symbol};
 
 // =============================================================================
@@ -268,7 +272,24 @@ pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) ->
     lower_case_to_scf(db, module)
 }
 
-/// Stage 6: Lower to WebAssembly target.
+/// Stage 7: Dead Code Elimination (DCE).
+///
+/// This pass removes unreachable function definitions from the module.
+/// Entry points include:
+/// - Functions named "main" or "_start"
+/// - Functions referenced by `wasm.export_func` (for wasm target)
+///
+/// This should run after all high-level transformations but before
+/// target-specific lowering, to avoid emitting unused functions
+/// (e.g., unused prelude functions with incomplete lowering).
+#[salsa::tracked]
+pub fn stage_dce<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = stage_lower_case(db, source);
+    let result = eliminate_dead_functions(db, module);
+    result.module
+}
+
+/// Stage 8: Lower to WebAssembly target.
 ///
 /// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
 /// It performs:
@@ -283,7 +304,7 @@ pub fn stage_lower_to_wasm<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<WasmBinary<'db>> {
-    let module = stage_lower_case(db, source);
+    let module = stage_dce(db, source);
     match compile_to_wasm(db, module) {
         Ok(binary) => Some(binary),
         Err(e) => {
@@ -313,10 +334,11 @@ pub fn stage_lower_to_wasm<'db>(
 /// 4. Infer types
 /// 5. TDNR (Type-Directed Name Resolution)
 /// 6. Lower case expressions to `scf.if`
-/// 7. Final resolution pass (reports unresolved references)
+/// 7. Dead code elimination
+/// 8. Final resolution pass (reports unresolved references)
 #[salsa::tracked]
 pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_lower_case(db, source);
+    let module = stage_dce(db, source);
 
     // Final pass: resolve any remaining unresolved references and emit diagnostics
     let env = build_env(db, &module);
