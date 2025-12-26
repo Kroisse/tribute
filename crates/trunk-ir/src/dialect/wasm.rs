@@ -69,7 +69,7 @@ dialect! {
         };
 
         /// `wasm.import_func` operation: import a function.
-        #[attr(module, name, sym_name, r#type)]
+        #[attr(module: Symbol, name: Symbol, sym_name: QualifiedName, r#type: Type)]
         fn import_func();
 
         /// `wasm.export_func` operation: export a function by symbol.

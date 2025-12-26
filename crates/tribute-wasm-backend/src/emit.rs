@@ -179,8 +179,8 @@ struct FunctionDef<'db> {
 
 struct ImportFuncDef<'db> {
     sym: QualifiedName,
-    module: String,
-    name: String,
+    module: Symbol,
+    name: Symbol,
     ty: core::Func<'db>,
 }
 
@@ -284,8 +284,8 @@ pub fn emit_wasm<'db>(
         let type_index = next_type_index;
         next_type_index += 1;
         import_section.import(
-            import_def.module.as_str(),
-            import_def.name.as_str(),
+            &import_def.module.to_string(),
+            &import_def.name.to_string(),
             EntityType::Function(type_index),
         );
     }
@@ -973,16 +973,16 @@ fn extract_import_def<'db>(
     op: &Operation<'db>,
 ) -> CompilationResult<ImportFuncDef<'db>> {
     let attrs = op.attributes(db);
-    let module = attr_string(attrs, ATTR_MODULE())?;
-    let name = attr_string(attrs, ATTR_NAME())?;
-    let sym = attr_symbol(attrs, ATTR_SYM_NAME())?;
+    let module = attr_symbol(attrs, ATTR_MODULE())?;
+    let name = attr_symbol(attrs, ATTR_NAME())?;
+    let sym = attr_symbol_ref_attr(attrs, ATTR_SYM_NAME())?;
     let ty = attr_type(attrs, ATTR_TYPE())?;
 
     let func_ty = core::Func::from_type(db, ty)
         .ok_or_else(|| CompilationError::type_error("wasm.import_func requires core.func type"))?;
 
     Ok(ImportFuncDef {
-        sym: sym.into(), // Convert Symbol to QualifiedName
+        sym: sym.clone(),
         module,
         name,
         ty: func_ty,
