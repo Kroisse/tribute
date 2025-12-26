@@ -2662,6 +2662,7 @@ dependencies = [
  "fluent-uri",
  "ropey",
  "salsa",
+ "tracing",
  "tree-sitter",
  "tree-sitter-tribute",
  "trunk-ir",

@@ -185,6 +185,23 @@ impl<'db> ModuleEnv<'db> {
     pub fn has_namespace(&self, namespace: Symbol) -> bool {
         self.namespaces.contains_key(&namespace)
     }
+
+    /// Iterate over all definitions (for type-directed resolution).
+    pub fn definitions_iter(&self) -> impl Iterator<Item = (&QualifiedName, &Binding<'db>)> {
+        self.definitions.iter()
+    }
+
+    /// Get namespace contents for debugging.
+    pub fn get_namespace(&self, namespace: Symbol) -> Option<&HashMap<Symbol, Binding<'db>>> {
+        self.namespaces.get(&namespace)
+    }
+
+    /// Iterate over all namespaces.
+    pub fn namespaces_iter(
+        &self,
+    ) -> impl Iterator<Item = (&Symbol, &HashMap<Symbol, Binding<'db>>)> {
+        self.namespaces.iter()
+    }
 }
 
 // =============================================================================

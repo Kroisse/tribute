@@ -363,6 +363,12 @@ impl<'db> OperationBuilder<'db> {
         self
     }
 
+    /// Set all attributes at once, replacing any existing ones.
+    pub fn attrs(mut self, attrs: BTreeMap<Symbol, Attribute<'db>>) -> Self {
+        self.attributes = attrs;
+        self
+    }
+
     pub fn regions(mut self, regions: IdVec<Region<'db>>) -> Self {
         self.regions = regions;
         self

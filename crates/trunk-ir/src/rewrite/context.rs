@@ -31,8 +31,16 @@ impl<'db> RewriteContext<'db> {
 
     /// Look up the mapped value for an old value.
     /// Returns the mapped value if one exists, otherwise the original.
+    /// Follows the chain of mappings to get the final value.
     pub fn lookup(&self, old: Value<'db>) -> Value<'db> {
-        self.value_map.get(&old).copied().unwrap_or(old)
+        let mut current = old;
+        while let Some(&mapped) = self.value_map.get(&current) {
+            if mapped == current {
+                break; // Avoid infinite loop
+            }
+            current = mapped;
+        }
+        current
     }
 
     /// Register a value mapping from old to new.
