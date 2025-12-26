@@ -231,6 +231,7 @@ fn emit_parse_errors(db: &dyn salsa::Database, cst: &tribute_front::ParsedCst) {
                 phase: CompilationPhase::Parsing,
             }
             .accumulate(db);
+            continue;
         }
 
         let mut cursor = node.walk();
