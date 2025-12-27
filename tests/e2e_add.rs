@@ -412,3 +412,47 @@ fn main() -> Int {
         assert_eq!(result, 42, "Expected main to return 42, got {}", result);
     });
 }
+
+/// Test generic instantiation in indirect function calls.
+/// When a closure with generic type is called, the type parameter
+/// should be properly instantiated at the call site.
+///
+/// Note: This test verifies typeck only. Full WASM execution requires
+/// closure support in the WASM backend (not yet implemented).
+#[test]
+fn test_generic_indirect_call() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::stage_typecheck;
+
+    let source_code = Rope::from_str(
+        r#"
+fn main() -> Int {
+    let f = fn(x) { x }
+    f(42)
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file =
+            SourceCst::from_path(db, "generic_indirect.trb", source_code.clone(), tree);
+
+        // Run typecheck stage - this should succeed with generic instantiation
+        let _module = stage_typecheck(db, source_file);
+
+        // Check for type errors
+        let diagnostics: Vec<_> =
+            stage_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no type errors, got {} diagnostics",
+            diagnostics.len()
+        );
+    });
+}
