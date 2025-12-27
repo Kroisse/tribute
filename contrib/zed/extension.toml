@@ -8,7 +8,7 @@ authors = ["Eunchong Yu <kroisse@gmail.com>"]
 
 [grammars.tribute]
 repository = "https://github.com/Kroisse/tree-sitter-tribute"
-rev = "479e23e50fbbce2a87cd5dcfdb84e145a9b56a29"
+rev = "37201b5501b574323d12288c7ca7a360347d3bcd"
 
 [language_servers.tribute-lsp]
 name = "Tribute Language Server"

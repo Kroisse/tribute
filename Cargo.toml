@@ -36,7 +36,7 @@ tempfile = "3.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tree-sitter = "0.25.6"
-tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute", tag = "v0.2.3" }
+tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute", tag = "v0.3.0" }
 tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-front = { path = "crates/tribute-front" }
