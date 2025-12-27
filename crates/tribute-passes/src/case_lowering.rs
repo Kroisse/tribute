@@ -37,7 +37,68 @@ struct ArmInfo<'db> {
 }
 
 pub fn lower_case_to_scf<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    // Sanity check: verify all operand references point to operations in the same module
+    #[cfg(debug_assertions)]
+    verify_operand_references(db, module);
     CaseLowerer::new(db).lower_module(module)
+}
+
+#[cfg(debug_assertions)]
+fn verify_operand_references<'db>(db: &'db dyn salsa::Database, module: Module<'db>) {
+    use std::collections::HashSet;
+
+    // Collect all operations in the module
+    let mut all_ops: HashSet<trunk_ir::Operation<'db>> = HashSet::new();
+    collect_ops_in_region(db, module.body(db), &mut all_ops);
+
+    // Verify all operand references point to operations in the set
+    verify_refs_in_region(db, module.body(db), &all_ops);
+}
+
+#[cfg(debug_assertions)]
+fn collect_ops_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: Region<'db>,
+    ops: &mut std::collections::HashSet<trunk_ir::Operation<'db>>,
+) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter().copied() {
+            ops.insert(op);
+            for nested in op.regions(db).iter().copied() {
+                collect_ops_in_region(db, nested, ops);
+            }
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+fn verify_refs_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: Region<'db>,
+    all_ops: &std::collections::HashSet<trunk_ir::Operation<'db>>,
+) {
+    use trunk_ir::ValueDef;
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter().copied() {
+            for operand in op.operands(db).iter() {
+                if let ValueDef::OpResult(ref_op) = operand.def(db)
+                    && !all_ops.contains(&ref_op)
+                {
+                    tracing::warn!(
+                        "STALE REFERENCE DETECTED in input to case_lowering!\n  \
+                         Operation {}.{} references {}.{} which is NOT in the module",
+                        op.dialect(db),
+                        op.name(db),
+                        ref_op.dialect(db),
+                        ref_op.name(db)
+                    );
+                }
+            }
+            for nested in op.regions(db).iter().copied() {
+                verify_refs_in_region(db, nested, all_ops);
+            }
+        }
+    }
 }
 
 struct CaseLowerer<'db> {
@@ -387,26 +448,94 @@ impl<'db> CaseLowerer<'db> {
 
     /// Lower an arm body with pattern bindings set up.
     /// For simple bind patterns, the scrutinee IS the bound value.
-    /// For variant patterns with nested bindings, we use the scrutinee for now
-    /// (full destructuring support would require more complex handling).
+    /// For variant patterns, we insert a `variant_cast` to convert the scrutinee
+    /// to the variant-specific type before field access.
     fn lower_arm_body(&mut self, scrutinee: Value<'db>, arm: &ArmInfo<'db>) -> Region<'db> {
-        // Extract bindings from pattern and map them to scrutinee
-        // For simple `x` or `Some(x)` patterns, x gets the scrutinee value
-        // (More sophisticated handling would destruct variants first)
+        let location = arm.body.location(self.db);
+
+        // For variant patterns, create a cast operation to get variant-specific reference
+        let cast_info = if let ArmPattern::Variant(variant_name) = &arm.pattern {
+            // Get the enum type from scrutinee
+            if let Some(enum_type) = self.value_type(scrutinee) {
+                // Create variant_cast: casts scrutinee to variant-specific type
+                // The result type uses the same enum type (will be refined to variant type in lowering)
+                let cast = adt::variant_cast(
+                    self.db,
+                    location,
+                    scrutinee,
+                    enum_type, // result type (will become ref $Enum$Variant)
+                    enum_type, // enum type for the cast
+                    *variant_name,
+                )
+                .as_operation();
+
+                let cast_result = cast.result(self.db, 0);
+
+                // Temporarily map scrutinee -> cast result for this arm only
+                self.ctx.map_value(scrutinee, cast_result);
+
+                Some((cast, cast_result))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Extract bindings from pattern and map them to the (possibly cast) scrutinee
         if let Some(pattern_region) = arm.pattern_region {
             let bindings = self.extract_bindings_from_pattern(pattern_region);
+            // Use the remapped value (cast result if variant, original scrutinee otherwise)
+            let bound_value = self.ctx.lookup(scrutinee);
             for name in bindings {
-                self.current_arm_bindings.insert(name, scrutinee);
+                self.current_arm_bindings.insert(name, bound_value);
             }
         }
 
         // Lower the body with bindings in scope
-        let result = self.lower_region(arm.body);
+        let lowered = self.lower_region(arm.body);
 
         // Clear bindings after processing this arm
         self.current_arm_bindings.clear();
 
-        result
+        // Restore the scrutinee mapping (remove the temporary cast mapping)
+        // This is important so that other arms don't see the cast mapping
+        if cast_info.is_some() {
+            // Reset scrutinee mapping to itself (effectively removing the cast mapping)
+            self.ctx.map_value(scrutinee, scrutinee);
+        }
+
+        // If we created a cast op, prepend it to the first block
+        if let Some((cast_op, _)) = cast_info {
+            self.prepend_op_to_region(lowered, cast_op)
+        } else {
+            lowered
+        }
+    }
+
+    /// Prepend an operation to the first block of a region.
+    fn prepend_op_to_region(&self, region: Region<'db>, op: Operation<'db>) -> Region<'db> {
+        let blocks = region.blocks(self.db);
+        if blocks.is_empty() {
+            return region;
+        }
+
+        let first_block = blocks[0];
+        let mut new_ops = IdVec::from(vec![op]);
+        new_ops.extend(first_block.operations(self.db).iter().copied());
+
+        let new_first_block = Block::new(
+            self.db,
+            first_block.id(self.db),
+            first_block.location(self.db),
+            first_block.args(self.db).clone(),
+            new_ops,
+        );
+
+        let mut new_blocks: Vec<Block<'db>> = vec![new_first_block];
+        new_blocks.extend(blocks.iter().skip(1).copied());
+
+        Region::new(self.db, region.location(self.db), IdVec::from(new_blocks))
     }
 
     fn build_arm_chain(
@@ -504,22 +633,19 @@ impl<'db> CaseLowerer<'db> {
                 (vec![lit_op, cmp_op], cmp_value)
             }
             ArmPattern::Variant(name) => {
-                let Some(tag) = self.variant_tags.get(name).copied() else {
+                // Get the enum type from scrutinee
+                let Some(enum_type) = self.value_type(scrutinee) else {
                     let op = arith::r#const(self.db, location, bool_ty, true.into()).as_operation();
                     let value = op.result(self.db, 0);
                     return (vec![op], value);
                 };
-                let tag_ty = core::I32::new(self.db).as_type();
-                let tag_op = adt::variant_tag(self.db, location, scrutinee, tag_ty).as_operation();
-                let tag_value = tag_op.result(self.db, 0);
-                let tag_const =
-                    arith::r#const(self.db, location, tag_ty, Attribute::IntBits(tag as u64))
+
+                // Use adt.variant_is which tests if scrutinee is of specific variant type
+                let variant_is_op =
+                    adt::variant_is(self.db, location, scrutinee, bool_ty, enum_type, *name)
                         .as_operation();
-                let tag_const_value = tag_const.result(self.db, 0);
-                let cmp_op = arith::cmp_eq(self.db, location, tag_value, tag_const_value, bool_ty)
-                    .as_operation();
-                let cmp_value = cmp_op.result(self.db, 0);
-                (vec![tag_op, tag_const, cmp_op], cmp_value)
+                let result = variant_is_op.result(self.db, 0);
+                (vec![variant_is_op], result)
             }
         }
     }
