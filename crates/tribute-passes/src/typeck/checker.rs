@@ -511,6 +511,7 @@ impl<'db> TypeChecker<'db> {
     fn check_func_call(&mut self, op: &Operation<'db>) {
         // func.call: direct call to a function symbol
         // The effect of the call is the effect declared in the function type
+        let mut effect_handled = false;
         let operands = op.operands(self.db);
         let results = op.results(self.db);
         let result_type = results
@@ -559,6 +560,7 @@ impl<'db> TypeChecker<'db> {
                         && let Some(effect_row) = EffectRow::from_type(self.db, effect_ty)
                     {
                         self.merge_effect(effect_row);
+                        effect_handled = true;
                     }
                 }
             }
@@ -569,8 +571,10 @@ impl<'db> TypeChecker<'db> {
         self.record_type(value, result_type);
 
         // Default effect if not handled above
-        let call_effect = EffectRow::var(self.fresh_row_var());
-        self.merge_effect(call_effect);
+        if !effect_handled {
+            let call_effect = EffectRow::var(self.fresh_row_var());
+            self.merge_effect(call_effect);
+        }
     }
 
     /// Instantiate a function type by replacing type variables with fresh ones.
@@ -627,8 +631,23 @@ impl<'db> TypeChecker<'db> {
             core::Func::with_effect(self.db, new_params, new_result, func_ty.effect(self.db))
                 .as_type()
         } else {
-            // Not a type variable or function, return as-is
-            ty
+            // Recursively instantiate type parameters for composite types (e.g., List<a>)
+            let params = ty.params(self.db);
+            if params.is_empty() {
+                ty
+            } else {
+                let new_params: IdVec<Type<'db>> = params
+                    .iter()
+                    .map(|&t| self.instantiate_type(t, var_mapping))
+                    .collect();
+                Type::new(
+                    self.db,
+                    ty.dialect(self.db),
+                    ty.name(self.db),
+                    new_params,
+                    ty.attrs(self.db).clone(),
+                )
+            }
         }
     }
 
