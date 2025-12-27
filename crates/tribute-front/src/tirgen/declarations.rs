@@ -201,7 +201,6 @@ pub fn lower_struct_decl<'db>(
     node: Node,
 ) -> Option<(ty::Struct<'db>, core::Module<'db>)> {
     let location = ctx.location(&node);
-    let struct_ty = ctx.fresh_type_var();
 
     // Use field-based access
     let name_node = node.child_by_field_name("name")?;
@@ -209,6 +208,10 @@ pub fn lower_struct_decl<'db>(
 
     let name = node_text(&name_node, &ctx.source).to_string();
     let type_name = sym(&name);
+
+    // Create adt.typeref as the result type - this provides a proper ADT type
+    // instead of type.var, allowing correct type flow through the pipeline
+    let struct_ty = adt::typeref(ctx.db, QualifiedName::simple(type_name));
     let fields = parse_struct_fields(ctx, body_node);
 
     // Build fields attribute for the struct definition
@@ -523,16 +526,32 @@ fn parse_struct_fields<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Vec<(S
 /// Lower an enum declaration to type.enum.
 pub fn lower_enum_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<ty::Enum<'db>> {
     let location = ctx.location(&node);
-    let infer_ty = ctx.fresh_type_var();
 
     // Use field-based access
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
     let name = node_text(&name_node, &ctx.source).to_string();
-    let variants = parse_enum_variants(ctx, body_node);
+
+    // Parse variants from AST
+    let parsed_variants = parse_enum_variants(ctx, body_node);
+
+    // Convert to adt::enum_type format: Vec<(Symbol, Vec<Type>)>
+    let enum_variants: Vec<(Symbol, Vec<Type<'db>>)> = parsed_variants
+        .iter()
+        .map(|(variant_name, fields)| {
+            let field_types: Vec<Type<'db>> = fields.iter().map(|(_, ty)| *ty).collect();
+            (sym(variant_name), field_types)
+        })
+        .collect();
+
+    // Create adt.enum as the result type - this provides a self-descriptive type
+    // with variant information accessible via adt::get_enum_variants
+    let result_ty = adt::enum_type(ctx.db, QualifiedName::simple(sym(&name)), enum_variants);
+
+    // Also build the attribute for ty.enum operation (for backwards compatibility)
     let variants_attr = Attribute::List(
-        variants
+        parsed_variants
             .into_iter()
             .map(|(variant_name, variant_fields)| {
                 Attribute::List(vec![
@@ -540,12 +559,7 @@ pub fn lower_enum_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option
                     Attribute::List(
                         variant_fields
                             .into_iter()
-                            .map(|(f_name, f_type)| {
-                                Attribute::List(vec![
-                                    Attribute::Symbol(sym(&f_name)),
-                                    Attribute::Symbol(sym(&format!("{:?}", f_type))),
-                                ])
-                            })
+                            .map(|(_f_name, f_type)| Attribute::Type(f_type))
                             .collect(),
                     ),
                 ])
@@ -556,7 +570,7 @@ pub fn lower_enum_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option
     Some(ty::r#enum(
         ctx.db,
         location,
-        infer_ty,
+        result_ty,
         Attribute::Symbol(sym(&name)),
         variants_attr,
     ))
@@ -604,6 +618,17 @@ fn parse_variant_fields<'db>(
     node: Node,
 ) -> Vec<(String, Type<'db>)> {
     match node.kind() {
+        "variant_fields" => {
+            // variant_fields wraps tuple_fields or struct_body
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                let result = parse_variant_fields(ctx, child);
+                if !result.is_empty() {
+                    return result;
+                }
+            }
+            Vec::new()
+        }
         "tuple_fields" => {
             // Positional fields: Variant(Int, String)
             let mut cursor = node.walk();
