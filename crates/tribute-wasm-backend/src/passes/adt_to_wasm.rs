@@ -1,16 +1,34 @@
 //! Lower adt dialect operations to wasm dialect.
 //!
-//! This pass converts ADT (Algebraic Data Type) operations to wasm operations:
+//! This pass converts ADT (Algebraic Data Type) operations to wasm operations.
+//!
+//! ## Struct Operations
 //! - `adt.struct_new` -> `wasm.struct_new`
 //! - `adt.struct_get` -> `wasm.struct_get`
 //! - `adt.struct_set` -> `wasm.struct_set`
-//! - `adt.variant_new` -> `wasm.i32_const` + `wasm.struct_new` (tag + fields)
-//! - `adt.variant_tag` -> `wasm.struct_get` (field 0)
-//! - `adt.variant_get` -> `wasm.struct_get` (field + 1)
+//!
+//! ## Variant Operations (WasmGC Subtyping Approach)
+//!
+//! Variants use WasmGC's nominal subtyping for discrimination instead of
+//! explicit tag fields. Each variant gets its own struct type (e.g., `Expr$Add`,
+//! `Expr$Num`) that is a subtype of the base enum type. The type itself serves
+//! as the discriminant via `ref.test` and `ref.cast` instructions.
+//!
+//! - `adt.variant_new` -> `wasm.struct_new` with variant-specific type
+//!   - Creates a struct with only the variant's fields (no tag field)
+//!   - Result type is marked with `is_variant=true` and `variant_tag` attributes
+//! - `adt.variant_is` -> `wasm.ref_test` (tests if ref is of specific variant type)
+//! - `adt.variant_cast` -> `wasm.ref_cast` (casts to specific variant type)
+//! - `adt.variant_get` -> `wasm.struct_get` (direct field access, no offset)
+//! - `adt.variant_tag` -> DEPRECATED (issues warning, kept for compatibility)
+//!
+//! ## Array Operations
 //! - `adt.array_new` -> `wasm.array_new` or `wasm.array_new_default`
 //! - `adt.array_get` -> `wasm.array_get`
 //! - `adt.array_set` -> `wasm.array_set`
 //! - `adt.array_len` -> `wasm.array_len`
+//!
+//! ## Reference Operations
 //! - `adt.ref_null` -> `wasm.ref_null`
 //! - `adt.ref_is_null` -> `wasm.ref_is_null`
 //! - `adt.ref_cast` -> `wasm.ref_cast`
