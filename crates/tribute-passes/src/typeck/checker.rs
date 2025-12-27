@@ -656,6 +656,7 @@ impl<'db> TypeChecker<'db> {
     fn check_func_call_indirect(&mut self, op: &Operation<'db>) {
         // func.call_indirect: indirect call via function value
         // The callee is the first operand (function value)
+        let mut effect_handled = false;
         let operands = op.operands(self.db);
         let results = op.results(self.db);
         let result_type = results
@@ -668,20 +669,23 @@ impl<'db> TypeChecker<'db> {
             && let Some(callee_type) = self.get_type(callee)
             && let Some(func_type) = core::Func::from_type(self.db, callee_type)
         {
-            // Constrain result type
-            let func_result = func_type.result(self.db);
-            self.constrain_eq(result_type, func_result);
+            // Instantiate fresh type variables for generic parameters
+            let (instantiated_params, instantiated_result) =
+                self.instantiate_function_type(&func_type);
+
+            // Constrain result type with instantiated return type
+            self.constrain_eq(result_type, instantiated_result);
 
             // Propagate the function's effect
             if let Some(effect_ty) = func_type.effect(self.db)
                 && let Some(effect_row) = EffectRow::from_type(self.db, effect_ty)
             {
                 self.merge_effect(effect_row);
+                effect_handled = true;
             }
 
-            // Constrain argument types
-            let param_types = func_type.params(self.db);
-            for (i, &param_ty) in param_types.iter().enumerate() {
+            // Constrain argument types with instantiated param types
+            for (i, &param_ty) in instantiated_params.iter().enumerate() {
                 // Arguments start after the callee (index 0)
                 if let Some(&arg) = operands.get(i + 1)
                     && let Some(arg_ty) = self.get_type(arg)
@@ -693,6 +697,12 @@ impl<'db> TypeChecker<'db> {
 
         let value = op.result(self.db, 0);
         self.record_type(value, result_type);
+
+        // Default effect if not handled above
+        if !effect_handled {
+            let call_effect = EffectRow::var(self.fresh_row_var());
+            self.merge_effect(call_effect);
+        }
     }
 
     fn check_func_constant(&mut self, op: &Operation<'db>) {
