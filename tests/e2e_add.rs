@@ -598,3 +598,46 @@ fn main() -> Float {
         );
     });
 }
+
+/// Test AST-based calculator with enum, pattern matching, and recursion.
+/// This is a milestone test for calc.trb functionality.
+#[test]
+#[ignore = "blocked by #80: WASM struct field count mismatch for enum variants"]
+fn test_calc_eval() {
+    use tribute::database::parse_with_thread_local;
+
+    let source = include_str!("../lang-examples/calc.trb");
+    let source_code = Rope::from_str(source);
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, "calc.trb", source_code.clone(), tree);
+
+        let wasm_binary = stage_lower_to_wasm(db, source_file).unwrap_or_else(|| {
+            let diagnostics: Vec<_> =
+                stage_lower_to_wasm::accumulated::<tribute::Diagnostic>(db, source_file);
+            for diag in &diagnostics {
+                eprintln!("Diagnostic: {:?}", diag);
+            }
+            panic!(
+                "WASM compilation failed with {} diagnostics",
+                diagnostics.len()
+            );
+        });
+
+        let engine = create_gc_engine();
+        let module = wasmtime::Module::new(&engine, wasm_binary.bytes(db)).unwrap();
+        let mut store = wasmtime::Store::new(&engine, ());
+        let instance =
+            wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
+
+        let main = instance
+            .get_typed_func::<(), i64>(&mut store, "main")
+            .expect("main function not found");
+
+        let result = main.call(&mut store, ()).expect("Execution failed");
+
+        // (1 + 2) * (10 - 4) / 2 = 3 * 6 / 2 = 18 / 2 = 9
+        assert_eq!(result, 9, "Expected main to return 9, got {}", result);
+    });
+}
