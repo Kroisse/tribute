@@ -11,6 +11,7 @@
 //! then solved by the [`TypeSolver`].
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
@@ -57,7 +58,8 @@ pub struct TypeChecker<'db> {
     entry_block_arg_types: Vec<Type<'db>>,
     /// Map from function names to their types for looking up callees.
     /// This enables proper type inference for generic function calls.
-    function_types: HashMap<QualifiedName, Type<'db>>,
+    /// Wrapped in Arc for cheap cloning across function checks.
+    function_types: Arc<HashMap<QualifiedName, Type<'db>>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -71,14 +73,14 @@ impl<'db> TypeChecker<'db> {
             next_row_var: 0,
             current_effect: EffectRow::empty(),
             entry_block_arg_types: Vec::new(),
-            function_types: HashMap::new(),
+            function_types: Arc::new(HashMap::new()),
         }
     }
 
     /// Create a new type checker with a pre-built function type map.
     pub fn with_function_types(
         db: &'db dyn salsa::Database,
-        function_types: HashMap<QualifiedName, Type<'db>>,
+        function_types: Arc<HashMap<QualifiedName, Type<'db>>>,
     ) -> Self {
         Self {
             db,
@@ -195,7 +197,7 @@ impl<'db> TypeChecker<'db> {
                     "collect_function_types_from_block: {:?} -> {:?}",
                     name, func_type
                 );
-                self.function_types.insert(name, func_type);
+                Arc::make_mut(&mut self.function_types).insert(name, func_type);
             }
         }
     }
@@ -1249,7 +1251,7 @@ pub fn typecheck_module_per_function<'db>(
             }
 
             // Type check this function with access to all function types
-            let typed_op = typecheck_function_with_context(db, *op, &function_types);
+            let typed_op = typecheck_function_with_context(db, *op, function_types.clone());
             new_ops.push(typed_op);
         } else {
             // Non-function operations pass through
@@ -1273,7 +1275,7 @@ pub fn typecheck_module_per_function<'db>(
 fn collect_function_types<'db>(
     db: &'db dyn salsa::Database,
     block: &Block<'db>,
-) -> HashMap<QualifiedName, Type<'db>> {
+) -> Arc<HashMap<QualifiedName, Type<'db>>> {
     let mut function_types = HashMap::new();
 
     for op in block.operations(db).iter() {
@@ -1292,7 +1294,7 @@ fn collect_function_types<'db>(
         "collect_function_types: collected {} functions",
         function_types.len()
     );
-    function_types
+    Arc::new(function_types)
 }
 
 /// Type check a function with access to all function types.
@@ -1302,9 +1304,9 @@ fn collect_function_types<'db>(
 fn typecheck_function_with_context<'db>(
     db: &'db dyn salsa::Database,
     func_op: Operation<'db>,
-    function_types: &HashMap<QualifiedName, Type<'db>>,
+    function_types: Arc<HashMap<QualifiedName, Type<'db>>>,
 ) -> Operation<'db> {
-    let mut checker = TypeChecker::with_function_types(db, function_types.clone());
+    let mut checker = TypeChecker::with_function_types(db, function_types);
 
     // Check the function definition
     checker.check_func_def(&func_op);
