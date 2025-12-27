@@ -251,6 +251,16 @@ struct ModuleInfo<'db> {
     type_idx_by_type: HashMap<Type<'db>, u32>,
     /// Function type lookup map for boxing/unboxing at call sites.
     func_types: HashMap<QualifiedName, core::Func<'db>>,
+    /// Function index lookup map (import index or func index).
+    func_indices: HashMap<QualifiedName, u32>,
+}
+
+/// Context for emitting a single function's code.
+struct FunctionEmitContext<'db> {
+    /// Maps values to their local indices.
+    value_locals: HashMap<Value<'db>, u32>,
+    /// Effective types for values (after unification).
+    effective_types: HashMap<Value<'db>, Type<'db>>,
 }
 
 enum GcTypeDef {
@@ -285,17 +295,8 @@ pub fn emit_wasm<'db>(
     let mut code_section = CodeSection::new();
     let mut data_section = DataSection::new();
 
-    let mut func_indices: HashMap<QualifiedName, u32> = HashMap::new();
     let gc_type_count = module_info.gc_types.len() as u32;
     let mut next_type_index = gc_type_count;
-
-    for (index, import_def) in module_info.imports.iter().enumerate() {
-        func_indices.insert(import_def.sym.clone(), index as u32);
-    }
-    let import_count = module_info.imports.len() as u32;
-    for (index, func_def) in module_info.funcs.iter().enumerate() {
-        func_indices.insert(func_def.name.clone(), import_count + index as u32);
-    }
 
     // All GC types must be in a single rec group for nominal typing.
     // This makes structurally identical types distinct for ref.test.
@@ -426,7 +427,7 @@ pub fn emit_wasm<'db>(
         debug!("  export: {:?} -> {:?}", export.name, export.target);
         match &export.target {
             ExportTarget::Func(sym) => {
-                let Some(index) = func_indices.get(sym) else {
+                let Some(index) = module_info.func_indices.get(sym) else {
                     debug!("  function not found: {:?}", sym);
                     return Err(CompilationError::function_not_found(&sym.to_string()));
                 };
@@ -439,7 +440,7 @@ pub fn emit_wasm<'db>(
     }
     if module_info.exports.is_empty() {
         for func_def in module_info.funcs.iter() {
-            let Some(index) = func_indices.get(&func_def.name) else {
+            let Some(index) = module_info.func_indices.get(&func_def.name) else {
                 continue;
             };
             // Export with simple name (last segment of qualified name)
@@ -458,7 +459,7 @@ pub fn emit_wasm<'db>(
         let func_idxs: Vec<u32> = elem_def
             .funcs
             .iter()
-            .filter_map(|name| func_indices.get(name).copied())
+            .filter_map(|name| module_info.func_indices.get(name).copied())
             .collect();
         if !func_idxs.is_empty() {
             let offset = ConstExpr::i32_const(elem_def.offset);
@@ -476,13 +477,7 @@ pub fn emit_wasm<'db>(
     );
     for (i, func_def) in module_info.funcs.iter().enumerate() {
         debug!("emit_wasm: emitting function {}: {:?}", i, func_def.name);
-        match emit_function(
-            db,
-            func_def,
-            &func_indices,
-            &module_info.type_idx_by_type,
-            &module_info.func_types,
-        ) {
+        match emit_function(db, func_def, &module_info) {
             Ok(function) => {
                 code_section.function(&function);
             }
@@ -614,6 +609,17 @@ fn collect_module_info<'db>(
     }
     for import in &info.imports {
         info.func_types.insert(import.sym.clone(), import.ty);
+    }
+
+    // Build function index map (import index or func index).
+    for (index, import_def) in info.imports.iter().enumerate() {
+        info.func_indices
+            .insert(import_def.sym.clone(), index as u32);
+    }
+    let import_count = info.imports.len() as u32;
+    for (index, func_def) in info.funcs.iter().enumerate() {
+        info.func_indices
+            .insert(func_def.name.clone(), import_count + index as u32);
     }
 
     Ok(info)
@@ -1308,9 +1314,7 @@ fn extract_global_def<'db>(
 fn emit_function<'db>(
     db: &'db dyn salsa::Database,
     func_def: &FunctionDef<'db>,
-    func_indices: &HashMap<QualifiedName, u32>,
-    type_idx_by_type: &HashMap<Type<'db>, u32>,
-    func_types: &HashMap<QualifiedName, core::Func<'db>>,
+    module_info: &ModuleInfo<'db>,
 ) -> CompilationResult<Function> {
     debug!("=== emit_function: {:?} ===", func_def.name);
     let region = func_def
@@ -1330,57 +1334,38 @@ fn emit_function<'db>(
         ));
     }
 
-    let mut value_locals: HashMap<Value<'db>, u32> = HashMap::new();
-    let mut effective_types: HashMap<Value<'db>, Type<'db>> = HashMap::new();
+    let mut ctx = FunctionEmitContext {
+        value_locals: HashMap::new(),
+        effective_types: HashMap::new(),
+    };
     let mut locals: Vec<ValType> = Vec::new();
 
     for (index, ty) in block.args(db).iter().enumerate() {
-        value_locals.insert(block.arg(db, index), index as u32);
+        ctx.value_locals.insert(block.arg(db, index), index as u32);
         // Block args have their types from the block definition
-        effective_types.insert(block.arg(db, index), *ty);
+        ctx.effective_types.insert(block.arg(db, index), *ty);
     }
 
     let param_count = params.len() as u32;
 
-    assign_locals_in_region(
-        db,
-        region,
-        param_count,
-        &mut locals,
-        &mut value_locals,
-        &mut effective_types,
-        func_types,
-        type_idx_by_type,
-    )?;
+    assign_locals_in_region(db, region, param_count, &mut locals, &mut ctx, module_info)?;
 
     let mut function = Function::new(compress_locals(&locals));
 
-    emit_region_ops(
-        db,
-        region,
-        &value_locals,
-        &effective_types,
-        func_indices,
-        type_idx_by_type,
-        func_types,
-        &mut function,
-    )?;
+    emit_region_ops(db, region, &ctx, module_info, &mut function)?;
 
     function.instruction(&Instruction::End);
 
     Ok(function)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn assign_locals_in_region<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
     param_count: u32,
     locals: &mut Vec<ValType>,
-    value_locals: &mut HashMap<Value<'db>, u32>,
-    effective_types: &mut HashMap<Value<'db>, Type<'db>>,
-    func_types: &HashMap<QualifiedName, core::Func<'db>>,
-    type_idx_by_type: &HashMap<Type<'db>, u32>,
+    ctx: &mut FunctionEmitContext<'db>,
+    module_info: &ModuleInfo<'db>,
 ) -> CompilationResult<()> {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
@@ -1388,16 +1373,7 @@ fn assign_locals_in_region<'db>(
             // are available when we compute the effective type for this operation.
             // This is critical for wasm.if which needs to know the branch result types.
             for nested in op.regions(db).iter() {
-                assign_locals_in_region(
-                    db,
-                    nested,
-                    param_count,
-                    locals,
-                    value_locals,
-                    effective_types,
-                    func_types,
-                    type_idx_by_type,
-                )?;
+                assign_locals_in_region(db, nested, param_count, locals, ctx, module_info)?;
             }
 
             let result_types = op.results(db);
@@ -1411,7 +1387,8 @@ fn assign_locals_in_region<'db>(
             {
                 // For generic function calls, infer the concrete return type from operands.
                 // This ensures the local is typed correctly for unboxed values.
-                let mut effective_ty = infer_call_result_type(db, op, result_ty, func_types);
+                let mut effective_ty =
+                    infer_call_result_type(db, op, result_ty, &module_info.func_types);
 
                 // For struct_get on variant types with type.var result, the local type
                 // must match the struct field type, not the IR result type.
@@ -1462,7 +1439,7 @@ fn assign_locals_in_region<'db>(
                     && ty::is_var(db, effective_ty)
                     && let Some(then_region) = op.regions(db).first()
                     && let Some(then_result) = region_result_value(db, then_region)
-                    && let Some(eff_ty) = effective_types.get(&then_result)
+                    && let Some(eff_ty) = ctx.effective_types.get(&then_result)
                     && !ty::is_var(db, *eff_ty)
                 {
                     debug!(
@@ -1475,23 +1452,24 @@ fn assign_locals_in_region<'db>(
                     effective_ty = *eff_ty;
                 }
 
-                let val_type = match type_to_valtype(db, effective_ty, type_idx_by_type) {
-                    Ok(vt) => vt,
-                    Err(e) => {
-                        debug!(
-                            "type_to_valtype failed for op {}.{}: {:?}",
-                            op.dialect(db),
-                            op.name(db),
-                            e
-                        );
-                        return Err(e);
-                    }
-                };
+                let val_type =
+                    match type_to_valtype(db, effective_ty, &module_info.type_idx_by_type) {
+                        Ok(vt) => vt,
+                        Err(e) => {
+                            debug!(
+                                "type_to_valtype failed for op {}.{}: {:?}",
+                                op.dialect(db),
+                                op.name(db),
+                                e
+                            );
+                            return Err(e);
+                        }
+                    };
                 let local_index = param_count + locals.len() as u32;
                 let result_value = op.result(db, 0);
-                value_locals.insert(result_value, local_index);
+                ctx.value_locals.insert(result_value, local_index);
                 // Record the effective type for boxing/unboxing decisions
-                effective_types.insert(result_value, effective_ty);
+                ctx.effective_types.insert(result_value, effective_ty);
                 locals.push(val_type);
             }
         }
@@ -1499,15 +1477,11 @@ fn assign_locals_in_region<'db>(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_region_ops<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
-    value_locals: &HashMap<Value<'db>, u32>,
-    effective_types: &HashMap<Value<'db>, Type<'db>>,
-    func_indices: &HashMap<QualifiedName, u32>,
-    type_idx_by_type: &HashMap<Type<'db>, u32>,
-    func_types: &HashMap<QualifiedName, core::Func<'db>>,
+    ctx: &FunctionEmitContext<'db>,
+    module_info: &ModuleInfo<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let blocks = region.blocks(db);
@@ -1516,16 +1490,7 @@ fn emit_region_ops<'db>(
     }
     let block = &blocks[0];
     for op in block.operations(db).iter() {
-        emit_op(
-            db,
-            op,
-            value_locals,
-            effective_types,
-            func_indices,
-            type_idx_by_type,
-            func_types,
-            function,
-        )?;
+        emit_op(db, op, ctx, module_info, function)?;
     }
     Ok(())
 }
@@ -1546,25 +1511,22 @@ fn region_result_value<'db>(
 
 fn emit_value_get<'db>(
     value: Value<'db>,
-    value_locals: &HashMap<Value<'db>, u32>,
+    ctx: &FunctionEmitContext<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let index = value_locals
+    let index = ctx
+        .value_locals
         .get(&value)
         .ok_or_else(|| CompilationError::invalid_module("value missing local mapping"))?;
     function.instruction(&Instruction::LocalGet(*index));
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_op<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
-    value_locals: &HashMap<Value<'db>, u32>,
-    effective_types: &HashMap<Value<'db>, Type<'db>>,
-    func_indices: &HashMap<QualifiedName, u32>,
-    type_idx_by_type: &HashMap<Type<'db>, u32>,
-    func_types: &HashMap<QualifiedName, core::Func<'db>>,
+    ctx: &FunctionEmitContext<'db>,
+    module_info: &ModuleInfo<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let wasm_dialect = Symbol::new("wasm");
@@ -1583,7 +1545,7 @@ fn emit_op<'db>(
             }
             // Fall back to type attribute
             if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-                return type_idx_by_type.get(ty).copied();
+                return module_info.type_idx_by_type.get(ty).copied();
             }
             None
         };
@@ -1601,9 +1563,9 @@ fn emit_op<'db>(
 
     // Fast path: simple operations (emit operands → instruction → set result)
     if let Some(instr) = SIMPLE_OPS.get(&name) {
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         function.instruction(instr);
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
         return Ok(());
     }
 
@@ -1611,19 +1573,19 @@ fn emit_op<'db>(
     if name == Symbol::new("i32_const") {
         let value = attr_i32(db, op, ATTR_VALUE())?;
         function.instruction(&Instruction::I32Const(value));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("i64_const") {
         let value = attr_i64(db, op, ATTR_VALUE())?;
         function.instruction(&Instruction::I64Const(value));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("f32_const") {
         let value = attr_f32(db, op, ATTR_VALUE())?;
         function.instruction(&Instruction::F32Const(value.into()));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("f64_const") {
         let value = attr_f64(db, op, ATTR_VALUE())?;
         function.instruction(&Instruction::F64Const(value.into()));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("if") {
         let result_ty = op.results(db).first().copied();
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
@@ -1643,7 +1605,7 @@ fn emit_op<'db>(
                 let then_result_ty = regions
                     .first()
                     .and_then(|r| region_result_value(db, r))
-                    .and_then(|v| effective_types.get(&v).copied());
+                    .and_then(|v| ctx.effective_types.get(&v).copied());
 
                 if let Some(eff_ty) = then_result_ty {
                     if !ty::is_var(db, eff_ty) {
@@ -1665,7 +1627,11 @@ fn emit_op<'db>(
                 ir_ty
             };
 
-            BlockType::Result(type_to_valtype(db, effective_ty, type_idx_by_type)?)
+            BlockType::Result(type_to_valtype(
+                db,
+                effective_ty,
+                &module_info.type_idx_by_type,
+            )?)
         } else {
             BlockType::Empty
         };
@@ -1674,7 +1640,7 @@ fn emit_op<'db>(
                 "wasm.if expects a single condition operand",
             ));
         }
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         function.instruction(&Instruction::If(block_type));
         let regions = op.regions(db);
         let then_region = regions
@@ -1687,18 +1653,9 @@ fn emit_op<'db>(
         } else {
             None
         };
-        emit_region_ops(
-            db,
-            then_region,
-            value_locals,
-            effective_types,
-            func_indices,
-            type_idx_by_type,
-            func_types,
-            function,
-        )?;
+        emit_region_ops(db, then_region, ctx, module_info, function)?;
         if let Some(value) = then_result {
-            emit_value_get(value, value_locals, function)?;
+            emit_value_get(value, ctx, function)?;
         }
         if let Some(else_region) = regions.get(1) {
             let else_result = if has_result {
@@ -1709,18 +1666,9 @@ fn emit_op<'db>(
                 None
             };
             function.instruction(&Instruction::Else);
-            emit_region_ops(
-                db,
-                else_region,
-                value_locals,
-                effective_types,
-                func_indices,
-                type_idx_by_type,
-                func_types,
-                function,
-            )?;
+            emit_region_ops(db, else_region, ctx, module_info, function)?;
             if let Some(value) = else_result {
-                emit_value_get(value, value_locals, function)?;
+                emit_value_get(value, ctx, function)?;
             }
         } else if has_result {
             return Err(CompilationError::invalid_module(
@@ -1729,7 +1677,7 @@ fn emit_op<'db>(
         }
         function.instruction(&Instruction::End);
         if has_result {
-            set_result_local(db, op, value_locals, function)?;
+            set_result_local(db, op, ctx, function)?;
         }
     } else if name == Symbol::new("block") {
         let result_ty = op.results(db).first().copied();
@@ -1738,7 +1686,7 @@ fn emit_op<'db>(
             BlockType::Result(type_to_valtype(
                 db,
                 result_ty.expect("block result type"),
-                type_idx_by_type,
+                &module_info.type_idx_by_type,
             )?)
         } else {
             BlockType::Empty
@@ -1748,25 +1696,16 @@ fn emit_op<'db>(
             .regions(db)
             .first()
             .ok_or_else(|| CompilationError::invalid_module("wasm.block missing body region"))?;
-        emit_region_ops(
-            db,
-            region,
-            value_locals,
-            effective_types,
-            func_indices,
-            type_idx_by_type,
-            func_types,
-            function,
-        )?;
+        emit_region_ops(db, region, ctx, module_info, function)?;
         if has_result {
             let value = region_result_value(db, region).ok_or_else(|| {
                 CompilationError::invalid_module("wasm.block body missing result value")
             })?;
-            emit_value_get(value, value_locals, function)?;
+            emit_value_get(value, ctx, function)?;
         }
         function.instruction(&Instruction::End);
         if has_result {
-            set_result_local(db, op, value_locals, function)?;
+            set_result_local(db, op, ctx, function)?;
         }
     } else if name == Symbol::new("loop") {
         let result_ty = op.results(db).first().copied();
@@ -1775,7 +1714,7 @@ fn emit_op<'db>(
             BlockType::Result(type_to_valtype(
                 db,
                 result_ty.expect("loop result type"),
-                type_idx_by_type,
+                &module_info.type_idx_by_type,
             )?)
         } else {
             BlockType::Empty
@@ -1785,25 +1724,16 @@ fn emit_op<'db>(
             .regions(db)
             .first()
             .ok_or_else(|| CompilationError::invalid_module("wasm.loop missing body region"))?;
-        emit_region_ops(
-            db,
-            region,
-            value_locals,
-            effective_types,
-            func_indices,
-            type_idx_by_type,
-            func_types,
-            function,
-        )?;
+        emit_region_ops(db, region, ctx, module_info, function)?;
         if has_result {
             let value = region_result_value(db, region).ok_or_else(|| {
                 CompilationError::invalid_module("wasm.loop body missing result value")
             })?;
-            emit_value_get(value, value_locals, function)?;
+            emit_value_get(value, ctx, function)?;
         }
         function.instruction(&Instruction::End);
         if has_result {
-            set_result_local(db, op, value_locals, function)?;
+            set_result_local(db, op, ctx, function)?;
         }
     } else if name == Symbol::new("br") {
         let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
@@ -1814,38 +1744,30 @@ fn emit_op<'db>(
                 "wasm.br_if expects a single condition operand",
             ));
         }
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
         function.instruction(&Instruction::BrIf(depth));
     } else if name == Symbol::new("call") {
         let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
-        let target = resolve_callee(callee, func_indices)?;
+        let target = resolve_callee(callee, module_info)?;
 
         // Check if we need boxing for generic function calls
-        if let Some(callee_ty) = func_types.get(callee) {
+        if let Some(callee_ty) = module_info.func_types.get(callee) {
             let param_types = callee_ty.params(db);
-            emit_operands_with_boxing(
-                db,
-                operands,
-                &param_types,
-                value_locals,
-                effective_types,
-                type_idx_by_type,
-                function,
-            )?;
+            emit_operands_with_boxing(db, operands, &param_types, ctx, module_info, function)?;
         } else {
-            emit_operands(db, operands, value_locals, function)?;
+            emit_operands(db, operands, ctx, function)?;
         }
 
         function.instruction(&Instruction::Call(target));
 
         // Check if we need unboxing for the return value
-        if let Some(callee_ty) = func_types.get(callee) {
+        if let Some(callee_ty) = module_info.func_types.get(callee) {
             let return_ty = callee_ty.result(db);
             // If callee returns anyref (type.var), we need to unbox to the expected concrete type.
             // Since type inference doesn't propagate instantiated types to the IR,
             // we infer the result type from the first operand's type (works for identity-like functions).
-            if ty::is_var(db, return_ty) && !type_idx_by_type.contains_key(&return_ty) {
+            if ty::is_var(db, return_ty) && !module_info.type_idx_by_type.contains_key(&return_ty) {
                 // Try to infer concrete type from first operand
                 if let Some(operand_ty) = operands
                     .first()
@@ -1857,25 +1779,17 @@ fn emit_op<'db>(
             }
         }
 
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("return_call") {
         let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
-        let target = resolve_callee(callee, func_indices)?;
+        let target = resolve_callee(callee, module_info)?;
 
         // Check if we need boxing for generic function calls
-        if let Some(callee_ty) = func_types.get(callee) {
+        if let Some(callee_ty) = module_info.func_types.get(callee) {
             let param_types = callee_ty.params(db);
-            emit_operands_with_boxing(
-                db,
-                operands,
-                &param_types,
-                value_locals,
-                effective_types,
-                type_idx_by_type,
-                function,
-            )?;
+            emit_operands_with_boxing(db, operands, &param_types, ctx, module_info, function)?;
         } else {
-            emit_operands(db, operands, value_locals, function)?;
+            emit_operands(db, operands, ctx, function)?;
         }
 
         // Note: Return unboxing is not needed for tail calls since
@@ -1884,33 +1798,33 @@ fn emit_op<'db>(
     } else if name == Symbol::new("local_get") {
         let index = attr_index(db, op)?;
         function.instruction(&Instruction::LocalGet(index));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("local_set") {
         let index = attr_index(db, op)?;
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         function.instruction(&Instruction::LocalSet(index));
     } else if name == Symbol::new("local_tee") {
         let index = attr_index(db, op)?;
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         function.instruction(&Instruction::LocalTee(index));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("global_get") {
         let index = attr_index(db, op)?;
         function.instruction(&Instruction::GlobalGet(index));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("global_set") {
         let index = attr_index(db, op)?;
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         function.instruction(&Instruction::GlobalSet(index));
     } else if name == Symbol::new("struct_new") {
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::StructNew(type_idx));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("struct_get") {
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
@@ -1919,9 +1833,9 @@ fn emit_op<'db>(
             struct_type_index: type_idx,
             field_index: field_idx,
         });
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("struct_set") {
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
@@ -1931,28 +1845,28 @@ fn emit_op<'db>(
             field_index: field_idx,
         });
     } else if name == Symbol::new("array_new") {
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayNew(type_idx));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("array_new_default") {
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayNewDefault(type_idx));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("array_get") {
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayGet(type_idx));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("array_set") {
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
@@ -1964,25 +1878,25 @@ fn emit_op<'db>(
             .or_else(|| get_type_idx_from_attrs(attrs).map(HeapType::Concrete))
             .ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
         function.instruction(&Instruction::RefNull(heap_type));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("ref_cast") {
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         let attrs = op.attributes(db);
         let heap_type = attr_heap_type(attrs, ATTR_TARGET_TYPE())
             .ok()
             .or_else(|| get_type_idx_from_attrs(attrs).map(HeapType::Concrete))
             .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
         function.instruction(&Instruction::RefCastNullable(heap_type));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("ref_test") {
-        emit_operands(db, operands, value_locals, function)?;
+        emit_operands(db, operands, ctx, function)?;
         let attrs = op.attributes(db);
         let heap_type = attr_heap_type(attrs, ATTR_TARGET_TYPE())
             .ok()
             .or_else(|| get_type_idx_from_attrs(attrs).map(HeapType::Concrete))
             .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
         function.instruction(&Instruction::RefTestNullable(heap_type));
-        set_result_local(db, op, value_locals, function)?;
+        set_result_local(db, op, ctx, function)?;
     } else {
         return Err(CompilationError::unsupported_feature(
             "wasm op not supported",
@@ -1995,7 +1909,7 @@ fn emit_op<'db>(
 fn emit_operands<'db>(
     db: &'db dyn salsa::Database,
     operands: &IdVec<Value<'db>>,
-    value_locals: &HashMap<Value<'db>, u32>,
+    ctx: &FunctionEmitContext<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
     for value in operands.iter() {
@@ -2011,7 +1925,7 @@ fn emit_operands<'db>(
         }
 
         // Try direct lookup first
-        if let Some(index) = value_locals.get(value) {
+        if let Some(index) = ctx.value_locals.get(value) {
             function.instruction(&Instruction::LocalGet(*index));
             continue;
         }
@@ -2043,9 +1957,8 @@ fn emit_operands_with_boxing<'db>(
     db: &'db dyn salsa::Database,
     operands: &IdVec<Value<'db>>,
     param_types: &IdVec<Type<'db>>,
-    value_locals: &HashMap<Value<'db>, u32>,
-    effective_types: &HashMap<Value<'db>, Type<'db>>,
-    type_idx_by_type: &HashMap<Type<'db>, u32>,
+    ctx: &FunctionEmitContext<'db>,
+    module_info: &ModuleInfo<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let mut param_iter = param_types.iter();
@@ -2062,16 +1975,19 @@ fn emit_operands_with_boxing<'db>(
         }
 
         // Emit the value (local.get)
-        emit_value(db, *value, value_locals, function)?;
+        emit_value(db, *value, ctx, function)?;
 
         // Check if boxing is needed
         // If parameter expects anyref (type.var) AND doesn't have a concrete type index, box the operand
         // Types with a type index (like struct types) are already reference types and don't need boxing
         // Use effective_types to get the actual computed type, falling back to IR type
-        if param_ty.is_some_and(|ty| ty::is_var(db, *ty) && !type_idx_by_type.contains_key(ty)) {
+        if param_ty
+            .is_some_and(|ty| ty::is_var(db, *ty) && !module_info.type_idx_by_type.contains_key(ty))
+        {
             // Use effective type if available (computed during local allocation),
             // otherwise fall back to IR result type
-            let operand_ty = effective_types
+            let operand_ty = ctx
+                .effective_types
                 .get(value)
                 .copied()
                 .or_else(|| value_type(db, *value));
@@ -2092,11 +2008,11 @@ fn emit_operands_with_boxing<'db>(
 fn emit_value<'db>(
     db: &'db dyn salsa::Database,
     value: Value<'db>,
-    value_locals: &HashMap<Value<'db>, u32>,
+    ctx: &FunctionEmitContext<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
     // Try direct lookup first
-    if let Some(index) = value_locals.get(&value) {
+    if let Some(index) = ctx.value_locals.get(&value) {
         function.instruction(&Instruction::LocalGet(*index));
         return Ok(());
     }
@@ -2240,24 +2156,23 @@ fn infer_call_result_type<'db>(
 fn set_result_local<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
-    value_locals: &HashMap<Value<'db>, u32>,
+    ctx: &FunctionEmitContext<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
     if op.results(db).is_empty() {
         return Ok(());
     }
-    let local = value_locals
+    let local = ctx
+        .value_locals
         .get(&op.result(db, 0))
         .ok_or_else(|| CompilationError::invalid_module("result missing local mapping"))?;
     function.instruction(&Instruction::LocalSet(*local));
     Ok(())
 }
 
-fn resolve_callee(
-    path: &QualifiedName,
-    func_indices: &HashMap<QualifiedName, u32>,
-) -> CompilationResult<u32> {
-    func_indices
+fn resolve_callee(path: &QualifiedName, module_info: &ModuleInfo) -> CompilationResult<u32> {
+    module_info
+        .func_indices
         .get(path)
         .copied()
         .ok_or_else(|| CompilationError::function_not_found(&path.to_string()))
