@@ -32,6 +32,7 @@ trunk_ir::symbols! {
     ATTR_TYPE => "type",
     ATTR_TYPE_IDX => "type_idx",
     ATTR_FIELD_IDX => "field_idx",
+    ATTR_FIELD => "field",
     ATTR_HEAP_TYPE => "heap_type",
     ATTR_TARGET_TYPE => "target_type",
     ATTR_CALLEE => "callee",
@@ -282,9 +283,9 @@ pub fn emit_wasm<'db>(
             .ty
             .params(db)
             .iter()
-            .map(|ty| type_to_valtype(db, *ty))
+            .map(|ty| type_to_valtype(db, *ty, &module_info.type_idx_by_type))
             .collect::<CompilationResult<Vec<_>>>()?;
-        let results = result_types(db, import_def.ty.result(db))?;
+        let results = result_types(db, import_def.ty.result(db), &module_info.type_idx_by_type)?;
         type_section.ty().function(params, results);
         let type_index = next_type_index;
         next_type_index += 1;
@@ -301,7 +302,7 @@ pub fn emit_wasm<'db>(
             .ty
             .params(db)
             .iter()
-            .map(|ty| type_to_valtype(db, *ty))
+            .map(|ty| type_to_valtype(db, *ty, &module_info.type_idx_by_type))
             .collect::<CompilationResult<Vec<_>>>();
         let params = match params {
             Ok(p) => {
@@ -313,7 +314,8 @@ pub fn emit_wasm<'db>(
                 return Err(e);
             }
         };
-        let results = match result_types(db, func_def.ty.result(db)) {
+        let results = match result_types(db, func_def.ty.result(db), &module_info.type_idx_by_type)
+        {
             Ok(r) => {
                 debug!("  results: {:?}", r);
                 r
@@ -575,10 +577,13 @@ fn collect_gc_types<'db>(
         builders: &'a mut Vec<GcTypeBuilder<'db>>,
         idx: u32,
     ) -> &'a mut GcTypeBuilder<'db> {
-        if builders.len() <= idx as usize {
-            builders.resize_with(idx as usize + 1, GcTypeBuilder::new);
+        // Subtract 1 because index 0 is reserved for BoxedF64 (not in builders)
+        // Type indices start at 1, so idx-1 gives the array index
+        let adjusted_idx = (idx - 1) as usize;
+        if builders.len() <= adjusted_idx {
+            builders.resize_with(adjusted_idx + 1, GcTypeBuilder::new);
         }
-        &mut builders[idx as usize]
+        &mut builders[adjusted_idx]
     }
 
     fn register_type<'db>(type_idx_by_type: &mut HashMap<Type<'db>, u32>, idx: u32, ty: Type<'db>) {
@@ -693,7 +698,7 @@ fn collect_gc_types<'db>(
             else {
                 return Ok(());
             };
-            let field_idx = attr_u32(attrs, ATTR_FIELD_IDX())?;
+            let field_idx = attr_field_idx(attrs)?;
             let builder = ensure_builder(&mut builders, type_idx);
             builder.kind = GcKind::Struct;
             if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
@@ -719,7 +724,7 @@ fn collect_gc_types<'db>(
             else {
                 return Ok(());
             };
-            let field_idx = attr_u32(attrs, ATTR_FIELD_IDX())?;
+            let field_idx = attr_field_idx(attrs)?;
             let builder = ensure_builder(&mut builders, type_idx);
             builder.kind = GcKind::Struct;
             if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
@@ -1119,6 +1124,7 @@ fn emit_function<'db>(
         &mut locals,
         &mut value_locals,
         func_types,
+        type_idx_by_type,
     )?;
 
     let mut function = Function::new(compress_locals(&locals));
@@ -1145,6 +1151,7 @@ fn assign_locals_in_region<'db>(
     locals: &mut Vec<ValType>,
     value_locals: &mut HashMap<Value<'db>, u32>,
     func_types: &HashMap<QualifiedName, core::Func<'db>>,
+    type_idx_by_type: &HashMap<Type<'db>, u32>,
 ) -> CompilationResult<()> {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
@@ -1161,7 +1168,7 @@ fn assign_locals_in_region<'db>(
                 // This ensures the local is typed correctly for unboxed values.
                 let effective_ty = infer_call_result_type(db, op, result_ty, func_types);
 
-                let val_type = match type_to_valtype(db, effective_ty) {
+                let val_type = match type_to_valtype(db, effective_ty, type_idx_by_type) {
                     Ok(vt) => vt,
                     Err(e) => {
                         debug!(
@@ -1178,7 +1185,15 @@ fn assign_locals_in_region<'db>(
                 locals.push(val_type);
             }
             for nested in op.regions(db).iter() {
-                assign_locals_in_region(db, nested, param_count, locals, value_locals, func_types)?;
+                assign_locals_in_region(
+                    db,
+                    nested,
+                    param_count,
+                    locals,
+                    value_locals,
+                    func_types,
+                    type_idx_by_type,
+                )?;
             }
         }
     }
@@ -1309,7 +1324,11 @@ fn emit_op<'db>(
         let result_ty = op.results(db).first().copied();
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
         let block_type = if has_result {
-            BlockType::Result(type_to_valtype(db, result_ty.expect("if result type"))?)
+            BlockType::Result(type_to_valtype(
+                db,
+                result_ty.expect("if result type"),
+                type_idx_by_type,
+            )?)
         } else {
             BlockType::Empty
         };
@@ -1377,7 +1396,11 @@ fn emit_op<'db>(
         let result_ty = op.results(db).first().copied();
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
         let block_type = if has_result {
-            BlockType::Result(type_to_valtype(db, result_ty.expect("block result type"))?)
+            BlockType::Result(type_to_valtype(
+                db,
+                result_ty.expect("block result type"),
+                type_idx_by_type,
+            )?)
         } else {
             BlockType::Empty
         };
@@ -1409,7 +1432,11 @@ fn emit_op<'db>(
         let result_ty = op.results(db).first().copied();
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
         let block_type = if has_result {
-            BlockType::Result(type_to_valtype(db, result_ty.expect("loop result type"))?)
+            BlockType::Result(type_to_valtype(
+                db,
+                result_ty.expect("loop result type"),
+                type_idx_by_type,
+            )?)
         } else {
             BlockType::Empty
         };
@@ -1456,7 +1483,14 @@ fn emit_op<'db>(
         // Check if we need boxing for generic function calls
         if let Some(callee_ty) = func_types.get(callee) {
             let param_types = callee_ty.params(db);
-            emit_operands_with_boxing(db, operands, &param_types, value_locals, function)?;
+            emit_operands_with_boxing(
+                db,
+                operands,
+                &param_types,
+                value_locals,
+                type_idx_by_type,
+                function,
+            )?;
         } else {
             emit_operands(db, operands, value_locals, function)?;
         }
@@ -1469,7 +1503,7 @@ fn emit_op<'db>(
             // If callee returns anyref (type.var), we need to unbox to the expected concrete type.
             // Since type inference doesn't propagate instantiated types to the IR,
             // we infer the result type from the first operand's type (works for identity-like functions).
-            if ty::is_var(db, return_ty) {
+            if ty::is_var(db, return_ty) && !type_idx_by_type.contains_key(&return_ty) {
                 // Try to infer concrete type from first operand
                 if let Some(operand_ty) = operands
                     .first()
@@ -1489,7 +1523,14 @@ fn emit_op<'db>(
         // Check if we need boxing for generic function calls
         if let Some(callee_ty) = func_types.get(callee) {
             let param_types = callee_ty.params(db);
-            emit_operands_with_boxing(db, operands, &param_types, value_locals, function)?;
+            emit_operands_with_boxing(
+                db,
+                operands,
+                &param_types,
+                value_locals,
+                type_idx_by_type,
+                function,
+            )?;
         } else {
             emit_operands(db, operands, value_locals, function)?;
         }
@@ -1522,7 +1563,7 @@ fn emit_op<'db>(
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        let field_idx = attr_u32(attrs, ATTR_FIELD_IDX())?;
+        let field_idx = attr_field_idx(attrs)?;
         function.instruction(&Instruction::StructGet {
             struct_type_index: type_idx,
             field_index: field_idx,
@@ -1533,7 +1574,7 @@ fn emit_op<'db>(
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        let field_idx = attr_u32(attrs, ATTR_FIELD_IDX())?;
+        let field_idx = attr_field_idx(attrs)?;
         function.instruction(&Instruction::StructSet {
             struct_type_index: type_idx,
             field_index: field_idx,
@@ -1667,6 +1708,7 @@ fn emit_operands_with_boxing<'db>(
     operands: &IdVec<Value<'db>>,
     param_types: &IdVec<Type<'db>>,
     value_locals: &HashMap<Value<'db>, u32>,
+    type_idx_by_type: &HashMap<Type<'db>, u32>,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let mut param_iter = param_types.iter();
@@ -1686,8 +1728,9 @@ fn emit_operands_with_boxing<'db>(
         emit_value(db, *value, value_locals, function)?;
 
         // Check if boxing is needed
-        // If parameter expects anyref (type.var), box the operand
-        if param_ty.is_some_and(|ty| ty::is_var(db, *ty))
+        // If parameter expects anyref (type.var) AND doesn't have a concrete type index, box the operand
+        // Types with a type index (like struct types) are already reference types and don't need boxing
+        if param_ty.is_some_and(|ty| ty::is_var(db, *ty) && !type_idx_by_type.contains_key(ty))
             && let Some(operand_ty) = value_type(db, *value)
         {
             emit_boxing(db, operand_ty, function)?;
@@ -1826,7 +1869,8 @@ fn infer_call_result_type<'db>(
     // Check if the callee returns type.var (generic)
     let return_ty = callee_ty.result(db);
     if !ty::is_var(db, return_ty) {
-        return result_ty;
+        // Callee returns a concrete type, use it
+        return return_ty;
     }
 
     // Infer concrete type from first operand (works for identity-like functions)
@@ -1868,7 +1912,11 @@ fn resolve_callee(
         .ok_or_else(|| CompilationError::function_not_found(&path.to_string()))
 }
 
-fn type_to_valtype<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> CompilationResult<ValType> {
+fn type_to_valtype<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    type_idx_by_type: &HashMap<Type<'db>, u32>,
+) -> CompilationResult<ValType> {
     if core::I32::from_type(db, ty).is_some() || core::I1::from_type(db, ty).is_some() {
         // core.i1 (Bool) is represented as i32 in WebAssembly
         Ok(ValType::I32)
@@ -1888,6 +1936,13 @@ fn type_to_valtype<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Compilat
         || (ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == Symbol::new("ptr"))
     {
         Ok(ValType::I32)
+    } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
+        // ADT types (structs, variants) - use concrete GC type reference
+        // Check this BEFORE ty::is_var to handle struct types with type_idx
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(type_idx),
+        }))
     } else if ty::is_var(db, ty) {
         // Generic type variables use anyref (uniform representation)
         // Values must be boxed when passed to generic functions
@@ -1904,11 +1959,12 @@ fn type_to_valtype<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Compilat
 fn result_types<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
+    type_idx_by_type: &HashMap<Type<'db>, u32>,
 ) -> CompilationResult<Vec<ValType>> {
     if is_nil_type(db, ty) {
         Ok(Vec::new())
     } else {
-        Ok(vec![type_to_valtype(db, ty)?])
+        Ok(vec![type_to_valtype(db, ty, type_idx_by_type)?])
     }
 }
 
@@ -2064,6 +2120,11 @@ fn attr_u32<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<u32> {
     }
 }
 
+/// Get field index from attributes, trying both `field_idx` and `field` attribute names.
+fn attr_field_idx<'db>(attrs: &Attrs<'db>) -> CompilationResult<u32> {
+    attr_u32(attrs, ATTR_FIELD_IDX()).or_else(|_| attr_u32(attrs, ATTR_FIELD()))
+}
+
 fn attr_heap_type<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<HeapType> {
     match attrs.get(&key) {
         Some(Attribute::IntBits(bits)) => Ok(HeapType::Concrete(*bits as u32)),
@@ -2130,7 +2191,7 @@ mod tests {
         let struct_new = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field0.result(db, 0), field1.result(db, 0)])
             .results(idvec![struct_ty])
-            .attr("type_idx", Attribute::IntBits(0))
+            .attr("type_idx", Attribute::IntBits(1))
             .build();
 
         let block = Block::new(
@@ -2187,7 +2248,7 @@ mod tests {
         let array_new = Operation::of_name(db, location, "wasm.array_new")
             .operands(idvec![size.result(db, 0), init.result(db, 0)])
             .results(idvec![i32_ty]) // placeholder result type
-            .attr("type_idx", Attribute::IntBits(0))
+            .attr("type_idx", Attribute::IntBits(1))
             .build();
 
         let block = Block::new(
@@ -2232,7 +2293,7 @@ mod tests {
         let struct_new1 = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field.result(db, 0)])
             .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(0))
+            .attr("type_idx", Attribute::IntBits(1))
             .build();
 
         let field2 = Operation::of_name(db, location, "wasm.i32_const")
@@ -2243,7 +2304,7 @@ mod tests {
         let struct_new2 = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field2.result(db, 0)])
             .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(0)) // same type_idx
+            .attr("type_idx", Attribute::IntBits(1)) // same type_idx
             .build();
 
         let block = Block::new(
@@ -2288,7 +2349,7 @@ mod tests {
         let struct_new1 = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field.result(db, 0)])
             .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(0))
+            .attr("type_idx", Attribute::IntBits(1))
             .build();
 
         // Create another struct_new with 2 fields (same type_idx)
@@ -2305,7 +2366,7 @@ mod tests {
         let struct_new2 = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field2a.result(db, 0), field2b.result(db, 0)])
             .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(0)) // same type_idx, different field count
+            .attr("type_idx", Attribute::IntBits(1)) // same type_idx, different field count
             .build();
 
         let block = Block::new(
@@ -2350,7 +2411,7 @@ mod tests {
         let struct_new = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field.result(db, 0)])
             .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(0))
+            .attr("type_idx", Attribute::IntBits(1))
             .build();
 
         let func_return = Operation::of_name(db, location, "wasm.return").build();

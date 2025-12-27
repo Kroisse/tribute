@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 //! Type-Directed Name Resolution (TDNR) pass.
 //!
 //! This pass resolves remaining `src.call` operations that couldn't be resolved
@@ -23,13 +25,15 @@
 
 use std::collections::HashMap;
 
+use tracing::trace;
+
 use crate::resolve::{Binding, ModuleEnv, build_env};
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func;
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
-    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
-    Value,
+    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region,
+    Symbol, Type, Value,
 };
 
 // =============================================================================
@@ -117,10 +121,13 @@ impl<'db> TdnrResolver<'db> {
         let op_name = remapped_op.name(self.db);
 
         if dialect == "src" && op_name == "call" {
+            trace!("TDNR: found src.call operation");
             if let Some(resolved) = self.try_resolve_method_call(&remapped_op) {
+                trace!("TDNR: resolved to {:?}", resolved.dialect(self.db));
                 self.ctx.map_results(self.db, &remapped_op, &resolved);
                 vec![resolved]
             } else {
+                trace!("TDNR: could not resolve src.call");
                 // Still unresolved - keep as is (will be an error later)
                 let final_op = self.resolve_op_regions(&remapped_op);
                 if final_op != remapped_op {
@@ -172,20 +179,32 @@ impl<'db> TdnrResolver<'db> {
         let Attribute::QualifiedName(qual_name) = attrs.get(&Symbol::new("name"))? else {
             return None;
         };
+        trace!("TDNR: method name = {:?}", qual_name);
 
         let receiver = operands[0];
 
         // Get the receiver's type
         let receiver_type = self.get_value_type(receiver)?;
+        trace!(
+            "TDNR: receiver_type = {}.{}",
+            receiver_type.dialect(self.db),
+            receiver_type.name(self.db)
+        );
 
         // Look up the function - handle both simple and qualified names
         let (func_path, func_ty) = if qual_name.is_simple() {
-            // Simple name: look up directly
-            let binding = self.env.lookup(qual_name.name())?;
-            let Binding::Function { path, ty } = binding else {
-                return None;
-            };
-            (path.clone(), *ty)
+            // Simple name: first try direct lookup
+            if let Some(binding) = self.env.lookup(qual_name.name()) {
+                if let Binding::Function { path, ty } = binding {
+                    (path.clone(), *ty)
+                } else {
+                    return None;
+                }
+            } else {
+                // Direct lookup failed - try type-based namespace lookup
+                // Find a type whose definition matches the receiver type
+                self.lookup_method_in_type_namespace(qual_name.name(), receiver_type)?
+            }
         } else {
             // Qualified name: look up by full path, fall back to namespace lookup
             let binding = self.env.lookup_path(qual_name).or_else(|| {
@@ -224,6 +243,46 @@ impl<'db> TdnrResolver<'db> {
         self.ctx.map_value(old_result, new_result);
 
         Some(new_operation)
+    }
+
+    /// Look up a method in the namespace of a type that matches the receiver type.
+    ///
+    /// This enables UFCS for struct methods: `point.x()` → `Point::x(point)`
+    /// by finding the type definition that matches the receiver's type and
+    /// looking up the method name in that type's namespace.
+    fn lookup_method_in_type_namespace(
+        &self,
+        method_name: Symbol,
+        receiver_type: Type<'db>,
+    ) -> Option<(QualifiedName, Type<'db>)> {
+        trace!(
+            "TDNR lookup_method_in_type_namespace: method='{}', receiver={}.{}",
+            method_name,
+            receiver_type.dialect(self.db),
+            receiver_type.name(self.db)
+        );
+
+        // Iterate through all namespaces and look for the method
+        // Then verify the first parameter type matches the receiver type
+        for (ns_name, namespace) in self.env.namespaces_iter() {
+            if let Some(Binding::Function { path, ty }) = namespace.get(&method_name) {
+                // Check if first parameter matches receiver type
+                if let Some(func_type) = core::Func::from_type(self.db, *ty) {
+                    let params = func_type.params(self.db);
+                    if let Some(first_param) = params.first() {
+                        if self.types_compatible(receiver_type, *first_param) {
+                            trace!(
+                                "  found method {}::{} with matching first param",
+                                ns_name, method_name
+                            );
+                            return Some((path.clone(), *ty));
+                        }
+                    }
+                }
+            }
+        }
+        trace!("  no matching method found");
+        None
     }
 
     /// Check if two types are compatible for UFCS resolution.
@@ -266,9 +325,16 @@ impl<'db> TdnrResolver<'db> {
 /// For `x.method(y)`, it looks up `method` in the environment and checks
 /// if the first parameter type matches `x`'s type.
 pub fn resolve_tdnr<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    trace!("TDNR: starting resolution");
     let env = build_env(db, &module);
+    trace!(
+        "TDNR: built environment with {} definitions",
+        env.definitions_iter().count()
+    );
     let mut resolver = TdnrResolver::new(db, env);
-    resolver.resolve_module(&module)
+    let result = resolver.resolve_module(&module);
+    trace!("TDNR: resolution complete");
+    result
 }
 
 #[cfg(test)]

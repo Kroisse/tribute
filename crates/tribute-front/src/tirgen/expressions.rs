@@ -1,5 +1,8 @@
+#![allow(clippy::collapsible_if)]
+
 //! Expression lowering.
 
+use tracing::trace;
 use tree_sitter::Node;
 use trunk_ir::{
     Attribute, Block, BlockBuilder, BlockId, DialectOp, DialectType, IdVec, Operation,
@@ -30,6 +33,8 @@ pub fn lower_expr<'db>(
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
     let unit_ty = core::Nil::new(ctx.db).as_type();
+
+    trace!("lower_expr: kind={}", node.kind());
 
     match node.kind() {
         // === Literals ===
@@ -448,29 +453,44 @@ fn lower_method_call_expr<'db>(
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
 
+    trace!("lower_method_call_expr: node={:?}", node.to_sexp());
+
     // Use field-based access
     let receiver_node = node.child_by_field_name("receiver")?;
     let method_node = node.child_by_field_name("method")?;
+    trace!(
+        "  receiver={:?}, method={:?}",
+        receiver_node.to_sexp(),
+        method_node.to_sexp()
+    );
 
-    // Handle method_path: may contain path_segment nodes followed by identifier
-    // e.g., "double" → just identifier
-    // e.g., "math::double" → path_segment(math) + identifier(double)
-    let method_path: QualifiedName = {
-        let mut cursor = method_node.walk();
-        method_node
-            .named_children(&mut cursor)
-            .filter_map(|n| match n.kind() {
-                "identifier" | "type_identifier" => Some(node_text(&n, &ctx.source).into()),
-                "path_segment" => {
-                    // path_segment contains an identifier or type_identifier
-                    let mut inner = n.walk();
-                    n.named_children(&mut inner)
-                        .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
-                        .map(|c| node_text(&c, &ctx.source).into())
-                }
-                _ => None,
-            })
-            .collect::<Option<_>>()?
+    // Handle method: can be a simple identifier or a path with segments
+    // e.g., "x" → just identifier
+    // e.g., "math::double" → path with segments
+    let method_path: QualifiedName = match method_node.kind() {
+        "identifier" | "type_identifier" => {
+            // Simple method name: p.x()
+            let name = node_text(&method_node, &ctx.source);
+            std::iter::once(Symbol::from(name)).collect::<Option<_>>()?
+        }
+        _ => {
+            // Qualified path: p.math::double()
+            let mut cursor = method_node.walk();
+            method_node
+                .named_children(&mut cursor)
+                .filter_map(|n| match n.kind() {
+                    "identifier" | "type_identifier" => Some(node_text(&n, &ctx.source).into()),
+                    "path_segment" => {
+                        // path_segment contains an identifier or type_identifier
+                        let mut inner = n.walk();
+                        n.named_children(&mut inner)
+                            .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
+                            .map(|c| node_text(&c, &ctx.source).into())
+                    }
+                    _ => None,
+                })
+                .collect::<Option<_>>()?
+        }
     };
 
     // Lower receiver first
@@ -945,25 +965,40 @@ fn lower_record_expr<'db>(
             "type_identifier" if type_name.is_none() => {
                 type_name = Some(node_text(&child, &ctx.source).to_string());
             }
-            "record_field" => {
-                // Get field value
-                let mut field_cursor = child.walk();
-                for field_child in child.named_children(&mut field_cursor) {
-                    if is_comment(field_child.kind()) {
+            "record_fields" => {
+                // Container for record_field nodes
+                let mut fields_cursor = child.walk();
+                for field in child.named_children(&mut fields_cursor) {
+                    if is_comment(field.kind()) || field.kind() != "record_field" {
                         continue;
                     }
-                    if field_child.kind() != "identifier" {
-                        if let Some(value) = lower_expr(ctx, block, field_child) {
-                            field_values.push(value);
-                        }
-                    } else {
+                    // record_field has: identifier (field name) and optionally an expression (value)
+                    // For `x: 10`, there's identifier("x") and literal(10)
+                    // For shorthand `{ x }`, there's only identifier("x")
+                    let mut field_cursor = field.walk();
+                    let children: Vec<_> = field
+                        .named_children(&mut field_cursor)
+                        .filter(|c| !is_comment(c.kind()))
+                        .collect();
+
+                    if children.len() == 1 && children[0].kind() == "identifier" {
                         // Shorthand: { name } means { name: name }
-                        let field_name = node_text(&field_child, &ctx.source).into();
+                        let field_name = node_text(&children[0], &ctx.source).into();
                         if let Some(value) = ctx.lookup(field_name) {
                             field_values.push(value);
                         } else {
                             let var_op = block.op(src::var(ctx.db, location, infer_ty, field_name));
                             field_values.push(var_op.result(ctx.db));
+                        }
+                    } else {
+                        // Full syntax: { name: value }
+                        // Find the value expression (skip the identifier)
+                        for field_child in &children {
+                            if field_child.kind() != "identifier" {
+                                if let Some(value) = lower_expr(ctx, block, *field_child) {
+                                    field_values.push(value);
+                                }
+                            }
                         }
                     }
                 }
@@ -973,7 +1008,7 @@ fn lower_record_expr<'db>(
     }
 
     let type_name = type_name?;
-    let op = block.op(src::call(
+    let op = block.op(src::cons(
         ctx.db,
         location,
         field_values,

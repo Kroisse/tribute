@@ -6,7 +6,7 @@
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::ty;
 use trunk_ir::rewrite::RewriteContext;
-use trunk_ir::{Block, IdVec, Operation, Region, Type};
+use trunk_ir::{Attribute, Attrs, Block, IdVec, Operation, Region, Type};
 
 use super::solver::TypeSubst;
 
@@ -116,11 +116,15 @@ impl<'db, 'a> SubstApplier<'db, 'a> {
             .map(|region| self.apply_to_region(region))
             .collect();
 
+        // Substitute types in attributes (e.g., function type attributes)
+        let new_attrs = self.apply_to_attributes(remapped_op.attributes(self.db));
+
         // Check if anything changed
         let results_changed = remapped_op.results(self.db).as_slice() != new_results.as_slice();
         let regions_changed = remapped_op.regions(self.db).as_slice() != new_regions.as_slice();
+        let attrs_changed = remapped_op.attributes(self.db) != &new_attrs;
 
-        if !results_changed && !regions_changed {
+        if !results_changed && !regions_changed && !attrs_changed {
             return remapped_op;
         }
 
@@ -128,12 +132,33 @@ impl<'db, 'a> SubstApplier<'db, 'a> {
             .modify(self.db)
             .results(new_results)
             .regions(new_regions)
+            .attrs(new_attrs)
             .build();
 
         // Map old results to new results
         self.ctx.map_results(self.db, &remapped_op, &new_op);
 
         new_op
+    }
+
+    /// Apply substitution to all attributes, replacing type variables in Type attributes.
+    fn apply_to_attributes(&self, attrs: &Attrs<'db>) -> Attrs<'db> {
+        attrs
+            .iter()
+            .map(|(k, v)| (*k, self.apply_to_attribute(v)))
+            .collect()
+    }
+
+    /// Apply substitution to a single attribute.
+    fn apply_to_attribute(&self, attr: &Attribute<'db>) -> Attribute<'db> {
+        match attr {
+            Attribute::Type(ty) => Attribute::Type(self.subst.apply(self.db, *ty)),
+            Attribute::List(items) => {
+                Attribute::List(items.iter().map(|a| self.apply_to_attribute(a)).collect())
+            }
+            // Other attribute types don't contain types
+            _ => attr.clone(),
+        }
     }
 }
 

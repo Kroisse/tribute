@@ -17,7 +17,8 @@ dialect! {
 
         /// `adt.struct_get` operation: reads a field from a struct.
         /// Field can be a name (String) or index (IntBits).
-        #[attr(field: any)]
+        /// Type attribute specifies the struct type (for WASM GC lowering).
+        #[attr(r#type: Type, field: any)]
         fn struct_get(r#ref) -> result;
 
         /// `adt.struct_set` operation: writes a field in a struct.

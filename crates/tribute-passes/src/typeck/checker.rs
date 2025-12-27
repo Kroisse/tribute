@@ -11,12 +11,14 @@
 //! then solved by the [`TypeSolver`].
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
 use tracing::trace;
 use trunk_ir::{
-    Attribute, DialectOp, DialectType, Operation, Region, Symbol, Type, Value,
+    Attribute, Block, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
+    Type, Value,
     dialect::{ability, adt, arith, case, core, func, list, pat, src, ty},
 };
 
@@ -54,6 +56,10 @@ pub struct TypeChecker<'db> {
     /// Used as fallback for block argument lookups when the resolver creates
     /// stale block references (issue #43).
     entry_block_arg_types: Vec<Type<'db>>,
+    /// Map from function names to their types for looking up callees.
+    /// This enables proper type inference for generic function calls.
+    /// Wrapped in Arc for cheap cloning across function checks.
+    function_types: Arc<HashMap<QualifiedName, Type<'db>>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -67,6 +73,24 @@ impl<'db> TypeChecker<'db> {
             next_row_var: 0,
             current_effect: EffectRow::empty(),
             entry_block_arg_types: Vec::new(),
+            function_types: Arc::new(HashMap::new()),
+        }
+    }
+
+    /// Create a new type checker with a pre-built function type map.
+    pub fn with_function_types(
+        db: &'db dyn salsa::Database,
+        function_types: Arc<HashMap<QualifiedName, Type<'db>>>,
+    ) -> Self {
+        Self {
+            db,
+            value_types: HashMap::new(),
+            constraints: ConstraintSet::new(),
+            next_type_var: 0,
+            next_row_var: 0,
+            current_effect: EffectRow::empty(),
+            entry_block_arg_types: Vec::new(),
+            function_types,
         }
     }
 
@@ -152,8 +176,30 @@ impl<'db> TypeChecker<'db> {
     /// Check a module.
     pub fn check_module(&mut self, module: &core::Module<'db>) {
         self.seed_var_counters(module);
+
+        // Collect all function types before checking
+        // This enables proper type inference for generic function calls
         let body = module.body(self.db);
+        if let Some(block) = body.blocks(self.db).first() {
+            self.collect_function_types_from_block(block);
+        }
+
         self.check_region(&body);
+    }
+
+    /// Collect function types from a block.
+    fn collect_function_types_from_block(&mut self, block: &Block<'db>) {
+        for op in block.operations(self.db).iter() {
+            if let Ok(func_op) = func::Func::from_operation(self.db, *op) {
+                let name = func_op.qualified_name(self.db);
+                let func_type = func_op.r#type(self.db);
+                trace!(
+                    "collect_function_types_from_block: {:?} -> {:?}",
+                    name, func_type
+                );
+                Arc::make_mut(&mut self.function_types).insert(name, func_type);
+            }
+        }
     }
 
     fn seed_var_counters(&mut self, module: &core::Module<'db>) {
@@ -337,6 +383,10 @@ impl<'db> TypeChecker<'db> {
         } else if dialect == adt::DIALECT_NAME() {
             if name == adt::STRING_CONST() {
                 self.check_string_const(op);
+            } else if name == adt::STRUCT_NEW() || name == adt::VARIANT_NEW() {
+                // For struct/variant construction, the result type is already set correctly
+                // to the struct/enum type. Just record this type for the result value.
+                self.check_adt_new(op);
             } else {
                 self.check_unknown_op(op);
             }
@@ -395,6 +445,19 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// Handle adt.struct_new and adt.variant_new operations.
+    ///
+    /// The result type is already set to the struct/enum type from the resolve pass.
+    /// We just need to record this type for the result value so type inference
+    /// can use it when checking method calls.
+    fn check_adt_new(&mut self, op: &Operation<'db>) {
+        let results = op.results(self.db);
+        if let Some(&result_ty) = results.first() {
+            let value = op.result(self.db, 0);
+            self.record_type(value, result_ty);
+        }
+    }
+
     // === func dialect checking ===
 
     fn check_func_def(&mut self, op: &Operation<'db>) {
@@ -450,21 +513,144 @@ impl<'db> TypeChecker<'db> {
     fn check_func_call(&mut self, op: &Operation<'db>) {
         // func.call: direct call to a function symbol
         // The effect of the call is the effect declared in the function type
+        let mut effect_handled = false;
+        let operands = op.operands(self.db);
         let results = op.results(self.db);
         let result_type = results
             .first()
             .copied()
             .unwrap_or_else(|| self.fresh_type_var());
 
+        // Try to get callee info from the func.call operation
+        if let Ok(call_op) = func::Call::from_operation(self.db, *op) {
+            let callee_name = call_op.callee(self.db);
+            trace!(
+                "check_func_call: callee={:?}, function_types_count={}",
+                callee_name,
+                self.function_types.len()
+            );
+
+            // Look up the callee's function type
+            if let Some(&callee_type) = self.function_types.get(&callee_name) {
+                trace!("check_func_call: found callee type");
+                if let Some(func_type) = core::Func::from_type(self.db, callee_type) {
+                    // Instantiate fresh type variables for generic parameters
+                    let (instantiated_params, instantiated_result) =
+                        self.instantiate_function_type(&func_type);
+
+                    // Constrain result type with instantiated return type
+                    self.constrain_eq(result_type, instantiated_result);
+
+                    // Constrain argument types with instantiated param types
+                    for (i, &param_ty) in instantiated_params.iter().enumerate() {
+                        if let Some(&arg) = operands.get(i) {
+                            trace!("check_func_call: arg[{}] def={:?}", i, arg.def(self.db));
+                            if let Some(arg_ty) = self.get_type(arg) {
+                                trace!(
+                                    "check_func_call: constraining arg[{}] type {:?} with param {:?}",
+                                    i, arg_ty, param_ty
+                                );
+                                self.constrain_eq(arg_ty, param_ty);
+                            } else {
+                                trace!("check_func_call: no type found for arg[{}]", i);
+                            }
+                        }
+                    }
+
+                    // Propagate the function's effect
+                    if let Some(effect_ty) = func_type.effect(self.db)
+                        && let Some(effect_row) = EffectRow::from_type(self.db, effect_ty)
+                    {
+                        self.merge_effect(effect_row);
+                        effect_handled = true;
+                    }
+                }
+            }
+        }
+
         // Record the result type
         let value = op.result(self.db, 0);
         self.record_type(value, result_type);
 
-        // TODO: Look up the function by its callee symbol to get the function type
-        // and propagate its effect. For now, we assign a fresh effect row variable
-        // to represent the potential effects of the call.
-        let call_effect = EffectRow::var(self.fresh_row_var());
-        self.merge_effect(call_effect);
+        // Default effect if not handled above
+        if !effect_handled {
+            let call_effect = EffectRow::var(self.fresh_row_var());
+            self.merge_effect(call_effect);
+        }
+    }
+
+    /// Instantiate a function type by replacing type variables with fresh ones.
+    ///
+    /// This is needed for generic function calls: `identity(42)` where `identity: (a) -> a`
+    /// should create fresh type var `?0` and return params `[?0]` and result `?0`.
+    fn instantiate_function_type(
+        &mut self,
+        func_type: &core::Func<'db>,
+    ) -> (Vec<Type<'db>>, Type<'db>) {
+        let params = func_type.params(self.db);
+        let result = func_type.result(self.db);
+
+        // Mapping from original type var ids to fresh type vars
+        let mut var_mapping: HashMap<u64, Type<'db>> = HashMap::new();
+
+        // Instantiate parameters
+        let instantiated_params: Vec<Type<'db>> = params
+            .iter()
+            .map(|&ty| self.instantiate_type(ty, &mut var_mapping))
+            .collect();
+
+        // Instantiate result
+        let instantiated_result = self.instantiate_type(result, &mut var_mapping);
+
+        (instantiated_params, instantiated_result)
+    }
+
+    /// Instantiate a type by replacing type variables with fresh ones from the mapping.
+    fn instantiate_type(
+        &mut self,
+        ty: Type<'db>,
+        var_mapping: &mut HashMap<u64, Type<'db>>,
+    ) -> Type<'db> {
+        if ty::is_var(self.db, ty) {
+            // Extract the var id and map it
+            if let Some(Attribute::IntBits(var_id)) = ty.attrs(self.db).get(&Symbol::new("id")) {
+                *var_mapping
+                    .entry(*var_id)
+                    .or_insert_with(|| self.fresh_type_var())
+            } else {
+                // No id attribute, create a new fresh var
+                self.fresh_type_var()
+            }
+        } else if let Some(func_ty) = core::Func::from_type(self.db, ty) {
+            // Recursively instantiate function types
+            let new_params: IdVec<Type<'db>> = func_ty
+                .params(self.db)
+                .iter()
+                .map(|&t| self.instantiate_type(t, var_mapping))
+                .collect();
+            let new_result = self.instantiate_type(func_ty.result(self.db), var_mapping);
+
+            core::Func::with_effect(self.db, new_params, new_result, func_ty.effect(self.db))
+                .as_type()
+        } else {
+            // Recursively instantiate type parameters for composite types (e.g., List<a>)
+            let params = ty.params(self.db);
+            if params.is_empty() {
+                ty
+            } else {
+                let new_params: IdVec<Type<'db>> = params
+                    .iter()
+                    .map(|&t| self.instantiate_type(t, var_mapping))
+                    .collect();
+                Type::new(
+                    self.db,
+                    ty.dialect(self.db),
+                    ty.name(self.db),
+                    new_params,
+                    ty.attrs(self.db).clone(),
+                )
+            }
+        }
     }
 
     fn check_func_call_indirect(&mut self, op: &Operation<'db>) {
@@ -1032,8 +1218,9 @@ fn validate_toplevel_function_types<'db>(db: &'db dyn salsa::Database, func_op: 
 
 /// Type check a module using per-function approach.
 ///
-/// Each function is type-checked independently via `typecheck_function`,
-/// which enables incremental compilation at the function level.
+/// Each function is type-checked independently, but with access to a pre-built
+/// map of all function types. This enables proper type inference for generic
+/// function calls across function boundaries.
 ///
 /// This also validates that top-level functions have explicit type annotations.
 pub fn typecheck_module_per_function<'db>(
@@ -1050,6 +1237,11 @@ pub fn typecheck_module_per_function<'db>(
     }
 
     let block = &blocks[0];
+
+    // First pass: collect all function types
+    let function_types = collect_function_types(db, block);
+
+    // Second pass: type check each function with the function types map
     let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
     for op in block.operations(db).iter() {
         if op.dialect(db) == func::DIALECT_NAME() && op.name(db) == func::FUNC() {
@@ -1058,9 +1250,9 @@ pub fn typecheck_module_per_function<'db>(
                 validate_toplevel_function_types(db, &func_op);
             }
 
-            // Type check this function independently
-            let result = typecheck_function(db, *op);
-            new_ops.push(result.operation(db));
+            // Type check this function with access to all function types
+            let typed_op = typecheck_function_with_context(db, *op, function_types.clone());
+            new_ops.push(typed_op);
         } else {
             // Non-function operations pass through
             new_ops.push(*op);
@@ -1077,6 +1269,84 @@ pub fn typecheck_module_per_function<'db>(
     let new_body = Region::new(db, body.location(db), IdVec::from(vec![new_block]));
 
     core::Module::create(db, module.location(db), module.name(db), new_body)
+}
+
+/// Collect function types from all function definitions in a block.
+fn collect_function_types<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+) -> Arc<HashMap<QualifiedName, Type<'db>>> {
+    let mut function_types = HashMap::new();
+
+    for op in block.operations(db).iter() {
+        if let Ok(func_op) = func::Func::from_operation(db, *op) {
+            let name = func_op.qualified_name(db);
+            let func_type = func_op.r#type(db);
+            trace!(
+                "collect_function_types: found {:?} with type {:?}",
+                name, func_type
+            );
+            function_types.insert(name, func_type);
+        }
+    }
+
+    trace!(
+        "collect_function_types: collected {} functions",
+        function_types.len()
+    );
+    Arc::new(function_types)
+}
+
+/// Type check a function with access to all function types.
+///
+/// This is similar to `typecheck_function` but accepts a function types map
+/// for proper type inference of generic function calls.
+fn typecheck_function_with_context<'db>(
+    db: &'db dyn salsa::Database,
+    func_op: Operation<'db>,
+    function_types: Arc<HashMap<QualifiedName, Type<'db>>>,
+) -> Operation<'db> {
+    let mut checker = TypeChecker::with_function_types(db, function_types);
+
+    // Check the function definition
+    checker.check_func_def(&func_op);
+
+    // Solve constraints for this function
+    match checker.solve() {
+        Ok(solver) => {
+            // Apply substitution to the function's regions
+            let subst = solver.type_subst();
+            let new_regions: trunk_ir::IdVec<_> = func_op
+                .regions(db)
+                .iter()
+                .map(|r| super::subst::apply_subst_to_region(db, r, subst))
+                .collect();
+
+            // Create new operation with resolved types
+            let new_results: trunk_ir::IdVec<_> = func_op
+                .results(db)
+                .iter()
+                .map(|ty| subst.apply(db, *ty))
+                .collect();
+
+            Operation::new(
+                db,
+                func_op.location(db),
+                func_op.dialect(db),
+                func_op.name(db),
+                func_op.operands(db).clone(),
+                new_results,
+                func_op.attributes(db).clone(),
+                new_regions,
+                func_op.successors(db).clone(),
+            )
+        }
+        Err(_err) => {
+            // TODO: Emit type error via accumulator
+            // Return the original operation with failure status
+            func_op
+        }
+    }
 }
 
 #[cfg(test)]
