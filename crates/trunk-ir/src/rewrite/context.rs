@@ -3,7 +3,7 @@
 //! The `RewriteContext` tracks mappings from old values to new values
 //! during IR transformation, enabling operand remapping across rewrites.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{IdVec, Operation, Value};
 
@@ -34,9 +34,10 @@ impl<'db> RewriteContext<'db> {
     /// Follows the chain of mappings to get the final value.
     pub fn lookup(&self, old: Value<'db>) -> Value<'db> {
         let mut current = old;
+        let mut visited = HashSet::new();
         while let Some(&mapped) = self.value_map.get(&current) {
-            if mapped == current {
-                break; // Avoid infinite loop
+            if !visited.insert(current) {
+                break; // Cycle detected
             }
             current = mapped;
         }
