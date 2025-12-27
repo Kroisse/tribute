@@ -33,7 +33,18 @@ dialect! {
         fn variant_new(#[rest] fields) -> result;
 
         /// `adt.variant_tag` operation: reads the tag from a variant.
+        /// DEPRECATED: Use `variant_is` for WasmGC subtyping approach.
         fn variant_tag(r#ref) -> result;
+
+        /// `adt.variant_is` operation: tests if a variant is of a specific tag.
+        /// Returns true (i1) if the variant matches the given tag.
+        #[attr(r#type: Type, tag: Symbol)]
+        fn variant_is(r#ref) -> result;
+
+        /// `adt.variant_cast` operation: casts a variant to a specific variant type.
+        /// Used after pattern matching to access variant-specific fields.
+        #[attr(r#type: Type, tag: Symbol)]
+        fn variant_cast(r#ref) -> result;
 
         /// `adt.variant_get` operation: reads a field from a variant.
         /// Field can be a name (String) or index (IntBits).
@@ -93,6 +104,8 @@ crate::register_pure_op!(adt.struct_get);
 
 crate::register_pure_op!(adt.variant_new);
 crate::register_pure_op!(adt.variant_tag);
+crate::register_pure_op!(adt.variant_is);
+crate::register_pure_op!(adt.variant_cast);
 crate::register_pure_op!(adt.variant_get);
 
 crate::register_pure_op!(adt.array_new);
