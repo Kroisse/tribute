@@ -185,6 +185,10 @@ impl RewritePattern for VariantNewPattern {
 
 /// Create a variant-specific type by combining base type name with variant tag.
 /// e.g., base type `adt.Expr` + tag `Add` -> `adt.Expr$Add`
+///
+/// The resulting type carries attributes for variant detection:
+/// - `is_variant = true` - marks this as a variant instance type
+/// - `variant_tag = Symbol` - the variant tag (e.g., `Add`, `Num`)
 fn make_variant_type<'db>(
     db: &'db dyn salsa::Database,
     base_type: Type<'db>,
@@ -206,9 +210,12 @@ fn make_variant_type<'db>(
     // Convert &[Type] to IdVec<Type>
     let params: IdVec<Type<'db>> = base_type.params(db).iter().copied().collect();
 
-    // Don't copy attrs from base_type - variant types are fresh types
-    // identified only by dialect + name + params
-    Type::new(db, dialect, variant_name, params, trunk_ir::Attrs::new())
+    // Add variant type attributes for proper detection (instead of name-based heuristics)
+    let mut attrs = trunk_ir::Attrs::new();
+    attrs.insert(adt::ATTR_IS_VARIANT(), Attribute::Bool(true));
+    attrs.insert(adt::ATTR_VARIANT_TAG(), Attribute::Symbol(tag));
+
+    Type::new(db, dialect, variant_name, params, attrs)
 }
 
 /// Pattern for `adt.variant_tag` -> `wasm.struct_get` (field 0)

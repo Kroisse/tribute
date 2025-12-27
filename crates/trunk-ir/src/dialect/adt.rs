@@ -23,6 +23,11 @@ crate::symbols! {
     ATTR_NAME => "name",
     ATTR_FIELDS => "fields",
     ATTR_VARIANTS => "variants",
+    // Variant instance type attributes (used by adt_to_wasm lowering)
+    ATTR_IS_VARIANT => "is_variant",
+    ATTR_BASE_ENUM => "base_enum",
+    ATTR_VARIANT_TAG => "variant_tag",
+    ATTR_VARIANT_FIELDS => "variant_fields",
 }
 
 dialect! {
@@ -229,6 +234,44 @@ pub fn is_enum_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
 /// Check if a type is an `adt.typeref` type.
 pub fn is_typeref(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     ty.is_dialect(db, DIALECT_NAME(), TYPEREF())
+}
+
+/// Check if a type is a variant instance type (created by adt_to_wasm lowering).
+///
+/// Variant instance types are generated when lowering `adt.variant_new` operations
+/// to WasmGC struct types. They carry `is_variant = true` attribute.
+pub fn is_variant_instance_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    matches!(
+        ty.get_attr(db, ATTR_IS_VARIANT()),
+        Some(Attribute::Bool(true))
+    )
+}
+
+/// Get the variant tag from a variant instance type.
+pub fn get_variant_tag<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Symbol> {
+    match ty.get_attr(db, ATTR_VARIANT_TAG()) {
+        Some(Attribute::Symbol(tag)) => Some(*tag),
+        _ => None,
+    }
+}
+
+/// Get the field types from a variant instance type.
+pub fn get_variant_field_types<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+) -> Option<Vec<Type<'db>>> {
+    let Attribute::List(fields) = ty.get_attr(db, ATTR_VARIANT_FIELDS())? else {
+        return None;
+    };
+    Some(
+        fields
+            .iter()
+            .filter_map(|a| match a {
+                Attribute::Type(t) => Some(*t),
+                _ => None,
+            })
+            .collect(),
+    )
 }
 
 /// Get the qualified name from an ADT type (struct, enum, or typeref).

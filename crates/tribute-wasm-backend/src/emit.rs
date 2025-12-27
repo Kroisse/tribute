@@ -999,9 +999,9 @@ fn collect_gc_types<'db>(
 
     visit_region(db, &module.body(db), &mut visit_op)?;
 
-    // Check if a type is a variant type (has $ in the name, e.g., var$Num, var$Add)
-    let is_variant_type =
-        |ty: Type<'db>| -> bool { ty.name(db).with_str(|name| name.contains('$')) };
+    // Check if a type is a variant instance type (created by adt_to_wasm lowering).
+    // Uses the is_variant attribute instead of name-based heuristics.
+    let is_variant_type = |ty: Type<'db>| -> bool { adt::is_variant_instance_type(db, ty) };
 
     let to_field_type = |ty: Type<'db>, type_idx_by_type: &HashMap<_, _>| -> FieldType {
         debug!(
@@ -1409,13 +1409,14 @@ fn assign_locals_in_region<'db>(
                             struct_ty.dialect(db),
                             struct_ty.name(db)
                         );
-                        // Check if this is a Num variant (ends with $Num)
-                        // Num variants contain primitive Int fields, not reference fields
-                        if struct_ty.name(db).with_str(|s| s.ends_with("$Num")) {
+                        // Check if this is a Num variant using attribute-based detection.
+                        // Num variants contain primitive Int fields, not reference fields.
+                        let num_sym = Symbol::new("Num");
+                        if adt::get_variant_tag(db, *struct_ty) == Some(num_sym) {
                             debug!("  -> detected Num variant, using I64");
                             // This is a Num variant - field type is I64
                             effective_ty = ty::Int::new(db).as_type();
-                        } else if struct_ty.name(db).with_str(|s| s.contains('$')) {
+                        } else if adt::is_variant_instance_type(db, *struct_ty) {
                             debug!("  -> detected other variant, staying anyref");
                             // Other variants (Add, Sub, Mul, Div) have Expr ref fields
                             // The field type is anyref (already the default for type.var)
