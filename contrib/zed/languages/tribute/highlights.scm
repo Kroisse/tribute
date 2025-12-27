@@ -30,6 +30,14 @@
 ; Type variables (lowercase in type position)
 (type_variable) @type
 
+; Function types - fn keyword in type position
+(function_type
+  (keyword_fn) @type.builtin)
+
+; Ability items in function types
+(ability_item
+  (type_identifier) @type)
+
 ; Function definitions
 (function_definition
   name: (identifier) @function)
@@ -47,7 +55,7 @@
 
 ; Method calls (UFCS)
 (method_call_expression
-  method: (identifier) @function.method)
+  method: (method_path) @function.method)
 
 ; Parameters
 (parameter
@@ -84,12 +92,16 @@
 ; Strings
 (string) @string
 (raw_string) @string
+(raw_interpolated_string) @string
 (multiline_string) @string
 (bytes_string) @string
 (raw_bytes) @string
+(raw_interpolated_bytes) @string
 (multiline_bytes) @string
 (string_segment) @string
 (bytes_segment) @string
+(raw_interpolated_string_segment) @string
+(raw_interpolated_bytes_segment) @string
 (multiline_string_segment) @string
 (multiline_bytes_segment) @string
 
@@ -143,6 +155,9 @@
 
 (operator) @operator
 (qualified_operator) @operator
+
+; Spread operator
+(spread) @operator
 
 ; Punctuation - brackets
 [
