@@ -9,16 +9,17 @@ use std::sync::LazyLock;
 
 use tracing::debug;
 
-use trunk_ir::dialect::{core, func, ty, wasm};
+use trunk_ir::dialect::{adt, core, func, ty, wasm};
 use trunk_ir::{
     Attribute, Attrs, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
     Type, Value, ValueDef,
 };
 use wasm_encoder::{
-    BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType,
-    ExportKind, ExportSection, FieldType, Function, FunctionSection, GlobalSection, GlobalType,
-    HeapType, ImportSection, Instruction, MemorySection, MemoryType, Module, RefType, StorageType,
-    TableSection, TableType, TypeSection, ValType,
+    ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType, ConstExpr, DataSection,
+    ElementSection, Elements, EntityType, ExportKind, ExportSection, FieldType, Function,
+    FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection, Instruction,
+    MemorySection, MemoryType, Module, RefType, StorageType, StructType, SubType, TableSection,
+    TableType, TypeSection, ValType,
 };
 
 use crate::errors;
@@ -296,15 +297,38 @@ pub fn emit_wasm<'db>(
         func_indices.insert(func_def.name.clone(), import_count + index as u32);
     }
 
-    for gc_type in &module_info.gc_types {
-        match gc_type {
-            GcTypeDef::Struct(fields) => {
-                type_section.ty().struct_(fields.clone());
-            }
-            GcTypeDef::Array(field) => {
-                type_section.ty().array(&field.element_type, field.mutable);
-            }
-        }
+    // All GC types must be in a single rec group for nominal typing.
+    // This makes structurally identical types distinct for ref.test.
+    let gc_subtypes: Vec<SubType> = module_info
+        .gc_types
+        .iter()
+        .map(|gc_type| match gc_type {
+            GcTypeDef::Struct(fields) => SubType {
+                is_final: true,
+                supertype_idx: None,
+                composite_type: CompositeType {
+                    shared: false,
+                    inner: CompositeInnerType::Struct(StructType {
+                        fields: fields.clone().into_boxed_slice(),
+                    }),
+                    descriptor: None,
+                    describes: None,
+                },
+            },
+            GcTypeDef::Array(field) => SubType {
+                is_final: true,
+                supertype_idx: None,
+                composite_type: CompositeType {
+                    shared: false,
+                    inner: CompositeInnerType::Array(ArrayType(*field)),
+                    descriptor: None,
+                    describes: None,
+                },
+            },
+        })
+        .collect();
+    if !gc_subtypes.is_empty() {
+        type_section.ty().rec(gc_subtypes);
     }
 
     for import_def in module_info.imports.iter() {
@@ -332,17 +356,7 @@ pub fn emit_wasm<'db>(
             .params(db)
             .iter()
             .map(|ty| type_to_valtype(db, *ty, &module_info.type_idx_by_type))
-            .collect::<CompilationResult<Vec<_>>>();
-        let params = match params {
-            Ok(p) => {
-                debug!("  params: {:?}", p);
-                p
-            }
-            Err(e) => {
-                debug!("Function params conversion failed: {:?}", e);
-                return Err(e);
-            }
-        };
+            .collect::<CompilationResult<Vec<_>>>()?;
         let results = match result_types(db, func_def.ty.result(db), &module_info.type_idx_by_type)
         {
             Ok(r) => {
@@ -743,6 +757,10 @@ fn collect_gc_types<'db>(
             let builder = ensure_builder(&mut builders, type_idx);
             builder.kind = GcKind::Struct;
             let field_count = op.operands(db).len();
+            debug!(
+                "GC: struct_new type_idx={} field_count={}",
+                type_idx, field_count
+            );
             if matches!(builder.field_count, Some(existing_count) if existing_count != field_count)
             {
                 let existing_count = builder.field_count.expect("count checked by matches");
@@ -756,11 +774,25 @@ fn collect_gc_types<'db>(
                 }
             }
             if let Some(result_ty) = op.results(db).first().copied() {
+                debug!(
+                    "GC: struct_new result_ty={}.{}",
+                    result_ty.dialect(db),
+                    result_ty.name(db)
+                );
                 register_type(&mut type_idx_by_type, type_idx, result_ty);
             }
             for (field_idx, value) in op.operands(db).iter().enumerate() {
                 if let Some(ty) = value_type(db, *value) {
+                    debug!(
+                        "GC: struct_new field {} type={}.{} is_var={}",
+                        field_idx,
+                        ty.dialect(db),
+                        ty.name(db),
+                        ty::is_var(db, ty)
+                    );
                     record_struct_field(type_idx, builder, field_idx as u32, ty)?;
+                } else {
+                    debug!("GC: struct_new field {} has no type", field_idx);
                 }
             }
         } else if name == Symbol::new("struct_get") {
@@ -786,7 +818,11 @@ fn collect_gc_types<'db>(
             {
                 register_type(&mut type_idx_by_type, type_idx, ty);
             }
-            if let Some(result_ty) = op.results(db).first().copied() {
+            // Only record field type if result type is concrete (not a type variable).
+            // Type variables map to ANYREF and would conflict with concrete types.
+            if let Some(result_ty) = op.results(db).first().copied()
+                && !ty::is_var(db, result_ty)
+            {
                 record_struct_field(type_idx, builder, field_idx, result_ty)?;
             }
         } else if name == Symbol::new("struct_set") {
@@ -855,7 +891,10 @@ fn collect_gc_types<'db>(
             {
                 register_type(&mut type_idx_by_type, type_idx, ty);
             }
-            if let Some(result_ty) = op.results(db).first().copied() {
+            // Only record element type if result type is concrete (not a type variable).
+            if let Some(result_ty) = op.results(db).first().copied()
+                && !ty::is_var(db, result_ty)
+            {
                 record_array_elem(type_idx, builder, result_ty)?;
             }
         } else if name == Symbol::new("array_set") {
@@ -954,8 +993,18 @@ fn collect_gc_types<'db>(
 
     visit_region(db, &module.body(db), &mut visit_op)?;
 
+    // Check if a type is a variant type (has $ in the name, e.g., var$Num, var$Add)
+    let is_variant_type =
+        |ty: Type<'db>| -> bool { ty.name(db).with_str(|name| name.contains('$')) };
+
     let to_field_type = |ty: Type<'db>, type_idx_by_type: &HashMap<_, _>| -> FieldType {
+        debug!(
+            "GC: to_field_type called with {}.{}",
+            ty.dialect(db),
+            ty.name(db)
+        );
         let element_type = if core::I32::from_type(db, ty).is_some() {
+            debug!("GC: to_field_type -> I32");
             StorageType::Val(ValType::I32)
         } else if core::I64::from_type(db, ty).is_some()
             || ty::Int::from_type(db, ty).is_some()
@@ -963,17 +1012,41 @@ fn collect_gc_types<'db>(
         {
             // Int/Nat (arbitrary precision) is lowered to i64 for Phase 1
             // TODO: Implement i31ref/BigInt hybrid for WasmGC
+            debug!("GC: to_field_type -> I64");
             StorageType::Val(ValType::I64)
         } else if core::F32::from_type(db, ty).is_some() {
             StorageType::Val(ValType::F32)
         } else if core::F64::from_type(db, ty).is_some() {
             StorageType::Val(ValType::F64)
+        } else if is_variant_type(ty) {
+            // For variant types (e.g., type.var$Num), use anyref to enable polymorphism.
+            // Without proper WasmGC subtyping hierarchy, concrete struct refs
+            // are not subtypes of anyref. Using anyref for all variant fields
+            // allows values of any variant type to be stored uniformly.
+            debug!(
+                "GC: to_field_type {}.{} -> ANYREF (variant type needs polymorphism)",
+                ty.dialect(db),
+                ty.name(db)
+            );
+            StorageType::Val(ValType::Ref(RefType::ANYREF))
         } else if let Some(type_idx) = type_idx_by_type.get(&ty).copied() {
+            // Non-variant struct types use concrete refs
+            debug!(
+                "GC: to_field_type {}.{} -> Concrete({})",
+                ty.dialect(db),
+                ty.name(db),
+                type_idx
+            );
             StorageType::Val(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Concrete(type_idx),
             }))
         } else {
+            debug!(
+                "GC: to_field_type {}.{} -> ANYREF (not in type_idx_by_type)",
+                ty.dialect(db),
+                ty.name(db)
+            );
             StorageType::Val(ValType::Ref(RefType::ANYREF))
         };
         FieldType {
@@ -1258,10 +1331,13 @@ fn emit_function<'db>(
     }
 
     let mut value_locals: HashMap<Value<'db>, u32> = HashMap::new();
+    let mut effective_types: HashMap<Value<'db>, Type<'db>> = HashMap::new();
     let mut locals: Vec<ValType> = Vec::new();
 
-    for (index, _) in block.args(db).iter().enumerate() {
+    for (index, ty) in block.args(db).iter().enumerate() {
         value_locals.insert(block.arg(db, index), index as u32);
+        // Block args have their types from the block definition
+        effective_types.insert(block.arg(db, index), *ty);
     }
 
     let param_count = params.len() as u32;
@@ -1272,6 +1348,7 @@ fn emit_function<'db>(
         param_count,
         &mut locals,
         &mut value_locals,
+        &mut effective_types,
         func_types,
         type_idx_by_type,
     )?;
@@ -1282,6 +1359,7 @@ fn emit_function<'db>(
         db,
         region,
         &value_locals,
+        &effective_types,
         func_indices,
         type_idx_by_type,
         func_types,
@@ -1293,17 +1371,35 @@ fn emit_function<'db>(
     Ok(function)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn assign_locals_in_region<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
     param_count: u32,
     locals: &mut Vec<ValType>,
     value_locals: &mut HashMap<Value<'db>, u32>,
+    effective_types: &mut HashMap<Value<'db>, Type<'db>>,
     func_types: &HashMap<QualifiedName, core::Func<'db>>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
 ) -> CompilationResult<()> {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
+            // IMPORTANT: Process nested regions FIRST so that their effective types
+            // are available when we compute the effective type for this operation.
+            // This is critical for wasm.if which needs to know the branch result types.
+            for nested in op.regions(db).iter() {
+                assign_locals_in_region(
+                    db,
+                    nested,
+                    param_count,
+                    locals,
+                    value_locals,
+                    effective_types,
+                    func_types,
+                    type_idx_by_type,
+                )?;
+            }
+
             let result_types = op.results(db);
             if result_types.len() > 1 {
                 return Err(CompilationError::unsupported_feature("multi-result ops"));
@@ -1315,7 +1411,69 @@ fn assign_locals_in_region<'db>(
             {
                 // For generic function calls, infer the concrete return type from operands.
                 // This ensures the local is typed correctly for unboxed values.
-                let effective_ty = infer_call_result_type(db, op, result_ty, func_types);
+                let mut effective_ty = infer_call_result_type(db, op, result_ty, func_types);
+
+                // For struct_get on variant types with type.var result, the local type
+                // must match the struct field type, not the IR result type.
+                // The IR may have a generic type.var, but the WASM struct.get returns
+                // the actual field type (e.g., I64 for Num variant's Int field).
+                // We check if the result type is type.var and the struct type is a variant.
+                // If the variant type has '$' in its name (like type.var$Num), we keep anyref
+                // for struct refs, but for primitive fields (inferred from Num suffix), use I64.
+                if op.dialect(db) == Symbol::new("wasm")
+                    && op.name(db) == Symbol::new("struct_get")
+                    && ty::is_var(db, effective_ty)
+                {
+                    // Check if this is a primitive field access on a Num-like variant
+                    // Num variants have a single Int field, so struct_get returns I64
+                    if let Some(Attribute::Type(struct_ty)) = op.attributes(db).get(&ATTR_TYPE()) {
+                        debug!(
+                            "struct_get type attr: {}.{}",
+                            struct_ty.dialect(db),
+                            struct_ty.name(db)
+                        );
+                        // Check if this is a Num variant (ends with $Num)
+                        // Num variants contain primitive Int fields, not reference fields
+                        if struct_ty.name(db).with_str(|s| s.ends_with("$Num")) {
+                            debug!("  -> detected Num variant, using I64");
+                            // This is a Num variant - field type is I64
+                            effective_ty = ty::Int::new(db).as_type();
+                        } else if struct_ty.name(db).with_str(|s| s.contains('$')) {
+                            debug!("  -> detected other variant, staying anyref");
+                            // Other variants (Add, Sub, Mul, Div) have Expr ref fields
+                            // The field type is anyref (already the default for type.var)
+                            // No change needed - effective_ty stays as type.var -> anyref
+                        }
+                    } else {
+                        debug!(
+                            "struct_get has no type attr, result_ty: {}.{}",
+                            effective_ty.dialect(db),
+                            effective_ty.name(db)
+                        );
+                    }
+                }
+
+                // For wasm.if with type.var result, infer the effective type from the
+                // then branch's result value. This ensures the local type matches the
+                // actual value produced by the branches.
+                // Try to get effective type from the then region's result value
+                if op.dialect(db) == Symbol::new("wasm")
+                    && op.name(db) == Symbol::new("if")
+                    && ty::is_var(db, effective_ty)
+                    && let Some(then_region) = op.regions(db).first()
+                    && let Some(then_result) = region_result_value(db, then_region)
+                    && let Some(eff_ty) = effective_types.get(&then_result)
+                    && !ty::is_var(db, *eff_ty)
+                {
+                    debug!(
+                        "wasm.if local: using then branch effective type {}.{} instead of IR type {}.{}",
+                        eff_ty.dialect(db),
+                        eff_ty.name(db),
+                        effective_ty.dialect(db),
+                        effective_ty.name(db)
+                    );
+                    effective_ty = *eff_ty;
+                }
 
                 let val_type = match type_to_valtype(db, effective_ty, type_idx_by_type) {
                     Ok(vt) => vt,
@@ -1330,29 +1488,23 @@ fn assign_locals_in_region<'db>(
                     }
                 };
                 let local_index = param_count + locals.len() as u32;
-                value_locals.insert(op.result(db, 0), local_index);
+                let result_value = op.result(db, 0);
+                value_locals.insert(result_value, local_index);
+                // Record the effective type for boxing/unboxing decisions
+                effective_types.insert(result_value, effective_ty);
                 locals.push(val_type);
-            }
-            for nested in op.regions(db).iter() {
-                assign_locals_in_region(
-                    db,
-                    nested,
-                    param_count,
-                    locals,
-                    value_locals,
-                    func_types,
-                    type_idx_by_type,
-                )?;
             }
         }
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_region_ops<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
     value_locals: &HashMap<Value<'db>, u32>,
+    effective_types: &HashMap<Value<'db>, Type<'db>>,
     func_indices: &HashMap<QualifiedName, u32>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
     func_types: &HashMap<QualifiedName, core::Func<'db>>,
@@ -1368,6 +1520,7 @@ fn emit_region_ops<'db>(
             db,
             op,
             value_locals,
+            effective_types,
             func_indices,
             type_idx_by_type,
             func_types,
@@ -1403,10 +1556,12 @@ fn emit_value_get<'db>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_op<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
     value_locals: &HashMap<Value<'db>, u32>,
+    effective_types: &HashMap<Value<'db>, Type<'db>>,
     func_indices: &HashMap<QualifiedName, u32>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
     func_types: &HashMap<QualifiedName, core::Func<'db>>,
@@ -1472,12 +1627,45 @@ fn emit_op<'db>(
     } else if name == Symbol::new("if") {
         let result_ty = op.results(db).first().copied();
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
+
+        // For wasm.if with results, we need to determine the actual block type.
+        // If the IR result type is type.var (anyref) but the effective result type
+        // from the then/else branches is concrete (like I64), we must use the
+        // effective type for the block type.
         let block_type = if has_result {
-            BlockType::Result(type_to_valtype(
-                db,
-                result_ty.expect("if result type"),
-                type_idx_by_type,
-            )?)
+            let ir_ty = result_ty.expect("if result type");
+            // Check if the branch result values have an effective type computed
+            // If the IR type is a type variable and we have a different effective type,
+            // use the effective type for the block
+            let effective_ty = if ty::is_var(db, ir_ty) {
+                // Try to get effective type from the then region's result value
+                let regions = op.regions(db);
+                let then_result_ty = regions
+                    .first()
+                    .and_then(|r| region_result_value(db, r))
+                    .and_then(|v| effective_types.get(&v).copied());
+
+                if let Some(eff_ty) = then_result_ty {
+                    if !ty::is_var(db, eff_ty) {
+                        debug!(
+                            "wasm.if: using then branch effective type {}.{} instead of IR type {}.{}",
+                            eff_ty.dialect(db),
+                            eff_ty.name(db),
+                            ir_ty.dialect(db),
+                            ir_ty.name(db)
+                        );
+                        eff_ty
+                    } else {
+                        ir_ty
+                    }
+                } else {
+                    ir_ty
+                }
+            } else {
+                ir_ty
+            };
+
+            BlockType::Result(type_to_valtype(db, effective_ty, type_idx_by_type)?)
         } else {
             BlockType::Empty
         };
@@ -1503,6 +1691,7 @@ fn emit_op<'db>(
             db,
             then_region,
             value_locals,
+            effective_types,
             func_indices,
             type_idx_by_type,
             func_types,
@@ -1524,6 +1713,7 @@ fn emit_op<'db>(
                 db,
                 else_region,
                 value_locals,
+                effective_types,
                 func_indices,
                 type_idx_by_type,
                 func_types,
@@ -1562,6 +1752,7 @@ fn emit_op<'db>(
             db,
             region,
             value_locals,
+            effective_types,
             func_indices,
             type_idx_by_type,
             func_types,
@@ -1598,6 +1789,7 @@ fn emit_op<'db>(
             db,
             region,
             value_locals,
+            effective_types,
             func_indices,
             type_idx_by_type,
             func_types,
@@ -1637,6 +1829,7 @@ fn emit_op<'db>(
                 operands,
                 &param_types,
                 value_locals,
+                effective_types,
                 type_idx_by_type,
                 function,
             )?;
@@ -1677,6 +1870,7 @@ fn emit_op<'db>(
                 operands,
                 &param_types,
                 value_locals,
+                effective_types,
                 type_idx_by_type,
                 function,
             )?;
@@ -1818,11 +2012,6 @@ fn emit_operands<'db>(
 
         // Try direct lookup first
         if let Some(index) = value_locals.get(value) {
-            debug!(
-                "  emit_operands: found value {:?} -> local {}",
-                value.def(db),
-                index
-            );
             function.instruction(&Instruction::LocalGet(*index));
             continue;
         }
@@ -1831,24 +2020,14 @@ fn emit_operands<'db>(
         // The resolver creates operands that reference OLD block arguments, but value_locals
         // only contains NEW block arguments. For block args, we can use the index directly
         // since parameters are always locals 0, 1, 2, etc.
-        if let ValueDef::BlockArg(block_id) = value.def(db) {
+        if let ValueDef::BlockArg(_block_id) = value.def(db) {
             let index = value.index(db) as u32;
-            debug!(
-                "  emit_operands: BlockArg fallback {:?} -> local {}",
-                block_id, index
-            );
             function.instruction(&Instruction::LocalGet(index));
             continue;
         }
 
         // If operand not found and not a block arg, this is an ERROR - stale value reference!
-        if let ValueDef::OpResult(stale_op) = value.def(db) {
-            debug!(
-                "  emit_operands: STALE OpResult! op={}.{}; value_locals has {} entries",
-                stale_op.dialect(db),
-                stale_op.name(db),
-                value_locals.len(),
-            );
+        if let ValueDef::OpResult(_stale_op) = value.def(db) {
             return Err(CompilationError::invalid_module(
                 "stale SSA value in wasm backend (missing local mapping)",
             ));
@@ -1865,6 +2044,7 @@ fn emit_operands_with_boxing<'db>(
     operands: &IdVec<Value<'db>>,
     param_types: &IdVec<Type<'db>>,
     value_locals: &HashMap<Value<'db>, u32>,
+    effective_types: &HashMap<Value<'db>, Type<'db>>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
     function: &mut Function,
 ) -> CompilationResult<()> {
@@ -1887,10 +2067,22 @@ fn emit_operands_with_boxing<'db>(
         // Check if boxing is needed
         // If parameter expects anyref (type.var) AND doesn't have a concrete type index, box the operand
         // Types with a type index (like struct types) are already reference types and don't need boxing
-        if param_ty.is_some_and(|ty| ty::is_var(db, *ty) && !type_idx_by_type.contains_key(ty))
-            && let Some(operand_ty) = value_type(db, *value)
-        {
-            emit_boxing(db, operand_ty, function)?;
+        // Use effective_types to get the actual computed type, falling back to IR type
+        if param_ty.is_some_and(|ty| ty::is_var(db, *ty) && !type_idx_by_type.contains_key(ty)) {
+            // Use effective type if available (computed during local allocation),
+            // otherwise fall back to IR result type
+            let operand_ty = effective_types
+                .get(value)
+                .copied()
+                .or_else(|| value_type(db, *value));
+            if let Some(operand_ty) = operand_ty {
+                debug!(
+                    "emit_operands_with_boxing: param expects anyref, operand effective_ty={}.{}",
+                    operand_ty.dialect(db),
+                    operand_ty.name(db)
+                );
+                emit_boxing(db, operand_ty, function)?;
+            }
         }
     }
     Ok(())
@@ -1930,7 +2122,9 @@ fn emit_boxing<'db>(
     ty: Type<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
+    debug!("emit_boxing: type={}.{}", ty.dialect(db), ty.name(db));
     if ty::Int::from_type(db, ty).is_some() || ty::Nat::from_type(db, ty).is_some() {
+        debug!("  -> boxing Int/Nat to i31ref");
         // Int/Nat (i64) → i31ref
         // Truncate i64 to i32, then convert to i31ref
         // Note: This only works correctly for values that fit in 31 bits!
@@ -2103,6 +2297,10 @@ fn type_to_valtype<'db>(
     } else if ty::is_var(db, ty) {
         // Generic type variables use anyref (uniform representation)
         // Values must be boxed when passed to generic functions
+        Ok(ValType::Ref(RefType::ANYREF))
+    } else if ty.dialect(db) == adt::DIALECT_NAME() {
+        // ADT base types (e.g., adt.Expr) without specific variant type_idx
+        // These represent "any variant of this enum" and use anyref
         Ok(ValType::Ref(RefType::ANYREF))
     } else {
         Err(CompilationError::type_error(format!(

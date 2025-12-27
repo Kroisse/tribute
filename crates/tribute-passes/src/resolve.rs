@@ -257,11 +257,12 @@ fn collect_definition<'db>(
             let attrs = op.attributes(db);
 
             if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_SYM_NAME()) {
+                // Use the result type directly (adt.typeref from tirgen)
                 let ty = op
                     .results(db)
                     .first()
                     .copied()
-                    .unwrap_or_else(|| ty::var(db, std::collections::BTreeMap::new()));
+                    .unwrap_or_else(|| adt::typeref(db, QualifiedName::simple(*sym)));
                 // Add type definition
                 env.add_type(*sym, ty);
                 // Struct constructor has same name as type
@@ -273,11 +274,12 @@ fn collect_definition<'db>(
             // Enum definition → creates constructors for each variant
             let attrs = op.attributes(db);
             if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_SYM_NAME()) {
+                // Use the result type directly (adt.typeref from tirgen)
                 let ty = op
                     .results(db)
                     .first()
                     .copied()
-                    .unwrap_or_else(|| ty::var(db, std::collections::BTreeMap::new()));
+                    .unwrap_or_else(|| adt::typeref(db, QualifiedName::simple(*sym)));
                 // Add type definition
                 env.add_type(*sym, ty);
                 // Extract variants from the operation's regions or attributes

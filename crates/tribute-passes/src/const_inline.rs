@@ -119,6 +119,18 @@ impl<'db> ConstInliner<'db> {
         // First, remap operands from previous transformations
         let remapped_op = self.remap_operands(op);
 
+        // If operands were remapped, map old results to new results
+        if remapped_op != *op {
+            let old_results = op.results(self.db);
+            let new_results = remapped_op.results(self.db);
+            let count = old_results.len().min(new_results.len());
+            for i in 0..count {
+                let old_val = op.result(self.db, i);
+                let new_val = remapped_op.result(self.db, i);
+                self.map_value(old_val, new_val);
+            }
+        }
+
         // Check if this is a resolved const reference
         if self.is_resolved_const(&remapped_op)
             && let Some(inlined) = self.inline_const_ref(&remapped_op)
@@ -197,7 +209,19 @@ impl<'db> ConstInliner<'db> {
             .map(|region| self.inline_region(region))
             .collect();
 
-        op.modify(self.db).regions(new_regions).build()
+        let new_op = op.modify(self.db).regions(new_regions).build();
+
+        // Map old results to new results so subsequent operations can find them
+        let old_results = op.results(self.db);
+        let new_results = new_op.results(self.db);
+        let count = old_results.len().min(new_results.len());
+        for i in 0..count {
+            let old_val = op.result(self.db, i);
+            let new_val = new_op.result(self.db, i);
+            self.map_value(old_val, new_val);
+        }
+
+        new_op
     }
 }
 

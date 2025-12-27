@@ -201,7 +201,6 @@ pub fn lower_struct_decl<'db>(
     node: Node,
 ) -> Option<(ty::Struct<'db>, core::Module<'db>)> {
     let location = ctx.location(&node);
-    let struct_ty = ctx.fresh_type_var();
 
     // Use field-based access
     let name_node = node.child_by_field_name("name")?;
@@ -209,6 +208,10 @@ pub fn lower_struct_decl<'db>(
 
     let name = node_text(&name_node, &ctx.source).to_string();
     let type_name = sym(&name);
+
+    // Create adt.typeref as the result type - this provides a proper ADT type
+    // instead of type.var, allowing correct type flow through the pipeline
+    let struct_ty = adt::typeref(ctx.db, QualifiedName::simple(type_name));
     let fields = parse_struct_fields(ctx, body_node);
 
     // Build fields attribute for the struct definition
@@ -523,13 +526,16 @@ fn parse_struct_fields<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Vec<(S
 /// Lower an enum declaration to type.enum.
 pub fn lower_enum_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<ty::Enum<'db>> {
     let location = ctx.location(&node);
-    let infer_ty = ctx.fresh_type_var();
 
     // Use field-based access
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
     let name = node_text(&name_node, &ctx.source).to_string();
+
+    // Create adt.typeref as the result type - this provides a proper ADT type
+    // instead of type.var, allowing correct type flow through the pipeline
+    let result_ty = adt::typeref(ctx.db, QualifiedName::simple(sym(&name)));
     let variants = parse_enum_variants(ctx, body_node);
     let variants_attr = Attribute::List(
         variants
@@ -556,7 +562,7 @@ pub fn lower_enum_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option
     Some(ty::r#enum(
         ctx.db,
         location,
-        infer_ty,
+        result_ty,
         Attribute::Symbol(sym(&name)),
         variants_attr,
     ))

@@ -17,8 +17,18 @@ pub fn apply_subst_to_module<'db>(
     module: core::Module<'db>,
     subst: &TypeSubst<'db>,
 ) -> core::Module<'db> {
+    // Sanity check: verify input module has no stale references
+    #[cfg(debug_assertions)]
+    verify_operand_references(db, module, "subst input");
+
     let mut applier = SubstApplier::new(db, subst);
-    applier.apply_to_module(module)
+    let result = applier.apply_to_module(module);
+
+    // Sanity check: verify output module has no stale references
+    #[cfg(debug_assertions)]
+    verify_operand_references(db, result, "subst output");
+
+    result
 }
 
 /// Apply type substitution to a region.
@@ -208,6 +218,74 @@ fn operation_has_type_vars(db: &dyn salsa::Database, op: &Operation<'_>) -> bool
     op.regions(db)
         .iter()
         .any(|region| region_has_type_vars(db, region))
+}
+
+// =============================================================================
+// Debug verification
+// =============================================================================
+
+#[cfg(debug_assertions)]
+fn verify_operand_references<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+    context: &str,
+) {
+    use std::collections::HashSet;
+
+    // Collect all operations in the module
+    let mut all_ops: HashSet<trunk_ir::Operation<'db>> = HashSet::new();
+    collect_ops_in_region(db, module.body(db), &mut all_ops);
+
+    // Verify all operand references point to operations in the set
+    verify_refs_in_region(db, module.body(db), &all_ops, context);
+}
+
+#[cfg(debug_assertions)]
+fn collect_ops_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: Region<'db>,
+    ops: &mut std::collections::HashSet<trunk_ir::Operation<'db>>,
+) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter().copied() {
+            ops.insert(op);
+            for nested in op.regions(db).iter().copied() {
+                collect_ops_in_region(db, nested, ops);
+            }
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+fn verify_refs_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: Region<'db>,
+    all_ops: &std::collections::HashSet<trunk_ir::Operation<'db>>,
+    context: &str,
+) {
+    use trunk_ir::ValueDef;
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter().copied() {
+            for operand in op.operands(db).iter() {
+                if let ValueDef::OpResult(ref_op) = operand.def(db)
+                    && !all_ops.contains(&ref_op)
+                {
+                    tracing::warn!(
+                        "STALE REFERENCE DETECTED in {}!\n  \
+                         Operation {}.{} references {}.{} which is NOT in the module",
+                        context,
+                        op.dialect(db),
+                        op.name(db),
+                        ref_op.dialect(db),
+                        ref_op.name(db)
+                    );
+                }
+            }
+            for nested in op.regions(db).iter().copied() {
+                verify_refs_in_region(db, nested, all_ops, context);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

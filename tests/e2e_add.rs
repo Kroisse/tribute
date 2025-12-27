@@ -602,7 +602,6 @@ fn main() -> Float {
 /// Test AST-based calculator with enum, pattern matching, and recursion.
 /// This is a milestone test for calc.trb functionality.
 #[test]
-#[ignore = "blocked by #80: WASM struct field count mismatch for enum variants"]
 fn test_calc_eval() {
     use tribute::database::parse_with_thread_local;
 
