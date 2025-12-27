@@ -71,6 +71,10 @@ macro_rules! attr_type_helper {
     // Rust type for parameter
     (@rust_type any) => { $crate::Attribute<'db> };
     (@rust_type bool) => { bool };
+    (@rust_type i32) => { i32 };
+    (@rust_type i64) => { i64 };
+    (@rust_type u32) => { u32 };
+    (@rust_type u64) => { u64 };
     (@rust_type Type) => { $crate::Type<'db> };
     (@rust_type String) => { std::string::String };
     (@rust_type Symbol) => { $crate::Symbol };
@@ -79,6 +83,10 @@ macro_rules! attr_type_helper {
     // Convert Rust value to Attribute
     (@to_attr any, $val:expr) => { $val };
     (@to_attr bool, $val:expr) => { $crate::Attribute::Bool($val) };
+    (@to_attr i32, $val:expr) => { $crate::Attribute::IntBits($val as u64) };
+    (@to_attr i64, $val:expr) => { $crate::Attribute::IntBits($val as u64) };
+    (@to_attr u32, $val:expr) => { $crate::Attribute::IntBits($val as u64) };
+    (@to_attr u64, $val:expr) => { $crate::Attribute::IntBits($val) };
     (@to_attr Type, $val:expr) => { $crate::Attribute::Type($val) };
     (@to_attr String, $val:expr) => { $crate::Attribute::String($val) };
     (@to_attr Symbol, $val:expr) => { $crate::Attribute::Symbol($val) };
@@ -90,6 +98,30 @@ macro_rules! attr_type_helper {
         match $attr {
             $crate::Attribute::Bool(v) => *v,
             _ => panic!("expected Bool attribute"),
+        }
+    };
+    (@from_attr i32, $attr:expr) => {
+        match $attr {
+            $crate::Attribute::IntBits(v) => *v as i32,
+            _ => panic!("expected IntBits attribute"),
+        }
+    };
+    (@from_attr i64, $attr:expr) => {
+        match $attr {
+            $crate::Attribute::IntBits(v) => *v as i64,
+            _ => panic!("expected IntBits attribute"),
+        }
+    };
+    (@from_attr u32, $attr:expr) => {
+        match $attr {
+            $crate::Attribute::IntBits(v) => *v as u32,
+            _ => panic!("expected IntBits attribute"),
+        }
+    };
+    (@from_attr u64, $attr:expr) => {
+        match $attr {
+            $crate::Attribute::IntBits(v) => *v,
+            _ => panic!("expected IntBits attribute"),
         }
     };
     (@from_attr Type, $attr:expr) => {

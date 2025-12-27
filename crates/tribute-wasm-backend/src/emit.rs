@@ -3,20 +3,22 @@
 //! This module converts lowered wasm dialect TrunkIR operations to
 //! a WebAssembly binary using the `wasm_encoder` crate.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use tracing::debug;
 
-use trunk_ir::dialect::{core, ty};
+use trunk_ir::dialect::{core, func, ty, wasm};
 use trunk_ir::{
-    Attribute, Attrs, DialectType, IdVec, Operation, QualifiedName, Region, Symbol, Type, Value,
-    ValueDef,
+    Attribute, Attrs, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
+    Type, Value, ValueDef,
 };
 use wasm_encoder::{
-    BlockType, CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection,
-    FieldType, Function, FunctionSection, HeapType, ImportSection, Instruction, MemorySection,
-    MemoryType, Module, RefType, StorageType, TypeSection, ValType,
+    BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType,
+    ExportKind, ExportSection, FieldType, Function, FunctionSection, HeapType, ImportSection,
+    Instruction, MemorySection, MemoryType, Module, RefType, StorageType, TableSection, TableType,
+    TypeSection, ValType,
 };
 
 use crate::errors;
@@ -48,6 +50,8 @@ trunk_ir::symbols! {
     ATTR_MEMORY64 => "memory64",
     ATTR_OFFSET => "offset",
     ATTR_BYTES => "bytes",
+    ATTR_REFTYPE => "reftype",
+    ATTR_TABLE => "table",
 }
 
 /// Simple wasm operations that follow the pattern:
@@ -214,12 +218,26 @@ struct DataDef {
     bytes: Vec<u8>,
 }
 
+struct TableDef {
+    reftype: RefType,
+    min: u32,
+    max: Option<u32>,
+}
+
+struct ElementDef {
+    table: u32,
+    offset: i32,
+    funcs: Vec<QualifiedName>,
+}
+
 struct ModuleInfo<'db> {
     imports: Vec<ImportFuncDef<'db>>,
     funcs: Vec<FunctionDef<'db>>,
     exports: Vec<ExportDef>,
     memory: Option<MemoryDef>,
     data: Vec<DataDef>,
+    tables: Vec<TableDef>,
+    elements: Vec<ElementDef>,
     gc_types: Vec<GcTypeDef>,
     type_idx_by_type: HashMap<Type<'db>, u32>,
     /// Function type lookup map for boxing/unboxing at call sites.
@@ -250,8 +268,10 @@ pub fn emit_wasm<'db>(
     let mut type_section = TypeSection::new();
     let mut import_section = ImportSection::new();
     let mut function_section = FunctionSection::new();
+    let mut table_section = TableSection::new();
     let mut memory_section = MemorySection::new();
     let mut export_section = ExportSection::new();
+    let mut element_section = ElementSection::new();
     let mut code_section = CodeSection::new();
     let mut data_section = DataSection::new();
 
@@ -342,6 +362,17 @@ pub fn emit_wasm<'db>(
         });
     }
 
+    // Generate table section
+    for table_def in &module_info.tables {
+        table_section.table(TableType {
+            element_type: table_def.reftype,
+            minimum: table_def.min as u64,
+            maximum: table_def.max.map(|v| v as u64),
+            table64: false,
+            shared: false,
+        });
+    }
+
     debug!("Processing {} exports...", module_info.exports.len());
     for export in module_info.exports.iter() {
         debug!("  export: {:?} -> {:?}", export.name, export.target);
@@ -374,6 +405,23 @@ pub fn emit_wasm<'db>(
         data_section.active(0, &offset, data.bytes.iter().copied());
     }
 
+    // Generate element section (active element segments)
+    for elem_def in &module_info.elements {
+        let func_idxs: Vec<u32> = elem_def
+            .funcs
+            .iter()
+            .filter_map(|name| func_indices.get(name).copied())
+            .collect();
+        if !func_idxs.is_empty() {
+            let offset = ConstExpr::i32_const(elem_def.offset);
+            element_section.active(
+                Some(elem_def.table),
+                &offset,
+                Elements::Functions(Cow::Owned(func_idxs)),
+            );
+        }
+    }
+
     debug!(
         "emit_wasm: emitting {} functions...",
         module_info.funcs.len()
@@ -398,6 +446,8 @@ pub fn emit_wasm<'db>(
     }
 
     let mut module_bytes = Module::new();
+    // Section order per WebAssembly spec:
+    // Type, Import, Function, Table, Memory, Global, Export, Start, Element, Code, Data
     module_bytes.section(&type_section);
     if !module_info.imports.is_empty() {
         module_bytes.section(&import_section);
@@ -405,10 +455,16 @@ pub fn emit_wasm<'db>(
     if !module_info.funcs.is_empty() {
         module_bytes.section(&function_section);
     }
+    if !module_info.tables.is_empty() {
+        module_bytes.section(&table_section);
+    }
     if module_info.memory.is_some() {
         module_bytes.section(&memory_section);
     }
     module_bytes.section(&export_section);
+    if !module_info.elements.is_empty() {
+        module_bytes.section(&element_section);
+    }
     if !module_info.funcs.is_empty() {
         module_bytes.section(&code_section);
     }
@@ -430,6 +486,8 @@ fn collect_wasm_ops_from_region<'db>(
     exports: &mut Vec<ExportDef>,
     memory: &mut Option<MemoryDef>,
     data: &mut Vec<DataDef>,
+    tables: &mut Vec<TableDef>,
+    elements: &mut Vec<ElementDef>,
 ) -> CompilationResult<()> {
     let wasm_dialect = Symbol::new("wasm");
     let core_dialect = Symbol::new("core");
@@ -451,6 +509,8 @@ fn collect_wasm_ops_from_region<'db>(
                         exports,
                         memory,
                         data,
+                        tables,
+                        elements,
                     )?;
                 }
                 continue;
@@ -480,6 +540,12 @@ fn collect_wasm_ops_from_region<'db>(
                     n if n == Symbol::new("data") => {
                         data.push(extract_data_def(db, op)?);
                     }
+                    n if n == Symbol::new("table") => {
+                        tables.push(extract_table_def(db, op)?);
+                    }
+                    n if n == Symbol::new("elem") => {
+                        elements.push(extract_element_def(db, op)?);
+                    }
                     _ => {}
                 }
             }
@@ -498,6 +564,8 @@ fn collect_module_info<'db>(
     let mut exports = Vec::new();
     let mut memory = None;
     let mut data = Vec::new();
+    let mut tables = Vec::new();
+    let mut elements = Vec::new();
 
     // Recursively collect wasm operations from the module and any nested core.module operations.
     collect_wasm_ops_from_region(
@@ -508,6 +576,8 @@ fn collect_module_info<'db>(
         &mut exports,
         &mut memory,
         &mut data,
+        &mut tables,
+        &mut elements,
     )?;
 
     let (gc_types, type_idx_by_type) = collect_gc_types(db, module)?;
@@ -528,6 +598,8 @@ fn collect_module_info<'db>(
         exports,
         memory,
         data,
+        tables,
+        elements,
         gc_types,
         type_idx_by_type,
         func_types,
@@ -1081,6 +1153,55 @@ fn extract_data_def<'db>(
         }
     };
     Ok(DataDef { offset, bytes })
+}
+
+fn extract_table_def<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+) -> CompilationResult<TableDef> {
+    let table_op = wasm::Table::from_operation(db, *op)
+        .map_err(|_| CompilationError::invalid_operation("wasm.table"))?;
+    let reftype_sym = table_op.reftype(db);
+    let reftype = reftype_sym.with_str(|s| match s {
+        "funcref" => Ok(RefType::FUNCREF),
+        "externref" => Ok(RefType::EXTERNREF),
+        other => Err(CompilationError::from(
+            errors::CompilationErrorKind::InvalidAttribute(Box::leak(
+                format!("reftype: {}", other).into_boxed_str(),
+            )),
+        )),
+    })?;
+    let min = table_op.min(db);
+    let max = table_op.max(db);
+    Ok(TableDef { reftype, min, max })
+}
+
+fn extract_element_def<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+) -> CompilationResult<ElementDef> {
+    let elem_op = wasm::Elem::from_operation(db, *op)
+        .map_err(|_| CompilationError::invalid_operation("wasm.elem"))?;
+    let table = elem_op.table(db).unwrap_or(0);
+    let offset = elem_op.offset(db).unwrap_or(0);
+
+    // Collect function references from the funcs region
+    let funcs_region = elem_op.funcs(db);
+    let mut funcs = Vec::new();
+    for block in funcs_region.blocks(db).iter() {
+        for inner_op in block.operations(db).iter() {
+            // Look for func.constant operations
+            if let Ok(const_op) = func::Constant::from_operation(db, *inner_op) {
+                funcs.push(const_op.func_ref(db));
+            }
+        }
+    }
+
+    Ok(ElementDef {
+        table,
+        offset,
+        funcs,
+    })
 }
 
 fn emit_function<'db>(

@@ -88,6 +88,20 @@ dialect! {
         #[attr(offset, bytes)]
         fn data();
 
+        // === Tables and Element Segments ===
+
+        /// `wasm.table` operation: define a function table.
+        /// reftype: "funcref" or "externref"
+        #[attr(reftype: Symbol, min: u32, max?: u32)]
+        fn table();
+
+        /// `wasm.elem` operation: define an active element segment.
+        /// The funcs region contains func.constant operations for each function reference.
+        #[attr(table?: u32, offset?: i32)]
+        fn elem() {
+            #[region(funcs)] {}
+        };
+
         // === Integer Arithmetic (i32) ===
 
         /// `wasm.i32_const` operation: i32 constant.

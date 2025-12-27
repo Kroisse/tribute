@@ -43,6 +43,10 @@ impl CompilationError {
     pub fn missing_attribute(attr: &'static str) -> Self {
         CompilationErrorKind::MissingAttribute(attr).into()
     }
+
+    pub fn invalid_operation(op: &'static str) -> Self {
+        CompilationErrorKind::InvalidOperation(op).into()
+    }
 }
 
 #[derive(Clone, Display, Debug, PartialEq)]
@@ -64,6 +68,9 @@ pub enum CompilationErrorKind {
 
     #[display("Function not found: {_0}")]
     FunctionNotFound(String),
+
+    #[display("Invalid operation: {_0}")]
+    InvalidOperation(&'static str),
 }
 
 impl std::error::Error for CompilationError {}
