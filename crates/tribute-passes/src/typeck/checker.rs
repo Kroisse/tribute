@@ -188,16 +188,14 @@ impl<'db> TypeChecker<'db> {
     /// Collect function types from a block.
     fn collect_function_types_from_block(&mut self, block: &Block<'db>) {
         for op in block.operations(self.db).iter() {
-            if op.dialect(self.db) == func::DIALECT_NAME() && op.name(self.db) == func::FUNC() {
-                if let Ok(func_op) = func::Func::from_operation(self.db, *op) {
-                    let name = func_op.qualified_name(self.db);
-                    let func_type = func_op.r#type(self.db);
-                    trace!(
-                        "collect_function_types_from_block: {:?} -> {:?}",
-                        name, func_type
-                    );
-                    self.function_types.insert(name, func_type);
-                }
+            if let Ok(func_op) = func::Func::from_operation(self.db, *op) {
+                let name = func_op.qualified_name(self.db);
+                let func_type = func_op.r#type(self.db);
+                trace!(
+                    "collect_function_types_from_block: {:?} -> {:?}",
+                    name, func_type
+                );
+                self.function_types.insert(name, func_type);
             }
         }
     }
@@ -1260,16 +1258,14 @@ fn collect_function_types<'db>(
     let mut function_types = HashMap::new();
 
     for op in block.operations(db).iter() {
-        if op.dialect(db) == func::DIALECT_NAME() && op.name(db) == func::FUNC() {
-            if let Ok(func_op) = func::Func::from_operation(db, *op) {
-                let name = func_op.qualified_name(db);
-                let func_type = func_op.r#type(db);
-                trace!(
-                    "collect_function_types: found {:?} with type {:?}",
-                    name, func_type
-                );
-                function_types.insert(name, func_type);
-            }
+        if let Ok(func_op) = func::Func::from_operation(db, *op) {
+            let name = func_op.qualified_name(db);
+            let func_type = func_op.r#type(db);
+            trace!(
+                "collect_function_types: found {:?} with type {:?}",
+                name, func_type
+            );
+            function_types.insert(name, func_type);
         }
     }
 
