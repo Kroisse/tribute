@@ -191,19 +191,24 @@ fn make_variant_type<'db>(
     tag: Symbol,
 ) -> Type<'db> {
     let dialect = base_type.dialect(db);
-    let base_name = base_type.name(db);
+
+    // For adt.typeref types, extract the actual type name from the name attribute
+    let base_name = if adt::is_typeref(db, base_type) {
+        adt::get_type_name(db, base_type)
+            .map(|name| name.name())
+            .unwrap_or_else(|| base_type.name(db))
+    } else {
+        base_type.name(db)
+    };
+
     let variant_name = Symbol::from_dynamic(&format!("{}${}", base_name, tag));
 
     // Convert &[Type] to IdVec<Type>
     let params: IdVec<Type<'db>> = base_type.params(db).iter().copied().collect();
 
-    Type::new(
-        db,
-        dialect,
-        variant_name,
-        params,
-        base_type.attrs(db).clone(),
-    )
+    // Don't copy attrs from base_type - variant types are fresh types
+    // identified only by dialect + name + params
+    Type::new(db, dialect, variant_name, params, trunk_ir::Attrs::new())
 }
 
 /// Pattern for `adt.variant_tag` -> `wasm.struct_get` (field 0)
@@ -258,8 +263,16 @@ impl RewritePattern for VariantIsPattern {
         let location = op.location(db);
         let tag = variant_is.tag(db);
 
+        // Get the enum type - prefer operand type over attribute type
+        // (attribute may have unsubstituted type.var, operand has concrete type)
+        let enum_type = op
+            .operands(db)
+            .first()
+            .and_then(|v| operand_type(db, *v))
+            .unwrap_or_else(|| variant_is.r#type(db));
+
         // Create variant-specific type for the ref.test
-        let variant_type = make_variant_type(db, variant_is.r#type(db), tag);
+        let variant_type = make_variant_type(db, enum_type, tag);
 
         // Create wasm.ref_test with variant-specific type
         let ref_test = Operation::of_name(db, location, "wasm.ref_test")
@@ -290,8 +303,16 @@ impl RewritePattern for VariantCastPattern {
         let location = op.location(db);
         let tag = variant_cast.tag(db);
 
+        // Get the enum type - prefer operand type over attribute type
+        // (attribute may have unsubstituted type.var, operand has concrete type)
+        let enum_type = op
+            .operands(db)
+            .first()
+            .and_then(|v| operand_type(db, *v))
+            .unwrap_or_else(|| variant_cast.r#type(db));
+
         // Create variant-specific type for the ref.cast
-        let variant_type = make_variant_type(db, variant_cast.r#type(db), tag);
+        let variant_type = make_variant_type(db, enum_type, tag);
 
         // Create wasm.ref_cast with variant-specific type
         // Result type must be the variant-specific type so struct_get can find it
@@ -354,7 +375,7 @@ impl RewritePattern for VariantGetPattern {
 fn operand_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
     match value.def(db) {
         trunk_ir::ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
-        trunk_ir::ValueDef::BlockArg(_) => None, // Block args don't carry types in this context
+        trunk_ir::ValueDef::BlockArg(_) => None,
     }
 }
 

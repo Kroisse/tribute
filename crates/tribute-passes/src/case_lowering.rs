@@ -150,8 +150,8 @@ impl<'db> CaseLowerer<'db> {
 
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
         // Register block arg types for value_type lookups
-        self.block_arg_types
-            .insert(block.id(self.db), block.args(self.db).clone());
+        let args = block.args(self.db);
+        self.block_arg_types.insert(block.id(self.db), args.clone());
 
         let mut new_ops = IdVec::new();
         for op in block.operations(self.db).iter().copied() {
@@ -188,9 +188,11 @@ impl<'db> CaseLowerer<'db> {
             && let Some(Attribute::Symbol(name)) = op.attributes(self.db).get(&Symbol::new("name"))
             && let Some(&bound_value) = self.current_arm_bindings.get(name)
         {
+            // Look up the current mapping for the bound value (handles remapping from lowering)
+            let current_bound_value = self.ctx.lookup(bound_value);
             // Map case.bind result to the bound value (scrutinee or destructured value)
             let bind_result = op.result(self.db, 0);
-            self.ctx.map_value(bind_result, bound_value);
+            self.ctx.map_value(bind_result, current_bound_value);
             // Erase the case.bind operation - value is remapped
             return vec![];
         }
@@ -391,6 +393,43 @@ impl<'db> CaseLowerer<'db> {
         }
     }
 
+    /// Collect `adt.variant_get` operations from an arm body.
+    /// Returns a map from field index to the result value.
+    fn collect_variant_get_ops(
+        &self,
+        body: Region<'db>,
+        scrutinee: Value<'db>,
+    ) -> HashMap<u64, Value<'db>> {
+        let mut field_extractions = HashMap::new();
+        let expected_ref = self.ctx.lookup(scrutinee);
+
+        for block in body.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter().copied() {
+                if let Ok(vget) = adt::VariantGet::from_operation(self.db, op) {
+                    // Check if this variant_get operates on our scrutinee
+                    let operands = op.operands(self.db);
+                    if !operands.is_empty() {
+                        let ref_operand = operands[0];
+                        // The ref operand may be the original scrutinee
+                        // (tirgen passes scrutinee to variant_get)
+                        if ref_operand == scrutinee
+                            || ref_operand == expected_ref
+                            || self.ctx.lookup(ref_operand) == expected_ref
+                        {
+                            // Get field index from the operation
+                            if let Attribute::IntBits(idx) = vget.field(self.db) {
+                                let result = op.result(self.db, 0);
+                                field_extractions.insert(idx, result);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        field_extractions
+    }
+
     fn is_exhaustive(&self, arms: &[ArmInfo<'db>]) -> bool {
         if matches!(
             arms.last().map(|arm| &arm.pattern),
@@ -482,13 +521,30 @@ impl<'db> CaseLowerer<'db> {
             None
         };
 
-        // Extract bindings from pattern and map them to the (possibly cast) scrutinee
+        // Extract bindings from pattern and map them to extracted field values
         if let Some(pattern_region) = arm.pattern_region {
             let bindings = self.extract_bindings_from_pattern(pattern_region);
-            // Use the remapped value (cast result if variant, original scrutinee otherwise)
-            let bound_value = self.ctx.lookup(scrutinee);
-            for name in bindings {
-                self.current_arm_bindings.insert(name, bound_value);
+
+            if matches!(arm.pattern, ArmPattern::Variant(_)) {
+                // For variant patterns, find adt.variant_get ops in the body
+                // and map bindings to their results (by field index order)
+                let field_extractions = self.collect_variant_get_ops(arm.body, scrutinee);
+
+                for (i, name) in bindings.iter().enumerate() {
+                    if let Some(&field_value) = field_extractions.get(&(i as u64)) {
+                        self.current_arm_bindings.insert(*name, field_value);
+                    } else {
+                        // Fallback: use cast result if no variant_get found
+                        let bound_value = self.ctx.lookup(scrutinee);
+                        self.current_arm_bindings.insert(*name, bound_value);
+                    }
+                }
+            } else {
+                // For simple patterns (wildcard, bind, literal), use scrutinee directly
+                let bound_value = self.ctx.lookup(scrutinee);
+                for name in bindings {
+                    self.current_arm_bindings.insert(name, bound_value);
+                }
             }
         }
 
