@@ -456,3 +456,145 @@ fn main() -> Int {
         );
     });
 }
+
+/// Test function type syntax in parameter annotations.
+/// Higher-order function with explicit function type: `fn(Int) -> Int`
+///
+/// Note: This test verifies typeck only. Full WASM execution requires
+/// closure support in the WASM backend (not yet implemented).
+#[test]
+fn test_function_type_parameter() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::stage_typecheck;
+
+    let source_code = Rope::from_str(
+        r#"
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn double(n: Int) -> Int {
+    n + n
+}
+
+fn main() -> Int {
+    apply(double, 21)
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, "function_type.trb", source_code.clone(), tree);
+
+        // Run typecheck stage
+        let _module = stage_typecheck(db, source_file);
+
+        // Check for type errors
+        let diagnostics: Vec<_> =
+            stage_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no type errors, got {} diagnostics",
+            diagnostics.len()
+        );
+    });
+}
+
+/// Test nested function types.
+/// Function that takes a function returning a function.
+#[test]
+fn test_nested_function_type() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::stage_typecheck;
+
+    let source_code = Rope::from_str(
+        r#"
+fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int, x: Int) -> Int {
+    f(g(x))
+}
+
+fn inc(n: Int) -> Int { n + 1 }
+fn double(n: Int) -> Int { n + n }
+
+fn main() -> Int {
+    compose(inc, double, 10)
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file =
+            SourceCst::from_path(db, "nested_function_type.trb", source_code.clone(), tree);
+
+        // Run typecheck stage
+        let _module = stage_typecheck(db, source_file);
+
+        // Check for type errors
+        let diagnostics: Vec<_> =
+            stage_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no type errors, got {} diagnostics",
+            diagnostics.len()
+        );
+    });
+}
+
+/// Test generic function type parameters.
+/// Function type with type variables: `fn(a) -> b`
+#[test]
+fn test_generic_function_type() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::stage_typecheck;
+
+    let source_code = Rope::from_str(
+        r#"
+fn apply_generic(f: fn(a) -> b, x: a) -> b {
+    f(x)
+}
+
+fn to_float(n: Int) -> Float {
+    3.14
+}
+
+fn main() -> Float {
+    apply_generic(to_float, 42)
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file =
+            SourceCst::from_path(db, "generic_function_type.trb", source_code.clone(), tree);
+
+        // Run typecheck stage
+        let _module = stage_typecheck(db, source_file);
+
+        // Check for type errors
+        let diagnostics: Vec<_> =
+            stage_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no type errors, got {} diagnostics",
+            diagnostics.len()
+        );
+    });
+}
