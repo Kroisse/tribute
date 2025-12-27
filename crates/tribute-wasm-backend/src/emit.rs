@@ -230,6 +230,7 @@ struct ElementDef {
     funcs: Vec<QualifiedName>,
 }
 
+#[derive(Default)]
 struct ModuleInfo<'db> {
     imports: Vec<ImportFuncDef<'db>>,
     funcs: Vec<FunctionDef<'db>>,
@@ -481,13 +482,7 @@ pub fn emit_wasm<'db>(
 fn collect_wasm_ops_from_region<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
-    funcs: &mut Vec<FunctionDef<'db>>,
-    imports: &mut Vec<ImportFuncDef<'db>>,
-    exports: &mut Vec<ExportDef>,
-    memory: &mut Option<MemoryDef>,
-    data: &mut Vec<DataDef>,
-    tables: &mut Vec<TableDef>,
-    elements: &mut Vec<ElementDef>,
+    info: &mut ModuleInfo<'db>,
 ) -> CompilationResult<()> {
     let wasm_dialect = Symbol::new("wasm");
     let core_dialect = Symbol::new("core");
@@ -501,17 +496,7 @@ fn collect_wasm_ops_from_region<'db>(
             // Recurse into nested core.module operations
             if dialect == core_dialect && name == module_name {
                 for nested_region in op.regions(db).iter() {
-                    collect_wasm_ops_from_region(
-                        db,
-                        nested_region,
-                        funcs,
-                        imports,
-                        exports,
-                        memory,
-                        data,
-                        tables,
-                        elements,
-                    )?;
+                    collect_wasm_ops_from_region(db, nested_region, info)?;
                 }
                 continue;
             }
@@ -522,29 +507,29 @@ fn collect_wasm_ops_from_region<'db>(
                     n if n == Symbol::new("func") => {
                         if let Ok(func_def) = extract_function_def(db, op) {
                             debug!("Including function: {}", func_def.name);
-                            funcs.push(func_def);
+                            info.funcs.push(func_def);
                         }
                     }
                     n if n == Symbol::new("import_func") => {
-                        imports.push(extract_import_def(db, op)?);
+                        info.imports.push(extract_import_def(db, op)?);
                     }
                     n if n == Symbol::new("export_func") => {
-                        exports.push(extract_export_func(db, op)?);
+                        info.exports.push(extract_export_func(db, op)?);
                     }
                     n if n == Symbol::new("export_memory") => {
-                        exports.push(extract_export_memory(db, op)?);
+                        info.exports.push(extract_export_memory(db, op)?);
                     }
                     n if n == Symbol::new("memory") => {
-                        *memory = Some(extract_memory_def(db, op)?);
+                        info.memory = Some(extract_memory_def(db, op)?);
                     }
                     n if n == Symbol::new("data") => {
-                        data.push(extract_data_def(db, op)?);
+                        info.data.push(extract_data_def(db, op)?);
                     }
                     n if n == Symbol::new("table") => {
-                        tables.push(extract_table_def(db, op)?);
+                        info.tables.push(extract_table_def(db, op)?);
                     }
                     n if n == Symbol::new("elem") => {
-                        elements.push(extract_element_def(db, op)?);
+                        info.elements.push(extract_element_def(db, op)?);
                     }
                     _ => {}
                 }
@@ -559,51 +544,26 @@ fn collect_module_info<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> CompilationResult<ModuleInfo<'db>> {
-    let mut funcs = Vec::new();
-    let mut imports = Vec::new();
-    let mut exports = Vec::new();
-    let mut memory = None;
-    let mut data = Vec::new();
-    let mut tables = Vec::new();
-    let mut elements = Vec::new();
+    let mut info = ModuleInfo::default();
 
     // Recursively collect wasm operations from the module and any nested core.module operations.
-    collect_wasm_ops_from_region(
-        db,
-        &module.body(db),
-        &mut funcs,
-        &mut imports,
-        &mut exports,
-        &mut memory,
-        &mut data,
-        &mut tables,
-        &mut elements,
-    )?;
+    collect_wasm_ops_from_region(db, &module.body(db), &mut info)?;
 
+    // Collect GC types (structs, arrays)
     let (gc_types, type_idx_by_type) = collect_gc_types(db, module)?;
+    info.gc_types = gc_types;
+    info.type_idx_by_type = type_idx_by_type;
 
     // Build function type lookup map for boxing/unboxing.
     // Use the qualified name already stored in func/import definitions.
-    let mut func_types = HashMap::new();
-    for func in &funcs {
-        func_types.insert(func.name.clone(), func.ty);
+    for func in &info.funcs {
+        info.func_types.insert(func.name.clone(), func.ty);
     }
-    for import in &imports {
-        func_types.insert(import.sym.clone(), import.ty);
+    for import in &info.imports {
+        info.func_types.insert(import.sym.clone(), import.ty);
     }
 
-    Ok(ModuleInfo {
-        imports,
-        funcs,
-        exports,
-        memory,
-        data,
-        tables,
-        elements,
-        gc_types,
-        type_idx_by_type,
-        func_types,
-    })
+    Ok(info)
 }
 
 /// Collect GC types (structs, arrays) and return:
