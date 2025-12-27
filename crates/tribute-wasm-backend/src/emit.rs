@@ -1688,24 +1688,24 @@ fn emit_op<'db>(
         // the caller's return type should match the callee's.
         function.instruction(&Instruction::ReturnCall(target));
     } else if name == Symbol::new("local_get") {
-        let index = attr_local_index(db, op)?;
+        let index = attr_index(db, op)?;
         function.instruction(&Instruction::LocalGet(index));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("local_set") {
-        let index = attr_local_index(db, op)?;
+        let index = attr_index(db, op)?;
         emit_operands(db, operands, value_locals, function)?;
         function.instruction(&Instruction::LocalSet(index));
     } else if name == Symbol::new("local_tee") {
-        let index = attr_local_index(db, op)?;
+        let index = attr_index(db, op)?;
         emit_operands(db, operands, value_locals, function)?;
         function.instruction(&Instruction::LocalTee(index));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("global_get") {
-        let index = attr_local_index(db, op)?;
+        let index = attr_index(db, op)?;
         function.instruction(&Instruction::GlobalGet(index));
         set_result_local(db, op, value_locals, function)?;
     } else if name == Symbol::new("global_set") {
-        let index = attr_local_index(db, op)?;
+        let index = attr_index(db, op)?;
         emit_operands(db, operands, value_locals, function)?;
         function.instruction(&Instruction::GlobalSet(index));
     } else if name == Symbol::new("struct_new") {
@@ -2204,10 +2204,7 @@ fn attr_f64<'db>(
     }
 }
 
-fn attr_local_index<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-) -> CompilationResult<u32> {
+fn attr_index<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> CompilationResult<u32> {
     match op.attributes(db).get(&ATTR_INDEX()) {
         Some(Attribute::IntBits(bits)) => Ok(*bits as u32),
         _ => Err(CompilationError::from(
