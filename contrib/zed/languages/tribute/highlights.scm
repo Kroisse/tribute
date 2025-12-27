@@ -186,6 +186,3 @@
 
 ; Wildcards
 (wildcard_pattern) @variable.builtin
-
-; Spread operator
-(spread) @operator
