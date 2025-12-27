@@ -102,6 +102,23 @@ dialect! {
             #[region(funcs)] {}
         };
 
+        // === Global Variables ===
+
+        /// `wasm.global` operation: define a global variable.
+        /// valtype: "i32", "i64", "f32", "f64", "funcref", "externref", etc.
+        /// mutable: whether the global can be modified
+        /// init: initial value (i64 for integers, f64 for floats)
+        #[attr(valtype: Symbol, mutable: bool, init: i64)]
+        fn global();
+
+        /// `wasm.global_get` operation: get global variable value.
+        #[attr(index: u32)]
+        fn global_get() -> result;
+
+        /// `wasm.global_set` operation: set global variable value.
+        #[attr(index: u32)]
+        fn global_set(value);
+
         // === Integer Arithmetic (i32) ===
 
         /// `wasm.i32_const` operation: i32 constant.

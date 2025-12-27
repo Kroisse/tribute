@@ -16,9 +16,9 @@ use trunk_ir::{
 };
 use wasm_encoder::{
     BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType,
-    ExportKind, ExportSection, FieldType, Function, FunctionSection, HeapType, ImportSection,
-    Instruction, MemorySection, MemoryType, Module, RefType, StorageType, TableSection, TableType,
-    TypeSection, ValType,
+    ExportKind, ExportSection, FieldType, Function, FunctionSection, GlobalSection, GlobalType,
+    HeapType, ImportSection, Instruction, MemorySection, MemoryType, Module, RefType, StorageType,
+    TableSection, TableType, TypeSection, ValType,
 };
 
 use crate::errors;
@@ -230,6 +230,12 @@ struct ElementDef {
     funcs: Vec<QualifiedName>,
 }
 
+struct GlobalDef {
+    valtype: ValType,
+    mutable: bool,
+    init: i64,
+}
+
 #[derive(Default)]
 struct ModuleInfo<'db> {
     imports: Vec<ImportFuncDef<'db>>,
@@ -239,6 +245,7 @@ struct ModuleInfo<'db> {
     data: Vec<DataDef>,
     tables: Vec<TableDef>,
     elements: Vec<ElementDef>,
+    globals: Vec<GlobalDef>,
     gc_types: Vec<GcTypeDef>,
     type_idx_by_type: HashMap<Type<'db>, u32>,
     /// Function type lookup map for boxing/unboxing at call sites.
@@ -271,6 +278,7 @@ pub fn emit_wasm<'db>(
     let mut function_section = FunctionSection::new();
     let mut table_section = TableSection::new();
     let mut memory_section = MemorySection::new();
+    let mut global_section = GlobalSection::new();
     let mut export_section = ExportSection::new();
     let mut element_section = ElementSection::new();
     let mut code_section = CodeSection::new();
@@ -374,6 +382,26 @@ pub fn emit_wasm<'db>(
         });
     }
 
+    // Generate global section
+    for global_def in &module_info.globals {
+        let init_expr = match global_def.valtype {
+            ValType::I32 => ConstExpr::i32_const(global_def.init as i32),
+            ValType::I64 => ConstExpr::i64_const(global_def.init),
+            ValType::F32 => ConstExpr::f32_const(f32::from_bits(global_def.init as u32).into()),
+            ValType::F64 => ConstExpr::f64_const(f64::from_bits(global_def.init as u64).into()),
+            ValType::Ref(ref_type) => ConstExpr::ref_null(ref_type.heap_type),
+            _ => ConstExpr::i32_const(0), // fallback
+        };
+        global_section.global(
+            GlobalType {
+                val_type: global_def.valtype,
+                mutable: global_def.mutable,
+                shared: false,
+            },
+            &init_expr,
+        );
+    }
+
     debug!("Processing {} exports...", module_info.exports.len());
     for export in module_info.exports.iter() {
         debug!("  export: {:?} -> {:?}", export.name, export.target);
@@ -462,6 +490,9 @@ pub fn emit_wasm<'db>(
     if module_info.memory.is_some() {
         module_bytes.section(&memory_section);
     }
+    if !module_info.globals.is_empty() {
+        module_bytes.section(&global_section);
+    }
     module_bytes.section(&export_section);
     if !module_info.elements.is_empty() {
         module_bytes.section(&element_section);
@@ -530,6 +561,9 @@ fn collect_wasm_ops_from_region<'db>(
                     }
                     n if n == Symbol::new("elem") => {
                         info.elements.push(extract_element_def(db, op)?);
+                    }
+                    n if n == Symbol::new("global") => {
+                        info.globals.push(extract_global_def(db, op)?);
                     }
                     _ => {}
                 }
@@ -1164,6 +1198,35 @@ fn extract_element_def<'db>(
     })
 }
 
+fn extract_global_def<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+) -> CompilationResult<GlobalDef> {
+    let global_op = wasm::Global::from_operation(db, *op)
+        .map_err(|_| CompilationError::invalid_operation("wasm.global"))?;
+    let valtype_sym = global_op.valtype(db);
+    let valtype = valtype_sym.with_str(|s| match s {
+        "i32" => Ok(ValType::I32),
+        "i64" => Ok(ValType::I64),
+        "f32" => Ok(ValType::F32),
+        "f64" => Ok(ValType::F64),
+        "funcref" => Ok(ValType::Ref(RefType::FUNCREF)),
+        "externref" => Ok(ValType::Ref(RefType::EXTERNREF)),
+        other => Err(CompilationError::from(
+            errors::CompilationErrorKind::InvalidAttribute(Box::leak(
+                format!("valtype: {}", other).into_boxed_str(),
+            )),
+        )),
+    })?;
+    let mutable = global_op.mutable(db);
+    let init = global_op.init(db);
+    Ok(GlobalDef {
+        valtype,
+        mutable,
+        init,
+    })
+}
+
 fn emit_function<'db>(
     db: &'db dyn salsa::Database,
     func_def: &FunctionDef<'db>,
@@ -1632,6 +1695,14 @@ fn emit_op<'db>(
         emit_operands(db, operands, value_locals, function)?;
         function.instruction(&Instruction::LocalTee(index));
         set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("global_get") {
+        let index = attr_local_index(db, op)?;
+        function.instruction(&Instruction::GlobalGet(index));
+        set_result_local(db, op, value_locals, function)?;
+    } else if name == Symbol::new("global_set") {
+        let index = attr_local_index(db, op)?;
+        emit_operands(db, operands, value_locals, function)?;
+        function.instruction(&Instruction::GlobalSet(index));
     } else if name == Symbol::new("struct_new") {
         emit_operands(db, operands, value_locals, function)?;
         let attrs = op.attributes(db);
