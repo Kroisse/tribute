@@ -533,12 +533,25 @@ pub fn lower_enum_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option
 
     let name = node_text(&name_node, &ctx.source).to_string();
 
-    // Create adt.typeref as the result type - this provides a proper ADT type
-    // instead of type.var, allowing correct type flow through the pipeline
-    let result_ty = adt::typeref(ctx.db, QualifiedName::simple(sym(&name)));
-    let variants = parse_enum_variants(ctx, body_node);
+    // Parse variants from AST
+    let parsed_variants = parse_enum_variants(ctx, body_node);
+
+    // Convert to adt::enum_type format: Vec<(Symbol, Vec<Type>)>
+    let enum_variants: Vec<(Symbol, Vec<Type<'db>>)> = parsed_variants
+        .iter()
+        .map(|(variant_name, fields)| {
+            let field_types: Vec<Type<'db>> = fields.iter().map(|(_, ty)| *ty).collect();
+            (sym(variant_name), field_types)
+        })
+        .collect();
+
+    // Create adt.enum as the result type - this provides a self-descriptive type
+    // with variant information accessible via adt::get_enum_variants
+    let result_ty = adt::enum_type(ctx.db, QualifiedName::simple(sym(&name)), enum_variants);
+
+    // Also build the attribute for ty.enum operation (for backwards compatibility)
     let variants_attr = Attribute::List(
-        variants
+        parsed_variants
             .into_iter()
             .map(|(variant_name, variant_fields)| {
                 Attribute::List(vec![
@@ -546,12 +559,7 @@ pub fn lower_enum_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option
                     Attribute::List(
                         variant_fields
                             .into_iter()
-                            .map(|(f_name, f_type)| {
-                                Attribute::List(vec![
-                                    Attribute::Symbol(sym(&f_name)),
-                                    Attribute::Symbol(sym(&format!("{:?}", f_type))),
-                                ])
-                            })
+                            .map(|(_f_name, f_type)| Attribute::Type(f_type))
                             .collect(),
                     ),
                 ])
@@ -610,6 +618,17 @@ fn parse_variant_fields<'db>(
     node: Node,
 ) -> Vec<(String, Type<'db>)> {
     match node.kind() {
+        "variant_fields" => {
+            // variant_fields wraps tuple_fields or struct_body
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                let result = parse_variant_fields(ctx, child);
+                if !result.is_empty() {
+                    return result;
+                }
+            }
+            Vec::new()
+        }
         "tuple_fields" => {
             // Positional fields: Variant(Int, String)
             let mut cursor = node.walk();

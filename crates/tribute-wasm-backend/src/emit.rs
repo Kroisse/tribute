@@ -587,7 +587,6 @@ fn collect_wasm_ops_from_region<'db>(
 
     Ok(())
 }
-
 fn collect_module_info<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
@@ -1395,32 +1394,67 @@ fn assign_locals_in_region<'db>(
                 // The IR may have a generic type.var, but the WASM struct.get returns
                 // the actual field type (e.g., I64 for Num variant's Int field).
                 // We check if the result type is type.var and the struct type is a variant.
-                // If the variant type has '$' in its name (like type.var$Num), we keep anyref
-                // for struct refs, but for primitive fields (inferred from Num suffix), use I64.
+                // Use variant tag to determine field type semantics.
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("struct_get")
                     && ty::is_var(db, effective_ty)
                 {
-                    // Check if this is a primitive field access on a Num-like variant
-                    // Num variants have a single Int field, so struct_get returns I64
                     if let Some(Attribute::Type(struct_ty)) = op.attributes(db).get(&ATTR_TYPE()) {
                         debug!(
                             "struct_get type attr: {}.{}",
                             struct_ty.dialect(db),
                             struct_ty.name(db)
                         );
-                        // Check if this is a Num variant using attribute-based detection.
-                        // Num variants contain primitive Int fields, not reference fields.
-                        let num_sym = Symbol::new("Num");
-                        if adt::get_variant_tag(db, *struct_ty) == Some(num_sym) {
-                            debug!("  -> detected Num variant, using I64");
-                            // This is a Num variant - field type is I64
-                            effective_ty = ty::Int::new(db).as_type();
-                        } else if adt::is_variant_instance_type(db, *struct_ty) {
-                            debug!("  -> detected other variant, staying anyref");
-                            // Other variants (Add, Sub, Mul, Div) have Expr ref fields
-                            // The field type is anyref (already the default for type.var)
-                            // No change needed - effective_ty stays as type.var -> anyref
+                        // For variant types, look up the actual field type from adt.enum type.
+                        // The base_enum attribute contains the adt.enum type with variant info.
+                        if adt::is_variant_instance_type(db, *struct_ty)
+                            && let (Some(base_enum_ty), Some(variant_tag)) = (
+                                adt::get_base_enum(db, *struct_ty),
+                                adt::get_variant_tag(db, *struct_ty),
+                            )
+                            && let Ok(field_idx) = attr_field_idx(op.attributes(db))
+                            && let Some(variants) = adt::get_enum_variants(db, base_enum_ty)
+                            && let Some((_, field_types)) =
+                                variants.iter().find(|(tag, _)| *tag == variant_tag)
+                            && let Some(field_ty) = field_types.get(field_idx as usize)
+                        {
+                            // Extract the type name from src.type's "name" attribute
+                            // or directly from the type name for other types.
+                            let type_name = if field_ty.dialect(db) == Symbol::new("src")
+                                && field_ty.name(db) == Symbol::new("type")
+                            {
+                                // src.type stores name in "name" attribute
+                                field_ty
+                                    .get_attr(db, Symbol::new("name"))
+                                    .and_then(|a| {
+                                        if let Attribute::Symbol(s) = a {
+                                            Some(*s)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or_else(|| field_ty.name(db))
+                            } else {
+                                field_ty.name(db)
+                            };
+                            debug!(
+                                "  -> variant {:?} field {} resolved type name: {}",
+                                variant_tag, field_idx, type_name
+                            );
+                            // Convert unresolved src.* types to ty.* types.
+                            // The types from adt.enum are unresolved (src.Int),
+                            // but we need resolved types for local allocation.
+                            if type_name == Symbol::new("Int") {
+                                effective_ty = ty::Int::new(db).as_type();
+                            } else if type_name == Symbol::new("Nat") {
+                                effective_ty = ty::Nat::new(db).as_type();
+                            } else if type_name == Symbol::new("Float") {
+                                effective_ty = core::F64::new(db).as_type();
+                            } else if type_name == Symbol::new("Bool") {
+                                effective_ty = core::I1::new(db).as_type();
+                            }
+                            // For other types (like Expr), keep effective_ty
+                            // as type.var which maps to anyref
                         }
                     } else {
                         debug!(

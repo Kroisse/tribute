@@ -231,6 +231,7 @@ fn make_variant_type<'db>(
     // Add variant type attributes for proper detection (instead of name-based heuristics)
     let mut attrs = trunk_ir::Attrs::new();
     attrs.insert(adt::ATTR_IS_VARIANT(), Attribute::Bool(true));
+    attrs.insert(adt::ATTR_BASE_ENUM(), Attribute::Type(base_type));
     attrs.insert(adt::ATTR_VARIANT_TAG(), Attribute::Symbol(tag));
 
     Type::new(db, dialect, variant_name, params, attrs)

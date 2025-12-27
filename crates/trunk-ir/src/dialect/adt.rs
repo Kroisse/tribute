@@ -255,6 +255,14 @@ pub fn get_variant_tag<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Opti
     }
 }
 
+/// Get the base enum type from a variant instance type.
+pub fn get_base_enum<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Type<'db>> {
+    match ty.get_attr(db, ATTR_BASE_ENUM()) {
+        Some(Attribute::Type(base_ty)) => Some(*base_ty),
+        _ => None,
+    }
+}
+
 /// Get the field types from a variant instance type.
 pub fn get_variant_field_types<'db>(
     db: &'db dyn salsa::Database,
