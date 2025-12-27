@@ -390,7 +390,12 @@ pub fn emit_wasm<'db>(
             ValType::F32 => ConstExpr::f32_const(f32::from_bits(global_def.init as u32).into()),
             ValType::F64 => ConstExpr::f64_const(f64::from_bits(global_def.init as u64).into()),
             ValType::Ref(ref_type) => ConstExpr::ref_null(ref_type.heap_type),
-            _ => ConstExpr::i32_const(0), // fallback
+            unsupported => {
+                return Err(CompilationError::type_error(format!(
+                    "unsupported global value type: {:?}",
+                    unsupported
+                )));
+            }
         };
         global_section.global(
             GlobalType {
