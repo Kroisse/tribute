@@ -534,36 +534,8 @@ impl<'db> TypeChecker<'db> {
             if let Some(&callee_type) = self.function_types.get(&callee_name) {
                 trace!("check_func_call: found callee type");
                 if let Some(func_type) = core::Func::from_type(self.db, callee_type) {
-                    // Instantiate fresh type variables for generic parameters
-                    let (instantiated_params, instantiated_result) =
-                        self.instantiate_function_type(&func_type);
-
-                    // Constrain result type with instantiated return type
-                    self.constrain_eq(result_type, instantiated_result);
-
-                    // Constrain argument types with instantiated param types
-                    for (i, &param_ty) in instantiated_params.iter().enumerate() {
-                        if let Some(&arg) = operands.get(i) {
-                            trace!("check_func_call: arg[{}] def={:?}", i, arg.def(self.db));
-                            if let Some(arg_ty) = self.get_type(arg) {
-                                trace!(
-                                    "check_func_call: constraining arg[{}] type {:?} with param {:?}",
-                                    i, arg_ty, param_ty
-                                );
-                                self.constrain_eq(arg_ty, param_ty);
-                            } else {
-                                trace!("check_func_call: no type found for arg[{}]", i);
-                            }
-                        }
-                    }
-
-                    // Propagate the function's effect
-                    if let Some(effect_ty) = func_type.effect(self.db)
-                        && let Some(effect_row) = EffectRow::from_type(self.db, effect_ty)
-                    {
-                        self.merge_effect(effect_row);
-                        effect_handled = true;
-                    }
+                    let args: Vec<_> = operands.iter().copied().collect();
+                    effect_handled = self.constrain_call_types(&func_type, &args, result_type);
                 }
             }
         }
@@ -603,6 +575,42 @@ impl<'db> TypeChecker<'db> {
         let instantiated_result = self.instantiate_type(result, &mut var_mapping);
 
         (instantiated_params, instantiated_result)
+    }
+
+    /// Common logic for constraining call types (used by both direct and indirect calls).
+    ///
+    /// Instantiates generic parameters, constrains argument and result types,
+    /// and propagates effects. Returns true if the function's effect was handled.
+    fn constrain_call_types(
+        &mut self,
+        func_type: &core::Func<'db>,
+        args: &[Value<'db>],
+        result_type: Type<'db>,
+    ) -> bool {
+        // Instantiate fresh type variables for generic parameters
+        let (instantiated_params, instantiated_result) = self.instantiate_function_type(func_type);
+
+        // Constrain result type with instantiated return type
+        self.constrain_eq(result_type, instantiated_result);
+
+        // Constrain argument types with instantiated param types
+        for (i, &param_ty) in instantiated_params.iter().enumerate() {
+            if let Some(&arg) = args.get(i)
+                && let Some(arg_ty) = self.get_type(arg)
+            {
+                self.constrain_eq(arg_ty, param_ty);
+            }
+        }
+
+        // Propagate the function's effect
+        if let Some(effect_ty) = func_type.effect(self.db)
+            && let Some(effect_row) = EffectRow::from_type(self.db, effect_ty)
+        {
+            self.merge_effect(effect_row);
+            true
+        } else {
+            false
+        }
     }
 
     /// Instantiate a type by replacing type variables with fresh ones from the mapping.
@@ -656,6 +664,7 @@ impl<'db> TypeChecker<'db> {
     fn check_func_call_indirect(&mut self, op: &Operation<'db>) {
         // func.call_indirect: indirect call via function value
         // The callee is the first operand (function value)
+        let mut effect_handled = false;
         let operands = op.operands(self.db);
         let results = op.results(self.db);
         let result_type = results
@@ -668,31 +677,19 @@ impl<'db> TypeChecker<'db> {
             && let Some(callee_type) = self.get_type(callee)
             && let Some(func_type) = core::Func::from_type(self.db, callee_type)
         {
-            // Constrain result type
-            let func_result = func_type.result(self.db);
-            self.constrain_eq(result_type, func_result);
-
-            // Propagate the function's effect
-            if let Some(effect_ty) = func_type.effect(self.db)
-                && let Some(effect_row) = EffectRow::from_type(self.db, effect_ty)
-            {
-                self.merge_effect(effect_row);
-            }
-
-            // Constrain argument types
-            let param_types = func_type.params(self.db);
-            for (i, &param_ty) in param_types.iter().enumerate() {
-                // Arguments start after the callee (index 0)
-                if let Some(&arg) = operands.get(i + 1)
-                    && let Some(arg_ty) = self.get_type(arg)
-                {
-                    self.constrain_eq(arg_ty, param_ty);
-                }
-            }
+            // Arguments start after the callee (index 0)
+            let args: Vec<_> = operands.iter().skip(1).copied().collect();
+            effect_handled = self.constrain_call_types(&func_type, &args, result_type);
         }
 
         let value = op.result(self.db, 0);
         self.record_type(value, result_type);
+
+        // Default effect if not handled above
+        if !effect_handled {
+            let call_effect = EffectRow::var(self.fresh_row_var());
+            self.merge_effect(call_effect);
+        }
     }
 
     fn check_func_constant(&mut self, op: &Operation<'db>) {
