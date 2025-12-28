@@ -5,6 +5,7 @@ use salsa::Database;
 use tribute::TributeDatabaseImpl;
 use tribute::pipeline::stage_lower_to_wasm;
 use tribute_front::SourceCst;
+use trunk_ir::DialectOp;
 
 /// Helper to create a wasmtime engine with GC support
 fn create_gc_engine() -> wasmtime::Engine {
@@ -639,4 +640,135 @@ fn test_calc_eval() {
         // (1 + 2) * (10 - 4) / 2 = 3 * 6 / 2 = 18 / 2 = 9
         assert_eq!(result, 9, "Expected main to return 9, got {}", result);
     });
+}
+
+// ============================================================================
+// Lambda Lifting Tests (Issue #93)
+// ============================================================================
+
+/// Test simple identity lambda (no captures).
+#[test]
+fn test_lambda_identity() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::stage_lambda_lift;
+
+    let source_code = Rope::from_str(
+        r#"
+fn main() -> Int {
+    let f = fn(x) { x }
+    f(42)
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file =
+            SourceCst::from_path(db, "lambda_identity.trb", source_code.clone(), tree);
+
+        // Run lambda lifting stage
+        let module = stage_lambda_lift(db, source_file);
+
+        // Verify no diagnostics
+        let diagnostics: Vec<_> =
+            stage_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no errors, got {} diagnostics",
+            diagnostics.len()
+        );
+
+        // Verify the module has a lifted function (name starts with __lambda_)
+        let body = module.body(db);
+        let blocks = body.blocks(db);
+        let ops = blocks[0].operations(db);
+
+        let has_lifted = ops.iter().any(|op| {
+            if let Ok(f) = trunk_ir::dialect::func::Func::from_operation(db, *op) {
+                f.sym_name(db)
+                    .name()
+                    .with_str(|s: &str| s.starts_with("__lambda_"))
+            } else {
+                false
+            }
+        });
+
+        assert!(
+            has_lifted,
+            "Expected a lifted lambda function in the module"
+        );
+    });
+}
+
+/// Test lambda with capture - verifies closure.new is created.
+#[test]
+fn test_lambda_with_capture() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::stage_lambda_lift;
+
+    let source_code = Rope::from_str(
+        r#"
+fn test_capture() -> Int {
+    let a = 10
+    let f = fn(x) { x + a }
+    f(32)
+}
+
+fn main() -> Int {
+    test_capture()
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, "lambda_capture.trb", source_code.clone(), tree);
+
+        // Run lambda lifting stage
+        let module = stage_lambda_lift(db, source_file);
+
+        // Verify no diagnostics
+        let diagnostics: Vec<_> =
+            stage_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no errors, got {} diagnostics",
+            diagnostics.len()
+        );
+
+        // Check for closure.new in the output
+        let body = module.body(db);
+        let has_closure_new = check_for_closure_new(db, &body);
+
+        assert!(
+            has_closure_new,
+            "Expected closure.new operation for captured lambda"
+        );
+    });
+}
+
+/// Helper to recursively check for closure.new in a region
+fn check_for_closure_new(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>) -> bool {
+    use trunk_ir::dialect::closure;
+
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if op.dialect(db) == closure::DIALECT_NAME() && op.name(db) == closure::NEW() {
+                return true;
+            }
+            // Recurse into nested regions
+            for nested in op.regions(db).iter() {
+                if check_for_closure_new(db, nested) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
