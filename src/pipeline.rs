@@ -24,6 +24,9 @@
 //! stage_typecheck ─► Module (concrete types)
 //!     │
 //!     ▼
+//! stage_lambda_lift ─► Module (lambdas lifted, closure.new created)
+//!     │
+//!     ▼
 //! stage_tdnr ─► Module (UFCS method calls resolved)
 //!     │
 //!     ▼
@@ -63,6 +66,7 @@ use tribute_front::source_file::parse_with_rope;
 use tribute_front::{lower_cst, parse_cst};
 use tribute_passes::const_inline::inline_module;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_passes::lambda_lift::lift_lambdas;
 use tribute_passes::lower_case_to_scf;
 use tribute_passes::resolve::{Resolver, build_env};
 use tribute_passes::tdnr::resolve_tdnr;
@@ -311,7 +315,21 @@ pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
     }
 }
 
-/// Stage 5: Type-Directed Name Resolution (TDNR).
+/// Stage 5: Lambda Lifting.
+///
+/// This pass transforms lambda expressions into:
+/// 1. Lifted top-level functions (with captured variables as parameters)
+/// 2. `closure.new` operations at the original lambda locations
+///
+/// This happens after type checking (to know captured variable types)
+/// and before TDNR (so closures are visible for method resolution).
+#[salsa::tracked]
+pub fn stage_lambda_lift<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = stage_typecheck(db, source);
+    lift_lambdas(db, module)
+}
+
+/// Stage 6: Type-Directed Name Resolution (TDNR).
 ///
 /// This pass resolves UFCS method calls that couldn't be resolved during
 /// initial name resolution because they required type information.
@@ -321,18 +339,18 @@ pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
 /// - `x.map(f)` → `Type::map(x, f)` (based on x's inferred type)
 #[salsa::tracked]
 pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_typecheck(db, source);
+    let module = stage_lambda_lift(db, source);
     resolve_tdnr(db, module)
 }
 
-/// Stage 6: Lower `case.case` to `scf.if` chains.
+/// Stage 7: Lower `case.case` to `scf.if` chains.
 #[salsa::tracked]
 pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let module = stage_tdnr(db, source);
     lower_case_to_scf(db, module)
 }
 
-/// Stage 7: Dead Code Elimination (DCE).
+/// Stage 8: Dead Code Elimination (DCE).
 ///
 /// This pass removes unreachable function definitions from the module.
 /// Entry points include:
@@ -349,7 +367,7 @@ pub fn stage_dce<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module
     result.module
 }
 
-/// Stage 8: Lower to WebAssembly target.
+/// Stage 9: Lower to WebAssembly target.
 ///
 /// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
 /// It performs:
