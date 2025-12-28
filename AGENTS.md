@@ -7,6 +7,7 @@ The documents under `new-plans/` are the **source of truth** for Tribute’s cur
 - `new-plans/design.md`: high-level goals and direction
 - `new-plans/syntax.md`: surface syntax (keywords, literals, `case`, `handle`, UFCS, etc.)
 - `new-plans/types.md`: `struct`/`enum`, records, UFCS/field access rules
+- `new-plans/text.md`: Text (UTF-8 rope), Bytes, Rune types
 - `new-plans/modules.md`: module system (`::`), `use`, name resolution
 - `new-plans/abilities.md`: abilities (= algebraic effects), syntax and semantics
 - `new-plans/type-inference.md`: row-polymorphic effect typing + bidirectional typing

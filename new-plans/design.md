@@ -27,7 +27,7 @@ ML의 의미론을 갖지만 C 계열 개발자에게 친숙한 문법:
 
 ```rust
 // 타입 선언
-struct User { name: String, age: Int }
+struct User { name: Text, age: Int }
 enum Option(a) { None, Some(a) }
 
 // 함수 정의
@@ -36,7 +36,7 @@ fn add(x: Int, y: Int) -> Int {
 }
 
 // 패턴 매칭
-fn describe(value: Option(Int)) -> String {
+fn describe(value: Option(Int)) -> Text {
     case value {
         Some(n) -> "got: " <> Int::to_string(n)
         None -> "nothing"

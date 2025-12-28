@@ -53,7 +53,7 @@ fn memoize(f: fn(a) ->{} b) ->{} fn(a) ->{} b
 참고: `Map`은 생성 시점에 `eq`, `hash`를 받아 내부에 보관한다. 이후 `insert`, `get` 등에서는 전달할 필요 없다:
 
 ```rust
-let users = Map::new(String::eq, String::hash)
+let users = Map::new(Text::eq, Text::hash)
 let users = users.insert("alice", alice).insert("bob", bob)
 users.get("alice")  // eq, hash 불필요
 ```
@@ -61,8 +61,8 @@ users.get("alice")  // eq, hash 불필요
 ### 특정 Ability 명시
 
 ```rust
-fn(String) ->{Http} Response           // Http만
-fn(String) ->{Http, Async} Response    // Http와 Async
+fn(Text) ->{Http} Response             // Http만
+fn(Text) ->{Http, Async} Response      // Http와 Async
 ```
 
 ## 함수 정의 문법
@@ -71,12 +71,12 @@ fn(String) ->{Http, Async} Response    // Http와 Async
 
 ```rust
 // 특정 ability
-fn fetch(url: String) ->{Http} Response {
+fn fetch(url: Text) ->{Http} Response {
     Http::get(url)
 }
 
 // 여러 ability
-fn fetch_all(urls: List(String)) ->{Http, Async} List(Response) {
+fn fetch_all(urls: List(Text)) ->{Http, Async} List(Response) {
     urls.map(fn(url) url.get.await)
 }
 
@@ -146,7 +146,7 @@ fn or_else(opt: Option(a), fallback: fn() ->{e} a) ->{e} a {
 Ability operation은 일반 함수처럼 호출한다. 별도의 `perform` 키워드 없이 `Ability::operation(args)` 형태를 사용한다:
 
 ```rust
-fn fetch(url: String) ->{Http} Response {
+fn fetch(url: Text) ->{Http} Response {
     Http::get(url)  // perform 없이 직접 호출
 }
 
@@ -178,8 +178,8 @@ url.get.await
 
 ```rust
 ability Http {
-    fn get(url: String) -> Response
-    fn post(url: String, body: String) -> Response
+    fn get(url: Text) -> Response
+    fn post(url: Text, body: Text) -> Response
 }
 
 ability Async {
@@ -192,8 +192,8 @@ ability State(s) {
 }
 
 ability Console {
-    fn print(msg: String) -> Nil
-    fn read() -> String
+    fn print(msg: Text) -> Nil
+    fn read() -> Text
 }
 ```
 
@@ -331,8 +331,8 @@ fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
 
 ```rust
 ability Console {
-    fn print(msg: String) -> Nil
-    fn read() -> String
+    fn print(msg: Text) -> Nil
+    fn read() -> Text
 }
 
 ability State(s) {

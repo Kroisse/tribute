@@ -162,7 +162,7 @@ string.split(",")
 이 규칙 덕분에 struct 필드 접근과 함수 호출이 동일한 문법을 사용한다:
 
 ```rust
-struct User { name: String, age: Int }
+struct User { name: Text, age: Int }
 
 // 필드 접근도 UFCS (자동 생성된 getter 함수)
 user.name    // User::name(user)
@@ -223,7 +223,7 @@ fn process(data: List(Int)) -> Int {
 use std::collections::List
 use std::collections::Option
 
-fn example(xs: List(Int), opt: Option(String)) {
+fn example(xs: List(Int), opt: Option(Text)) {
     xs.map(fn(x) x + 1)     // List::map 선택 (xs: List)
     opt.map(fn(s) s.len)    // Option::map 선택 (opt: Option)
 }
@@ -298,7 +298,7 @@ fn sort(xs: List(a), compare: fn(a, a) -> Ordering) -> List(a) { ... }
 
 // 사용
 sort(my_list, Int::compare)
-sort(my_list, String::compare)
+sort(my_list, Text::compare)
 
 // 또는 특화된 함수 제공
 fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(a)
@@ -308,7 +308,7 @@ fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(
 
 | Typeclass 용도 | Tribute 대안 |
 |---------------|--------------|
-| `Show` | `fn show(x: T) -> String`을 명시적 전달, 또는 type-directed resolution |
+| `Show` | `fn show(x: T) -> Text`을 명시적 전달, 또는 type-directed resolution |
 | `Eq` | `fn eq(a: T, b: T) -> Bool` 명시적 전달 |
 | `Ord` | `fn compare(a: T, b: T) -> Ordering` 명시적 전달 |
 | `Functor`/`Monad` | Ability system + type-directed `map`, `flat_map` |
@@ -325,7 +325,7 @@ use std::collections::{List, Option}
 use std::io::Console
 
 struct User {
-    name: String
+    name: Text
     age: Int
 }
 
@@ -347,8 +347,8 @@ fn main() ->{Console} Nil {
 }
 
 // 명시적 함수 전달 예시
-fn sort_and_print(items: List(String)) ->{Console} Nil {
-    let sorted = List::sort(items, String::compare)
+fn sort_and_print(items: List(Text)) ->{Console} Nil {
+    let sorted = List::sort(items, Text::compare)
     sorted.each(fn(item) {
         Console::println(item)
     })
@@ -501,13 +501,13 @@ use pkg::internal::Config
 use super::internal    // 또는 pkg::internal
 
 pub struct Request {
-    path: String
+    path: Text
     config: Config
 }
 
 pub struct Response {
     status: Int
-    body: String
+    body: Text
 }
 
 pub fn handle(req: Request) -> Response {

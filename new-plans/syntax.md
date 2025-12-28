@@ -100,7 +100,7 @@ RawBytesContent   ::= RawChar | BytesInterpolation        // escape 처리 안 �
 RawChar           ::= Any
 
 EscapeSeq    ::= '\' ('n' | 'r' | 't' | '0' | '"' | '\' | 'x' HexDigit{2} | 'u' HexDigit{4})
-StringInterpolation ::= '\{' Expression '}'   // Expression은 String 타입
+StringInterpolation ::= '\{' Expression '}'   // Expression은 Text 타입
 BytesInterpolation  ::= '\{' Expression '}'   // Expression은 Bytes 타입
 
 // Rune (Unicode codepoint)
@@ -111,7 +111,7 @@ RuneEscape ::= '\' ('n' | 'r' | 't' | '0' | '\' | 'x' HexDigit{2} | 'u' HexDigit
 Bool       ::= 'True' | 'False'
 Unit       ::= 'Nil'
 
-// Literal (String과 Bytes는 raw 변형 포함)
+// Literal (Text와 Bytes는 raw 변형 포함)
 StringLit  ::= String | RawString
 BytesLit   ::= Bytes | RawBytes
 Literal    ::= Number | StringLit | BytesLit | Rune | Bool | Unit
@@ -222,7 +222,7 @@ fn add(x: Nat, y: Nat) -> Nat {
  * age: 사용자 나이
  */
 struct User {
-    name: String
+    name: Text
     age: Nat
 }
 ```
@@ -348,7 +348,7 @@ FieldSep ::= ',' | '\n'
 
 ```rust
 struct User {
-    name: String
+    name: Text
     age: Nat
 }
 
@@ -389,8 +389,8 @@ enum Result(a, e) {
 // 혼합
 enum Expr {
     Lit(Int)
-    Var(String)
-    BinOp { op: String, lhs: Expr, rhs: Expr }
+    Var(Text)
+    BinOp { op: Text, lhs: Expr, rhs: Expr }
 }
 ```
 
@@ -403,7 +403,7 @@ Type ::= TypePath TypeArgs?
        | FunctionType
        | TupleType
 
-TupleType ::= '#(' TypeList? ')'              // #(Int, String, Float)
+TupleType ::= '#(' TypeList? ')'              // #(Int, Text, Float)
 
 TypePath ::= (PathSegment '::')* TypeId
 TypeArgs ::= '(' Type (',' Type)* ','? ')'
@@ -425,18 +425,18 @@ EffectTail ::= ',' LowerIdentifier            // row variable
 Nat                           // 0, 양수
 Int                           // 정수 (부호 있음)
 Float                         // 부동소수점
-String
+Text
 List(Int)
-Option(String)
-Result(Int, String)
+Option(Text)
+Result(Int, Text)
 
-#(Int, String)                // 2-tuple (pair)
-#(Int, String, Float)         // 3-tuple
+#(Int, Text)                  // 2-tuple (pair)
+#(Int, Text, Float)           // 3-tuple
 Nil                           // unit type (#() 대신 사용)
 
 fn(Int, Int) -> Int           // 암묵적 effect polymorphic
 fn(Int) ->{} Int              // 순수 함수
-fn(String) ->{Http} Response  // Http effect
+fn(Text) ->{Http} Response    // Http effect
 fn() ->{State(Int), e} Int    // State + row variable e
 ```
 
@@ -456,8 +456,8 @@ AbilityOp ::= 'fn' Identifier '(' ParamList? ')' '->' Type
 
 ```rust
 ability Console {
-    fn print(msg: String) -> Nil
-    fn read() -> String
+    fn print(msg: Text) -> Nil
+    fn read() -> Text
 }
 
 ability State(s) {
@@ -466,8 +466,8 @@ ability State(s) {
 }
 
 ability Http {
-    fn get(url: String) -> Response
-    fn post(url: String, body: String) -> Response
+    fn get(url: Text) -> Response
+    fn post(url: Text, body: Text) -> Response
 }
 ```
 
@@ -535,7 +535,7 @@ fn add(x: Int, y: Int) -> Int {
     x + y
 }
 
-fn fetch(url: String) ->{Http} Response {
+fn fetch(url: Text) ->{Http} Response {
     Http::get(url)
 }
 
@@ -589,7 +589,7 @@ PrimaryExpr ::= Literal
 ListExpr ::= '[' ExprList? ']'
 TupleExpr ::= '#(' ExprList? ')'          // #(1, "hello", 3.14)
 OperatorFn ::= '(' Operator ')'           // (+), (<>)
-             | '(' QualifiedOp ')'        // (Int::+), (String::<>)
+             | '(' QualifiedOp ')'        // (Int::+), (Text::<>)
 ```
 
 ### Block Expression
@@ -707,7 +707,7 @@ QualifiedOp ::= Path '::' Operator        // List::<>, Int::+
 
 // 연산자를 함수로 사용
 OperatorFn ::= '(' Operator ')'           // (+), (<>)
-             | '(' QualifiedOp ')'        // (Int::+), (String::<>)
+             | '(' QualifiedOp ')'        // (Int::+), (Text::<>)
 
 // 우선순위 (높은 것부터)
 // 1. * / %
@@ -717,10 +717,10 @@ OperatorFn ::= '(' Operator ')'           // (+), (<>)
 // 5. ||
 ```
 
-**연결 연산자 `<>`**: String, List 등에 사용 (type-directed resolution)
+**연결 연산자 `<>`**: Text, List 등에 사용 (type-directed resolution)
 
 ```rust
-"Hello, " <> name <> "!"        // String::<>
+"Hello, " <> name <> "!"        // Text::<>
 [1, 2] <> [3, 4]                // List::<>
 
 // 명시적으로 연산자 지정
@@ -732,11 +732,11 @@ a Int::+ b                      // Int::+ 명시
 
 ```rust
 (+)(a, b)                       // a + b 와 동일
-(String::<>)("a", "b")          // "a" <> "b" 와 동일
+(Text::<>)("a", "b")            // "a" <> "b" 와 동일
 
 // 고차 함수에 전달
 xs.fold(0, (+))                 // 합계
-xs.fold("", (String::<>))       // 문자열 연결
+xs.fold("", (Text::<>))         // 문자열 연결
 numbers.reduce((Int::*))        // 곱셈
 ```
 
@@ -803,7 +803,7 @@ Pattern ::= LiteralPattern
 
 AsPattern ::= Pattern 'as' Identifier        // 전체를 바인딩
 
-LiteralPattern ::= Number | String | Rune | 'True' | 'False' | 'Nil'
+LiteralPattern ::= Number | StringLit | Rune | 'True' | 'False' | 'Nil'
 WildcardPattern ::= '_'
 IdentifierPattern ::= Identifier
 VariantPattern ::= TypeId ('(' PatternList ')' | '{' RecordPatternFields '}')?
@@ -876,10 +876,10 @@ User { name, .. } as user   // name과 전체 user 바인딩
 
 ```rust
 // struct 필드는 자동으로 getter 생성
-struct User { name: String, age: Nat }
+struct User { name: Text, age: Nat }
 
 // 생성되는 함수:
-// User::name : fn(User) -> String
+// User::name : fn(User) -> Text
 // User::age  : fn(User) -> Nat
 
 user.name    // User::name(user)
@@ -892,8 +892,8 @@ Struct 필드에 대해 자동 생성되는 함수들 (별도 문법 없음, UFC
 
 ```rust
 // 자동 생성되는 함수:
-// User::name::set    : fn(User, String) -> User
-// User::name::modify : fn(User, fn(String) -> String) -> User
+// User::name::set    : fn(User, Text) -> User
+// User::name::modify : fn(User, fn(Text) -> Text) -> User
 
 user.name::set("Jane")              // UFCS: User::name::set(user, "Jane")
 user.age::modify(fn(n) n + 1)       // UFCS: User::age::modify(user, ...)
@@ -940,12 +940,12 @@ Visibility ::= 'pub'?
 ```rust
 // 개행으로 구분
 struct User {
-    name: String
+    name: Text
     age: Nat
 }
 
 // 한 줄이면 쉼표 필수
-struct User { name: String, age: Nat }
+struct User { name: Text, age: Nat }
 ```
 
 ### 세미콜론
@@ -965,17 +965,17 @@ use std::collections::{List, Option}
 use std::io::Console
 
 struct User {
-    name: String
+    name: Text
     age: Nat
 }
 
 enum Status {
     Active
-    Inactive { reason: String }
+    Inactive { reason: Text }
 }
 
 ability Logger {
-    fn log(msg: String) -> Nil
+    fn log(msg: Text) -> Nil
 }
 
 pub fn greet(user: User) ->{Console} Nil {
@@ -983,7 +983,7 @@ pub fn greet(user: User) ->{Console} Nil {
     Console::print(greeting)
 }
 
-fn process(users: List(User)) ->{Logger} List(String) {
+fn process(users: List(User)) ->{Logger} List(Text) {
     users
         .filter(fn(u) u.age >= 18)
         .map(fn(u) {
@@ -1038,9 +1038,9 @@ fn main() ->{Console} Nil {
 
 | 구문                     | 의미                           |
 | ------------------------ | ------------------------------ |
-| `Nat`, `Int`, `Float`, `String`, ... | 기본 타입             |
+| `Nat`, `Int`, `Float`, `Text`, ... | 기본 타입               |
 | `List(a)`, `Option(Int)` | 제네릭 타입                    |
-| `#(Int, String)`         | Tuple 타입                     |
+| `#(Int, Text)`           | Tuple 타입                     |
 | `fn(a) -> b`             | 함수 타입 (암묵적 polymorphic) |
 | `fn(a) ->{} b`           | 순수 함수 타입                 |
 | `fn(a) ->{E} b`          | Effect E를 수행하는 함수       |
@@ -1069,7 +1069,7 @@ fn main() ->{Console} Nil {
 
 | 패턴               | 의미                           |
 | ------------------ | ------------------------------ |
-| `42`, `"hi"`, `?a` | Literal (Number, String, Rune) |
+| `42`, `"hi"`, `?a` | Literal (Number, Text, Rune)   |
 | `_`                | Wildcard                       |
 | `x`                | Binding                        |
 | `Some(x)`          | Variant (positional)           |
