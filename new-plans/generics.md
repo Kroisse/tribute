@@ -45,8 +45,8 @@ enum Result(a, e) {
 
 ```rust
 let box: Box(Int) = Box { value: 42 }
-let pair: Pair(Int, String) = Pair { first: 1, second: "hello" }
-let result: Result(Int, String) = Ok { value: 42 }
+let pair: Pair(Int, Text) = Pair { first: 1, second: "hello" }
+let result: Result(Int, Text) = Ok { value: 42 }
 ```
 
 ### 제네릭 함수
@@ -118,9 +118,9 @@ Stage 7: Codegen (Wasm/Cranelift)
 ```
 Box(Int)           → Box$Int
 List(Option(Int))  → List$Option_Int_
-Pair(Int, String)  → Pair$Int$String
+Pair(Int, Text)    → Pair$Int$Text
 identity<Int>      → identity$Int
-map<Int, String>   → map$Int$String
+map<Int, Text>     → map$Int$Text
 ```
 
 ### 알고리즘
@@ -146,16 +146,16 @@ fn identity(a)(x: a) -> a { x }
 
 fn main() {
     identity(42)       // identity<Int>
-    identity("hello")  // identity<String>
+    identity("hello")  // identity<Text>
 }
 
 // Monomorphization 후
 fn identity$Int(x: Int) -> Int { x }
-fn identity$String(x: String) -> String { x }
+fn identity$Text(x: Text) -> Text { x }
 
 fn main() {
     identity$Int(42)
-    identity$String("hello")
+    identity$Text("hello")
 }
 ```
 
@@ -215,13 +215,13 @@ fn nest(n: Int, x: anyref) -> anyref {
 ;; Box$Int
 (type $Box$Int (struct (field $value i64)))
 
-;; Box$String
-(type $Box$String (struct (field $value (ref $string))))
+;; Box$Text
+(type $Box$Text (struct (field $value (ref $text))))
 
-;; Pair$Int$String
-(type $Pair$Int$String (struct
+;; Pair$Int$Text
+(type $Pair$Int$Text (struct
   (field $first i64)
-  (field $second (ref $string))))
+  (field $second (ref $text))))
 ```
 
 ### Uniform Representation

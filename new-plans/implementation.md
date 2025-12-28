@@ -222,12 +222,12 @@ fn state_get(ev: *const Evidence) -> s {
 
 ```rust
 // 원본
-fn fetch_all(urls: List(String)) ->{Http, Async} List(Response) {
+fn fetch_all(urls: List(Text)) ->{Http, Async} List(Response) {
     urls.map(fn(url) url.get.await)
 }
 
 // 변환 후 (개념적)
-fn fetch_all(urls: List(String), ev: *const Evidence) -> List(Response) {
+fn fetch_all(urls: List(Text), ev: *const Evidence) -> List(Response) {
     urls.map(
         fn(url, ev_inner) {
             let response = http_get(url, ev_inner)
@@ -403,7 +403,7 @@ Continuation 캡처 시 해당 prompt까지의 스택 세그먼트를 힙에 복
 ### 문제: Continuation 내 객체 참조
 
 ```rust
-fn example() ->{State(Int)} String {
+fn example() ->{State(Int)} Text {
     let big_object = create_large_data()  // 힙 할당
     let n = State::get()                   // 여기서 캡처
     process(big_object, n)

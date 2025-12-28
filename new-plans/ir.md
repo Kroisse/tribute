@@ -69,7 +69,6 @@ i1, i8, i16, i32, i64, i128, ...
 f32, f64
 
 // 연속 메모리
-String          // 연속 바이트열
 Bytes           // raw 바이트
 Array<T>        // 연속 배열
 
@@ -306,8 +305,8 @@ adt.ref_cast : (ref: ref<T>) -> ref<U>
 #### 리터럴
 
 ```
-adt.string_const : (literal: String) -> String
-    문자열 상수
+adt.text_const : (literal: Text) -> Text
+    텍스트 상수
 
 adt.bytes_const : (bytes: [u8]) -> Bytes
     바이트열 상수
@@ -684,7 +683,7 @@ Name resolution과 type inference가 interleaved되는 이유:
 
 **타입 기반 해소 (타입 필요)**:
 - `xs.map(f)` → `xs`의 타입이 `List(a)`이면 `List::map` 선택
-- `x + y` → `x`, `y`의 타입이 `Int`이면 `arith.add`, `String`이면 `String::concat`
+- `x <> y` → `x`, `y`의 타입이 `Text`이면 `Text::<>`, `List`이면 `List::<>`
 
 ---
 
@@ -715,10 +714,9 @@ Name resolution과 type inference가 interleaved되는 이유:
 | ------------------------ | -------------------- |
 | i1 ~ i128                | List (finger tree)   |
 | f32, f64                 | Text (rope)          |
-| String (연속 바이트)     | Option               |
-| Bytes                    | Result               |
-| Array\<T\> (연속 메모리) | ...                  |
-| ref\<T\>, ref\<T\>?      |                      |
+| Bytes                    | Option               |
+| Array\<T\> (연속 메모리) | Result               |
+| ref\<T\>, ref\<T\>?      | ...                  |
 
 ### 변환
 
@@ -727,9 +725,9 @@ Name resolution과 type inference가 interleaved되는 이유:
 arr.to_list()
 list.to_array()
 
-// String ↔ Text
-s.to_text()
-text.to_string()
+// Bytes ↔ Text
+bytes.to_text_utf8()
+text.to_bytes()
 ```
 
 ---

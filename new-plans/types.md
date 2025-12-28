@@ -10,7 +10,7 @@ Tribute는 `struct`와 `enum` 두 키워드로 타입을 선언한다.
 
 ```rust
 struct User {
-    name: String
+    name: Text
     age: Int
 }
 
@@ -81,8 +81,8 @@ enum Result(a, e) { Ok { value: a }, Error { error: e } }
 
 // 사용
 let box: Box(Int) = Box { value: 42 }
-let opt: Option(String) = Some("hello")
-let res: Result(Int, String) = Ok { value: 42 }
+let opt: Option(Text) = Some("hello")
+let res: Result(Int, Text) = Ok { value: 42 }
 ```
 
 ---
@@ -152,12 +152,12 @@ Struct 필드는 자동으로 getter 함수를 생성한다. UFCS와 결합하�
 
 ```rust
 struct User {
-    name: String
+    name: Text
     age: Int
 }
 
 // 자동 생성되는 함수
-// User::name : fn(User) -> String
+// User::name : fn(User) -> Text
 // User::age  : fn(User) -> Int
 
 // 필드 접근 (괄호 생략)
@@ -177,21 +177,21 @@ option.is_some // Option::is_some(option)
 ```rust
 // v1: 저장된 필드
 struct User {
-    name: String
-    first_name: String
-    last_name: String
+    name: Text
+    first_name: Text
+    last_name: Text
 }
 
 user.name  // 필드 접근
 
 // v2: 계산된 값으로 변경
 struct User {
-    first_name: String
-    last_name: String
+    first_name: Text
+    last_name: Text
 }
 
 mod User {
-    fn name(self: User) -> String {
+    fn name(self: User) -> Text {
         self.first_name <> " " <> self.last_name
     }
 }
@@ -219,14 +219,14 @@ string.split(",")          // OK
 
 ```rust
 struct User {
-    name: String
+    name: Text
     age: Int
 }
 
 // 자동 생성되는 함수
-// User::name         : fn(User) -> String
-// User::name::set    : fn(User, String) -> User
-// User::name::modify : fn(User, fn(String) -> String) -> User
+// User::name         : fn(User) -> Text
+// User::name::set    : fn(User, Text) -> User
+// User::name::modify : fn(User, fn(Text) -> Text) -> User
 
 // 사용 예시
 user.name::set("Jane")           // User::name::set(user, "Jane")

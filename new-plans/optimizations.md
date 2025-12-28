@@ -60,14 +60,14 @@
 fn identity(a)(x: a) -> a { x }
 
 identity(42)       // identity<Int>
-identity("hello")  // identity<String>
+identity("hello")  // identity<Text>
 
 // 최적화 후
 fn identity$Int(x: Int) -> Int { x }
-fn identity$String(x: String) -> String { x }
+fn identity$Text(x: Text) -> Text { x }
 
 identity$Int(42)
-identity$String("hello")
+identity$Text("hello")
 ```
 
 ### 장점
