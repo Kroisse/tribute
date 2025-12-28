@@ -204,6 +204,12 @@ impl<'db> CstLoweringCtx<'db> {
                         // Extract the tail var ID from an existing effect row type
                         if let Some(row) = core::EffectRowType::from_type(self.db, ty) {
                             tail_var = row.tail_var(self.db);
+                        } else {
+                            // Existing binding is a regular type var, not a row var.
+                            // Create a fresh row var for this context.
+                            let id = self.next_row_var_id;
+                            self.next_row_var_id += 1;
+                            tail_var = Some(id);
                         }
                     } else {
                         // Create a fresh row var and store it
