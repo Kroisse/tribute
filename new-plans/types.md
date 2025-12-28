@@ -62,8 +62,8 @@ enum Result(a, e) {
 // 혼합 가능
 enum Expr {
     Lit(Int)
-    Var(String)
-    BinOp { op: String, lhs: Expr, rhs: Expr }
+    Var(Text)
+    BinOp { op: Text, lhs: Expr, rhs: Expr }
 }
 
 // 한 줄이면 쉼표 필수
@@ -319,8 +319,8 @@ enum Result(a, e) {
 // 같은 enum에서 혼합 가능
 enum Expr {
     Lit(Int)
-    Var(String)
-    BinOp { op: String, lhs: Expr, rhs: Expr }
+    Var(Text)
+    BinOp { op: Text, lhs: Expr, rhs: Expr }
 }
 ```
 

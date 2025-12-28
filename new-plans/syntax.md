@@ -389,8 +389,8 @@ enum Result(a, e) {
 // 혼합
 enum Expr {
     Lit(Int)
-    Var(String)
-    BinOp { op: String, lhs: Expr, rhs: Expr }
+    Var(Text)
+    BinOp { op: Text, lhs: Expr, rhs: Expr }
 }
 ```
 
@@ -803,7 +803,7 @@ Pattern ::= LiteralPattern
 
 AsPattern ::= Pattern 'as' Identifier        // 전체를 바인딩
 
-LiteralPattern ::= Number | String | Rune | 'True' | 'False' | 'Nil'
+LiteralPattern ::= Number | StringLit | Rune | 'True' | 'False' | 'Nil'
 WildcardPattern ::= '_'
 IdentifierPattern ::= Identifier
 VariantPattern ::= TypeId ('(' PatternList ')' | '{' RecordPatternFields '}')?
@@ -1069,7 +1069,7 @@ fn main() ->{Console} Nil {
 
 | 패턴               | 의미                           |
 | ------------------ | ------------------------------ |
-| `42`, `"hi"`, `?a` | Literal (Number, String, Rune) |
+| `42`, `"hi"`, `?a` | Literal (Number, Text, Rune)   |
 | `_`                | Wildcard                       |
 | `x`                | Binding                        |
 | `Some(x)`          | Variant (positional)           |
