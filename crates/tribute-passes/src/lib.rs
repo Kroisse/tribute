@@ -12,6 +12,7 @@ pub mod diagnostic;
 
 // === TrunkIR passes ===
 pub mod case_lowering;
+pub mod closure_lower;
 pub mod const_inline;
 pub mod lambda_lift;
 pub mod resolve;
@@ -20,6 +21,7 @@ pub mod typeck;
 
 // Re-exports
 pub use case_lowering::lower_case_to_scf;
+pub use closure_lower::lower_closures;
 pub use const_inline::{ConstInliner, inline_module};
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use lambda_lift::lift_lambdas;

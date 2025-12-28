@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use trunk_ir::dialect::{closure, core, func, pat, src};
+use trunk_ir::dialect::{adt, closure, core, func, pat, src};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
     Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, QualifiedName, Region,
@@ -640,18 +640,22 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         };
 
         // Get capture values from current scope
-        let mut capture_values: IdVec<Value<'db>> = IdVec::new();
+        let mut capture_values: Vec<Value<'db>> = Vec::new();
         for capture_info in &info.captures {
             if let Some(value) = self.lookup_local(capture_info.name) {
                 capture_values.push(value);
             }
         }
 
-        // Build lifted function
+        // Create env struct type for captures
+        let env_type = self.create_env_type(&info.captures, &info.lifted_name);
+
+        // Build lifted function (takes env as first param)
         let lifted_func = self.build_lifted_function(
             location,
             info.lifted_name.clone(),
             &info.captures,
+            env_type,
             &param_types,
             result_type,
             effect_type,
@@ -660,13 +664,26 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
 
         self.lifted_functions.push(lifted_func);
 
-        // Create closure.new at original location
+        // Create env struct with captured values
         let result_ty = op.results(self.db).first().copied().unwrap_or(lambda_type);
 
+        let env_value = if capture_values.is_empty() {
+            // No captures - create unit/nil value for env
+            let nil_ty = core::Nil::new(self.db);
+            adt::struct_new(self.db, location, capture_values, *nil_ty, *nil_ty)
+                .as_operation()
+                .result(self.db, 0)
+        } else {
+            adt::struct_new(self.db, location, capture_values, env_type, env_type)
+                .as_operation()
+                .result(self.db, 0)
+        };
+
+        // Create closure.new with env
         let closure_op = closure::new(
             self.db,
             location,
-            capture_values,
+            env_value,
             result_ty,
             info.lifted_name.clone(),
         );
@@ -679,23 +696,51 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         vec![closure_op.as_operation()]
     }
 
+    /// Create an env struct type for the captured variables.
+    fn create_env_type(
+        &self,
+        captures: &[CaptureInfo<'db>],
+        lambda_name: &QualifiedName,
+    ) -> Type<'db> {
+        if captures.is_empty() {
+            return *core::Nil::new(self.db);
+        }
+
+        // Create anonymous struct type with captured variable types as fields
+        let fields: Vec<(Symbol, Type<'db>)> = captures
+            .iter()
+            .enumerate()
+            .map(|(i, cap)| (Symbol::from_dynamic(&format!("_{}", i)), cap.ty))
+            .collect();
+
+        // Use lambda name + "_env" for the struct name
+        let env_name = QualifiedName::new(
+            lambda_name.as_parent(),
+            Symbol::from_dynamic(&format!("{}_env", lambda_name.name())),
+        );
+
+        adt::struct_type(self.db, env_name, fields)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn build_lifted_function(
         &self,
         location: Location<'db>,
         name: QualifiedName,
         captures: &[CaptureInfo<'db>],
+        env_type: Type<'db>,
         param_types: &IdVec<Type<'db>>,
         result_type: Type<'db>,
         effect_type: Option<Type<'db>>,
         body: &Region<'db>,
     ) -> Operation<'db> {
-        // Build parameter list: captures first, then original params
+        // Build parameter list: env first, then original params
         let mut all_params: IdVec<Type<'db>> = IdVec::new();
-        for capture in captures {
-            all_params.push(capture.ty);
-        }
+        all_params.push(env_type);
         all_params.extend(param_types.iter().copied());
+
+        let db = self.db;
+        let captures_vec: Vec<_> = captures.to_vec();
 
         // Build the function
         func::Func::build_with_effect(
@@ -706,17 +751,31 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
             result_type,
             effect_type,
             |entry| {
+                // Get env parameter (first block argument)
+                let env_param = entry.block_arg(db, 0);
+
+                // Extract captured values from env struct
+                for (i, capture) in captures_vec.iter().enumerate() {
+                    let _extracted = entry.op(adt::struct_get(
+                        db,
+                        location,
+                        env_param,
+                        capture.ty,
+                        env_type,
+                        trunk_ir::Attribute::IntBits(i as u64),
+                    ));
+                    // TODO: Map the extracted value to the capture name for use in body
+                }
+
                 // Transform the lambda body
-                let body_blocks = body.blocks(self.db);
+                let body_blocks = body.blocks(db);
                 if let Some(orig_block) = body_blocks.first() {
                     // Copy and transform operations from original body
-                    for op in orig_block.operations(self.db).iter() {
+                    for op in orig_block.operations(db).iter() {
                         // Handle src.yield -> func.return conversion
-                        if op.dialect(self.db) == src::DIALECT_NAME()
-                            && op.name(self.db) == src::YIELD()
-                        {
-                            let return_vals = op.operands(self.db).clone();
-                            entry.op(func::r#return(self.db, op.location(self.db), return_vals));
+                        if op.dialect(db) == src::DIALECT_NAME() && op.name(db) == src::YIELD() {
+                            let return_vals = op.operands(db).clone();
+                            entry.op(func::r#return(db, op.location(db), return_vals));
                         } else {
                             // For now, just copy the operation
                             // TODO: Proper value remapping for captured variables

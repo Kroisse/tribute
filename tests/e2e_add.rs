@@ -772,3 +772,200 @@ fn check_for_closure_new(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>
     }
     false
 }
+
+// ============================================================================
+// Indirect Function Call Tests (Issue #94)
+// ============================================================================
+
+/// Test that func.call_indirect is generated for function-typed variables.
+#[test]
+fn test_indirect_call_ir_generation() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::stage_lambda_lift;
+
+    let source_code = Rope::from_str(
+        r#"
+fn main() -> Int {
+    let f = fn(x) { x }
+    f(42)
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, "indirect_call.trb", source_code.clone(), tree);
+
+        let module = stage_lambda_lift(db, source_file);
+
+        // Verify no diagnostics
+        let diagnostics: Vec<_> =
+            stage_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no errors, got {} diagnostics",
+            diagnostics.len()
+        );
+
+        // Check for func.call_indirect in main function
+        let body = module.body(db);
+        let has_call_indirect = check_for_call_indirect(db, &body);
+
+        assert!(
+            has_call_indirect,
+            "Expected func.call_indirect for indirect function call"
+        );
+    });
+}
+
+/// Test higher-order function with function parameter.
+#[test]
+fn test_higher_order_function_ir() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::stage_lambda_lift;
+
+    let source_code = Rope::from_str(
+        r#"
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn main() -> Int {
+    apply(fn(n) { n + 1 }, 41)
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, "higher_order.trb", source_code.clone(), tree);
+
+        let module = stage_lambda_lift(db, source_file);
+
+        // Verify no diagnostics
+        let diagnostics: Vec<_> =
+            stage_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no errors, got {} diagnostics",
+            diagnostics.len()
+        );
+
+        // Check that apply function has func.call_indirect
+        let body = module.body(db);
+        let has_call_indirect = check_for_call_indirect(db, &body);
+
+        assert!(
+            has_call_indirect,
+            "Expected func.call_indirect in apply function"
+        );
+    });
+}
+
+/// Helper to recursively check for func.call_indirect in a region
+fn check_for_call_indirect(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>) -> bool {
+    use trunk_ir::dialect::func;
+
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if op.dialect(db) == func::DIALECT_NAME() && op.name(db) == func::CALL_INDIRECT() {
+                return true;
+            }
+            // Recurse into nested regions
+            for nested in op.regions(db).iter() {
+                if check_for_call_indirect(db, nested) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Test that closure.func/closure.env are generated after closure lowering.
+#[test]
+fn test_closure_lowering() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::stage_closure_lower;
+
+    let source_code = Rope::from_str(
+        r#"
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn main() -> Int {
+    apply(fn(n) { n + 1 }, 41)
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, "closure_lower.trb", source_code.clone(), tree);
+
+        let module = stage_closure_lower(db, source_file);
+
+        // Verify no diagnostics
+        let diagnostics: Vec<_> =
+            stage_closure_lower::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no errors, got {} diagnostics",
+            diagnostics.len()
+        );
+
+        // Check that closure.func and closure.env are generated
+        let body = module.body(db);
+        let (has_closure_func, has_closure_env) = check_for_closure_ops(db, &body);
+
+        assert!(
+            has_closure_func,
+            "Expected closure.func in apply function after closure lowering"
+        );
+        assert!(
+            has_closure_env,
+            "Expected closure.env in apply function after closure lowering"
+        );
+    });
+}
+
+/// Helper to check for closure.func and closure.env operations
+fn check_for_closure_ops(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>) -> (bool, bool) {
+    use trunk_ir::dialect::closure;
+
+    let mut has_func = false;
+    let mut has_env = false;
+
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if op.dialect(db) == closure::DIALECT_NAME() {
+                if op.name(db) == closure::FUNC() {
+                    has_func = true;
+                }
+                if op.name(db) == closure::ENV() {
+                    has_env = true;
+                }
+            }
+            // Recurse into nested regions
+            for nested in op.regions(db).iter() {
+                let (nested_func, nested_env) = check_for_closure_ops(db, nested);
+                has_func = has_func || nested_func;
+                has_env = has_env || nested_env;
+            }
+        }
+    }
+
+    (has_func, has_env)
+}
