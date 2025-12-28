@@ -21,6 +21,7 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
+use trunk_ir::dialect::ability;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::case;
@@ -101,6 +102,17 @@ pub enum Binding<'db> {
         /// Constant type
         ty: Type<'db>,
     },
+    /// An ability operation (e.g., State::get, Console::print).
+    AbilityOp {
+        /// The ability this operation belongs to (e.g., "State")
+        ability: QualifiedName,
+        /// The operation name (e.g., "get")
+        op_name: Symbol,
+        /// Parameter types
+        params: IdVec<Type<'db>>,
+        /// Return type
+        return_ty: Type<'db>,
+    },
 }
 
 /// Module environment for name resolution.
@@ -150,6 +162,26 @@ impl<'db> ModuleEnv<'db> {
     pub fn add_const(&mut self, name: Symbol, value: Attribute<'db>, ty: Type<'db>) {
         self.definitions
             .insert(name.into(), Binding::Const { name, value, ty });
+    }
+
+    /// Add an ability operation to the environment.
+    ///
+    /// Ability operations are added to the ability's namespace (e.g., `State::get`).
+    pub fn add_ability_op(
+        &mut self,
+        ability: QualifiedName,
+        op_name: Symbol,
+        params: IdVec<Type<'db>>,
+        return_ty: Type<'db>,
+    ) {
+        let binding = Binding::AbilityOp {
+            ability: ability.clone(),
+            op_name,
+            params,
+            return_ty,
+        };
+        // Add to the ability's namespace for qualified lookup (State::get)
+        self.add_to_namespace(ability.name(), op_name, binding);
     }
 
     /// Add a qualified name to a namespace.
@@ -287,6 +319,25 @@ fn collect_definition<'db>(
                 collect_enum_constructors(db, env, op, *sym, ty);
             }
         }
+        (d, n) if d == ty::DIALECT_NAME() && n == ty::ABILITY() => {
+            // Ability definition → creates operations in the ability's namespace
+            let attrs = op.attributes(db);
+
+            if let Some(Attribute::Symbol(ability_name)) = attrs.get(&ATTR_SYM_NAME()) {
+                let ability_qn = QualifiedName::simple(*ability_name);
+                // Also register as a Module binding for the namespace
+                env.definitions.insert(
+                    ability_qn.clone(),
+                    Binding::Module {
+                        namespace: ability_qn.clone(),
+                        type_def: None,
+                    },
+                );
+
+                // Extract operations from the ability
+                collect_ability_operations(db, env, attrs, ability_qn);
+            }
+        }
         (d, n) if d == src::DIALECT_NAME() && n == src::CONST() => {
             // Const definition
             let attrs = op.attributes(db);
@@ -374,6 +425,42 @@ fn collect_enum_constructors<'db>(
                 env.add_constructor(*variant_sym, ty, Some(*variant_sym), IdVec::new());
             }
         }
+    }
+}
+
+trunk_ir::symbols! {
+    ATTR_OPERATIONS => "operations",
+}
+
+/// Collect ability operations from an ability definition.
+///
+/// Operations are stored as: `[(name, [param_types], return_type), ...]`
+fn collect_ability_operations<'db>(
+    db: &'db dyn salsa::Database,
+    env: &mut ModuleEnv<'db>,
+    attrs: &Attrs<'db>,
+    ability: QualifiedName,
+) {
+    let Some(Attribute::List(operations)) = attrs.get(&ATTR_OPERATIONS()) else {
+        return;
+    };
+
+    for op_attr in operations.iter() {
+        let Attribute::List(parts) = op_attr else {
+            continue;
+        };
+
+        // parts = [name, [param_types], return_type]
+        let Some(Attribute::Symbol(op_name)) = parts.first() else {
+            continue;
+        };
+
+        // For now, we use fresh type variables for params and return type
+        // TODO: Parse actual types from the attribute representation
+        let params = IdVec::new();
+        let return_ty = ty::var(db, std::collections::BTreeMap::new());
+
+        env.add_ability_op(ability.clone(), *op_name, params, return_ty);
     }
 }
 
@@ -1295,6 +1382,32 @@ impl<'db> Resolver<'db> {
 
                 Some(vec![new_op])
             }
+            Binding::AbilityOp {
+                ability,
+                op_name,
+                return_ty,
+                ..
+            } => {
+                // Ability operation reference - create ability.perform
+                // NOTE: This case handles `State::get` as a bare reference (rare).
+                // Usually ability calls come through src.call + src.path which is
+                // handled in try_resolve_call.
+                let resolved_return_ty = self.resolve_type(*return_ty);
+                let new_op = ability::perform(
+                    self.db,
+                    location,
+                    std::iter::empty::<Value<'db>>(),
+                    resolved_return_ty,
+                    ability.clone(),
+                    *op_name,
+                );
+
+                let old_result = op.result(self.db, 0);
+                let new_result = new_op.as_operation().result(self.db, 0);
+                self.ctx.map_value(old_result, new_result);
+
+                Some(vec![new_op.as_operation()])
+            }
             Binding::TypeDef { .. } | Binding::Module { .. } => {
                 // Type used in value position - error (leave unresolved for diagnostics)
                 None
@@ -1353,6 +1466,30 @@ impl<'db> Resolver<'db> {
                 // Not commonly used, but handle similarly to unqualified const
                 // For now, leave unresolved (could be implemented if needed)
                 None
+            }
+            Binding::AbilityOp {
+                ability,
+                op_name,
+                return_ty,
+                ..
+            } => {
+                // Ability operation reference via path (e.g., State::get as a value)
+                // This creates an ability.perform with no arguments
+                let resolved_return_ty = self.resolve_type(*return_ty);
+                let new_op = ability::perform(
+                    self.db,
+                    location,
+                    std::iter::empty::<Value<'db>>(),
+                    resolved_return_ty,
+                    ability.clone(),
+                    *op_name,
+                );
+
+                let old_result = op.result(self.db, 0);
+                let new_result = new_op.as_operation().result(self.db, 0);
+                self.ctx.map_value(old_result, new_result);
+
+                Some(new_op.as_operation())
             }
             Binding::TypeDef { .. } | Binding::Module { .. } => None,
         }
@@ -1426,6 +1563,30 @@ impl<'db> Resolver<'db> {
                 self.ctx.map_value(old_result, new_result);
 
                 Some(new_operation)
+            }
+            Binding::AbilityOp {
+                ability,
+                op_name,
+                return_ty,
+                ..
+            } => {
+                // Ability operation call (e.g., State::get(), Console::print(msg))
+                // Create ability.perform with the call arguments
+                let resolved_return_ty = self.resolve_type(*return_ty);
+                let new_op = ability::perform(
+                    self.db,
+                    location,
+                    args,
+                    resolved_return_ty,
+                    ability.clone(),
+                    *op_name,
+                );
+
+                let old_result = op.result(self.db, 0);
+                let new_result = new_op.as_operation().result(self.db, 0);
+                self.ctx.map_value(old_result, new_result);
+
+                Some(new_op.as_operation())
             }
             Binding::Constructor { .. }
             | Binding::TypeDef { .. }
@@ -2055,6 +2216,89 @@ pub mod tests {
                 Some(&Attribute::Bool(true)),
                 "let binding reference should be marked as resolved_local"
             );
+        }
+    }
+
+    /// Create a module with an ability declaration and a call to it.
+    #[salsa::tracked]
+    fn module_with_ability_call(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let infer_ty = trunk_ir::dialect::ty::var(db, std::collections::BTreeMap::new());
+
+        // Create ability declaration: ability Console { fn print(msg: String) -> Nil }
+        let ability_decl = ty::ability(
+            db,
+            location,
+            infer_ty,
+            Attribute::Symbol(Symbol::new("Console")),
+            Attribute::List(vec![Attribute::List(vec![
+                Attribute::Symbol(Symbol::new("print")),
+                Attribute::List(vec![]), // param types (simplified)
+                Attribute::Symbol(Symbol::new("Nil")),
+            ])]),
+        );
+
+        // Create main function that calls Console::print()
+        let print_path = QualifiedName::from_strs(["Console", "print"]).unwrap();
+        let main_func = func::Func::build(db, location, "main", idvec![], infer_ty, |entry| {
+            // src.call(Console::print)()
+            let call_result = entry.op(src::call(
+                db,
+                location,
+                vec![],
+                infer_ty,
+                print_path.clone(),
+            ));
+            entry.op(func::Return::value(db, location, call_result.result(db)));
+        });
+
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            top.op(ability_decl);
+            top.op(main_func);
+        })
+    }
+
+    #[salsa::tracked]
+    fn resolve_ability_call_module(db: &dyn salsa::Database) -> Module<'_> {
+        let module = module_with_ability_call(db);
+        resolve_module(db, &module)
+    }
+
+    #[salsa_test]
+    fn test_ability_call_resolved_to_perform(db: &salsa::DatabaseImpl) {
+        let resolved = resolve_ability_call_module(db);
+
+        let mut ops = Vec::new();
+        collect_ops(db, &resolved.body(db), &mut ops);
+
+        // After resolution, src.call to Console::print should become ability.perform
+        let perform_ops: Vec<_> = ops
+            .iter()
+            .filter(|op| op.dialect(db) == "ability" && op.name(db) == "perform")
+            .collect();
+
+        assert!(
+            !perform_ops.is_empty(),
+            "ability call should be resolved to ability.perform"
+        );
+
+        // Check that the perform op has the correct ability_ref and op attributes
+        let perform_op = perform_ops[0];
+        let attrs = perform_op.attributes(db);
+
+        // Check ability_ref attribute
+        if let Some(Attribute::QualifiedName(ability_ref)) = attrs.get(&Symbol::new("ability_ref"))
+        {
+            assert!(ability_ref.name() == "Console");
+        } else {
+            panic!("ability.perform should have ability_ref attribute");
+        }
+
+        // Check op attribute
+        if let Some(Attribute::Symbol(op_name)) = attrs.get(&Symbol::new("op")) {
+            assert!(*op_name == "print");
+        } else {
+            panic!("ability.perform should have op attribute");
         }
     }
 }
