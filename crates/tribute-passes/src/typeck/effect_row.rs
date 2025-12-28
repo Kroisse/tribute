@@ -42,8 +42,8 @@ pub struct AbilityRef<'db> {
     pub params: IdVec<Type<'db>>,
 }
 
-// Manual Ord implementation for AbilityRef, ordering by name only.
-// Type parameters are considered equal if names match (for BTreeSet).
+// Manual Ord implementation for AbilityRef, ordering by name and type parameters.
+// This ensures `State(Int)` and `State(String)` are treated as distinct abilities.
 impl<'db> PartialOrd for AbilityRef<'db> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -52,9 +52,24 @@ impl<'db> PartialOrd for AbilityRef<'db> {
 
 impl<'db> Ord for AbilityRef<'db> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Compare by name only for ordering in BTreeSet
-        // Equality still uses full comparison (name + params)
-        self.name.cmp(&other.name)
+        use std::cmp::Ordering;
+
+        // Compare by name first, then by type parameters
+        // This ensures consistent ordering with Eq (name + params must match)
+        match self.name.cmp(&other.name) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+
+        // Compare params lexicographically using Type's Ord implementation
+        let len_cmp = self.params.len().cmp(&other.params.len());
+        for (a, b) in self.params.iter().zip(other.params.iter()) {
+            match a.cmp(b) {
+                Ordering::Equal => continue,
+                ord => return ord,
+            }
+        }
+        len_cmp
     }
 }
 
@@ -253,5 +268,96 @@ impl<'db> EffectRow<'db> {
 impl Default for EffectRow<'_> {
     fn default() -> Self {
         Self::empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::dialect::core;
+
+    #[salsa_test]
+    fn test_parameterized_abilities_are_distinct(db: &salsa::DatabaseImpl) {
+        // State(I64) and State(F64) should be treated as distinct abilities
+        let state_name = Symbol::new("State");
+        let int_ty = *core::I64::new(db);
+        let float_ty = *core::F64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let state_float = AbilityRef::new(state_name, IdVec::from(vec![float_ty]));
+
+        // They should not be equal
+        assert_ne!(state_int, state_float);
+
+        // They should have different orderings
+        assert_ne!(state_int.cmp(&state_float), std::cmp::Ordering::Equal);
+    }
+
+    #[salsa_test]
+    fn test_parameterized_abilities_coexist_in_row(db: &salsa::DatabaseImpl) {
+        // Both State(I64) and State(F64) should be able to coexist in the same row
+        let state_name = Symbol::new("State");
+        let int_ty = *core::I64::new(db);
+        let float_ty = *core::F64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let state_float = AbilityRef::new(state_name, IdVec::from(vec![float_ty]));
+
+        let row = EffectRow::concrete([state_int.clone(), state_float.clone()]);
+
+        // Both abilities should be in the row
+        assert_eq!(row.abilities().len(), 2);
+        assert!(row.contains(&state_int));
+        assert!(row.contains(&state_float));
+    }
+
+    #[salsa_test]
+    fn test_simple_abilities_with_same_name_are_equal(_db: &salsa::DatabaseImpl) {
+        // Two simple (non-parameterized) abilities with the same name should be equal
+        let console1 = AbilityRef::simple(Symbol::new("Console"));
+        let console2 = AbilityRef::simple(Symbol::new("Console"));
+
+        assert_eq!(console1, console2);
+        assert_eq!(console1.cmp(&console2), std::cmp::Ordering::Equal);
+    }
+
+    #[salsa_test]
+    fn test_ability_ref_ordering_is_consistent_with_eq(db: &salsa::DatabaseImpl) {
+        // Ord and Eq must be consistent: a.cmp(&b) == Equal iff a == b
+        let state_name = Symbol::new("State");
+        let int_ty = *core::I64::new(db);
+
+        let state_int1 = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let state_int2 = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+
+        // Same abilities should be equal in both Eq and Ord
+        assert_eq!(state_int1, state_int2);
+        assert_eq!(state_int1.cmp(&state_int2), std::cmp::Ordering::Equal);
+    }
+
+    #[salsa_test]
+    fn test_effect_row_union_preserves_parameterized_abilities(db: &salsa::DatabaseImpl) {
+        // Union of rows should preserve both State(I64) and State(F64)
+        let state_name = Symbol::new("State");
+        let int_ty = *core::I64::new(db);
+        let float_ty = *core::F64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let state_float = AbilityRef::new(state_name, IdVec::from(vec![float_ty]));
+
+        let row1 = EffectRow::concrete([state_int.clone()]);
+        let row2 = EffectRow::concrete([state_float.clone()]);
+
+        let mut counter = 0u64;
+        let union = row1.union(&row2, || {
+            counter += 1;
+            RowVar(counter)
+        });
+
+        // Both abilities should be in the union
+        assert_eq!(union.abilities().len(), 2);
+        assert!(union.contains(&state_int));
+        assert!(union.contains(&state_float));
     }
 }

@@ -83,6 +83,21 @@ impl<'db> Type<'db> {
     }
 }
 
+// Implement Ord for Type using salsa's interned ID.
+// This provides a stable ordering for types in collections like BTreeSet.
+impl<'db> PartialOrd for Type<'db> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'db> Ord for Type<'db> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use salsa::plumbing::AsId;
+        self.as_id().cmp(&other.as_id())
+    }
+}
+
 /// IR attribute values.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum Attribute<'db> {
