@@ -731,4 +731,180 @@ mod tests {
         let func_op = func::Func::from_operation(&db, inner_ops[0]).expect("Should be a func.func");
         assert_eq!(func_op.name(&db), "value");
     }
+
+    #[test]
+    fn test_function_type_with_effects() {
+        use trunk_ir::DialectType;
+        use trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func as CoreFunc};
+
+        let db = salsa::DatabaseImpl::default();
+        // Higher-order function with explicit effect annotation
+        let source = r#"
+            fn apply(f: fn(Int) ->{Console} Int, x: Int) -> Int {
+                f(x)
+            }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        let ops = blocks[0].operations(&db);
+
+        let func_op = func::Func::from_operation(&db, ops[0]).expect("Should be a func.func");
+        assert_eq!(func_op.name(&db), "apply");
+
+        // Get the function's declared type to access parameter types
+        let func_ty = func_op.r#type(&db);
+        let core_func = CoreFunc::from_type(&db, func_ty).expect("Should be a function type");
+        let param_types = core_func.params(&db);
+        assert_eq!(param_types.len(), 2, "Should have 2 parameters");
+
+        // First param should be fn(Int) ->{Console} Int
+        let f_type = param_types[0];
+        let func_type = CoreFunc::from_type(&db, f_type).expect("Should be a function type");
+
+        // Check it has an effect annotation
+        let effect = func_type
+            .effect(&db)
+            .expect("Function type should have effect");
+        let effect_row = EffectRowType::from_type(&db, effect).expect("Should be an effect row");
+
+        // The effect row should contain Console
+        let abilities = effect_row.abilities(&db);
+        assert_eq!(abilities.len(), 1, "Should have 1 ability");
+
+        // Verify the ability is Console
+        let ability = AbilityRefType::from_type(&db, abilities[0]).expect("Should be ability ref");
+        assert_eq!(
+            ability.name(&db).map(|s| s.to_string()),
+            Some("Console".to_string())
+        );
+    }
+
+    #[test]
+    fn test_function_type_pure() {
+        use trunk_ir::DialectType;
+        use trunk_ir::dialect::core::{EffectRowType, Func as CoreFunc};
+
+        let db = salsa::DatabaseImpl::default();
+        // Pure function type with empty effect row
+        let source = r#"
+            fn map(f: fn(Int) ->{} Int, x: Int) -> Int {
+                f(x)
+            }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        let ops = blocks[0].operations(&db);
+
+        let func_op = func::Func::from_operation(&db, ops[0]).expect("Should be a func.func");
+        let func_ty = func_op.r#type(&db);
+        let core_func = CoreFunc::from_type(&db, func_ty).expect("Should be a function type");
+        let param_types = core_func.params(&db);
+
+        // First param should be fn(Int) ->{} Int (pure)
+        let f_type = param_types[0];
+        let func_type = CoreFunc::from_type(&db, f_type).expect("Should be a function type");
+
+        // Check it has an empty effect row
+        let effect = func_type
+            .effect(&db)
+            .expect("Function type should have effect");
+        let effect_row = EffectRowType::from_type(&db, effect).expect("Should be an effect row");
+        assert!(
+            effect_row.is_empty(&db),
+            "Pure function should have empty effect row"
+        );
+    }
+
+    #[test]
+    fn test_function_type_with_row_variable() {
+        use trunk_ir::DialectType;
+        use trunk_ir::dialect::core::{EffectRowType, Func as CoreFunc};
+
+        let db = salsa::DatabaseImpl::default();
+        // Function type with row variable tail
+        let source = r#"
+            fn run_state(f: fn() ->{State(Int), e} Int) -> Int {
+                f()
+            }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        let ops = blocks[0].operations(&db);
+
+        let func_op = func::Func::from_operation(&db, ops[0]).expect("Should be a func.func");
+        let func_ty = func_op.r#type(&db);
+        let core_func = CoreFunc::from_type(&db, func_ty).expect("Should be a function type");
+        let param_types = core_func.params(&db);
+
+        // First param should be fn() ->{State(Int), e} Int
+        let f_type = param_types[0];
+        let func_type = CoreFunc::from_type(&db, f_type).expect("Should be a function type");
+
+        let effect = func_type
+            .effect(&db)
+            .expect("Function type should have effect");
+        let effect_row = EffectRowType::from_type(&db, effect).expect("Should be an effect row");
+
+        // Should have 1 ability (State) and a tail variable
+        let abilities = effect_row.abilities(&db);
+        assert_eq!(abilities.len(), 1, "Should have 1 ability (State)");
+        assert!(
+            effect_row.tail_var(&db).is_some(),
+            "Should have a tail variable"
+        );
+    }
+
+    #[test]
+    fn test_function_type_row_variable_not_at_end() {
+        use trunk_ir::DialectType;
+        use trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func as CoreFunc};
+
+        let db = salsa::DatabaseImpl::default();
+        // Row variable comes BEFORE the concrete ability
+        let source = r#"
+            fn apply(f: fn() ->{e, Console} Int) -> Int {
+                f()
+            }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        let ops = blocks[0].operations(&db);
+
+        let func_op = func::Func::from_operation(&db, ops[0]).expect("Should be a func.func");
+        let func_ty = func_op.r#type(&db);
+        let core_func = CoreFunc::from_type(&db, func_ty).expect("Should be a function type");
+        let param_types = core_func.params(&db);
+
+        // First param should be fn() ->{e, Console} Int
+        let f_type = param_types[0];
+        let func_type = CoreFunc::from_type(&db, f_type).expect("Should be a function type");
+
+        let effect = func_type
+            .effect(&db)
+            .expect("Function type should have effect");
+        let effect_row = EffectRowType::from_type(&db, effect).expect("Should be an effect row");
+
+        // Should have 1 ability (Console) and a row variable
+        let abilities = effect_row.abilities(&db);
+        assert_eq!(abilities.len(), 1, "Should have 1 ability (Console)");
+
+        let ability = AbilityRefType::from_type(&db, abilities[0]).expect("Should be ability ref");
+        assert_eq!(
+            ability.name(&db).map(|s| s.to_string()),
+            Some("Console".to_string())
+        );
+
+        assert!(
+            effect_row.tail_var(&db).is_some(),
+            "Should have a row variable even when not at the end"
+        );
+    }
 }

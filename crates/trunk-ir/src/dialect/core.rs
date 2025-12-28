@@ -409,7 +409,9 @@ impl<'db> EffectRowType<'db> {
         Self::new(db, abilities, Default::default())
     }
 
-    /// Create an effect row with a tail variable (open row).
+    /// Create an effect row with a row variable (open row).
+    ///
+    /// See [`tail_var`](Self::tail_var) for why it's called "tail".
     #[inline]
     pub fn with_tail(
         db: &'db dyn salsa::Database,
@@ -438,7 +440,12 @@ impl<'db> EffectRowType<'db> {
         Symbol::new("tail")
     }
 
-    /// Get the tail variable ID, if any.
+    /// Get the row variable ID, if any.
+    ///
+    /// The name "tail_var" comes from row polymorphism theory, where the row variable
+    /// semantically represents "the rest of the row" (the tail). However, in surface
+    /// syntax, the row variable can appear at any position (e.g., `{e, Console}` or
+    /// `{Console, e}`) — only the semantics treat it as the polymorphic remainder.
     pub fn tail_var(&self, db: &'db dyn salsa::Database) -> Option<u64> {
         match self.0.get_attr(db, Self::tail_sym()) {
             Some(Attribute::IntBits(id)) => Some(*id),
