@@ -334,16 +334,14 @@ impl<'db> TypeSolver<'db> {
         if t1.is_function(self.db) && t2.is_function(self.db) {
             let eff1 = t1.function_effect(self.db);
             let eff2 = t2.function_effect(self.db);
-            // TODO: Convert effect types to EffectRow and unify
-            // For now, just check if both have or don't have effects
-            match (eff1, eff2) {
-                (Some(e1), Some(e2)) => self.unify_types(e1, e2)?,
-                (None, None) => {}
-                _ => {
-                    // One has effect, one doesn't - this might be ok with row polymorphism
-                    // For now, allow it (treat missing effect as empty row)
-                }
-            }
+            // Convert effect types to EffectRow and use row unification
+            let row1 = eff1
+                .and_then(|e| EffectRow::from_type(self.db, e))
+                .unwrap_or_else(EffectRow::empty);
+            let row2 = eff2
+                .and_then(|e| EffectRow::from_type(self.db, e))
+                .unwrap_or_else(EffectRow::empty);
+            self.unify_rows(row1, row2)?;
         }
 
         Ok(())
@@ -582,6 +580,7 @@ impl<'db> TypeSolver<'db> {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
+    use trunk_ir::DialectType;
     use trunk_ir::dialect::core;
 
     #[salsa_test]
@@ -643,5 +642,72 @@ mod tests {
         // var should now be bound to empty
         let resolved = solver.apply_row(&EffectRow::var(var));
         assert!(resolved.is_empty());
+    }
+
+    #[salsa_test]
+    fn test_function_effect_unification(db: &salsa::DatabaseImpl) {
+        use trunk_ir::IdVec;
+
+        let mut solver = TypeSolver::new(db);
+
+        // Create two function types with the same effect row
+        let effect = core::EffectRowType::empty(db).as_type();
+        let func1 = core::Func::with_effect(db, IdVec::new(), *core::I64::new(db), Some(effect));
+        let func2 = core::Func::with_effect(db, IdVec::new(), *core::I64::new(db), Some(effect));
+
+        let result = solver.unify_types(*func1, *func2);
+        assert!(result.is_ok(), "Same function types should unify");
+    }
+
+    #[salsa_test]
+    fn test_function_effect_unification_with_row_var(db: &salsa::DatabaseImpl) {
+        use trunk_ir::IdVec;
+
+        let mut solver = TypeSolver::new(db);
+
+        // Create a function with empty effect
+        let empty_effect = core::EffectRowType::empty(db).as_type();
+        let func_pure =
+            core::Func::with_effect(db, IdVec::new(), *core::I64::new(db), Some(empty_effect));
+
+        // Create a function with a row variable effect
+        let row_var_id = 1;
+        let row_var_effect = core::EffectRowType::var(db, row_var_id).as_type();
+        let func_poly =
+            core::Func::with_effect(db, IdVec::new(), *core::I64::new(db), Some(row_var_effect));
+
+        // Unifying should bind the row variable to empty
+        let result = solver.unify_types(*func_pure, *func_poly);
+        assert!(
+            result.is_ok(),
+            "Pure function should unify with polymorphic function"
+        );
+
+        // Check that the row variable was bound to empty
+        let row = EffectRow::var(RowVar(row_var_id));
+        let resolved = solver.apply_row(&row);
+        assert!(resolved.is_empty(), "Row variable should be bound to empty");
+    }
+
+    #[salsa_test]
+    fn test_function_effect_unification_missing_effect(db: &salsa::DatabaseImpl) {
+        use trunk_ir::IdVec;
+
+        let mut solver = TypeSolver::new(db);
+
+        // Create a function without explicit effect (pure)
+        let func_no_effect = core::Func::new(db, IdVec::new(), *core::I64::new(db));
+
+        // Create a function with empty effect
+        let empty_effect = core::EffectRowType::empty(db).as_type();
+        let func_empty =
+            core::Func::with_effect(db, IdVec::new(), *core::I64::new(db), Some(empty_effect));
+
+        // Both represent pure functions, should unify
+        let result = solver.unify_types(*func_no_effect, *func_empty);
+        assert!(
+            result.is_ok(),
+            "Function without effect should unify with empty effect"
+        );
     }
 }
