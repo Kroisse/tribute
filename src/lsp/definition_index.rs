@@ -55,7 +55,7 @@ impl DefinitionIndex {
 
         Self::collect_from_region(db, &module.body(db), &mut definitions, &mut references);
 
-        // Sort for efficient lookup
+        // Sort for deterministic iteration order (by span position)
         definitions.sort_by_key(|e| (e.span.start, e.span.end));
         references.sort_by_key(|e| (e.span.start, e.span.end));
 
