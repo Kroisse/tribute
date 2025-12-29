@@ -998,7 +998,10 @@ impl<'db> TypeChecker<'db> {
         if let Some(Attribute::Type(ability_ty)) =
             op.attributes(self.db).get(&Symbol::new("ability_ref"))
         {
-            // Convert the Type to AbilityRef
+            // Convert the Type to AbilityRef.
+            // Note: The resolve phase guarantees that ability_ref attributes contain valid
+            // core.ability_ref types. Conversion failures indicate corrupted IR rather than
+            // semantic errors, so we log and skip rather than reporting a user-facing error.
             if let Some(ability) = AbilityRef::from_type(self.db, *ability_ty) {
                 // Create an effect row with this ability and merge it
                 let effect = EffectRow::concrete([ability]);
