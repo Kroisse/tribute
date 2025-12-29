@@ -575,7 +575,6 @@ fn lower_case_expr<'db>(
 
     // Use field-based access for scrutinee
     let scrutinee_node = node.child_by_field_name("value")?;
-    let scrutinee = lower_expr(ctx, block, scrutinee_node)?;
 
     // Collect case arms (need iteration)
     let mut cursor = node.walk();
@@ -583,6 +582,8 @@ fn lower_case_expr<'db>(
         .named_children(&mut cursor)
         .filter(|child| child.kind() == "case_arm")
         .collect();
+
+    let scrutinee = lower_expr(ctx, block, scrutinee_node)?;
 
     // Build the body region containing case.arm operations
     let mut body_block = BlockBuilder::new(ctx.db, location);
@@ -634,9 +635,16 @@ fn lower_case_arm<'db>(
     // Create arm body
     let mut body_block = BlockBuilder::new(ctx.db, location);
 
+    // Check if pattern is a handler_pattern (for ability effect handling)
+    let is_handler_pattern = find_handler_pattern(pattern_node).is_some();
+
     let result_value = ctx.scoped(|ctx| {
-        // Bind pattern
-        bind_pattern(ctx, &mut body_block, pattern_node, scrutinee);
+        // Bind pattern - use appropriate binding function based on pattern type
+        if is_handler_pattern {
+            bind_handler_pattern(ctx, &mut body_block, pattern_node, scrutinee);
+        } else {
+            bind_pattern(ctx, &mut body_block, pattern_node, scrutinee);
+        }
 
         // Lower body
         lower_expr(ctx, &mut body_block, body_node)
@@ -649,6 +657,23 @@ fn lower_case_arm<'db>(
     let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
     Some(case::arm(ctx.db, location, pattern_region, body_region))
+}
+
+/// Find a handler_pattern node within a pattern (unwrapping wrapper nodes).
+fn find_handler_pattern(node: Node) -> Option<Node> {
+    match node.kind() {
+        "handler_pattern" => Some(node),
+        "pattern" | "simple_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if let Some(found) = find_handler_pattern(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Convert a pattern node to a pattern region for case arms and let bindings.
@@ -842,6 +867,11 @@ pub fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'
             let as_op = pat::as_pat(ctx.db, location, name, inner);
             pat::helpers::single_op_region(ctx.db, location, as_op.as_operation())
         }
+        "handler_pattern" => {
+            // Handler patterns are for ability effect handling in case expressions
+            // Delegate to the specialized handler pattern converter
+            handler_pattern_to_region(ctx, node)
+        }
         _ => pat::helpers::wildcard_region(ctx.db, location),
     }
 }
@@ -1028,11 +1058,22 @@ fn lower_record_expr<'db>(
 
 /// Lower a handle expression (ability handling).
 ///
-/// Source: `case handle expr { arms... }`
+/// Source: `handle expr`
 /// Lowers to:
 /// ```text
 /// %request = ability.prompt { expr }
-/// case.case(%request) { arms... }
+/// ```
+///
+/// The `handle expr` expression returns a Request value that can be pattern-matched
+/// to handle both normal completion (`{ result }`) and suspended effects
+/// (`{ State::get() -> k }`).
+///
+/// Typically used with case expressions:
+/// ```text
+/// case handle expr {
+///     { result } -> ...
+///     { State::get() -> k } -> ...
+/// }
 /// ```
 fn lower_handle_expr<'db>(
     ctx: &mut CstLoweringCtx<'db>,
@@ -1041,22 +1082,16 @@ fn lower_handle_expr<'db>(
 ) -> Option<Value<'db>> {
     let mut cursor = node.walk();
     let location = ctx.location(&node);
-    let infer_ty = ctx.fresh_type_var();
     let request_ty = ctx.fresh_type_var(); // Type for Request value
 
+    // Find the expression to handle
     let mut expr_node = None;
-    let mut handler_arms = Vec::new();
-
     for child in node.named_children(&mut cursor) {
         if is_comment(child.kind()) || child.kind() == "keyword_handle" {
             continue;
         }
-        // First expression is the expression to handle
-        if expr_node.is_none() {
-            expr_node = Some(child);
-        } else if child.kind() == "case_arm" {
-            handler_arms.push(child);
-        }
+        expr_node = Some(child);
+        break;
     }
 
     let expr_node = expr_node?;
@@ -1073,84 +1108,7 @@ fn lower_handle_expr<'db>(
 
     // Create ability.prompt to run body and get Request
     let prompt_op = block.op(ability::prompt(ctx.db, location, request_ty, body_region));
-    let request_value = prompt_op.request(ctx.db);
-
-    // Build handler arms as case.case body
-    let case_body_region = if handler_arms.is_empty() {
-        // No handlers - just a single wildcard arm
-        let mut arm_block = BlockBuilder::new(ctx.db, location);
-        arm_block.op(case::r#yield(ctx.db, location, request_value));
-        Region::new(ctx.db, location, idvec![arm_block.build()])
-    } else {
-        // Build case.arm operations for each handler
-        let mut arms_block = BlockBuilder::new(ctx.db, location);
-
-        for arm_node in &handler_arms {
-            // Lower handler arm (similar to case arm but with request as scrutinee)
-            if let Some(arm_op) = ctx.scoped(|ctx| lower_handler_arm(ctx, *arm_node, request_value))
-            {
-                arms_block.op(arm_op);
-            }
-        }
-
-        Region::new(ctx.db, location, idvec![arms_block.build()])
-    };
-
-    // Create case.case to pattern match on the Request
-    let case_op = block.op(case::r#case(
-        ctx.db,
-        location,
-        request_value,
-        infer_ty,
-        case_body_region,
-    ));
-    Some(case_op.result(ctx.db))
-}
-
-/// Lower a handler arm (for ability handling).
-fn lower_handler_arm<'db>(
-    ctx: &mut CstLoweringCtx<'db>,
-    node: Node,
-    request: Value<'db>,
-) -> Option<case::Arm<'db>> {
-    let mut cursor = node.walk();
-    let location = ctx.location(&node);
-
-    let mut pattern_node = None;
-    let mut body_node = None;
-
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        if pattern_node.is_none() {
-            pattern_node = Some(child);
-        } else if body_node.is_none() {
-            body_node = Some(child);
-        }
-    }
-
-    let pattern_node = pattern_node?;
-    let body_node = body_node?;
-
-    // Create arm body
-    let mut body_block = BlockBuilder::new(ctx.db, location);
-
-    let result_value = ctx.scoped(|ctx| {
-        // Bind handler pattern (value binding, continuation binding, etc.)
-        bind_handler_pattern(ctx, &mut body_block, pattern_node, request);
-
-        // Lower body
-        lower_expr(ctx, &mut body_block, body_node)
-    });
-
-    let result_value = result_value?;
-    body_block.op(case::r#yield(ctx.db, location, result_value));
-
-    let pattern_region = handler_pattern_to_region(ctx, pattern_node);
-    let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
-
-    Some(case::arm(ctx.db, location, pattern_region, body_region))
+    Some(prompt_op.request(ctx.db))
 }
 
 /// Bind handler pattern variables.
@@ -1164,6 +1122,15 @@ fn bind_handler_pattern<'db>(
     let mut cursor = node.walk();
 
     match node.kind() {
+        // Unwrap wrapper nodes
+        "pattern" | "simple_pattern" => {
+            for child in node.named_children(&mut cursor) {
+                if !is_comment(child.kind()) {
+                    bind_handler_pattern(ctx, block, child, request);
+                    return;
+                }
+            }
+        }
         "handler_pattern" => {
             // Handler patterns: { value } or { Op(args) -> k }
             let mut value_name = None;

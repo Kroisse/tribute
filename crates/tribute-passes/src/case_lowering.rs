@@ -27,6 +27,13 @@ enum ArmPattern<'db> {
     Bind,
     Literal(Attribute<'db>),
     Variant(Symbol),
+    /// Handler done pattern: `{ result }` - matches Request::Done
+    HandlerDone,
+    /// Handler suspend pattern: `{ Op(args) -> k }` - matches Request::Suspend
+    #[allow(dead_code)]
+    HandlerSuspend {
+        op_name: Symbol,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +245,18 @@ impl<'db> CaseLowerer<'db> {
             return vec![self.rebuild_case(op, remapped_operands)];
         }
 
+        // Check if any arm has a handler pattern - these require special lowering
+        // in a later pass (handler lowering), so we skip them here.
+        let has_handler_patterns = arms.iter().any(|arm| {
+            matches!(
+                arm.pattern,
+                ArmPattern::HandlerDone | ArmPattern::HandlerSuspend { .. }
+            )
+        });
+        if has_handler_patterns {
+            return vec![self.rebuild_case(op, remapped_operands)];
+        }
+
         if arms.is_empty() {
             self.emit_error(location, "case expression has no arms");
             return vec![self.rebuild_case(op, remapped_operands)];
@@ -344,6 +363,18 @@ impl<'db> CaseLowerer<'db> {
                     return Some((ArmPattern::Wildcard, false));
                 }
                 Some((ArmPattern::Variant(name), true))
+            }
+            name if name == pat::HANDLER_DONE() => Some((ArmPattern::HandlerDone, true)),
+            name if name == pat::HANDLER_SUSPEND() => {
+                let op_name = op
+                    .attributes(self.db)
+                    .get(&Symbol::new("op"))
+                    .and_then(|attr| match attr {
+                        Attribute::Symbol(s) => Some(*s),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| Symbol::new("?"));
+                Some((ArmPattern::HandlerSuspend { op_name }, true))
             }
             _ => Some((ArmPattern::Wildcard, false)),
         }
@@ -482,6 +513,8 @@ impl<'db> CaseLowerer<'db> {
                 };
                 all_variants.len() == 1
             }
+            // Handler patterns are always refutable (need all cases for exhaustiveness)
+            ArmPattern::HandlerDone | ArmPattern::HandlerSuspend { .. } => false,
         }
     }
 
@@ -702,6 +735,10 @@ impl<'db> CaseLowerer<'db> {
                         .as_operation();
                 let result = variant_is_op.result(self.db, 0);
                 (vec![variant_is_op], result)
+            }
+            // Handler patterns are skipped in lower_case, so these should never be reached
+            ArmPattern::HandlerDone | ArmPattern::HandlerSuspend { .. } => {
+                unreachable!("Handler patterns should be skipped in lower_case")
             }
         }
     }

@@ -104,7 +104,6 @@ fn main() -> Int { 0 }
 
 /// Test basic handle expression parsing and typechecking.
 #[test]
-#[ignore = "Handler patterns not yet implemented in parser"]
 fn test_handle_expression() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -156,7 +155,6 @@ fn main() -> Int { run() }
 ///
 /// Note: Full execution requires backend support (issues #112-#114).
 #[test]
-#[ignore = "Handler patterns and ability operation calls not fully implemented"]
 fn test_milestone_target_code() {
     // This is the target code from issue #100
     let code = r#"ability State(s) {
