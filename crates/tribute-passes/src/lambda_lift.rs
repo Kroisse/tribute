@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use trunk_ir::dialect::{closure, core, func, pat, src};
+use trunk_ir::dialect::{adt, closure, core, func, pat, src};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
     Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, QualifiedName, Region,
@@ -640,18 +640,22 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         };
 
         // Get capture values from current scope
-        let mut capture_values: IdVec<Value<'db>> = IdVec::new();
+        let mut capture_values: Vec<Value<'db>> = Vec::new();
         for capture_info in &info.captures {
             if let Some(value) = self.lookup_local(capture_info.name) {
                 capture_values.push(value);
             }
         }
 
-        // Build lifted function
+        // Create env struct type for captures
+        let env_type = self.create_env_type(&info.captures, &info.lifted_name);
+
+        // Build lifted function (takes env as first param)
         let lifted_func = self.build_lifted_function(
             location,
             info.lifted_name.clone(),
             &info.captures,
+            env_type,
             &param_types,
             result_type,
             effect_type,
@@ -660,14 +664,27 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
 
         self.lifted_functions.push(lifted_func);
 
-        // Create closure.new at original location
-        let result_ty = op.results(self.db).first().copied().unwrap_or(lambda_type);
+        // Create env struct with captured values
+        let env_value = if capture_values.is_empty() {
+            // No captures - create unit/nil value for env
+            let nil_ty = core::Nil::new(self.db);
+            adt::struct_new(self.db, location, capture_values, *nil_ty, *nil_ty)
+                .as_operation()
+                .result(self.db, 0)
+        } else {
+            adt::struct_new(self.db, location, capture_values, env_type, env_type)
+                .as_operation()
+                .result(self.db, 0)
+        };
 
+        // Create closure.new with closure type (not raw function type)
+        // This allows us to distinguish closures from bare function refs
+        let closure_ty = closure::Closure::new(self.db, lambda_type);
         let closure_op = closure::new(
             self.db,
             location,
-            capture_values,
-            result_ty,
+            env_value,
+            *closure_ty,
             info.lifted_name.clone(),
         );
 
@@ -679,23 +696,52 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         vec![closure_op.as_operation()]
     }
 
+    /// Create an env struct type for the captured variables.
+    fn create_env_type(
+        &self,
+        captures: &[CaptureInfo<'db>],
+        lambda_name: &QualifiedName,
+    ) -> Type<'db> {
+        if captures.is_empty() {
+            return *core::Nil::new(self.db);
+        }
+
+        // Create anonymous struct type with captured variable types as fields
+        let fields: Vec<(Symbol, Type<'db>)> = captures
+            .iter()
+            .enumerate()
+            .map(|(i, cap)| (Symbol::from_dynamic(&format!("_{}", i)), cap.ty))
+            .collect();
+
+        // Use lambda name + "_env" for the struct name
+        let env_name = QualifiedName::new(
+            lambda_name.as_parent(),
+            Symbol::from_dynamic(&format!("{}_env", lambda_name.name())),
+        );
+
+        adt::struct_type(self.db, env_name, fields)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn build_lifted_function(
         &self,
         location: Location<'db>,
         name: QualifiedName,
         captures: &[CaptureInfo<'db>],
+        env_type: Type<'db>,
         param_types: &IdVec<Type<'db>>,
         result_type: Type<'db>,
         effect_type: Option<Type<'db>>,
         body: &Region<'db>,
     ) -> Operation<'db> {
-        // Build parameter list: captures first, then original params
+        // Build parameter list: env first, then original params
         let mut all_params: IdVec<Type<'db>> = IdVec::new();
-        for capture in captures {
-            all_params.push(capture.ty);
-        }
+        all_params.push(env_type);
         all_params.extend(param_types.iter().copied());
+
+        let db = self.db;
+        let captures_vec: Vec<_> = captures.to_vec();
+        let param_count = param_types.len();
 
         // Build the function
         func::Func::build_with_effect(
@@ -706,21 +752,102 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
             result_type,
             effect_type,
             |entry| {
+                // Get env parameter (first block argument)
+                let env_param = entry.block_arg(db, 0);
+
+                // Build mapping: capture name -> extracted value
+                let mut capture_values: HashMap<Symbol, Value<'db>> = HashMap::new();
+                for (i, capture) in captures_vec.iter().enumerate() {
+                    let extracted = entry.op(adt::struct_get(
+                        db,
+                        location,
+                        env_param,
+                        capture.ty,
+                        env_type,
+                        trunk_ir::Attribute::IntBits(i as u64),
+                    ));
+                    capture_values.insert(capture.name, extracted.result(db));
+                }
+
                 // Transform the lambda body
-                let body_blocks = body.blocks(self.db);
+                let body_blocks = body.blocks(db);
                 if let Some(orig_block) = body_blocks.first() {
-                    // Copy and transform operations from original body
-                    for op in orig_block.operations(self.db).iter() {
+                    let orig_block_id = orig_block.id(db);
+
+                    // Build value remapping context
+                    let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
+
+                    // Map original block args (params 0..n) to new block args (1..n+1)
+                    for i in 0..param_count {
+                        let orig_arg = Value::new(db, ValueDef::BlockArg(orig_block_id), i);
+                        let new_arg = entry.block_arg(db, i + 1);
+                        value_map.insert(orig_arg, new_arg);
+                    }
+
+                    // Process operations from original body
+                    let ops = orig_block.operations(db);
+                    let mut param_decl_count = 0;
+
+                    for op in ops.iter() {
+                        // Handle src.var ops - either parameter declarations or captured refs
+                        if let Ok(var_op) = src::Var::from_operation(db, *op) {
+                            let var_name = var_op.name(db);
+
+                            // Check if this is a parameter declaration (first N src.var ops)
+                            if param_decl_count < param_count {
+                                // This is a parameter declaration
+                                // Map its result to the shifted block arg
+                                let orig_result = op.result(db, 0);
+                                let new_arg = entry.block_arg(db, param_decl_count + 1);
+                                value_map.insert(orig_result, new_arg);
+                                param_decl_count += 1;
+                                // Don't emit the src.var op - params are block args now
+                                continue;
+                            }
+
+                            // Check if this is a captured variable reference
+                            if let Some(&extracted_val) = capture_values.get(&var_name) {
+                                // Map the src.var result to the extracted value
+                                let orig_result = op.result(db, 0);
+                                value_map.insert(orig_result, extracted_val);
+                                // Don't emit the src.var op - we use the extracted value
+                                continue;
+                            }
+                        }
+
                         // Handle src.yield -> func.return conversion
-                        if op.dialect(self.db) == src::DIALECT_NAME()
-                            && op.name(self.db) == src::YIELD()
-                        {
-                            let return_vals = op.operands(self.db).clone();
-                            entry.op(func::r#return(self.db, op.location(self.db), return_vals));
+                        if op.dialect(db) == src::DIALECT_NAME() && op.name(db) == src::YIELD() {
+                            let return_vals: Vec<_> = op
+                                .operands(db)
+                                .iter()
+                                .map(|&v| *value_map.get(&v).unwrap_or(&v))
+                                .collect();
+                            entry.op(func::r#return(db, op.location(db), return_vals));
+                            continue;
+                        }
+
+                        // For other ops, remap operands and copy
+                        let remapped_operands: IdVec<Value<'db>> = op
+                            .operands(db)
+                            .iter()
+                            .map(|&v| *value_map.get(&v).unwrap_or(&v))
+                            .collect();
+
+                        let new_op = if remapped_operands != *op.operands(db) {
+                            op.modify(db).operands(remapped_operands).build()
                         } else {
-                            // For now, just copy the operation
-                            // TODO: Proper value remapping for captured variables
-                            entry.op(*op);
+                            *op
+                        };
+
+                        entry.op(new_op);
+
+                        // Map old results to new results
+                        for (i, _) in op.results(db).iter().enumerate() {
+                            let old_result = op.result(db, i);
+                            let new_result = new_op.result(db, i);
+                            if old_result != new_result {
+                                value_map.insert(old_result, new_result);
+                            }
                         }
                     }
                 }
