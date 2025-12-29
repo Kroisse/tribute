@@ -967,17 +967,13 @@ impl<'db> TypeChecker<'db> {
                     && op.name(self.db) == pat::HANDLER_SUSPEND()
                 {
                     // Extract ability reference from attributes
+                    // The ability_ref is now a Type (core.ability_ref) instead of QualifiedName
                     let attrs = op.attributes(self.db);
-                    if let Some(Attribute::QualifiedName(ability_path)) =
-                        attrs.get(&ability_ref_sym)
+                    if let Some(Attribute::Type(ability_ty)) = attrs.get(&ability_ref_sym)
+                        && let Some(ability) = AbilityRef::from_type(self.db, *ability_ty)
+                        && !handled.contains(&ability)
                     {
-                        // Extract ability name from path
-                        let ability_name = ability_path.name();
-
-                        let ability = AbilityRef::simple(ability_name);
-                        if !handled.contains(&ability) {
-                            handled.push(ability);
-                        }
+                        handled.push(ability);
                     }
                 }
             }
@@ -997,21 +993,17 @@ impl<'db> TypeChecker<'db> {
             .unwrap_or_else(|| self.fresh_type_var());
 
         // Get the ability reference from attributes
-        // attr: ability_ref: QualifiedName (path to ability)
+        // attr: ability_ref: Type (core.ability_ref) - supports parameterized abilities
         // attr: op: Symbol (operation name)
-        if let Some(Attribute::QualifiedName(ability_path)) =
+        if let Some(Attribute::Type(ability_ty)) =
             op.attributes(self.db).get(&Symbol::new("ability_ref"))
         {
-            // Extract ability name from the path (last component)
-            let ability_name = ability_path.name();
-
-            // Create ability reference (with no type params for now)
-            // TODO: Extract type parameters from the ability definition
-            let ability = AbilityRef::simple(ability_name);
-
-            // Create an effect row with this ability and merge it
-            let effect = EffectRow::concrete([ability]);
-            self.merge_effect(effect);
+            // Convert the Type to AbilityRef
+            if let Some(ability) = AbilityRef::from_type(self.db, *ability_ty) {
+                // Create an effect row with this ability and merge it
+                let effect = EffectRow::concrete([ability]);
+                self.merge_effect(effect);
+            }
         }
 
         let value = op.result(self.db, 0);

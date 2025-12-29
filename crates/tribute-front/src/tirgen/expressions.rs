@@ -7,7 +7,11 @@ use tree_sitter::Node;
 use trunk_ir::{
     Attribute, Block, BlockBuilder, BlockId, DialectOp, DialectType, IdVec, Operation,
     QualifiedName, Region, Symbol, Type, Value,
-    dialect::{ability, adt, arith, case, core, list, pat, src},
+    dialect::{
+        ability, adt, arith, case,
+        core::{self, AbilityRefType},
+        list, pat, src,
+    },
     idvec,
 };
 
@@ -1289,7 +1293,9 @@ fn handler_pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Regi
         let cont_symbol = continuation_name.unwrap_or_else(|| Symbol::new("_"));
 
         // If ability_ref is None, use a placeholder for inference
-        let ability_ref = ability_ref.unwrap_or_else(|| QualifiedName::simple(Symbol::new("?")));
+        // The type checker will resolve this later
+        let ability_ref = ability_ref
+            .unwrap_or_else(|| AbilityRefType::simple(ctx.db, Symbol::new("?")).as_type());
 
         pat::helpers::handler_suspend_region(
             ctx.db,
@@ -1312,10 +1318,10 @@ fn handler_pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Regi
 
 /// Parse an operation path like `State::get` into (ability_ref, op_name).
 /// Returns (None, op_name) if the ability should be inferred.
-fn parse_operation_path<'db>(
-    ctx: &CstLoweringCtx<'db>,
-    node: Node,
-) -> (Option<QualifiedName>, Symbol) {
+///
+/// The ability_ref is returned as a `core.ability_ref` Type to support
+/// parameterized abilities like `State(Int)`.
+fn parse_operation_path<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> (Option<Type<'db>>, Symbol) {
     let mut cursor = node.walk();
 
     // Collect all path components
@@ -1331,7 +1337,15 @@ fn parse_operation_path<'db>(
         .collect::<Option<QualifiedName>>()
         .unwrap_or_else(|| sym_ref("unknown"));
 
-    (path.to_parent(), path.name())
+    // Convert the parent path (ability name) to an AbilityRefType
+    // Note: Type parameters will be inferred/resolved later by the type checker
+    let ability_ref = path.to_parent().map(|parent| {
+        // For now, use just the final component as the ability name
+        // Multi-module support would require preserving the full qualified name
+        AbilityRefType::simple(ctx.db, parent.name()).as_type()
+    });
+
+    (ability_ref, path.name())
 }
 
 // =============================================================================

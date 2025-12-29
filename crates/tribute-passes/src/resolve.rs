@@ -25,7 +25,7 @@ use trunk_ir::dialect::ability;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::case;
-use trunk_ir::dialect::core::{self, Module};
+use trunk_ir::dialect::core::{self, AbilityRefType, Module};
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::pat;
 use trunk_ir::dialect::src;
@@ -104,8 +104,9 @@ pub enum Binding<'db> {
     },
     /// An ability operation (e.g., State::get, Console::print).
     AbilityOp {
-        /// The ability this operation belongs to (e.g., "State")
-        ability: QualifiedName,
+        /// The ability this operation belongs to as a `core.ability_ref` type.
+        /// This supports parameterized abilities like `State(Int)`.
+        ability: Type<'db>,
         /// The operation name (e.g., "get")
         op_name: Symbol,
         /// Parameter types
@@ -167,21 +168,26 @@ impl<'db> ModuleEnv<'db> {
     /// Add an ability operation to the environment.
     ///
     /// Ability operations are added to the ability's namespace (e.g., `State::get`).
+    ///
+    /// - `ability_name`: The ability name symbol (e.g., `State`)
+    /// - `ability_ty`: The ability type as `core.ability_ref` (e.g., `AbilityRefType::simple(db, "State")`)
+    /// - `op_name`: The operation name (e.g., `get`)
     pub fn add_ability_op(
         &mut self,
-        ability: QualifiedName,
+        ability_name: Symbol,
+        ability_ty: Type<'db>,
         op_name: Symbol,
         params: IdVec<Type<'db>>,
         return_ty: Type<'db>,
     ) {
         let binding = Binding::AbilityOp {
-            ability: ability.clone(),
+            ability: ability_ty,
             op_name,
             params,
             return_ty,
         };
         // Add to the ability's namespace for qualified lookup (State::get)
-        self.add_to_namespace(ability.name(), op_name, binding);
+        self.add_to_namespace(ability_name, op_name, binding);
     }
 
     /// Add a qualified name to a namespace.
@@ -335,7 +341,7 @@ fn collect_definition<'db>(
                 );
 
                 // Extract operations from the ability
-                collect_ability_operations(db, env, ability_decl, ability_qn);
+                collect_ability_operations(db, env, ability_decl, *ability_name);
             }
         }
         (d, n) if d == src::DIALECT_NAME() && n == src::CONST() => {
@@ -439,9 +445,14 @@ fn collect_ability_operations<'db>(
     db: &'db dyn salsa::Database,
     env: &mut ModuleEnv<'db>,
     ability_decl: ty::Ability<'db>,
-    ability: QualifiedName,
+    ability_name: Symbol,
 ) {
     let operations_region = ability_decl.operations(db);
+
+    // Create the ability type as a core.ability_ref.
+    // At this point we don't know the type parameters (they come from usage sites),
+    // so we create a simple reference without parameters.
+    let ability_ty = AbilityRefType::simple(db, ability_name).as_type();
 
     for block in operations_region.blocks(db).iter() {
         for op in block.operations(db).iter().copied() {
@@ -460,7 +471,7 @@ fn collect_ability_operations<'db>(
                 (IdVec::new(), core::Nil::new(db).as_type())
             };
 
-            env.add_ability_op(ability.clone(), op_name, params, return_ty);
+            env.add_ability_op(ability_name, ability_ty, op_name, params, return_ty);
         }
     }
 }
@@ -1399,7 +1410,7 @@ impl<'db> Resolver<'db> {
                     location,
                     std::iter::empty::<Value<'db>>(),
                     resolved_return_ty,
-                    ability.clone(),
+                    *ability,
                     *op_name,
                 );
 
@@ -1482,7 +1493,7 @@ impl<'db> Resolver<'db> {
                     location,
                     std::iter::empty::<Value<'db>>(),
                     resolved_return_ty,
-                    ability.clone(),
+                    *ability,
                     *op_name,
                 );
 
@@ -1579,7 +1590,7 @@ impl<'db> Resolver<'db> {
                     location,
                     args,
                     resolved_return_ty,
-                    ability.clone(),
+                    *ability,
                     *op_name,
                 );
 
@@ -2295,10 +2306,14 @@ pub mod tests {
         let perform_op = perform_ops[0];
         let attrs = perform_op.attributes(db);
 
-        // Check ability_ref attribute
-        if let Some(Attribute::QualifiedName(ability_ref)) = attrs.get(&Symbol::new("ability_ref"))
-        {
-            assert!(ability_ref.name() == "Console");
+        // Check ability_ref attribute - now stored as Type (core.ability_ref)
+        if let Some(Attribute::Type(ability_ty)) = attrs.get(&Symbol::new("ability_ref")) {
+            // Use AbilityRefType to extract the name
+            if let Some(ability_ref) = AbilityRefType::from_type(db, *ability_ty) {
+                assert!(ability_ref.name(db) == Some(Symbol::new("Console")));
+            } else {
+                panic!("ability_ref should be a valid AbilityRefType");
+            }
         } else {
             panic!("ability.perform should have ability_ref attribute");
         }
