@@ -635,16 +635,9 @@ fn lower_case_arm<'db>(
     // Create arm body
     let mut body_block = BlockBuilder::new(ctx.db, location);
 
-    // Check if pattern is a handler_pattern (for ability effect handling)
-    let is_handler_pattern = find_handler_pattern(pattern_node).is_some();
-
     let result_value = ctx.scoped(|ctx| {
-        // Bind pattern - use appropriate binding function based on pattern type
-        if is_handler_pattern {
-            bind_handler_pattern(ctx, &mut body_block, pattern_node, scrutinee);
-        } else {
-            bind_pattern(ctx, &mut body_block, pattern_node, scrutinee);
-        }
+        // Bind pattern variables (including handler patterns)
+        bind_pattern(ctx, &mut body_block, pattern_node, scrutinee);
 
         // Lower body
         lower_expr(ctx, &mut body_block, body_node)
@@ -657,23 +650,6 @@ fn lower_case_arm<'db>(
     let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
     Some(case::arm(ctx.db, location, pattern_region, body_region))
-}
-
-/// Find a handler_pattern node within a pattern (unwrapping wrapper nodes).
-fn find_handler_pattern(node: Node) -> Option<Node> {
-    match node.kind() {
-        "handler_pattern" => Some(node),
-        "pattern" | "simple_pattern" => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                if let Some(found) = find_handler_pattern(child) {
-                    return Some(found);
-                }
-            }
-            None
-        }
-        _ => None,
-    }
 }
 
 /// Convert a pattern node to a pattern region for case arms and let bindings.
@@ -1109,119 +1085,6 @@ fn lower_handle_expr<'db>(
     // Create ability.prompt to run body and get Request
     let prompt_op = block.op(ability::prompt(ctx.db, location, request_ty, body_region));
     Some(prompt_op.request(ctx.db))
-}
-
-/// Bind handler pattern variables.
-///
-/// The `_request` parameter represents the Request value being pattern matched.
-/// Currently, `case::bind` operations extract values from the pattern matching
-/// context. The actual extraction from the request is handled by the handler
-/// lowering pass.
-fn bind_handler_pattern<'db>(
-    ctx: &mut CstLoweringCtx<'db>,
-    block: &mut BlockBuilder<'db>,
-    node: Node,
-    _request: Value<'db>,
-) {
-    let location = ctx.location(&node);
-    let mut cursor = node.walk();
-
-    match node.kind() {
-        // Unwrap wrapper nodes
-        "pattern" | "simple_pattern" => {
-            for child in node.named_children(&mut cursor) {
-                if !is_comment(child.kind()) {
-                    bind_handler_pattern(ctx, block, child, _request);
-                    return;
-                }
-            }
-        }
-        "handler_pattern" => {
-            // Handler patterns: { value } or { Op(args) -> k }
-            let mut value_name = None;
-            let mut op_name = None;
-            let mut args_node = None;
-            let mut continuation_name = None;
-
-            for child in node.named_children(&mut cursor) {
-                if is_comment(child.kind()) {
-                    continue;
-                }
-                match child.kind() {
-                    "identifier" if op_name.is_none() && value_name.is_none() => {
-                        // Could be value binding or operation name
-                        let name = node_text(&child, &ctx.source).into();
-                        // Check if this is followed by -> (continuation)
-                        // For now, treat single identifier as value binding
-                        value_name = Some(name);
-                    }
-                    "type_identifier" => {
-                        // This is an ability operation name
-                        op_name = Some(node_text(&child, &ctx.source));
-                    }
-                    "path_expression" => {
-                        // This is the operation path (e.g., State::get)
-                        // Mark that we have an operation, not a simple value binding
-                        op_name = Some(node_text(&child, &ctx.source));
-                    }
-                    "pattern_list" => {
-                        // Arguments to the operation
-                        args_node = Some(child);
-                    }
-                    "identifier" if op_name.is_some() => {
-                        // This is the continuation binding
-                        continuation_name = Some(node_text(&child, &ctx.source).into());
-                    }
-                    _ => {}
-                }
-            }
-
-            // Bind the value (for { result } pattern)
-            if let Some(name) = value_name
-                && op_name.is_none()
-            {
-                // Simple value binding: { result }
-                // The request's Done payload is bound to name
-                let bind_op = block.op(case::bind(ctx.db, location, ctx.fresh_type_var(), name));
-                ctx.bind(name, bind_op.result(ctx.db));
-            }
-
-            // Bind operation arguments (for { Op(args) -> k } pattern)
-            // Each argument is extracted from the request using case::bind
-            if let Some(args) = args_node {
-                let mut args_cursor = args.walk();
-                for arg_child in args.named_children(&mut args_cursor) {
-                    if is_comment(arg_child.kind()) {
-                        continue;
-                    }
-                    // Extract the argument value from the request
-                    let arg_bind = block.op(case::bind(
-                        ctx.db,
-                        location,
-                        ctx.fresh_type_var(),
-                        Symbol::new("_arg"),
-                    ));
-                    let arg_value = arg_bind.result(ctx.db);
-                    // Bind the argument pattern to the extracted value
-                    bind_pattern(ctx, block, arg_child, arg_value);
-                }
-            }
-
-            // Bind continuation (for { Op(args) -> k } pattern)
-            if let Some(cont_name) = continuation_name {
-                let cont_bind = block.op(case::bind(
-                    ctx.db,
-                    location,
-                    ctx.fresh_type_var(),
-                    cont_name,
-                ));
-                ctx.bind(cont_name, cont_bind.result(ctx.db));
-            }
-        }
-        _ => {
-            // Unknown pattern type
-        }
-    }
 }
 
 /// Convert a handler pattern to a pattern region.
