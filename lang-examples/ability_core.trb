@@ -1,0 +1,26 @@
+ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn counter() ->{State(Int)} Int {
+    let n = State::get()
+    State::set(n + 1)
+    n
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    case handle comp() {
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() { k(init) }, init)
+        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+    }
+}
+
+fn main() -> Int {
+    run_state(fn() {
+        counter()
+        counter()
+        counter()
+    }, 0)
+}

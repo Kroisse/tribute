@@ -2,8 +2,8 @@
 
 use tree_sitter::Node;
 use trunk_ir::{
-    BlockBuilder, Value,
-    dialect::{adt, arith, list, src},
+    BlockBuilder, Symbol, Value,
+    dialect::{adt, arith, case, list, src},
 };
 
 use super::context::CstLoweringCtx;
@@ -269,8 +269,72 @@ pub fn bind_pattern<'db>(
             }
         }
         "handler_pattern" => {
-            // Handler patterns are for ability effect handling in match expressions
-            // They don't make sense in let bindings - handled in case arms
+            // Handler patterns: { value } or { Op(args) -> k }
+            let location = ctx.location(&pattern);
+            let mut handler_cursor = pattern.walk();
+
+            let mut value_name = None;
+            let mut has_operation = false;
+            let mut args_node = None;
+            let mut continuation_name = None;
+
+            for child in pattern.named_children(&mut handler_cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                match child.kind() {
+                    "identifier" if !has_operation && value_name.is_none() => {
+                        value_name = Some(node_text(&child, &ctx.source).into());
+                    }
+                    "type_identifier" | "path_expression" => {
+                        has_operation = true;
+                    }
+                    "pattern_list" => {
+                        args_node = Some(child);
+                    }
+                    "identifier" if has_operation => {
+                        continuation_name = Some(node_text(&child, &ctx.source).into());
+                    }
+                    _ => {}
+                }
+            }
+
+            // Bind the value (for { result } pattern)
+            if let Some(name) = value_name
+                && !has_operation
+            {
+                let bind_op = block.op(case::bind(ctx.db, location, ctx.fresh_type_var(), name));
+                ctx.bind(name, bind_op.result(ctx.db));
+            }
+
+            // Bind operation arguments (for { Op(args) -> k } pattern)
+            if let Some(args) = args_node {
+                let mut args_cursor = args.walk();
+                for arg_child in args.named_children(&mut args_cursor) {
+                    if is_comment(arg_child.kind()) {
+                        continue;
+                    }
+                    let arg_bind = block.op(case::bind(
+                        ctx.db,
+                        location,
+                        ctx.fresh_type_var(),
+                        Symbol::new("_arg"),
+                    ));
+                    let arg_value = arg_bind.result(ctx.db);
+                    bind_pattern(ctx, block, arg_child, arg_value);
+                }
+            }
+
+            // Bind continuation (for { Op(args) -> k } pattern)
+            if let Some(cont_name) = continuation_name {
+                let cont_bind = block.op(case::bind(
+                    ctx.db,
+                    location,
+                    ctx.fresh_type_var(),
+                    cont_name,
+                ));
+                ctx.bind(cont_name, cont_bind.result(ctx.db));
+            }
         }
         _ => {
             // Unknown pattern - try to handle child patterns
