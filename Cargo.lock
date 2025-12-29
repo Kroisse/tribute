@@ -2602,8 +2602,8 @@ checksum = "4ae62f7eae5eb549c71b76658648b72cc6111f2d87d24a1e31fa907f4943e3ce"
 
 [[package]]
 name = "tree-sitter-tribute"
-version = "0.3.1"
-source = "git+https://github.com/Kroisse/tree-sitter-tribute?tag=v0.3.1#d9cf60f95c3e6b039e13f36616bcfcffc561b929"
+version = "0.3.2"
+source = "git+https://github.com/Kroisse/tree-sitter-tribute?tag=v0.3.2#806fd69cc879dbd7ac60affe64e769acc1f0ccef"
 dependencies = [
  "cc",
  "tree-sitter-language",
