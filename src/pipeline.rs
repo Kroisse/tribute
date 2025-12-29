@@ -27,6 +27,9 @@
 //! stage_lambda_lift ─► Module (lambdas lifted, closure.new created)
 //!     │
 //!     ▼
+//! stage_closure_lower ─► Module (closure.func/env extracted for indirect calls)
+//!     │
+//!     ▼
 //! stage_tdnr ─► Module (UFCS method calls resolved)
 //!     │
 //!     ▼
@@ -358,14 +361,14 @@ pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Modul
     resolve_tdnr(db, module)
 }
 
-/// Stage 7: Lower `case.case` to `scf.if` chains.
+/// Stage 8: Lower `case.case` to `scf.if` chains.
 #[salsa::tracked]
 pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let module = stage_tdnr(db, source);
     lower_case_to_scf(db, module)
 }
 
-/// Stage 8: Dead Code Elimination (DCE).
+/// Stage 9: Dead Code Elimination (DCE).
 ///
 /// This pass removes unreachable function definitions from the module.
 /// Entry points include:
@@ -382,7 +385,7 @@ pub fn stage_dce<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module
     result.module
 }
 
-/// Stage 9: Lower to WebAssembly target.
+/// Stage 10: Lower to WebAssembly target.
 ///
 /// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
 /// It performs:
