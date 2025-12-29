@@ -189,6 +189,28 @@ impl<'db> EffectRow<'db> {
         self.abilities.remove(ability)
     }
 
+    /// Find abilities matching a given name (ignoring type parameters).
+    ///
+    /// This is used for handler pattern matching where the pattern specifies
+    /// only the ability name (e.g., `State::get()`) but we need to find the
+    /// fully parameterized ability (e.g., `State(Int)`) in the effect row.
+    ///
+    /// Returns all matching abilities since multiple parameterizations of the
+    /// same ability can coexist in an effect row. When the effect row contains
+    /// multiple parameterizations (e.g., `State(Int)` and `State(String)`), all
+    /// are returned. This means a handler pattern without explicit type params
+    /// will handle all matching parameterizations.
+    ///
+    /// Future work: Type inference from handler bodies could disambiguate which
+    /// specific parameterization is being handled.
+    pub fn find_by_name(&self, name: Symbol) -> Vec<AbilityRef<'db>> {
+        self.abilities
+            .iter()
+            .filter(|ability| ability.name == name)
+            .cloned()
+            .collect()
+    }
+
     /// Set the row variable tail.
     pub fn set_tail(&mut self, tail: Option<RowVar>) {
         self.tail = tail;
@@ -212,14 +234,30 @@ impl<'db> EffectRow<'db> {
         Self { abilities, tail }
     }
 
-    /// Check for duplicate abilities (same ability appearing twice).
+    /// Check for conflicting abilities (same name with different type parameters).
     ///
-    /// Returns `Some(ability)` if a duplicate is found.
-    /// Note: This checks within `self`, not between two rows.
-    pub fn find_duplicate(&self) -> Option<&AbilityRef<'db>> {
-        // BTreeSet prevents duplicates, so we just need to check
-        // if any ability appears with different type parameters
-        // This is already prevented by the AbilityRef Eq implementation
+    /// Returns `Some((name, abilities))` if a conflict is found, where `abilities`
+    /// contains all the conflicting ability references with the same name.
+    ///
+    /// This restriction exists because handler patterns match abilities by name only
+    /// (e.g., `State::get()`), so having both `State(Int)` and `State(Text)` would
+    /// be ambiguous. Future work on named effects may lift this restriction.
+    pub fn find_conflicting_abilities(&self) -> Option<(Symbol, Vec<&AbilityRef<'db>>)> {
+        use std::collections::HashMap;
+
+        // Group abilities by name
+        let mut by_name: HashMap<Symbol, Vec<&AbilityRef<'db>>> = HashMap::new();
+        for ability in &self.abilities {
+            by_name.entry(ability.name).or_default().push(ability);
+        }
+
+        // Find any name with multiple different parameterizations
+        for (name, abilities) in by_name {
+            if abilities.len() > 1 {
+                return Some((name, abilities));
+            }
+        }
+
         None
     }
 }
@@ -359,5 +397,138 @@ mod tests {
         assert_eq!(union.abilities().len(), 2);
         assert!(union.contains(&state_int));
         assert!(union.contains(&state_float));
+    }
+
+    #[salsa_test]
+    fn test_find_by_name_returns_all_matching_abilities(db: &salsa::DatabaseImpl) {
+        // find_by_name should return all abilities matching the name, ignoring type params
+        let state_name = Symbol::new("State");
+        let console_name = Symbol::new("Console");
+        let int_ty = *core::I64::new(db);
+        let float_ty = *core::F64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let state_float = AbilityRef::new(state_name, IdVec::from(vec![float_ty]));
+        let console = AbilityRef::simple(console_name);
+
+        let row = EffectRow::concrete([state_int.clone(), state_float.clone(), console.clone()]);
+
+        // find_by_name("State") should return both State(I64) and State(F64)
+        let state_abilities = row.find_by_name(state_name);
+        assert_eq!(state_abilities.len(), 2);
+        assert!(state_abilities.contains(&state_int));
+        assert!(state_abilities.contains(&state_float));
+
+        // find_by_name("Console") should return only Console
+        let console_abilities = row.find_by_name(console_name);
+        assert_eq!(console_abilities.len(), 1);
+        assert!(console_abilities.contains(&console));
+
+        // find_by_name("Unknown") should return empty
+        let unknown_name = Symbol::new("Unknown");
+        let unknown_abilities = row.find_by_name(unknown_name);
+        assert!(unknown_abilities.is_empty());
+    }
+
+    #[salsa_test]
+    fn test_find_by_name_handler_pattern_matching(db: &salsa::DatabaseImpl) {
+        // Simulates handler pattern matching: pattern has no type params,
+        // effect row has parameterized ability
+        let state_name = Symbol::new("State");
+        let int_ty = *core::I64::new(db);
+
+        // Effect row contains State(Int)
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let row = EffectRow::concrete([state_int.clone()]);
+
+        // Handler pattern just says "State" (no params)
+        let pattern_name = state_name;
+
+        // find_by_name should find State(Int) when looking for "State"
+        let matching = row.find_by_name(pattern_name);
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0], state_int);
+    }
+
+    #[salsa_test]
+    fn test_find_by_name_with_multiple_parameterizations(db: &salsa::DatabaseImpl) {
+        // When effect row contains multiple parameterizations of the same ability
+        // (e.g., both State(Int) and State(String)), find_by_name returns all.
+        //
+        // Note: In the current implementation, a handler pattern without explicit
+        // type parameters (e.g., `State::get()`) will handle ALL matching abilities.
+        // Future work may add type inference from handler bodies to disambiguate.
+        let state_name = Symbol::new("State");
+        let int_ty = *core::I64::new(db);
+        let string_ty = *core::String::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let state_string = AbilityRef::new(state_name, IdVec::from(vec![string_ty]));
+        let row = EffectRow::concrete([state_int.clone(), state_string.clone()]);
+
+        // Handler pattern just says "State" (no params)
+        let matching = row.find_by_name(state_name);
+
+        // Both parameterizations are returned
+        assert_eq!(matching.len(), 2);
+        assert!(matching.contains(&state_int));
+        assert!(matching.contains(&state_string));
+    }
+
+    #[salsa_test]
+    fn test_find_conflicting_abilities_detects_conflicts(db: &salsa::DatabaseImpl) {
+        // find_conflicting_abilities should detect when the same ability name
+        // appears with different type parameters
+        let state_name = Symbol::new("State");
+        let int_ty = *core::I64::new(db);
+        let string_ty = *core::String::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let state_string = AbilityRef::new(state_name, IdVec::from(vec![string_ty]));
+        let row = EffectRow::concrete([state_int.clone(), state_string.clone()]);
+
+        // Should detect the conflict
+        let conflict = row.find_conflicting_abilities();
+        assert!(conflict.is_some());
+
+        let (conflict_name, conflicting) = conflict.unwrap();
+        assert_eq!(conflict_name, state_name);
+        assert_eq!(conflicting.len(), 2);
+    }
+
+    #[salsa_test]
+    fn test_find_conflicting_abilities_no_conflict_with_different_abilities(
+        db: &salsa::DatabaseImpl,
+    ) {
+        // find_conflicting_abilities should NOT report a conflict when different
+        // ability names are used
+        let state_name = Symbol::new("State");
+        let console_name = Symbol::new("Console");
+        let int_ty = *core::I64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let console = AbilityRef::simple(console_name);
+        let row = EffectRow::concrete([state_int, console]);
+
+        // Should NOT detect a conflict
+        let conflict = row.find_conflicting_abilities();
+        assert!(conflict.is_none());
+    }
+
+    #[salsa_test]
+    fn test_find_conflicting_abilities_no_conflict_with_single_parameterization(
+        db: &salsa::DatabaseImpl,
+    ) {
+        // find_conflicting_abilities should NOT report a conflict when only
+        // one parameterization of an ability is present
+        let state_name = Symbol::new("State");
+        let int_ty = *core::I64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let row = EffectRow::concrete([state_int]);
+
+        // Should NOT detect a conflict
+        let conflict = row.find_conflicting_abilities();
+        assert!(conflict.is_none());
     }
 }

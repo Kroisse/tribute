@@ -173,6 +173,44 @@ impl<'db> TypeChecker<'db> {
         self.current_effect = self.current_effect.union(&effect, fresh_var);
     }
 
+    /// Check for conflicting abilities in the current effect row and report an error.
+    ///
+    /// Conflicting abilities are abilities with the same name but different type parameters
+    /// (e.g., `State(Int)` and `State(Text)`). Handler patterns match by name only, so having
+    /// multiple parameterizations of the same ability would be ambiguous.
+    ///
+    /// This restriction may be lifted in the future with named effects.
+    fn check_ability_conflicts(&self, span: trunk_ir::Span) {
+        if let Some((name, abilities)) = self.current_effect.find_conflicting_abilities() {
+            let ability_strs: Vec<String> = abilities
+                .iter()
+                .map(|a| {
+                    if a.params.is_empty() {
+                        a.name.to_string()
+                    } else {
+                        let params: Vec<String> =
+                            a.params.iter().map(|ty| format!("{:?}", ty)).collect();
+                        format!("{}({})", a.name, params.join(", "))
+                    }
+                })
+                .collect();
+
+            Diagnostic {
+                message: format!(
+                    "conflicting ability parameterizations for `{}`: {} are all in scope. \
+                     Handler patterns match abilities by name only, so mixing different \
+                     parameterizations is not allowed.",
+                    name,
+                    ability_strs.join(" and ")
+                ),
+                span,
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::TypeChecking,
+            }
+            .accumulate(self.db);
+        }
+    }
+
     /// Check a module.
     pub fn check_module(&mut self, module: &core::Module<'db>) {
         self.seed_var_counters(module);
@@ -954,6 +992,16 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Extract abilities being handled from a pattern region.
+    ///
+    /// Handler patterns specify abilities by name only (e.g., `State::get()`), but
+    /// the effect row may contain parameterized abilities (e.g., `State(Int)`).
+    /// This function matches pattern ability names against the current effect row
+    /// to find the fully parameterized abilities that are being handled.
+    ///
+    /// Note: When the effect row contains multiple parameterizations of the same
+    /// ability (e.g., both `State(Int)` and `State(String)`), a handler pattern
+    /// without explicit type parameters will handle ALL of them. Future work may
+    /// add type inference from handler bodies to disambiguate.
     fn extract_handled_abilities(
         &self,
         pattern_region: &Region<'db>,
@@ -967,13 +1015,28 @@ impl<'db> TypeChecker<'db> {
                     && op.name(self.db) == pat::HANDLER_SUSPEND()
                 {
                     // Extract ability reference from attributes
-                    // The ability_ref is now a Type (core.ability_ref) instead of QualifiedName
+                    // The ability_ref is a Type (core.ability_ref) but may lack type parameters
+                    // because handler patterns don't include them in the syntax.
                     let attrs = op.attributes(self.db);
                     if let Some(Attribute::Type(ability_ty)) = attrs.get(&ability_ref_sym)
-                        && let Some(ability) = AbilityRef::from_type(self.db, *ability_ty)
-                        && !handled.contains(&ability)
+                        && let Some(pattern_ability) = AbilityRef::from_type(self.db, *ability_ty)
                     {
-                        handled.push(ability);
+                        // If the pattern ability has type parameters, use it directly
+                        // Otherwise, find matching abilities from the effect row by name
+                        if !pattern_ability.params.is_empty() {
+                            // Pattern has explicit type parameters - use as is
+                            if !handled.contains(&pattern_ability) {
+                                handled.push(pattern_ability);
+                            }
+                        } else {
+                            // Pattern has no type parameters - find by name in effect row
+                            // This allows `State::get()` to match `State(Int)` in the effect row
+                            for ability in self.current_effect.find_by_name(pattern_ability.name) {
+                                if !handled.contains(&ability) {
+                                    handled.push(ability);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1006,6 +1069,9 @@ impl<'db> TypeChecker<'db> {
                 // Create an effect row with this ability and merge it
                 let effect = EffectRow::concrete([ability]);
                 self.merge_effect(effect);
+
+                // Check for conflicting abilities (same name with different type parameters)
+                self.check_ability_conflicts(op.location(self.db).span);
             } else {
                 trace!(
                     ?ability_ty,
@@ -1045,6 +1111,9 @@ impl<'db> TypeChecker<'db> {
         // (pat.handler_suspend in pattern regions).
         let body_effect = std::mem::replace(&mut self.current_effect, outer_effect);
         self.merge_effect(body_effect);
+
+        // Check for conflicting abilities after merging body effects
+        self.check_ability_conflicts(op.location(self.db).span);
 
         let value = op.result(self.db, 0);
         self.record_type(value, result_type);
