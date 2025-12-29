@@ -14,7 +14,8 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use trunk_ir::dialect::{adt, closure, core, func, pat, src};
+use tribute_ir::dialect::{adt, closure, pat, src, ty};
+use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
     Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, QualifiedName, Region,
@@ -258,7 +259,7 @@ impl<'db> LambdaInfoCollector<'db> {
                 }
             }
         }
-        trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new())
+        ty::var(self.db, std::collections::BTreeMap::new())
     }
 
     fn collect_pattern_bindings(&mut self, region: &Region<'db>, ty: Type<'db>) {
@@ -626,18 +627,17 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         let body = lambda_op.body(self.db);
 
         // Parse the function type
-        let (param_types, result_type, effect_type) = if let Some(func_ty) =
-            core::Func::from_type(self.db, lambda_type)
-        {
-            (
-                func_ty.params(self.db).clone(),
-                func_ty.result(self.db),
-                func_ty.effect(self.db),
-            )
-        } else {
-            let infer_ty = trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
-            (IdVec::new(), infer_ty, None)
-        };
+        let (param_types, result_type, effect_type) =
+            if let Some(func_ty) = core::Func::from_type(self.db, lambda_type) {
+                (
+                    func_ty.params(self.db).clone(),
+                    func_ty.result(self.db),
+                    func_ty.effect(self.db),
+                )
+            } else {
+                let infer_ty = ty::var(self.db, std::collections::BTreeMap::new());
+                (IdVec::new(), infer_ty, None)
+            };
 
         // Get capture values from current scope
         let mut capture_values: Vec<Value<'db>> = Vec::new();
@@ -901,7 +901,8 @@ pub fn lift_lambdas<'db>(
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::{arith, closure, core, func, src};
+    use tribute_ir::dialect::{closure, src};
+    use trunk_ir::dialect::{arith, core, func};
     use trunk_ir::{BlockId, Location, PathId, Span, idvec};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {

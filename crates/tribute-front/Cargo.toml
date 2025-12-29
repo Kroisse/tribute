@@ -13,4 +13,5 @@ ropey.workspace = true
 tracing.workspace = true
 tree-sitter.workspace = true
 tree-sitter-tribute.workspace = true
+tribute-ir.workspace = true
 trunk-ir.workspace = true

@@ -3,7 +3,7 @@
 //! Operations for persistent list (RRB tree-backed) manipulation.
 //! All operations that return a list or element carry `elem_type` for type information.
 
-use crate::dialect;
+use trunk_ir::dialect;
 
 dialect! {
     mod list {
@@ -63,13 +63,13 @@ dialect! {
 // === Pure operation registrations ===
 // All list operations are pure (persistent data structure - returns new lists)
 
-crate::register_pure_op!(list.new);
-crate::register_pure_op!(list.get);
-crate::register_pure_op!(list.len);
-crate::register_pure_op!(list.view_front);
-crate::register_pure_op!(list.view_back);
-crate::register_pure_op!(list.set);
-crate::register_pure_op!(list.push_front);
-crate::register_pure_op!(list.push_back);
-crate::register_pure_op!(list.concat);
-crate::register_pure_op!(list.slice);
+trunk_ir::register_pure_op!(New<'_>);
+trunk_ir::register_pure_op!(Get<'_>);
+trunk_ir::register_pure_op!(Len<'_>);
+trunk_ir::register_pure_op!(ViewFront<'_>);
+trunk_ir::register_pure_op!(ViewBack<'_>);
+trunk_ir::register_pure_op!(Set<'_>);
+trunk_ir::register_pure_op!(PushFront<'_>);
+trunk_ir::register_pure_op!(PushBack<'_>);
+trunk_ir::register_pure_op!(Concat<'_>);
+trunk_ir::register_pure_op!(Slice<'_>);

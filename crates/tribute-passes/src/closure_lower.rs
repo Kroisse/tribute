@@ -19,7 +19,8 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
-use trunk_ir::dialect::{closure, core, func};
+use tribute_ir::dialect::closure;
+use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{DialectOp, DialectType, Operation, Type, Value, ValueDef};
 

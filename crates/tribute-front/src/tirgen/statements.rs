@@ -1,10 +1,8 @@
 //! Block and statement lowering.
 
 use tree_sitter::Node;
-use trunk_ir::{
-    BlockBuilder, Symbol, Value,
-    dialect::{adt, arith, case, list, src},
-};
+use tribute_ir::dialect::{adt, case, list, src};
+use trunk_ir::{BlockBuilder, Symbol, Value, dialect::arith};
 
 use super::context::CstLoweringCtx;
 use super::expressions::{lower_expr, pattern_to_region};

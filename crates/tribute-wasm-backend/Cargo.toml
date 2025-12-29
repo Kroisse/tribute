@@ -9,6 +9,7 @@ license.workspace = true
 derive_more.workspace = true
 salsa.workspace = true
 tracing.workspace = true
+tribute-ir.workspace = true
 trunk-ir.workspace = true
 wasm-encoder.workspace = true
 

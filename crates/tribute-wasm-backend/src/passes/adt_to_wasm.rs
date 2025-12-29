@@ -40,7 +40,7 @@
 
 use tracing::warn;
 
-use trunk_ir::dialect::adt;
+use tribute_ir::dialect::adt;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type, Value};

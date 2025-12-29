@@ -2630,6 +2630,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-tribute",
  "tribute-front",
+ "tribute-ir",
  "tribute-passes",
  "tribute-wasm-backend",
  "trunk-ir",
@@ -2665,6 +2666,17 @@ dependencies = [
  "tracing",
  "tree-sitter",
  "tree-sitter-tribute",
+ "tribute-ir",
+ "trunk-ir",
+]
+
+[[package]]
+name = "tribute-ir"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "salsa",
+ "tracing",
  "trunk-ir",
 ]
 
@@ -2675,6 +2687,7 @@ dependencies = [
  "salsa",
  "salsa-test-macros",
  "tracing",
+ "tribute-ir",
  "trunk-ir",
 ]
 
@@ -2688,6 +2701,7 @@ dependencies = [
  "salsa-test-macros",
  "tempfile",
  "tracing",
+ "tribute-ir",
  "trunk-ir",
  "wasm-encoder",
 ]

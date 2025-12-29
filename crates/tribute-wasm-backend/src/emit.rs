@@ -9,7 +9,8 @@ use std::sync::LazyLock;
 
 use tracing::debug;
 
-use trunk_ir::dialect::{adt, core, func, ty, wasm};
+use tribute_ir::dialect::{adt, ty};
+use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::{
     Attribute, Attrs, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
     Type, Value, ValueDef,

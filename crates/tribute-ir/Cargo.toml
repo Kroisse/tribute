@@ -1,0 +1,13 @@
+[package]
+name = "tribute-ir"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Tribute language-specific IR dialects"
+
+[dependencies]
+inventory.workspace = true
+salsa.workspace = true
+tracing.workspace = true
+trunk-ir.workspace = true

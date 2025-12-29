@@ -21,7 +21,7 @@
 //! }
 //! ```
 
-use crate::dialect;
+use trunk_ir::dialect;
 
 dialect! {
     mod closure {
@@ -54,7 +54,7 @@ dialect! {
 // Printable Registration
 // ============================================================================
 
-use crate::type_interface::Printable;
+use trunk_ir::type_interface::Printable;
 
 // closure.closure -> "Closure(fn(I64) -> I64)"
 inventory::submit! {
@@ -72,6 +72,6 @@ inventory::submit! {
 // === Pure operation registrations ===
 // All closure operations are pure
 
-crate::register_pure_op!(closure.new);
-crate::register_pure_op!(closure.func);
-crate::register_pure_op!(closure.env);
+trunk_ir::register_pure_op!(New<'_>);
+trunk_ir::register_pure_op!(Func<'_>);
+trunk_ir::register_pure_op!(Env<'_>);

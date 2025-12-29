@@ -20,7 +20,7 @@
 //! }
 //! ```
 
-use crate::dialect;
+use trunk_ir::dialect;
 
 dialect! {
     mod ability {

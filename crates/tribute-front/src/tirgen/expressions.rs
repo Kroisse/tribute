@@ -4,13 +4,13 @@
 
 use tracing::trace;
 use tree_sitter::Node;
+use tribute_ir::dialect::{ability, adt, case, list, pat, src};
 use trunk_ir::{
     Attribute, Block, BlockBuilder, BlockId, DialectOp, DialectType, IdVec, Operation,
     QualifiedName, Region, Symbol, Type, Value,
     dialect::{
-        ability, adt, arith, case,
+        arith,
         core::{self, AbilityRefType},
-        list, pat, src,
     },
     idvec,
 };

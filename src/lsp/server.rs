@@ -503,8 +503,9 @@ fn extract_symbol_from_operation<'db>(
     op: &trunk_ir::Operation<'db>,
     rope: &Rope,
 ) -> Option<DocumentSymbol> {
+    use tribute_ir::dialect::ty;
     use trunk_ir::DialectOp;
-    use trunk_ir::dialect::{core, func, ty};
+    use trunk_ir::dialect::{core, func};
 
     if let Ok(module_op) = core::Module::from_operation(db, *op) {
         return Some(create_symbol(
