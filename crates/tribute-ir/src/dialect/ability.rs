@@ -85,7 +85,7 @@ dialect! {
 
 // === Printable interface registrations ===
 
-use crate::type_interface::Printable;
+use trunk_ir::type_interface::Printable;
 
 // evidence_ptr -> "Evidence"
-inventory::submit! { Printable::implement("ability", "evidence_ptr", |_, _, f| f.write_str("Evidence")) }
+inventory::submit! { Printable::implement("ability", "evidence_ptr", |_, _, f: &mut std::fmt::Formatter<'_>| f.write_str("Evidence")) }
