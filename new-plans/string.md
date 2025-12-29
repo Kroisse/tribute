@@ -1,4 +1,4 @@
-# Text and Bytes
+# String and Bytes
 
 Tribute는 텍스트와 바이트 데이터를 명확히 구분한다.
 
@@ -7,12 +7,12 @@ Tribute는 텍스트와 바이트 데이터를 명확히 구분한다.
 | 타입 | 설명 | 리터럴 |
 |------|------|--------|
 | `Bytes` | raw bytes, 인코딩 가정 없음 | `b"..."` |
-| `Text` | Unicode 텍스트 (UTF-8) | `"..."` |
+| `String` | Unicode 텍스트 (UTF-8 rope) | `"..."` |
 | `Rune` | 단일 Unicode codepoint | `?a`, `?\n` |
 
 **설계 원칙:**
 - `Bytes`는 primitive type (ptr, len)
-- `Text`는 UTF-8 인코딩된 텍스트
+- `String`은 UTF-8 인코딩된 텍스트 (내부적으로 rope 구조)
 - 인코딩 변환은 명시적으로 수행
 
 ---
@@ -52,22 +52,22 @@ bytes1 <> bytes2 -> Bytes   // 새 Bytes 생성
 
 // 변환
 bytes.to_array() -> Array(U8)
-bytes.to_text_utf8() -> Result(Text, DecodeError)
-bytes.to_text_lossy() -> Text  // invalid → U+FFFD
+bytes.to_string_utf8() -> Result(String, DecodeError)
+bytes.to_string_lossy() -> String  // invalid → U+FFFD
 ```
 
 ---
 
-## Text
+## String
 
 ### 내부 표현
 
 UTF-8 rope 구조:
 
 ```rust
-enum Text {
-    Leaf(Bytes)                    // 짧은 텍스트 (UTF-8 validated)
-    Branch(Text, Text, Nat)        // left, right, total_len
+enum String {
+    Leaf(Bytes)                      // 짧은 텍스트 (UTF-8 validated)
+    Branch(String, String, Nat)      // left, right, total_len
 }
 ```
 
@@ -81,16 +81,16 @@ enum Text {
 | | Library Type | Builtin Type |
 |---|---|---|
 | 정의 위치 | 표준 라이브러리 | 컴파일러 내장 |
-| Bytes 의존 | Text가 Bytes 사용 | 독립적 primitive |
+| Bytes 의존 | String이 Bytes 사용 | 독립적 primitive |
 | 확장성 | 사용자 정의 가능 | 컴파일러만 정의 |
 
-어느 쪽이든 컴파일러는 `Text`를 "well-known type"으로 인식해야 한다 (리터럴, interpolation 지원).
+어느 쪽이든 컴파일러는 `String`을 "well-known type"으로 인식해야 한다 (리터럴, interpolation 지원).
 
 ### 리터럴
 
 ```rust
 "hello"                     // 기본
-"Hello, \{name}!"           // interpolation → Text
+"Hello, \{name}!"           // interpolation → String
 s#"
     multiline
     text
@@ -102,42 +102,42 @@ r"\d+\.\d+"                 // raw (escape 없음)
 
 ```rust
 // 생성
-Text::empty() -> Text
-Text::from_rune(r: Rune) -> Text
+String::empty() -> String
+String::from_rune(r: Rune) -> String
 
 // 길이
-text.len() -> Nat           // byte 길이
-text.rune_count() -> Nat    // codepoint 수
+s.len() -> Nat           // byte 길이
+s.rune_count() -> Nat    // codepoint 수
 
 // 연결
-text1 <> text2 -> Text
+s1 <> s2 -> String
 
 // 접근 (byte 단위는 제공하지 않음)
-text.runes() -> Iterator(Rune)
-text.chars() -> Iterator(Rune)  // alias
+s.runes() -> Iterator(Rune)
+s.chars() -> Iterator(Rune)  // alias
 
 // Slice (codepoint 단위)
-text.slice(start: Nat, end: Nat) -> Text
-text.take(n: Nat) -> Text
-text.drop(n: Nat) -> Text
+s.slice(start: Nat, end: Nat) -> String
+s.take(n: Nat) -> String
+s.drop(n: Nat) -> String
 
 // 검색
-text.contains(pattern: Text) -> Bool
-text.starts_with(prefix: Text) -> Bool
-text.ends_with(suffix: Text) -> Bool
-text.find(pattern: Text) -> Option(Nat)
+s.contains(pattern: String) -> Bool
+s.starts_with(prefix: String) -> Bool
+s.ends_with(suffix: String) -> Bool
+s.find(pattern: String) -> Option(Nat)
 
 // 변환
-text.to_bytes() -> Bytes    // UTF-8 bytes
-text.to_upper() -> Text
-text.to_lower() -> Text
-text.trim() -> Text
-text.split(sep: Text) -> List(Text)
-text.lines() -> List(Text)
+s.to_bytes() -> Bytes    // UTF-8 bytes
+s.to_upper() -> String
+s.to_lower() -> String
+s.trim() -> String
+s.split(sep: String) -> List(String)
+s.lines() -> List(String)
 
 // 비교
-text1 == text2 -> Bool      // byte-wise equality
-Text::compare(a: Text, b: Text) -> Ordering
+s1 == s2 -> Bool      // byte-wise equality
+String::compare(a: String, b: String) -> Ordering
 ```
 
 ---
@@ -166,7 +166,7 @@ Rune = u32  // 실제로는 21비트면 충분하지만 정렬상 32비트
 ### 주요 연산
 
 ```rust
-rune.to_text() -> Text
+rune.to_string() -> String
 rune.to_bytes() -> Bytes    // UTF-8 인코딩
 rune.codepoint() -> Nat     // U+XXXX 값
 
@@ -184,30 +184,30 @@ rune.to_lower() -> Rune
 
 ---
 
-## Text::runes - Lazy Rune Stream
+## String::runes - Lazy Rune Stream
 
-`Text`에서 `Rune` 시퀀스를 lazy하게 순회:
+`String`에서 `Rune` 시퀀스를 lazy하게 순회:
 
 ```rust
-fn count_vowels(text: Text) -> Nat {
-    text.runes()
-        .filter(fn(r) "aeiouAEIOU".contains(r.to_text()))
+fn count_vowels(s: String) -> Nat {
+    s.runes()
+        .filter(fn(r) "aeiouAEIOU".contains(r.to_string()))
         .count()
 }
 
-fn first_word(text: Text) -> Text {
-    text.runes()
+fn first_word(s: String) -> String {
+    s.runes()
         .take_while(fn(r) !r.is_whitespace())
-        .collect()  // Iterator(Rune) -> Text
+        .collect()  // Iterator(Rune) -> String
 }
 ```
 
 ### Iterator 타입
 
 ```rust
-// Text::runes()가 반환하는 타입
+// String::runes()가 반환하는 타입
 struct RuneIterator {
-    text: Text
+    s: String
     byte_offset: Nat
 }
 
@@ -222,22 +222,22 @@ impl Iterator for RuneIterator {
 
 ## 인코딩 변환
 
-Bytes ↔ Text 변환은 명시적으로 인코딩을 지정:
+Bytes ↔ String 변환은 명시적으로 인코딩을 지정:
 
 ```rust
-// Bytes → Text
-bytes.to_text_utf8() -> Result(Text, DecodeError)
-bytes.to_text_utf16_le() -> Result(Text, DecodeError)
-bytes.to_text_utf16_be() -> Result(Text, DecodeError)
-bytes.to_text_latin1() -> Text  // 항상 성공
+// Bytes → String
+bytes.to_string_utf8() -> Result(String, DecodeError)
+bytes.to_string_utf16_le() -> Result(String, DecodeError)
+bytes.to_string_utf16_be() -> Result(String, DecodeError)
+bytes.to_string_latin1() -> String  // 항상 성공
 
-// Text → Bytes
-text.to_bytes() -> Bytes        // UTF-8 (기본)
-text.to_bytes_utf16_le() -> Bytes
-text.to_bytes_utf16_be() -> Bytes
+// String → Bytes
+s.to_bytes() -> Bytes        // UTF-8 (기본)
+s.to_bytes_utf16_le() -> Bytes
+s.to_bytes_utf16_be() -> Bytes
 
 // Lossy 변환
-bytes.to_text_lossy() -> Text   // invalid bytes → U+FFFD
+bytes.to_string_lossy() -> String   // invalid bytes → U+FFFD
 ```
 
 ### DecodeError
@@ -245,7 +245,7 @@ bytes.to_text_lossy() -> Text   // invalid bytes → U+FFFD
 ```rust
 struct DecodeError {
     offset: Nat
-    message: Text
+    message: String
 }
 ```
 
@@ -253,25 +253,25 @@ struct DecodeError {
 
 ## 문자열 Interpolation
 
-`"\{expr}"` 구문은 `expr`이 `Text` 타입일 것을 요구:
+`"\{expr}"` 구문은 `expr`이 `String` 타입일 것을 요구:
 
 ```rust
 let name = "Alice"
 let age = 30
 
-// 직접 Text인 경우
+// 직접 String인 경우
 "Hello, \{name}!"  // OK
 
-// Text가 아닌 경우 → 명시적 변환 필요
-"Age: \{Nat::to_text(age)}"  // OK
-"Age: \{age}"                // 타입 에러
+// String이 아닌 경우 → 명시적 변환 필요
+"Age: \{Nat::to_string(age)}"  // OK
+"Age: \{age}"                  // 타입 에러
 ```
 
 ### Display Ability (미래 고려)
 
 ```rust
 ability Display {
-    fn display(self) -> Text
+    fn display(self) -> String
 }
 
 // Display가 있으면 자동 변환 가능하도록 할 수도 있음
@@ -295,20 +295,20 @@ ability Display {
   (field $len i32)))
 ```
 
-### Text (Rope)
+### String (Rope)
 
 ```wasm
 ;; Rope node (abstract base)
-(type $text (sub (struct)))
+(type $string (sub (struct)))
 
 ;; Leaf: UTF-8 bytes
-(type $text_leaf (sub $text (struct
+(type $string_leaf (sub $string (struct
   (field $bytes (ref $bytes)))))
 
 ;; Branch: two children + cached length
-(type $text_branch (sub $text (struct
-  (field $left (ref $text))
-  (field $right (ref $text))
+(type $string_branch (sub $string (struct
+  (field $left (ref $string))
+  (field $right (ref $string))
   (field $len i32)
   (field $depth i32))))  ;; balancing을 위한 깊이
 ```
@@ -328,32 +328,22 @@ ability Display {
 
 | 항목 | 결정 |
 |------|------|
-| Text 인코딩 | UTF-8 |
-| Text 구조 | Rope |
+| 타입 이름 | `String` (보편적인 이름 원칙) |
+| String 인코딩 | UTF-8 |
+| String 구조 | Rope |
 | Bytes 표현 | (ptr, len) |
 | Rune 표현 | u32 |
 | 인코딩 변환 | 명시적 |
-| `"..."` 리터럴 타입 | Text |
+| `"..."` 리터럴 타입 | String |
 | `b"..."` 리터럴 타입 | Bytes |
 
 ### 미결정
 
 | 항목 | 선택지 |
 |------|--------|
-| Text 정의 위치 | Library type vs Builtin type |
-| Text byte 인덱싱 | 허용 vs 금지 |
+| String 정의 위치 | Library type vs Builtin type |
+| String byte 인덱싱 | 허용 vs 금지 |
 | Display ability | 도입 vs 명시적 변환만 |
-
----
-
-## 마이그레이션
-
-기존 `String` 타입 참조를 `Text`로 변경:
-
-1. `new-plans/*.md`에서 `String` → `Text` 업데이트
-2. `core.string` dialect → 제거 또는 `core.text`로 변경
-3. `adt.string_const` → `adt.text_const`
-4. 기존 예제 코드 업데이트
 
 ---
 
