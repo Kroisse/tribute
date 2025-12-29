@@ -1003,6 +1003,11 @@ impl<'db> TypeChecker<'db> {
                 // Create an effect row with this ability and merge it
                 let effect = EffectRow::concrete([ability]);
                 self.merge_effect(effect);
+            } else {
+                trace!(
+                    ?ability_ty,
+                    "failed to convert ability_ref Type to AbilityRef"
+                );
             }
         }
 
