@@ -31,7 +31,6 @@
 //! }
 //! ```
 
-use crate::QualifiedName;
 use crate::dialect;
 
 dialect! {
@@ -118,11 +117,11 @@ dialect! {
 
         /// `pat.handler_suspend` operation: matches Suspend variant for a specific ability operation.
         /// Used for `{ Op(args) -> k }` patterns in handle expressions.
-        /// - `ability_ref`: path to the ability being handled
+        /// - `ability_ref`: ability type (core.ability_ref) to support parameterized abilities
         /// - `op`: the operation name within the ability
         /// - `args`: region containing patterns for operation arguments
         /// - `continuation`: name to bind the continuation (or empty for discard)
-        #[attr(ability_ref: QualifiedName, op: Symbol, continuation: Symbol)]
+        #[attr(ability_ref: Type, op: Symbol, continuation: Symbol)]
         fn handler_suspend() {
             #[region(args)] {}
         };
@@ -154,7 +153,9 @@ dialect! {
 pub mod helpers {
     use super::*;
     use crate::Location;
-    use crate::{Attribute, Block, BlockId, DialectOp, IdVec, Operation, Region, Symbol};
+    use crate::{
+        Attribute, Block, BlockId, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type,
+    };
 
     /// Create a wildcard pattern region (`_`).
     pub fn wildcard_region<'db>(
@@ -291,10 +292,13 @@ pub mod helpers {
     }
 
     /// Create a handler_suspend pattern region for `{ Op(args) -> k }` patterns.
+    ///
+    /// The `ability_ref` should be a `core.ability_ref` type created via
+    /// `AbilityRefType::simple()` or `AbilityRefType::with_params()`.
     pub fn handler_suspend_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        ability_ref: QualifiedName,
+        ability_ref: Type<'db>,
         op_name: Symbol,
         args_pattern: Region<'db>,
         continuation_name: Symbol,
