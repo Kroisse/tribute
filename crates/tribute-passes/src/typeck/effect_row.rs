@@ -189,6 +189,22 @@ impl<'db> EffectRow<'db> {
         self.abilities.remove(ability)
     }
 
+    /// Find abilities matching a given name (ignoring type parameters).
+    ///
+    /// This is used for handler pattern matching where the pattern specifies
+    /// only the ability name (e.g., `State::get()`) but we need to find the
+    /// fully parameterized ability (e.g., `State(Int)`) in the effect row.
+    ///
+    /// Returns all matching abilities since multiple parameterizations of the
+    /// same ability can coexist in an effect row.
+    pub fn find_by_name(&self, name: Symbol) -> Vec<AbilityRef<'db>> {
+        self.abilities
+            .iter()
+            .filter(|ability| ability.name == name)
+            .cloned()
+            .collect()
+    }
+
     /// Set the row variable tail.
     pub fn set_tail(&mut self, tail: Option<RowVar>) {
         self.tail = tail;
@@ -359,5 +375,56 @@ mod tests {
         assert_eq!(union.abilities().len(), 2);
         assert!(union.contains(&state_int));
         assert!(union.contains(&state_float));
+    }
+
+    #[salsa_test]
+    fn test_find_by_name_returns_all_matching_abilities(db: &salsa::DatabaseImpl) {
+        // find_by_name should return all abilities matching the name, ignoring type params
+        let state_name = Symbol::new("State");
+        let console_name = Symbol::new("Console");
+        let int_ty = *core::I64::new(db);
+        let float_ty = *core::F64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let state_float = AbilityRef::new(state_name, IdVec::from(vec![float_ty]));
+        let console = AbilityRef::simple(console_name);
+
+        let row = EffectRow::concrete([state_int.clone(), state_float.clone(), console.clone()]);
+
+        // find_by_name("State") should return both State(I64) and State(F64)
+        let state_abilities = row.find_by_name(state_name);
+        assert_eq!(state_abilities.len(), 2);
+        assert!(state_abilities.contains(&state_int));
+        assert!(state_abilities.contains(&state_float));
+
+        // find_by_name("Console") should return only Console
+        let console_abilities = row.find_by_name(console_name);
+        assert_eq!(console_abilities.len(), 1);
+        assert!(console_abilities.contains(&console));
+
+        // find_by_name("Unknown") should return empty
+        let unknown_name = Symbol::new("Unknown");
+        let unknown_abilities = row.find_by_name(unknown_name);
+        assert!(unknown_abilities.is_empty());
+    }
+
+    #[salsa_test]
+    fn test_find_by_name_handler_pattern_matching(db: &salsa::DatabaseImpl) {
+        // Simulates handler pattern matching: pattern has no type params,
+        // effect row has parameterized ability
+        let state_name = Symbol::new("State");
+        let int_ty = *core::I64::new(db);
+
+        // Effect row contains State(Int)
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let row = EffectRow::concrete([state_int.clone()]);
+
+        // Handler pattern just says "State" (no params)
+        let pattern_name = state_name;
+
+        // find_by_name should find State(Int) when looking for "State"
+        let matching = row.find_by_name(pattern_name);
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0], state_int);
     }
 }

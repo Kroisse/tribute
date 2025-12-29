@@ -954,6 +954,11 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Extract abilities being handled from a pattern region.
+    ///
+    /// Handler patterns specify abilities by name only (e.g., `State::get()`), but
+    /// the effect row may contain parameterized abilities (e.g., `State(Int)`).
+    /// This function matches pattern ability names against the current effect row
+    /// to find the fully parameterized abilities that are being handled.
     fn extract_handled_abilities(
         &self,
         pattern_region: &Region<'db>,
@@ -967,13 +972,28 @@ impl<'db> TypeChecker<'db> {
                     && op.name(self.db) == pat::HANDLER_SUSPEND()
                 {
                     // Extract ability reference from attributes
-                    // The ability_ref is now a Type (core.ability_ref) instead of QualifiedName
+                    // The ability_ref is a Type (core.ability_ref) but may lack type parameters
+                    // because handler patterns don't include them in the syntax.
                     let attrs = op.attributes(self.db);
                     if let Some(Attribute::Type(ability_ty)) = attrs.get(&ability_ref_sym)
-                        && let Some(ability) = AbilityRef::from_type(self.db, *ability_ty)
-                        && !handled.contains(&ability)
+                        && let Some(pattern_ability) = AbilityRef::from_type(self.db, *ability_ty)
                     {
-                        handled.push(ability);
+                        // If the pattern ability has type parameters, use it directly
+                        // Otherwise, find matching abilities from the effect row by name
+                        if !pattern_ability.params.is_empty() {
+                            // Pattern has explicit type parameters - use as is
+                            if !handled.contains(&pattern_ability) {
+                                handled.push(pattern_ability);
+                            }
+                        } else {
+                            // Pattern has no type parameters - find by name in effect row
+                            // This allows `State::get()` to match `State(Int)` in the effect row
+                            for ability in self.current_effect.find_by_name(pattern_ability.name) {
+                                if !handled.contains(&ability) {
+                                    handled.push(ability);
+                                }
+                            }
+                        }
                     }
                 }
             }
