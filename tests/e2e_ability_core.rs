@@ -67,7 +67,6 @@ fn main() -> Int { 0 }
 
 /// Test ability operations with effect annotations.
 #[test]
-#[ignore = "Ability operation calls not fully supported - parsing issue with arithmetic in call args"]
 fn test_ability_operation_with_effect() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -211,7 +210,6 @@ fn main() -> Int {
 /// Test that effect row polymorphism works correctly.
 /// The function `run_state` should handle `State(s)` and propagate remaining effects `e`.
 #[test]
-#[ignore = "Ability operation calls not fully supported - parsing issue with arithmetic in call args"]
 fn test_effect_row_polymorphism() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -250,7 +248,6 @@ fn main() -> Int { 0 }
 
 /// Test that multiple abilities can be combined in effect rows.
 #[test]
-#[ignore = "Ability operation calls not fully supported in parser"]
 fn test_multiple_abilities() {
     let code = r#"ability Reader(r) {
     fn ask() -> r
