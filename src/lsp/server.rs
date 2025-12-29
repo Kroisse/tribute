@@ -8,21 +8,22 @@ use std::io;
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, Hover,
-    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, MarkupContent,
-    MarkupKind, PublishDiagnosticsParams, ServerCapabilities, SymbolKind,
-    TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, Uri,
+    DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
+    HoverProviderCapability, InitializeParams, MarkupContent, MarkupKind, PublishDiagnosticsParams,
+    ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
     notification::{
         DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
         PublishDiagnostics,
     },
-    request::{DocumentSymbolRequest, HoverRequest},
+    request::{DocumentSymbolRequest, GotoDefinition, HoverRequest},
 };
 use ropey::Rope;
 use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
+use super::definition_index::DefinitionIndex;
 use super::pretty::print_type;
 use super::type_index::TypeIndex;
 use tribute::{TributeDatabaseImpl, compile, database::parse_with_thread_local};
@@ -66,6 +67,10 @@ impl LspServer {
 
         if let Some((id, params)) = cast_request::<HoverRequest>(req.clone()) {
             let result = self.hover(params);
+            let response = Response::new_ok(id, result);
+            self.connection.sender.send(Message::Response(response))?;
+        } else if let Some((id, params)) = cast_request::<GotoDefinition>(req.clone()) {
+            let result = self.goto_definition(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
         } else if let Some((id, params)) = cast_request::<DocumentSymbolRequest>(req) {
@@ -178,6 +183,42 @@ impl LspServer {
             contents,
             range: Some(range),
         })
+    }
+
+    fn goto_definition(&self, params: GotoDefinitionParams) -> Option<GotoDefinitionResponse> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        tracing::debug!(
+            line = position.line,
+            character = position.character,
+            "Go to Definition request"
+        );
+
+        let rope = self.db.source_cst(uri)?.text(&self.db).clone();
+        let offset = offset_from_position(&rope, position.line, position.character)?;
+        let source_cst = self.db.source_cst(uri)?;
+
+        // Run Salsa compilation and build definition index
+        let definition = self.db.attach(|db| {
+            let module = compile(db, source_cst);
+            let index = DefinitionIndex::build(db, &module);
+            index.definition_at(offset).cloned()
+        })?;
+
+        tracing::debug!(
+            name = %definition.name,
+            kind = ?definition.kind,
+            "Found definition"
+        );
+
+        let range = span_to_range(&rope, definition.span);
+        let location = lsp_types::Location {
+            uri: uri.clone(),
+            range,
+        };
+
+        Some(GotoDefinitionResponse::Scalar(location))
     }
 
     fn document_symbols(&self, params: DocumentSymbolParams) -> Option<DocumentSymbolResponse> {
@@ -326,6 +367,7 @@ pub fn serve(_log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         )),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         document_symbol_provider: Some(lsp_types::OneOf::Left(true)),
+        definition_provider: Some(lsp_types::OneOf::Left(true)),
         ..Default::default()
     };
 
