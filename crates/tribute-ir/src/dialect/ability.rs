@@ -1,4 +1,4 @@
-//! Ability dialect operations.
+//! Ability dialect operations and types.
 //!
 //! This dialect represents language-level ability (algebraic effect) operations.
 //! These are high-level operations that get lowered to the `cont` dialect.
@@ -24,6 +24,8 @@ use trunk_ir::dialect;
 
 dialect! {
     mod ability {
+        // === Operations ===
+
         /// `ability.op` operation: declares an operation signature within an ability.
         ///
         /// Used inside `ty.ability` operations region to define what operations the ability provides.
@@ -68,5 +70,22 @@ dialect! {
         /// dropping them. Used when a handler doesn't want to continue execution
         /// (e.g., `Fail::fail` handler returning `None`).
         fn abort(continuation);
+
+        // === Types ===
+
+        /// `ability.evidence_ptr` type: pointer to evidence struct.
+        ///
+        /// Evidence is a runtime structure containing ability markers for
+        /// dynamic handler dispatch. Passed as first argument to effectful functions.
+        ///
+        /// See `new-plans/implementation.md` for the evidence passing design.
+        type evidence_ptr;
     }
 }
+
+// === Printable interface registrations ===
+
+use crate::type_interface::Printable;
+
+// evidence_ptr -> "Evidence"
+inventory::submit! { Printable::implement("ability", "evidence_ptr", |_, _, f| f.write_str("Evidence")) }
