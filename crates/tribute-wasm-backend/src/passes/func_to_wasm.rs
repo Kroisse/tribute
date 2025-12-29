@@ -3,12 +3,12 @@
 //! This pass converts function-level operations to wasm operations:
 //! - `func.func` -> `wasm.func`
 //! - `func.call` -> `wasm.call`
+//! - `func.call_indirect` -> `wasm.call_indirect`
 //! - `func.return` -> `wasm.return`
 //! - `func.tail_call` -> `wasm.return_call`
 //! - `func.unreachable` -> `wasm.unreachable`
 //!
-//! Note: `func.call_indirect` and `func.constant` are preserved for now
-//! (closure support to be added later).
+//! Note: `func.constant` is preserved for later table index resolution.
 
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::func;
@@ -20,6 +20,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
     PatternApplicator::new()
         .add_pattern(FuncFuncPattern)
         .add_pattern(FuncCallPattern)
+        .add_pattern(FuncCallIndirectPattern)
         .add_pattern(FuncReturnPattern)
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncUnreachablePattern)
@@ -68,6 +69,34 @@ impl RewritePattern for FuncCallPattern {
             .dialect_str("wasm")
             .name_str("call")
             .attr("callee", Attribute::QualifiedName(call_op.callee(db)))
+            .build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Pattern for `func.call_indirect` -> `wasm.call_indirect`
+///
+/// Transforms indirect function calls for closures.
+/// The callee (funcref) is the first operand, followed by arguments.
+struct FuncCallIndirectPattern;
+
+impl RewritePattern for FuncCallIndirectPattern {
+    fn match_and_rewrite<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+    ) -> RewriteResult<'db> {
+        let Ok(_call_indirect) = func::CallIndirect::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Build wasm.call_indirect with same operands
+        // The emit phase will resolve the type_idx and table attributes
+        let new_op = op
+            .modify(db)
+            .dialect_str("wasm")
+            .name_str("call_indirect")
             .build();
 
         RewriteResult::Replace(new_op)
