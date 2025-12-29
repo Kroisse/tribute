@@ -2,8 +2,9 @@
 
 use tree_sitter::Node;
 use trunk_ir::{
-    Attribute, BlockBuilder, DialectType, IdVec, QualifiedName, Span, Symbol, SymbolVec, Type,
-    dialect::{adt, core, func, src, ty},
+    Attribute, BlockBuilder, DialectType, IdVec, QualifiedName, Region, Span, Symbol, SymbolVec,
+    Type,
+    dialect::{ability, adt, core, func, src, ty},
     idvec,
 };
 
@@ -763,30 +764,21 @@ pub fn lower_ability_decl<'db>(
 
     let name = node_text(&name_node, &ctx.source).to_string();
     let operations = parse_ability_operations(ctx, body_node);
-    let operations_attr = Attribute::List(
-        operations
-            .into_iter()
-            .map(|(op_name, param_types, return_type)| {
-                Attribute::List(vec![
-                    Attribute::Symbol(sym(&op_name)),
-                    Attribute::List(
-                        param_types
-                            .iter()
-                            .map(|t| Attribute::Symbol(sym(&format!("{:?}", t))))
-                            .collect(),
-                    ),
-                    Attribute::Symbol(sym(&format!("{:?}", return_type))),
-                ])
-            })
-            .collect(),
-    );
+
+    // Build operations region containing ability.op operations
+    let mut ops_block = BlockBuilder::new(ctx.db, location);
+    for (op_name, param_types, return_type) in operations {
+        let op_type = core::Func::new(ctx.db, param_types.into(), return_type).as_type();
+        ops_block.op(ability::op(ctx.db, location, sym(&op_name), op_type));
+    }
+    let operations_region = Region::new(ctx.db, location, idvec![ops_block.build()]);
 
     Some(ty::ability(
         ctx.db,
         location,
         infer_ty,
         Attribute::Symbol(sym(&name)),
-        operations_attr,
+        operations_region,
     ))
 }
 

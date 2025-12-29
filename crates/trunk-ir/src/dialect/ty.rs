@@ -38,11 +38,14 @@ dialect! {
 
         /// `type.ability` operation: defines an ability (effect) type.
         ///
+        /// The operations region contains `ability.op` operations defining the signatures.
+        ///
         /// Attributes:
         /// - `sym_name`: The name of the ability
-        /// - `operations`: Operation signatures as [(name, signature)] pairs
-        #[attr(sym_name, operations)]
-        fn ability() -> result;
+        #[attr(sym_name)]
+        fn ability() -> result {
+            #[region(operations)] {}
+        };
 
         // === Tribute language primitive types ===
 

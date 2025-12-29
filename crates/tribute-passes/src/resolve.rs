@@ -321,9 +321,9 @@ fn collect_definition<'db>(
         }
         (d, n) if d == ty::DIALECT_NAME() && n == ty::ABILITY() => {
             // Ability definition → creates operations in the ability's namespace
-            let attrs = op.attributes(db);
-
-            if let Some(Attribute::Symbol(ability_name)) = attrs.get(&ATTR_SYM_NAME()) {
+            if let Ok(ability_decl) = ty::Ability::from_operation(db, *op)
+                && let Attribute::Symbol(ability_name) = ability_decl.sym_name(db)
+            {
                 let ability_qn = QualifiedName::simple(*ability_name);
                 // Also register as a Module binding for the namespace
                 env.definitions.insert(
@@ -335,7 +335,7 @@ fn collect_definition<'db>(
                 );
 
                 // Extract operations from the ability
-                collect_ability_operations(db, env, attrs, ability_qn);
+                collect_ability_operations(db, env, ability_decl, ability_qn);
             }
         }
         (d, n) if d == src::DIALECT_NAME() && n == src::CONST() => {
@@ -434,33 +434,34 @@ trunk_ir::symbols! {
 
 /// Collect ability operations from an ability definition.
 ///
-/// Operations are stored as: `[(name, [param_types], return_type), ...]`
+/// Walks the operations region and extracts ability.op operations.
 fn collect_ability_operations<'db>(
     db: &'db dyn salsa::Database,
     env: &mut ModuleEnv<'db>,
-    attrs: &Attrs<'db>,
+    ability_decl: ty::Ability<'db>,
     ability: QualifiedName,
 ) {
-    let Some(Attribute::List(operations)) = attrs.get(&ATTR_OPERATIONS()) else {
-        return;
-    };
+    let operations_region = ability_decl.operations(db);
 
-    for op_attr in operations.iter() {
-        let Attribute::List(parts) = op_attr else {
-            continue;
-        };
+    for block in operations_region.blocks(db).iter() {
+        for op in block.operations(db).iter().copied() {
+            // Check if this is an ability.op
+            let Ok(ability_op) = ability::Op::from_operation(db, op) else {
+                continue;
+            };
 
-        // parts = [name, [param_types], return_type]
-        let Some(Attribute::Symbol(op_name)) = parts.first() else {
-            continue;
-        };
+            let op_name = ability_op.sym_name(db);
+            let op_type = ability_op.r#type(db);
 
-        // For now, we use fresh type variables for params and return type
-        // TODO: Parse actual types from the attribute representation
-        let params = IdVec::new();
-        let return_ty = ty::var(db, std::collections::BTreeMap::new());
+            // Extract params and return type from the function type
+            let (params, return_ty) = if let Some(func_ty) = core::Func::from_type(db, op_type) {
+                (func_ty.params(db), func_ty.result(db))
+            } else {
+                (IdVec::new(), core::Nil::new(db).as_type())
+            };
 
-        env.add_ability_op(ability.clone(), *op_name, params, return_ty);
+            env.add_ability_op(ability.clone(), op_name, params, return_ty);
+        }
     }
 }
 
@@ -2222,20 +2223,28 @@ pub mod tests {
     /// Create a module with an ability declaration and a call to it.
     #[salsa::tracked]
     fn module_with_ability_call(db: &dyn salsa::Database) -> Module<'_> {
+        use trunk_ir::BlockBuilder;
+
         let location = test_location(db);
         let infer_ty = trunk_ir::dialect::ty::var(db, std::collections::BTreeMap::new());
 
         // Create ability declaration: ability Console { fn print(msg: String) -> Nil }
+        // Use actual Type attributes for param and return types
+        let string_ty = *core::String::new(db);
+        let nil_ty = *core::Nil::new(db);
+
+        // Build operations region with ability.op
+        let mut ops_block = BlockBuilder::new(db, location);
+        let print_type = core::Func::new(db, idvec![string_ty], nil_ty).as_type();
+        ops_block.op(ability::op(db, location, Symbol::new("print"), print_type));
+        let operations_region = Region::new(db, location, idvec![ops_block.build()]);
+
         let ability_decl = ty::ability(
             db,
             location,
             infer_ty,
             Attribute::Symbol(Symbol::new("Console")),
-            Attribute::List(vec![Attribute::List(vec![
-                Attribute::Symbol(Symbol::new("print")),
-                Attribute::List(vec![]), // param types (simplified)
-                Attribute::Symbol(Symbol::new("Nil")),
-            ])]),
+            operations_region,
         );
 
         // Create main function that calls Console::print()
@@ -2299,6 +2308,48 @@ pub mod tests {
             assert!(*op_name == "print");
         } else {
             panic!("ability.perform should have op attribute");
+        }
+    }
+
+    #[salsa_test]
+    fn test_ability_operation_types_extracted(db: &salsa::DatabaseImpl) {
+        // Build the module and extract the environment
+        let module = module_with_ability_call(db);
+        let env = build_env(db, &module);
+
+        // Look up the Console::print operation
+        let print_binding = env.lookup_qualified(Symbol::new("Console"), Symbol::new("print"));
+
+        assert!(
+            print_binding.is_some(),
+            "Console::print should be found in environment"
+        );
+
+        let binding = print_binding.unwrap();
+        if let Binding::AbilityOp {
+            params, return_ty, ..
+        } = binding
+        {
+            // Verify parameter types are correctly extracted
+            assert_eq!(params.len(), 1, "print should have 1 parameter");
+            let param_ty = params[0];
+            assert!(
+                param_ty.is_dialect(db, core::DIALECT_NAME(), core::STRING()),
+                "print parameter should be String type, got {:?}",
+                param_ty
+            );
+
+            // Verify return type is correctly extracted
+            assert!(
+                return_ty.is_dialect(db, core::DIALECT_NAME(), core::NIL()),
+                "print return type should be Nil, got {:?}",
+                return_ty
+            );
+        } else {
+            panic!(
+                "Console::print should be an AbilityOp binding, got {:?}",
+                binding
+            );
         }
     }
 }
