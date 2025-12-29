@@ -665,8 +665,6 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         self.lifted_functions.push(lifted_func);
 
         // Create env struct with captured values
-        let result_ty = op.results(self.db).first().copied().unwrap_or(lambda_type);
-
         let env_value = if capture_values.is_empty() {
             // No captures - create unit/nil value for env
             let nil_ty = core::Nil::new(self.db);
@@ -679,12 +677,14 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                 .result(self.db, 0)
         };
 
-        // Create closure.new with env
+        // Create closure.new with closure type (not raw function type)
+        // This allows us to distinguish closures from bare function refs
+        let closure_ty = closure::Closure::new(self.db, lambda_type);
         let closure_op = closure::new(
             self.db,
             location,
             env_value,
-            result_ty,
+            *closure_ty,
             info.lifted_name.clone(),
         );
 
@@ -741,6 +741,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
 
         let db = self.db;
         let captures_vec: Vec<_> = captures.to_vec();
+        let param_count = param_types.len();
 
         // Build the function
         func::Func::build_with_effect(
@@ -754,9 +755,10 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                 // Get env parameter (first block argument)
                 let env_param = entry.block_arg(db, 0);
 
-                // Extract captured values from env struct
+                // Build mapping: capture name -> extracted value
+                let mut capture_values: HashMap<Symbol, Value<'db>> = HashMap::new();
                 for (i, capture) in captures_vec.iter().enumerate() {
-                    let _extracted = entry.op(adt::struct_get(
+                    let extracted = entry.op(adt::struct_get(
                         db,
                         location,
                         env_param,
@@ -764,22 +766,88 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                         env_type,
                         trunk_ir::Attribute::IntBits(i as u64),
                     ));
-                    // TODO: Map the extracted value to the capture name for use in body
+                    capture_values.insert(capture.name, extracted.result(db));
                 }
 
                 // Transform the lambda body
                 let body_blocks = body.blocks(db);
                 if let Some(orig_block) = body_blocks.first() {
-                    // Copy and transform operations from original body
-                    for op in orig_block.operations(db).iter() {
+                    let orig_block_id = orig_block.id(db);
+
+                    // Build value remapping context
+                    let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
+
+                    // Map original block args (params 0..n) to new block args (1..n+1)
+                    for i in 0..param_count {
+                        let orig_arg = Value::new(db, ValueDef::BlockArg(orig_block_id), i);
+                        let new_arg = entry.block_arg(db, i + 1);
+                        value_map.insert(orig_arg, new_arg);
+                    }
+
+                    // Process operations from original body
+                    let ops = orig_block.operations(db);
+                    let mut param_decl_count = 0;
+
+                    for op in ops.iter() {
+                        // Handle src.var ops - either parameter declarations or captured refs
+                        if let Ok(var_op) = src::Var::from_operation(db, *op) {
+                            let var_name = var_op.name(db);
+
+                            // Check if this is a parameter declaration (first N src.var ops)
+                            if param_decl_count < param_count {
+                                // This is a parameter declaration
+                                // Map its result to the shifted block arg
+                                let orig_result = op.result(db, 0);
+                                let new_arg = entry.block_arg(db, param_decl_count + 1);
+                                value_map.insert(orig_result, new_arg);
+                                param_decl_count += 1;
+                                // Don't emit the src.var op - params are block args now
+                                continue;
+                            }
+
+                            // Check if this is a captured variable reference
+                            if let Some(&extracted_val) = capture_values.get(&var_name) {
+                                // Map the src.var result to the extracted value
+                                let orig_result = op.result(db, 0);
+                                value_map.insert(orig_result, extracted_val);
+                                // Don't emit the src.var op - we use the extracted value
+                                continue;
+                            }
+                        }
+
                         // Handle src.yield -> func.return conversion
                         if op.dialect(db) == src::DIALECT_NAME() && op.name(db) == src::YIELD() {
-                            let return_vals = op.operands(db).clone();
+                            let return_vals: Vec<_> = op
+                                .operands(db)
+                                .iter()
+                                .map(|&v| *value_map.get(&v).unwrap_or(&v))
+                                .collect();
                             entry.op(func::r#return(db, op.location(db), return_vals));
+                            continue;
+                        }
+
+                        // For other ops, remap operands and copy
+                        let remapped_operands: IdVec<Value<'db>> = op
+                            .operands(db)
+                            .iter()
+                            .map(|&v| *value_map.get(&v).unwrap_or(&v))
+                            .collect();
+
+                        let new_op = if remapped_operands != *op.operands(db) {
+                            op.modify(db).operands(remapped_operands).build()
                         } else {
-                            // For now, just copy the operation
-                            // TODO: Proper value remapping for captured variables
-                            entry.op(*op);
+                            *op
+                        };
+
+                        entry.op(new_op);
+
+                        // Map old results to new results
+                        for (i, _) in op.results(db).iter().enumerate() {
+                            let old_result = op.result(db, i);
+                            let new_result = new_op.result(db, i);
+                            if old_result != new_result {
+                                value_map.insert(old_result, new_result);
+                            }
                         }
                     }
                 }
