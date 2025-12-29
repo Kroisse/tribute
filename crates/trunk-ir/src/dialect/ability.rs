@@ -24,6 +24,16 @@ use crate::dialect;
 
 dialect! {
     mod ability {
+        /// `ability.op` operation: declares an operation signature within an ability.
+        ///
+        /// Used inside `ty.ability` operations region to define what operations the ability provides.
+        ///
+        /// Attributes:
+        /// - `sym_name`: The operation name
+        /// - `type`: The operation's function type (func.Fn)
+        #[attr(sym_name: Symbol, r#type: Type)]
+        fn op();
+
         /// `ability.perform` operation: performs an ability operation.
         ///
         /// Invokes an operation from an ability, capturing the current continuation
