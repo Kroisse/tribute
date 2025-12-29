@@ -1112,11 +1112,16 @@ fn lower_handle_expr<'db>(
 }
 
 /// Bind handler pattern variables.
+///
+/// The `_request` parameter represents the Request value being pattern matched.
+/// Currently, `case::bind` operations extract values from the pattern matching
+/// context. The actual extraction from the request is handled by the handler
+/// lowering pass.
 fn bind_handler_pattern<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
-    request: Value<'db>,
+    _request: Value<'db>,
 ) {
     let location = ctx.location(&node);
     let mut cursor = node.walk();
@@ -1126,7 +1131,7 @@ fn bind_handler_pattern<'db>(
         "pattern" | "simple_pattern" => {
             for child in node.named_children(&mut cursor) {
                 if !is_comment(child.kind()) {
-                    bind_handler_pattern(ctx, block, child, request);
+                    bind_handler_pattern(ctx, block, child, _request);
                     return;
                 }
             }
@@ -1182,14 +1187,23 @@ fn bind_handler_pattern<'db>(
             }
 
             // Bind operation arguments (for { Op(args) -> k } pattern)
+            // Each argument is extracted from the request using case::bind
             if let Some(args) = args_node {
                 let mut args_cursor = args.walk();
                 for arg_child in args.named_children(&mut args_cursor) {
                     if is_comment(arg_child.kind()) {
                         continue;
                     }
-                    // Bind each argument pattern
-                    bind_pattern(ctx, block, arg_child, request);
+                    // Extract the argument value from the request
+                    let arg_bind = block.op(case::bind(
+                        ctx.db,
+                        location,
+                        ctx.fresh_type_var(),
+                        Symbol::new("_arg"),
+                    ));
+                    let arg_value = arg_bind.result(ctx.db);
+                    // Bind the argument pattern to the extracted value
+                    bind_pattern(ctx, block, arg_child, arg_value);
                 }
             }
 
