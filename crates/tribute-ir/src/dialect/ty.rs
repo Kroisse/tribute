@@ -8,9 +8,9 @@
 //! - `type.error` - an error type indicating type resolution failed
 use std::collections::BTreeMap;
 
-use crate::{Attribute, Attrs, IdVec, Type, dialect};
+use trunk_ir::{Attribute, Attrs, IdVec, Type, dialect};
 
-crate::symbols! {
+trunk_ir::symbols! {
     ATTR_ID => "id",
     ERROR => "error",
     VAR => "var",
@@ -94,7 +94,7 @@ pub fn is_error(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
 
 use std::fmt::{Formatter, Write};
 
-use crate::type_interface::Printable;
+use trunk_ir::type_interface::Printable;
 
 // type.var -> "a", "b", ..., "t0", "t1", ...
 inventory::submit! {

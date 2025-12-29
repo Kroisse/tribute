@@ -8,7 +8,8 @@
 use std::collections::HashMap;
 
 use tracing::{debug, trace};
-use trunk_ir::{Attribute, IdVec, Symbol, Type, dialect::ty};
+use tribute_ir::dialect::ty;
+use trunk_ir::{Attribute, IdVec, Symbol, Type};
 
 use super::constraint::{Constraint, ConstraintSet, TypeVar};
 use super::effect_row::{AbilityRef, EffectRow, RowVar};

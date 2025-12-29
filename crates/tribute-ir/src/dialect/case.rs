@@ -31,7 +31,7 @@
 //! }
 //! ```
 
-use crate::{Location, Symbol, dialect};
+use trunk_ir::{Location, Symbol, dialect};
 
 dialect! {
     mod case {
@@ -135,7 +135,7 @@ impl<'db> Arm<'db> {
     pub fn wildcard(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        body: crate::Region<'db>,
+        body: trunk_ir::Region<'db>,
     ) -> Self {
         let pattern_region = pattern::wildcard_region(db, location);
         arm(db, location, pattern_region, body)
@@ -146,7 +146,7 @@ impl<'db> Arm<'db> {
         db: &'db dyn salsa::Database,
         location: Location<'db>,
         name: Symbol,
-        body: crate::Region<'db>,
+        body: trunk_ir::Region<'db>,
     ) -> Self {
         let pattern_region = pattern::bind_region(db, location, name);
         arm(db, location, pattern_region, body)
@@ -157,9 +157,9 @@ impl<'db> Arm<'db> {
         db: &'db dyn salsa::Database,
         location: Location<'db>,
         variant_name: Symbol,
-        body: crate::Region<'db>,
+        body: trunk_ir::Region<'db>,
     ) -> Self {
-        let variant_path = crate::QualifiedName::simple(variant_name);
+        let variant_path = trunk_ir::QualifiedName::simple(variant_name);
         let fields = pattern::empty_region(db, location);
         let pattern_region = pattern::variant_region(db, location, variant_path, fields);
         arm(db, location, pattern_region, body)

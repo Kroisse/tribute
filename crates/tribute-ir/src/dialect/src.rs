@@ -5,7 +5,7 @@
 //!
 //! Additionally, this module provides type constructors for unresolved types:
 //! - `src.type` - an unresolved type reference that needs name resolution
-use crate::{IdVec, Symbol, dialect};
+use trunk_ir::{IdVec, Symbol, dialect};
 
 dialect! {
     mod src {
@@ -94,8 +94,8 @@ dialect! {
 pub fn unresolved_type<'db>(
     db: &'db dyn salsa::Database,
     name: Symbol,
-    params: IdVec<crate::Type<'db>>,
-) -> crate::Type<'db> {
+    params: IdVec<trunk_ir::Type<'db>>,
+) -> trunk_ir::Type<'db> {
     // Use the macro-generated Type struct
     *Type::new(db, params, name)
 }
@@ -104,8 +104,8 @@ pub fn unresolved_type<'db>(
 
 use std::fmt::Write;
 
-use crate::Attribute;
-use crate::type_interface::Printable;
+use trunk_ir::Attribute;
+use trunk_ir::type_interface::Printable;
 
 // src.type -> "Name" or "Name(params...)"
 inventory::submit! {

@@ -31,7 +31,7 @@
 //! }
 //! ```
 
-use crate::dialect;
+use trunk_ir::dialect;
 
 dialect! {
     mod pat {
@@ -138,7 +138,7 @@ dialect! {
 /// # use salsa::Database;
 /// # use salsa::DatabaseImpl;
 /// # use trunk_ir::{Location, PathId, Region, Span};
-/// # use trunk_ir::dialect::pat::helpers;
+/// # use tribute_ir::dialect::pat::helpers;
 /// # #[salsa::tracked]
 /// # fn build_pattern(db: &dyn salsa::Database) -> Region<'_> {
 /// #     let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -152,8 +152,8 @@ dialect! {
 /// ```
 pub mod helpers {
     use super::*;
-    use crate::Location;
-    use crate::{
+    use trunk_ir::Location;
+    use trunk_ir::{
         Attribute, Block, BlockId, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type,
     };
 

@@ -21,15 +21,10 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
-use trunk_ir::dialect::ability;
-use trunk_ir::dialect::adt;
+use tribute_ir::dialect::{ability, adt, case, pat, src, ty};
 use trunk_ir::dialect::arith;
-use trunk_ir::dialect::case;
 use trunk_ir::dialect::core::{self, AbilityRefType, Module};
 use trunk_ir::dialect::func;
-use trunk_ir::dialect::pat;
-use trunk_ir::dialect::src;
-use trunk_ir::dialect::ty;
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
     Attribute, Attrs, Block, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region,
@@ -1035,7 +1030,7 @@ impl<'db> Resolver<'db> {
     /// Collect a single let binding from a pattern operation.
     fn collect_let_binding_from_op(&mut self, op: &Operation<'db>, value: Value<'db>) {
         // Use a type variable - typechecker will infer the actual type
-        let infer_ty = || trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
+        let infer_ty = || ty::var(self.db, std::collections::BTreeMap::new());
 
         if let Ok(bind_op) = pat::Bind::from_operation(self.db, *op) {
             // pat.bind("x") - bind x to the value
@@ -1098,8 +1093,7 @@ impl<'db> Resolver<'db> {
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_NAME()) {
                     // Pattern binding - value comes from pattern matching at runtime
-                    let infer_ty =
-                        trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty = ty::var(self.db, std::collections::BTreeMap::new());
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
                 }
             }
@@ -1107,8 +1101,7 @@ impl<'db> Resolver<'db> {
                 // pat.as_pat has a "name" attribute and an inner pattern region
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_NAME()) {
-                    let infer_ty =
-                        trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty = ty::var(self.db, std::collections::BTreeMap::new());
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
                 }
                 // Also collect from inner pattern region
@@ -1120,8 +1113,7 @@ impl<'db> Resolver<'db> {
                 // pat.list_rest has a "rest_name" attribute
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_REST_NAME()) {
-                    let infer_ty =
-                        trunk_ir::dialect::ty::var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty = ty::var(self.db, std::collections::BTreeMap::new());
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
                 }
                 // Also collect from head pattern region
@@ -1770,7 +1762,8 @@ pub fn resolve_module<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) -
 pub mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::{arith, core, func, src};
+    use tribute_ir::dialect::src;
+    use trunk_ir::dialect::{arith, core, func};
     use trunk_ir::{Location, PathId, QualifiedName, Span, idvec};
 
     fn test_location<'db>(db: &'db dyn salsa::Database) -> Location<'db> {
@@ -2137,10 +2130,10 @@ pub mod tests {
     /// Create a module with a let binding: fn main() { let x = 42; x }
     #[salsa::tracked]
     fn module_with_let_binding(db: &dyn salsa::Database) -> Module<'_> {
-        use trunk_ir::dialect::pat;
+        use tribute_ir::dialect::pat;
 
         let location = test_location(db);
-        let infer_ty = trunk_ir::dialect::ty::var(db, std::collections::BTreeMap::new());
+        let infer_ty = ty::var(db, std::collections::BTreeMap::new());
 
         // Pre-create the pattern region outside the closure
         let pattern_region = pat::helpers::bind_region(db, location, Symbol::new("x"));
@@ -2237,7 +2230,7 @@ pub mod tests {
         use trunk_ir::BlockBuilder;
 
         let location = test_location(db);
-        let infer_ty = trunk_ir::dialect::ty::var(db, std::collections::BTreeMap::new());
+        let infer_ty = ty::var(db, std::collections::BTreeMap::new());
 
         // Create ability declaration: ability Console { fn print(msg: String) -> Nil }
         // Use actual Type attributes for param and return types

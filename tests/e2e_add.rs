@@ -755,7 +755,7 @@ fn main() -> Int {
 
 /// Helper to recursively check for closure.new in a region
 fn check_for_closure_new(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>) -> bool {
-    use trunk_ir::dialect::closure;
+    use tribute_ir::dialect::closure;
 
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
@@ -943,7 +943,7 @@ fn main() -> Int {
 
 /// Helper to check for closure.func and closure.env operations
 fn check_for_closure_ops(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>) -> (bool, bool) {
-    use trunk_ir::dialect::closure;
+    use tribute_ir::dialect::closure;
 
     let mut has_func = false;
     let mut has_env = false;

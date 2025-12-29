@@ -145,9 +145,10 @@ mod tests {
     use super::*;
     use salsa::Setter;
     use tree_sitter::{InputEdit, Parser, Point};
+    use tribute_ir::dialect::{adt, case, src};
     use trunk_ir::Attribute;
     use trunk_ir::DialectOp;
-    use trunk_ir::dialect::{adt, case, func, src};
+    use trunk_ir::dialect::func;
 
     fn lower_and_get_module<'db>(db: &'db salsa::DatabaseImpl, source: &str) -> core::Module<'db> {
         lower_from_tree(db, source)

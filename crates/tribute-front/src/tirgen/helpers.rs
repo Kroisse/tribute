@@ -5,8 +5,9 @@ use std::hash::{Hash, Hasher};
 
 use ropey::Rope;
 use tree_sitter::{Node, Tree};
+use tribute_ir::dialect::ty;
 use trunk_ir::Span;
-use trunk_ir::dialect::{arith, ty};
+use trunk_ir::dialect::arith;
 use trunk_ir::{DialectType, Location, QualifiedName, Symbol};
 
 // =============================================================================

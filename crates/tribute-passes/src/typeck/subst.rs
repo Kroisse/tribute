@@ -3,8 +3,8 @@
 //! After type inference, this module provides utilities for walking the IR
 //! and replacing type variables with their solved concrete types.
 
+use tribute_ir::dialect::ty;
 use trunk_ir::dialect::core;
-use trunk_ir::dialect::ty;
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{Attribute, Attrs, Block, IdVec, Operation, Region, Type};
 

@@ -172,6 +172,12 @@ pub enum ConversionError {
 
 /// Trait for dialect operation wrappers.
 pub trait DialectOp<'db>: Sized + Copy {
+    /// The dialect name (e.g., "arith", "func").
+    const DIALECT_NAME: &'static str;
+
+    /// The operation name within the dialect (e.g., "add", "call").
+    const OP_NAME: &'static str;
+
     /// Try to wrap an Operation as this dialect op type.
     fn from_operation(
         db: &'db dyn salsa::Database,
@@ -180,9 +186,23 @@ pub trait DialectOp<'db>: Sized + Copy {
 
     /// Get the underlying Operation.
     fn as_operation(&self) -> Operation<'db>;
+
+    /// Check if an operation matches this dialect op type by name.
+    ///
+    /// This is useful for quick checks without full validation.
+    fn matches(db: &'db dyn salsa::Database, op: Operation<'db>) -> bool {
+        op.dialect(db) == crate::Symbol::new(Self::DIALECT_NAME)
+            && op.name(db) == crate::Symbol::new(Self::OP_NAME)
+    }
 }
 
 impl<'db> DialectOp<'db> for Operation<'db> {
+    /// `Operation` itself accepts any dialect/op, so this is empty.
+    const DIALECT_NAME: &'static str = "";
+
+    /// `Operation` itself accepts any dialect/op, so this is empty.
+    const OP_NAME: &'static str = "";
+
     fn from_operation(
         _db: &'db dyn salsa::Database,
         op: Operation<'db>,
@@ -192,6 +212,11 @@ impl<'db> DialectOp<'db> for Operation<'db> {
 
     fn as_operation(&self) -> Operation<'db> {
         *self
+    }
+
+    /// `Operation` matches any operation.
+    fn matches(_db: &'db dyn salsa::Database, _op: Operation<'db>) -> bool {
+        true
     }
 }
 
@@ -963,6 +988,9 @@ macro_rules! define_op {
             }
 
             impl<'db> $crate::DialectOp<'db> for [<$op:camel>]<'db> {
+                const DIALECT_NAME: &'static str = $crate::raw_ident_str!($dialect);
+                const OP_NAME: &'static str = $crate::raw_ident_str!($op);
+
                 fn from_operation(
                     db: &'db dyn salsa::Database,
                     op: $crate::Operation<'db>,

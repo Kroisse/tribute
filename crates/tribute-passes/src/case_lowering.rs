@@ -10,8 +10,9 @@
 use std::collections::HashMap;
 
 use salsa::Accumulator;
+use tribute_ir::dialect::{adt, case, pat, ty};
 use trunk_ir::dialect::core::Module;
-use trunk_ir::dialect::{adt, arith, case, core, pat, ty};
+use trunk_ir::dialect::{arith, core};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region,

@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use trunk_ir::dialect::adt;
+use tribute_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};

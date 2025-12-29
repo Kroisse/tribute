@@ -1,10 +1,11 @@
 //! Declaration lowering for functions, types, and modules.
 
 use tree_sitter::Node;
+use tribute_ir::dialect::{ability, adt, src, ty};
 use trunk_ir::{
     Attribute, BlockBuilder, DialectType, IdVec, QualifiedName, Region, Span, Symbol, SymbolVec,
     Type,
-    dialect::{ability, adt, core, func, src, ty},
+    dialect::{core, func},
     idvec,
 };
 

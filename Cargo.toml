@@ -41,6 +41,7 @@ tribute-cranelift = { path = "crates/tribute-cranelift" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-front = { path = "crates/tribute-front" }
 tribute-passes = { path = "crates/tribute-passes" }
+tribute-ir = { path = "crates/tribute-ir" }
 tribute-wasm-backend = { path = "crates/tribute-wasm-backend" }
 trunk-ir = { path = "crates/trunk-ir" }
 unsynn = "0.3.0"
@@ -70,6 +71,7 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tribute-front.workspace = true
+tribute-ir.workspace = true
 tribute-passes.workspace = true
 tribute-wasm-backend.workspace = true
 trunk-ir.workspace = true

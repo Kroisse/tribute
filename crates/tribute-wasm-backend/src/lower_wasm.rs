@@ -7,9 +7,9 @@ use tracing::{error, warn};
 
 use crate::plan::{MainExports, MemoryPlan};
 
+use tribute_ir::dialect::src;
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::src;
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::RewriteContext;
 

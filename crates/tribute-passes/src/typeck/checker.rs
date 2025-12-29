@@ -16,10 +16,11 @@ use std::sync::Arc;
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
 use tracing::trace;
+use tribute_ir::dialect::{ability, adt, case, list, pat, src, ty};
 use trunk_ir::{
     Attribute, Block, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
     Type, Value,
-    dialect::{ability, adt, arith, case, core, func, list, pat, src, ty},
+    dialect::{arith, core, func},
 };
 
 use super::constraint::ConstraintSet;
@@ -1480,7 +1481,7 @@ mod tests {
 
     #[salsa_test]
     fn test_has_type_vars_detection(db: &salsa::DatabaseImpl) {
-        use trunk_ir::dialect::ty;
+        use tribute_ir::dialect::ty;
 
         // Type variable should be detected
         let type_var = ty::var_with_id(db, 42);

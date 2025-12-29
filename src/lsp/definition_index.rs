@@ -93,8 +93,9 @@ impl DefinitionIndex {
         definitions: &mut Vec<DefinitionEntry>,
         references: &mut Vec<ReferenceEntry>,
     ) {
+        use tribute_ir::dialect::{src, ty};
         use trunk_ir::DialectOp;
-        use trunk_ir::dialect::{func, src, ty};
+        use trunk_ir::dialect::func;
 
         let attrs = op.attributes(db);
         let op_span = op.location(db).span;

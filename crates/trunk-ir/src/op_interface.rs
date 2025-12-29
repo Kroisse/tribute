@@ -96,6 +96,11 @@ impl PureOps {
 ///
 /// # Example
 /// ```ignore
+/// // New syntax: just provide the operation type
+/// register_pure_op!(arith::Add);
+/// register_pure_op!(adt::StructNew);
+///
+/// // Legacy syntax: dialect.op_name (still supported)
 /// register_pure_op!(arith.add);
 /// register_pure_op!(adt.struct_new);
 /// ```
@@ -109,8 +114,22 @@ impl PureOps {
 /// ```
 #[macro_export]
 macro_rules! register_pure_op {
+    // New syntax: provide the type path directly
+    // The type must implement DialectOp with DIALECT_NAME and OP_NAME constants
+    ($op_type:ty) => {
+        impl $crate::op_interface::Pure for $op_type {}
+
+        ::inventory::submit! {
+            $crate::op_interface::PureOps::register(
+                <$op_type as $crate::DialectOp>::DIALECT_NAME,
+                <$op_type as $crate::DialectOp>::OP_NAME
+            )
+        }
+    };
+
+    // Legacy syntax: dialect.op_name (for backwards compatibility within trunk-ir)
     ($dialect:ident . $op_name:ident) => {
-        ::paste::paste! {
+        $crate::paste::paste! {
             impl $crate::op_interface::Pure for $crate::dialect::$dialect::[<$op_name:camel>]<'_> {}
 
             ::inventory::submit! {
