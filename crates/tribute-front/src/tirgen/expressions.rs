@@ -1135,6 +1135,7 @@ fn bind_handler_pattern<'db>(
             // Handler patterns: { value } or { Op(args) -> k }
             let mut value_name = None;
             let mut op_name = None;
+            let mut args_node = None;
             let mut continuation_name = None;
 
             for child in node.named_children(&mut cursor) {
@@ -1152,6 +1153,15 @@ fn bind_handler_pattern<'db>(
                     "type_identifier" => {
                         // This is an ability operation name
                         op_name = Some(node_text(&child, &ctx.source));
+                    }
+                    "path_expression" => {
+                        // This is the operation path (e.g., State::get)
+                        // Mark that we have an operation, not a simple value binding
+                        op_name = Some(node_text(&child, &ctx.source));
+                    }
+                    "pattern_list" => {
+                        // Arguments to the operation
+                        args_node = Some(child);
                     }
                     "identifier" if op_name.is_some() => {
                         // This is the continuation binding
@@ -1171,6 +1181,18 @@ fn bind_handler_pattern<'db>(
                 ctx.bind(name, bind_op.result(ctx.db));
             }
 
+            // Bind operation arguments (for { Op(args) -> k } pattern)
+            if let Some(args) = args_node {
+                let mut args_cursor = args.walk();
+                for arg_child in args.named_children(&mut args_cursor) {
+                    if is_comment(arg_child.kind()) {
+                        continue;
+                    }
+                    // Bind each argument pattern
+                    bind_pattern(ctx, block, arg_child, request);
+                }
+            }
+
             // Bind continuation (for { Op(args) -> k } pattern)
             if let Some(cont_name) = continuation_name {
                 let cont_bind = block.op(case::bind(
@@ -1181,9 +1203,6 @@ fn bind_handler_pattern<'db>(
                 ));
                 ctx.bind(cont_name, cont_bind.result(ctx.db));
             }
-
-            // TODO: Bind operation arguments
-            let _ = request; // Will be used for extracting payload
         }
         _ => {
             // Unknown pattern type
