@@ -60,7 +60,7 @@ impl RewritePattern for ClosureNewPattern {
             .results(db)
             .first()
             .copied()
-            .expect("closure.new should have a result type");
+            .expect("closure.new must have exactly one result type");
 
         // Create wasm.struct_new with the function reference as an attribute
         // and the environment as an operand.
@@ -222,5 +222,131 @@ mod tests {
 
         assert!(op_names.iter().any(|n| n == "wasm.struct_new"));
         assert!(!op_names.iter().any(|n| n == "closure.new"));
+    }
+
+    #[salsa::tracked]
+    fn make_closure_func_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let closure_ty = closure::Closure::new(db, i32_ty).as_type();
+
+        // Create a dummy env value
+        let env_op = Operation::of_name(db, location, "test.env")
+            .results(idvec![i32_ty])
+            .build();
+        let env_val = Value::new(db, ValueDef::OpResult(env_op), 0);
+
+        // Create closure.new
+        let closure_new = closure::new(
+            db,
+            location,
+            env_val,
+            closure_ty,
+            QualifiedName::simple(Symbol::new("test_func")),
+        );
+        let closure_val = Value::new(db, ValueDef::OpResult(closure_new.as_operation()), 0);
+
+        // Create closure.func
+        let closure_func = closure::func(db, location, closure_val, i32_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                env_op,
+                closure_new.as_operation(),
+                closure_func.as_operation()
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa::tracked]
+    fn make_closure_env_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let closure_ty = closure::Closure::new(db, i32_ty).as_type();
+
+        // Create a dummy env value
+        let env_op = Operation::of_name(db, location, "test.env")
+            .results(idvec![i32_ty])
+            .build();
+        let env_val = Value::new(db, ValueDef::OpResult(env_op), 0);
+
+        // Create closure.new
+        let closure_new = closure::new(
+            db,
+            location,
+            env_val,
+            closure_ty,
+            QualifiedName::simple(Symbol::new("test_func")),
+        );
+        let closure_val = Value::new(db, ValueDef::OpResult(closure_new.as_operation()), 0);
+
+        // Create closure.env
+        let closure_env = closure::env(db, location, closure_val, i32_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                env_op,
+                closure_new.as_operation(),
+                closure_env.as_operation()
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    /// Helper to check operation attributes
+    #[salsa::tracked]
+    fn lower_and_get_field_idx(db: &dyn salsa::Database, module: Module<'_>) -> Option<i64> {
+        let lowered = lower(db, module);
+        let body = lowered.body(db);
+        let ops = body.blocks(db)[0].operations(db);
+        // Find the wasm.struct_get operation
+        for op in ops.iter() {
+            if op.full_name(db) == "wasm.struct_get"
+                && let Some(Attribute::IntBits(idx)) =
+                    op.attributes(db).get(&Symbol::new("field_idx"))
+            {
+                return Some(*idx as i64);
+            }
+        }
+        None
+    }
+
+    #[salsa_test]
+    fn test_closure_func_to_wasm(db: &salsa::DatabaseImpl) {
+        let module = make_closure_func_module(db);
+        let op_names = lower_and_check_names(db, module);
+
+        // closure.func should become wasm.struct_get
+        assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
+        assert!(!op_names.iter().any(|n| n == "closure.func"));
+
+        // Verify field_idx is 0 (function reference)
+        let field_idx = lower_and_get_field_idx(db, module);
+        assert_eq!(field_idx, Some(0));
+    }
+
+    #[salsa_test]
+    fn test_closure_env_to_wasm(db: &salsa::DatabaseImpl) {
+        let module = make_closure_env_module(db);
+        let op_names = lower_and_check_names(db, module);
+
+        // closure.env should become wasm.struct_get
+        assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
+        assert!(!op_names.iter().any(|n| n == "closure.env"));
+
+        // Verify field_idx is 1 (environment)
+        let field_idx = lower_and_get_field_idx(db, module);
+        assert_eq!(field_idx, Some(1));
     }
 }

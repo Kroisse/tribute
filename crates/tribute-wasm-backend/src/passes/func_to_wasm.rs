@@ -274,4 +274,50 @@ mod tests {
         // func.return inside should become wasm.return
         assert_eq!(inner_name, "wasm.return");
     }
+
+    #[salsa::tracked]
+    fn make_call_indirect_module(db: &dyn salsa::Database) -> Module<'_> {
+        use trunk_ir::{Value, ValueDef};
+
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create a dummy callee value (function reference)
+        let callee_op = Operation::of_name(db, location, "test.callee")
+            .results(idvec![i32_ty])
+            .build();
+        let callee_val = Value::new(db, ValueDef::OpResult(callee_op), 0);
+
+        // Create a dummy argument value
+        let arg_op = Operation::of_name(db, location, "test.arg")
+            .results(idvec![i32_ty])
+            .build();
+        let arg_val = Value::new(db, ValueDef::OpResult(arg_op), 0);
+
+        // Create func.call_indirect
+        let call_indirect = Operation::of_name(db, location, "func.call_indirect")
+            .operands(idvec![callee_val, arg_val])
+            .results(idvec![i32_ty])
+            .build();
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![callee_op, arg_op, call_indirect],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_call_indirect_to_wasm(db: &salsa::DatabaseImpl) {
+        let module = make_call_indirect_module(db);
+        let op_names = lower_and_check_names(db, module);
+
+        // func.call_indirect should become wasm.call_indirect
+        assert!(op_names.iter().any(|n| n == "wasm.call_indirect"));
+        assert!(!op_names.iter().any(|n| n == "func.call_indirect"));
+    }
 }
