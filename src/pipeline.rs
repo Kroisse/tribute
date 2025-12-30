@@ -30,10 +30,10 @@
 //! stage_closure_lower ─► Module (closure.func/env extracted for indirect calls)
 //!     │
 //!     ▼
-//! stage_evidence ─► Module (evidence params added to effectful functions)
+//! stage_tdnr ─► Module (UFCS method calls resolved)
 //!     │
 //!     ▼
-//! stage_tdnr ─► Module (UFCS method calls resolved)
+//! stage_evidence ─► Module (evidence params added to effectful functions)
 //!     │
 //!     ▼
 //! stage_lower_case ─► Module (case.case lowered to scf.if)
@@ -351,7 +351,24 @@ pub fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst)
     lower_closures(db, module)
 }
 
-/// Stage 7: Evidence Insertion.
+/// Stage 7: Type-Directed Name Resolution (TDNR).
+///
+/// This pass resolves UFCS method calls that couldn't be resolved during
+/// initial name resolution because they required type information.
+///
+/// For example:
+/// - `list.len()` → `List::len(list)` (based on list's type being `List(a)`)
+/// - `x.map(f)` → `Type::map(x, f)` (based on x's inferred type)
+///
+/// TDNR runs before evidence insertion because it creates new `func.call`
+/// operations (from UFCS resolution) that need evidence parameters.
+#[salsa::tracked]
+pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = stage_closure_lower(db, source);
+    resolve_tdnr(db, module)
+}
+
+/// Stage 8: Evidence Insertion.
 ///
 /// This pass transforms effectful functions for ability system support:
 /// - Adds evidence parameter as first argument to effectful functions
@@ -360,31 +377,18 @@ pub fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst)
 /// Evidence is a runtime structure for dynamic handler dispatch.
 /// Pure functions (with empty effect row) are unchanged.
 ///
-/// This happens after closure lowering (closures are top-level) and before TDNR.
+/// This runs after TDNR because TDNR creates new `func.call` operations
+/// (from UFCS `x.method()` → `Type::method(x)`) that need evidence parameters.
 #[salsa::tracked]
 pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_closure_lower(db, source);
+    let module = stage_tdnr(db, source);
     insert_evidence(db, module)
-}
-
-/// Stage 8: Type-Directed Name Resolution (TDNR).
-///
-/// This pass resolves UFCS method calls that couldn't be resolved during
-/// initial name resolution because they required type information.
-///
-/// For example:
-/// - `list.len()` → `List::len(list)` (based on list's type being `List(a)`)
-/// - `x.map(f)` → `Type::map(x, f)` (based on x's inferred type)
-#[salsa::tracked]
-pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_evidence(db, source);
-    resolve_tdnr(db, module)
 }
 
 /// Stage 9: Lower `case.case` to `scf.if` chains.
 #[salsa::tracked]
 pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_tdnr(db, source);
+    let module = stage_evidence(db, source);
     lower_case_to_scf(db, module)
 }
 

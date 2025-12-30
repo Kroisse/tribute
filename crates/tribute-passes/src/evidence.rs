@@ -46,16 +46,16 @@ use tribute_ir::dialect::ability;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
-    Block, BlockId, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Type, Value,
+    Block, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Type, Value,
 };
 
 /// Insert evidence parameters for effectful functions.
 ///
 /// This is the main entry point for the evidence insertion pass.
 ///
-/// The pass works in two phases:
-/// 1. Transform effectful function signatures to add evidence parameter
-/// 2. Transform calls inside effectful functions to pass evidence
+/// The pass works in two phases via `PatternApplicator`:
+/// 1. `AddEvidenceParamPattern`: Add evidence parameter to effectful function signatures
+/// 2. `TransformCallsPattern`: Transform calls inside effectful functions to pass evidence
 #[salsa::tracked]
 pub fn insert_evidence<'db>(
     db: &'db dyn salsa::Database,
@@ -68,115 +68,14 @@ pub fn insert_evidence<'db>(
         return module;
     }
 
+    // Both phases use PatternApplicator
     // Phase 1: Add evidence parameters to function signatures
-    let applicator =
-        PatternApplicator::new().add_pattern(AddEvidenceParamPattern::new(effectful_fns.clone()));
-    let module = applicator.apply(db, module).module;
-
     // Phase 2: Transform calls inside effectful functions to pass evidence
-    transform_calls_in_module(db, module, &effectful_fns)
-}
-
-/// Transform calls inside effectful functions to pass evidence.
-fn transform_calls_in_module<'db>(
-    db: &'db dyn salsa::Database,
-    module: core::Module<'db>,
-    effectful_fns: &HashSet<QualifiedName>,
-) -> core::Module<'db> {
-    let body = module.body(db);
-    let mut new_ops = Vec::new();
-    let mut changed = false;
-
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if let Ok(func_op) = func::Func::from_operation(db, *op) {
-                let func_name = func_op.sym_name(db);
-                // Only process effectful functions (they have evidence parameter)
-                if effectful_fns.contains(&func_name) {
-                    let transformed = transform_calls_in_function(db, func_op, effectful_fns);
-                    if transformed.as_operation() != *op {
-                        changed = true;
-                    }
-                    new_ops.push(transformed.as_operation());
-                } else {
-                    new_ops.push(*op);
-                }
-            } else {
-                new_ops.push(*op);
-            }
-        }
-    }
-
-    if !changed {
-        return module;
-    }
-
-    // Rebuild module with transformed functions
-    let location = module.location(db);
-    let new_block = Block::new(
-        db,
-        BlockId::fresh(),
-        location,
-        IdVec::new(),
-        new_ops.into_iter().collect(),
-    );
-    let new_body = Region::new(db, location, IdVec::from(vec![new_block]));
-    core::Module::create(db, location, module.name(db), new_body)
-}
-
-/// Transform calls inside a single effectful function.
-fn transform_calls_in_function<'db>(
-    db: &'db dyn salsa::Database,
-    func_op: func::Func<'db>,
-    effectful_fns: &HashSet<QualifiedName>,
-) -> func::Func<'db> {
-    let body = func_op.body(db);
-    let blocks = body.blocks(db);
-
-    // Get evidence value from first block's first argument
-    let Some(entry_block) = blocks.first() else {
-        return func_op;
-    };
-
-    let args = entry_block.args(db);
-    if args.is_empty() {
-        return func_op;
-    }
-
-    // First arg should be evidence_ptr after transformation
-    let ev_value = entry_block.arg(db, 0);
-
-    // Transform all blocks
-    let mut changed = false;
-    let new_blocks: IdVec<Block<'db>> = blocks
-        .iter()
-        .map(|block| {
-            let (new_block, block_changed) =
-                transform_calls_in_block(db, block, ev_value, effectful_fns);
-            if block_changed {
-                changed = true;
-            }
-            new_block
-        })
-        .collect();
-
-    if !changed {
-        return func_op;
-    }
-
-    // Rebuild function with transformed body
-    let location = func_op.as_operation().location(db);
-    let new_body = Region::new(db, location, new_blocks);
-    let func_name = func_op.sym_name(db);
-    let func_ty = func_op.r#type(db);
-
-    let new_op = Operation::of_name(db, location, "func.func")
-        .attr("sym_name", trunk_ir::Attribute::QualifiedName(func_name))
-        .attr("type", trunk_ir::Attribute::Type(func_ty))
-        .region(new_body)
-        .build();
-
-    func::Func::from_operation(db, new_op).expect("valid func.func")
+    PatternApplicator::new()
+        .add_pattern(AddEvidenceParamPattern::new(effectful_fns.clone()))
+        .add_pattern(TransformCallsPattern::new(effectful_fns))
+        .apply(db, module)
+        .module
 }
 
 /// Transform calls in a block, returning the new block and whether any changes were made.
@@ -385,9 +284,10 @@ impl RewritePattern for AddEvidenceParamPattern {
                     new_args.push(ev_ty);
                     new_args.extend(old_args.iter().copied());
 
+                    // Preserve original BlockId to maintain any inter-block references
                     Block::new(
                         db,
-                        BlockId::fresh(),
+                        block.id(db),
                         block.location(db),
                         new_args,
                         block.operations(db).clone(),
@@ -402,13 +302,87 @@ impl RewritePattern for AddEvidenceParamPattern {
         let location = op.location(db);
 
         // Build new func.func operation
-        let new_op = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", trunk_ir::Attribute::QualifiedName(func_name))
-            .attr("type", trunk_ir::Attribute::Type(*new_func_ty))
-            .region(new_body)
-            .build();
+        let new_func = func::func(db, location, func_name, *new_func_ty, new_body);
 
-        RewriteResult::Replace(new_op)
+        RewriteResult::Replace(new_func.as_operation())
+    }
+}
+
+/// Pattern: Transform calls to effectful functions inside effectful function bodies.
+///
+/// This pattern matches `func.func` operations for effectful functions and
+/// transforms all calls to effectful functions within their bodies to pass
+/// the evidence parameter.
+struct TransformCallsPattern {
+    effectful_fns: HashSet<QualifiedName>,
+}
+
+impl TransformCallsPattern {
+    fn new(effectful_fns: HashSet<QualifiedName>) -> Self {
+        Self { effectful_fns }
+    }
+}
+
+impl RewritePattern for TransformCallsPattern {
+    fn match_and_rewrite<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+    ) -> RewriteResult<'db> {
+        // Match: func.func
+        let func_op = match func::Func::from_operation(db, *op) {
+            Ok(f) => f,
+            Err(_) => return RewriteResult::Unchanged,
+        };
+
+        let func_name = func_op.sym_name(db);
+
+        // Only process effectful functions (they have evidence parameter)
+        if !self.effectful_fns.contains(&func_name) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Get evidence value from first block's first argument
+        let body = func_op.body(db);
+        let blocks = body.blocks(db);
+        let Some(entry_block) = blocks.first() else {
+            return RewriteResult::Unchanged;
+        };
+
+        let args = entry_block.args(db);
+        if args.is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        // First arg should be evidence_ptr after Phase 1 transformation
+        let ev_value = entry_block.arg(db, 0);
+
+        // Transform calls in all blocks
+        let mut changed = false;
+        let new_blocks: IdVec<Block<'db>> = blocks
+            .iter()
+            .map(|block| {
+                let (new_block, block_changed) =
+                    transform_calls_in_block(db, block, ev_value, &self.effectful_fns);
+                if block_changed {
+                    changed = true;
+                }
+                new_block
+            })
+            .collect();
+
+        if !changed {
+            return RewriteResult::Unchanged;
+        }
+
+        // Rebuild function with transformed body
+        let location = op.location(db);
+        let new_body = Region::new(db, location, new_blocks);
+        let func_ty = func_op.r#type(db);
+
+        let new_func = func::func(db, location, func_name, func_ty, new_body);
+
+        RewriteResult::Replace(new_func.as_operation())
     }
 }
 
