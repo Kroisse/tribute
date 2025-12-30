@@ -106,7 +106,7 @@ pub fn analyze_continuations<'db>(
                 let dialect = op.dialect(db);
                 if dialect == cont::DIALECT_NAME() {
                     *has_cont = true;
-                    // Count unique prompt tags
+                    // Count prompt operations (for statistics/debugging)
                     if op.name(db) == cont::PUSH_PROMPT() {
                         *prompt_count = prompt_count.saturating_add(1);
                     }
@@ -217,6 +217,12 @@ impl RewritePattern for ShiftPattern {
         // - Identifying live locals at this point
         // - Creating a reentry point (resume dispatch)
         // - Building the continuation struct
+        //
+        // NOTE: The shift operation has a handler region that contains the code
+        // to run when the continuation is captured. Currently this region is dropped
+        // because we're using a placeholder. When implementing the full yield bubbling,
+        // this handler region needs to be preserved and integrated into the
+        // continuation struct.
         let new_op = Operation::of_name(db, location, "wasm.unreachable").build();
 
         RewriteResult::Replace(new_op)
@@ -283,7 +289,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::DialectType;
     use trunk_ir::dialect::core;
-    use trunk_ir::{Block, BlockId, IdVec, Location, PathId, Region, Span, idvec};
+    use trunk_ir::{Block, BlockId, IdVec, Location, PathId, Region, Span, Value, ValueDef, idvec};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -352,5 +358,123 @@ mod tests {
         let module = make_empty_module(db);
         let analysis = analyze_continuations(db, module);
         assert!(!analysis.has_continuations(db));
+    }
+
+    // === Tests for other patterns ===
+
+    #[salsa::tracked]
+    fn make_module_with_shift(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+
+        // Create empty handler region for shift
+        let handler_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
+        let handler_region = Region::new(db, location, idvec![handler_block]);
+
+        let shift = Operation::of_name(db, location, "cont.shift")
+            .attr("tag", Attribute::IntBits(42))
+            .region(handler_region)
+            .build();
+
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![shift]);
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_shift_to_wasm_unreachable(db: &salsa::DatabaseImpl) {
+        let module = make_module_with_shift(db);
+        let op_name = lower_and_check_dialect(db, module);
+        assert_eq!(op_name, "wasm.unreachable");
+    }
+
+    #[salsa::tracked]
+    fn make_module_with_resume(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create dummy continuation and value operands
+        let cont_op = Operation::of_name(db, location, "test.dummy_cont")
+            .result(i32_ty)
+            .build();
+        let cont_val = Value::new(db, ValueDef::OpResult(cont_op), 0);
+
+        let val_op = Operation::of_name(db, location, "test.dummy_val")
+            .result(i32_ty)
+            .build();
+        let value = Value::new(db, ValueDef::OpResult(val_op), 0);
+
+        let resume = Operation::of_name(db, location, "cont.resume")
+            .operand(cont_val)
+            .operand(value)
+            .result(i32_ty)
+            .build();
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![cont_op, val_op, resume],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa::tracked]
+    fn lower_resume_and_check(db: &dyn salsa::Database, module: Module<'_>) -> String {
+        let lowered = lower(db, module);
+        let body = lowered.body(db);
+        let ops = body.blocks(db)[0].operations(db);
+        // The resume op is the third operation (after two dummy ops)
+        ops.get(2).map(|op| op.full_name(db)).unwrap_or_default()
+    }
+
+    #[salsa_test]
+    fn test_resume_to_wasm_unreachable(db: &salsa::DatabaseImpl) {
+        let module = make_module_with_resume(db);
+        let op_name = lower_resume_and_check(db, module);
+        assert_eq!(op_name, "wasm.unreachable");
+    }
+
+    #[salsa::tracked]
+    fn make_module_with_drop(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create dummy continuation operand
+        let cont_op = Operation::of_name(db, location, "test.dummy_cont")
+            .result(i32_ty)
+            .build();
+        let cont_val = Value::new(db, ValueDef::OpResult(cont_op), 0);
+
+        let drop_op = Operation::of_name(db, location, "cont.drop")
+            .operand(cont_val)
+            .build();
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![cont_op, drop_op],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa::tracked]
+    fn lower_drop_and_check(db: &dyn salsa::Database, module: Module<'_>) -> String {
+        let lowered = lower(db, module);
+        let body = lowered.body(db);
+        let ops = body.blocks(db)[0].operations(db);
+        // The drop op is the second operation (after dummy op)
+        ops.get(1).map(|op| op.full_name(db)).unwrap_or_default()
+    }
+
+    #[salsa_test]
+    fn test_drop_to_wasm_drop(db: &salsa::DatabaseImpl) {
+        let module = make_module_with_drop(db);
+        let op_name = lower_drop_and_check(db, module);
+        assert_eq!(op_name, "wasm.drop");
     }
 }
