@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
-use tribute_ir::dialect::{ability, adt, case, pat, src, ty};
+use tribute_ir::dialect::{ability, adt, tribute, tribute_pat};
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core::{self, AbilityRefType, Module};
 use trunk_ir::dialect::func;
@@ -285,7 +285,7 @@ fn collect_definition<'db>(
                 env.add_function(qn.clone(), *ty);
             }
         }
-        (d, n) if d == ty::DIALECT_NAME() && n == ty::STRUCT() => {
+        (d, n) if d == tribute::DIALECT_NAME() && n == tribute::STRUCT_DEF() => {
             // Struct definition → creates constructor
             let attrs = op.attributes(db);
 
@@ -303,7 +303,7 @@ fn collect_definition<'db>(
                 env.add_constructor(*sym, ty, None, IdVec::new());
             }
         }
-        (d, n) if d == ty::DIALECT_NAME() && n == ty::ENUM() => {
+        (d, n) if d == tribute::DIALECT_NAME() && n == tribute::ENUM_DEF() => {
             // Enum definition → creates constructors for each variant
             let attrs = op.attributes(db);
             if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_SYM_NAME()) {
@@ -320,9 +320,9 @@ fn collect_definition<'db>(
                 collect_enum_constructors(db, env, op, *sym, ty);
             }
         }
-        (d, n) if d == ty::DIALECT_NAME() && n == ty::ABILITY() => {
+        (d, n) if d == tribute::DIALECT_NAME() && n == tribute::ABILITY_DEF() => {
             // Ability definition → creates operations in the ability's namespace
-            if let Ok(ability_decl) = ty::Ability::from_operation(db, *op)
+            if let Ok(ability_decl) = tribute::AbilityDef::from_operation(db, *op)
                 && let Attribute::Symbol(ability_name) = ability_decl.sym_name(db)
             {
                 let ability_qn = QualifiedName::simple(*ability_name);
@@ -339,7 +339,7 @@ fn collect_definition<'db>(
                 collect_ability_operations(db, env, ability_decl, *ability_name);
             }
         }
-        (d, n) if d == src::DIALECT_NAME() && n == src::CONST() => {
+        (d, n) if d == tribute::DIALECT_NAME() && n == tribute::CONST() => {
             // Const definition
             let attrs = op.attributes(db);
 
@@ -347,11 +347,9 @@ fn collect_definition<'db>(
                 (attrs.get(&ATTR_NAME()), attrs.get(&ATTR_VALUE()))
             {
                 // Get the type from the operation result
-                let ty = op
-                    .results(db)
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| ty::var(db, std::collections::BTreeMap::new()));
+                let ty = op.results(db).first().copied().unwrap_or_else(|| {
+                    tribute::new_type_var(db, std::collections::BTreeMap::new())
+                });
                 env.add_const(*sym, value.clone(), ty);
             }
         }
@@ -439,7 +437,7 @@ trunk_ir::symbols! {
 fn collect_ability_operations<'db>(
     db: &'db dyn salsa::Database,
     env: &mut ModuleEnv<'db>,
-    ability_decl: ty::Ability<'db>,
+    ability_decl: tribute::AbilityDef<'db>,
     ability_name: Symbol,
 ) {
     let operations_region = ability_decl.operations(db);
@@ -452,7 +450,7 @@ fn collect_ability_operations<'db>(
     for block in operations_region.blocks(db).iter() {
         for op in block.operations(db).iter().copied() {
             // Check if this is an ability.op
-            let Ok(ability_op) = ability::Op::from_operation(db, op) else {
+            let Ok(ability_op) = tribute::Op::from_operation(db, op) else {
                 continue;
             };
 
@@ -632,9 +630,11 @@ impl<'db> Resolver<'db> {
     /// - User-defined types are looked up in the environment
     fn resolve_type(&self, ty: Type<'db>) -> Type<'db> {
         // Check if this is an unresolved type (src.type)
-        if ty.dialect(self.db) == "src" && ty.name(self.db) == "type" {
+        if ty.dialect(self.db) == "tribute" && ty.name(self.db) == "type" {
             // Get the type name from the name attribute (stored as Symbol)
-            if let Some(Attribute::Symbol(name_sym)) = ty.get_attr(self.db, src::Type::name_sym()) {
+            if let Some(Attribute::Symbol(name_sym)) =
+                ty.get_attr(self.db, tribute::Type::name_sym())
+            {
                 return self.resolve_type_name(*name_sym);
             }
         }
@@ -665,10 +665,10 @@ impl<'db> Resolver<'db> {
         let name_str = name.to_string();
         match &*name_str {
             // Primitive types
-            "Int" => *ty::Int::new(self.db),
+            "Int" => *tribute::Int::new(self.db),
             "Bool" => *core::I1::new(self.db),
             "Float" => *core::F64::new(self.db),
-            "Nat" => *ty::Nat::new(self.db),
+            "Nat" => *tribute::Nat::new(self.db),
             "String" => *core::String::new(self.db),
             "Bytes" => *core::Bytes::new(self.db),
             "Nil" => *core::Nil::new(self.db),
@@ -687,8 +687,8 @@ impl<'db> Resolver<'db> {
                 // Leave unresolved - will be caught by type checker
                 Type::new(
                     self.db,
-                    src::DIALECT_NAME(),
-                    src::TYPE(),
+                    tribute::DIALECT_NAME(),
+                    tribute::TYPE(),
                     IdVec::new(),
                     Attrs::new(),
                 )
@@ -818,11 +818,11 @@ impl<'db> Resolver<'db> {
                 // Handle function with local scope for parameters
                 vec![self.resolve_func(&remapped_op)]
             }
-            (d, n) if d == src::DIALECT_NAME() && n == src::USE() => {
+            (d, n) if d == tribute::DIALECT_NAME() && n == tribute::USE() => {
                 self.apply_use(&remapped_op);
                 Vec::new()
             }
-            (d, n) if d == src::DIALECT_NAME() && n == src::VAR() => {
+            (d, n) if d == tribute::DIALECT_NAME() && n == tribute::VAR() => {
                 if let Some(resolved) = self.try_resolve_var(&remapped_op) {
                     resolved
                 } else {
@@ -835,7 +835,7 @@ impl<'db> Resolver<'db> {
                         remapped_op.results(self.db).first().is_some_and(|ty| {
                             // Type is resolved if it's not a source type placeholder and not a type variable
                             let dialect = ty.dialect(self.db);
-                            dialect != src::DIALECT_NAME() && dialect != ty::DIALECT_NAME()
+                            dialect != tribute::DIALECT_NAME() && dialect != tribute::DIALECT_NAME()
                         });
 
                     let is_resolved_local = self.is_marked_resolved_local(&remapped_op);
@@ -845,7 +845,7 @@ impl<'db> Resolver<'db> {
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
-            (d, n) if d == src::DIALECT_NAME() && n == src::PATH() => {
+            (d, n) if d == tribute::DIALECT_NAME() && n == tribute::PATH() => {
                 if let Some(resolved) = self.try_resolve_path(&remapped_op) {
                     vec![resolved]
                 } else {
@@ -856,7 +856,7 @@ impl<'db> Resolver<'db> {
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
-            (d, n) if d == src::DIALECT_NAME() && n == src::CALL() => {
+            (d, n) if d == tribute::DIALECT_NAME() && n == tribute::CALL() => {
                 if let Some(resolved) = self.try_resolve_call(&remapped_op) {
                     vec![resolved]
                 } else {
@@ -867,7 +867,7 @@ impl<'db> Resolver<'db> {
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
-            (d, n) if d == src::DIALECT_NAME() && n == src::CONS() => {
+            (d, n) if d == tribute::DIALECT_NAME() && n == tribute::CONS() => {
                 if let Some(resolved) = self.try_resolve_cons(&remapped_op) {
                     vec![resolved]
                 } else {
@@ -883,11 +883,11 @@ impl<'db> Resolver<'db> {
                 self.pop_import_scope();
                 vec![resolved]
             }
-            (d, n) if d == src::DIALECT_NAME() && n == src::LET() => {
+            (d, n) if d == tribute::DIALECT_NAME() && n == tribute::LET() => {
                 // Handle let binding with pattern region
                 self.resolve_let(&remapped_op)
             }
-            (d, n) if d == case::DIALECT_NAME() && n == case::ARM() => {
+            (d, n) if d == tribute::DIALECT_NAME() && n == tribute::ARM() => {
                 // Handle case arm with pattern bindings
                 vec![self.resolve_case_arm(&remapped_op)]
             }
@@ -1030,9 +1030,9 @@ impl<'db> Resolver<'db> {
     /// Collect a single let binding from a pattern operation.
     fn collect_let_binding_from_op(&mut self, op: &Operation<'db>, value: Value<'db>) {
         // Use a type variable - typechecker will infer the actual type
-        let infer_ty = || ty::var(self.db, std::collections::BTreeMap::new());
+        let infer_ty = || tribute::new_type_var(self.db, std::collections::BTreeMap::new());
 
-        if let Ok(bind_op) = pat::Bind::from_operation(self.db, *op) {
+        if let Ok(bind_op) = tribute_pat::Bind::from_operation(self.db, *op) {
             // pat.bind("x") - bind x to the value
             let name = bind_op.name(self.db);
             self.add_local(
@@ -1042,7 +1042,7 @@ impl<'db> Resolver<'db> {
                     ty: infer_ty(),
                 },
             );
-        } else if let Ok(as_pat_op) = pat::AsPat::from_operation(self.db, *op) {
+        } else if let Ok(as_pat_op) = tribute_pat::AsPat::from_operation(self.db, *op) {
             // pat.as_pat: bind the name to value, then recurse on inner pattern
             let name = as_pat_op.name(self.db);
             self.add_local(
@@ -1054,9 +1054,9 @@ impl<'db> Resolver<'db> {
             );
             // Recurse on inner pattern with the same value
             self.collect_let_bindings(&as_pat_op.inner(self.db), value);
-        } else if pat::Wildcard::from_operation(self.db, *op).is_ok() {
+        } else if tribute_pat::Wildcard::from_operation(self.db, *op).is_ok() {
             // Wildcard pattern - no binding needed
-        } else if let Ok(tuple_op) = pat::Tuple::from_operation(self.db, *op) {
+        } else if let Ok(tuple_op) = tribute_pat::Tuple::from_operation(self.db, *op) {
             // TODO: Handle tuple patterns by generating extraction operations
             // For now, fall through to nested regions which may have bindings
             // Each element in the tuple needs extraction - for now just recurse
@@ -1088,20 +1088,22 @@ impl<'db> Resolver<'db> {
         let op_name = op.name(self.db);
 
         match (dialect, op_name) {
-            (d, n) if d == pat::DIALECT_NAME() && n == pat::BIND() => {
+            (d, n) if d == tribute_pat::DIALECT_NAME() && n == tribute_pat::BIND() => {
                 // pat.bind has a "name" attribute
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_NAME()) {
                     // Pattern binding - value comes from pattern matching at runtime
-                    let infer_ty = ty::var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty =
+                        tribute::new_type_var(self.db, std::collections::BTreeMap::new());
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
                 }
             }
-            (d, n) if d == pat::DIALECT_NAME() && n == pat::AS_PAT() => {
+            (d, n) if d == tribute_pat::DIALECT_NAME() && n == tribute_pat::AS_PAT() => {
                 // pat.as_pat has a "name" attribute and an inner pattern region
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_NAME()) {
-                    let infer_ty = ty::var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty =
+                        tribute::new_type_var(self.db, std::collections::BTreeMap::new());
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
                 }
                 // Also collect from inner pattern region
@@ -1109,11 +1111,12 @@ impl<'db> Resolver<'db> {
                     self.collect_pattern_bindings(region);
                 }
             }
-            (d, n) if d == pat::DIALECT_NAME() && n == pat::LIST_REST() => {
+            (d, n) if d == tribute_pat::DIALECT_NAME() && n == tribute_pat::LIST_REST() => {
                 // pat.list_rest has a "rest_name" attribute
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_REST_NAME()) {
-                    let infer_ty = ty::var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty =
+                        tribute::new_type_var(self.db, std::collections::BTreeMap::new());
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
                 }
                 // Also collect from head pattern region
@@ -1170,7 +1173,7 @@ impl<'db> Resolver<'db> {
                 break;
             }
 
-            if op.dialect(self.db) == "src" && op.name(self.db) == "var" {
+            if op.dialect(self.db) == "tribute" && op.name(self.db) == "var" {
                 // Only consider as parameter declaration if span matches function span
                 // Body references have their own specific span, not the function span
                 let op_span = op.location(self.db).span;
@@ -1304,7 +1307,7 @@ impl<'db> Resolver<'db> {
                     let resolved_ty = self.resolve_type(*ty);
 
                     // Create new src.var with resolved type (keeps span for hover)
-                    let new_op = src::var(self.db, location, resolved_ty, *sym);
+                    let new_op = tribute::var(self.db, location, resolved_ty, *sym);
                     let new_operation = self.mark_resolved_local(new_op.as_operation());
 
                     // Map old result to the actual bound value (not the new src.var's result)
@@ -1319,7 +1322,7 @@ impl<'db> Resolver<'db> {
                     // Pattern binding - use case.bind to extract value from pattern matching
                     // This produces proper SSA form: case.bind result is the pattern-bound value
                     let resolved_ty = self.resolve_type(*ty);
-                    let bind_op = case::bind(self.db, location, resolved_ty, *sym);
+                    let bind_op = tribute::bind(self.db, location, resolved_ty, *sym);
 
                     // Remap old result to case.bind result (proper SSA value)
                     let old_result = op.result(self.db, 0);
@@ -1762,7 +1765,7 @@ pub fn resolve_module<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) -
 pub mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use tribute_ir::dialect::src;
+    use tribute_ir::dialect::tribute;
     use trunk_ir::dialect::{arith, core, func};
     use trunk_ir::{Location, PathId, QualifiedName, Span, idvec};
 
@@ -1801,8 +1804,8 @@ pub mod tests {
         let name = alias.unwrap_or("double");
         let call_path = QualifiedName::simple(Symbol::from_dynamic(name));
         let arg = arith::Const::i64(db, location, 1);
-        let call_result_ty = src::unresolved_type(db, Symbol::new("Int"), idvec![]);
-        let call = src::call(
+        let call_result_ty = tribute::unresolved_type(db, Symbol::new("Int"), idvec![]);
+        let call = tribute::call(
             db,
             location,
             vec![arg.result(db)],
@@ -1825,7 +1828,7 @@ pub mod tests {
 
         core::Module::build(db, location, Symbol::new("main"), |top| {
             top.op(helpers);
-            top.op(src::r#use(db, location, path, alias_sym, false));
+            top.op(tribute::r#use(db, location, path, alias_sym, false));
             top.op(main_func);
         })
     }
@@ -1902,7 +1905,7 @@ pub mod tests {
     ) -> bool {
         let name_sym = Symbol::from_dynamic(name);
         ops.iter().any(|op| {
-            op.dialect(db) == "src"
+            op.dialect(db) == "tribute"
                 && op.name(db) == "call"
                 && matches!(
                     op.attributes(db).get(&ATTR_NAME()),
@@ -2034,7 +2037,7 @@ pub mod tests {
 
         core::Module::build(db, location, Symbol::new("main"), |top| {
             let const_op =
-                src::r#const(db, location, int_ty, max_size_sym, Attribute::IntBits(1024));
+                tribute::r#const(db, location, int_ty, max_size_sym, Attribute::IntBits(1024));
             top.op(const_op);
         })
     }
@@ -2047,11 +2050,11 @@ pub mod tests {
 
         core::Module::build(db, location, Symbol::new("main"), |top| {
             let const_op =
-                src::r#const(db, location, int_ty, max_size_sym, Attribute::IntBits(1024));
+                tribute::r#const(db, location, int_ty, max_size_sym, Attribute::IntBits(1024));
             top.op(const_op);
 
             let func_op = func::Func::build(db, location, "test", idvec![], int_ty, |entry| {
-                let const_ref = entry.op(src::var(db, location, int_ty, max_size_sym));
+                let const_ref = entry.op(tribute::var(db, location, int_ty, max_size_sym));
                 entry.op(func::Return::value(db, location, const_ref.result(db)));
             });
             top.op(func_op);
@@ -2101,7 +2104,7 @@ pub mod tests {
         let const_refs: Vec<_> = ops
             .iter()
             .filter(|op| {
-                op.dialect(db) == "src"
+                op.dialect(db) == "tribute"
                     && op.name(db) == "var"
                     && matches!(
                         op.attributes(db).get(&ATTR_NAME()),
@@ -2130,13 +2133,13 @@ pub mod tests {
     /// Create a module with a let binding: fn main() { let x = 42; x }
     #[salsa::tracked]
     fn module_with_let_binding(db: &dyn salsa::Database) -> Module<'_> {
-        use tribute_ir::dialect::pat;
+        use tribute_ir::dialect::tribute_pat;
 
         let location = test_location(db);
-        let infer_ty = ty::var(db, std::collections::BTreeMap::new());
+        let infer_ty = tribute::new_type_var(db, std::collections::BTreeMap::new());
 
         // Pre-create the pattern region outside the closure
-        let pattern_region = pat::helpers::bind_region(db, location, Symbol::new("x"));
+        let pattern_region = tribute_pat::helpers::bind_region(db, location, Symbol::new("x"));
 
         // Create the main function with let binding
         let main_func = func::Func::build(
@@ -2150,7 +2153,7 @@ pub mod tests {
                 let const_val = entry.op(arith::Const::i64(db, location, 42));
 
                 // src.let(%0) { pat.bind("x") }
-                entry.op(src::r#let(
+                entry.op(tribute::r#let(
                     db,
                     location,
                     const_val.result(db),
@@ -2158,7 +2161,7 @@ pub mod tests {
                 ));
 
                 // %1 = src.var("x")
-                let var_ref = entry.op(src::var(db, location, infer_ty, Symbol::new("x")));
+                let var_ref = entry.op(tribute::var(db, location, infer_ty, Symbol::new("x")));
 
                 // return %1
                 entry.op(func::Return::value(db, location, var_ref.result(db)));
@@ -2191,7 +2194,7 @@ pub mod tests {
         // Check that src.let is erased
         let let_ops: Vec<_> = ops
             .iter()
-            .filter(|op| op.dialect(db) == "src" && op.name(db) == "let")
+            .filter(|op| op.dialect(db) == "tribute" && op.name(db) == "let")
             .collect();
         assert!(
             let_ops.is_empty(),
@@ -2203,7 +2206,7 @@ pub mod tests {
         let var_refs: Vec<_> = ops
             .iter()
             .filter(|op| {
-                op.dialect(db) == "src"
+                op.dialect(db) == "tribute"
                     && op.name(db) == "var"
                     && matches!(
                         op.attributes(db).get(&ATTR_NAME()),
@@ -2230,7 +2233,7 @@ pub mod tests {
         use trunk_ir::BlockBuilder;
 
         let location = test_location(db);
-        let infer_ty = ty::var(db, std::collections::BTreeMap::new());
+        let infer_ty = tribute::new_type_var(db, std::collections::BTreeMap::new());
 
         // Create ability declaration: ability Console { fn print(msg: String) -> Nil }
         // Use actual Type attributes for param and return types
@@ -2240,10 +2243,10 @@ pub mod tests {
         // Build operations region with ability.op
         let mut ops_block = BlockBuilder::new(db, location);
         let print_type = core::Func::new(db, idvec![string_ty], nil_ty).as_type();
-        ops_block.op(ability::op(db, location, Symbol::new("print"), print_type));
+        ops_block.op(tribute::op(db, location, Symbol::new("print"), print_type));
         let operations_region = Region::new(db, location, idvec![ops_block.build()]);
 
-        let ability_decl = ty::ability(
+        let ability_decl = tribute::ability_def(
             db,
             location,
             infer_ty,
@@ -2255,7 +2258,7 @@ pub mod tests {
         let print_path = QualifiedName::from_strs(["Console", "print"]).unwrap();
         let main_func = func::Func::build(db, location, "main", idvec![], infer_ty, |entry| {
             // src.call(Console::print)()
-            let call_result = entry.op(src::call(
+            let call_result = entry.op(tribute::call(
                 db,
                 location,
                 vec![],

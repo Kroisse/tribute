@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use tribute_ir::dialect::{adt, closure, pat, src, ty};
+use tribute_ir::dialect::{adt, closure, tribute, tribute_pat};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
@@ -141,7 +141,7 @@ impl<'db> LambdaInfoCollector<'db> {
             }
 
             // Check if this is a src.var (parameter declaration)
-            if let Ok(var_op) = src::Var::from_operation(self.db, *op) {
+            if let Ok(var_op) = tribute::Var::from_operation(self.db, *op) {
                 let name = var_op.name(self.db);
                 let ty = param_types[param_idx];
                 self.add_local(name, ty);
@@ -186,12 +186,12 @@ impl<'db> LambdaInfoCollector<'db> {
         }
 
         // Handle lambda expressions - collect capture info
-        if let Ok(lambda_op) = src::Lambda::from_operation(self.db, *op) {
+        if let Ok(lambda_op) = tribute::Lambda::from_operation(self.db, *op) {
             return self.collect_lambda(lambda_op);
         }
 
         // Handle let bindings - track bound variables
-        if let Ok(let_op) = src::Let::from_operation(self.db, *op) {
+        if let Ok(let_op) = tribute::Let::from_operation(self.db, *op) {
             return self.collect_in_let(let_op);
         }
 
@@ -230,7 +230,7 @@ impl<'db> LambdaInfoCollector<'db> {
         lambda_info_map
     }
 
-    fn collect_in_let(&mut self, op: src::Let<'db>) -> LambdaInfoMap<'db> {
+    fn collect_in_let(&mut self, op: tribute::Let<'db>) -> LambdaInfoMap<'db> {
         // Get the bound value type
         let bound_ty = self.get_value_type(op.value(self.db));
 
@@ -259,13 +259,13 @@ impl<'db> LambdaInfoCollector<'db> {
                 }
             }
         }
-        ty::var(self.db, std::collections::BTreeMap::new())
+        tribute::new_type_var(self.db, std::collections::BTreeMap::new())
     }
 
     fn collect_pattern_bindings(&mut self, region: &Region<'db>, ty: Type<'db>) {
         for block in region.blocks(self.db) {
             for op in block.operations(self.db) {
-                if let Ok(bind_op) = pat::Bind::from_operation(self.db, *op) {
+                if let Ok(bind_op) = tribute_pat::Bind::from_operation(self.db, *op) {
                     let name = bind_op.name(self.db);
                     let binding_ty = op.results(self.db).first().copied().unwrap_or(ty);
                     self.add_local(name, binding_ty);
@@ -274,7 +274,7 @@ impl<'db> LambdaInfoCollector<'db> {
         }
     }
 
-    fn collect_lambda(&mut self, op: src::Lambda<'db>) -> LambdaInfoMap<'db> {
+    fn collect_lambda(&mut self, op: tribute::Lambda<'db>) -> LambdaInfoMap<'db> {
         let location = op.location(self.db);
         let body = op.body(self.db);
 
@@ -344,8 +344,8 @@ impl<'db> LambdaInfoCollector<'db> {
         let op_name = op.name(self.db);
 
         // Check for variable references
-        if dialect == src::DIALECT_NAME() && op_name == src::VAR() {
-            if let Ok(var_op) = src::Var::from_operation(self.db, *op) {
+        if dialect == tribute::DIALECT_NAME() && op_name == tribute::VAR() {
+            if let Ok(var_op) = tribute::Var::from_operation(self.db, *op) {
                 let name = var_op.name(self.db);
 
                 if !seen_names.contains(&name)
@@ -359,7 +359,7 @@ impl<'db> LambdaInfoCollector<'db> {
         }
 
         // Skip nested lambdas - they handle their own captures
-        if dialect == src::DIALECT_NAME() && op_name == src::LAMBDA() {
+        if dialect == tribute::DIALECT_NAME() && op_name == tribute::LAMBDA() {
             return;
         }
 
@@ -445,8 +445,9 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
 
         for op in ops.iter() {
             // Check if this is a src.var (parameter declaration)
-            if op.dialect(self.db) == src::DIALECT_NAME() && op.name(self.db) == src::VAR() {
-                if let Ok(var_op) = src::Var::from_operation(self.db, *op) {
+            if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::VAR()
+            {
+                if let Ok(var_op) = tribute::Var::from_operation(self.db, *op) {
                     let name = var_op.name(self.db);
                     let block_arg = Value::new(self.db, ValueDef::BlockArg(block_id), param_idx);
                     self.add_local(name, block_arg);
@@ -546,12 +547,12 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         }
 
         // Handle lambda expressions - transform to closure.new
-        if dialect == src::DIALECT_NAME() && op_name == src::LAMBDA() {
+        if dialect == tribute::DIALECT_NAME() && op_name == tribute::LAMBDA() {
             return self.transform_lambda(&remapped_op);
         }
 
         // Handle let bindings - track bound variables
-        if dialect == src::DIALECT_NAME() && op_name == src::LET() {
+        if dialect == tribute::DIALECT_NAME() && op_name == tribute::LET() {
             return vec![self.transform_in_let(&remapped_op)];
         }
 
@@ -598,7 +599,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
     fn collect_pattern_bindings(&mut self, region: &Region<'db>, value: Value<'db>) {
         for block in region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
-                if let Ok(bind_op) = pat::Bind::from_operation(self.db, *op) {
+                if let Ok(bind_op) = tribute_pat::Bind::from_operation(self.db, *op) {
                     let name = bind_op.name(self.db);
                     self.add_local(name, value);
                 }
@@ -620,8 +621,8 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
             }
         };
 
-        let lambda_op =
-            src::Lambda::from_operation(self.db, *op).expect("already checked this is src.lambda");
+        let lambda_op = tribute::Lambda::from_operation(self.db, *op)
+            .expect("already checked this is src.lambda");
 
         let lambda_type = lambda_op.r#type(self.db);
         let body = lambda_op.body(self.db);
@@ -635,7 +636,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                     func_ty.effect(self.db),
                 )
             } else {
-                let infer_ty = ty::var(self.db, std::collections::BTreeMap::new());
+                let infer_ty = tribute::new_type_var(self.db, std::collections::BTreeMap::new());
                 (IdVec::new(), infer_ty, None)
             };
 
@@ -790,7 +791,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
 
                     for op in ops.iter() {
                         // Handle src.var ops - either parameter declarations or captured refs
-                        if let Ok(var_op) = src::Var::from_operation(db, *op) {
+                        if let Ok(var_op) = tribute::Var::from_operation(db, *op) {
                             let var_name = var_op.name(db);
 
                             // Check if this is a parameter declaration (first N src.var ops)
@@ -816,7 +817,9 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                         }
 
                         // Handle src.yield -> func.return conversion
-                        if op.dialect(db) == src::DIALECT_NAME() && op.name(db) == src::YIELD() {
+                        if op.dialect(db) == tribute::DIALECT_NAME()
+                            && op.name(db) == tribute::YIELD()
+                        {
                             let return_vals: Vec<_> = op
                                 .operands(db)
                                 .iter()
@@ -901,7 +904,7 @@ pub fn lift_lambdas<'db>(
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use tribute_ir::dialect::{closure, src};
+    use tribute_ir::dialect::{closure, tribute};
     use trunk_ir::dialect::{arith, core, func};
     use trunk_ir::{BlockId, Location, PathId, Span, idvec};
 
@@ -960,7 +963,7 @@ mod tests {
                 *core::I64::new(db),
                 |entry| {
                     // Parameter x
-                    let x_var = entry.op(src::var(
+                    let x_var = entry.op(tribute::var(
                         db,
                         location,
                         *core::I64::new(db),
@@ -983,13 +986,21 @@ mod tests {
                             {
                                 let mut ops = IdVec::new();
                                 // Parameter y declaration
-                                let y_var =
-                                    src::var(db, lambda_loc, *core::I64::new(db), Symbol::new("y"));
+                                let y_var = tribute::var(
+                                    db,
+                                    lambda_loc,
+                                    *core::I64::new(db),
+                                    Symbol::new("y"),
+                                );
                                 ops.push(y_var.as_operation());
 
                                 // Reference to captured x
-                                let x_ref =
-                                    src::var(db, lambda_loc, *core::I64::new(db), Symbol::new("x"));
+                                let x_ref = tribute::var(
+                                    db,
+                                    lambda_loc,
+                                    *core::I64::new(db),
+                                    Symbol::new("x"),
+                                );
                                 ops.push(x_ref.as_operation());
 
                                 // x + y
@@ -1003,14 +1014,14 @@ mod tests {
                                 ops.push(add_op.as_operation());
 
                                 // yield result
-                                let yield_op = src::r#yield(db, lambda_loc, add_op.result(db));
+                                let yield_op = tribute::r#yield(db, lambda_loc, add_op.result(db));
                                 ops.push(yield_op.as_operation());
                                 ops
                             },
                         )],
                     );
 
-                    let lambda = entry.op(src::lambda(
+                    let lambda = entry.op(tribute::lambda(
                         db,
                         lambda_loc,
                         lambda_type,
@@ -1071,17 +1082,21 @@ mod tests {
                             idvec![*core::I64::new(db)],
                             {
                                 let mut ops = IdVec::new();
-                                let x_var =
-                                    src::var(db, lambda_loc, *core::I64::new(db), Symbol::new("x"));
+                                let x_var = tribute::var(
+                                    db,
+                                    lambda_loc,
+                                    *core::I64::new(db),
+                                    Symbol::new("x"),
+                                );
                                 ops.push(x_var.as_operation());
-                                let yield_op = src::r#yield(db, lambda_loc, x_var.result(db));
+                                let yield_op = tribute::r#yield(db, lambda_loc, x_var.result(db));
                                 ops.push(yield_op.as_operation());
                                 ops
                             },
                         )],
                     );
 
-                    let lambda = entry.op(src::lambda(
+                    let lambda = entry.op(tribute::lambda(
                         db,
                         lambda_loc,
                         lambda_type,

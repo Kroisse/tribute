@@ -23,7 +23,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use tribute_ir::dialect::ability;
+use tribute_ir::dialect::{ability, tribute};
 use trunk_ir::dialect::{cont, core};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, Block, BlockId, DialectOp, IdVec, Operation, Region};
@@ -106,7 +106,7 @@ impl RewritePattern for LowerPromptPattern {
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
         // Match: ability.prompt
-        let prompt_op = match ability::Prompt::from_operation(db, *op) {
+        let prompt_op = match tribute::Prompt::from_operation(db, *op) {
             Ok(p) => p,
             Err(_) => return RewriteResult::Unchanged,
         };
@@ -273,7 +273,7 @@ mod tests {
         let body_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
         let body = Region::new(db, location, idvec![body_block]);
 
-        let prompt_op = Operation::of_name(db, location, "ability.prompt")
+        let prompt_op = Operation::of_name(db, location, "tribute.prompt")
             .result(*core::Nil::new(db))
             .region(body)
             .build();

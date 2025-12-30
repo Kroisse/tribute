@@ -15,7 +15,7 @@ pub fn print_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use tribute_ir::dialect::ty::{self, Int};
+    use tribute_ir::dialect::tribute::{self, Int};
     use trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func, Nil};
     use trunk_ir::{IdVec, Symbol, idvec};
 
@@ -62,13 +62,13 @@ mod tests {
 
     #[salsa_test]
     fn test_print_type_var(db: &salsa::DatabaseImpl) {
-        let var_a = ty::var_with_id(db, 0);
+        let var_a = tribute::type_var_with_id(db, 0);
         assert_eq!(print_type(db, var_a), "a");
 
-        let var_z = ty::var_with_id(db, 25);
+        let var_z = tribute::type_var_with_id(db, 25);
         assert_eq!(print_type(db, var_z), "z");
 
-        let var_t0 = ty::var_with_id(db, 26);
+        let var_t0 = tribute::type_var_with_id(db, 26);
         assert_eq!(print_type(db, var_t0), "t0");
     }
 }

@@ -120,8 +120,8 @@ impl<'db> TdnrResolver<'db> {
         let dialect = remapped_op.dialect(self.db);
         let op_name = remapped_op.name(self.db);
 
-        if dialect == "src" && op_name == "call" {
-            trace!("TDNR: found src.call operation");
+        if dialect == "tribute" && op_name == "call" {
+            trace!("TDNR: found tribute.call operation");
             if let Some(resolved) = self.try_resolve_method_call(&remapped_op) {
                 trace!("TDNR: resolved to {:?}", resolved.dialect(self.db));
                 self.ctx.map_results(self.db, &remapped_op, &resolved);

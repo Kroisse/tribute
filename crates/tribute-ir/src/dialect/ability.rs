@@ -1,22 +1,25 @@
 //! Ability dialect operations and types.
 //!
-//! This dialect represents language-level ability (algebraic effect) operations.
-//! These are high-level operations that get lowered to the `cont` dialect.
+//! This dialect represents ability (algebraic effect) operations that get
+//! lowered to the `cont` dialect for continuation-based control flow.
 //!
 //! ## Design
 //!
-//! Handler pattern matching is done via `case.case`, not in this dialect.
-//! The `ability.prompt` operation runs the body in a delimited context and
-//! returns a `Request` value, which is then pattern-matched by `case.case`
-//! with handler patterns (`case.handler_done`, `case.handler_suspend`).
+//! Ability declarations (`tribute.ability_def`, `tribute.op`) are in the tribute dialect.
+//! This dialect contains the runtime operations:
+//! - `ability.perform`: invoke an ability operation
+//! - `ability.resume`: resume a captured continuation
+//! - `ability.abort`: discard a continuation
+//!
+//! Handler pattern matching is done via `tribute.case` with `tribute.prompt`:
 //!
 //! ```text
 //! // Source: case handle expr { ... }
 //! // Lowers to:
-//! %request = ability.prompt { expr }
-//! case.case(%request) {
-//!     case.arm("{result}") { ... }
-//!     case.arm("{State::get() -> k}") { ... }
+//! %request = tribute.prompt { expr }
+//! tribute.case(%request) {
+//!     tribute.arm("{result}") { ... }
+//!     tribute.arm("{State::get() -> k}") { ... }
 //! }
 //! ```
 
@@ -25,16 +28,6 @@ use trunk_ir::dialect;
 dialect! {
     mod ability {
         // === Operations ===
-
-        /// `ability.op` operation: declares an operation signature within an ability.
-        ///
-        /// Used inside `ty.ability` operations region to define what operations the ability provides.
-        ///
-        /// Attributes:
-        /// - `sym_name`: The operation name
-        /// - `type`: The operation's function type (func.Fn)
-        #[attr(sym_name: Symbol, r#type: Type)]
-        fn op();
 
         /// `ability.perform` operation: performs an ability operation.
         ///
@@ -45,18 +38,6 @@ dialect! {
         /// to support parameterized abilities like `State(Int)`.
         #[attr(ability_ref: Type, op: Symbol)]
         fn perform(#[rest] args) -> result;
-
-        /// `ability.prompt` operation: runs body in a delimited context.
-        ///
-        /// Executes the body region until it either:
-        /// - Completes with a value → returns `Request::Done(value)`
-        /// - Performs an ability operation → returns `Request::Suspend(op, args, continuation)`
-        ///
-        /// The returned `Request` is typically pattern-matched using `case.case`
-        /// with handler patterns.
-        fn prompt() -> request {
-            #[region(body)] {}
-        };
 
         /// `ability.resume` operation: resumes a captured continuation.
         ///

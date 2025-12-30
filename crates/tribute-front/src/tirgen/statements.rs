@@ -1,7 +1,7 @@
 //! Block and statement lowering.
 
 use tree_sitter::Node;
-use tribute_ir::dialect::{adt, case, list, src};
+use tribute_ir::dialect::{adt, list, tribute};
 use trunk_ir::{BlockBuilder, Symbol, Value, dialect::arith};
 
 use super::context::CstLoweringCtx;
@@ -62,9 +62,9 @@ pub fn lower_let_statement<'db>(
     };
 
     if let Some(value) = lower_expr(ctx, block, value_node) {
-        // Generate src.let with pattern region for resolver
+        // Generate tribute.let with pattern region for resolver
         let pattern_region = pattern_to_region(ctx, pattern_node);
-        block.op(src::r#let(ctx.db, location, value, pattern_region));
+        block.op(tribute::r#let(ctx.db, location, value, pattern_region));
 
         // Also bind in context for tirgen's own use during lowering
         bind_pattern(ctx, block, pattern_node, value);
@@ -189,7 +189,7 @@ pub fn bind_pattern<'db>(
                             continue;
                         }
                         let elem_value = block
-                            .op(src::call(
+                            .op(tribute::call(
                                 ctx.db,
                                 location,
                                 vec![value],
@@ -301,7 +301,7 @@ pub fn bind_pattern<'db>(
             if let Some(name) = value_name
                 && !has_operation
             {
-                let bind_op = block.op(case::bind(ctx.db, location, ctx.fresh_type_var(), name));
+                let bind_op = block.op(tribute::bind(ctx.db, location, ctx.fresh_type_var(), name));
                 ctx.bind(name, bind_op.result(ctx.db));
             }
 
@@ -312,7 +312,7 @@ pub fn bind_pattern<'db>(
                     if is_comment(arg_child.kind()) {
                         continue;
                     }
-                    let arg_bind = block.op(case::bind(
+                    let arg_bind = block.op(tribute::bind(
                         ctx.db,
                         location,
                         ctx.fresh_type_var(),
@@ -325,7 +325,7 @@ pub fn bind_pattern<'db>(
 
             // Bind continuation (for { Op(args) -> k } pattern)
             if let Some(cont_name) = continuation_name {
-                let cont_bind = block.op(case::bind(
+                let cont_bind = block.op(tribute::bind(
                     ctx.db,
                     location,
                     ctx.fresh_type_var(),

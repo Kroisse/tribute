@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use tracing::{debug, trace};
-use tribute_ir::dialect::ty;
+use tribute_ir::dialect::tribute;
 use trunk_ir::{Attribute, IdVec, Symbol, Type};
 
 use super::constraint::{Constraint, ConstraintSet, TypeVar};
@@ -114,7 +114,7 @@ impl<'db> TypeSubst<'db> {
     /// Apply this substitution to a type, resolving type variables.
     pub fn apply(&self, db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
         // If it's a type variable, look it up
-        if ty::is_var(db, ty) {
+        if tribute::is_type_var(db, ty) {
             if let Some(Attribute::IntBits(id)) = ty.get_attr(db, Symbol::new("id")) {
                 if let Some(resolved) = self.get(*id) {
                     trace!(id, ?resolved, "applying type substitution");
@@ -266,8 +266,8 @@ impl<'db> TypeSolver<'db> {
         }
 
         // Check for type variables
-        let t1_is_var = ty::is_var(self.db, t1);
-        let t2_is_var = ty::is_var(self.db, t2);
+        let t1_is_var = tribute::is_type_var(self.db, t1);
+        let t2_is_var = tribute::is_type_var(self.db, t2);
 
         match (t1_is_var, t2_is_var) {
             (true, _) => {
@@ -352,7 +352,7 @@ impl<'db> TypeSolver<'db> {
     fn occurs_in(&self, var_id: u64, ty: Type<'db>) -> bool {
         let ty = self.type_subst.apply(self.db, ty);
 
-        if ty::is_var(self.db, ty)
+        if tribute::is_type_var(self.db, ty)
             && let Some(Attribute::IntBits(id)) = ty.get_attr(self.db, Symbol::new("id"))
         {
             return *id == var_id;
@@ -597,7 +597,7 @@ mod tests {
     fn test_unify_type_var(db: &salsa::DatabaseImpl) {
         let mut solver = TypeSolver::new(db);
 
-        let var = ty::var_with_id(db, 0);
+        let var = tribute::type_var_with_id(db, 0);
         let i64_ty = *core::I64::new(db);
 
         let result = solver.unify_types(var, i64_ty);

@@ -145,7 +145,7 @@ mod tests {
     use super::*;
     use salsa::Setter;
     use tree_sitter::{InputEdit, Parser, Point};
-    use tribute_ir::dialect::{adt, case, src};
+    use tribute_ir::dialect::{adt, tribute};
     use trunk_ir::Attribute;
     use trunk_ir::DialectOp;
     use trunk_ir::dialect::func;
@@ -394,7 +394,9 @@ mod tests {
 
         let case_arms = ops
             .iter()
-            .filter(|op| op.dialect(&db) == case::DIALECT_NAME() && op.name(&db) == case::ARM())
+            .filter(|op| {
+                op.dialect(&db) == tribute::DIALECT_NAME() && op.name(&db) == tribute::ARM()
+            })
             .count();
         assert_eq!(case_arms, 3, "Expected three case arms");
     }
@@ -408,9 +410,9 @@ mod tests {
         let mut ops = Vec::new();
         collect_ops(&db, module.body(&db), &mut ops);
 
-        let has_constructor = ops
-            .iter()
-            .any(|op| op.dialect(&db) == src::DIALECT_NAME() && op.name(&db) == src::CONS());
+        let has_constructor = ops.iter().any(|op| {
+            op.dialect(&db) == tribute::DIALECT_NAME() && op.name(&db) == tribute::CONS()
+        });
         assert!(has_constructor, "Expected a src.cons operation");
     }
 
@@ -428,7 +430,9 @@ mod tests {
 
         let use_count = ops
             .iter()
-            .filter(|op| op.dialect(&db) == src::DIALECT_NAME() && op.name(&db) == src::USE())
+            .filter(|op| {
+                op.dialect(&db) == tribute::DIALECT_NAME() && op.name(&db) == tribute::USE()
+            })
             .count();
         assert_eq!(use_count, 2, "Expected two use imports");
     }
@@ -582,7 +586,7 @@ mod tests {
         );
 
         // Verify we have the struct type
-        assert_eq!(ops[0].full_name(&db), "type.struct");
+        assert_eq!(ops[0].full_name(&db), "tribute.struct_def");
 
         // Verify we have the accessor module
         assert_eq!(ops[1].full_name(&db), "core.module");
@@ -652,7 +656,7 @@ mod tests {
         assert!(!ops.is_empty(), "Should have at least one operation");
 
         // The first op should be src.const
-        let const_op = src::Const::from_operation(&db, ops[0]).expect("Should be a src.const");
+        let const_op = tribute::Const::from_operation(&db, ops[0]).expect("Should be a src.const");
         assert_eq!(const_op.name(&db), "pi");
     }
 

@@ -1,7 +1,7 @@
 //! Declaration lowering for functions, types, and modules.
 
 use tree_sitter::Node;
-use tribute_ir::dialect::{ability, adt, src, ty};
+use tribute_ir::dialect::{adt, tribute};
 use trunk_ir::{
     Attribute, BlockBuilder, DialectType, IdVec, QualifiedName, Region, Span, Symbol, SymbolVec,
     Type,
@@ -47,7 +47,13 @@ pub fn lower_use_decl<'db>(
     for import in imports {
         let alias_sym = import.alias.unwrap_or_else(|| sym(""));
 
-        block.op(src::r#use(ctx.db, location, import.path, alias_sym, is_pub));
+        block.op(tribute::r#use(
+            ctx.db,
+            location,
+            import.path,
+            alias_sym,
+            is_pub,
+        ));
     }
 }
 
@@ -167,7 +173,7 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
             // Bind parameters
             for (i, param_name) in param_names.into_iter().enumerate() {
                 let infer_ty = ctx.fresh_type_var();
-                let param_value = entry.op(src::var(ctx.db, location, infer_ty, param_name));
+                let param_value = entry.op(tribute::var(ctx.db, location, infer_ty, param_name));
                 ctx.bind(param_name, param_value.result(ctx.db));
                 let _ = i;
             }
@@ -201,7 +207,7 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
 pub fn lower_struct_decl<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     node: Node,
-) -> Option<(ty::Struct<'db>, core::Module<'db>)> {
+) -> Option<(tribute::StructDef<'db>, core::Module<'db>)> {
     let location = ctx.location(&node);
 
     // Use field-based access
@@ -230,7 +236,7 @@ pub fn lower_struct_decl<'db>(
     );
 
     // Create the struct definition operation
-    let struct_op = ty::r#struct(
+    let struct_op = tribute::struct_def(
         ctx.db,
         location,
         struct_ty,
@@ -525,8 +531,11 @@ fn parse_struct_fields<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Vec<(S
     fields
 }
 
-/// Lower an enum declaration to type.enum.
-pub fn lower_enum_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<ty::Enum<'db>> {
+/// Lower an enum declaration to tribute.enum_def.
+pub fn lower_enum_decl<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
+    node: Node,
+) -> Option<tribute::EnumDef<'db>> {
     let location = ctx.location(&node);
 
     // Use field-based access
@@ -569,7 +578,7 @@ pub fn lower_enum_decl<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option
             .collect(),
     );
 
-    Some(ty::r#enum(
+    Some(tribute::enum_def(
         ctx.db,
         location,
         result_ty,
@@ -648,12 +657,12 @@ fn parse_variant_fields<'db>(
     }
 }
 
-/// Lower a const declaration to src.const.
+/// Lower a const declaration to tribute.const.
 pub fn lower_const_decl<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     _block: &mut BlockBuilder<'db>,
     node: Node,
-) -> Option<src::Const<'db>> {
+) -> Option<tribute::Const<'db>> {
     let location = ctx.location(&node);
 
     // Use field access to get the named children
@@ -669,7 +678,7 @@ pub fn lower_const_decl<'db>(
     // Extract literal value directly as an Attribute (no arith.const generated)
     let value_attr = literal_to_attribute(ctx, value_node)?;
 
-    Some(src::r#const(
+    Some(tribute::r#const(
         ctx.db,
         location,
         result_type,
@@ -751,11 +760,11 @@ fn unwrap_expression_node<'tree>(node: Node<'tree>) -> Option<Node<'tree>> {
     }
 }
 
-/// Lower an ability declaration to type.ability.
+/// Lower an ability declaration to tribute.ability_def.
 pub fn lower_ability_decl<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     node: Node,
-) -> Option<ty::Ability<'db>> {
+) -> Option<tribute::AbilityDef<'db>> {
     let location = ctx.location(&node);
     let infer_ty = ctx.fresh_type_var();
 
@@ -766,15 +775,15 @@ pub fn lower_ability_decl<'db>(
     let name = node_text(&name_node, &ctx.source).to_string();
     let operations = parse_ability_operations(ctx, body_node);
 
-    // Build operations region containing ability.op operations
+    // Build operations region containing tribute.op operations
     let mut ops_block = BlockBuilder::new(ctx.db, location);
     for (op_name, param_types, return_type) in operations {
         let op_type = core::Func::new(ctx.db, param_types.into(), return_type).as_type();
-        ops_block.op(ability::op(ctx.db, location, sym(&op_name), op_type));
+        ops_block.op(tribute::op(ctx.db, location, sym(&op_name), op_type));
     }
     let operations_region = Region::new(ctx.db, location, idvec![ops_block.build()]);
 
-    Some(ty::ability(
+    Some(tribute::ability_def(
         ctx.db,
         location,
         infer_ty,
