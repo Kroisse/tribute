@@ -33,6 +33,9 @@
 //! stage_tdnr ─► Module (UFCS method calls resolved)
 //!     │
 //!     ▼
+//! stage_evidence ─► Module (evidence params added to effectful functions)
+//!     │
+//!     ▼
 //! stage_lower_case ─► Module (case.case lowered to scf.if)
 //!     │
 //!     ▼
@@ -70,6 +73,7 @@ use tribute_front::{lower_cst, parse_cst};
 use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::const_inline::inline_module;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_passes::evidence::insert_evidence;
 use tribute_passes::lambda_lift::lift_lambdas;
 use tribute_passes::lower_case_to_scf;
 use tribute_passes::resolve::{Resolver, build_env};
@@ -355,20 +359,40 @@ pub fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst)
 /// For example:
 /// - `list.len()` → `List::len(list)` (based on list's type being `List(a)`)
 /// - `x.map(f)` → `Type::map(x, f)` (based on x's inferred type)
+///
+/// TDNR runs before evidence insertion because it creates new `func.call`
+/// operations (from UFCS resolution) that need evidence parameters.
 #[salsa::tracked]
 pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let module = stage_closure_lower(db, source);
     resolve_tdnr(db, module)
 }
 
-/// Stage 8: Lower `case.case` to `scf.if` chains.
+/// Stage 8: Evidence Insertion.
+///
+/// This pass transforms effectful functions for ability system support:
+/// - Adds evidence parameter as first argument to effectful functions
+/// - Passes evidence through call chains
+///
+/// Evidence is a runtime structure for dynamic handler dispatch.
+/// Pure functions (with empty effect row) are unchanged.
+///
+/// This runs after TDNR because TDNR creates new `func.call` operations
+/// (from UFCS `x.method()` → `Type::method(x)`) that need evidence parameters.
+#[salsa::tracked]
+pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = stage_tdnr(db, source);
+    insert_evidence(db, module)
+}
+
+/// Stage 9: Lower `case.case` to `scf.if` chains.
 #[salsa::tracked]
 pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_tdnr(db, source);
+    let module = stage_evidence(db, source);
     lower_case_to_scf(db, module)
 }
 
-/// Stage 9: Dead Code Elimination (DCE).
+/// Stage 10: Dead Code Elimination (DCE).
 ///
 /// This pass removes unreachable function definitions from the module.
 /// Entry points include:
@@ -385,7 +409,7 @@ pub fn stage_dce<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module
     result.module
 }
 
-/// Stage 10: Lower to WebAssembly target.
+/// Stage 11: Lower to WebAssembly target.
 ///
 /// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
 /// It performs:
