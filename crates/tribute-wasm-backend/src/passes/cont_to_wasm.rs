@@ -202,27 +202,22 @@ impl<'db> ContinuationAnalyzer<'db> {
         let name = op.name(self.db);
 
         // Track function context
-        if dialect == trunk_ir::dialect::func::DIALECT_NAME()
-            && name == trunk_ir::dialect::func::FUNC()
-        {
-            if let Ok(func_op) = trunk_ir::dialect::func::Func::from_operation(self.db, *op) {
-                let prev_func = self.current_func.take();
-                let prev_counter = self.shift_counter;
+        if let Ok(func_op) = trunk_ir::dialect::func::Func::from_operation(self.db, *op) {
+            let prev_func = self.current_func.take();
+            let prev_counter = self.shift_counter;
 
-                self.current_func = Some(func_op.sym_name(self.db));
-                self.shift_counter = 0;
+            self.current_func = Some(func_op.sym_name(self.db));
+            self.shift_counter = 0;
 
-                // Analyze function body
-                for region in op.regions(self.db).iter() {
-                    self.analyze_region(region);
-                }
-
-                self.current_func = prev_func;
-                self.shift_counter = prev_counter;
-                return;
+            // Analyze function body
+            for region in op.regions(self.db).iter() {
+                self.analyze_region(region);
             }
-        }
 
+            self.current_func = prev_func;
+            self.shift_counter = prev_counter;
+            return;
+        }
         // Check for continuation operations
         if dialect == cont::DIALECT_NAME() {
             self.has_continuations = true;
