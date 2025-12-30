@@ -5,7 +5,7 @@
 
 use tracing::{error, warn};
 
-use crate::passes::cont_to_wasm::{ContAnalysis, YieldGlobals};
+use crate::passes::cont_to_wasm::ContAnalysis;
 use crate::plan::{MainExports, MemoryPlan};
 
 use tribute_ir::dialect::src;
@@ -108,11 +108,12 @@ struct WasmLowerer<'db> {
     module_location: Option<Location<'db>>,
     const_analysis: ConstAnalysis<'db>,
     intrinsic_analysis: IntrinsicAnalysis<'db>,
-    #[allow(dead_code)] // Used in constructor to set up yield_globals
+    #[allow(dead_code)] // Used in constructor to set up has_continuations
     cont_analysis: ContAnalysis<'db>,
     memory_plan: MemoryPlan,
     main_exports: MainExports<'db>,
-    yield_globals: Option<YieldGlobals>,
+    /// Whether the module uses continuations and needs yield globals.
+    has_continuations: bool,
 }
 
 impl<'db> WasmLowerer<'db> {
@@ -122,14 +123,8 @@ impl<'db> WasmLowerer<'db> {
         intrinsic_analysis: IntrinsicAnalysis<'db>,
         cont_analysis: ContAnalysis<'db>,
     ) -> Self {
-        // Initialize yield globals if module uses continuations
-        let yield_globals = if cont_analysis.has_continuations(db) {
-            // Yield globals are placed at the start (index 0-3)
-            // Other globals will be added after these
-            Some(YieldGlobals::new())
-        } else {
-            None
-        };
+        // Check if module uses continuations (yield globals will be emitted if true)
+        let has_continuations = cont_analysis.has_continuations(db);
 
         Self {
             db,
@@ -140,7 +135,7 @@ impl<'db> WasmLowerer<'db> {
             cont_analysis,
             memory_plan: MemoryPlan::new(),
             main_exports: MainExports::new(),
-            yield_globals,
+            has_continuations,
         }
     }
 
@@ -242,7 +237,7 @@ impl<'db> WasmLowerer<'db> {
         }
 
         // Emit yield globals for continuation support
-        if self.yield_globals.is_some() {
+        if self.has_continuations {
             // $yield_state: i32 (0 = normal, 1 = yielding)
             builder.op(wasm::global(
                 self.db,

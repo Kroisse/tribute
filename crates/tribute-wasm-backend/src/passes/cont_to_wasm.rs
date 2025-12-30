@@ -209,43 +209,9 @@ pub mod resume_gen {
     }
 }
 
-/// Global variable indices for yield state.
-/// These will be allocated in the module preamble.
-#[allow(dead_code)] // Fields will be used when implementing global get/set
-pub struct YieldGlobals {
-    pub state_idx: u32,
-    pub tag_idx: u32,
-    pub cont_idx: u32,
-    pub value_idx: u32,
-}
-
-impl Default for YieldGlobals {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl YieldGlobals {
-    /// Create yield globals starting at the given base index.
-    ///
-    /// The base should be set to the number of existing globals in the module
-    /// to avoid index conflicts.
-    pub fn with_base(base: u32) -> Self {
-        Self {
-            state_idx: base,
-            tag_idx: base + 1,
-            cont_idx: base + 2,
-            value_idx: base + 3,
-        }
-    }
-
-    /// Create yield globals starting at index 0.
-    ///
-    /// Use `with_base()` if the module has existing globals.
-    pub fn new() -> Self {
-        Self::with_base(0)
-    }
-}
+// Yield global indices - these are hardcoded since they're always at the
+// start of the module's global section (indices 0-3).
+// See lower_wasm.rs::module_preamble_ops for where these are emitted.
 
 /// Analysis result for continuation lowering.
 #[salsa::tracked]
@@ -262,9 +228,14 @@ pub struct ContAnalysis<'db> {
 /// Uses BTreeMap for deterministic ordering.
 pub type ShiftPointMap<'db> = BTreeMap<LocationKey, ShiftPointInfo<'db>>;
 
-/// Serializable location key for shift points.
+/// Location key for shift points that can be used in 'static contexts.
+///
+/// Unlike `Location<'db>`, this doesn't contain a salsa-interned PathId,
+/// so it can be stored in patterns that require 'static lifetime.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
 pub struct LocationKey {
+    /// File path URI (e.g., "file:///path/to/file.trb")
+    pub path: String,
     /// Start byte of the span.
     pub start: usize,
     /// End byte of the span.
@@ -272,8 +243,9 @@ pub struct LocationKey {
 }
 
 impl LocationKey {
-    fn from_location(loc: Location<'_>) -> Self {
+    fn from_location(db: &dyn salsa::Database, loc: Location<'_>) -> Self {
         Self {
+            path: loc.path.uri(db).to_owned(),
             start: loc.span.start,
             end: loc.span.end,
         }
@@ -367,7 +339,8 @@ impl<'db> ContinuationAnalyzer<'db> {
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
 
-        // Track function context
+        // Track function context - check both func.func and wasm.func
+        // (wasm.func is present after func_to_wasm lowering)
         if let Ok(func_op) = trunk_ir::dialect::func::Func::from_operation(self.db, *op) {
             let prev_func = self.current_func.take();
             let prev_counter = self.shift_counter;
@@ -383,7 +356,23 @@ impl<'db> ContinuationAnalyzer<'db> {
             self.current_func = prev_func;
             self.shift_counter = prev_counter;
             return;
+        } else if let Ok(wasm_func_op) = wasm::Func::from_operation(self.db, *op) {
+            let prev_func = self.current_func.take();
+            let prev_counter = self.shift_counter;
+
+            self.current_func = Some(wasm_func_op.sym_name(self.db));
+            self.shift_counter = 0;
+
+            // Analyze function body
+            for region in op.regions(self.db).iter() {
+                self.analyze_region(region);
+            }
+
+            self.current_func = prev_func;
+            self.shift_counter = prev_counter;
+            return;
         }
+
         // Check for continuation operations
         if dialect == cont::DIALECT_NAME() {
             self.has_continuations = true;
@@ -403,7 +392,7 @@ impl<'db> ContinuationAnalyzer<'db> {
 
     fn collect_shift_info(&mut self, op: &Operation<'db>) {
         let location = op.location(self.db);
-        let location_key = LocationKey::from_location(location);
+        let location_key = LocationKey::from_location(self.db, location);
 
         // Extract tag from operation
         let tag = op
@@ -740,7 +729,7 @@ impl RewritePattern for ShiftPattern {
         };
 
         let location = op.location(db);
-        let location_key = LocationKey::from_location(location);
+        let location_key = LocationKey::from_location(db, location);
         let i32_ty = core::I32::new(db).as_type();
         let anyref_ty = wasm::Anyref::new(db).as_type();
         let funcref_ty = wasm::Funcref::new(db).as_type();
