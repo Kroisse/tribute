@@ -906,7 +906,10 @@ fn collect_gc_types<'db>(
             {
                 record_array_elem(type_idx, builder, ty)?;
             }
-        } else if name == Symbol::new("array_get") {
+        } else if name == Symbol::new("array_get")
+            || name == Symbol::new("array_get_s")
+            || name == Symbol::new("array_get_u")
+        {
             let attrs = op.attributes(db);
             let Some(type_idx) = get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx)
             else {
@@ -1962,6 +1965,20 @@ fn emit_op<'db>(
         let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayGet(type_idx));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("array_get_s") {
+        emit_operands(db, operands, ctx, function)?;
+        let attrs = op.attributes(db);
+        let type_idx = get_type_idx_from_attrs(attrs)
+            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
+        function.instruction(&Instruction::ArrayGetS(type_idx));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("array_get_u") {
+        emit_operands(db, operands, ctx, function)?;
+        let attrs = op.attributes(db);
+        let type_idx = get_type_idx_from_attrs(attrs)
+            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
+        function.instruction(&Instruction::ArrayGetU(type_idx));
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("array_set") {
         emit_operands(db, operands, ctx, function)?;

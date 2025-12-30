@@ -415,6 +415,14 @@ dialect! {
         #[attr(type_idx)]
         fn array_get(r#ref, index) -> result;
 
+        /// `wasm.array_get_s` operation: get packed element with sign extension.
+        #[attr(type_idx)]
+        fn array_get_s(r#ref, index) -> result;
+
+        /// `wasm.array_get_u` operation: get packed element with zero extension.
+        #[attr(type_idx)]
+        fn array_get_u(r#ref, index) -> result;
+
         /// `wasm.array_set` operation: set element in array.
         #[attr(type_idx)]
         fn array_set(r#ref, index, value);
