@@ -16,11 +16,11 @@ use trunk_ir::{
     Type, Value, ValueDef,
 };
 use wasm_encoder::{
-    ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType, ConstExpr, DataSection,
-    ElementSection, Elements, EntityType, ExportKind, ExportSection, FieldType, Function,
-    FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection, Instruction,
-    MemorySection, MemoryType, Module, RefType, StorageType, StructType, SubType, TableSection,
-    TableType, TypeSection, ValType,
+    ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
+    DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
+    FieldType, Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection,
+    Instruction, MemorySection, MemoryType, Module, RefType, StorageType, StructType, SubType,
+    TableSection, TableType, TypeSection, ValType,
 };
 
 use crate::errors;
@@ -28,8 +28,18 @@ use crate::{CompilationError, CompilationResult};
 
 /// Type index for BoxedF64 (Float wrapper for polymorphic contexts).
 /// This is always index 0 in the GC type section.
-/// Later, BigInt can be index 1 when implemented.
 const BOXED_F64_IDX: u32 = 0;
+
+/// Type index for BytesArray (array i8) - backing storage for Bytes.
+/// This is always index 1 in the GC type section.
+const BYTES_ARRAY_IDX: u32 = 1;
+
+/// Type index for BytesStruct (struct { data: ref BytesArray, offset: i32, len: i32 }).
+/// This is always index 2 in the GC type section.
+const BYTES_STRUCT_IDX: u32 = 2;
+
+/// First type index available for user-defined types.
+const FIRST_USER_TYPE_IDX: u32 = 3;
 
 trunk_ir::symbols! {
     ATTR_SYM_NAME => "sym_name",
@@ -54,6 +64,9 @@ trunk_ir::symbols! {
     ATTR_BYTES => "bytes",
     ATTR_REFTYPE => "reftype",
     ATTR_TABLE => "table",
+    ATTR_PASSIVE => "passive",
+    ATTR_DATA_IDX => "data_idx",
+    ATTR_LEN => "len",
 }
 
 /// Simple wasm operations that follow the pattern:
@@ -218,6 +231,7 @@ struct MemoryDef {
 struct DataDef {
     offset: i32,
     bytes: Vec<u8>,
+    passive: bool,
 }
 
 struct TableDef {
@@ -451,8 +465,12 @@ pub fn emit_wasm<'db>(
     }
 
     for data in module_info.data.iter() {
-        let offset = ConstExpr::i32_const(data.offset);
-        data_section.active(0, &offset, data.bytes.iter().copied());
+        if data.passive {
+            data_section.passive(data.bytes.iter().copied());
+        } else {
+            let offset = ConstExpr::i32_const(data.offset);
+            data_section.active(0, &offset, data.bytes.iter().copied());
+        }
     }
 
     // Generate element section (active element segments)
@@ -511,6 +529,12 @@ pub fn emit_wasm<'db>(
     module_bytes.section(&export_section);
     if !module_info.elements.is_empty() {
         module_bytes.section(&element_section);
+    }
+    // Data count section is required when using array.new_data or memory.init
+    if !module_info.data.is_empty() {
+        module_bytes.section(&DataCountSection {
+            count: module_info.data.len() as u32,
+        });
     }
     if !module_info.funcs.is_empty() {
         module_bytes.section(&code_section);
@@ -661,16 +685,17 @@ fn collect_gc_types<'db>(
     let mut builders: Vec<GcTypeBuilder<'db>> = Vec::new();
     let mut type_idx_by_type: HashMap<Type<'db>, u32> = HashMap::new();
 
-    // Start at 1 since index 0 is reserved for BoxedF64 (see BOXED_F64_IDX constant)
-    let mut next_type_idx: u32 = 1;
+    // Start at FIRST_USER_TYPE_IDX since indices 0-2 are reserved for built-in types:
+    // 0: BoxedF64, 1: BytesArray, 2: BytesStruct
+    let mut next_type_idx: u32 = FIRST_USER_TYPE_IDX;
 
     fn ensure_builder<'db, 'a>(
         builders: &'a mut Vec<GcTypeBuilder<'db>>,
         idx: u32,
     ) -> &'a mut GcTypeBuilder<'db> {
-        // Subtract 1 because index 0 is reserved for BoxedF64 (not in builders)
-        // Type indices start at 1, so idx-1 gives the array index
-        let adjusted_idx = (idx - 1) as usize;
+        // Subtract FIRST_USER_TYPE_IDX because indices 0-2 are reserved for built-in types
+        // User type indices start at FIRST_USER_TYPE_IDX
+        let adjusted_idx = (idx - FIRST_USER_TYPE_IDX) as usize;
         if builders.len() <= adjusted_idx {
             builders.resize_with(adjusted_idx + 1, GcTypeBuilder::new);
         }
@@ -1091,8 +1116,35 @@ fn collect_gc_types<'db>(
         }
     }
 
-    // Insert BoxedF64 at index 0 (BOXED_F64_IDX)
-    // BoxedF64 is a struct with a single f64 field for Float boxing
+    // Insert built-in types at reserved indices (in reverse order since we insert at 0)
+    // Index 2: BytesStruct (struct { data: ref BytesArray, offset: i32, len: i32 })
+    let bytes_struct_type = GcTypeDef::Struct(vec![
+        FieldType {
+            element_type: StorageType::Val(ValType::Ref(RefType {
+                nullable: false,
+                heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
+            })),
+            mutable: false,
+        },
+        FieldType {
+            element_type: StorageType::Val(ValType::I32),
+            mutable: false,
+        },
+        FieldType {
+            element_type: StorageType::Val(ValType::I32),
+            mutable: false,
+        },
+    ]);
+    result.insert(0, bytes_struct_type);
+
+    // Index 1: BytesArray (array i8)
+    let bytes_array_type = GcTypeDef::Array(FieldType {
+        element_type: StorageType::I8,
+        mutable: false,
+    });
+    result.insert(0, bytes_array_type);
+
+    // Index 0: BoxedF64 (struct with single f64 field for Float boxing)
     let boxed_f64_type = GcTypeDef::Struct(vec![FieldType {
         element_type: StorageType::Val(ValType::F64),
         mutable: false,
@@ -1221,7 +1273,12 @@ fn extract_data_def<'db>(
     op: &Operation<'db>,
 ) -> CompilationResult<DataDef> {
     let attrs = op.attributes(db);
-    let offset = attr_i32_attr(attrs, ATTR_OFFSET())?;
+    let passive = matches!(attrs.get(&ATTR_PASSIVE()), Some(Attribute::Bool(true)));
+    let offset = if passive {
+        0 // Passive segments don't have an offset
+    } else {
+        attr_i32_attr(attrs, ATTR_OFFSET())?
+    };
     let bytes = match attrs.get(&ATTR_BYTES()) {
         Some(Attribute::Bytes(value)) => value.clone(),
         _ => {
@@ -1230,7 +1287,11 @@ fn extract_data_def<'db>(
             ));
         }
     };
-    Ok(DataDef { offset, bytes })
+    Ok(DataDef {
+        offset,
+        bytes,
+        passive,
+    })
 }
 
 fn extract_table_def<'db>(
@@ -1934,6 +1995,34 @@ fn emit_op<'db>(
             .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
         function.instruction(&Instruction::RefTestNullable(heap_type));
         set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("bytes_from_data") {
+        // Compound operation: create Bytes struct from passive data segment
+        // Stack operations:
+        //   i32.const <offset>    ; offset within data segment
+        //   i32.const <len>       ; number of bytes to copy
+        //   array.new_data $bytes_array <data_idx>
+        //   i32.const 0           ; offset field (we use the whole array)
+        //   i32.const <len>       ; len field
+        //   struct.new $bytes_struct
+        let attrs = op.attributes(db);
+        let data_idx = attr_u32(attrs, ATTR_DATA_IDX())?;
+        let offset = attr_u32(attrs, ATTR_OFFSET())?;
+        let len = attr_u32(attrs, ATTR_LEN())?;
+
+        // Push offset and length for array.new_data
+        function.instruction(&Instruction::I32Const(offset as i32));
+        function.instruction(&Instruction::I32Const(len as i32));
+        function.instruction(&Instruction::ArrayNewData {
+            array_type_index: BYTES_ARRAY_IDX,
+            array_data_index: data_idx,
+        });
+
+        // Push struct fields: offset (0) and len
+        function.instruction(&Instruction::I32Const(0));
+        function.instruction(&Instruction::I32Const(len as i32));
+        function.instruction(&Instruction::StructNew(BYTES_STRUCT_IDX));
+
+        set_result_local(db, op, ctx, function)?;
     } else {
         return Err(CompilationError::unsupported_feature(
             "wasm op not supported",
@@ -2234,10 +2323,16 @@ fn type_to_valtype<'db>(
         Ok(ValType::F32)
     } else if core::F64::from_type(db, ty).is_some() {
         Ok(ValType::F64)
+    } else if core::Bytes::from_type(db, ty).is_some() {
+        // Bytes uses WasmGC struct representation
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(BYTES_STRUCT_IDX),
+        }))
     } else if core::String::from_type(db, ty).is_some()
-        || core::Bytes::from_type(db, ty).is_some()
         || (ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == Symbol::new("ptr"))
     {
+        // String and ptr still use linear memory (i32 pointer)
         Ok(ValType::I32)
     } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
         // ADT types (structs, variants) - use concrete GC type reference
@@ -2495,7 +2590,7 @@ mod tests {
         let struct_new = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field0.result(db, 0), field1.result(db, 0)])
             .results(idvec![struct_ty])
-            .attr("type_idx", Attribute::IntBits(1))
+            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64))
             .build();
 
         let block = Block::new(
@@ -2514,12 +2609,16 @@ mod tests {
         let module = make_struct_new_module(db);
         let (gc_types, type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
 
-        // Should have 2 GC types: BoxedF64 at index 0 + 1 user struct
-        assert_eq!(gc_types.len(), 2);
+        // Should have 4 GC types: 3 built-in (BoxedF64, BytesArray, BytesStruct) + 1 user struct
+        assert_eq!(gc_types.len(), 4);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
-        // Index 1 is the user struct
-        assert_eq!(gc_type_kind(&gc_types[1]), "struct");
+        // Index 1 is BytesArray
+        assert_eq!(gc_type_kind(&gc_types[1]), "array");
+        // Index 2 is BytesStruct
+        assert_eq!(gc_type_kind(&gc_types[2]), "struct");
+        // Index 3 is the user struct
+        assert_eq!(gc_type_kind(&gc_types[3]), "struct");
 
         // Type should be in the map
         let i32_ty = core::I32::new(db).as_type();
@@ -2552,7 +2651,7 @@ mod tests {
         let array_new = Operation::of_name(db, location, "wasm.array_new")
             .operands(idvec![size.result(db, 0), init.result(db, 0)])
             .results(idvec![i32_ty]) // placeholder result type
-            .attr("type_idx", Attribute::IntBits(1))
+            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64))
             .build();
 
         let block = Block::new(
@@ -2571,12 +2670,16 @@ mod tests {
         let module = make_array_new_module(db);
         let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
 
-        // Should have 2 GC types: BoxedF64 at index 0 + 1 user array
-        assert_eq!(gc_types.len(), 2);
+        // Should have 4 GC types: 3 built-in (BoxedF64, BytesArray, BytesStruct) + 1 user array
+        assert_eq!(gc_types.len(), 4);
         // Index 0 is BoxedF64 (struct)
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
-        // Index 1 is the user array
+        // Index 1 is BytesArray (array)
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
+        // Index 2 is BytesStruct (struct)
+        assert_eq!(gc_type_kind(&gc_types[2]), "struct");
+        // Index 3 is the user array
+        assert_eq!(gc_type_kind(&gc_types[3]), "array");
     }
 
     // ========================================
@@ -2597,7 +2700,7 @@ mod tests {
         let struct_new1 = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field.result(db, 0)])
             .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(1))
+            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64))
             .build();
 
         let field2 = Operation::of_name(db, location, "wasm.i32_const")
@@ -2608,7 +2711,7 @@ mod tests {
         let struct_new2 = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field2.result(db, 0)])
             .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(1)) // same type_idx
+            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64)) // same type_idx
             .build();
 
         let block = Block::new(
@@ -2627,12 +2730,16 @@ mod tests {
         let module = make_dedup_module(db);
         let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
 
-        // Should have 2 GC types: BoxedF64 + 1 user struct (same type_idx used twice)
-        assert_eq!(gc_types.len(), 2);
+        // Should have 4 GC types: 3 built-in + 1 user struct (same type_idx used twice)
+        assert_eq!(gc_types.len(), 4);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
-        // Index 1 is the deduplicated user struct
-        assert_eq!(gc_type_kind(&gc_types[1]), "struct");
+        // Index 1 is BytesArray
+        assert_eq!(gc_type_kind(&gc_types[1]), "array");
+        // Index 2 is BytesStruct
+        assert_eq!(gc_type_kind(&gc_types[2]), "struct");
+        // Index 3 is the deduplicated user struct
+        assert_eq!(gc_type_kind(&gc_types[3]), "struct");
     }
 
     // ========================================
@@ -2653,7 +2760,7 @@ mod tests {
         let struct_new1 = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field.result(db, 0)])
             .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(1))
+            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64))
             .build();
 
         // Create another struct_new with 2 fields (same type_idx)
@@ -2670,7 +2777,7 @@ mod tests {
         let struct_new2 = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field2a.result(db, 0), field2b.result(db, 0)])
             .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(1)) // same type_idx, different field count
+            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64)) // same type_idx, different field count
             .build();
 
         let block = Block::new(
@@ -2715,7 +2822,7 @@ mod tests {
         let struct_new = Operation::of_name(db, location, "wasm.struct_new")
             .operands(idvec![field.result(db, 0)])
             .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(1))
+            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64))
             .build();
 
         let func_return = Operation::of_name(db, location, "wasm.return").build();
@@ -2748,11 +2855,15 @@ mod tests {
         let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
 
         // Should find the struct type from inside the function body
-        // (2 types: BoxedF64 at index 0 + 1 user struct)
-        assert_eq!(gc_types.len(), 2);
+        // (4 types: 3 built-in + 1 user struct)
+        assert_eq!(gc_types.len(), 4);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
-        // Index 1 is the user struct from inside the function body
-        assert_eq!(gc_type_kind(&gc_types[1]), "struct");
+        // Index 1 is BytesArray
+        assert_eq!(gc_type_kind(&gc_types[1]), "array");
+        // Index 2 is BytesStruct
+        assert_eq!(gc_type_kind(&gc_types[2]), "struct");
+        // Index 3 is the user struct from inside the function body
+        assert_eq!(gc_type_kind(&gc_types[3]), "struct");
     }
 }
