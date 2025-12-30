@@ -630,7 +630,7 @@ impl<'db> Resolver<'db> {
     /// - User-defined types are looked up in the environment
     fn resolve_type(&self, ty: Type<'db>) -> Type<'db> {
         // Check if this is an unresolved type (src.type)
-        if ty.dialect(self.db) == "tribute" && ty.name(self.db) == "type" {
+        if ty.dialect(self.db) == tribute::DIALECT_NAME() && ty.name(self.db) == tribute::TYPE() {
             // Get the type name from the name attribute (stored as Symbol)
             if let Some(Attribute::Symbol(name_sym)) =
                 ty.get_attr(self.db, tribute::Type::name_sym())
@@ -1173,7 +1173,8 @@ impl<'db> Resolver<'db> {
                 break;
             }
 
-            if op.dialect(self.db) == "tribute" && op.name(self.db) == "var" {
+            if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::VAR()
+            {
                 // Only consider as parameter declaration if span matches function span
                 // Body references have their own specific span, not the function span
                 let op_span = op.location(self.db).span;
