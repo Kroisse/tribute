@@ -33,6 +33,7 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     tracing::debug!("=== AFTER func_to_wasm ===\n{:?}", module);
     let module = crate::passes::adt_to_wasm::lower(db, module);
     let module = crate::passes::closure_to_wasm::lower(db, module);
+    let module = crate::passes::cont_to_wasm::lower(db, module);
 
     // Const analysis and lowering (string/bytes constants to data segments)
     let const_analysis = crate::passes::const_to_wasm::analyze_consts(db, module);
