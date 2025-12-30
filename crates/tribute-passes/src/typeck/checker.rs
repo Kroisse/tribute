@@ -422,6 +422,8 @@ impl<'db> TypeChecker<'db> {
         } else if dialect == adt::DIALECT_NAME() {
             if name == adt::STRING_CONST() {
                 self.check_string_const(op);
+            } else if name == adt::BYTES_CONST() {
+                self.check_bytes_const(op);
             } else if name == adt::STRUCT_NEW() || name == adt::VARIANT_NEW() {
                 // For struct/variant construction, the result type is already set correctly
                 // to the struct/enum type. Just record this type for the result value.
@@ -931,6 +933,12 @@ impl<'db> TypeChecker<'db> {
         let string_type = core::String::new(self.db);
         let value = op.result(self.db, 0);
         self.record_type(value, *string_type);
+    }
+
+    fn check_bytes_const(&mut self, op: &Operation<'db>) {
+        let bytes_type = core::Bytes::new(self.db);
+        let value = op.result(self.db, 0);
+        self.record_type(value, *bytes_type);
     }
 
     // === list dialect checking ===
