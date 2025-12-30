@@ -5,6 +5,7 @@
 
 use tracing::{error, warn};
 
+use crate::passes::cont_to_wasm::{ContAnalysis, YieldGlobals};
 use crate::plan::{MainExports, MemoryPlan};
 
 use tribute_ir::dialect::src;
@@ -33,6 +34,9 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     tracing::debug!("=== AFTER func_to_wasm ===\n{:?}", module);
     let module = crate::passes::adt_to_wasm::lower(db, module);
     let module = crate::passes::closure_to_wasm::lower(db, module);
+
+    // Analyze continuations BEFORE lowering (to detect cont.* operations)
+    let cont_analysis = crate::passes::cont_to_wasm::analyze_continuations(db, module);
     let module = crate::passes::cont_to_wasm::lower(db, module);
 
     // Const analysis and lowering (string/bytes constants to data segments)
@@ -48,7 +52,7 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = crate::passes::intrinsic_to_wasm::lower(db, module, intrinsic_analysis);
 
     // Phase 2: Remaining lowering via WasmLowerer
-    let mut lowerer = WasmLowerer::new(db, const_analysis, intrinsic_analysis);
+    let mut lowerer = WasmLowerer::new(db, const_analysis, intrinsic_analysis, cont_analysis);
     let lowered = lowerer.lower_module(module);
 
     // Debug: Verify all operations are now in wasm dialect
@@ -104,8 +108,11 @@ struct WasmLowerer<'db> {
     module_location: Option<Location<'db>>,
     const_analysis: ConstAnalysis<'db>,
     intrinsic_analysis: IntrinsicAnalysis<'db>,
+    #[allow(dead_code)] // Used in constructor to set up yield_globals
+    cont_analysis: ContAnalysis<'db>,
     memory_plan: MemoryPlan,
     main_exports: MainExports<'db>,
+    yield_globals: Option<YieldGlobals>,
 }
 
 impl<'db> WasmLowerer<'db> {
@@ -113,15 +120,27 @@ impl<'db> WasmLowerer<'db> {
         db: &'db dyn salsa::Database,
         const_analysis: ConstAnalysis<'db>,
         intrinsic_analysis: IntrinsicAnalysis<'db>,
+        cont_analysis: ContAnalysis<'db>,
     ) -> Self {
+        // Initialize yield globals if module uses continuations
+        let yield_globals = if cont_analysis.has_continuations(db) {
+            // Yield globals are placed at the start (index 0-3)
+            // Other globals will be added after these
+            Some(YieldGlobals::new())
+        } else {
+            None
+        };
+
         Self {
             db,
             ctx: RewriteContext::new(),
             module_location: None,
             const_analysis,
             intrinsic_analysis,
+            cont_analysis,
             memory_plan: MemoryPlan::new(),
             main_exports: MainExports::new(),
+            yield_globals,
         }
     }
 
@@ -220,6 +239,42 @@ impl<'db> WasmLowerer<'db> {
                 Attribute::Bool(false),
             ));
             self.memory_plan.has_memory = true;
+        }
+
+        // Emit yield globals for continuation support
+        if self.yield_globals.is_some() {
+            // $yield_state: i32 (0 = normal, 1 = yielding)
+            builder.op(wasm::global(
+                self.db,
+                module_location,
+                Symbol::new("i32"),
+                true,
+                0,
+            ));
+            // $yield_tag: i32 (prompt tag being yielded to)
+            builder.op(wasm::global(
+                self.db,
+                module_location,
+                Symbol::new("i32"),
+                true,
+                0,
+            ));
+            // $yield_cont: anyref (captured continuation, GC-managed)
+            builder.op(wasm::global(
+                self.db,
+                module_location,
+                Symbol::new("anyref"),
+                true,
+                0,
+            ));
+            // $yield_value: anyref (value passed with shift)
+            builder.op(wasm::global(
+                self.db,
+                module_location,
+                Symbol::new("anyref"),
+                true,
+                0,
+            ));
         }
     }
 

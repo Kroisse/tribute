@@ -34,13 +34,16 @@
 //! - `$yield_cont`: anyref (captured continuation, GC-managed)
 //! - `$yield_value`: anyref (value passed with shift)
 
+use trunk_ir::DialectType;
 use trunk_ir::dialect::cont;
-use trunk_ir::dialect::core::Module;
+use trunk_ir::dialect::core::{self, Module};
+use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, Operation, Symbol};
 
 /// Global variable indices for yield state.
 /// These will be allocated in the module preamble.
+#[allow(dead_code)] // Fields will be used when implementing global get/set
 pub struct YieldGlobals {
     pub state_idx: u32,
     pub tag_idx: u32,
@@ -197,37 +200,79 @@ impl RewritePattern for ShiftPattern {
         };
 
         let location = op.location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let anyref_ty = wasm::Anyref::new(db).as_type();
 
         // Get the prompt tag
-        let _tag = op
+        let tag = op
             .attributes(db)
             .get(&Symbol::new("tag"))
             .cloned()
             .unwrap_or(Attribute::IntBits(0));
 
-        // For now, create wasm.unreachable as placeholder
-        // Full implementation will:
-        // 1. Capture current frame into continuation struct
-        // 2. Set $yield_state = 1
-        // 3. Set $yield_tag = tag
-        // 4. Set $yield_cont = captured_continuation
-        // 5. Return/unwind to nearest push_prompt
-        //
-        // TODO: Continuation capture requires:
-        // - Identifying live locals at this point
-        // - Creating a reentry point (resume dispatch)
-        // - Building the continuation struct
-        //
+        let tag_value = match tag {
+            Attribute::IntBits(v) => v,
+            _ => 0,
+        };
+
         // NOTE: The shift operation has a handler region that contains the code
         // to run when the continuation is captured. Currently this region is dropped
-        // because we're using a placeholder. When implementing the full yield bubbling,
-        // this handler region needs to be preserved and integrated into the
-        // continuation struct.
-        let new_op = Operation::of_name(db, location, "wasm.unreachable").build();
+        // because full continuation capture is not yet implemented.
+        //
+        // TODO: Full continuation capture requires:
+        // - Identifying live locals at this point (Phase 2)
+        // - Creating state struct to capture locals
+        // - Building continuation struct with resume function
+        // - Setting $yield_cont to the actual continuation
 
-        RewriteResult::Replace(new_op)
+        let mut ops = Vec::new();
+
+        // 1. Set $yield_state = 1
+        let const_1 = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1));
+        let const_1_val = const_1.as_operation().result(db, 0);
+        ops.push(const_1.as_operation());
+        ops.push(wasm::global_set(db, location, const_1_val, YIELD_STATE_IDX).as_operation());
+
+        // 2. Set $yield_tag = tag
+        let const_tag = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(tag_value));
+        let const_tag_val = const_tag.as_operation().result(db, 0);
+        ops.push(const_tag.as_operation());
+        ops.push(wasm::global_set(db, location, const_tag_val, YIELD_TAG_IDX).as_operation());
+
+        // 3. Set $yield_cont = null (placeholder - full impl will capture actual continuation)
+        let null_cont = wasm::ref_null(
+            db,
+            location,
+            anyref_ty,
+            Attribute::Symbol(Symbol::new("any")),
+        );
+        let null_cont_val = null_cont.as_operation().result(db, 0);
+        ops.push(null_cont.as_operation());
+        ops.push(wasm::global_set(db, location, null_cont_val, YIELD_CONT_IDX).as_operation());
+
+        // 4. Set $yield_value = null (placeholder - full impl will pass shift value)
+        let null_value = wasm::ref_null(
+            db,
+            location,
+            anyref_ty,
+            Attribute::Symbol(Symbol::new("any")),
+        );
+        let null_value_val = null_value.as_operation().result(db, 0);
+        ops.push(null_value.as_operation());
+        ops.push(wasm::global_set(db, location, null_value_val, YIELD_VALUE_IDX).as_operation());
+
+        // 5. Return to unwind stack (will bubble up to push_prompt)
+        ops.push(wasm::r#return(db, location, None).as_operation());
+
+        RewriteResult::Expand(ops)
     }
 }
+
+// Yield global indices (must match order in lower_wasm.rs module_preamble_ops)
+const YIELD_STATE_IDX: u32 = 0;
+const YIELD_TAG_IDX: u32 = 1;
+const YIELD_CONT_IDX: u32 = 2;
+const YIELD_VALUE_IDX: u32 = 3;
 
 /// Pattern for `cont.resume` -> invoke continuation
 struct ResumePattern;
@@ -380,11 +425,26 @@ mod tests {
         Module::create(db, location, "test".into(), region)
     }
 
+    #[salsa::tracked]
+    fn lower_shift_and_check(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
+        let lowered = lower(db, module);
+        let body = lowered.body(db);
+        let ops = body.blocks(db)[0].operations(db);
+        ops.iter().map(|op| op.full_name(db)).collect()
+    }
+
     #[salsa_test]
-    fn test_shift_to_wasm_unreachable(db: &salsa::DatabaseImpl) {
+    fn test_shift_expands_to_yield_sequence(db: &salsa::DatabaseImpl) {
         let module = make_module_with_shift(db);
-        let op_name = lower_and_check_dialect(db, module);
-        assert_eq!(op_name, "wasm.unreachable");
+        let op_names = lower_shift_and_check(db, module);
+
+        // Shift should expand to: i32_const, global_set (x4), ref_null (x2), return
+        // First op: i32_const (for yield_state = 1)
+        assert_eq!(op_names.first(), Some(&"wasm.i32_const".to_string()));
+        // Last op: return (to unwind stack)
+        assert_eq!(op_names.last(), Some(&"wasm.return".to_string()));
+        // Should have multiple operations (9 total: 2 const + 2 global_set + 2 ref_null + 2 global_set + 1 return)
+        assert_eq!(op_names.len(), 9);
     }
 
     #[salsa::tracked]

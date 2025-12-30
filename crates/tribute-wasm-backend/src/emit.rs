@@ -1296,6 +1296,7 @@ fn extract_global_def<'db>(
         "f64" => Ok(ValType::F64),
         "funcref" => Ok(ValType::Ref(RefType::FUNCREF)),
         "externref" => Ok(ValType::Ref(RefType::EXTERNREF)),
+        "anyref" => Ok(ValType::Ref(RefType::ANYREF)),
         other => Err(CompilationError::from(
             errors::CompilationErrorKind::InvalidAttribute(Box::leak(
                 format!("valtype: {}", other).into_boxed_str(),
