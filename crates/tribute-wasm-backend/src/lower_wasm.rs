@@ -226,13 +226,25 @@ impl<'db> WasmLowerer<'db> {
     fn module_data_ops(&mut self, builder: &mut BlockBuilder<'db>, location: Location<'db>) {
         let module_location = self.module_location.unwrap_or(location);
 
-        // Emit data segments from const analysis (string/bytes constants)
-        for (content, offset, _len) in self.const_analysis.allocations(self.db).iter() {
+        // Emit active data segments for string constants (linear memory)
+        for (content, offset, _len) in self.const_analysis.string_allocations(self.db).iter() {
             builder.op(wasm::data(
                 self.db,
                 module_location,
-                Attribute::IntBits(u64::from(*offset)),
+                *offset as i32,
                 Attribute::Bytes(content.clone()),
+                false, // active segment
+            ));
+        }
+
+        // Emit passive data segments for bytes constants (for array.new_data)
+        for (content, _data_idx, _len) in self.const_analysis.bytes_allocations(self.db).iter() {
+            builder.op(wasm::data(
+                self.db,
+                module_location,
+                0, // offset not used for passive segments
+                Attribute::Bytes(content.clone()),
+                true, // passive segment
             ));
         }
 
@@ -244,8 +256,9 @@ impl<'db> WasmLowerer<'db> {
             builder.op(wasm::data(
                 self.db,
                 module_location,
-                Attribute::IntBits(u64::from(*offset)),
+                *offset as i32,
                 Attribute::Bytes(iovec_bytes),
+                false, // active segment
             ));
         }
 
@@ -254,8 +267,9 @@ impl<'db> WasmLowerer<'db> {
             builder.op(wasm::data(
                 self.db,
                 module_location,
-                Attribute::IntBits(u64::from(nwritten_offset)),
+                nwritten_offset as i32,
                 Attribute::Bytes(vec![0, 0, 0, 0]),
+                false, // active segment
             ));
         }
     }

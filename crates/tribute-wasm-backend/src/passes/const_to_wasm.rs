@@ -16,21 +16,125 @@ use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 /// Result of const analysis - maps content to allocated offset.
 #[salsa::tracked]
 pub struct ConstAnalysis<'db> {
-    /// Map from content bytes to (offset, length).
-    /// Using Vec<(Vec<u8>, u32, u32)> instead of HashMap for salsa compatibility.
+    /// String allocations: (content, offset, length) - for active data segments.
     #[returns(ref)]
-    pub allocations: Vec<(Vec<u8>, u32, u32)>,
-    /// Total size of all data segments.
-    pub total_size: u32,
+    pub string_allocations: Vec<(Vec<u8>, u32, u32)>,
+    /// Bytes allocations: (content, data_idx, length) - for passive data segments.
+    /// data_idx is the index into the passive data segment array.
+    #[returns(ref)]
+    pub bytes_allocations: Vec<(Vec<u8>, u32, u32)>,
+    /// Total size of string data segments (for linear memory).
+    pub string_total_size: u32,
 }
 
 impl<'db> ConstAnalysis<'db> {
-    /// Look up the offset for given content bytes.
+    /// Legacy accessor for backwards compatibility.
+    /// Returns string allocations only.
+    pub fn allocations(&self, db: &'db dyn salsa::Database) -> &[(Vec<u8>, u32, u32)] {
+        self.string_allocations(db)
+    }
+
+    /// Legacy accessor for backwards compatibility.
+    pub fn total_size(&self, db: &'db dyn salsa::Database) -> u32 {
+        self.string_total_size(db)
+    }
+}
+
+impl<'db> ConstAnalysis<'db> {
+    /// Look up the offset for given string content.
+    /// Returns (offset, length).
     pub fn offset_for(&self, db: &'db dyn salsa::Database, content: &[u8]) -> Option<(u32, u32)> {
-        self.allocations(db)
+        self.string_allocations(db)
             .iter()
             .find(|(data, _, _)| data.as_slice() == content)
             .map(|(_, offset, len)| (*offset, *len))
+    }
+
+    /// Look up the bytes allocation info for given content.
+    /// Returns (data_idx, 0, length) where data_idx is the passive data segment index.
+    pub fn bytes_info_for(
+        &self,
+        db: &'db dyn salsa::Database,
+        content: &[u8],
+    ) -> Option<(u32, u32, u32)> {
+        self.bytes_allocations(db)
+            .iter()
+            .find(|(data, _, _)| data.as_slice() == content)
+            .map(|(_, data_idx, len)| (*data_idx, 0, *len))
+    }
+}
+
+/// Context for collecting const allocations during analysis.
+struct ConstCollector {
+    string_allocations: Vec<(Vec<u8>, u32, u32)>,
+    bytes_allocations: Vec<(Vec<u8>, u32, u32)>,
+    string_seen: HashMap<Vec<u8>, usize>,
+    bytes_seen: HashMap<Vec<u8>, usize>,
+    next_string_offset: u32,
+    next_bytes_idx: u32,
+}
+
+impl ConstCollector {
+    fn new() -> Self {
+        Self {
+            string_allocations: Vec::new(),
+            bytes_allocations: Vec::new(),
+            string_seen: HashMap::new(),
+            bytes_seen: HashMap::new(),
+            next_string_offset: 0,
+            next_bytes_idx: 0,
+        }
+    }
+
+    fn align_to(value: u32, align: u32) -> u32 {
+        if align == 0 {
+            return value;
+        }
+        value.div_ceil(align) * align
+    }
+
+    fn visit_op<'db>(&mut self, db: &'db dyn salsa::Database, op: &Operation<'db>) {
+        let dialect = op.dialect(db);
+        let name = op.name(db);
+
+        if dialect == adt::DIALECT_NAME() {
+            let attrs = op.attributes(db);
+
+            if name == adt::STRING_CONST()
+                && let Some(Attribute::String(s)) = attrs.get(&Symbol::new("value"))
+            {
+                let bytes = s.clone().into_bytes();
+                if !self.string_seen.contains_key(&bytes) {
+                    let offset = Self::align_to(self.next_string_offset, 4);
+                    let len = bytes.len() as u32;
+                    self.string_seen
+                        .insert(bytes.clone(), self.string_allocations.len());
+                    self.string_allocations.push((bytes, offset, len));
+                    self.next_string_offset = offset + len;
+                }
+            } else if name == adt::BYTES_CONST()
+                && let Some(Attribute::Bytes(b)) = attrs.get(&Symbol::new("value"))
+            {
+                let bytes = b.clone();
+                if !self.bytes_seen.contains_key(&bytes) {
+                    let data_idx = self.next_bytes_idx;
+                    let len = bytes.len() as u32;
+                    self.bytes_seen
+                        .insert(bytes.clone(), self.bytes_allocations.len());
+                    self.bytes_allocations.push((bytes, data_idx, len));
+                    self.next_bytes_idx += 1;
+                }
+            }
+        }
+
+        // Recurse into regions
+        for region in op.regions(db).iter() {
+            for block in region.blocks(db).iter() {
+                for nested_op in block.operations(db).iter() {
+                    self.visit_op(db, nested_op);
+                }
+            }
+        }
     }
 }
 
@@ -40,81 +144,22 @@ pub fn analyze_consts<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> ConstAnalysis<'db> {
-    let mut allocations: Vec<(Vec<u8>, u32, u32)> = Vec::new();
-    let mut seen: HashMap<Vec<u8>, usize> = HashMap::new();
-    let mut next_offset: u32 = 0;
-
-    // Helper to align offset
-    fn align_to(value: u32, align: u32) -> u32 {
-        if align == 0 {
-            return value;
-        }
-        value.div_ceil(align) * align
-    }
-
-    // Visitor to collect const operations
-    fn visit_op<'db>(
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        allocations: &mut Vec<(Vec<u8>, u32, u32)>,
-        seen: &mut HashMap<Vec<u8>, usize>,
-        next_offset: &mut u32,
-    ) {
-        let dialect = op.dialect(db);
-        let name = op.name(db);
-
-        if dialect == adt::DIALECT_NAME() {
-            let attrs = op.attributes(db);
-
-            let content: Option<Vec<u8>> = if name == adt::STRING_CONST() {
-                attrs
-                    .get(&Symbol::new("value"))
-                    .and_then(|attr| match attr {
-                        Attribute::String(s) => Some(s.clone().into_bytes()),
-                        _ => None,
-                    })
-            } else if name == adt::BYTES_CONST() {
-                attrs
-                    .get(&Symbol::new("value"))
-                    .and_then(|attr| match attr {
-                        Attribute::Bytes(b) => Some(b.clone()),
-                        _ => None,
-                    })
-            } else {
-                None
-            };
-
-            if let Some(bytes) = content {
-                // Deduplicate identical content
-                if !seen.contains_key(&bytes) {
-                    let offset = align_to(*next_offset, 4);
-                    let len = bytes.len() as u32;
-                    seen.insert(bytes.clone(), allocations.len());
-                    allocations.push((bytes, offset, len));
-                    *next_offset = offset + len;
-                }
-            }
-        }
-
-        // Recurse into regions
-        for region in op.regions(db).iter() {
-            for block in region.blocks(db).iter() {
-                for nested_op in block.operations(db).iter() {
-                    visit_op(db, nested_op, allocations, seen, next_offset);
-                }
-            }
-        }
-    }
+    let mut collector = ConstCollector::new();
 
     // Walk all operations in module body
     let body = module.body(db);
     for block in body.blocks(db).iter() {
         for op in block.operations(db).iter() {
-            visit_op(db, op, &mut allocations, &mut seen, &mut next_offset);
+            collector.visit_op(db, op);
         }
     }
 
-    ConstAnalysis::new(db, allocations, next_offset)
+    ConstAnalysis::new(
+        db,
+        collector.string_allocations,
+        collector.bytes_allocations,
+        collector.next_string_offset,
+    )
 }
 
 /// Lower const operations using pre-computed analysis.
@@ -124,11 +169,12 @@ pub fn lower<'db>(
     analysis: ConstAnalysis<'db>,
 ) -> Module<'db> {
     // Extract allocations data from salsa-tracked struct for use in 'static patterns
-    let allocations = analysis.allocations(db).clone();
+    let string_allocations = analysis.string_allocations(db).clone();
+    let bytes_allocations = analysis.bytes_allocations(db).clone();
 
     PatternApplicator::new()
-        .add_pattern(StringConstPattern::new(allocations.clone()))
-        .add_pattern(BytesConstPattern::new(allocations))
+        .add_pattern(StringConstPattern::new(string_allocations))
+        .add_pattern(BytesConstPattern::new(bytes_allocations))
         .apply(db, module)
         .module
 }
@@ -184,13 +230,24 @@ impl RewritePattern for StringConstPattern {
     }
 }
 
-/// Pattern for `adt.bytes_const` -> `wasm.i32_const`
+/// Bytes allocation data: (content, data_idx, length).
+type BytesAllocations = Vec<(Vec<u8>, u32, u32)>;
+
+/// Look up data_idx and length for given bytes content.
+fn lookup_bytes_info(allocations: &BytesAllocations, content: &[u8]) -> Option<(u32, u32)> {
+    allocations
+        .iter()
+        .find(|(data, _, _)| data.as_slice() == content)
+        .map(|(_, data_idx, len)| (*data_idx, *len))
+}
+
+/// Pattern for `adt.bytes_const` -> `wasm.bytes_from_data`
 struct BytesConstPattern {
-    allocations: Allocations,
+    allocations: BytesAllocations,
 }
 
 impl BytesConstPattern {
-    fn new(allocations: Allocations) -> Self {
+    fn new(allocations: BytesAllocations) -> Self {
         Self { allocations }
     }
 }
@@ -211,17 +268,19 @@ impl RewritePattern for BytesConstPattern {
 
         let content = value.clone();
 
-        let Some((offset, len)) = lookup_offset(&self.allocations, &content) else {
+        let Some((data_idx, len)) = lookup_bytes_info(&self.allocations, &content) else {
             return RewriteResult::Unchanged;
         };
 
         let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
+        let bytes_ty = core::Bytes::new(db).as_type();
 
-        let new_op = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(u64::from(offset)))
-            .attr("literal_len", Attribute::IntBits(u64::from(len)))
-            .results(trunk_ir::idvec![i32_ty])
+        // Create wasm.bytes_from_data operation
+        let new_op = Operation::of_name(db, location, "wasm.bytes_from_data")
+            .attr("data_idx", Attribute::IntBits(u64::from(data_idx)))
+            .attr("offset", Attribute::IntBits(0)) // offset within data segment
+            .attr("len", Attribute::IntBits(u64::from(len)))
+            .results(trunk_ir::idvec![bytes_ty])
             .build();
 
         RewriteResult::Replace(new_op)

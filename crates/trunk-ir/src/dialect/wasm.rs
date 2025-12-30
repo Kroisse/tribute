@@ -85,7 +85,9 @@ dialect! {
         fn memory();
 
         /// `wasm.data` operation: define a data segment.
-        #[attr(offset, bytes)]
+        /// For active segments: offset is the linear memory offset.
+        /// For passive segments: set passive=true (used with array.new_data).
+        #[attr(offset: i32, bytes: any, passive: bool)]
         fn data();
 
         // === Tables and Element Segments ===
@@ -396,6 +398,18 @@ dialect! {
         /// `wasm.array_new_default` operation: create array with default values.
         #[attr(type_idx)]
         fn array_new_default(size) -> result;
+
+        /// `wasm.array_new_data` operation: create array from data segment.
+        /// Operands: offset (i32), size (i32) - offset and length within data segment.
+        #[attr(type_idx, data_idx)]
+        fn array_new_data(offset, size) -> result;
+
+        /// `wasm.bytes_from_data` operation: create Bytes struct from data segment.
+        /// This is a compound operation that emits:
+        /// - array.new_data to create the backing array
+        /// - struct.new to create the Bytes struct (array_ref, offset=0, len)
+        #[attr(data_idx: u32, offset: u32, len: u32)]
+        fn bytes_from_data() -> result;
 
         /// `wasm.array_get` operation: get element from array.
         #[attr(type_idx)]
