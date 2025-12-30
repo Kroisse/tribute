@@ -34,12 +34,14 @@
 //! - `$yield_cont`: anyref (captured continuation, GC-managed)
 //! - `$yield_value`: anyref (value passed with shift)
 
+use std::collections::BTreeMap;
+
 use trunk_ir::DialectType;
 use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, Operation, Symbol};
+use trunk_ir::{Attribute, DialectOp, Location, Operation, QualifiedName, Symbol, Type};
 
 /// Global variable indices for yield state.
 /// These will be allocated in the module preamble.
@@ -86,6 +88,55 @@ pub struct ContAnalysis<'db> {
     pub has_continuations: bool,
     /// Number of prompt tags used
     pub prompt_count: u32,
+    /// Information about each shift point, keyed by location
+    pub shift_points: ShiftPointMap<'db>,
+}
+
+/// Map from shift location to its info.
+/// Uses BTreeMap for deterministic ordering.
+pub type ShiftPointMap<'db> = BTreeMap<LocationKey, ShiftPointInfo<'db>>;
+
+/// Serializable location key for shift points.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
+pub struct LocationKey {
+    /// Start byte of the span.
+    pub start: usize,
+    /// End byte of the span.
+    pub end: usize,
+}
+
+impl LocationKey {
+    fn from_location(loc: Location<'_>) -> Self {
+        Self {
+            start: loc.span.start,
+            end: loc.span.end,
+        }
+    }
+}
+
+/// Information about a shift point for continuation capture.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct ShiftPointInfo<'db> {
+    /// The prompt tag this shift corresponds to.
+    pub tag: u64,
+    /// The containing function's name (for generating resume function name).
+    pub containing_func: Option<QualifiedName>,
+    /// Index of this shift within its containing function (for unique naming).
+    pub shift_index: u32,
+    /// Live local variables at this shift point that need to be captured.
+    /// Each entry is (name, type).
+    pub live_locals: Vec<LiveLocal<'db>>,
+    /// Generated state struct type name.
+    pub state_type_name: Option<QualifiedName>,
+}
+
+/// A live local variable that needs to be captured at a shift point.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct LiveLocal<'db> {
+    /// Variable name (if known from src.var).
+    pub name: Option<Symbol>,
+    /// Variable type.
+    pub ty: Type<'db>,
 }
 
 /// Analyze module for continuation operations.
@@ -94,38 +145,139 @@ pub fn analyze_continuations<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> ContAnalysis<'db> {
-    let mut has_continuations = false;
-    let mut prompt_count = 0u32;
+    let mut collector = ContinuationAnalyzer::new(db);
+    collector.analyze_module(module);
 
-    // Scan all operations recursively, including those inside function bodies
-    fn scan_region<'db>(
-        db: &'db dyn salsa::Database,
-        region: &trunk_ir::Region<'db>,
-        has_cont: &mut bool,
-        prompt_count: &mut u32,
-    ) {
-        for block in region.blocks(db).iter() {
-            for op in block.operations(db).iter() {
-                let dialect = op.dialect(db);
-                if dialect == cont::DIALECT_NAME() {
-                    *has_cont = true;
-                    // Count prompt operations (for statistics/debugging)
-                    if op.name(db) == cont::PUSH_PROMPT() {
-                        *prompt_count = prompt_count.saturating_add(1);
-                    }
-                }
-                // Recursively scan nested regions (e.g., function bodies)
-                for nested_region in op.regions(db).iter() {
-                    scan_region(db, nested_region, has_cont, prompt_count);
-                }
-            }
+    ContAnalysis::new(
+        db,
+        collector.has_continuations,
+        collector.prompt_count,
+        collector.shift_points,
+    )
+}
+
+/// Collector for continuation analysis.
+struct ContinuationAnalyzer<'db> {
+    db: &'db dyn salsa::Database,
+    has_continuations: bool,
+    prompt_count: u32,
+    shift_points: ShiftPointMap<'db>,
+    /// Current containing function name (if inside a function).
+    current_func: Option<QualifiedName>,
+    /// Counter for shifts within current function.
+    shift_counter: u32,
+}
+
+impl<'db> ContinuationAnalyzer<'db> {
+    fn new(db: &'db dyn salsa::Database) -> Self {
+        Self {
+            db,
+            has_continuations: false,
+            prompt_count: 0,
+            shift_points: BTreeMap::new(),
+            current_func: None,
+            shift_counter: 0,
         }
     }
 
-    let body = module.body(db);
-    scan_region(db, &body, &mut has_continuations, &mut prompt_count);
+    fn analyze_module(&mut self, module: Module<'db>) {
+        let body = module.body(self.db);
+        self.analyze_region(&body);
+    }
 
-    ContAnalysis::new(db, has_continuations, prompt_count)
+    fn analyze_region(&mut self, region: &trunk_ir::Region<'db>) {
+        for block in region.blocks(self.db).iter() {
+            self.analyze_block(block);
+        }
+    }
+
+    fn analyze_block(&mut self, block: &trunk_ir::Block<'db>) {
+        for op in block.operations(self.db).iter() {
+            self.analyze_operation(op);
+        }
+    }
+
+    fn analyze_operation(&mut self, op: &Operation<'db>) {
+        let dialect = op.dialect(self.db);
+        let name = op.name(self.db);
+
+        // Track function context
+        if dialect == trunk_ir::dialect::func::DIALECT_NAME()
+            && name == trunk_ir::dialect::func::FUNC()
+        {
+            if let Ok(func_op) = trunk_ir::dialect::func::Func::from_operation(self.db, *op) {
+                let prev_func = self.current_func.take();
+                let prev_counter = self.shift_counter;
+
+                self.current_func = Some(func_op.sym_name(self.db));
+                self.shift_counter = 0;
+
+                // Analyze function body
+                for region in op.regions(self.db).iter() {
+                    self.analyze_region(region);
+                }
+
+                self.current_func = prev_func;
+                self.shift_counter = prev_counter;
+                return;
+            }
+        }
+
+        // Check for continuation operations
+        if dialect == cont::DIALECT_NAME() {
+            self.has_continuations = true;
+
+            if name == cont::PUSH_PROMPT() {
+                self.prompt_count = self.prompt_count.saturating_add(1);
+            } else if name == cont::SHIFT() {
+                self.collect_shift_info(op);
+            }
+        }
+
+        // Recursively analyze nested regions
+        for region in op.regions(self.db).iter() {
+            self.analyze_region(region);
+        }
+    }
+
+    fn collect_shift_info(&mut self, op: &Operation<'db>) {
+        let location = op.location(self.db);
+        let location_key = LocationKey::from_location(location);
+
+        // Extract tag from operation
+        let tag = op
+            .attributes(self.db)
+            .get(&Symbol::new("tag"))
+            .and_then(|attr| {
+                if let Attribute::IntBits(v) = attr {
+                    Some(*v)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+
+        // Generate state type name based on function and shift index
+        let state_type_name = self.current_func.as_ref().map(|func_name| {
+            let state_name = Symbol::from_dynamic(&format!(
+                "{}_state_{}",
+                func_name.name(),
+                self.shift_counter
+            ));
+            QualifiedName::new(func_name.as_parent(), state_name)
+        });
+
+        let info = ShiftPointInfo {
+            tag,
+            containing_func: self.current_func.clone(),
+            shift_index: self.shift_counter,
+            live_locals: Vec::new(), // TODO: Implement live local analysis
+            state_type_name,
+        };
+
+        self.shift_points.insert(location_key, info);
+        self.shift_counter += 1;
+    }
 }
 
 /// Lower continuation dialect to wasm dialect.
@@ -536,5 +688,75 @@ mod tests {
         let module = make_module_with_drop(db);
         let op_name = lower_drop_and_check(db, module);
         assert_eq!(op_name, "wasm.drop");
+    }
+
+    // === Tests for shift point analysis ===
+
+    fn shift_location(db: &dyn salsa::Database) -> Location<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        Location::new(path, Span::new(100, 120)) // Distinct location for shift
+    }
+
+    #[salsa::tracked]
+    fn make_module_with_shift_in_function(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let shift_loc = shift_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create shift inside a function
+        let handler_block = Block::new(db, BlockId::fresh(), shift_loc, IdVec::new(), idvec![]);
+        let handler_region = Region::new(db, shift_loc, idvec![handler_block]);
+
+        let shift = Operation::of_name(db, shift_loc, "cont.shift")
+            .attr("tag", Attribute::IntBits(99))
+            .region(handler_region)
+            .build();
+
+        // Create function body with shift
+        let func_body_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![shift]);
+        let func_body = Region::new(db, location, idvec![func_body_block]);
+
+        // Create func.func operation
+        let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
+        let func_op = Operation::of_name(db, location, "func.func")
+            .attr(
+                "sym_name",
+                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("my_func"))),
+            )
+            .attr("type", Attribute::Type(func_ty))
+            .region(func_body)
+            .build();
+
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_op]);
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa::tracked]
+    fn analyze_shift_points_test(db: &dyn salsa::Database) -> (usize, Option<u64>, Option<String>) {
+        let module = make_module_with_shift_in_function(db);
+        let analysis = analyze_continuations(db, module);
+        let shift_points = analysis.shift_points(db);
+
+        let count = shift_points.len();
+        let first_info = shift_points.values().next();
+        let tag = first_info.map(|info| info.tag);
+        let func_name = first_info
+            .and_then(|info| info.containing_func.as_ref())
+            .map(|name| name.name().to_string());
+
+        (count, tag, func_name)
+    }
+
+    #[salsa_test]
+    fn test_shift_point_analysis(db: &salsa::DatabaseImpl) {
+        let (count, tag, func_name) = analyze_shift_points_test(db);
+
+        // Should find one shift point
+        assert_eq!(count, 1);
+        // Should have correct tag
+        assert_eq!(tag, Some(99));
+        // Should have correct containing function
+        assert_eq!(func_name, Some("my_func".to_string()));
     }
 }
