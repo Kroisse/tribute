@@ -835,7 +835,7 @@ impl<'db> Resolver<'db> {
                         remapped_op.results(self.db).first().is_some_and(|ty| {
                             // Type is resolved if it's not a source type placeholder and not a type variable
                             let dialect = ty.dialect(self.db);
-                            dialect != tribute::DIALECT_NAME() && dialect != tribute::DIALECT_NAME()
+                            dialect != tribute::DIALECT_NAME()
                         });
 
                     let is_resolved_local = self.is_marked_resolved_local(&remapped_op);
