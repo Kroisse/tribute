@@ -414,6 +414,11 @@ dialect! {
         #[attr(heap_type)]
         fn ref_null() -> result;
 
+        /// `wasm.ref_func` operation: create funcref from function name.
+        /// The func_name is resolved to a function index at emit time.
+        #[attr(func_name: QualifiedName)]
+        fn ref_func() -> result;
+
         /// `wasm.ref_is_null` operation: check if reference is null.
         fn ref_is_null(r#ref) -> result;
 

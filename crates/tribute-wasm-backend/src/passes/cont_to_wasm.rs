@@ -82,6 +82,131 @@ pub mod cont_types {
         // The actual struct layout will be determined when live local capture is implemented
         wasm::Anyref::new(db).as_type()
     }
+
+    /// Create the resume function type.
+    ///
+    /// Signature: (state: anyref, value: anyref) -> anyref
+    pub fn resume_fn_type(db: &dyn salsa::Database) -> Type<'_> {
+        let anyref = wasm::Anyref::new(db).as_type();
+        core::Func::new(db, IdVec::from(vec![anyref, anyref]), anyref).as_type()
+    }
+}
+
+/// Resume function generation.
+///
+/// For each shift point, we generate a resume function that:
+/// 1. Takes (state: anyref, value: anyref) as parameters
+/// 2. Restores captured locals from state
+/// 3. Continues execution from after the shift point
+pub mod resume_gen {
+    use super::*;
+    use trunk_ir::{Block, BlockId, Region};
+
+    /// Information about a generated resume function.
+    #[derive(Clone, Debug)]
+    pub struct ResumeFunctionInfo<'db> {
+        /// The qualified name of the resume function.
+        pub name: QualifiedName,
+        /// The location for the function.
+        pub location: Location<'db>,
+        /// The shift point this resume function corresponds to.
+        pub shift_key: LocationKey,
+    }
+
+    /// Generate resume functions for all shift points in the module.
+    ///
+    /// Returns a list of resume function operations to add to the module,
+    /// and a map from shift location to resume function name.
+    pub fn generate_resume_functions<'db>(
+        db: &'db dyn salsa::Database,
+        analysis: &ContAnalysis<'db>,
+        location: Location<'db>,
+    ) -> (Vec<Operation<'db>>, BTreeMap<LocationKey, QualifiedName>) {
+        let mut functions = Vec::new();
+        let mut resume_fn_names = BTreeMap::new();
+
+        for (key, info) in analysis.shift_points(db).iter() {
+            let resume_fn_name = generate_resume_fn_name(info);
+            let resume_fn = generate_resume_function(db, location, &resume_fn_name, info);
+
+            functions.push(resume_fn);
+            resume_fn_names.insert(key.clone(), resume_fn_name);
+        }
+
+        (functions, resume_fn_names)
+    }
+
+    /// Generate the resume function name for a shift point.
+    fn generate_resume_fn_name(info: &ShiftPointInfo<'_>) -> QualifiedName {
+        let base_name = info
+            .containing_func
+            .as_ref()
+            .map(|n| n.name().to_string())
+            .unwrap_or_else(|| "anon".to_string());
+
+        let resume_name =
+            Symbol::from_dynamic(&format!("{}$resume${}", base_name, info.shift_index));
+
+        if let Some(ref containing) = info.containing_func {
+            QualifiedName::new(containing.as_parent(), resume_name)
+        } else {
+            QualifiedName::simple(resume_name)
+        }
+    }
+
+    /// Generate a resume function for a shift point.
+    ///
+    /// The resume function has signature: (state: anyref, value: anyref) -> anyref
+    ///
+    /// For now, this generates a placeholder that just returns the value.
+    /// Full implementation will:
+    /// 1. Cast state to the concrete state struct type
+    /// 2. Extract captured locals from state
+    /// 3. Execute the continuation body (code after shift)
+    fn generate_resume_function<'db>(
+        db: &'db dyn salsa::Database,
+        location: Location<'db>,
+        name: &QualifiedName,
+        _info: &ShiftPointInfo<'db>,
+    ) -> Operation<'db> {
+        let anyref = wasm::Anyref::new(db).as_type();
+        let func_ty = cont_types::resume_fn_type(db);
+
+        // Block arguments are typed (state: anyref, value: anyref)
+        let block_args = IdVec::from(vec![anyref, anyref]);
+
+        // For now, create a placeholder that returns the value
+        // TODO: Implement actual continuation body restoration
+        //
+        // The full implementation will:
+        // 1. Cast state to concrete type: (ref.cast $State_N (local.get $state))
+        // 2. Extract each captured local: (struct.get $State_N i (local.get $typed_state))
+        // 3. Execute the code that comes after the shift point
+
+        // Create return instruction that returns the value parameter
+        // Block arg 1 is the value parameter (index 1)
+        let block_id = BlockId::fresh();
+        let value_ref = trunk_ir::Value::new(
+            db,
+            ValueDef::BlockArg(block_id),
+            1, // value is second parameter
+        );
+
+        let return_op = wasm::r#return(db, location, Some(value_ref));
+
+        // Create function body block with typed arguments
+        let body_block = Block::new(
+            db,
+            block_id,
+            location,
+            block_args,
+            IdVec::from(vec![return_op.as_operation()]),
+        );
+        let body_region = Region::new(db, location, IdVec::from(vec![body_block]));
+
+        // Create the wasm.func operation
+        wasm::func(db, location, name.clone(), func_ty, body_region).as_operation()
+    }
 }
 
 /// Global variable indices for yield state.
@@ -324,13 +449,73 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         return module;
     }
 
+    let location = module.location(db);
+
+    // Generate resume functions for all shift points
+    let (resume_functions, resume_fn_names) =
+        resume_gen::generate_resume_functions(db, &analysis, location);
+
+    // Add resume functions to the module body
+    let module = prepend_operations_to_module(db, module, &resume_functions);
+
+    // Apply pattern transformations
     PatternApplicator::new()
         .add_pattern(PushPromptPattern)
-        .add_pattern(ShiftPattern)
+        .add_pattern(ShiftPattern::new(resume_fn_names))
         .add_pattern(ResumePattern)
         .add_pattern(DropPattern)
         .apply(db, module)
         .module
+}
+
+/// Prepend operations to the first block of a module's body region.
+fn prepend_operations_to_module<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+    ops_to_prepend: &[Operation<'db>],
+) -> Module<'db> {
+    if ops_to_prepend.is_empty() {
+        return module;
+    }
+
+    let body = module.body(db);
+    let blocks = body.blocks(db);
+
+    if blocks.is_empty() {
+        // No blocks to prepend to - create a new block with just the ops
+        let location = module.location(db);
+        let new_block = trunk_ir::Block::new(
+            db,
+            trunk_ir::BlockId::fresh(),
+            location,
+            IdVec::new(),
+            ops_to_prepend.iter().copied().collect(),
+        );
+        let new_body = trunk_ir::Region::new(db, location, IdVec::from(vec![new_block]));
+        return Module::create(db, location, module.name(db), new_body);
+    }
+
+    // Prepend to the first block
+    let first_block = &blocks[0];
+    let existing_ops = first_block.operations(db);
+    let mut all_ops: Vec<Operation<'db>> = ops_to_prepend.to_vec();
+    all_ops.extend(existing_ops.iter().copied());
+
+    let new_first_block = trunk_ir::Block::new(
+        db,
+        first_block.id(db),
+        first_block.location(db),
+        first_block.args(db).clone(),
+        all_ops.into_iter().collect(),
+    );
+
+    // Rebuild the blocks list with the modified first block
+    let mut new_blocks: Vec<trunk_ir::Block<'db>> = vec![new_first_block];
+    new_blocks.extend(blocks.iter().skip(1).copied());
+
+    let location = module.location(db);
+    let new_body = trunk_ir::Region::new(db, location, new_blocks.into_iter().collect());
+    Module::create(db, location, module.name(db), new_body)
 }
 
 /// Pattern for `cont.push_prompt` -> yield-checking block
@@ -533,7 +718,16 @@ fn append_ops_to_region<'db>(
 }
 
 /// Pattern for `cont.shift` -> set yield state and build continuation
-struct ShiftPattern;
+struct ShiftPattern {
+    /// Map from shift location to resume function name
+    resume_fn_names: BTreeMap<LocationKey, QualifiedName>,
+}
+
+impl ShiftPattern {
+    fn new(resume_fn_names: BTreeMap<LocationKey, QualifiedName>) -> Self {
+        Self { resume_fn_names }
+    }
+}
 
 impl RewritePattern for ShiftPattern {
     fn match_and_rewrite<'db>(
@@ -546,6 +740,7 @@ impl RewritePattern for ShiftPattern {
         };
 
         let location = op.location(db);
+        let location_key = LocationKey::from_location(location);
         let i32_ty = core::I32::new(db).as_type();
         let anyref_ty = wasm::Anyref::new(db).as_type();
         let funcref_ty = wasm::Funcref::new(db).as_type();
@@ -568,8 +763,8 @@ impl RewritePattern for ShiftPattern {
         //
         // Current implementation:
         // - Creates an empty state struct (live local capture not yet implemented)
-        // - Creates continuation struct with (null resume_fn, state, tag)
-        // - Resume function generation is deferred to Phase 4
+        // - Creates continuation struct with (resume_fn, state, tag)
+        // - Uses generated resume function reference
 
         let mut ops = Vec::new();
 
@@ -583,15 +778,25 @@ impl RewritePattern for ShiftPattern {
         ops.push(state_struct.as_operation());
 
         // 2. Create continuation struct: (resume_fn, state, tag)
-        // Field 0: resume_fn (ref.null func) - placeholder until resume fn generation
-        let null_resume_fn = wasm::ref_null(
-            db,
-            location,
-            funcref_ty,
-            Attribute::Symbol(Symbol::new("func")),
-        );
-        let resume_fn_val = null_resume_fn.as_operation().result(db, 0);
-        ops.push(null_resume_fn.as_operation());
+        // Field 0: resume_fn - reference to the generated resume function
+        let resume_fn_val = if let Some(resume_fn_name) = self.resume_fn_names.get(&location_key) {
+            // Use ref.func to get function reference
+            let ref_func = wasm::ref_func(db, location, funcref_ty, resume_fn_name.clone());
+            let val = ref_func.as_operation().result(db, 0);
+            ops.push(ref_func.as_operation());
+            val
+        } else {
+            // Fallback: use null funcref if no resume function was generated
+            let null_resume_fn = wasm::ref_null(
+                db,
+                location,
+                funcref_ty,
+                Attribute::Symbol(Symbol::new("func")),
+            );
+            let val = null_resume_fn.as_operation().result(db, 0);
+            ops.push(null_resume_fn.as_operation());
+            val
+        };
 
         // Field 1: state (the state struct we just created)
         // Already have state_val
@@ -872,9 +1077,10 @@ mod tests {
         let module = make_module_with_shift(db);
         let op_names = lower_shift_and_check(db, module);
 
-        // Shift should expand to:
+        // Module now has resume function prepended, followed by shift expansion:
+        // 0. wasm.func (generated resume function)
         // 1. wasm.nop (state placeholder)
-        // 2. wasm.ref_null (resume_fn = null funcref)
+        // 2. wasm.ref_func (resume_fn reference)
         // 3. wasm.i32_const (tag value for continuation struct)
         // 4. wasm.struct_new (continuation struct)
         // 5. wasm.i32_const (yield_state = 1)
@@ -886,14 +1092,18 @@ mod tests {
         // 11. wasm.global_set (yield_value)
         // 12. wasm.return
 
-        // First op: nop (state placeholder)
-        assert_eq!(op_names.first(), Some(&"wasm.nop".to_string()));
+        // First op: wasm.func (resume function)
+        assert_eq!(op_names.first(), Some(&"wasm.func".to_string()));
+        // Second op: nop (state placeholder from shift)
+        assert_eq!(op_names.get(1), Some(&"wasm.nop".to_string()));
         // Last op: return (to unwind stack)
         assert_eq!(op_names.last(), Some(&"wasm.return".to_string()));
+        // Should contain ref_func for resume function reference
+        assert!(op_names.contains(&"wasm.ref_func".to_string()));
         // Should contain struct_new for continuation
         assert!(op_names.contains(&"wasm.struct_new".to_string()));
-        // Total: 12 operations
-        assert_eq!(op_names.len(), 12);
+        // Total: 13 operations (1 resume function + 12 shift expansion)
+        assert_eq!(op_names.len(), 13);
     }
 
     #[salsa::tracked]
