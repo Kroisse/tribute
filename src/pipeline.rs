@@ -36,6 +36,9 @@
 //! stage_evidence ─► Module (evidence params added to effectful functions)
 //!     │
 //!     ▼
+//! stage_handler_lower ─► Module (ability ops lowered to cont ops)
+//!     │
+//!     ▼
 //! stage_lower_case ─► Module (case.case lowered to scf.if)
 //!     │
 //!     ▼
@@ -74,6 +77,7 @@ use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::const_inline::inline_module;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence::insert_evidence;
+use tribute_passes::handler_lower::lower_handlers;
 use tribute_passes::lambda_lift::lift_lambdas;
 use tribute_passes::lower_case_to_scf;
 use tribute_passes::resolve::{Resolver, build_env};
@@ -385,14 +389,29 @@ pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> M
     insert_evidence(db, module)
 }
 
-/// Stage 9: Lower `case.case` to `scf.if` chains.
+/// Stage 9: Handler Lowering.
+///
+/// This pass transforms ability dialect operations to continuation dialect operations:
+/// - `ability.prompt` → `cont.push_prompt`
+/// - `ability.perform` → `cont.shift` (with evidence lookup)
+/// - `ability.resume` → `cont.resume`
+/// - `ability.abort` → `cont.drop`
+///
+/// This happens after evidence insertion (evidence params exist) and before case lowering.
+#[salsa::tracked]
+pub fn stage_handler_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = stage_evidence(db, source);
+    lower_handlers(db, module)
+}
+
+/// Stage 10: Lower `case.case` to `scf.if` chains.
 #[salsa::tracked]
 pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_evidence(db, source);
+    let module = stage_handler_lower(db, source);
     lower_case_to_scf(db, module)
 }
 
-/// Stage 10: Dead Code Elimination (DCE).
+/// Stage 11: Dead Code Elimination (DCE).
 ///
 /// This pass removes unreachable function definitions from the module.
 /// Entry points include:
@@ -409,7 +428,7 @@ pub fn stage_dce<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module
     result.module
 }
 
-/// Stage 11: Lower to WebAssembly target.
+/// Stage 12: Lower to WebAssembly target.
 ///
 /// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
 /// It performs:
