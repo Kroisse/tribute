@@ -151,12 +151,11 @@ impl RewritePattern for PushPromptPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        let Ok(push_prompt) = cont::PushPrompt::from_operation(db, *op) else {
+        let Ok(_push_prompt) = cont::PushPrompt::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
         let location = op.location(db);
-        let _body = push_prompt.body(db);
 
         // Get the prompt tag
         let tag = op
