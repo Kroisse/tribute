@@ -127,7 +127,7 @@ dialect! {
         ///
         /// Attributes:
         /// - `sym_name`: The name of the struct type
-        #[attr(sym_name)]
+        #[attr(sym_name: Symbol)]
         fn struct_def() -> result {
             #[region(fields)] {}
         };
@@ -138,7 +138,7 @@ dialect! {
         ///
         /// Attributes:
         /// - `sym_name`: The name of the enum type
-        #[attr(sym_name)]
+        #[attr(sym_name: Symbol)]
         fn enum_def() -> result {
             #[region(variants)] {}
         };
@@ -171,7 +171,7 @@ dialect! {
         ///
         /// Attributes:
         /// - `sym_name`: The name of the ability
-        #[attr(sym_name)]
+        #[attr(sym_name: Symbol)]
         fn ability_def() -> result {
             #[region(operations)] {}
         };

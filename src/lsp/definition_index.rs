@@ -120,34 +120,31 @@ impl DefinitionIndex {
             });
         } else if let Ok(struct_op) = tribute::StructDef::from_operation(db, *op) {
             // tribute.struct_def - struct type definition
-            if let trunk_ir::Attribute::Symbol(name) = struct_op.sym_name(db) {
-                let span = name_span.unwrap_or(op_span);
-                definitions.push(DefinitionEntry {
-                    name: *name,
-                    span,
-                    kind: DefinitionKind::Type,
-                });
-            }
+            let name = struct_op.sym_name(db);
+            let span = name_span.unwrap_or(op_span);
+            definitions.push(DefinitionEntry {
+                name,
+                span,
+                kind: DefinitionKind::Type,
+            });
         } else if let Ok(enum_op) = tribute::EnumDef::from_operation(db, *op) {
             // tribute.enum_def - enum type definition
-            if let trunk_ir::Attribute::Symbol(name) = enum_op.sym_name(db) {
-                let span = name_span.unwrap_or(op_span);
-                definitions.push(DefinitionEntry {
-                    name: *name,
-                    span,
-                    kind: DefinitionKind::Type,
-                });
-            }
+            let name = enum_op.sym_name(db);
+            let span = name_span.unwrap_or(op_span);
+            definitions.push(DefinitionEntry {
+                name,
+                span,
+                kind: DefinitionKind::Type,
+            });
         } else if let Ok(ability_op) = tribute::AbilityDef::from_operation(db, *op) {
             // tribute.ability_def - ability definition
-            if let trunk_ir::Attribute::Symbol(name) = ability_op.sym_name(db) {
-                let span = name_span.unwrap_or(op_span);
-                definitions.push(DefinitionEntry {
-                    name: *name,
-                    span,
-                    kind: DefinitionKind::Ability,
-                });
-            }
+            let name = ability_op.sym_name(db);
+            let span = name_span.unwrap_or(op_span);
+            definitions.push(DefinitionEntry {
+                name,
+                span,
+                kind: DefinitionKind::Ability,
+            });
         }
 
         // Collect references using typed wrappers

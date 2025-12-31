@@ -792,10 +792,7 @@ impl<'db> CaseLowerer<'db> {
             return;
         };
 
-        let type_name = match enum_def.sym_name(self.db) {
-            Attribute::Symbol(sym) => *sym,
-            _ => Symbol::new("_"),
-        };
+        let type_name = enum_def.sym_name(self.db);
 
         let variants_region = enum_def.variants(self.db);
         let mut variant_names = SymbolVec::new();

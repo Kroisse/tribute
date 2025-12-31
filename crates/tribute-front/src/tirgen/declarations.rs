@@ -225,18 +225,17 @@ pub fn lower_struct_decl<'db>(
     // Build fields region containing tribute.field_def operations
     let mut fields_block = BlockBuilder::new(ctx.db, location);
     for (field_name, field_type) in &fields {
-        fields_block.op(tribute::field_def(ctx.db, location, sym(field_name), *field_type));
+        fields_block.op(tribute::field_def(
+            ctx.db,
+            location,
+            sym(field_name),
+            *field_type,
+        ));
     }
     let fields_region = Region::new(ctx.db, location, idvec![fields_block.build()]);
 
     // Create the struct definition operation
-    let struct_op = tribute::struct_def(
-        ctx.db,
-        location,
-        struct_ty,
-        Attribute::Symbol(type_name),
-        fields_region,
-    );
+    let struct_op = tribute::struct_def(ctx.db, location, struct_ty, type_name, fields_region);
 
     // Create a module with the same name as the struct, containing field accessors
     let fields_clone = fields.clone();
@@ -560,9 +559,15 @@ pub fn lower_enum_decl<'db>(
         // Build fields region for this variant
         let mut variant_fields_block = BlockBuilder::new(ctx.db, location);
         for (field_name, field_type) in variant_fields {
-            variant_fields_block.op(tribute::field_def(ctx.db, location, sym(&field_name), field_type));
+            variant_fields_block.op(tribute::field_def(
+                ctx.db,
+                location,
+                sym(&field_name),
+                field_type,
+            ));
         }
-        let variant_fields_region = Region::new(ctx.db, location, idvec![variant_fields_block.build()]);
+        let variant_fields_region =
+            Region::new(ctx.db, location, idvec![variant_fields_block.build()]);
 
         variants_block.op(tribute::variant_def(
             ctx.db,
@@ -577,7 +582,7 @@ pub fn lower_enum_decl<'db>(
         ctx.db,
         location,
         result_ty,
-        Attribute::Symbol(sym(&name)),
+        sym(&name),
         variants_region,
     ))
 }
@@ -782,7 +787,7 @@ pub fn lower_ability_decl<'db>(
         ctx.db,
         location,
         infer_ty,
-        Attribute::Symbol(sym(&name)),
+        sym(&name),
         operations_region,
     ))
 }

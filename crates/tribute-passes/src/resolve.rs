@@ -322,10 +322,9 @@ fn collect_definition<'db>(
         }
         (d, n) if d == tribute::DIALECT_NAME() && n == tribute::ABILITY_DEF() => {
             // Ability definition → creates operations in the ability's namespace
-            if let Ok(ability_decl) = tribute::AbilityDef::from_operation(db, *op)
-                && let Attribute::Symbol(ability_name) = ability_decl.sym_name(db)
-            {
-                let ability_qn = QualifiedName::simple(*ability_name);
+            if let Ok(ability_decl) = tribute::AbilityDef::from_operation(db, *op) {
+                let ability_name = ability_decl.sym_name(db);
+                let ability_qn = QualifiedName::simple(ability_name);
                 // Also register as a Module binding for the namespace
                 env.definitions.insert(
                     ability_qn.clone(),
@@ -336,7 +335,7 @@ fn collect_definition<'db>(
                 );
 
                 // Extract operations from the ability
-                collect_ability_operations(db, env, ability_decl, *ability_name);
+                collect_ability_operations(db, env, ability_decl, ability_name);
             }
         }
         (d, n) if d == tribute::DIALECT_NAME() && n == tribute::CONST() => {
@@ -2275,7 +2274,7 @@ pub mod tests {
             db,
             location,
             infer_ty,
-            Attribute::Symbol(Symbol::new("Console")),
+            Symbol::new("Console"),
             operations_region,
         );
 
