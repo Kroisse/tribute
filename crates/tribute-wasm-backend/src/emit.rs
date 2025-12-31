@@ -906,7 +906,10 @@ fn collect_gc_types<'db>(
             {
                 record_array_elem(type_idx, builder, ty)?;
             }
-        } else if name == Symbol::new("array_get") {
+        } else if name == Symbol::new("array_get")
+            || name == Symbol::new("array_get_s")
+            || name == Symbol::new("array_get_u")
+        {
             let attrs = op.attributes(db);
             let Some(type_idx) = get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx)
             else {
@@ -951,6 +954,19 @@ fn collect_gc_types<'db>(
                 .and_then(|value| value_type(db, value))
             {
                 record_array_elem(type_idx, builder, ty)?;
+            }
+        } else if name == Symbol::new("array_copy") {
+            // array_copy has dst_type_idx: u32 and src_type_idx: u32 attributes
+            let attrs = op.attributes(db);
+            if let Some(&Attribute::IntBits(dst_idx)) = attrs.get(&Symbol::new("dst_type_idx")) {
+                let dst_type_idx = dst_idx as u32;
+                let builder = ensure_builder(&mut builders, dst_type_idx);
+                builder.kind = GcKind::Array;
+            }
+            if let Some(&Attribute::IntBits(src_idx)) = attrs.get(&Symbol::new("src_type_idx")) {
+                let src_type_idx = src_idx as u32;
+                let builder = ensure_builder(&mut builders, src_type_idx);
+                builder.kind = GcKind::Array;
             }
         } else if name == Symbol::new("ref_null")
             || name == Symbol::new("ref_cast")
@@ -1138,9 +1154,10 @@ fn collect_gc_types<'db>(
     result.insert(0, bytes_struct_type);
 
     // Index 1: BytesArray (array i8)
+    // NOTE: mutable: true is required for array.copy operation in Bytes::concat
     let bytes_array_type = GcTypeDef::Array(FieldType {
         element_type: StorageType::I8,
-        mutable: false,
+        mutable: true,
     });
     result.insert(0, bytes_array_type);
 
@@ -1965,12 +1982,47 @@ fn emit_op<'db>(
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayGet(type_idx));
         set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("array_get_s") {
+        emit_operands(db, operands, ctx, function)?;
+        let attrs = op.attributes(db);
+        let type_idx = get_type_idx_from_attrs(attrs)
+            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
+        function.instruction(&Instruction::ArrayGetS(type_idx));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("array_get_u") {
+        emit_operands(db, operands, ctx, function)?;
+        let attrs = op.attributes(db);
+        let type_idx = get_type_idx_from_attrs(attrs)
+            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
+        function.instruction(&Instruction::ArrayGetU(type_idx));
+        set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("array_set") {
         emit_operands(db, operands, ctx, function)?;
         let attrs = op.attributes(db);
         let type_idx = get_type_idx_from_attrs(attrs)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArraySet(type_idx));
+    } else if name == Symbol::new("array_copy") {
+        emit_operands(db, operands, ctx, function)?;
+        let attrs = op.attributes(db);
+        let dst_type_idx = attrs
+            .get(&Symbol::new("dst_type_idx"))
+            .and_then(|a| match a {
+                Attribute::IntBits(v) => Some(*v as u32),
+                _ => None,
+            })
+            .ok_or_else(|| CompilationError::missing_attribute("dst_type_idx"))?;
+        let src_type_idx = attrs
+            .get(&Symbol::new("src_type_idx"))
+            .and_then(|a| match a {
+                Attribute::IntBits(v) => Some(*v as u32),
+                _ => None,
+            })
+            .ok_or_else(|| CompilationError::missing_attribute("src_type_idx"))?;
+        function.instruction(&Instruction::ArrayCopy {
+            array_type_index_dst: dst_type_idx,
+            array_type_index_src: src_type_idx,
+        });
     } else if name == Symbol::new("ref_null") {
         let attrs = op.attributes(db);
         let heap_type = attr_heap_type(attrs, ATTR_HEAP_TYPE())

@@ -130,11 +130,21 @@ fn collect_use_imports<'db>(
 
 /// Lower a function definition to a func.func operation.
 pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<func::Func<'db>> {
-    let location = ctx.location(&node);
+    // function_definition contains either regular_function or extern_function
+    let func_node = node
+        .named_child(0)
+        .filter(|c| c.kind() == "regular_function" || c.kind() == "extern_function")?;
+
+    let location = ctx.location(&func_node);
+
+    // extern_function has no body - skip for now (TODO: handle extern functions)
+    if func_node.kind() == "extern_function" {
+        return None;
+    }
 
     // Use field-based access for cleaner extraction
-    let name_node = node.child_by_field_name("name")?;
-    let body_node = node.child_by_field_name("body")?;
+    let name_node = func_node.child_by_field_name("name")?;
+    let body_node = func_node.child_by_field_name("body")?;
 
     let name_str = node_text(&name_node, &ctx.source);
     let name_sym = Symbol::from_dynamic(&name_str);
@@ -145,12 +155,12 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
     });
 
     // Optional fields
-    let (param_names, param_types) = node
+    let (param_names, param_types) = func_node
         .child_by_field_name("params")
         .map(|params| parse_parameter_list(ctx, params))
         .unwrap_or_default();
 
-    let return_type = node
+    let return_type = func_node
         .child_by_field_name("return_type")
         .and_then(|rt| parse_return_type(ctx, rt));
 

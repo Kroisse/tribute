@@ -415,12 +415,25 @@ dialect! {
         #[attr(type_idx)]
         fn array_get(r#ref, index) -> result;
 
+        /// `wasm.array_get_s` operation: get packed element with sign extension.
+        #[attr(type_idx: u32)]
+        fn array_get_s(r#ref, index) -> result;
+
+        /// `wasm.array_get_u` operation: get packed element with zero extension.
+        #[attr(type_idx: u32)]
+        fn array_get_u(r#ref, index) -> result;
+
         /// `wasm.array_set` operation: set element in array.
         #[attr(type_idx)]
         fn array_set(r#ref, index, value);
 
         /// `wasm.array_len` operation: get array length.
         fn array_len(r#ref) -> result;
+
+        /// `wasm.array_copy` operation: copy elements between arrays.
+        /// Operands: dst_ref, dst_offset, src_ref, src_offset, len
+        #[attr(dst_type_idx, src_type_idx)]
+        fn array_copy(dst, dst_offset, src, src_offset, len);
 
         // === WasmGC: References ===
 

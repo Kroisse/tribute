@@ -1,18 +1,26 @@
-//! Lower intrinsic calls to WASI operations.
+//! Lower intrinsic calls to WASM operations.
 //!
-//! This pass transforms high-level intrinsic calls (like print_line) to
-//! low-level WASI calls (like fd_write).
+//! This pass transforms high-level intrinsic calls to low-level WASM instructions:
+//! - `print_line` -> WASI `fd_write` call
+//! - `Bytes::len`, `Bytes::get_or_panic`, etc. -> WasmGC struct/array operations
 //!
-//! Two-phase approach:
+//! Two-phase approach for WASI intrinsics:
 //! 1. Analysis: Collect all intrinsic calls and allocate runtime data segments
-//! 2. Transform: Replace intrinsic calls with WASI call sequences
+//! 2. Transform: Replace intrinsic calls with WASM instruction sequences
 
 use std::collections::HashMap;
 
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, DialectType, Operation, QualifiedName, Symbol};
+use trunk_ir::{Attribute, DialectOp, DialectType, Operation, QualifiedName, Symbol, idvec};
+
+// Constants for Bytes struct layout (must match emit.rs)
+const BYTES_ARRAY_IDX: u32 = 1;
+const BYTES_STRUCT_IDX: u32 = 2;
+const BYTES_DATA_FIELD: u32 = 0; // ref (array i8)
+const BYTES_OFFSET_FIELD: u32 = 1; // i32
+const BYTES_LEN_FIELD: u32 = 2; // i32
 
 /// Result of intrinsic analysis - tracks WASI needs and data segment allocations.
 #[salsa::tracked]
@@ -166,18 +174,24 @@ pub fn lower<'db>(
     module: Module<'db>,
     analysis: IntrinsicAnalysis<'db>,
 ) -> Module<'db> {
-    if !analysis.needs_fd_write(db) {
-        return module;
+    let mut applicator = PatternApplicator::new();
+
+    // Add print_line pattern if needed
+    if analysis.needs_fd_write(db) {
+        let iovec_allocations = analysis.iovec_allocations(db).clone();
+        let nwritten_offset = analysis.nwritten_offset(db);
+        applicator =
+            applicator.add_pattern(PrintLinePattern::new(iovec_allocations, nwritten_offset));
     }
 
-    // Extract data for 'static patterns
-    let iovec_allocations = analysis.iovec_allocations(db).clone();
-    let nwritten_offset = analysis.nwritten_offset(db);
+    // Always add Bytes intrinsic patterns
+    applicator = applicator
+        .add_pattern(BytesLenPattern)
+        .add_pattern(BytesGetOrPanicPattern)
+        .add_pattern(BytesSliceOrPanicPattern)
+        .add_pattern(BytesConcatPattern);
 
-    PatternApplicator::new()
-        .add_pattern(PrintLinePattern::new(iovec_allocations, nwritten_offset))
-        .apply(db, module)
-        .module
+    applicator.apply(db, module).module
 }
 
 /// Pattern for `wasm.call(print_line)` -> `fd_write` sequence
@@ -306,6 +320,400 @@ impl RewritePattern for PrintLinePattern {
     }
 }
 
+// =============================================================================
+// Bytes intrinsic patterns
+// =============================================================================
+
+/// Check if operation is a wasm.call to the given Bytes:: method.
+fn is_bytes_method_call<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    method: &'static str,
+) -> bool {
+    let Ok(call) = wasm::Call::from_operation(db, *op) else {
+        return false;
+    };
+    let Attribute::QualifiedName(callee) = call.callee(db) else {
+        return false;
+    };
+    callee.name() == Symbol::new(method)
+        && callee
+            .as_parent()
+            .first()
+            .map(|s| *s == "Bytes")
+            .unwrap_or(false)
+}
+
+/// Pattern for `Bytes::len(bytes)` -> `struct.get $bytes 2` + `i64.extend_i32_u`
+struct BytesLenPattern;
+
+impl RewritePattern for BytesLenPattern {
+    fn match_and_rewrite<'a>(
+        &self,
+        db: &'a dyn salsa::Database,
+        op: &Operation<'a>,
+    ) -> RewriteResult<'a> {
+        if !is_bytes_method_call(db, op, "len") {
+            return RewriteResult::Unchanged;
+        }
+
+        let operands = op.operands(db);
+        let Some(bytes_ref) = operands.first().copied() else {
+            return RewriteResult::Unchanged;
+        };
+
+        let location = op.location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let i64_ty = core::I64::new(db).as_type();
+
+        // struct.get to get len field (field 2)
+        let get_len = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![bytes_ref])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_LEN_FIELD)))
+            .build();
+
+        // Extend i32 to i64 (Int type in Tribute is i64)
+        let extend = Operation::of_name(db, location, "wasm.i64_extend_i32_u")
+            .operands(idvec![get_len.result(db, 0)])
+            .results(idvec![i64_ty])
+            .build();
+
+        RewriteResult::Expand(vec![get_len, extend])
+    }
+}
+
+/// Pattern for `Bytes::get_or_panic(bytes, index)` -> array access with offset
+struct BytesGetOrPanicPattern;
+
+impl RewritePattern for BytesGetOrPanicPattern {
+    fn match_and_rewrite<'a>(
+        &self,
+        db: &'a dyn salsa::Database,
+        op: &Operation<'a>,
+    ) -> RewriteResult<'a> {
+        if !is_bytes_method_call(db, op, "get_or_panic") {
+            return RewriteResult::Unchanged;
+        }
+
+        let operands = op.operands(db);
+        if operands.len() < 2 {
+            return RewriteResult::Unchanged;
+        }
+        let bytes_ref = operands[0];
+        let index = operands[1]; // i64
+
+        let location = op.location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let i64_ty = core::I64::new(db).as_type();
+        let i8_ty = core::I8::new(db).as_type();
+
+        // Get data array ref (field 0)
+        let array_ref_ty =
+            core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
+        let get_data = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![bytes_ref])
+            .results(idvec![array_ref_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_DATA_FIELD)))
+            .build();
+
+        // Get offset (field 1)
+        let get_offset = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![bytes_ref])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .attr(
+                "field_idx",
+                Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
+            )
+            .build();
+
+        // Wrap index to i32
+        let index_i32 = Operation::of_name(db, location, "wasm.i32_wrap_i64")
+            .operands(idvec![index])
+            .results(idvec![i32_ty])
+            .build();
+
+        // Add offset to index: actual_index = offset + index
+        let add_offset = Operation::of_name(db, location, "wasm.i32_add")
+            .operands(idvec![get_offset.result(db, 0), index_i32.result(db, 0)])
+            .results(idvec![i32_ty])
+            .build();
+
+        // array.get_u (unsigned extend to i32, for byte values 0-255)
+        let array_get = wasm::array_get_u(
+            db,
+            location,
+            get_data.result(db, 0),
+            add_offset.result(db, 0),
+            i32_ty,
+            BYTES_ARRAY_IDX,
+        );
+
+        // Extend i32 to i64 (unsigned, Int type in Tribute is i64)
+        let extend = wasm::i64_extend_i32_u(db, location, array_get.result(db), i64_ty);
+
+        RewriteResult::Expand(vec![
+            get_data,
+            get_offset,
+            index_i32,
+            add_offset,
+            array_get.operation(),
+            extend.operation(),
+        ])
+    }
+}
+
+/// Pattern for `Bytes::slice_or_panic(bytes, start, end)` -> new struct with adjusted offset/len
+struct BytesSliceOrPanicPattern;
+
+impl RewritePattern for BytesSliceOrPanicPattern {
+    fn match_and_rewrite<'a>(
+        &self,
+        db: &'a dyn salsa::Database,
+        op: &Operation<'a>,
+    ) -> RewriteResult<'a> {
+        if !is_bytes_method_call(db, op, "slice_or_panic") {
+            return RewriteResult::Unchanged;
+        }
+
+        let operands = op.operands(db);
+        if operands.len() < 3 {
+            return RewriteResult::Unchanged;
+        }
+        let bytes_ref = operands[0];
+        let start = operands[1]; // i64
+        let end = operands[2]; // i64
+
+        let location = op.location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let i8_ty = core::I8::new(db).as_type();
+        let bytes_ty = core::Bytes::new(db).as_type();
+
+        // Get data array ref (field 0) - shared, zero-copy
+        let array_ref_ty =
+            core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
+        let get_data = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![bytes_ref])
+            .results(idvec![array_ref_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_DATA_FIELD)))
+            .build();
+
+        // Get current offset (field 1)
+        let get_offset = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![bytes_ref])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .attr(
+                "field_idx",
+                Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
+            )
+            .build();
+
+        // Wrap start and end to i32
+        let start_i32 = Operation::of_name(db, location, "wasm.i32_wrap_i64")
+            .operands(idvec![start])
+            .results(idvec![i32_ty])
+            .build();
+
+        let end_i32 = Operation::of_name(db, location, "wasm.i32_wrap_i64")
+            .operands(idvec![end])
+            .results(idvec![i32_ty])
+            .build();
+
+        // new_offset = offset + start
+        let new_offset = Operation::of_name(db, location, "wasm.i32_add")
+            .operands(idvec![get_offset.result(db, 0), start_i32.result(db, 0)])
+            .results(idvec![i32_ty])
+            .build();
+
+        // new_len = end - start
+        let new_len = Operation::of_name(db, location, "wasm.i32_sub")
+            .operands(idvec![end_i32.result(db, 0), start_i32.result(db, 0)])
+            .results(idvec![i32_ty])
+            .build();
+
+        // struct.new to create new Bytes (shares the underlying array)
+        let struct_new = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![
+                get_data.result(db, 0),
+                new_offset.result(db, 0),
+                new_len.result(db, 0)
+            ])
+            .results(idvec![bytes_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .build();
+
+        RewriteResult::Expand(vec![
+            get_data, get_offset, start_i32, end_i32, new_offset, new_len, struct_new,
+        ])
+    }
+}
+
+/// Pattern for `Bytes::concat(left, right)` -> allocate new array and copy both
+struct BytesConcatPattern;
+
+impl RewritePattern for BytesConcatPattern {
+    fn match_and_rewrite<'a>(
+        &self,
+        db: &'a dyn salsa::Database,
+        op: &Operation<'a>,
+    ) -> RewriteResult<'a> {
+        if !is_bytes_method_call(db, op, "concat") {
+            return RewriteResult::Unchanged;
+        }
+
+        let operands = op.operands(db);
+        if operands.len() < 2 {
+            return RewriteResult::Unchanged;
+        }
+        let left = operands[0];
+        let right = operands[1];
+
+        let location = op.location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let i8_ty = core::I8::new(db).as_type();
+        let bytes_ty = core::Bytes::new(db).as_type();
+        let array_ref_ty =
+            core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
+
+        // Get left's data, offset, len
+        let left_data = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![left])
+            .results(idvec![array_ref_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_DATA_FIELD)))
+            .build();
+
+        let left_offset = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![left])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .attr(
+                "field_idx",
+                Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
+            )
+            .build();
+
+        let left_len = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![left])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_LEN_FIELD)))
+            .build();
+
+        // Get right's data, offset, len
+        let right_data = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![right])
+            .results(idvec![array_ref_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_DATA_FIELD)))
+            .build();
+
+        let right_offset = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![right])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .attr(
+                "field_idx",
+                Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
+            )
+            .build();
+
+        let right_len = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![right])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_LEN_FIELD)))
+            .build();
+
+        // Calculate total_len = left.len + right.len
+        let total_len = Operation::of_name(db, location, "wasm.i32_add")
+            .operands(idvec![left_len.result(db, 0), right_len.result(db, 0)])
+            .results(idvec![i32_ty])
+            .build();
+
+        // Allocate new array: array_new_default(total_len)
+        let new_array = Operation::of_name(db, location, "wasm.array_new_default")
+            .operands(idvec![total_len.result(db, 0)])
+            .results(idvec![array_ref_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)))
+            .build();
+
+        // Copy left bytes: array_copy(new_arr, 0, left.data, left.offset, left.len)
+        let zero = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(0))
+            .results(idvec![i32_ty])
+            .build();
+
+        let copy_left = Operation::of_name(db, location, "wasm.array_copy")
+            .operands(idvec![
+                new_array.result(db, 0),
+                zero.result(db, 0),
+                left_data.result(db, 0),
+                left_offset.result(db, 0),
+                left_len.result(db, 0)
+            ])
+            .attr(
+                "dst_type_idx",
+                Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
+            )
+            .attr(
+                "src_type_idx",
+                Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
+            )
+            .build();
+
+        // Copy right bytes: array_copy(new_arr, left.len, right.data, right.offset, right.len)
+        let copy_right = Operation::of_name(db, location, "wasm.array_copy")
+            .operands(idvec![
+                new_array.result(db, 0),
+                left_len.result(db, 0),
+                right_data.result(db, 0),
+                right_offset.result(db, 0),
+                right_len.result(db, 0)
+            ])
+            .attr(
+                "dst_type_idx",
+                Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
+            )
+            .attr(
+                "src_type_idx",
+                Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
+            )
+            .build();
+
+        // Create new Bytes struct: struct_new(new_arr, 0, total_len)
+        let struct_new = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![
+                new_array.result(db, 0),
+                zero.result(db, 0),
+                total_len.result(db, 0)
+            ])
+            .results(idvec![bytes_ty])
+            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
+            .build();
+
+        RewriteResult::Expand(vec![
+            left_data,
+            left_offset,
+            left_len,
+            right_data,
+            right_offset,
+            right_len,
+            total_len,
+            new_array,
+            zero,
+            copy_left,
+            copy_right,
+            struct_new,
+        ])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +819,185 @@ mod tests {
         // The call should be to fd_write, not print_line
         assert!(callees.contains(&"fd_write".to_string()));
         assert!(!callees.contains(&"print_line".to_string()));
+    }
+
+    // === Bytes intrinsic tests ===
+
+    /// Create a qualified name for Bytes::method
+    fn bytes_method_name(method: &'static str) -> QualifiedName {
+        QualifiedName::new(vec![Symbol::new("Bytes")], Symbol::new(method))
+    }
+
+    #[salsa::tracked]
+    fn make_bytes_len_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let bytes_ty = core::Bytes::new(db).as_type();
+        let i64_ty = core::I64::new(db).as_type();
+
+        // Create a fake bytes value (block arg)
+        let block_id = BlockId::fresh();
+        let bytes_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
+
+        // Create Bytes::len call
+        let len_call = Operation::of_name(db, location, "wasm.call")
+            .operands(idvec![bytes_val])
+            .results(idvec![i64_ty])
+            .attr("callee", Attribute::QualifiedName(bytes_method_name("len")))
+            .build();
+
+        let block = Block::new(db, block_id, location, idvec![bytes_ty], idvec![len_call]);
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_bytes_len_to_struct_get(db: &salsa::DatabaseImpl) {
+        let module = make_bytes_len_module(db);
+        let op_names = lower_and_check(db, module);
+
+        // Should have struct_get and extend operations, not a wasm.call
+        assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
+        assert!(op_names.iter().any(|n| n == "wasm.i64_extend_i32_u"));
+        // No Bytes::len call should remain
+        let callees = extract_callees(db, module);
+        assert!(!callees.iter().any(|n| n == "len"));
+    }
+
+    #[salsa::tracked]
+    fn make_bytes_get_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let bytes_ty = core::Bytes::new(db).as_type();
+        let i64_ty = core::I64::new(db).as_type();
+
+        let block_id = BlockId::fresh();
+        let bytes_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
+        let index_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
+
+        // Create Bytes::get_or_panic call
+        let get_call = Operation::of_name(db, location, "wasm.call")
+            .operands(idvec![bytes_val, index_val])
+            .results(idvec![i64_ty])
+            .attr(
+                "callee",
+                Attribute::QualifiedName(bytes_method_name("get_or_panic")),
+            )
+            .build();
+
+        let block = Block::new(
+            db,
+            block_id,
+            location,
+            idvec![bytes_ty, i64_ty],
+            idvec![get_call],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_bytes_get_to_array_get(db: &salsa::DatabaseImpl) {
+        let module = make_bytes_get_module(db);
+        let op_names = lower_and_check(db, module);
+
+        // Should have struct_get (for data and offset), i32_add, and array_get_u
+        assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
+        assert!(op_names.iter().any(|n| n == "wasm.i32_add"));
+        assert!(op_names.iter().any(|n| n == "wasm.array_get_u"));
+        // No Bytes::get_or_panic call should remain
+        let callees = extract_callees(db, module);
+        assert!(!callees.iter().any(|n| n == "get_or_panic"));
+    }
+
+    #[salsa::tracked]
+    fn make_bytes_slice_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let bytes_ty = core::Bytes::new(db).as_type();
+        let i64_ty = core::I64::new(db).as_type();
+
+        let block_id = BlockId::fresh();
+        let bytes_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
+        let start_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
+        let end_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 2);
+
+        // Create Bytes::slice_or_panic call
+        let slice_call = Operation::of_name(db, location, "wasm.call")
+            .operands(idvec![bytes_val, start_val, end_val])
+            .results(idvec![bytes_ty])
+            .attr(
+                "callee",
+                Attribute::QualifiedName(bytes_method_name("slice_or_panic")),
+            )
+            .build();
+
+        let block = Block::new(
+            db,
+            block_id,
+            location,
+            idvec![bytes_ty, i64_ty, i64_ty],
+            idvec![slice_call],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_bytes_slice_to_struct_new(db: &salsa::DatabaseImpl) {
+        let module = make_bytes_slice_module(db);
+        let op_names = lower_and_check(db, module);
+
+        // Should have struct_get, i32_add, i32_sub, and struct_new
+        assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
+        assert!(op_names.iter().any(|n| n == "wasm.i32_add"));
+        assert!(op_names.iter().any(|n| n == "wasm.i32_sub"));
+        assert!(op_names.iter().any(|n| n == "wasm.struct_new"));
+        // No Bytes::slice_or_panic call should remain
+        let callees = extract_callees(db, module);
+        assert!(!callees.iter().any(|n| n == "slice_or_panic"));
+    }
+
+    #[salsa::tracked]
+    fn make_bytes_concat_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let bytes_ty = core::Bytes::new(db).as_type();
+
+        let block_id = BlockId::fresh();
+        let left_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
+        let right_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
+
+        // Create Bytes::concat call
+        let concat_call = Operation::of_name(db, location, "wasm.call")
+            .operands(idvec![left_val, right_val])
+            .results(idvec![bytes_ty])
+            .attr(
+                "callee",
+                Attribute::QualifiedName(bytes_method_name("concat")),
+            )
+            .build();
+
+        let block = Block::new(
+            db,
+            block_id,
+            location,
+            idvec![bytes_ty, bytes_ty],
+            idvec![concat_call],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_bytes_concat_to_array_copy(db: &salsa::DatabaseImpl) {
+        let module = make_bytes_concat_module(db);
+        let op_names = lower_and_check(db, module);
+
+        // Should have struct_get, i32_add, array_new_default, array_copy, and struct_new
+        assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
+        assert!(op_names.iter().any(|n| n == "wasm.i32_add"));
+        assert!(op_names.iter().any(|n| n == "wasm.array_new_default"));
+        assert!(op_names.iter().any(|n| n == "wasm.array_copy"));
+        assert!(op_names.iter().any(|n| n == "wasm.struct_new"));
+        // No Bytes::concat call should remain
+        let callees = extract_callees(db, module);
+        assert!(!callees.iter().any(|n| n == "concat"));
     }
 }
