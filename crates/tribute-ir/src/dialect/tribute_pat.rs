@@ -42,7 +42,8 @@ dialect! {
 
         /// `tribute_pat.bind` operation: identifier pattern that binds a value.
         /// Matches anything and binds it to the given name.
-        /// The binding is accessible via `tribute.bind` in the arm body.
+        /// The binding is accessible via `tribute.var` in the arm body,
+        /// resolved by the resolver and case_lowering passes.
         #[attr(name: Symbol)]
         fn bind();
 

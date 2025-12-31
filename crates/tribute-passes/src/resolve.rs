@@ -623,13 +623,13 @@ impl<'db> Resolver<'db> {
 
     /// Resolve a type.
     ///
-    /// Converts `src.type` to concrete types:
+    /// Converts `tribute.type` to concrete types:
     /// - `Int` → `core.i64`
     /// - `Bool` → `core.i1`
     /// - `String` → `core.string`
     /// - User-defined types are looked up in the environment
     fn resolve_type(&self, ty: Type<'db>) -> Type<'db> {
-        // Check if this is an unresolved type (src.type)
+        // Check if this is an unresolved type (tribute.type)
         if ty.dialect(self.db) == tribute::DIALECT_NAME() && ty.name(self.db) == tribute::TYPE() {
             // Get the type name from the name attribute (stored as Symbol)
             if let Some(Attribute::Symbol(name_sym)) =
@@ -826,9 +826,9 @@ impl<'db> Resolver<'db> {
                 if let Some(resolved) = self.try_resolve_var(&remapped_op) {
                     resolved
                 } else {
-                    // Check if already resolved (has a concrete type, not src.type or type.var)
+                    // Check if already resolved (has a concrete type, not tribute.type or type_var)
                     // This happens when re-processing an already-resolved module:
-                    // - src.type: Not yet resolved
+                    // - tribute.type: Not yet resolved
                     // - type.var: Unresolved, with type variable from inference
                     // - Concrete types (core.*, adt.*): Already resolved local var
                     let is_already_resolved =
@@ -1607,7 +1607,7 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Try to resolve a `src.cons` operation.
+    /// Try to resolve a `tribute.cons` operation.
     fn try_resolve_cons(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let Attribute::QualifiedName(path) = attrs.get(&ATTR_NAME())? else {

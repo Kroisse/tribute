@@ -53,7 +53,7 @@ pub fn lower_handlers<'db>(
 // is INCORRECT for actual runtime semantics - they need matching tags to work.
 //
 // In the full implementation, tags will come from evidence lookup:
-//   1. `ability.prompt` installs a handler and creates an evidence marker
+//   1. `tribute.handle` installs a handler and creates an evidence marker
 //   2. `ability.perform` looks up the evidence to find the matching prompt tag
 //
 // The global tag generator here is temporary scaffolding that will be replaced
@@ -89,7 +89,7 @@ fn fresh_prompt_tag() -> u32 {
     PROMPT_TAG_GEN.fresh()
 }
 
-// === Pattern: Lower ability.prompt to cont.push_prompt ===
+// === Pattern: Lower tribute.handle to cont.push_prompt ===
 
 struct LowerPromptPattern;
 

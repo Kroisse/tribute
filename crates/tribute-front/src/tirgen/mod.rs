@@ -413,7 +413,7 @@ mod tests {
         let has_constructor = ops.iter().any(|op| {
             op.dialect(&db) == tribute::DIALECT_NAME() && op.name(&db) == tribute::CONS()
         });
-        assert!(has_constructor, "Expected a src.cons operation");
+        assert!(has_constructor, "Expected a tribute.cons operation");
     }
 
     #[test]
