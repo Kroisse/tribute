@@ -100,11 +100,13 @@ impl DefinitionIndex {
         let attrs = op.attributes(db);
         let op_span = op.location(db).span;
 
-        // Helper to get name_span attribute from attrs
-        let name_span = attrs.get(&Symbol::new("name_span")).and_then(|a| match a {
-            Attribute::Span(s) => Some(*s),
-            _ => None,
-        });
+        // Helper to get name_location attribute from attrs
+        let name_span = attrs
+            .get(&Symbol::new("name_location"))
+            .and_then(|a| match a {
+                Attribute::Location(loc) => Some(loc.span),
+                _ => None,
+            });
 
         // Collect definitions using typed wrappers
         if let Ok(func_op) = func::Func::from_operation(db, *op) {

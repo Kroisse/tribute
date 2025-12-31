@@ -93,15 +93,15 @@ impl<'db> TypeIndex<'db> {
         };
 
         // Special case for func.func: use the 'type' attribute since it has no results
-        // and use 'name_span' if available for precise hover targeting
+        // and use 'name_location' if available for precise hover targeting
         if dialect == "func" && name == "func" {
             let type_key = trunk_ir::Symbol::new("type");
-            let name_span_key = trunk_ir::Symbol::new("name_span");
+            let name_location_key = trunk_ir::Symbol::new("name_location");
 
             if let Some(Attribute::Type(func_ty)) = op.attributes(db).get(&type_key) {
-                // Use name_span if available, otherwise fall back to operation span
-                let hover_span = match op.attributes(db).get(&name_span_key) {
-                    Some(Attribute::Span(s)) => *s,
+                // Use name_location if available, otherwise fall back to operation span
+                let hover_span = match op.attributes(db).get(&name_location_key) {
+                    Some(Attribute::Location(loc)) => loc.span,
                     _ => span,
                 };
                 entries.push(TypeEntry {
