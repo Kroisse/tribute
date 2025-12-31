@@ -689,17 +689,28 @@ fn collect_gc_types<'db>(
     // 0: BoxedF64, 1: BytesArray, 2: BytesStruct
     let mut next_type_idx: u32 = FIRST_USER_TYPE_IDX;
 
-    fn ensure_builder<'db, 'a>(
+    /// Returns true if this is a built-in type (0-2) that shouldn't use a builder
+    fn is_builtin_type(idx: u32) -> bool {
+        idx < FIRST_USER_TYPE_IDX
+    }
+
+    /// Get or create a builder for a user-defined type.
+    /// Returns None for built-in types (0-2) which are predefined.
+    fn try_get_builder<'db, 'a>(
         builders: &'a mut Vec<GcTypeBuilder<'db>>,
         idx: u32,
-    ) -> &'a mut GcTypeBuilder<'db> {
+    ) -> Option<&'a mut GcTypeBuilder<'db>> {
+        // Skip built-in types (0-2) as they are predefined
+        if is_builtin_type(idx) {
+            return None;
+        }
         // Subtract FIRST_USER_TYPE_IDX because indices 0-2 are reserved for built-in types
         // User type indices start at FIRST_USER_TYPE_IDX
         let adjusted_idx = (idx - FIRST_USER_TYPE_IDX) as usize;
         if builders.len() <= adjusted_idx {
             builders.resize_with(adjusted_idx + 1, GcTypeBuilder::new);
         }
-        &mut builders[adjusted_idx]
+        Some(&mut builders[adjusted_idx])
     }
 
     fn register_type<'db>(type_idx_by_type: &mut HashMap<Type<'db>, u32>, idx: u32, ty: Type<'db>) {
@@ -785,45 +796,46 @@ fn collect_gc_types<'db>(
             else {
                 return Ok(());
             };
-            let builder = ensure_builder(&mut builders, type_idx);
-            builder.kind = GcKind::Struct;
-            let field_count = op.operands(db).len();
-            debug!(
-                "GC: struct_new type_idx={} field_count={}",
-                type_idx, field_count
-            );
-            if matches!(builder.field_count, Some(existing_count) if existing_count != field_count)
-            {
-                let existing_count = builder.field_count.expect("count checked by matches");
-                return Err(CompilationError::type_error(format!(
-                    "struct type index {type_idx} field count mismatch ({existing_count} vs {field_count})",
-                )));
-            } else {
-                builder.field_count = Some(field_count);
-                if builder.fields.len() < field_count {
-                    builder.fields.resize_with(field_count, || None);
-                }
-            }
-            if let Some(result_ty) = op.results(db).first().copied() {
+            if let Some(builder) = try_get_builder(&mut builders, type_idx) {
+                builder.kind = GcKind::Struct;
+                let field_count = op.operands(db).len();
                 debug!(
-                    "GC: struct_new result_ty={}.{}",
-                    result_ty.dialect(db),
-                    result_ty.name(db)
+                    "GC: struct_new type_idx={} field_count={}",
+                    type_idx, field_count
                 );
-                register_type(&mut type_idx_by_type, type_idx, result_ty);
-            }
-            for (field_idx, value) in op.operands(db).iter().enumerate() {
-                if let Some(ty) = value_type(db, *value) {
-                    debug!(
-                        "GC: struct_new field {} type={}.{} is_var={}",
-                        field_idx,
-                        ty.dialect(db),
-                        ty.name(db),
-                        tribute::is_type_var(db, ty)
-                    );
-                    record_struct_field(type_idx, builder, field_idx as u32, ty)?;
+                if matches!(builder.field_count, Some(existing_count) if existing_count != field_count)
+                {
+                    let existing_count = builder.field_count.expect("count checked by matches");
+                    return Err(CompilationError::type_error(format!(
+                        "struct type index {type_idx} field count mismatch ({existing_count} vs {field_count})",
+                    )));
                 } else {
-                    debug!("GC: struct_new field {} has no type", field_idx);
+                    builder.field_count = Some(field_count);
+                    if builder.fields.len() < field_count {
+                        builder.fields.resize_with(field_count, || None);
+                    }
+                }
+                if let Some(result_ty) = op.results(db).first().copied() {
+                    debug!(
+                        "GC: struct_new result_ty={}.{}",
+                        result_ty.dialect(db),
+                        result_ty.name(db)
+                    );
+                    register_type(&mut type_idx_by_type, type_idx, result_ty);
+                }
+                for (field_idx, value) in op.operands(db).iter().enumerate() {
+                    if let Some(ty) = value_type(db, *value) {
+                        debug!(
+                            "GC: struct_new field {} type={}.{} is_var={}",
+                            field_idx,
+                            ty.dialect(db),
+                            ty.name(db),
+                            tribute::is_type_var(db, ty)
+                        );
+                        record_struct_field(type_idx, builder, field_idx as u32, ty)?;
+                    } else {
+                        debug!("GC: struct_new field {} has no type", field_idx);
+                    }
                 }
             }
         } else if name == Symbol::new("struct_get") {
@@ -833,28 +845,29 @@ fn collect_gc_types<'db>(
                 return Ok(());
             };
             let field_idx = attr_field_idx(attrs)?;
-            let builder = ensure_builder(&mut builders, type_idx);
-            builder.kind = GcKind::Struct;
-            if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
-                let count = builder.field_count.expect("count checked by matches");
-                return Err(CompilationError::type_error(format!(
-                    "struct type index {type_idx} field index {field_idx} out of bounds (fields: {count})",
-                )));
-            }
-            if let Some(ty) = op
-                .operands(db)
-                .first()
-                .copied()
-                .and_then(|value| value_type(db, value))
-            {
-                register_type(&mut type_idx_by_type, type_idx, ty);
-            }
-            // Only record field type if result type is concrete (not a type variable).
-            // Type variables map to ANYREF and would conflict with concrete types.
-            if let Some(result_ty) = op.results(db).first().copied()
-                && !tribute::is_type_var(db, result_ty)
-            {
-                record_struct_field(type_idx, builder, field_idx, result_ty)?;
+            if let Some(builder) = try_get_builder(&mut builders, type_idx) {
+                builder.kind = GcKind::Struct;
+                if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
+                    let count = builder.field_count.expect("count checked by matches");
+                    return Err(CompilationError::type_error(format!(
+                        "struct type index {type_idx} field index {field_idx} out of bounds (fields: {count})",
+                    )));
+                }
+                if let Some(ty) = op
+                    .operands(db)
+                    .first()
+                    .copied()
+                    .and_then(|value| value_type(db, value))
+                {
+                    register_type(&mut type_idx_by_type, type_idx, ty);
+                }
+                // Only record field type if result type is concrete (not a type variable).
+                // Type variables map to ANYREF and would conflict with concrete types.
+                if let Some(result_ty) = op.results(db).first().copied()
+                    && !tribute::is_type_var(db, result_ty)
+                {
+                    record_struct_field(type_idx, builder, field_idx, result_ty)?;
+                }
             }
         } else if name == Symbol::new("struct_set") {
             let attrs = op.attributes(db);
@@ -863,29 +876,30 @@ fn collect_gc_types<'db>(
                 return Ok(());
             };
             let field_idx = attr_field_idx(attrs)?;
-            let builder = ensure_builder(&mut builders, type_idx);
-            builder.kind = GcKind::Struct;
-            if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
-                let count = builder.field_count.expect("count checked by matches");
-                return Err(CompilationError::type_error(format!(
-                    "struct type index {type_idx} field index {field_idx} out of bounds (fields: {count})",
-                )));
-            }
-            if let Some(ty) = op
-                .operands(db)
-                .first()
-                .copied()
-                .and_then(|value| value_type(db, value))
-            {
-                register_type(&mut type_idx_by_type, type_idx, ty);
-            }
-            if let Some(ty) = op
-                .operands(db)
-                .get(1)
-                .copied()
-                .and_then(|value| value_type(db, value))
-            {
-                record_struct_field(type_idx, builder, field_idx, ty)?;
+            if let Some(builder) = try_get_builder(&mut builders, type_idx) {
+                builder.kind = GcKind::Struct;
+                if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
+                    let count = builder.field_count.expect("count checked by matches");
+                    return Err(CompilationError::type_error(format!(
+                        "struct type index {type_idx} field index {field_idx} out of bounds (fields: {count})",
+                    )));
+                }
+                if let Some(ty) = op
+                    .operands(db)
+                    .first()
+                    .copied()
+                    .and_then(|value| value_type(db, value))
+                {
+                    register_type(&mut type_idx_by_type, type_idx, ty);
+                }
+                if let Some(ty) = op
+                    .operands(db)
+                    .get(1)
+                    .copied()
+                    .and_then(|value| value_type(db, value))
+                {
+                    record_struct_field(type_idx, builder, field_idx, ty)?;
+                }
             }
         } else if name == Symbol::new("array_new") || name == Symbol::new("array_new_default") {
             let attrs = op.attributes(db);
@@ -893,18 +907,19 @@ fn collect_gc_types<'db>(
             else {
                 return Ok(());
             };
-            let builder = ensure_builder(&mut builders, type_idx);
-            builder.kind = GcKind::Array;
-            if let Some(result_ty) = op.results(db).first().copied() {
-                register_type(&mut type_idx_by_type, type_idx, result_ty);
-            }
-            if let Some(ty) = op
-                .operands(db)
-                .get(1)
-                .copied()
-                .and_then(|value| value_type(db, value))
-            {
-                record_array_elem(type_idx, builder, ty)?;
+            if let Some(builder) = try_get_builder(&mut builders, type_idx) {
+                builder.kind = GcKind::Array;
+                if let Some(result_ty) = op.results(db).first().copied() {
+                    register_type(&mut type_idx_by_type, type_idx, result_ty);
+                }
+                if let Some(ty) = op
+                    .operands(db)
+                    .get(1)
+                    .copied()
+                    .and_then(|value| value_type(db, value))
+                {
+                    record_array_elem(type_idx, builder, ty)?;
+                }
             }
         } else if name == Symbol::new("array_get")
             || name == Symbol::new("array_get_s")
@@ -915,21 +930,22 @@ fn collect_gc_types<'db>(
             else {
                 return Ok(());
             };
-            let builder = ensure_builder(&mut builders, type_idx);
-            builder.kind = GcKind::Array;
-            if let Some(ty) = op
-                .operands(db)
-                .first()
-                .copied()
-                .and_then(|value| value_type(db, value))
-            {
-                register_type(&mut type_idx_by_type, type_idx, ty);
-            }
-            // Only record element type if result type is concrete (not a type variable).
-            if let Some(result_ty) = op.results(db).first().copied()
-                && !tribute::is_type_var(db, result_ty)
-            {
-                record_array_elem(type_idx, builder, result_ty)?;
+            if let Some(builder) = try_get_builder(&mut builders, type_idx) {
+                builder.kind = GcKind::Array;
+                if let Some(ty) = op
+                    .operands(db)
+                    .first()
+                    .copied()
+                    .and_then(|value| value_type(db, value))
+                {
+                    register_type(&mut type_idx_by_type, type_idx, ty);
+                }
+                // Only record element type if result type is concrete (not a type variable).
+                if let Some(result_ty) = op.results(db).first().copied()
+                    && !tribute::is_type_var(db, result_ty)
+                {
+                    record_array_elem(type_idx, builder, result_ty)?;
+                }
             }
         } else if name == Symbol::new("array_set") {
             let attrs = op.attributes(db);
@@ -937,36 +953,39 @@ fn collect_gc_types<'db>(
             else {
                 return Ok(());
             };
-            let builder = ensure_builder(&mut builders, type_idx);
-            builder.kind = GcKind::Array;
-            if let Some(ty) = op
-                .operands(db)
-                .first()
-                .copied()
-                .and_then(|value| value_type(db, value))
-            {
-                register_type(&mut type_idx_by_type, type_idx, ty);
-            }
-            if let Some(ty) = op
-                .operands(db)
-                .get(2)
-                .copied()
-                .and_then(|value| value_type(db, value))
-            {
-                record_array_elem(type_idx, builder, ty)?;
+            if let Some(builder) = try_get_builder(&mut builders, type_idx) {
+                builder.kind = GcKind::Array;
+                if let Some(ty) = op
+                    .operands(db)
+                    .first()
+                    .copied()
+                    .and_then(|value| value_type(db, value))
+                {
+                    register_type(&mut type_idx_by_type, type_idx, ty);
+                }
+                if let Some(ty) = op
+                    .operands(db)
+                    .get(2)
+                    .copied()
+                    .and_then(|value| value_type(db, value))
+                {
+                    record_array_elem(type_idx, builder, ty)?;
+                }
             }
         } else if name == Symbol::new("array_copy") {
             // array_copy has dst_type_idx: u32 and src_type_idx: u32 attributes
             let attrs = op.attributes(db);
             if let Some(&Attribute::IntBits(dst_idx)) = attrs.get(&Symbol::new("dst_type_idx")) {
                 let dst_type_idx = dst_idx as u32;
-                let builder = ensure_builder(&mut builders, dst_type_idx);
-                builder.kind = GcKind::Array;
+                if let Some(builder) = try_get_builder(&mut builders, dst_type_idx) {
+                    builder.kind = GcKind::Array;
+                }
             }
             if let Some(&Attribute::IntBits(src_idx)) = attrs.get(&Symbol::new("src_type_idx")) {
                 let src_type_idx = src_idx as u32;
-                let builder = ensure_builder(&mut builders, src_type_idx);
-                builder.kind = GcKind::Array;
+                if let Some(builder) = try_get_builder(&mut builders, src_type_idx) {
+                    builder.kind = GcKind::Array;
+                }
             }
         } else if name == Symbol::new("ref_null")
             || name == Symbol::new("ref_cast")
@@ -989,8 +1008,9 @@ fn collect_gc_types<'db>(
             if let Some(result_ty) = op.results(db).first().copied() {
                 register_type(&mut type_idx_by_type, type_idx, result_ty);
             }
-            let builder = ensure_builder(&mut builders, type_idx);
-            if builder.kind == GcKind::Unknown {
+            if let Some(builder) = try_get_builder(&mut builders, type_idx)
+                && builder.kind == GcKind::Unknown
+            {
                 builder.kind = GcKind::Struct;
             }
         }

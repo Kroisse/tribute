@@ -138,6 +138,11 @@ pub mod Bytes {
         left
     }
 
+    /// Concatenation operator for byte sequences.
+    pub fn (<>)(left: Bytes, right: Bytes) -> Bytes {
+        left.concat(right)
+    }
+
     /// Get the byte at the given index.
     /// Returns None if index is out of bounds.
     pub fn get(bytes: Bytes, index: Int) -> Option(Int) {

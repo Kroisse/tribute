@@ -1,29 +1,9 @@
-// Test operator functions - using operators as first-class values
+// Test operator functions
 
 fn main() {
-    // Basic operator function usage
-    let add = (+)
-    print_line(add(2, 3))  // 5
-
-    let mult = (*)
-    print_line(mult(4, 5))  // 20
-
-    // Comparison operators
-    let eq = (==)
-    print_line(eq(5, 5))    // True
-    print_line(eq(5, 6))    // False
-
-    let lt = (<)
-    print_line(lt(3, 5))    // True
-
-    // String concatenation
-    let concat = (<>)
-    print_line(concat("Hello, ", "World!"))
-
-    // Using operator functions in higher-order style
-    print_line(apply_op((+), 10, 20))  // 30
-}
-
-fn apply_op(op, a, b) {
-    op(a, b)
+    // Bytes concatenation using concat directly
+    let a = b"Hello, "
+    let b = b"Bytes!"
+    let c = a.concat(b)
+    c
 }

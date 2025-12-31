@@ -314,15 +314,15 @@ fn lower_binary_expr<'db>(
             .op(arith::or(ctx.db, location, lhs, rhs, bool_ty))
             .result(ctx.db),
         "<>" => {
-            // String concatenation - use tribute.binop
+            // Concatenation operator - resolved by TDNR based on operand type
+            let op_name = QualifiedName::simple(sym("<>"));
             block
-                .op(tribute::binop(
+                .op(tribute::call(
                     ctx.db,
                     location,
-                    lhs,
-                    rhs,
+                    vec![lhs, rhs],
                     infer_ty,
-                    sym("concat"),
+                    op_name,
                 ))
                 .result(ctx.db)
         }
