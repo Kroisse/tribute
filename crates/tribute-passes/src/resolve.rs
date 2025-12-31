@@ -792,15 +792,7 @@ impl<'db> Resolver<'db> {
 
     /// Resolve names in a block.
     fn resolve_block(&mut self, block: &Block<'db>) -> Block<'db> {
-        // Resolve block argument types (preserving attributes)
-        let new_args: IdVec<BlockArg<'db>> = block
-            .args(self.db)
-            .iter()
-            .map(|arg| {
-                let resolved_ty = self.resolve_type(arg.ty(self.db));
-                BlockArg::new(self.db, resolved_ty, arg.attrs(self.db).clone())
-            })
-            .collect();
+        let new_args = self.resolve_block_args(block.args(self.db).iter());
 
         let new_ops: IdVec<Operation<'db>> = block
             .operations(self.db)
@@ -815,6 +807,21 @@ impl<'db> Resolver<'db> {
             new_args,
             new_ops,
         )
+    }
+
+    /// Resolve block argument types while preserving attributes.
+    fn resolve_block_args<'a>(
+        &mut self,
+        args: impl Iterator<Item = &'a BlockArg<'db>>,
+    ) -> IdVec<BlockArg<'db>>
+    where
+        'db: 'a,
+    {
+        args.map(|arg| {
+            let resolved_ty = self.resolve_type(arg.ty(self.db));
+            BlockArg::new(self.db, resolved_ty, arg.attrs(self.db).clone())
+        })
+        .collect()
     }
 
     /// Resolve a single operation.
@@ -1236,14 +1243,7 @@ impl<'db> Resolver<'db> {
             }
         }
 
-        // Resolve block argument types (preserving attributes)
-        let new_args: IdVec<BlockArg<'db>> = block_args
-            .iter()
-            .map(|arg| {
-                let resolved_ty = self.resolve_type(arg.ty(self.db));
-                BlockArg::new(self.db, resolved_ty, arg.attrs(self.db).clone())
-            })
-            .collect();
+        let new_args = self.resolve_block_args(block_args.iter());
 
         // Now resolve the block, skipping parameter declaration tribute.var ops
         let num_param_decls = param_declarations.len();
