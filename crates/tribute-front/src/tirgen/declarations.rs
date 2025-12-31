@@ -145,7 +145,17 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
     let name_node = func_node.child_by_field_name("name")?;
     let body_node = func_node.child_by_field_name("body")?;
 
-    let name_str = node_text(&name_node, &ctx.source);
+    // For operator_name nodes like (<>), extract just the operator
+    let name_str = if name_node.kind() == "operator_name" {
+        let text = node_text(&name_node, &ctx.source);
+        // Strip surrounding parentheses: "(<>)" -> "<>"
+        text.strip_prefix('(')
+            .and_then(|s| s.strip_suffix(')'))
+            .unwrap_or(&text)
+            .to_string()
+    } else {
+        node_text(&name_node, &ctx.source).to_string()
+    };
     let name_sym = Symbol::from_dynamic(&name_str);
     let qualified_name = ctx.qualified_name(name_sym);
     let name_span = Some(Span {
