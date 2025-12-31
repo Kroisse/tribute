@@ -1320,17 +1320,18 @@ impl<'db> Resolver<'db> {
                     return Some(vec![new_operation]);
                 }
                 LocalBinding::PatternBinding { ty } => {
-                    // Pattern binding - use case.bind to extract value from pattern matching
-                    // This produces proper SSA form: case.bind result is the pattern-bound value
+                    // Pattern binding - keep tribute.var with resolved type
+                    // case_lowering will remap the result to the bound value
                     let resolved_ty = self.resolve_type(*ty);
-                    let bind_op = tribute::bind(self.db, location, resolved_ty, *sym);
+                    let new_op = tribute::var(self.db, location, resolved_ty, *sym);
+                    let new_operation = self.mark_resolved_local(new_op.as_operation());
 
-                    // Remap old result to case.bind result (proper SSA value)
+                    // Map old result to new tribute.var result (will be remapped in case_lowering)
                     let old_result = op.result(self.db, 0);
-                    let new_result = bind_op.as_operation().result(self.db, 0);
+                    let new_result = new_operation.result(self.db, 0);
                     self.ctx.map_value(old_result, new_result);
 
-                    return Some(vec![bind_op.as_operation()]);
+                    return Some(vec![new_operation]);
                 }
             }
         }

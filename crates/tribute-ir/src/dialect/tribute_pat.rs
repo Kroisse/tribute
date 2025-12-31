@@ -121,10 +121,11 @@ dialect! {
         /// - `ability_ref`: ability type (core.ability_ref) to support parameterized abilities
         /// - `op`: the operation name within the ability
         /// - `args`: region containing patterns for operation arguments
-        /// - `continuation`: name to bind the continuation (or empty for discard)
-        #[attr(ability_ref: Type, op: Symbol, continuation: Symbol)]
+        /// - `continuation`: region containing pattern for continuation (tribute_pat.bind or wildcard)
+        #[attr(ability_ref: Type, op: Symbol)]
         fn handler_suspend() {
             #[region(args)] {}
+            #[region(continuation)] {}
         };
     }
 }
@@ -296,21 +297,24 @@ pub mod helpers {
     ///
     /// The `ability_ref` should be a `core.ability_ref` type created via
     /// `AbilityRefType::simple()` or `AbilityRefType::with_params()`.
+    ///
+    /// The `continuation_pattern` should be a region containing `tribute_pat.bind`
+    /// for named continuations or `tribute_pat.wildcard` for discarded continuations.
     pub fn handler_suspend_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
         ability_ref: Type<'db>,
         op_name: Symbol,
         args_pattern: Region<'db>,
-        continuation_name: Symbol,
+        continuation_pattern: Region<'db>,
     ) -> Region<'db> {
         let op = handler_suspend(
             db,
             location,
             ability_ref,
             op_name,
-            continuation_name,
             args_pattern,
+            continuation_pattern,
         );
         single_op_region(db, location, op.as_operation())
     }

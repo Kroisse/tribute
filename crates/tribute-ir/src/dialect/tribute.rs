@@ -22,7 +22,7 @@
 //! - `tribute.lambda`, `tribute.tuple`, `tribute.const`, `tribute.use`
 //!
 //! **Pattern matching** (lowered to scf dialect):
-//! - `tribute.case`, `tribute.arm`, `tribute.let`, `tribute.bind`, `tribute.guard`
+//! - `tribute.case`, `tribute.arm`, `tribute.let`, `tribute.guard`
 //!
 //! **Types**:
 //! - `tribute.type` (unresolved type reference)
@@ -198,14 +198,6 @@ dialect! {
             #[region(then)] {}
             #[region(r#else)] {}
         };
-
-        /// `tribute.bind` operation: extracts a bound variable from pattern matching.
-        /// The `name` attribute is the binding name.
-        /// This is placed at the start of arm body to introduce bindings.
-        // NOTE: Consider whether tribute.var could replace this by referencing pattern bindings.
-        // Currently kept separate because pattern bindings don't have concrete values at resolve time.
-        #[attr(name: Symbol)]
-        fn bind() -> result;
 
         // === Types ===
 

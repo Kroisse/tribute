@@ -1161,8 +1161,11 @@ fn handler_pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Regi
             tribute_pat::helpers::empty_region(ctx.db, location)
         };
 
-        // Continuation name (empty Symbol for wildcard/discard)
-        let cont_symbol = continuation_name.unwrap_or_else(|| Symbol::new("_"));
+        // Continuation pattern: bind or wildcard
+        let continuation_region = match continuation_name {
+            Some(name) => tribute_pat::helpers::bind_region(ctx.db, location, name),
+            None => tribute_pat::helpers::wildcard_region(ctx.db, location),
+        };
 
         // If ability_ref is None, use a placeholder for inference
         // The type checker will resolve this later
@@ -1175,7 +1178,7 @@ fn handler_pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Regi
             ability_ref,
             op_name,
             args_region,
-            cont_symbol,
+            continuation_region,
         )
     } else {
         // Done pattern: { result }

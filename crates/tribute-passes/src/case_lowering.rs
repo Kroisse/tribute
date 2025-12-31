@@ -190,21 +190,22 @@ impl<'db> CaseLowerer<'db> {
             return vec![new_op];
         }
 
-        // Handle case.bind: replace with the bound value from pattern matching
+        // Handle tribute.var for case pattern bindings: replace with the bound value
+        // This is used when tribute.var in arm body references a tribute_pat.bind from pattern region
         if op.dialect(self.db) == tribute::DIALECT_NAME()
-            && op.name(self.db) == tribute::BIND()
+            && op.name(self.db) == tribute::VAR()
             && let Some(Attribute::Symbol(name)) = op.attributes(self.db).get(&Symbol::new("name"))
             && let Some(&bound_value) = self.current_arm_bindings.get(name)
         {
             // Look up the current mapping for the bound value (handles remapping from lowering)
             let current_bound_value = self.ctx.lookup(bound_value);
-            // Map case.bind result to the bound value (scrutinee or destructured value)
-            let bind_result = op.result(self.db, 0);
-            self.ctx.map_value(bind_result, current_bound_value);
-            // Erase the case.bind operation - value is remapped
+            // Map tribute.var result to the bound value (scrutinee or destructured value)
+            let var_result = op.result(self.db, 0);
+            self.ctx.map_value(var_result, current_bound_value);
+            // Erase the tribute.var operation - value is remapped
             return vec![];
         }
-        // If binding not found, keep the operation (shouldn't happen in well-formed IR)
+        // If binding not found in pattern bindings, keep the operation (regular local variable)
 
         let new_regions = op
             .regions(self.db)
