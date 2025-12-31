@@ -104,7 +104,8 @@ impl<'db> Func<'db> {
             .region(region);
 
         if let Some(span) = name_span {
-            builder = builder.attr("name_span", Attribute::Span(span));
+            let name_loc = crate::Location::new(location.path, span);
+            builder = builder.attr("name_location", Attribute::Location(name_loc));
         }
 
         Func::from_operation(db, builder.build()).expect("valid func.func operation")
@@ -149,7 +150,8 @@ impl<'db> Func<'db> {
             .region(region);
 
         if let Some(span) = name_span {
-            builder = builder.attr("name_span", Attribute::Span(span));
+            let name_loc = crate::Location::new(location.path, span);
+            builder = builder.attr("name_location", Attribute::Location(name_loc));
         }
 
         Func::from_operation(db, builder.build()).expect("valid func.func operation")
