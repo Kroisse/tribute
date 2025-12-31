@@ -1775,18 +1775,18 @@ mod tests {
         let ops = body.blocks(db)[0].operations(db);
 
         // The first operation should be the resume function (wasm.func)
-        if let Some(resume_fn) = ops.first() {
-            if resume_fn.full_name(db) == "wasm.func" {
-                // Check if the resume function body contains struct_get
-                let fn_body = resume_fn.regions(db);
-                if let Some(region) = fn_body.first() {
-                    if let Some(block) = region.blocks(db).first() {
-                        return block
-                            .operations(db)
-                            .iter()
-                            .any(|op| op.full_name(db) == "wasm.struct_get");
-                    }
-                }
+        if let Some(resume_fn) = ops.first()
+            && resume_fn.full_name(db) == "wasm.func"
+        {
+            // Check if the resume function body contains struct_get
+            let fn_body = resume_fn.regions(db);
+            if let Some(region) = fn_body.first()
+                && let Some(block) = region.blocks(db).first()
+            {
+                return block
+                    .operations(db)
+                    .iter()
+                    .any(|op| op.full_name(db) == "wasm.struct_get");
             }
         }
         false
