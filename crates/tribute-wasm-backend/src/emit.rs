@@ -1154,9 +1154,10 @@ fn collect_gc_types<'db>(
     result.insert(0, bytes_struct_type);
 
     // Index 1: BytesArray (array i8)
+    // NOTE: mutable: true is required for array.copy operation in Bytes::concat
     let bytes_array_type = GcTypeDef::Array(FieldType {
         element_type: StorageType::I8,
-        mutable: false,
+        mutable: true,
     });
     result.insert(0, bytes_array_type);
 

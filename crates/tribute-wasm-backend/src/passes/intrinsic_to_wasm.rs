@@ -442,21 +442,26 @@ impl RewritePattern for BytesGetOrPanicPattern {
             .results(idvec![i32_ty])
             .build();
 
-        // array.get (signed extend to i32)
-        let array_get = Operation::of_name(db, location, "wasm.array_get_s")
-            .operands(idvec![get_data.result(db, 0), add_offset.result(db, 0)])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)))
-            .build();
+        // array.get_u (unsigned extend to i32, for byte values 0-255)
+        let array_get = wasm::array_get_u(
+            db,
+            location,
+            get_data.result(db, 0),
+            add_offset.result(db, 0),
+            i32_ty,
+            BYTES_ARRAY_IDX,
+        );
 
-        // Extend i32 to i64 (Int type in Tribute is i64)
-        let extend = Operation::of_name(db, location, "wasm.i64_extend_i32_s")
-            .operands(idvec![array_get.result(db, 0)])
-            .results(idvec![i64_ty])
-            .build();
+        // Extend i32 to i64 (unsigned, Int type in Tribute is i64)
+        let extend = wasm::i64_extend_i32_u(db, location, array_get.result(db), i64_ty);
 
         RewriteResult::Expand(vec![
-            get_data, get_offset, index_i32, add_offset, array_get, extend,
+            get_data,
+            get_offset,
+            index_i32,
+            add_offset,
+            array_get.operation(),
+            extend.operation(),
         ])
     }
 }
@@ -894,10 +899,10 @@ mod tests {
         let module = make_bytes_get_module(db);
         let op_names = lower_and_check(db, module);
 
-        // Should have struct_get (for data and offset), i32_add, and array_get_s
+        // Should have struct_get (for data and offset), i32_add, and array_get_u
         assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
         assert!(op_names.iter().any(|n| n == "wasm.i32_add"));
-        assert!(op_names.iter().any(|n| n == "wasm.array_get_s"));
+        assert!(op_names.iter().any(|n| n == "wasm.array_get_u"));
         // No Bytes::get_or_panic call should remain
         let callees = extract_callees(db, module);
         assert!(!callees.iter().any(|n| n == "get_or_panic"));
