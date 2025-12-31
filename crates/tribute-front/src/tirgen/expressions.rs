@@ -4,7 +4,7 @@
 
 use tracing::trace;
 use tree_sitter::Node;
-use tribute_ir::dialect::{ability, adt, case, list, pat, src};
+use tribute_ir::dialect::{adt, list, tribute, tribute_pat};
 use trunk_ir::{
     Attribute, Block, BlockBuilder, BlockId, DialectOp, DialectType, IdVec, Operation,
     QualifiedName, Region, Symbol, Type, Value,
@@ -116,11 +116,11 @@ pub fn lower_expr<'db>(
 
         // === Identifiers and paths ===
         "identifier" => {
-            // Always create src.var for variable references, even for local bindings.
+            // Always create tribute.var for variable references, even for local bindings.
             // This preserves the source span for hover. Resolution will transform
             // local references to identity operations with the correct type.
             let name = node_text(&node, &ctx.source);
-            let op = block.op(src::var(ctx.db, location, infer_ty, name.into()));
+            let op = block.op(tribute::var(ctx.db, location, infer_ty, name.into()));
             Some(op.result(ctx.db))
         }
         "path_expression" => {
@@ -130,7 +130,7 @@ pub fn lower_expr<'db>(
                 .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
                 .map(|n| Symbol::from(node_text(&n, &ctx.source)))
                 .collect::<Option<_>>()?;
-            let op = block.op(src::path(ctx.db, location, infer_ty, path));
+            let op = block.op(tribute::path(ctx.db, location, infer_ty, path));
             Some(op.result(ctx.db))
         }
 
@@ -314,9 +314,9 @@ fn lower_binary_expr<'db>(
             .op(arith::or(ctx.db, location, lhs, rhs, bool_ty))
             .result(ctx.db),
         "<>" => {
-            // String concatenation - use src.binop
+            // String concatenation - use tribute.binop
             block
-                .op(src::binop(
+                .op(tribute::binop(
                     ctx.db,
                     location,
                     lhs,
@@ -327,9 +327,9 @@ fn lower_binary_expr<'db>(
                 .result(ctx.db)
         }
         _ => {
-            // Unknown operator - emit as src.binop
+            // Unknown operator - emit as tribute.binop
             block
-                .op(src::binop(
+                .op(tribute::binop(
                     ctx.db,
                     location,
                     lhs,
@@ -386,7 +386,7 @@ fn lower_call_expr<'db>(
     // Arguments need iteration (not a field)
     let args = collect_argument_list(ctx, block, node);
 
-    let op = block.op(src::call(ctx.db, location, args, infer_ty, func_path));
+    let op = block.op(tribute::call(ctx.db, location, args, infer_ty, func_path));
     Some(op.result(ctx.db))
 }
 
@@ -414,7 +414,7 @@ fn lower_constructor_expr<'db>(
     };
 
     let args = collect_argument_list(ctx, block, node);
-    let op = block.op(src::cons(ctx.db, location, args, infer_ty, ctor_path));
+    let op = block.op(tribute::cons(ctx.db, location, args, infer_ty, ctor_path));
     Some(op.result(ctx.db))
 }
 
@@ -507,7 +507,13 @@ fn lower_method_call_expr<'db>(
     let mut all_args = vec![receiver];
     all_args.extend(args);
 
-    let op = block.op(src::call(ctx.db, location, all_args, infer_ty, method_path));
+    let op = block.op(tribute::call(
+        ctx.db,
+        location,
+        all_args,
+        infer_ty,
+        method_path,
+    ));
     Some(op.result(ctx.db))
 }
 
@@ -541,7 +547,7 @@ fn lower_lambda_expr<'db>(
     let result_value = ctx.scoped(|ctx| {
         // Bind parameters
         for param_name in param_names {
-            let param_value = body_block.op(src::var(ctx.db, location, infer_ty, param_name));
+            let param_value = body_block.op(tribute::var(ctx.db, location, infer_ty, param_name));
             ctx.bind(param_name, param_value.result(ctx.db));
         }
 
@@ -550,13 +556,15 @@ fn lower_lambda_expr<'db>(
     });
 
     let result_value = result_value?;
-    body_block.op(src::r#yield(ctx.db, location, result_value));
+    body_block.op(tribute::r#yield(ctx.db, location, result_value));
 
     let effect_type = ctx.fresh_effect_row_type();
     let func_type =
         core::Func::with_effect(ctx.db, param_types, result_type, Some(effect_type)).as_type();
     let region = Region::new(ctx.db, location, idvec![body_block.build()]);
-    let lambda_op = block.op(src::lambda(ctx.db, location, infer_ty, func_type, region));
+    let lambda_op = block.op(tribute::lambda(
+        ctx.db, location, infer_ty, func_type, region,
+    ));
     Some(lambda_op.result(ctx.db))
 }
 
@@ -596,7 +604,7 @@ fn lower_case_expr<'db>(
 
     let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
-    let op = block.op(case::r#case(
+    let op = block.op(tribute::r#case(
         ctx.db,
         location,
         scrutinee,
@@ -611,7 +619,7 @@ fn lower_case_arm<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     node: Node,
     scrutinee: Value<'db>,
-) -> Option<case::Arm<'db>> {
+) -> Option<tribute::Arm<'db>> {
     let mut cursor = node.walk();
     let location = ctx.location(&node);
 
@@ -644,17 +652,17 @@ fn lower_case_arm<'db>(
     });
 
     let result_value = result_value?;
-    body_block.op(case::r#yield(ctx.db, location, result_value));
+    body_block.op(tribute::r#yield(ctx.db, location, result_value));
 
     let pattern_region = pattern_to_region(ctx, pattern_node);
     let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
-    Some(case::arm(ctx.db, location, pattern_region, body_region))
+    Some(tribute::arm(ctx.db, location, pattern_region, body_region))
 }
 
 /// Convert a pattern node to a pattern region for case arms and let bindings.
 ///
-/// Creates a region containing pattern operations from the `pat` dialect.
+/// Creates a region containing pattern operations from the `tribute_pat` dialect.
 pub fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'db> {
     let location = ctx.location(&node);
 
@@ -665,7 +673,7 @@ pub fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'
             if let Some(child) = node.named_children(&mut cursor).next() {
                 return pattern_to_region(ctx, child);
             }
-            pat::helpers::wildcard_region(ctx.db, location)
+            tribute_pat::helpers::wildcard_region(ctx.db, location)
         }
         "identifier" | "identifier_pattern" => {
             // Handle identifier_pattern which may have an inner identifier
@@ -678,34 +686,34 @@ pub fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'
             } else {
                 node_text(&node, &ctx.source)
             };
-            pat::helpers::bind_region(ctx.db, location, name.into())
+            tribute_pat::helpers::bind_region(ctx.db, location, name.into())
         }
-        "wildcard_pattern" => pat::helpers::wildcard_region(ctx.db, location),
+        "wildcard_pattern" => tribute_pat::helpers::wildcard_region(ctx.db, location),
         "literal_pattern" => {
             // Get the literal value
             let mut cursor = node.walk();
             if let Some(child) = node.named_children(&mut cursor).next() {
                 pattern_to_region(ctx, child)
             } else {
-                pat::helpers::wildcard_region(ctx.db, location)
+                tribute_pat::helpers::wildcard_region(ctx.db, location)
             }
         }
         "nat_literal" | "int_literal" => {
             if let Some(n) = parse_int_literal(&node_text(&node, &ctx.source)) {
-                pat::helpers::int_region(ctx.db, location, n)
+                tribute_pat::helpers::int_region(ctx.db, location, n)
             } else {
-                pat::helpers::wildcard_region(ctx.db, location)
+                tribute_pat::helpers::wildcard_region(ctx.db, location)
             }
         }
-        "true" | "keyword_true" => pat::helpers::bool_region(ctx.db, location, true),
-        "false" | "keyword_false" => pat::helpers::bool_region(ctx.db, location, false),
+        "true" | "keyword_true" => tribute_pat::helpers::bool_region(ctx.db, location, true),
+        "false" | "keyword_false" => tribute_pat::helpers::bool_region(ctx.db, location, false),
         "nil" | "keyword_nil" => {
-            let op = pat::literal(ctx.db, location, Attribute::Unit);
-            pat::helpers::single_op_region(ctx.db, location, op.as_operation())
+            let op = tribute_pat::literal(ctx.db, location, Attribute::Unit);
+            tribute_pat::helpers::single_op_region(ctx.db, location, op.as_operation())
         }
         "string" | "raw_string" | "multiline_string" => {
             let s = parse_string_literal(node, &ctx.source);
-            pat::helpers::string_region(ctx.db, location, &s)
+            tribute_pat::helpers::string_region(ctx.db, location, &s)
         }
         "constructor_pattern" => {
             let mut cursor = node.walk();
@@ -757,7 +765,7 @@ pub fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'
             let name = ctor_name.unwrap_or_else(|| Symbol::new("_"));
             let variant_path = QualifiedName::simple(name);
             let fields_region = ops_to_region(ctx.db, location, field_ops);
-            pat::helpers::variant_region(ctx.db, location, variant_path, fields_region)
+            tribute_pat::helpers::variant_region(ctx.db, location, variant_path, fields_region)
         }
         "tuple_pattern" => {
             let mut cursor = node.walk();
@@ -781,7 +789,7 @@ pub fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'
             }
 
             let elements_region = ops_to_region(ctx.db, location, elem_ops);
-            pat::helpers::tuple_region(ctx.db, location, elements_region)
+            tribute_pat::helpers::tuple_region(ctx.db, location, elements_region)
         }
         "list_pattern" => {
             let mut cursor = node.walk();
@@ -810,10 +818,10 @@ pub fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'
 
             if let Some(name) = rest_name {
                 let head_region = ops_to_region(ctx.db, location, elem_ops);
-                pat::helpers::list_rest_region(ctx.db, location, name, head_region)
+                tribute_pat::helpers::list_rest_region(ctx.db, location, name, head_region)
             } else {
                 let elements_region = ops_to_region(ctx.db, location, elem_ops);
-                pat::helpers::list_region(ctx.db, location, elements_region)
+                tribute_pat::helpers::list_region(ctx.db, location, elements_region)
             }
         }
         "as_pattern" => {
@@ -836,19 +844,19 @@ pub fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'
                 }
             }
 
-            let inner =
-                inner_region.unwrap_or_else(|| pat::helpers::wildcard_region(ctx.db, location));
+            let inner = inner_region
+                .unwrap_or_else(|| tribute_pat::helpers::wildcard_region(ctx.db, location));
             let name = binding_name.unwrap_or_else(|| Symbol::new("_"));
             // Create as_pat operation with inner region
-            let as_op = pat::as_pat(ctx.db, location, name, inner);
-            pat::helpers::single_op_region(ctx.db, location, as_op.as_operation())
+            let as_op = tribute_pat::as_pat(ctx.db, location, name, inner);
+            tribute_pat::helpers::single_op_region(ctx.db, location, as_op.as_operation())
         }
         "handler_pattern" => {
             // Handler patterns are for ability effect handling in case expressions
             // Delegate to the specialized handler pattern converter
             handler_pattern_to_region(ctx, node)
         }
-        _ => pat::helpers::wildcard_region(ctx.db, location),
+        _ => tribute_pat::helpers::wildcard_region(ctx.db, location),
     }
 }
 
@@ -896,10 +904,10 @@ fn lower_block_expr<'db>(
     let result_value = ctx.scoped(|ctx| lower_block_body(ctx, &mut body_block, node));
 
     let result_value = result_value?;
-    body_block.op(src::r#yield(ctx.db, location, result_value));
+    body_block.op(tribute::r#yield(ctx.db, location, result_value));
 
     let region = Region::new(ctx.db, location, idvec![body_block.build()]);
-    let block_op = block.op(src::block(ctx.db, location, infer_ty, region));
+    let block_op = block.op(tribute::block(ctx.db, location, infer_ty, region));
     Some(block_op.result(ctx.db))
 }
 
@@ -950,7 +958,7 @@ fn lower_tuple_expr<'db>(
         return None;
     }
 
-    let tuple_op = block.op(src::tuple(ctx.db, location, elements, infer_ty));
+    let tuple_op = block.op(tribute::tuple(ctx.db, location, elements, infer_ty));
     Some(tuple_op.result(ctx.db))
 }
 
@@ -997,7 +1005,8 @@ fn lower_record_expr<'db>(
                         if let Some(value) = ctx.lookup(field_name) {
                             field_values.push(value);
                         } else {
-                            let var_op = block.op(src::var(ctx.db, location, infer_ty, field_name));
+                            let var_op =
+                                block.op(tribute::var(ctx.db, location, infer_ty, field_name));
                             field_values.push(var_op.result(ctx.db));
                         }
                     } else {
@@ -1018,7 +1027,7 @@ fn lower_record_expr<'db>(
     }
 
     let type_name = type_name?;
-    let op = block.op(src::cons(
+    let op = block.op(tribute::cons(
         ctx.db,
         location,
         field_values,
@@ -1037,7 +1046,7 @@ fn lower_record_expr<'db>(
 /// Source: `handle expr`
 /// Lowers to:
 /// ```text
-/// %request = ability.prompt { expr }
+/// %request = tribute.handle { expr }
 /// ```
 ///
 /// The `handle expr` expression returns a Request value that can be pattern-matched
@@ -1077,14 +1086,14 @@ fn lower_handle_expr<'db>(
     let result_value = ctx.scoped(|ctx| lower_expr(ctx, &mut body_block, expr_node));
 
     if let Some(value) = result_value {
-        body_block.op(src::r#yield(ctx.db, location, value));
+        body_block.op(tribute::r#yield(ctx.db, location, value));
     }
 
     let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
-    // Create ability.prompt to run body and get Request
-    let prompt_op = block.op(ability::prompt(ctx.db, location, request_ty, body_region));
-    Some(prompt_op.request(ctx.db))
+    // Create tribute.handle to run body and get Request
+    let handle_op = block.op(tribute::handle(ctx.db, location, request_ty, body_region));
+    Some(handle_op.request(ctx.db))
 }
 
 /// Convert a handler pattern to a pattern region.
@@ -1149,33 +1158,36 @@ fn handler_pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Regi
             }
             ops_to_region(ctx.db, location, ops)
         } else {
-            pat::helpers::empty_region(ctx.db, location)
+            tribute_pat::helpers::empty_region(ctx.db, location)
         };
 
-        // Continuation name (empty Symbol for wildcard/discard)
-        let cont_symbol = continuation_name.unwrap_or_else(|| Symbol::new("_"));
+        // Continuation pattern: bind or wildcard
+        let continuation_region = match continuation_name {
+            Some(name) => tribute_pat::helpers::bind_region(ctx.db, location, name),
+            None => tribute_pat::helpers::wildcard_region(ctx.db, location),
+        };
 
         // If ability_ref is None, use a placeholder for inference
         // The type checker will resolve this later
         let ability_ref = ability_ref
             .unwrap_or_else(|| AbilityRefType::simple(ctx.db, Symbol::new("?")).as_type());
 
-        pat::helpers::handler_suspend_region(
+        tribute_pat::helpers::handler_suspend_region(
             ctx.db,
             location,
             ability_ref,
             op_name,
             args_region,
-            cont_symbol,
+            continuation_region,
         )
     } else {
         // Done pattern: { result }
         let result_region = match result_name {
-            Some(name) => pat::helpers::bind_region(ctx.db, location, name),
-            None => pat::helpers::wildcard_region(ctx.db, location),
+            Some(name) => tribute_pat::helpers::bind_region(ctx.db, location, name),
+            None => tribute_pat::helpers::wildcard_region(ctx.db, location),
         };
 
-        pat::helpers::handler_done_region(ctx.db, location, result_region)
+        tribute_pat::helpers::handler_done_region(ctx.db, location, result_region)
     }
 }
 
@@ -1259,7 +1271,7 @@ fn lower_string_interpolation<'db>(
                 // Convert to string using to_string
                 expr_value.map(|v| {
                     block
-                        .op(src::call(
+                        .op(tribute::call(
                             ctx.db,
                             location,
                             vec![v],
@@ -1276,7 +1288,14 @@ fn lower_string_interpolation<'db>(
             result = Some(match result {
                 None => v,
                 Some(r) => block
-                    .op(src::binop(ctx.db, location, r, v, infer_ty, sym("concat")))
+                    .op(tribute::binop(
+                        ctx.db,
+                        location,
+                        r,
+                        v,
+                        infer_ty,
+                        sym("concat"),
+                    ))
                     .result(ctx.db),
             });
         }
@@ -1338,7 +1357,7 @@ fn lower_bytes_interpolation<'db>(
                 // Convert to bytes using to_bytes
                 expr_value.map(|v| {
                     block
-                        .op(src::call(
+                        .op(tribute::call(
                             ctx.db,
                             location,
                             vec![v],
@@ -1355,7 +1374,14 @@ fn lower_bytes_interpolation<'db>(
             result = Some(match result {
                 None => v,
                 Some(r) => block
-                    .op(src::binop(ctx.db, location, r, v, infer_ty, sym("concat")))
+                    .op(tribute::binop(
+                        ctx.db,
+                        location,
+                        r,
+                        v,
+                        infer_ty,
+                        sym("concat"),
+                    ))
                     .result(ctx.db),
             });
         }

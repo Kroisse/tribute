@@ -1,8 +1,8 @@
 //! Block and statement lowering.
 
 use tree_sitter::Node;
-use tribute_ir::dialect::{adt, case, list, src};
-use trunk_ir::{BlockBuilder, Symbol, Value, dialect::arith};
+use tribute_ir::dialect::{adt, list, tribute};
+use trunk_ir::{BlockBuilder, Value, dialect::arith};
 
 use super::context::CstLoweringCtx;
 use super::expressions::{lower_expr, pattern_to_region};
@@ -44,7 +44,7 @@ pub fn lower_block_body<'db>(
 
 /// Lower a let statement.
 ///
-/// Generates a `src.let` operation with a pattern region for name resolution,
+/// Generates a `tribute.let` operation with a pattern region for name resolution,
 /// and also calls `bind_pattern` to register bindings in the lowering context.
 pub fn lower_let_statement<'db>(
     ctx: &mut CstLoweringCtx<'db>,
@@ -62,9 +62,9 @@ pub fn lower_let_statement<'db>(
     };
 
     if let Some(value) = lower_expr(ctx, block, value_node) {
-        // Generate src.let with pattern region for resolver
+        // Generate tribute.let with pattern region for resolver
         let pattern_region = pattern_to_region(ctx, pattern_node);
-        block.op(src::r#let(ctx.db, location, value, pattern_region));
+        block.op(tribute::r#let(ctx.db, location, value, pattern_region));
 
         // Also bind in context for tirgen's own use during lowering
         bind_pattern(ctx, block, pattern_node, value);
@@ -189,7 +189,7 @@ pub fn bind_pattern<'db>(
                             continue;
                         }
                         let elem_value = block
-                            .op(src::call(
+                            .op(tribute::call(
                                 ctx.db,
                                 location,
                                 vec![value],
@@ -268,71 +268,10 @@ pub fn bind_pattern<'db>(
         }
         "handler_pattern" => {
             // Handler patterns: { value } or { Op(args) -> k }
-            let location = ctx.location(&pattern);
-            let mut handler_cursor = pattern.walk();
-
-            let mut value_name = None;
-            let mut has_operation = false;
-            let mut args_node = None;
-            let mut continuation_name = None;
-
-            for child in pattern.named_children(&mut handler_cursor) {
-                if is_comment(child.kind()) {
-                    continue;
-                }
-                match child.kind() {
-                    "identifier" if !has_operation && value_name.is_none() => {
-                        value_name = Some(node_text(&child, &ctx.source).into());
-                    }
-                    "type_identifier" | "path_expression" => {
-                        has_operation = true;
-                    }
-                    "pattern_list" => {
-                        args_node = Some(child);
-                    }
-                    "identifier" if has_operation => {
-                        continuation_name = Some(node_text(&child, &ctx.source).into());
-                    }
-                    _ => {}
-                }
-            }
-
-            // Bind the value (for { result } pattern)
-            if let Some(name) = value_name
-                && !has_operation
-            {
-                let bind_op = block.op(case::bind(ctx.db, location, ctx.fresh_type_var(), name));
-                ctx.bind(name, bind_op.result(ctx.db));
-            }
-
-            // Bind operation arguments (for { Op(args) -> k } pattern)
-            if let Some(args) = args_node {
-                let mut args_cursor = args.walk();
-                for arg_child in args.named_children(&mut args_cursor) {
-                    if is_comment(arg_child.kind()) {
-                        continue;
-                    }
-                    let arg_bind = block.op(case::bind(
-                        ctx.db,
-                        location,
-                        ctx.fresh_type_var(),
-                        Symbol::new("_arg"),
-                    ));
-                    let arg_value = arg_bind.result(ctx.db);
-                    bind_pattern(ctx, block, arg_child, arg_value);
-                }
-            }
-
-            // Bind continuation (for { Op(args) -> k } pattern)
-            if let Some(cont_name) = continuation_name {
-                let cont_bind = block.op(case::bind(
-                    ctx.db,
-                    location,
-                    ctx.fresh_type_var(),
-                    cont_name,
-                ));
-                ctx.bind(cont_name, cont_bind.result(ctx.db));
-            }
+            // All bindings are handled through tribute_pat.bind in the pattern region.
+            // The resolver registers them as PatternBinding, and case_lowering
+            // remaps tribute.var references to the bound values.
+            // No special handling needed in arm body.
         }
         _ => {
             // Unknown pattern - try to handle child patterns

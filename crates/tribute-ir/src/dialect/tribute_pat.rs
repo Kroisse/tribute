@@ -1,7 +1,8 @@
-//! Pattern dialect operations.
+//! Tribute pattern dialect operations.
 //!
 //! High-level pattern representation that preserves source-level structure.
-//! Patterns are used in `case` expressions, `let` bindings, and function parameters.
+//! Patterns are used in `tribute.case` expressions, `tribute.let` bindings,
+//! and function parameters.
 //!
 //! ## Pattern Types
 //!
@@ -18,13 +19,13 @@
 //! ## Usage
 //!
 //! Patterns are represented as a tree of operations within a region.
-//! Each `case.arm` has a pattern region containing these operations.
+//! Each `tribute.arm` has a pattern region containing these operations.
 //!
 //! ```text
-//! case.arm {
+//! tribute.arm {
 //!     pattern {
-//!         pat.variant("Some") {
-//!             fields { pat.bind("x") }
+//!         tribute_pat.variant("Some") {
+//!             fields { tribute_pat.bind("x") }
 //!         }
 //!     }
 //!     body { ... }
@@ -34,23 +35,24 @@
 use trunk_ir::dialect;
 
 dialect! {
-    mod pat {
-        /// `pat.wildcard` operation: wildcard pattern (`_`).
+    mod tribute_pat {
+        /// `tribute_pat.wildcard` operation: wildcard pattern (`_`).
         /// Matches anything without binding.
         fn wildcard();
 
-        /// `pat.bind` operation: identifier pattern that binds a value.
+        /// `tribute_pat.bind` operation: identifier pattern that binds a value.
         /// Matches anything and binds it to the given name.
-        /// The binding is accessible via `case.bind` in the arm body.
+        /// The binding is accessible via `tribute.var` in the arm body,
+        /// resolved by the resolver and case_lowering passes.
         #[attr(name: Symbol)]
         fn bind();
 
-        /// `pat.literal` operation: literal pattern.
+        /// `tribute_pat.literal` operation: literal pattern.
         /// Matches a specific literal value (int, string, bool, nil, rune).
         #[attr(value: any)]
         fn literal();
 
-        /// `pat.variant` operation: variant/constructor pattern.
+        /// `tribute_pat.variant` operation: variant/constructor pattern.
         /// Matches a specific variant and destructures its fields.
         /// The fields region contains patterns for each field.
         #[attr(variant: QualifiedName)]
@@ -58,19 +60,19 @@ dialect! {
             #[region(fields)] {}
         };
 
-        /// `pat.tuple` operation: tuple pattern.
+        /// `tribute_pat.tuple` operation: tuple pattern.
         /// Matches a tuple and destructures its elements.
         fn tuple() {
             #[region(elements)] {}
         };
 
-        /// `pat.list` operation: exact list pattern.
+        /// `tribute_pat.list` operation: exact list pattern.
         /// Matches a list with exactly the given elements.
         fn list() {
             #[region(elements)] {}
         };
 
-        /// `pat.list_rest` operation: list pattern with rest.
+        /// `tribute_pat.list_rest` operation: list pattern with rest.
         /// Matches a list with the given head elements and binds the rest.
         /// `[head1, head2, ..rest]` or `[head1, head2, ..]`
         #[attr(rest_name: Symbol)]
@@ -78,20 +80,20 @@ dialect! {
             #[region(head)] {}
         };
 
-        /// `pat.record` operation: record pattern.
+        /// `tribute_pat.record` operation: record pattern.
         /// Matches a record and destructures specified fields.
         fn record() {
             #[region(fields)] {}
         };
 
-        /// `pat.field` operation: field pattern within a record pattern.
+        /// `tribute_pat.field` operation: field pattern within a record pattern.
         /// Matches a specific field with the given pattern.
         #[attr(field: Symbol)]
         fn field() {
             #[region(pattern)] {}
         };
 
-        /// `pat.as_pat` operation: as pattern.
+        /// `tribute_pat.as_pat` operation: as pattern.
         /// Matches the inner pattern and also binds the whole value to a name.
         /// `Some(x) as opt`
         #[attr(name: Symbol)]
@@ -99,7 +101,7 @@ dialect! {
             #[region(inner)] {}
         };
 
-        /// `pat.or` operation: or pattern (alternative patterns).
+        /// `tribute_pat.or` operation: or pattern (alternative patterns).
         /// Matches if any of the alternative patterns match.
         /// `None | Some(0)`
         fn or() {
@@ -108,22 +110,23 @@ dialect! {
 
         // === Handler Patterns (for ability effect handling) ===
 
-        /// `pat.handler_done` operation: matches Done variant of Request.
+        /// `tribute_pat.handler_done` operation: matches Done variant of Request.
         /// Used for `{ result }` patterns in handle expressions.
         /// The result region contains the pattern for the result value.
         fn handler_done() {
             #[region(result)] {}
         };
 
-        /// `pat.handler_suspend` operation: matches Suspend variant for a specific ability operation.
+        /// `tribute_pat.handler_suspend` operation: matches Suspend variant for a specific ability operation.
         /// Used for `{ Op(args) -> k }` patterns in handle expressions.
         /// - `ability_ref`: ability type (core.ability_ref) to support parameterized abilities
         /// - `op`: the operation name within the ability
         /// - `args`: region containing patterns for operation arguments
-        /// - `continuation`: name to bind the continuation (or empty for discard)
-        #[attr(ability_ref: Type, op: Symbol, continuation: Symbol)]
+        /// - `continuation`: region containing pattern for continuation (tribute_pat.bind or wildcard)
+        #[attr(ability_ref: Type, op: Symbol)]
         fn handler_suspend() {
             #[region(args)] {}
+            #[region(continuation)] {}
         };
     }
 }
@@ -138,7 +141,7 @@ dialect! {
 /// # use salsa::Database;
 /// # use salsa::DatabaseImpl;
 /// # use trunk_ir::{Location, PathId, Region, Span};
-/// # use tribute_ir::dialect::pat::helpers;
+/// # use tribute_ir::dialect::tribute_pat::helpers;
 /// # #[salsa::tracked]
 /// # fn build_pattern(db: &dyn salsa::Database) -> Region<'_> {
 /// #     let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -295,21 +298,24 @@ pub mod helpers {
     ///
     /// The `ability_ref` should be a `core.ability_ref` type created via
     /// `AbilityRefType::simple()` or `AbilityRefType::with_params()`.
+    ///
+    /// The `continuation_pattern` should be a region containing `tribute_pat.bind`
+    /// for named continuations or `tribute_pat.wildcard` for discarded continuations.
     pub fn handler_suspend_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
         ability_ref: Type<'db>,
         op_name: Symbol,
         args_pattern: Region<'db>,
-        continuation_name: Symbol,
+        continuation_pattern: Region<'db>,
     ) -> Region<'db> {
         let op = handler_suspend(
             db,
             location,
             ability_ref,
             op_name,
-            continuation_name,
             args_pattern,
+            continuation_pattern,
         );
         single_op_region(db, location, op.as_operation())
     }

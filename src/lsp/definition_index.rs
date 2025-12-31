@@ -93,7 +93,7 @@ impl DefinitionIndex {
         definitions: &mut Vec<DefinitionEntry>,
         references: &mut Vec<ReferenceEntry>,
     ) {
-        use tribute_ir::dialect::{src, ty};
+        use tribute_ir::dialect::tribute;
         use trunk_ir::DialectOp;
         use trunk_ir::dialect::func;
 
@@ -118,36 +118,36 @@ impl DefinitionIndex {
                 span,
                 kind: DefinitionKind::Function,
             });
-        } else if let Ok(struct_op) = ty::Struct::from_operation(db, *op) {
-            // ty.struct - struct type definition
-            let name = struct_op.name(db);
-            let span = name_span.unwrap_or(op_span);
-
-            definitions.push(DefinitionEntry {
-                name,
-                span,
-                kind: DefinitionKind::Type,
-            });
-        } else if let Ok(enum_op) = ty::Enum::from_operation(db, *op) {
-            // ty.enum - enum type definition
-            let name = enum_op.name(db);
-            let span = name_span.unwrap_or(op_span);
-
-            definitions.push(DefinitionEntry {
-                name,
-                span,
-                kind: DefinitionKind::Type,
-            });
-        } else if let Ok(ability_op) = ty::Ability::from_operation(db, *op) {
-            // ty.ability - ability definition
-            let name = ability_op.name(db);
-            let span = name_span.unwrap_or(op_span);
-
-            definitions.push(DefinitionEntry {
-                name,
-                span,
-                kind: DefinitionKind::Ability,
-            });
+        } else if let Ok(struct_op) = tribute::StructDef::from_operation(db, *op) {
+            // tribute.struct_def - struct type definition
+            if let trunk_ir::Attribute::Symbol(name) = struct_op.sym_name(db) {
+                let span = name_span.unwrap_or(op_span);
+                definitions.push(DefinitionEntry {
+                    name: *name,
+                    span,
+                    kind: DefinitionKind::Type,
+                });
+            }
+        } else if let Ok(enum_op) = tribute::EnumDef::from_operation(db, *op) {
+            // tribute.enum_def - enum type definition
+            if let trunk_ir::Attribute::Symbol(name) = enum_op.sym_name(db) {
+                let span = name_span.unwrap_or(op_span);
+                definitions.push(DefinitionEntry {
+                    name: *name,
+                    span,
+                    kind: DefinitionKind::Type,
+                });
+            }
+        } else if let Ok(ability_op) = tribute::AbilityDef::from_operation(db, *op) {
+            // tribute.ability_def - ability definition
+            if let trunk_ir::Attribute::Symbol(name) = ability_op.sym_name(db) {
+                let span = name_span.unwrap_or(op_span);
+                definitions.push(DefinitionEntry {
+                    name: *name,
+                    span,
+                    kind: DefinitionKind::Ability,
+                });
+            }
         }
 
         // Collect references using typed wrappers
@@ -158,15 +158,15 @@ impl DefinitionIndex {
                 span: op_span,
                 target: callee.name(),
             });
-        } else if let Ok(var_op) = src::Var::from_operation(db, *op) {
-            // src.var - variable reference (before resolution)
+        } else if let Ok(var_op) = tribute::Var::from_operation(db, *op) {
+            // tribute.var - variable reference (before resolution)
             let name = var_op.name(db);
             references.push(ReferenceEntry {
                 span: op_span,
                 target: name,
             });
-        } else if let Ok(path_op) = src::Path::from_operation(db, *op) {
-            // src.path - qualified path reference (before resolution)
+        } else if let Ok(path_op) = tribute::Path::from_operation(db, *op) {
+            // tribute.path - qualified path reference (before resolution)
             let path = path_op.path(db);
             references.push(ReferenceEntry {
                 span: op_span,

@@ -22,35 +22,35 @@ Located in `crates/trunk-ir/src/ir.rs`:
 
 ## Dialects
 
-All dialects are in `crates/trunk-ir/src/dialect/`:
+Dialects are split across two crates:
+- **trunk-ir** (`crates/trunk-ir/src/dialect/`): Target-independent dialects
+- **tribute-ir** (`crates/tribute-ir/src/dialect/`): Tribute-specific high-level dialects
 
-### Infrastructure
+### Infrastructure (trunk-ir)
 | Dialect | File | Purpose |
 |---------|------|---------|
 | `core` | `core.rs` | Core types: i32, f64, nil, tuple, string, ptr, array, ref_ |
-| `ty` | `ty.rs` | Type definition operations |
 
-### High-level (Source-like)
+### High-level Tribute (tribute-ir)
 | Dialect | File | Purpose |
 |---------|------|---------|
-| `src` | `src.rs` | Unresolved AST ops: var, call, path, binop, lambda, tuple, const |
-| `ability` | `ability.rs` | Ability (algebraic effects) operations |
+| `tribute` | `tribute.rs` | Tribute AST/HIR: var, call, case, struct_def, enum_def, type_var, int, nat |
+| `tribute_pat` | `tribute_pat.rs` | Pattern operations: wildcard, bind, variant, literal, tuple |
+| `ability` | `ability.rs` | Effect operations: perform, resume, abort |
 | `adt` | `adt.rs` | ADT ops: struct_new, variant_new, array_get, field_get |
+| `closure` | `closure.rs` | Closures and captures |
+| `list` | `list.rs` | List operations |
 
-### Mid-level
+### Mid-level (trunk-ir)
 | Dialect | File | Purpose |
 |---------|------|---------|
 | `func` | `func.rs` | Function ops: func, call, call_indirect, return, constant |
-| `case` | `case.rs` | Pattern matching: case, case_region |
-| `pat` | `pat.rs` | Pattern operations |
 | `cont` | `cont.rs` | Continuation-based control flow |
-| `closure` | `closure.rs` | Closures and captures |
 | `scf` | `scf.rs` | Structured control flow: if, while, for |
 | `arith` | `arith.rs` | Arithmetic: add, mul, div, cmp, etc. |
 | `mem` | `mem.rs` | Memory operations |
-| `list` | `list.rs` | List operations |
 
-### Low-level (Target-specific)
+### Low-level (trunk-ir)
 | Dialect | File | Purpose |
 |---------|------|---------|
 | `wasm` | `wasm.rs` | WebAssembly target ops |

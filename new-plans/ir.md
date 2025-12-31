@@ -138,67 +138,64 @@ impl QualifiedName {
   - Symbol이 이미 interned이므로 QualifiedName 자체는 interning하지 않음
   - 32바이트로 고정, SmallVec로 짧은 경로(≤4 segments)는 heap 할당 없음
 
-### type Dialect
-
-타입 및 ability 정의.
-
-```
-type.struct : (name: String, fields: [(String, Type)]) -> StructDef
-    struct 타입 정의
-
-type.enum : (name: String, variants: [(String, Fields)]) -> EnumDef
-    enum 타입 정의
-
-type.ability : (name: String, operations: [(String, Signature)]) -> AbilityDef
-    ability 정의
-```
-
 ---
 
 ## High-level Dialects
 
-### src Dialect
+### tribute Dialect
 
-파싱 직후의 미해소 상태를 표현한다. 타입 추론과 이름 해소 후 모두 제거되어야 한다.
+파싱 직후의 미해소 상태와 Tribute 언어 레벨 연산/타입을 표현한다.
+타입 추론과 이름 해소 후 대부분 제거된다.
 
 #### 연산
 
 ```
-src.dot_call : (receiver: T, name: String, args...) -> src.unknown
-    UFCS 호출 (x.foo(y) 형태), 미해소
-
-src.call : (name: String, args...) -> src.unknown
+tribute.call : (name: QualifiedName, args...) -> T
     Unqualified 호출 (foo(x, y) 형태), 미해소
 
-src.lambda : (params: [(String, Type?)], body: Region) -> src.unknown
+tribute.var : (name: Symbol) -> T
+    변수 참조, 미해소
+
+tribute.lambda : (params: [(String, Type?)], body: Region) -> T
     람다 (캡처 분석 전)
+
+tribute.case : (scrutinee) -> T { body }
+    패턴 매칭
+
+tribute.struct_def : (sym_name, fields) -> TypeDef
+    Struct 타입 정의
+
+tribute.enum_def : (sym_name, variants) -> TypeDef
+    Enum 타입 정의
+
+tribute.prompt : () -> Request { body }
+    Handler expression (ability body 실행)
 ```
 
 #### 타입
 
 ```
-src.unknown     // 타입 추론 전
-src.infer<$N>   // 추론 변수 ($0, $1, ...)
+tribute.type     // 미해소 타입 참조
+tribute.type_var // 타입 추론 변수
+tribute.int      // 정수 타입
+tribute.nat      // 자연수 타입
 ```
 
 #### Invariant
 
 | Pass 완료 후 | 조건                            |
 | ------------ | ------------------------------- |
-| Resolution   | src.\* 연산/타입 모두 없어야 함 |
+| Resolution   | tribute.var/call 대부분 해소    |
+| Type Check   | tribute.type_var 모두 해소      |
 
 ### ability Dialect
 
-언어 수준의 ability (algebraic effect) 연산.
-Handler 패턴 매칭은 `case` dialect에서 처리된다.
+Ability (algebraic effect) 실행 연산.
+Handler expression은 `tribute.prompt`에서 처리되고, 패턴 매칭은 `tribute.case`에서 처리된다.
 
 ```
 ability.perform : (ability: AbilityRef, op: String, args...) -> T
     Ability operation 수행
-
-ability.prompt : (body: Region) -> Request
-    Body를 delimited context에서 실행, Request 반환
-    (Handler 패턴 매칭은 case.case에서 수행)
 
 ability.resume : (continuation: Continuation<T>, value: T) -> U
     Continuation resume
@@ -209,8 +206,8 @@ ability.abort : (continuation: Continuation<T>) -> !
 
 Handler 구문 `case handle expr { ... }`는 다음과 같이 lowering된다:
 ```
-%request = ability.prompt { expr }
-case.case(%request) {
+%request = tribute.prompt { expr }
+tribute.case(%request) {
     { value } -> ...
     { Op(args) -> k } -> ...
 }
@@ -378,11 +375,11 @@ func.call_indirect %f(%x, %y) : (i32, i32) -> i32
 
 ```
 // 1. 파싱 직후 (캡처 분석 전)
-%f = src.lambda (%x) {
+%f = tribute.lambda (%x) {
     arith.add %x, %y        // %y는 외부 변수 (캡처 대상인지 아직 모름)
-} -> src.unknown
+} -> tribute.type_var
 
-// 2. 캡처 분석 후 (src → closure + func)
+// 2. 캡처 분석 후 (tribute → closure + func)
 //    별도 함수로 추출되고, 캡처 변수가 명시됨
 func.func @lambda_0(%env: ref<Env>, %x: i32) -> i32 {
     %y = adt.struct_get %env, 0 : i32
@@ -604,10 +601,10 @@ Tribute Source
     │
     ▼ Lower (CST → TrunkIR)
     │
-TrunkIR [src, type, adt, ability, func, scf, arith]
-    │   (src.var, src.path, src.call, src.type 포함)
-    │   (type.var 타입 변수 포함)
-    │   (src.lambda 포함)
+TrunkIR [tribute, tribute_pat, adt, ability, func, scf, arith]
+    │   (tribute.var, tribute.path, tribute.call, tribute.type 포함)
+    │   (tribute.type_var 타입 변수 포함)
+    │   (tribute.lambda 포함)
     │
     ▼ Name Resolution + Type Inference (interleaved)
     │   ┌─────────────────────────────────────────────┐
@@ -615,32 +612,32 @@ TrunkIR [src, type, adt, ability, func, scf, arith]
     │   │    - qualified paths (List::empty)          │
     │   │    - constructors (Some, None)              │
     │   │    - unambiguous function names             │
-    │   │    → src.path, 일부 src.var 해소            │
+    │   │    → tribute.path, 일부 tribute.var 해소    │
     │   │                                             │
     │   │ 2. First-pass Type Inference                │
     │   │    - constraint 수집                        │
-    │   │    - type.var 해소 시작                     │
+    │   │    - tribute.type_var 해소 시작             │
     │   │                                             │
     │   │ 3. Type-directed Name Resolution (UFCS)     │
     │   │    - xs.map(f) → List::map(xs, f)          │
     │   │    - 첫 번째 인자 타입으로 함수 선택        │
-    │   │    → 나머지 src.var, src.call 해소          │
+    │   │    → 나머지 tribute.var, tribute.call 해소  │
     │   │                                             │
     │   │ 4. Complete Type Inference                  │
     │   │    - UFCS 해소 후 추가 constraint 수집      │
-    │   │    - 모든 type.var 해소                     │
+    │   │    - 모든 tribute.type_var 해소             │
     │   │    - effect row 통합                        │
     │   └─────────────────────────────────────────────┘
     │
     ▼ Capture Analysis
-    │   src.lambda → closure.new (캡처 변수 명시)
+    │   tribute.lambda → closure.new (캡처 변수 명시)
     │
-TrunkIR [type, adt, ability, closure, func, scf, arith]
+TrunkIR [tribute, adt, ability, closure, func, scf, arith]
     │
     ▼ Ability Lowering (Evidence Passing)
     │   ability.* → cont.* + func.call
     │
-TrunkIR [type, adt, cont, func, scf, arith]
+TrunkIR [tribute, adt, cont, func, scf, arith]
     │
     ▼ Optimization Passes
     │   - Tail Call Inlining (func.tail_call → scf.loop)
@@ -673,7 +670,7 @@ Name resolution과 type inference가 interleaved되는 이유:
 │ Name Resolution│ ←─→ │ Type Inference │
 └────────────────┘     └────────────────┘
         ↓                      ↓
-   src.* 해소            type.var 해소
+tribute.var/call 해소   tribute.type_var 해소
 ```
 
 **기본 해소 (타입 불필요)**:
@@ -691,18 +688,18 @@ Name resolution과 type inference가 interleaved되는 이유:
 
 각 pass가 완료된 후 만족해야 하는 조건:
 
-| Pass                     | Invariant                                    |
-| ------------------------ | -------------------------------------------- |
-| Parse                    | 유효한 CST 구조                              |
-| Lower                    | 유효한 TrunkIR 구조                          |
-| Basic Name Resolution    | src.path 없음, 일부 src.var 해소             |
-| Type Inference (1차)     | 대부분의 type.var에 constraint 존재          |
-| Type-directed Resolution | src.var, src.call 없음 (UFCS 포함)           |
-| Type Inference (완료)    | type.var 없음, 모든 타입 구체화              |
-| Capture Analysis         | src.lambda 없음, closure.new로 대체          |
-| Ability Lowering         | ability.\* 없음                              |
-| Wasm Lowering            | wasm.\* 만 존재 (타겟이 Wasm일 때)           |
-| Cranelift Lowering       | clif.\* 만 존재 (타겟이 native일 때)         |
+| Pass                     | Invariant                                        |
+| ------------------------ | ------------------------------------------------ |
+| Parse                    | 유효한 CST 구조                                  |
+| Lower                    | 유효한 TrunkIR 구조                              |
+| Basic Name Resolution    | tribute.path 없음, 일부 tribute.var 해소         |
+| Type Inference (1차)     | 대부분의 tribute.type_var에 constraint 존재      |
+| Type-directed Resolution | tribute.var, tribute.call 없음 (UFCS 포함)       |
+| Type Inference (완료)    | tribute.type_var 없음, 모든 타입 구체화          |
+| Capture Analysis         | tribute.lambda 없음, closure.new로 대체          |
+| Ability Lowering         | ability.\* 없음 (tribute.prompt 포함)            |
+| Wasm Lowering            | wasm.\* 만 존재 (타겟이 Wasm일 때)               |
+| Cranelift Lowering       | clif.\* 만 존재 (타겟이 native일 때)             |
 
 ---
 

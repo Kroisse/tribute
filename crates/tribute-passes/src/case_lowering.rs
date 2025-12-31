@@ -1,4 +1,4 @@
-//! Lower `case.case` pattern matching to `scf.if` chains.
+//! Lower `tribute.case` pattern matching to `scf.if` chains.
 //!
 //! This pass currently supports only a minimal pattern subset:
 //! - wildcard (`_`)
@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use salsa::Accumulator;
-use tribute_ir::dialect::{adt, case, pat, ty};
+use tribute_ir::dialect::{adt, tribute, tribute_pat};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, core};
 use trunk_ir::rewrite::RewriteContext;
@@ -179,32 +179,33 @@ impl<'db> CaseLowerer<'db> {
         let remapped_op = self.ctx.remap_operands(self.db, &op);
         let remapped_operands = remapped_op.operands(self.db).clone();
 
-        if op.dialect(self.db) == case::DIALECT_NAME() && op.name(self.db) == case::CASE() {
+        if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::CASE() {
             return self.lower_case(op, remapped_operands);
         }
 
-        if op.dialect(self.db) == case::DIALECT_NAME() && op.name(self.db) == case::YIELD() {
+        if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::YIELD() {
             let new_op = Operation::of_name(self.db, op.location(self.db), "scf.yield")
                 .operands(remapped_operands)
                 .build();
             return vec![new_op];
         }
 
-        // Handle case.bind: replace with the bound value from pattern matching
-        if op.dialect(self.db) == case::DIALECT_NAME()
-            && op.name(self.db) == case::BIND()
+        // Handle tribute.var for case pattern bindings: replace with the bound value
+        // This is used when tribute.var in arm body references a tribute_pat.bind from pattern region
+        if op.dialect(self.db) == tribute::DIALECT_NAME()
+            && op.name(self.db) == tribute::VAR()
             && let Some(Attribute::Symbol(name)) = op.attributes(self.db).get(&Symbol::new("name"))
             && let Some(&bound_value) = self.current_arm_bindings.get(name)
         {
             // Look up the current mapping for the bound value (handles remapping from lowering)
             let current_bound_value = self.ctx.lookup(bound_value);
-            // Map case.bind result to the bound value (scrutinee or destructured value)
-            let bind_result = op.result(self.db, 0);
-            self.ctx.map_value(bind_result, current_bound_value);
-            // Erase the case.bind operation - value is remapped
+            // Map tribute.var result to the bound value (scrutinee or destructured value)
+            let var_result = op.result(self.db, 0);
+            self.ctx.map_value(var_result, current_bound_value);
+            // Erase the tribute.var operation - value is remapped
             return vec![];
         }
-        // If binding not found, keep the operation (shouldn't happen in well-formed IR)
+        // If binding not found in pattern bindings, keep the operation (regular local variable)
 
         let new_regions = op
             .regions(self.db)
@@ -295,7 +296,9 @@ impl<'db> CaseLowerer<'db> {
         let mut arms = Vec::new();
         for block in body_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter().copied() {
-                if op.dialect(self.db) != case::DIALECT_NAME() || op.name(self.db) != case::ARM() {
+                if op.dialect(self.db) != tribute::DIALECT_NAME()
+                    || op.name(self.db) != tribute::ARM()
+                {
                     continue;
                 }
                 let arm_location = op.location(self.db);
@@ -331,14 +334,14 @@ impl<'db> CaseLowerer<'db> {
             return Some((ArmPattern::Wildcard, false));
         }
 
-        if op.dialect(self.db) != pat::DIALECT_NAME() {
+        if op.dialect(self.db) != tribute_pat::DIALECT_NAME() {
             return Some((ArmPattern::Wildcard, false));
         }
 
         match op.name(self.db) {
-            name if name == pat::WILDCARD() => Some((ArmPattern::Wildcard, true)),
-            name if name == pat::BIND() => Some((ArmPattern::Bind, true)),
-            name if name == pat::LITERAL() => {
+            name if name == tribute_pat::WILDCARD() => Some((ArmPattern::Wildcard, true)),
+            name if name == tribute_pat::BIND() => Some((ArmPattern::Bind, true)),
+            name if name == tribute_pat::LITERAL() => {
                 let attr = op.attributes(self.db).get(&Symbol::new("value"))?.clone();
                 match attr {
                     Attribute::IntBits(_) | Attribute::Bool(_) => {
@@ -347,7 +350,7 @@ impl<'db> CaseLowerer<'db> {
                     _ => Some((ArmPattern::Wildcard, false)),
                 }
             }
-            name if name == pat::VARIANT() => {
+            name if name == tribute_pat::VARIANT() => {
                 let attr = op.attributes(self.db).get(&Symbol::new("variant"))?;
                 let variant_path = match attr {
                     Attribute::QualifiedName(path) => path,
@@ -365,8 +368,8 @@ impl<'db> CaseLowerer<'db> {
                 }
                 Some((ArmPattern::Variant(name), true))
             }
-            name if name == pat::HANDLER_DONE() => Some((ArmPattern::HandlerDone, true)),
-            name if name == pat::HANDLER_SUSPEND() => {
+            name if name == tribute_pat::HANDLER_DONE() => Some((ArmPattern::HandlerDone, true)),
+            name if name == tribute_pat::HANDLER_SUSPEND() => {
                 let op_name = op
                     .attributes(self.db)
                     .get(&Symbol::new("op"))
@@ -386,11 +389,10 @@ impl<'db> CaseLowerer<'db> {
             return true;
         };
         for op in block.operations(self.db).iter().copied() {
-            if op.dialect(self.db) != pat::DIALECT_NAME() {
+            if op.dialect(self.db) != tribute_pat::DIALECT_NAME() {
                 return false;
             }
-            let ok =
-                matches!(op.name(self.db), name if name == pat::BIND() || name == pat::WILDCARD());
+            let ok = matches!(op.name(self.db), name if name == tribute_pat::BIND() || name == tribute_pat::WILDCARD());
             if !ok {
                 return false;
             }
@@ -399,7 +401,7 @@ impl<'db> CaseLowerer<'db> {
     }
 
     /// Extract binding names from a pattern region.
-    /// For simple `pat.bind("x")` patterns, returns the binding name.
+    /// For simple `tribute_pat.bind("x")` patterns, returns the binding name.
     /// For variant patterns with bindings, returns all nested binding names.
     fn extract_bindings_from_pattern(&self, region: Region<'db>) -> SymbolVec {
         let mut bindings = SymbolVec::new();
@@ -410,8 +412,8 @@ impl<'db> CaseLowerer<'db> {
     fn collect_bindings_recursive(&self, region: Region<'db>, bindings: &mut SymbolVec) {
         for block in region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter().copied() {
-                if op.dialect(self.db) == pat::DIALECT_NAME()
-                    && op.name(self.db) == pat::BIND()
+                if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
+                    && op.name(self.db) == tribute_pat::BIND()
                     && let Some(Attribute::Symbol(name)) =
                         op.attributes(self.db).get(&Symbol::new("name"))
                 {
@@ -772,7 +774,9 @@ impl<'db> CaseLowerer<'db> {
     fn collect_variant_tags_in_region(&mut self, region: Region<'db>) {
         for block in region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter().copied() {
-                if op.dialect(self.db) == ty::DIALECT_NAME() && op.name(self.db) == ty::ENUM() {
+                if op.dialect(self.db) == tribute::DIALECT_NAME()
+                    && op.name(self.db) == tribute::ENUM_DEF()
+                {
                     self.collect_variant_tags_from_enum(op);
                 }
                 for nested in op.regions(self.db).iter().copied() {

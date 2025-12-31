@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use ropey::Rope;
 use tree_sitter::Node;
-use tribute_ir::dialect::ty;
+use tribute_ir::dialect::tribute;
 use trunk_ir::{DialectType, IdVec, QualifiedName, Symbol, SymbolVec, Type, Value, dialect::core};
 use trunk_ir::{Location, PathId};
 
@@ -61,7 +61,7 @@ impl<'db> CstLoweringCtx<'db> {
     pub fn fresh_type_var(&mut self) -> Type<'db> {
         let id = self.next_type_var_id;
         self.next_type_var_id += 1;
-        ty::var_with_id(self.db, id)
+        tribute::type_var_with_id(self.db, id)
     }
 
     /// Generate a fresh effect row type with a unique tail variable.
@@ -85,14 +85,12 @@ impl<'db> CstLoweringCtx<'db> {
 
     /// Resolve a type node to an IR Type.
     pub fn resolve_type_node(&mut self, node: Node) -> Type<'db> {
-        use tribute_ir::dialect::src;
-
         let mut cursor = node.walk();
         match node.kind() {
             "type_identifier" => {
                 // Concrete named type
                 let name = node_text(&node, &self.source);
-                src::unresolved_type(self.db, name.into(), IdVec::new())
+                tribute::unresolved_type(self.db, name.into(), IdVec::new())
             }
             "type_variable" => {
                 // Type variable (lowercase)
@@ -118,7 +116,7 @@ impl<'db> CstLoweringCtx<'db> {
 
                 let name = name.unwrap_or(Symbol::new("Unknown"));
                 let params: IdVec<Type<'db>> = args.into_iter().collect();
-                src::unresolved_type(self.db, name, params)
+                tribute::unresolved_type(self.db, name, params)
             }
             "function_type" => {
                 // Function type: fn(Int, Int) -> Int, fn(a) ->{State(s)} b

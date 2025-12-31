@@ -2,7 +2,7 @@
 
 //! Type-Directed Name Resolution (TDNR) pass.
 //!
-//! This pass resolves remaining `src.call` operations that couldn't be resolved
+//! This pass resolves remaining `tribute.call` operations that couldn't be resolved
 //! during initial name resolution because they require type information.
 //!
 //! ## UFCS Resolution
@@ -12,8 +12,8 @@
 //! parameter type matches the receiver's type.
 //!
 //! ```text
-//! x.len()           // src.call(x, "len") → len(x) where first param matches x's type
-//! list.map(f)       // src.call(list, f, "map") → map(list, f)
+//! x.len()           // tribute.call(x, "len") → len(x) where first param matches x's type
+//! list.map(f)       // tribute.call(list, f, "map") → map(list, f)
 //! ```
 //!
 //! ## Pipeline Position
@@ -120,14 +120,14 @@ impl<'db> TdnrResolver<'db> {
         let dialect = remapped_op.dialect(self.db);
         let op_name = remapped_op.name(self.db);
 
-        if dialect == "src" && op_name == "call" {
-            trace!("TDNR: found src.call operation");
+        if dialect == "tribute" && op_name == "call" {
+            trace!("TDNR: found tribute.call operation");
             if let Some(resolved) = self.try_resolve_method_call(&remapped_op) {
                 trace!("TDNR: resolved to {:?}", resolved.dialect(self.db));
                 self.ctx.map_results(self.db, &remapped_op, &resolved);
                 vec![resolved]
             } else {
-                trace!("TDNR: could not resolve src.call");
+                trace!("TDNR: could not resolve tribute.call");
                 // Still unresolved - keep as is (will be an error later)
                 let final_op = self.resolve_op_regions(&remapped_op);
                 if final_op != remapped_op {
@@ -160,9 +160,9 @@ impl<'db> TdnrResolver<'db> {
         op.modify(self.db).regions(new_regions).build()
     }
 
-    /// Try to resolve a `src.call` as a UFCS method call.
+    /// Try to resolve a `tribute.call` as a UFCS method call.
     ///
-    /// For `x.method(y)` (represented as `src.call` with receiver `x` and name `method`):
+    /// For `x.method(y)` (represented as `tribute.call` with receiver `x` and name `method`):
     /// 1. Look up `method` in the module environment
     /// 2. If it's a function and its first parameter matches `x`'s type, resolve it
     /// 3. Transform to `func.call(method, x, y, ...)`

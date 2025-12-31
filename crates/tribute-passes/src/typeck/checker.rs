@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
 use tracing::trace;
-use tribute_ir::dialect::{ability, adt, case, list, pat, src, ty};
+use tribute_ir::dialect::{ability, adt, list, tribute, tribute_pat};
 use trunk_ir::{
     Attribute, Block, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
     Type, Value,
@@ -99,7 +99,7 @@ impl<'db> TypeChecker<'db> {
     pub fn fresh_type_var(&mut self) -> Type<'db> {
         let id = self.next_type_var;
         self.next_type_var += 1;
-        ty::var_with_id(self.db, id)
+        tribute::type_var_with_id(self.db, id)
     }
 
     /// Generate a fresh row variable.
@@ -295,7 +295,7 @@ impl<'db> TypeChecker<'db> {
         max_row_var_id: &mut Option<u64>,
     ) {
         // Check for type variable
-        if ty::is_var(self.db, ty)
+        if tribute::is_type_var(self.db, ty)
             && let Some(Attribute::IntBits(id)) = ty.get_attr(self.db, Symbol::new("id"))
         {
             *max_type_var_id = Some(max_type_var_id.map_or(*id, |current| current.max(*id)));
@@ -399,23 +399,32 @@ impl<'db> TypeChecker<'db> {
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == src::DIALECT_NAME() {
-            if name == src::VAR() {
+        } else if dialect == tribute::DIALECT_NAME() {
+            if name == tribute::VAR() {
                 self.check_src_var(op);
-            } else if name == src::CALL() || name == src::CONS() {
+            } else if name == tribute::CALL() || name == tribute::CONS() {
                 self.check_src_call(op);
-            } else if name == src::BINOP() {
+            } else if name == tribute::BINOP() {
                 self.check_src_binop(op);
-            } else if name == src::LAMBDA() {
+            } else if name == tribute::LAMBDA() {
                 self.check_src_lambda(op);
-            } else if name == src::BLOCK() {
+            } else if name == tribute::BLOCK() {
                 self.check_src_block(op);
-            } else if name == src::YIELD() {
+            } else if name == tribute::YIELD() {
                 self.check_src_yield(op);
-            } else if name == src::TUPLE() {
+            } else if name == tribute::TUPLE() {
                 self.check_src_tuple(op);
-            } else if name == src::CONST() {
+            } else if name == tribute::CONST() {
                 self.check_src_const(op);
+            } else if name == tribute::CASE() {
+                self.check_case(op);
+            } else if name == tribute::HANDLE() {
+                self.check_ability_prompt(op);
+            } else if name == tribute::STRUCT_DEF()
+                || name == tribute::ENUM_DEF()
+                || name == tribute::ABILITY_DEF()
+            {
+                // Type declarations don't need type checking - no-op
             } else {
                 self.check_unknown_op(op);
             }
@@ -437,28 +446,13 @@ impl<'db> TypeChecker<'db> {
             } else {
                 self.check_unknown_op(op);
             }
-        } else if dialect == case::DIALECT_NAME() {
-            if name == case::CASE() {
-                self.check_case(op);
-            } else {
-                self.check_unknown_op(op);
-            }
         } else if dialect == ability::DIALECT_NAME() {
             if name == ability::PERFORM() {
                 self.check_ability_perform(op);
-            } else if name == ability::PROMPT() {
-                self.check_ability_prompt(op);
             } else if name == ability::RESUME() {
                 self.check_ability_resume(op);
             } else if name == ability::ABORT() {
                 self.check_ability_abort(op);
-            } else {
-                self.check_unknown_op(op);
-            }
-        } else if dialect == ty::DIALECT_NAME() {
-            // Type declarations (struct, enum, ability) don't need type checking
-            if name == ty::STRUCT() || name == ty::ENUM() || name == ty::ABILITY() {
-                // No-op
             } else {
                 self.check_unknown_op(op);
             }
@@ -660,7 +654,7 @@ impl<'db> TypeChecker<'db> {
         ty: Type<'db>,
         var_mapping: &mut HashMap<u64, Type<'db>>,
     ) -> Type<'db> {
-        if ty::is_var(self.db, ty) {
+        if tribute::is_type_var(self.db, ty) {
             // Extract the var id and map it
             if let Some(Attribute::IntBits(var_id)) = ty.attrs(self.db).get(&Symbol::new("id")) {
                 *var_mapping
@@ -970,8 +964,8 @@ impl<'db> TypeChecker<'db> {
             // Look for case.arm operations in the region
             for block in region.blocks(self.db).iter() {
                 for arm_op in block.operations(self.db).iter() {
-                    if arm_op.dialect(self.db) == case::DIALECT_NAME()
-                        && arm_op.name(self.db) == case::ARM()
+                    if arm_op.dialect(self.db) == tribute::DIALECT_NAME()
+                        && arm_op.name(self.db) == tribute::ARM()
                     {
                         // Extract handled abilities from the pattern region
                         let arm_regions = arm_op.regions(self.db);
@@ -1020,8 +1014,8 @@ impl<'db> TypeChecker<'db> {
         for block in pattern_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
                 // Check for pat.handler_suspend
-                if op.dialect(self.db) == pat::DIALECT_NAME()
-                    && op.name(self.db) == pat::HANDLER_SUSPEND()
+                if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
+                    && op.name(self.db) == tribute_pat::HANDLER_SUSPEND()
                 {
                     // Extract ability reference from attributes
                     // The ability_ref is a Type (core.ability_ref) but may lack type parameters
@@ -1094,10 +1088,10 @@ impl<'db> TypeChecker<'db> {
     }
 
     fn check_ability_prompt(&mut self, op: &Operation<'db>) {
-        // ability.prompt: runs body in a delimited context, returns Request
+        // tribute.handle: runs body in a delimited context, returns Request
         //
         // The body's effects are captured by the prompt. The resulting Request
-        // will be pattern-matched by case.case, which handles effect elimination.
+        // will be pattern-matched by tribute.case, which handles effect elimination.
 
         let results = op.results(self.db);
         let result_type = results
@@ -1115,9 +1109,9 @@ impl<'db> TypeChecker<'db> {
         }
 
         // The body's effects are "captured" by the prompt.
-        // We propagate body's effects to outer context first, then case.case
+        // We propagate body's effects to outer context first, then tribute.case
         // will eliminate handled abilities based on handler patterns
-        // (pat.handler_suspend in pattern regions).
+        // (tribute_pat.handler_suspend in pattern regions).
         let body_effect = std::mem::replace(&mut self.current_effect, outer_effect);
         self.merge_effect(body_effect);
 
@@ -1489,10 +1483,10 @@ mod tests {
 
     #[salsa_test]
     fn test_has_type_vars_detection(db: &salsa::DatabaseImpl) {
-        use tribute_ir::dialect::ty;
+        use tribute_ir::dialect::tribute;
 
         // Type variable should be detected
-        let type_var = ty::var_with_id(db, 42);
+        let type_var = tribute::type_var_with_id(db, 42);
         assert!(
             has_type_vars(db, type_var),
             "Type variable should be detected"

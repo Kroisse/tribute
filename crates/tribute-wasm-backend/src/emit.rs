@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 
 use tracing::debug;
 
-use tribute_ir::dialect::{adt, ty};
+use tribute_ir::dialect::{adt, tribute};
 use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::{
     Attribute, Attrs, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
@@ -819,7 +819,7 @@ fn collect_gc_types<'db>(
                         field_idx,
                         ty.dialect(db),
                         ty.name(db),
-                        ty::is_var(db, ty)
+                        tribute::is_type_var(db, ty)
                     );
                     record_struct_field(type_idx, builder, field_idx as u32, ty)?;
                 } else {
@@ -852,7 +852,7 @@ fn collect_gc_types<'db>(
             // Only record field type if result type is concrete (not a type variable).
             // Type variables map to ANYREF and would conflict with concrete types.
             if let Some(result_ty) = op.results(db).first().copied()
-                && !ty::is_var(db, result_ty)
+                && !tribute::is_type_var(db, result_ty)
             {
                 record_struct_field(type_idx, builder, field_idx, result_ty)?;
             }
@@ -924,7 +924,7 @@ fn collect_gc_types<'db>(
             }
             // Only record element type if result type is concrete (not a type variable).
             if let Some(result_ty) = op.results(db).first().copied()
-                && !ty::is_var(db, result_ty)
+                && !tribute::is_type_var(db, result_ty)
             {
                 record_array_elem(type_idx, builder, result_ty)?;
             }
@@ -1038,8 +1038,8 @@ fn collect_gc_types<'db>(
             debug!("GC: to_field_type -> I32");
             StorageType::Val(ValType::I32)
         } else if core::I64::from_type(db, ty).is_some()
-            || ty::Int::from_type(db, ty).is_some()
-            || ty::Nat::from_type(db, ty).is_some()
+            || tribute::Int::from_type(db, ty).is_some()
+            || tribute::Nat::from_type(db, ty).is_some()
         {
             // Int/Nat (arbitrary precision) is lowered to i64 for Phase 1
             // TODO: Implement i31ref/BigInt hybrid for WasmGC
@@ -1460,7 +1460,7 @@ fn assign_locals_in_region<'db>(
                 // Use variant tag to determine field type semantics.
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("struct_get")
-                    && ty::is_var(db, effective_ty)
+                    && tribute::is_type_var(db, effective_ty)
                 {
                     if let Some(Attribute::Type(struct_ty)) = op.attributes(db).get(&ATTR_TYPE()) {
                         debug!(
@@ -1481,12 +1481,12 @@ fn assign_locals_in_region<'db>(
                                 variants.iter().find(|(tag, _)| *tag == variant_tag)
                             && let Some(field_ty) = field_types.get(field_idx as usize)
                         {
-                            // Extract the type name from src.type's "name" attribute
+                            // Extract the type name from tribute.type's "name" attribute
                             // or directly from the type name for other types.
-                            let type_name = if field_ty.dialect(db) == Symbol::new("src")
+                            let type_name = if field_ty.dialect(db) == Symbol::new("tribute")
                                 && field_ty.name(db) == Symbol::new("type")
                             {
-                                // src.type stores name in "name" attribute
+                                // tribute.type stores name in "name" attribute
                                 field_ty
                                     .get_attr(db, Symbol::new("name"))
                                     .and_then(|a| {
@@ -1508,9 +1508,9 @@ fn assign_locals_in_region<'db>(
                             // The types from adt.enum are unresolved (src.Int),
                             // but we need resolved types for local allocation.
                             if type_name == Symbol::new("Int") {
-                                effective_ty = ty::Int::new(db).as_type();
+                                effective_ty = tribute::Int::new(db).as_type();
                             } else if type_name == Symbol::new("Nat") {
-                                effective_ty = ty::Nat::new(db).as_type();
+                                effective_ty = tribute::Nat::new(db).as_type();
                             } else if type_name == Symbol::new("Float") {
                                 effective_ty = core::F64::new(db).as_type();
                             } else if type_name == Symbol::new("Bool") {
@@ -1534,11 +1534,11 @@ fn assign_locals_in_region<'db>(
                 // Try to get effective type from the then region's result value
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("if")
-                    && ty::is_var(db, effective_ty)
+                    && tribute::is_type_var(db, effective_ty)
                     && let Some(then_region) = op.regions(db).first()
                     && let Some(then_result) = region_result_value(db, then_region)
                     && let Some(eff_ty) = ctx.effective_types.get(&then_result)
-                    && !ty::is_var(db, *eff_ty)
+                    && !tribute::is_type_var(db, *eff_ty)
                 {
                     debug!(
                         "wasm.if local: using then branch effective type {}.{} instead of IR type {}.{}",
@@ -1697,7 +1697,7 @@ fn emit_op<'db>(
             // Check if the branch result values have an effective type computed
             // If the IR type is a type variable and we have a different effective type,
             // use the effective type for the block
-            let effective_ty = if ty::is_var(db, ir_ty) {
+            let effective_ty = if tribute::is_type_var(db, ir_ty) {
                 // Try to get effective type from the then region's result value
                 let regions = op.regions(db);
                 let then_result_ty = regions
@@ -1706,7 +1706,7 @@ fn emit_op<'db>(
                     .and_then(|v| ctx.effective_types.get(&v).copied());
 
                 if let Some(eff_ty) = then_result_ty {
-                    if !ty::is_var(db, eff_ty) {
+                    if !tribute::is_type_var(db, eff_ty) {
                         debug!(
                             "wasm.if: using then branch effective type {}.{} instead of IR type {}.{}",
                             eff_ty.dialect(db),
@@ -1865,12 +1865,14 @@ fn emit_op<'db>(
             // If callee returns anyref (type.var), we need to unbox to the expected concrete type.
             // Since type inference doesn't propagate instantiated types to the IR,
             // we infer the result type from the first operand's type (works for identity-like functions).
-            if ty::is_var(db, return_ty) && !module_info.type_idx_by_type.contains_key(&return_ty) {
+            if tribute::is_type_var(db, return_ty)
+                && !module_info.type_idx_by_type.contains_key(&return_ty)
+            {
                 // Try to infer concrete type from first operand
                 if let Some(operand_ty) = operands
                     .first()
                     .and_then(|v| value_type(db, *v))
-                    .filter(|ty| !ty::is_var(db, *ty))
+                    .filter(|ty| !tribute::is_type_var(db, *ty))
                 {
                     emit_unboxing(db, operand_ty, function)?;
                 }
@@ -2107,9 +2109,9 @@ fn emit_operands_with_boxing<'db>(
         // If parameter expects anyref (type.var) AND doesn't have a concrete type index, box the operand
         // Types with a type index (like struct types) are already reference types and don't need boxing
         // Use effective_types to get the actual computed type, falling back to IR type
-        if param_ty
-            .is_some_and(|ty| ty::is_var(db, *ty) && !module_info.type_idx_by_type.contains_key(ty))
-        {
+        if param_ty.is_some_and(|ty| {
+            tribute::is_type_var(db, *ty) && !module_info.type_idx_by_type.contains_key(ty)
+        }) {
             // Use effective type if available (computed during local allocation),
             // otherwise fall back to IR result type
             let operand_ty = ctx
@@ -2165,7 +2167,7 @@ fn emit_boxing<'db>(
     function: &mut Function,
 ) -> CompilationResult<()> {
     debug!("emit_boxing: type={}.{}", ty.dialect(db), ty.name(db));
-    if ty::Int::from_type(db, ty).is_some() || ty::Nat::from_type(db, ty).is_some() {
+    if tribute::Int::from_type(db, ty).is_some() || tribute::Nat::from_type(db, ty).is_some() {
         debug!("  -> boxing Int/Nat to i31ref");
         // Int/Nat (i64) → i31ref
         // Truncate i64 to i32, then convert to i31ref
@@ -2194,14 +2196,14 @@ fn emit_unboxing<'db>(
     ty: Type<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    if ty::Int::from_type(db, ty).is_some() {
+    if tribute::Int::from_type(db, ty).is_some() {
         // anyref → i31ref → Int (i64)
         // Cast anyref to i31ref, extract i32, then sign-extend to i64
         function.instruction(&Instruction::RefCastNullable(HeapType::I31));
         function.instruction(&Instruction::I31GetS);
         function.instruction(&Instruction::I64ExtendI32S);
         Ok(())
-    } else if ty::Nat::from_type(db, ty).is_some() {
+    } else if tribute::Nat::from_type(db, ty).is_some() {
         // anyref → i31ref → Nat (i64)
         // Cast anyref to i31ref, extract u32, then zero-extend to i64
         function.instruction(&Instruction::RefCastNullable(HeapType::I31));
@@ -2261,7 +2263,7 @@ fn infer_call_result_type<'db>(
 
     // Check if the callee returns type.var (generic)
     let return_ty = callee_ty.result(db);
-    if !ty::is_var(db, return_ty) {
+    if !tribute::is_type_var(db, return_ty) {
         // Callee returns a concrete type, use it
         return return_ty;
     }
@@ -2271,7 +2273,7 @@ fn infer_call_result_type<'db>(
         .operands(db)
         .first()
         .and_then(|v| value_type(db, *v))
-        .filter(|ty| !ty::is_var(db, *ty))
+        .filter(|ty| !tribute::is_type_var(db, *ty))
     {
         return operand_ty;
     }
@@ -2313,8 +2315,8 @@ fn type_to_valtype<'db>(
         // core.i1 (Bool) is represented as i32 in WebAssembly
         Ok(ValType::I32)
     } else if core::I64::from_type(db, ty).is_some()
-        || ty::Int::from_type(db, ty).is_some()
-        || ty::Nat::from_type(db, ty).is_some()
+        || tribute::Int::from_type(db, ty).is_some()
+        || tribute::Nat::from_type(db, ty).is_some()
     {
         // Int/Nat (arbitrary precision) is lowered to i64 for Phase 1
         // TODO: Implement i31ref/BigInt hybrid for WasmGC
@@ -2336,12 +2338,12 @@ fn type_to_valtype<'db>(
         Ok(ValType::I32)
     } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
         // ADT types (structs, variants) - use concrete GC type reference
-        // Check this BEFORE ty::is_var to handle struct types with type_idx
+        // Check this BEFORE tribute::is_type_var to handle struct types with type_idx
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(type_idx),
         }))
-    } else if ty::is_var(db, ty) {
+    } else if tribute::is_type_var(db, ty) {
         // Generic type variables use anyref (uniform representation)
         // Values must be boxed when passed to generic functions
         Ok(ValType::Ref(RefType::ANYREF))

@@ -8,7 +8,7 @@ use tracing::{error, warn};
 use crate::passes::cont_to_wasm::ContAnalysis;
 use crate::plan::{MainExports, MemoryPlan};
 
-use tribute_ir::dialect::src;
+use tribute_ir::dialect::tribute;
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
@@ -86,7 +86,7 @@ fn check_function_body<'db>(db: &'db dyn salsa::Database, func_op: &Operation<'d
             for op in block.operations(db).iter() {
                 let dialect = op.dialect(db);
                 // Skip src.var - kept for LSP hover support, no runtime effect
-                if dialect == src::DIALECT_NAME() && op.name(db) == src::VAR() {
+                if dialect == tribute::DIALECT_NAME() && op.name(db) == tribute::VAR() {
                     continue;
                 }
                 if dialect != Symbol::new("wasm") {
@@ -412,7 +412,7 @@ impl<'db> WasmLowerer<'db> {
 
         // Skip src.var operations - they're kept for LSP hover support but have no runtime effect.
         // The resolver marks them as resolved_local and maps their results to actual values.
-        if dialect == src::DIALECT_NAME() && name == src::VAR() {
+        if dialect == tribute::DIALECT_NAME() && name == tribute::VAR() {
             return;
         }
 
@@ -429,11 +429,17 @@ impl<'db> WasmLowerer<'db> {
         // Note: Some dialects are allowed for edge cases:
         // - "func": func.call_indirect (closure support pending)
         // - "adt": adt.string_const (handled by const_to_wasm pass)
-        // - "src": src.var operations kept for LSP (filtered above)
+        // - "tribute": tribute.var operations kept for LSP (filtered above)
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
             let allowed = [
-                "wasm", "core", "type", "ty", "func", "adt", "case", "scf", "src",
+                "wasm",
+                "core",
+                "func",
+                "adt",
+                "scf",
+                "tribute",
+                "tribute_pat",
             ];
             if !allowed.contains(&dialect_str.as_str()) {
                 warn!(

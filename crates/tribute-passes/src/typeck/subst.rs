@@ -3,7 +3,7 @@
 //! After type inference, this module provides utilities for walking the IR
 //! and replacing type variables with their solved concrete types.
 
-use tribute_ir::dialect::ty;
+use tribute_ir::dialect::tribute;
 use trunk_ir::dialect::core;
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{Attribute, Attrs, Block, IdVec, Operation, Region, Type};
@@ -174,7 +174,7 @@ impl<'db, 'a> SubstApplier<'db, 'a> {
 
 /// Check if a type contains any type variables.
 pub fn has_type_vars(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    if ty::is_var(db, ty) {
+    if tribute::is_type_var(db, ty) {
         return true;
     }
 
@@ -301,7 +301,7 @@ mod tests {
     fn make_module_with_type_var_42(db: &dyn salsa::Database) -> core::Module<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
-        let type_var = ty::var_with_id(db, 42);
+        let type_var = tribute::type_var_with_id(db, 42);
 
         // Build operation with type variable result
         let op = Operation::of_name(db, location, "arith.const")
@@ -324,7 +324,7 @@ mod tests {
     fn make_module_with_type_var_1(db: &dyn salsa::Database) -> core::Module<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
-        let type_var = ty::var_with_id(db, 1);
+        let type_var = tribute::type_var_with_id(db, 1);
 
         // Build operation with type variable result
         let op = Operation::of_name(db, location, "arith.const")
@@ -416,7 +416,7 @@ mod tests {
 
     #[salsa_test]
     fn test_has_type_vars(db: &salsa::DatabaseImpl) {
-        let type_var = ty::var_with_id(db, 42);
+        let type_var = tribute::type_var_with_id(db, 42);
         assert!(has_type_vars(db, type_var));
 
         let i64_ty = *core::I64::new(db);
@@ -430,7 +430,7 @@ mod tests {
         let body = module.body(db);
         let op = &body.blocks(db)[0].operations(db)[0];
         let result_ty = op.results(db)[0];
-        assert!(ty::is_var(db, result_ty));
+        assert!(tribute::is_type_var(db, result_ty));
 
         // Apply substitution (in tracked function)
         let new_module = apply_subst_var42_to_i64(db);
@@ -463,7 +463,7 @@ mod tests {
             // Print block args
             for (i, ty) in block.args(db).iter().enumerate() {
                 let ty_name = format!("{}.{}", ty.dialect(db), ty.name(db));
-                let is_var = ty::is_var(db, *ty);
+                let is_var = tribute::is_type_var(db, *ty);
                 println!("{}  arg[{}]: {} (is_var: {})", prefix, i, ty_name, is_var);
             }
             // Print operations
@@ -471,7 +471,7 @@ mod tests {
                 println!("{}  {}", prefix, op.full_name(db));
                 for (i, ty) in op.results(db).iter().enumerate() {
                     let ty_name = format!("{}.{}", ty.dialect(db), ty.name(db));
-                    let is_var = ty::is_var(db, *ty);
+                    let is_var = tribute::is_type_var(db, *ty);
                     println!(
                         "{}    result[{}]: {} (is_var: {})",
                         prefix, i, ty_name, is_var

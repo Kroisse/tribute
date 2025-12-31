@@ -1,18 +1,14 @@
 //! Tribute language-specific dialect modules.
 
-// === High-level (pre-resolution) ===
-pub mod src;
+// === High-level (AST/HIR level) ===
+pub mod tribute;
+pub mod tribute_pat;
 
-// === Effect system ===
+// === Effect system (runtime ops, lowered to cont) ===
 pub mod ability;
-
-// === Pattern matching ===
-pub mod case;
-pub mod pat;
 
 // === Type system ===
 pub mod adt;
-pub mod ty;
 
 // === Closures ===
 pub mod closure;

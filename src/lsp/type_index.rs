@@ -113,7 +113,7 @@ impl<'db> TypeIndex<'db> {
         }
 
         // Only enable hover for source-level reference operations
-        let is_hoverable = dialect == "src" && (name == "var" || name == "path");
+        let is_hoverable = dialect == "tribute" && (name == "var" || name == "path");
         if is_hoverable {
             for &result_ty in op.results(db).iter() {
                 entries.push(TypeEntry {
