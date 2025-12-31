@@ -400,28 +400,46 @@ fn collect_enum_constructors<'db>(
     type_name: Symbol,
     ty: Type<'db>,
 ) {
-    let attrs = op.attributes(db);
+    // Try to parse as tribute.enum_def with region-based variants
+    let Ok(enum_def) = tribute::EnumDef::from_operation(db, *op) else {
+        return;
+    };
 
-    if let Some(Attribute::List(variants)) = attrs.get(&ATTR_VARIANTS()) {
-        for variant in variants.iter() {
-            let Attribute::List(parts) = variant else {
+    let variants_region = enum_def.variants(db);
+
+    for block in variants_region.blocks(db).iter() {
+        for variant_op in block.operations(db).iter().copied() {
+            // Check if this is a tribute.variant_def
+            let Ok(variant_def) = tribute::VariantDef::from_operation(db, variant_op) else {
                 continue;
             };
-            let Some(Attribute::Symbol(variant_sym)) = parts.first() else {
-                continue;
-            };
+
+            let variant_sym = variant_def.sym_name(db);
+
+            // Collect variant field types from the fields region
+            let fields_region = variant_def.fields(db);
+            let mut field_types = Vec::new();
+            for field_block in fields_region.blocks(db).iter() {
+                for field_op in field_block.operations(db).iter().copied() {
+                    if let Ok(field_def) = tribute::FieldDef::from_operation(db, field_op) {
+                        field_types.push(field_def.r#type(db));
+                    }
+                }
+            }
+
+            let params: IdVec<Type<'db>> = field_types.into_iter().collect();
 
             env.add_to_namespace(
                 type_name,
-                *variant_sym,
+                variant_sym,
                 Binding::Constructor {
                     ty,
-                    tag: Some(*variant_sym),
-                    params: IdVec::new(), // TODO: Get variant params
+                    tag: Some(variant_sym),
+                    params: params.clone(),
                 },
             );
-            if env.lookup(*variant_sym).is_none() {
-                env.add_constructor(*variant_sym, ty, Some(*variant_sym), IdVec::new());
+            if env.lookup(variant_sym).is_none() {
+                env.add_constructor(variant_sym, ty, Some(variant_sym), params);
             }
         }
     }
