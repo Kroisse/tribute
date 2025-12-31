@@ -150,3 +150,21 @@ impl From<QualifiedName> for Attribute<'_> {
         Attribute::QualifiedName(value)
     }
 }
+
+impl From<Symbol> for Attribute<'_> {
+    fn from(value: Symbol) -> Self {
+        Attribute::Symbol(value)
+    }
+}
+
+impl From<String> for Attribute<'_> {
+    fn from(value: String) -> Self {
+        Attribute::String(value)
+    }
+}
+
+impl From<&str> for Attribute<'_> {
+    fn from(value: &str) -> Self {
+        Attribute::String(value.to_string())
+    }
+}

@@ -6,7 +6,7 @@
 use tribute_ir::dialect::tribute;
 use trunk_ir::dialect::core;
 use trunk_ir::rewrite::RewriteContext;
-use trunk_ir::{Attribute, Attrs, Block, IdVec, Operation, Region, Type};
+use trunk_ir::{Attribute, Attrs, Block, BlockArg, IdVec, Operation, Region, Type};
 
 use super::solver::TypeSubst;
 
@@ -80,11 +80,14 @@ impl<'db, 'a> SubstApplier<'db, 'a> {
     }
 
     fn apply_to_block(&mut self, block: &Block<'db>) -> Block<'db> {
-        // Substitute block argument types
-        let new_args: IdVec<Type<'db>> = block
+        // Substitute block argument types (preserving attributes)
+        let new_args: IdVec<BlockArg<'db>> = block
             .args(self.db)
             .iter()
-            .map(|&ty| self.subst.apply(self.db, ty))
+            .map(|arg| {
+                let new_ty = self.subst.apply(self.db, arg.ty(self.db));
+                BlockArg::new(self.db, new_ty, arg.attrs(self.db).clone())
+            })
             .collect();
 
         // Substitute operations
@@ -197,7 +200,11 @@ fn region_has_type_vars(db: &dyn salsa::Database, region: &Region<'_>) -> bool {
 
 fn block_has_type_vars(db: &dyn salsa::Database, block: &Block<'_>) -> bool {
     // Check block arguments
-    if block.args(db).iter().any(|&ty| has_type_vars(db, ty)) {
+    if block
+        .args(db)
+        .iter()
+        .any(|arg| has_type_vars(db, arg.ty(db)))
+    {
         return true;
     }
 
@@ -461,9 +468,10 @@ mod tests {
         for (bi, block) in region.blocks(db).iter().enumerate() {
             println!("{}block[{}]:", prefix, bi);
             // Print block args
-            for (i, ty) in block.args(db).iter().enumerate() {
+            for (i, arg) in block.args(db).iter().enumerate() {
+                let ty = arg.ty(db);
                 let ty_name = format!("{}.{}", ty.dialect(db), ty.name(db));
-                let is_var = tribute::is_type_var(db, *ty);
+                let is_var = tribute::is_type_var(db, ty);
                 println!("{}  arg[{}]: {} (is_var: {})", prefix, i, ty_name, is_var);
             }
             // Print operations

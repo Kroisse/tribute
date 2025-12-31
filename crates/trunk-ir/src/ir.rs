@@ -255,13 +255,48 @@ impl<'db> Operation<'db> {
     }
 }
 
+/// Block argument with type and optional attributes.
+///
+/// Attributes can store metadata like binding names for pattern matching,
+/// debug information, or other auxiliary data that doesn't affect semantics.
+#[salsa::interned(debug)]
+pub struct BlockArg<'db> {
+    pub ty: Type<'db>,
+    #[returns(ref)]
+    pub attrs: BTreeMap<Symbol, Attribute<'db>>,
+}
+
+impl<'db> BlockArg<'db> {
+    /// Create a block argument with just a type (no attributes).
+    pub fn of_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Self {
+        Self::new(db, ty, BTreeMap::new())
+    }
+
+    /// Create a block argument with a type and a single attribute.
+    pub fn with_attr(
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        key: impl Into<Symbol>,
+        value: Attribute<'db>,
+    ) -> Self {
+        let mut attrs = BTreeMap::new();
+        attrs.insert(key.into(), value);
+        Self::new(db, ty, attrs)
+    }
+
+    /// Get an attribute by key.
+    pub fn get_attr(&self, db: &'db dyn salsa::Database, key: Symbol) -> Option<&Attribute<'db>> {
+        self.attrs(db).get(&key)
+    }
+}
+
 #[salsa::tracked(debug)]
 pub struct Block<'db> {
     /// Stable identifier that survives block recreation during IR transformations.
     pub id: BlockId,
     pub location: Location<'db>,
     #[returns(ref)]
-    pub args: IdVec<Type<'db>>,
+    pub args: IdVec<BlockArg<'db>>,
     #[returns(ref)]
     pub operations: IdVec<Operation<'db>>,
 }
@@ -271,6 +306,16 @@ impl<'db> Block<'db> {
     /// Uses BlockId for stable identity across block recreations.
     pub fn arg(self, db: &'db dyn salsa::Database, index: usize) -> Value<'db> {
         Value::new(db, ValueDef::BlockArg(self.id(db)), index)
+    }
+
+    /// Get the type of a block argument at the given index.
+    pub fn arg_ty(self, db: &'db dyn salsa::Database, index: usize) -> Type<'db> {
+        self.args(db)[index].ty(db)
+    }
+
+    /// Get all argument types as a vector (convenience method for compatibility).
+    pub fn arg_types(self, db: &'db dyn salsa::Database) -> IdVec<Type<'db>> {
+        self.args(db).iter().map(|arg| arg.ty(db)).collect()
     }
 }
 
@@ -400,11 +445,23 @@ impl<'db> OperationBuilder<'db> {
 }
 
 /// Builder for constructing Block instances.
+///
+/// Supports fluent API for adding block arguments with attributes:
+/// ```ignore
+/// BlockBuilder::new(db, location)
+///     .arg(ty1).attr(BIND_NAME(), name_sym)  // arg with attribute
+///     .arg(ty2)                               // arg without attributes
+///     .op(some_op)
+///     .build()
+/// ```
 pub struct BlockBuilder<'db> {
     db: &'db dyn salsa::Database,
     id: BlockId,
     location: Location<'db>,
-    args: IdVec<Type<'db>>,
+    args: IdVec<BlockArg<'db>>,
+    /// Pending argument being built (type + accumulated attributes).
+    /// Flushed when a new arg() is called or when build() is called.
+    pending_arg: Option<(Type<'db>, BTreeMap<Symbol, Attribute<'db>>)>,
     operations: IdVec<Operation<'db>>,
 }
 
@@ -416,7 +473,15 @@ impl<'db> BlockBuilder<'db> {
             id: BlockId::fresh(),
             location,
             args: Default::default(),
+            pending_arg: None,
             operations: Default::default(),
+        }
+    }
+
+    /// Flush any pending argument to the args list.
+    fn flush_pending_arg(&mut self) {
+        if let Some((ty, attrs)) = self.pending_arg.take() {
+            self.args.push(BlockArg::new(self.db, ty, attrs));
         }
     }
 
@@ -426,18 +491,73 @@ impl<'db> BlockBuilder<'db> {
         self
     }
 
-    pub fn args(mut self, args: IdVec<Type<'db>>) -> Self {
+    /// Set all block arguments at once.
+    ///
+    /// Note: This flushes any pending argument and replaces all args.
+    pub fn block_args(mut self, args: IdVec<BlockArg<'db>>) -> Self {
+        self.flush_pending_arg();
         self.args = args;
         self
     }
 
+    /// Set block arguments from types (convenience for common case with no attributes).
+    ///
+    /// Note: This flushes any pending argument and replaces all args.
+    pub fn args(mut self, types: IdVec<Type<'db>>) -> Self {
+        self.flush_pending_arg();
+        self.args = types
+            .iter()
+            .map(|ty| BlockArg::of_type(self.db, *ty))
+            .collect();
+        self
+    }
+
+    /// Add a block argument with the given type.
+    ///
+    /// Use `.attr()` after this to add attributes to the argument.
+    /// The argument is finalized when the next `.arg()` is called or when `.build()` is called.
     pub fn arg(mut self, ty: Type<'db>) -> Self {
-        self.args.push(ty);
+        self.flush_pending_arg();
+        self.pending_arg = Some((ty, BTreeMap::new()));
+        self
+    }
+
+    /// Add an attribute to the current pending block argument.
+    ///
+    /// Must be called after `.arg()`. Panics if no argument is pending.
+    ///
+    /// # Example
+    /// ```ignore
+    /// builder
+    ///     .arg(ty).attr("bind_name", Symbol::new("x"))
+    ///     .arg(ty).attr("flag", true)
+    /// ```
+    pub fn attr(mut self, key: impl Into<Symbol>, value: impl Into<Attribute<'db>>) -> Self {
+        let (_, attrs) = self
+            .pending_arg
+            .as_mut()
+            .expect("attr() called without a pending arg; call arg() first");
+        attrs.insert(key.into(), value.into());
+        self
+    }
+
+    /// Add a block argument with type and attributes (legacy API).
+    ///
+    /// Prefer using `.arg(ty).attr(...)` for better readability.
+    pub fn arg_with_attrs(
+        mut self,
+        ty: Type<'db>,
+        attrs: BTreeMap<Symbol, Attribute<'db>>,
+    ) -> Self {
+        self.flush_pending_arg();
+        self.args.push(BlockArg::new(self.db, ty, attrs));
         self
     }
 
     /// Get a Value representing block argument at the given index.
     /// This can be used before the block is built to reference block arguments.
+    ///
+    /// Note: This counts only finalized args, not the pending one.
     pub fn block_arg(&self, db: &'db dyn salsa::Database, index: usize) -> Value<'db> {
         Value::new(db, ValueDef::BlockArg(self.id), index)
     }
@@ -448,7 +568,8 @@ impl<'db> BlockBuilder<'db> {
         operation
     }
 
-    pub fn build(self) -> Block<'db> {
+    pub fn build(mut self) -> Block<'db> {
+        self.flush_pending_arg();
         Block::new(self.db, self.id, self.location, self.args, self.operations)
     }
 }
@@ -499,6 +620,54 @@ mod tests {
         let op = build_sample_module(db);
         let module = core::Module::from_operation(db, op).unwrap();
         assert_eq!(module.name(db), "main");
+    }
+
+    #[salsa::tracked]
+    fn build_block_with_attrs(db: &dyn salsa::Database) -> Block<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+
+        BlockBuilder::new(db, location)
+            .arg(i32_ty)
+            .attr("bind_name", Attribute::Symbol(Symbol::new("x")))
+            .arg(i32_ty)
+            .attr("bind_name", Attribute::Symbol(Symbol::new("y")))
+            .attr("other", Attribute::Bool(true))
+            .arg(i32_ty) // no attributes
+            .build()
+    }
+
+    #[salsa_test]
+    fn block_builder_fluent_arg_attrs(db: &salsa::DatabaseImpl) {
+        let block = build_block_with_attrs(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        let args = block.args(db);
+        assert_eq!(args.len(), 3);
+
+        // First arg: bind_name = "x"
+        let arg0 = &args[0];
+        assert_eq!(arg0.ty(db), i32_ty);
+        assert_eq!(
+            arg0.get_attr(db, Symbol::new("bind_name")),
+            Some(&Attribute::Symbol(Symbol::new("x")))
+        );
+
+        // Second arg: bind_name = "y", other = true
+        let arg1 = &args[1];
+        assert_eq!(
+            arg1.get_attr(db, Symbol::new("bind_name")),
+            Some(&Attribute::Symbol(Symbol::new("y")))
+        );
+        assert_eq!(
+            arg1.get_attr(db, Symbol::new("other")),
+            Some(&Attribute::Bool(true))
+        );
+
+        // Third arg: no attributes
+        let arg2 = &args[2];
+        assert!(arg2.attrs(db).is_empty());
     }
 
     // Test the new define_op! macro

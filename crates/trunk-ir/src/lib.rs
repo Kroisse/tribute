@@ -27,7 +27,8 @@ pub use paste;
 pub use smallvec;
 
 pub use ir::{
-    Block, BlockBuilder, BlockId, Operation, QualifiedName, Region, Symbol, Value, ValueDef,
+    Block, BlockArg, BlockBuilder, BlockId, Operation, QualifiedName, Region, Symbol, Value,
+    ValueDef,
 };
 pub use location::{Location, PathId, Span, Spanned};
 pub use ops::{ConversionError, DialectOp};

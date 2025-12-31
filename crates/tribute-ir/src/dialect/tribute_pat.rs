@@ -131,6 +131,41 @@ dialect! {
     }
 }
 
+// === Block Argument Attributes ===
+
+/// Attribute keys for block arguments in pattern matching contexts.
+///
+/// When pattern matching extracts bindings, the bound variables become
+/// block arguments. These attributes store metadata about the bindings.
+///
+/// # Example
+///
+/// ```ignore
+/// // Pattern: Some(value) => ...
+/// // The 'value' binding becomes a block argument with name attribute
+/// BlockArg::with_attr(
+///     db,
+///     extracted_ty,
+///     block_arg_attrs::BIND_NAME(),
+///     Attribute::Symbol(Symbol::new("value")),
+/// )
+/// ```
+pub mod block_arg_attrs {
+    use trunk_ir::Symbol;
+
+    /// The source-level name of the bound variable.
+    ///
+    /// Used for:
+    /// - Error messages: "expected i32, got String for 'value'"
+    /// - LSP hover/go-to-definition
+    /// - Debug output
+    #[allow(non_snake_case)]
+    #[inline]
+    pub fn BIND_NAME() -> Symbol {
+        Symbol::new("bind_name")
+    }
+}
+
 // === Pattern Region Builders ===
 
 /// Helper functions for building pattern regions.

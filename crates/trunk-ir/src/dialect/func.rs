@@ -110,6 +110,51 @@ impl<'db> Func<'db> {
         Func::from_operation(db, builder.build()).expect("valid func.func operation")
     }
 
+    /// Build a function with named parameters.
+    ///
+    /// Each parameter can optionally have a name that will be attached to the
+    /// block argument as a `bind_name` attribute. This is useful for debugging
+    /// and error messages.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_with_named_params(
+        db: &'db dyn salsa::Database,
+        location: Location<'db>,
+        name: impl Into<QualifiedName>,
+        name_span: Option<Span>,
+        params: impl IntoIterator<Item = (Type<'db>, Option<Symbol>)>,
+        result: Type<'db>,
+        effect: Option<Type<'db>>,
+        f: impl FnOnce(&mut BlockBuilder<'db>),
+    ) -> Self {
+        let mut entry = BlockBuilder::new(db, location);
+        let mut param_types = IdVec::new();
+
+        for (ty, param_name) in params {
+            param_types.push(ty);
+            entry = entry.arg(ty);
+            if let Some(name) = param_name {
+                entry = entry.attr(Symbol::new("bind_name"), name);
+            }
+        }
+
+        f(&mut entry);
+        let region = Region::new(db, location, idvec![entry.build()]);
+
+        let mut builder = Operation::of_name(db, location, "func.func")
+            .attr("sym_name", Attribute::QualifiedName(name.into()))
+            .attr(
+                "type",
+                Attribute::Type(core::Func::with_effect(db, param_types, result, effect).as_type()),
+            )
+            .region(region);
+
+        if let Some(span) = name_span {
+            builder = builder.attr("name_span", Attribute::Span(span));
+        }
+
+        Func::from_operation(db, builder.build()).expect("valid func.func operation")
+    }
+
     /// Get the function's simple name (last segment of qualified name).
     pub fn name(&self, db: &'db dyn salsa::Database) -> Symbol {
         self.sym_name(db).name()

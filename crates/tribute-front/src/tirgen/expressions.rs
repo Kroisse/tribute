@@ -539,10 +539,15 @@ fn lower_lambda_expr<'db>(
         .map(|params| parse_parameter_list(ctx, params).0)
         .unwrap_or_default();
 
-    // Build lambda body
+    // Build lambda body with bind_name attributes on block args
     let param_types: IdVec<Type<'_>> = std::iter::repeat_n(infer_ty, param_names.len()).collect();
     let result_type = infer_ty;
-    let mut body_block = BlockBuilder::new(ctx.db, location).args(param_types.clone());
+    let mut body_block = BlockBuilder::new(ctx.db, location);
+    for &param_name in &param_names {
+        body_block = body_block
+            .arg(infer_ty)
+            .attr(Symbol::new("bind_name"), param_name);
+    }
 
     let result_value = ctx.scoped(|ctx| {
         // Bind parameters

@@ -262,8 +262,8 @@ impl<'db> TypeChecker<'db> {
         max_row_var_id: &mut Option<u64>,
     ) {
         for block in region.blocks(self.db).iter() {
-            for &arg in block.args(self.db).iter() {
-                self.collect_vars_in_type(arg, max_type_var_id, max_row_var_id);
+            for arg in block.args(self.db).iter() {
+                self.collect_vars_in_type(arg.ty(self.db), max_type_var_id, max_row_var_id);
             }
             for op in block.operations(self.db).iter() {
                 self.collect_vars_in_operation(op, max_type_var_id, max_row_var_id);
@@ -341,8 +341,9 @@ impl<'db> TypeChecker<'db> {
             if num_args > 0 {
                 trace!(num_args, "recording block arguments");
             }
-            for (i, &arg_ty) in block.args(self.db).iter().enumerate() {
+            for (i, arg) in block.args(self.db).iter().enumerate() {
                 let arg_value = block.arg(self.db, i);
+                let arg_ty = arg.ty(self.db);
                 trace!(?arg_value, ?arg_ty, "recording block arg type");
                 self.record_type(arg_value, arg_ty);
             }
@@ -515,14 +516,13 @@ impl<'db> TypeChecker<'db> {
                     self.entry_block_arg_types = func_ty.params(self.db).iter().copied().collect();
                 } else {
                     // Fallback to entry block's declared arg types
-                    self.entry_block_arg_types =
-                        entry_block.args(self.db).iter().copied().collect();
+                    self.entry_block_arg_types = entry_block.arg_types(self.db).to_vec();
                 }
 
                 // Record types for the actual entry block arguments (for direct lookups)
-                for (i, &arg_ty) in entry_block.args(self.db).iter().enumerate() {
+                for (i, arg) in entry_block.args(self.db).iter().enumerate() {
                     let arg_value = entry_block.arg(self.db, i);
-                    self.record_type(arg_value, arg_ty);
+                    self.record_type(arg_value, arg.ty(self.db));
                 }
             }
 

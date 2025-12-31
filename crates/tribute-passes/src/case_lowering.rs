@@ -158,8 +158,8 @@ impl<'db> CaseLowerer<'db> {
 
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
         // Register block arg types for value_type lookups
-        let args = block.args(self.db);
-        self.block_arg_types.insert(block.id(self.db), args.clone());
+        let arg_types = block.arg_types(self.db);
+        self.block_arg_types.insert(block.id(self.db), arg_types);
 
         let mut new_ops = IdVec::new();
         for op in block.operations(self.db).iter().copied() {

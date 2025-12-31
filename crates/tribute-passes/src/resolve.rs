@@ -27,8 +27,8 @@ use trunk_ir::dialect::core::{self, AbilityRefType, Module};
 use trunk_ir::dialect::func;
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
-    Attribute, Attrs, Block, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region,
-    Symbol, Type, Value, ValueDef,
+    Attribute, Attrs, Block, BlockArg, DialectOp, DialectType, IdVec, Operation, QualifiedName,
+    Region, Symbol, Type, Value, ValueDef,
 };
 
 // =============================================================================
@@ -792,12 +792,7 @@ impl<'db> Resolver<'db> {
 
     /// Resolve names in a block.
     fn resolve_block(&mut self, block: &Block<'db>) -> Block<'db> {
-        // Resolve block argument types
-        let new_args: IdVec<Type<'db>> = block
-            .args(self.db)
-            .iter()
-            .map(|&ty| self.resolve_type(ty))
-            .collect();
+        let new_args = self.resolve_block_args(block.args(self.db).iter());
 
         let new_ops: IdVec<Operation<'db>> = block
             .operations(self.db)
@@ -812,6 +807,21 @@ impl<'db> Resolver<'db> {
             new_args,
             new_ops,
         )
+    }
+
+    /// Resolve block argument types while preserving attributes.
+    fn resolve_block_args<'a>(
+        &mut self,
+        args: impl Iterator<Item = &'a BlockArg<'db>>,
+    ) -> IdVec<BlockArg<'db>>
+    where
+        'db: 'a,
+    {
+        args.map(|arg| {
+            let resolved_ty = self.resolve_type(arg.ty(self.db));
+            BlockArg::new(self.db, resolved_ty, arg.attrs(self.db).clone())
+        })
+        .collect()
     }
 
     /// Resolve a single operation.
@@ -1216,7 +1226,7 @@ impl<'db> Resolver<'db> {
             if i < block_args.len() {
                 // Create block argument value
                 let block_arg = Value::new(self.db, ValueDef::BlockArg(block.id(self.db)), i);
-                let param_ty = block_args[i];
+                let param_ty = block_args[i].ty(self.db);
 
                 // Add to local scope
                 self.add_local(
@@ -1233,9 +1243,7 @@ impl<'db> Resolver<'db> {
             }
         }
 
-        // Resolve block argument types
-        let new_args: IdVec<Type<'db>> =
-            block_args.iter().map(|&ty| self.resolve_type(ty)).collect();
+        let new_args = self.resolve_block_args(block_args.iter());
 
         // Now resolve the block, skipping parameter declaration tribute.var ops
         let num_param_decls = param_declarations.len();

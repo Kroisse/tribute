@@ -718,7 +718,7 @@ impl RewritePattern for BytesConcatPattern {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, BlockId, Location, PathId, Region, Span, idvec};
+    use trunk_ir::{Block, BlockArg, BlockId, Location, PathId, Region, Span, idvec};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -845,7 +845,13 @@ mod tests {
             .attr("callee", Attribute::QualifiedName(bytes_method_name("len")))
             .build();
 
-        let block = Block::new(db, block_id, location, idvec![bytes_ty], idvec![len_call]);
+        let block = Block::new(
+            db,
+            block_id,
+            location,
+            idvec![BlockArg::of_type(db, bytes_ty)],
+            idvec![len_call],
+        );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
     }
@@ -887,7 +893,10 @@ mod tests {
             db,
             block_id,
             location,
-            idvec![bytes_ty, i64_ty],
+            idvec![
+                BlockArg::of_type(db, bytes_ty),
+                BlockArg::of_type(db, i64_ty)
+            ],
             idvec![get_call],
         );
         let region = Region::new(db, location, idvec![block]);
@@ -933,7 +942,11 @@ mod tests {
             db,
             block_id,
             location,
-            idvec![bytes_ty, i64_ty, i64_ty],
+            idvec![
+                BlockArg::of_type(db, bytes_ty),
+                BlockArg::of_type(db, i64_ty),
+                BlockArg::of_type(db, i64_ty)
+            ],
             idvec![slice_call],
         );
         let region = Region::new(db, location, idvec![block]);
@@ -978,7 +991,10 @@ mod tests {
             db,
             block_id,
             location,
-            idvec![bytes_ty, bytes_ty],
+            idvec![
+                BlockArg::of_type(db, bytes_ty),
+                BlockArg::of_type(db, bytes_ty)
+            ],
             idvec![concat_call],
         );
         let region = Region::new(db, location, idvec![block]);
