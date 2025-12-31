@@ -42,8 +42,7 @@ use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
-    Attribute, DialectOp, IdVec, Location, Operation, QualifiedName, Symbol, Type, Value,
-    ValueDef,
+    Attribute, DialectOp, IdVec, Location, Operation, QualifiedName, Symbol, Type, Value, ValueDef,
 };
 
 /// Continuation struct layout:
@@ -302,7 +301,11 @@ pub mod resume_gen {
         block: &Block<'db>,
         value_mapping: &mut HashMap<Value<'db>, Value<'db>>,
     ) -> Block<'db> {
-        let remapped_ops = remap_operations(db, &block.operations(db).iter().copied().collect::<Vec<_>>(), value_mapping);
+        let remapped_ops = remap_operations(
+            db,
+            &block.operations(db).iter().copied().collect::<Vec<_>>(),
+            value_mapping,
+        );
 
         Block::new(
             db,
@@ -622,8 +625,12 @@ impl<'db> ContinuationAnalyzer<'db> {
         live_locals.sort_by_key(|l| {
             // Sort by value definition for determinism
             match l.value.def(self.db) {
-                ValueDef::BlockArg(block_id) => (0, block_id.0 as u64, l.value.index(self.db) as u64),
-                ValueDef::OpResult(op) => (1, op.location(self.db).span.start as u64, l.value.index(self.db) as u64),
+                ValueDef::BlockArg(block_id) => (0, block_id.0, l.value.index(self.db) as u64),
+                ValueDef::OpResult(op) => (
+                    1,
+                    op.location(self.db).span.start as u64,
+                    l.value.index(self.db) as u64,
+                ),
             }
         });
 
@@ -805,7 +812,8 @@ fn transform_shifts<'db>(
     let body = module.body(db);
     let shift_points = analysis.shift_points(db);
 
-    let (new_body, _changed) = transform_shifts_in_region(db, &body, &shift_points, resume_fn_names);
+    let (new_body, _changed) =
+        transform_shifts_in_region(db, &body, &shift_points, resume_fn_names);
 
     Module::create(db, module.location(db), module.name(db), new_body)
 }
@@ -1473,7 +1481,11 @@ mod tests {
         assert!(op_names.contains(&"wasm.ref_func".to_string()));
         // Should contain struct_new for continuation (and state)
         let struct_new_count = op_names.iter().filter(|n| *n == "wasm.struct_new").count();
-        assert!(struct_new_count >= 2, "expected at least 2 struct_new (state + continuation), got {}", struct_new_count);
+        assert!(
+            struct_new_count >= 2,
+            "expected at least 2 struct_new (state + continuation), got {}",
+            struct_new_count
+        );
         // Total: 13 operations (1 resume function + 12 shift expansion)
         assert_eq!(op_names.len(), 13);
     }
