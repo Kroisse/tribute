@@ -2,7 +2,7 @@
 
 use tree_sitter::Node;
 use tribute_ir::dialect::{adt, list, tribute};
-use trunk_ir::{BlockBuilder, Symbol, Value, dialect::arith};
+use trunk_ir::{BlockBuilder, Value, dialect::arith};
 
 use super::context::CstLoweringCtx;
 use super::expressions::{lower_expr, pattern_to_region};
