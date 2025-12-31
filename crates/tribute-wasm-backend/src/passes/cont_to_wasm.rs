@@ -42,7 +42,8 @@ use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
-    Attribute, DialectOp, IdVec, Location, Operation, QualifiedName, Symbol, Type, Value, ValueDef,
+    Attribute, BlockArg, DialectOp, IdVec, Location, Operation, QualifiedName, Symbol, Type, Value,
+    ValueDef,
 };
 
 /// Continuation struct layout:
@@ -173,7 +174,10 @@ pub mod resume_gen {
         let func_ty = cont_types::resume_fn_type(db);
 
         // Block arguments are typed (state: anyref, value: anyref)
-        let block_args = IdVec::from(vec![anyref, anyref]);
+        let block_args = IdVec::from(vec![
+            BlockArg::of_type(db, anyref),
+            BlockArg::of_type(db, anyref),
+        ]);
 
         // For now, create a placeholder that returns the value
         // TODO: Implement actual continuation body restoration

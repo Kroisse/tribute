@@ -3,8 +3,7 @@
 use tree_sitter::Node;
 use tribute_ir::dialect::{adt, tribute};
 use trunk_ir::{
-    Attribute, BlockBuilder, DialectType, IdVec, QualifiedName, Region, Span, Symbol, SymbolVec,
-    Type,
+    Attribute, BlockBuilder, DialectType, QualifiedName, Region, Span, Symbol, SymbolVec, Type,
     dialect::{core, func},
     idvec,
 };
@@ -154,28 +153,31 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
         .child_by_field_name("return_type")
         .and_then(|rt| parse_return_type(ctx, rt));
 
-    // Resolve parameter types
-    let params: IdVec<Type> = param_types.into_iter().collect();
-
     // Resolve return type or create fresh type var
     let result = return_type.unwrap_or_else(|| ctx.fresh_type_var());
 
+    // Zip parameter types with names for bind_name attributes on block args
+    let named_params: Vec<_> = param_types
+        .into_iter()
+        .zip(param_names.iter().copied().map(Some))
+        .collect();
+    let param_names_clone = param_names.clone();
+
     let effect_type = ctx.fresh_effect_row_type();
-    Some(func::Func::build_with_name_span_and_effect(
+    Some(func::Func::build_with_named_params(
         ctx.db,
         location,
         qualified_name,
         name_span,
-        params.clone(),
+        named_params,
         result,
         Some(effect_type),
         |entry| {
             // Bind parameters
-            for (i, param_name) in param_names.into_iter().enumerate() {
+            for param_name in param_names_clone {
                 let infer_ty = ctx.fresh_type_var();
                 let param_value = entry.op(tribute::var(ctx.db, location, infer_ty, param_name));
                 ctx.bind(param_name, param_value.result(ctx.db));
-                let _ = i;
             }
 
             // Lower body statements

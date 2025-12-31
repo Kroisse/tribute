@@ -169,7 +169,7 @@ impl<'db> WasmLowerer<'db> {
 
         let location = first_block.location(self.db);
         let mut builder =
-            BlockBuilder::new(self.db, location).args(first_block.args(self.db).clone());
+            BlockBuilder::new(self.db, location).block_args(first_block.args(self.db).clone());
 
         self.module_preamble_ops(&mut builder, location);
         for op in first_block.operations(self.db).iter() {
@@ -186,7 +186,7 @@ impl<'db> WasmLowerer<'db> {
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
         let location = block.location(self.db);
         let args = block.args(self.db).clone();
-        let mut builder = BlockBuilder::new(self.db, location).args(args);
+        let mut builder = BlockBuilder::new(self.db, location).block_args(args);
 
         for op in block.operations(self.db).iter().copied() {
             self.lower_op(&mut builder, op);

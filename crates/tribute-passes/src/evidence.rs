@@ -46,7 +46,7 @@ use tribute_ir::dialect::ability;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
-    Block, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Type, Value,
+    Block, BlockArg, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Type, Value,
 };
 
 /// Insert evidence parameters for effectful functions.
@@ -281,7 +281,7 @@ impl RewritePattern for AddEvidenceParamPattern {
                     // Entry block: add evidence as first argument
                     let old_args = block.args(db);
                     let mut new_args = IdVec::with_capacity(old_args.len() + 1);
-                    new_args.push(ev_ty);
+                    new_args.push(BlockArg::of_type(db, ev_ty));
                     new_args.extend(old_args.iter().copied());
 
                     // Preserve original BlockId to maintain any inter-block references

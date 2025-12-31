@@ -170,7 +170,7 @@ impl<'db> LambdaInfoCollector<'db> {
     fn collect_block(&mut self, block: &Block<'db>) -> LambdaInfoMap<'db> {
         // Register block argument types for BlockArg value lookups
         self.block_args
-            .insert(block.id(self.db), block.args(self.db).clone());
+            .insert(block.id(self.db), block.arg_types(self.db));
 
         let mut lambda_info = BTreeMap::new();
         for op in block.operations(self.db).iter() {
@@ -906,7 +906,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use tribute_ir::dialect::{closure, tribute};
     use trunk_ir::dialect::{arith, core, func};
-    use trunk_ir::{BlockId, Location, PathId, Span, idvec};
+    use trunk_ir::{BlockArg, BlockId, Location, PathId, Span, idvec};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -982,7 +982,7 @@ mod tests {
                             db,
                             BlockId::fresh(),
                             lambda_loc,
-                            idvec![*core::I64::new(db)],
+                            idvec![BlockArg::of_type(db, *core::I64::new(db))],
                             {
                                 let mut ops = IdVec::new();
                                 // Parameter y declaration
@@ -1079,7 +1079,7 @@ mod tests {
                             db,
                             BlockId::fresh(),
                             lambda_loc,
-                            idvec![*core::I64::new(db)],
+                            idvec![BlockArg::of_type(db, *core::I64::new(db))],
                             {
                                 let mut ops = IdVec::new();
                                 let x_var = tribute::var(

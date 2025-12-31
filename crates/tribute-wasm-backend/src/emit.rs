@@ -1402,10 +1402,10 @@ fn emit_function<'db>(
     };
     let mut locals: Vec<ValType> = Vec::new();
 
-    for (index, ty) in block.args(db).iter().enumerate() {
+    for (index, arg) in block.args(db).iter().enumerate() {
         ctx.value_locals.insert(block.arg(db, index), index as u32);
         // Block args have their types from the block definition
-        ctx.effective_types.insert(block.arg(db, index), *ty);
+        ctx.effective_types.insert(block.arg(db, index), arg.ty(db));
     }
 
     let param_count = params.len() as u32;
