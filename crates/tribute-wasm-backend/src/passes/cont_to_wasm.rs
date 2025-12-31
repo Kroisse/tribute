@@ -71,17 +71,18 @@ pub mod cont_types {
     /// Create a state struct type for a specific shift point.
     ///
     /// The state struct captures all live locals at the shift point.
-    /// Currently returns anyref as live local analysis is a placeholder.
+    /// We return `structref` as the type - the actual struct layout is determined
+    /// at emit time from the `struct_new` operands.
     ///
-    /// When live local analysis is fully implemented, this will create
-    /// a unique struct type per shift point with the captured locals' types.
+    /// For empty live locals (pure shift with no captured state), we still use
+    /// structref for consistency - an empty struct will be created.
     pub fn state_type<'db>(
         db: &'db dyn salsa::Database,
         _live_locals: &[LiveLocal<'db>],
     ) -> Type<'db> {
-        // Use anyref as a placeholder for the state type
-        // The actual struct layout will be determined when live local capture is implemented
-        wasm::Anyref::new(db).as_type()
+        // Use structref - the actual struct type is determined at emit time
+        // from the types of the operands passed to struct_new
+        wasm::Structref::new(db).as_type()
     }
 
     /// Create the resume function type.
@@ -275,6 +276,8 @@ pub struct ShiftPointInfo<'db> {
 /// A live local variable that needs to be captured at a shift point.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct LiveLocal<'db> {
+    /// The SSA value that needs to be captured.
+    pub value: Value<'db>,
     /// Variable name (if known from src.var).
     pub name: Option<Symbol>,
     /// Variable type.
@@ -308,6 +311,10 @@ struct ContinuationAnalyzer<'db> {
     current_func: Option<QualifiedName>,
     /// Counter for shifts within current function.
     shift_counter: u32,
+    /// Current function's block arguments (entry point parameters).
+    current_func_args: Vec<Value<'db>>,
+    /// Types of current function's block arguments.
+    current_func_arg_types: Vec<Type<'db>>,
 }
 
 impl<'db> ContinuationAnalyzer<'db> {
@@ -319,6 +326,8 @@ impl<'db> ContinuationAnalyzer<'db> {
             shift_points: BTreeMap::new(),
             current_func: None,
             shift_counter: 0,
+            current_func_args: Vec::new(),
+            current_func_arg_types: Vec::new(),
         }
     }
 
@@ -346,45 +355,27 @@ impl<'db> ContinuationAnalyzer<'db> {
         // Track function context - check both func.func and wasm.func
         // (wasm.func is present after func_to_wasm lowering)
         if let Ok(func_op) = trunk_ir::dialect::func::Func::from_operation(self.db, *op) {
-            let prev_func = self.current_func.take();
-            let prev_counter = self.shift_counter;
-
-            self.current_func = Some(func_op.sym_name(self.db));
-            self.shift_counter = 0;
-
-            // Analyze function body
-            for region in op.regions(self.db).iter() {
-                self.analyze_region(region);
-            }
-
-            self.current_func = prev_func;
-            self.shift_counter = prev_counter;
+            self.analyze_function_with_live_locals(
+                func_op.sym_name(self.db),
+                func_op.body(self.db),
+            );
             return;
         } else if let Ok(wasm_func_op) = wasm::Func::from_operation(self.db, *op) {
-            let prev_func = self.current_func.take();
-            let prev_counter = self.shift_counter;
-
-            self.current_func = Some(wasm_func_op.sym_name(self.db));
-            self.shift_counter = 0;
-
-            // Analyze function body
-            for region in op.regions(self.db).iter() {
-                self.analyze_region(region);
-            }
-
-            self.current_func = prev_func;
-            self.shift_counter = prev_counter;
+            self.analyze_function_with_live_locals(
+                wasm_func_op.sym_name(self.db),
+                wasm_func_op.body(self.db),
+            );
             return;
         }
 
-        // Check for continuation operations
+        // Check for continuation operations (for non-function contexts)
         if dialect == cont::DIALECT_NAME() {
             self.has_continuations = true;
 
             if name == cont::PUSH_PROMPT() {
                 self.prompt_count = self.prompt_count.saturating_add(1);
             } else if name == cont::SHIFT() {
-                self.collect_shift_info(op);
+                self.collect_shift_info(op, &[]);
             }
         }
 
@@ -394,7 +385,182 @@ impl<'db> ContinuationAnalyzer<'db> {
         }
     }
 
-    fn collect_shift_info(&mut self, op: &Operation<'db>) {
+    /// Analyze a function body with live local analysis for shift points.
+    fn analyze_function_with_live_locals(
+        &mut self,
+        func_name: QualifiedName,
+        body: trunk_ir::Region<'db>,
+    ) {
+        let prev_func = self.current_func.take();
+        let prev_counter = self.shift_counter;
+        let prev_args = std::mem::take(&mut self.current_func_args);
+        let prev_arg_types = std::mem::take(&mut self.current_func_arg_types);
+
+        self.current_func = Some(func_name);
+        self.shift_counter = 0;
+
+        // Collect entry block arguments (function parameters) and their types
+        if let Some(entry_block) = body.blocks(self.db).first() {
+            let arg_types = entry_block.args(self.db);
+            for (i, ty) in arg_types.iter().enumerate() {
+                self.current_func_args.push(entry_block.arg(self.db, i));
+                self.current_func_arg_types.push(*ty);
+            }
+        }
+
+        // Flatten all operations in the function body
+        let flat_ops = self.flatten_region(&body);
+
+        // Find shift points and compute live locals for each
+        for (op_idx, op) in flat_ops.iter().enumerate() {
+            let dialect = op.dialect(self.db);
+            let name = op.name(self.db);
+
+            if dialect == cont::DIALECT_NAME() {
+                self.has_continuations = true;
+
+                if name == cont::PUSH_PROMPT() {
+                    self.prompt_count = self.prompt_count.saturating_add(1);
+                } else if name == cont::SHIFT() {
+                    // Compute live locals: values defined before shift, used after shift
+                    let live_locals = self.compute_live_locals(&flat_ops, op_idx);
+                    self.collect_shift_info(op, &live_locals);
+                }
+            }
+        }
+
+        self.current_func = prev_func;
+        self.shift_counter = prev_counter;
+        self.current_func_args = prev_args;
+        self.current_func_arg_types = prev_arg_types;
+    }
+
+    /// Flatten a region into a linear sequence of operations.
+    fn flatten_region(&self, region: &trunk_ir::Region<'db>) -> Vec<Operation<'db>> {
+        let mut ops = Vec::new();
+        for block in region.blocks(self.db).iter() {
+            self.flatten_block(block, &mut ops);
+        }
+        ops
+    }
+
+    /// Flatten a block and its nested regions into a linear sequence.
+    fn flatten_block(&self, block: &trunk_ir::Block<'db>, ops: &mut Vec<Operation<'db>>) {
+        for op in block.operations(self.db).iter() {
+            ops.push(*op);
+            // Recursively flatten nested regions
+            for region in op.regions(self.db).iter() {
+                for nested_block in region.blocks(self.db).iter() {
+                    self.flatten_block(nested_block, ops);
+                }
+            }
+        }
+    }
+
+    /// Compute live locals at a shift point.
+    ///
+    /// Live locals are values that:
+    /// 1. Are defined before the shift (including function parameters)
+    /// 2. Are used after the shift
+    fn compute_live_locals(
+        &self,
+        flat_ops: &[Operation<'db>],
+        shift_idx: usize,
+    ) -> Vec<LiveLocal<'db>> {
+        use std::collections::HashSet;
+
+        // Collect values defined before shift (including function args)
+        let mut defined_before: HashSet<Value<'db>> = HashSet::new();
+
+        // Function parameters are defined before any operation
+        for arg in &self.current_func_args {
+            defined_before.insert(*arg);
+        }
+
+        // Values from operations before shift
+        for op in flat_ops.iter().take(shift_idx) {
+            let result_types = op.results(self.db);
+            for i in 0..result_types.len() {
+                defined_before.insert(op.result(self.db, i));
+            }
+        }
+
+        // Collect values used after shift
+        let mut used_after: HashSet<Value<'db>> = HashSet::new();
+        for op in flat_ops.iter().skip(shift_idx + 1) {
+            for operand in op.operands(self.db).iter() {
+                used_after.insert(*operand);
+            }
+            // Also check nested regions
+            for region in op.regions(self.db).iter() {
+                self.collect_uses_in_region(region, &mut used_after);
+            }
+        }
+
+        // Live locals = defined before ∩ used after
+        let mut live_locals = Vec::new();
+        for value in defined_before.intersection(&used_after) {
+            // Get the type of this value
+            let ty = self.get_value_type(*value);
+            if let Some(ty) = ty {
+                live_locals.push(LiveLocal {
+                    value: *value,
+                    name: None, // TODO: Could extract from tribute.var if available
+                    ty,
+                });
+            }
+        }
+
+        // Sort for deterministic ordering
+        live_locals.sort_by_key(|l| {
+            // Sort by value definition for determinism
+            match l.value.def(self.db) {
+                ValueDef::BlockArg(block_id) => (0, block_id.0 as u64, l.value.index(self.db) as u64),
+                ValueDef::OpResult(op) => (1, op.location(self.db).span.start as u64, l.value.index(self.db) as u64),
+            }
+        });
+
+        live_locals
+    }
+
+    /// Collect all value uses in a region recursively.
+    fn collect_uses_in_region(
+        &self,
+        region: &trunk_ir::Region<'db>,
+        uses: &mut std::collections::HashSet<Value<'db>>,
+    ) {
+        for block in region.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter() {
+                for operand in op.operands(self.db).iter() {
+                    uses.insert(*operand);
+                }
+                for nested in op.regions(self.db).iter() {
+                    self.collect_uses_in_region(nested, uses);
+                }
+            }
+        }
+    }
+
+    /// Get the type of a value.
+    fn get_value_type(&self, value: Value<'db>) -> Option<Type<'db>> {
+        match value.def(self.db) {
+            ValueDef::OpResult(op) => {
+                let results = op.results(self.db);
+                results.get(value.index(self.db)).copied()
+            }
+            ValueDef::BlockArg(_block_id) => {
+                // Check if this is a function argument
+                if let Some(idx) = self.current_func_args.iter().position(|v| *v == value) {
+                    self.current_func_arg_types.get(idx).copied()
+                } else {
+                    // For other block args (e.g., loop variables), we'd need more context
+                    None
+                }
+            }
+        }
+    }
+
+    fn collect_shift_info(&mut self, op: &Operation<'db>, live_locals: &[LiveLocal<'db>]) {
         let location = op.location(self.db);
         let location_key = LocationKey::from_location(self.db, location);
 
@@ -425,7 +591,7 @@ impl<'db> ContinuationAnalyzer<'db> {
             tag,
             containing_func: self.current_func.clone(),
             shift_index: self.shift_counter,
-            live_locals: Vec::new(), // TODO: Implement live local analysis
+            live_locals: live_locals.to_vec(),
             state_type_name,
         };
 
@@ -735,7 +901,6 @@ impl RewritePattern for ShiftPattern {
         let location = op.location(db);
         let location_key = LocationKey::from_location(db, location);
         let i32_ty = core::I32::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
         let funcref_ty = wasm::Funcref::new(db).as_type();
 
         // Get the prompt tag
@@ -750,25 +915,26 @@ impl RewritePattern for ShiftPattern {
             _ => 0,
         };
 
-        // NOTE: The shift operation has a handler region that contains the code
-        // to run when the continuation is captured. The handler region is executed
-        // when the continuation is invoked via cont.resume.
-        //
-        // Current implementation:
-        // - Creates an empty state struct (live local capture not yet implemented)
-        // - Creates continuation struct with (resume_fn, state, tag)
-        // - Uses generated resume function reference
-
         let mut ops = Vec::new();
 
-        // === Build Continuation Struct ===
-
-        // 1. Create empty state struct (placeholder for captured locals)
-        // Type: core.nil (empty state, will be anyref at runtime)
+        // === Build State Struct (capturing live locals) ===
+        //
+        // TODO: The live local analysis is done in ContinuationAnalyzer, but
+        // we need to pass that information to this pattern. Currently we create
+        // an empty state struct. The full implementation will:
+        // 1. Look up shift point info by location_key
+        // 2. For each live local, add its value as an operand to struct_new
+        // 3. The emit phase will create the appropriate struct type
         let state_ty = cont_types::state_type(db, &[]);
-        let state_struct = wasm::nop(db, location, state_ty);
-        let state_val = state_struct.as_operation().result(db, 0);
-        ops.push(state_struct.as_operation());
+        let state_struct = Operation::of_name(db, location, "wasm.struct_new")
+            .attr("type", Attribute::Type(state_ty))
+            .results(IdVec::from(vec![state_ty]))
+            .build();
+        let state_val = Value::new(db, ValueDef::OpResult(state_struct), 0);
+        ops.push(state_struct);
+
+        // Suppress unused warning for location_key (will be used when live locals are integrated)
+        let _ = &location_key;
 
         // 2. Create continuation struct: (resume_fn, state, tag)
         // Field 0: resume_fn - reference to the generated resume function
@@ -827,6 +993,7 @@ impl RewritePattern for ShiftPattern {
         ops.push(wasm::global_set(db, location, cont_val, YIELD_CONT_IDX).as_operation());
 
         // 6. Set $yield_value = null (placeholder - full impl will pass shift value)
+        let anyref_ty = wasm::Anyref::new(db).as_type();
         let null_value = wasm::ref_null(
             db,
             location,
@@ -1087,14 +1254,15 @@ mod tests {
 
         // First op: wasm.func (resume function)
         assert_eq!(op_names.first(), Some(&"wasm.func".to_string()));
-        // Second op: nop (state placeholder from shift)
-        assert_eq!(op_names.get(1), Some(&"wasm.nop".to_string()));
+        // Second op: struct_new (state struct - now using struct_new instead of nop)
+        assert_eq!(op_names.get(1), Some(&"wasm.struct_new".to_string()));
         // Last op: return (to unwind stack)
         assert_eq!(op_names.last(), Some(&"wasm.return".to_string()));
         // Should contain ref_func for resume function reference
         assert!(op_names.contains(&"wasm.ref_func".to_string()));
-        // Should contain struct_new for continuation
-        assert!(op_names.contains(&"wasm.struct_new".to_string()));
+        // Should contain struct_new for continuation (and state)
+        let struct_new_count = op_names.iter().filter(|n| *n == "wasm.struct_new").count();
+        assert!(struct_new_count >= 2, "expected at least 2 struct_new (state + continuation), got {}", struct_new_count);
         // Total: 13 operations (1 resume function + 12 shift expansion)
         assert_eq!(op_names.len(), 13);
     }
