@@ -14,7 +14,7 @@
 //! - `tribute.field_def`, `tribute.variant_def` (helpers inside definitions)
 //!
 //! **Effect definitions** (inside ability_def):
-//! - `tribute.op` (ability operation declaration)
+//! - `tribute.op_def` (ability operation declaration)
 //! - `tribute.handle` (handler expression)
 //!
 //! **Block and control flow**:
@@ -139,7 +139,7 @@ dialect! {
 
         /// `tribute.ability_def` operation: defines an ability (effect) type.
         ///
-        /// The operations region contains `tribute.op` operations defining the signatures.
+        /// The operations region contains `tribute.op_def` operations defining the signatures.
         ///
         /// Attributes:
         /// - `sym_name`: The name of the ability
@@ -150,7 +150,7 @@ dialect! {
 
         // === Effect definition operations (metadata) ===
 
-        /// `tribute.op` operation: declares an operation signature within an ability.
+        /// `tribute.op_def` operation: declares an operation signature within an ability.
         ///
         /// Used inside `tribute.ability_def` operations region to define what
         /// operations the ability provides.
@@ -159,7 +159,7 @@ dialect! {
         /// - `sym_name`: The operation name
         /// - `type`: The operation's function type (func.Fn)
         #[attr(sym_name: Symbol, r#type: Type)]
-        fn op();
+        fn op_def();
 
         /// `tribute.handle` operation: runs body in a delimited context with a handler.
         ///

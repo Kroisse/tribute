@@ -775,11 +775,11 @@ pub fn lower_ability_decl<'db>(
     let name = node_text(&name_node, &ctx.source).to_string();
     let operations = parse_ability_operations(ctx, body_node);
 
-    // Build operations region containing tribute.op operations
+    // Build operations region containing tribute.op_def operations
     let mut ops_block = BlockBuilder::new(ctx.db, location);
     for (op_name, param_types, return_type) in operations {
         let op_type = core::Func::new(ctx.db, param_types.into(), return_type).as_type();
-        ops_block.op(tribute::op(ctx.db, location, sym(&op_name), op_type));
+        ops_block.op(tribute::op_def(ctx.db, location, sym(&op_name), op_type));
     }
     let operations_region = Region::new(ctx.db, location, idvec![ops_block.build()]);
 

@@ -449,8 +449,8 @@ fn collect_ability_operations<'db>(
 
     for block in operations_region.blocks(db).iter() {
         for op in block.operations(db).iter().copied() {
-            // Check if this is an ability.op
-            let Ok(ability_op) = tribute::Op::from_operation(db, op) else {
+            // Check if this is a tribute.op_def
+            let Ok(ability_op) = tribute::OpDef::from_operation(db, op) else {
                 continue;
             };
 
@@ -2241,10 +2241,15 @@ pub mod tests {
         let string_ty = *core::String::new(db);
         let nil_ty = *core::Nil::new(db);
 
-        // Build operations region with ability.op
+        // Build operations region with tribute.op_def
         let mut ops_block = BlockBuilder::new(db, location);
         let print_type = core::Func::new(db, idvec![string_ty], nil_ty).as_type();
-        ops_block.op(tribute::op(db, location, Symbol::new("print"), print_type));
+        ops_block.op(tribute::op_def(
+            db,
+            location,
+            Symbol::new("print"),
+            print_type,
+        ));
         let operations_region = Region::new(db, location, idvec![ops_block.build()]);
 
         let ability_decl = tribute::ability_def(

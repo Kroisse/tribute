@@ -5,7 +5,7 @@
 //!
 //! ## Design
 //!
-//! Ability declarations (`tribute.ability_def`, `tribute.op`) are in the tribute dialect.
+//! Ability declarations (`tribute.ability_def`, `tribute.op_def`) are in the tribute dialect.
 //! This dialect contains the runtime operations:
 //! - `ability.perform`: invoke an ability operation
 //! - `ability.resume`: resume a captured continuation
