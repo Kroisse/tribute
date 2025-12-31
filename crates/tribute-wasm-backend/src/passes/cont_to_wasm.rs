@@ -618,6 +618,14 @@ impl<'db> ContinuationAnalyzer<'db> {
                     name: None, // TODO: Could extract from tribute.var if available
                     ty,
                 });
+            } else {
+                // Warn about values that should be captured but have unknown types
+                // This can happen with nested block arguments (e.g., loop variables)
+                tracing::warn!(
+                    ?value,
+                    "Live value has unknown type and will not be captured in continuation state. \
+                     This may cause incorrect behavior if the value is actually used after resume."
+                );
             }
         }
 
