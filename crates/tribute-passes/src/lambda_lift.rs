@@ -1,6 +1,6 @@
 //! Lambda lifting pass.
 //!
-//! Transforms `src.lambda` operations into:
+//! Transforms `tribute.lambda` operations into:
 //! 1. A lifted top-level `func.func` operation
 //! 2. A `closure.new` operation at the original lambda location
 //!
@@ -125,8 +125,8 @@ impl<'db> LambdaInfoCollector<'db> {
         QualifiedName::new(parent, name)
     }
 
-    /// Extract parameter names from src.var ops at the start of a block.
-    /// Function/lambda parameters are declared as src.var ops in the body.
+    /// Extract parameter names from tribute.var ops at the start of a block.
+    /// Function/lambda parameters are declared as tribute.var ops in the body.
     fn extract_param_names_from_body(
         &mut self,
         block: &Block<'db>,
@@ -140,7 +140,7 @@ impl<'db> LambdaInfoCollector<'db> {
                 break;
             }
 
-            // Check if this is a src.var (parameter declaration)
+            // Check if this is a tribute.var (parameter declaration)
             if let Ok(var_op) = tribute::Var::from_operation(self.db, *op) {
                 let name = var_op.name(self.db);
                 let ty = param_types[param_idx];
@@ -213,12 +213,12 @@ impl<'db> LambdaInfoCollector<'db> {
                 let params = func_ty.params(self.db);
                 for (i, &param_ty) in params.iter().enumerate() {
                     // Add synthetic param name for now
-                    // Real param names will be extracted from src.var ops in the body
+                    // Real param names will be extracted from tribute.var ops in the body
                     let param_name = Symbol::from_dynamic(&format!("__param_{}", i));
                     self.add_local(param_name, param_ty);
                 }
 
-                // Also extract parameter names from src.var ops at start of body
+                // Also extract parameter names from tribute.var ops at start of body
                 self.extract_param_names_from_body(block, &params);
             }
         }
@@ -304,7 +304,7 @@ impl<'db> LambdaInfoCollector<'db> {
         if let Some(func_ty) = core::Func::from_type(self.db, lambda_type) {
             for block in body.blocks(self.db) {
                 let params = func_ty.params(self.db);
-                // Extract parameter names from src.var ops
+                // Extract parameter names from tribute.var ops
                 self.extract_param_names_from_body(block, &params);
             }
         }
@@ -436,7 +436,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         None
     }
 
-    /// Extract parameter names from src.var ops at the start of a block
+    /// Extract parameter names from tribute.var ops at the start of a block
     /// and map them to block argument values.
     fn extract_param_bindings(&mut self, block: &Block<'db>) {
         let ops = block.operations(self.db);
@@ -444,7 +444,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         let mut param_idx = 0;
 
         for op in ops.iter() {
-            // Check if this is a src.var (parameter declaration)
+            // Check if this is a tribute.var (parameter declaration)
             if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::VAR()
             {
                 if let Ok(var_op) = tribute::Var::from_operation(self.db, *op) {
@@ -568,7 +568,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         if let Some(body) = regions.first() {
             let blocks = body.blocks(self.db);
             if let Some(entry_block) = blocks.first() {
-                // Extract parameter names from src.var ops and map to block args
+                // Extract parameter names from tribute.var ops and map to block args
                 self.extract_param_bindings(entry_block);
             }
         }
@@ -622,7 +622,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         };
 
         let lambda_op = tribute::Lambda::from_operation(self.db, *op)
-            .expect("already checked this is src.lambda");
+            .expect("already checked this is tribute.lambda");
 
         let lambda_type = lambda_op.r#type(self.db);
         let body = lambda_op.body(self.db);
@@ -790,11 +790,11 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                     let mut param_decl_count = 0;
 
                     for op in ops.iter() {
-                        // Handle src.var ops - either parameter declarations or captured refs
+                        // Handle tribute.var ops - either parameter declarations or captured refs
                         if let Ok(var_op) = tribute::Var::from_operation(db, *op) {
                             let var_name = var_op.name(db);
 
-                            // Check if this is a parameter declaration (first N src.var ops)
+                            // Check if this is a parameter declaration (first N tribute.var ops)
                             if param_decl_count < param_count {
                                 // This is a parameter declaration
                                 // Map its result to the shifted block arg
@@ -802,21 +802,21 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                                 let new_arg = entry.block_arg(db, param_decl_count + 1);
                                 value_map.insert(orig_result, new_arg);
                                 param_decl_count += 1;
-                                // Don't emit the src.var op - params are block args now
+                                // Don't emit the tribute.var op - params are block args now
                                 continue;
                             }
 
                             // Check if this is a captured variable reference
                             if let Some(&extracted_val) = capture_values.get(&var_name) {
-                                // Map the src.var result to the extracted value
+                                // Map the tribute.var result to the extracted value
                                 let orig_result = op.result(db, 0);
                                 value_map.insert(orig_result, extracted_val);
-                                // Don't emit the src.var op - we use the extracted value
+                                // Don't emit the tribute.var op - we use the extracted value
                                 continue;
                             }
                         }
 
-                        // Handle src.yield -> func.return conversion
+                        // Handle tribute.yield -> func.return conversion
                         if op.dialect(db) == tribute::DIALECT_NAME()
                             && op.name(db) == tribute::YIELD()
                         {
@@ -1129,7 +1129,7 @@ mod tests {
 
         // Should have:
         // 1. Lifted lambda function (__lambda_0)
-        // 2. Original main function (with closure.new instead of src.lambda)
+        // 2. Original main function (with closure.new instead of tribute.lambda)
         assert!(ops.len() >= 2, "Expected at least 2 ops, got {}", ops.len());
 
         // Check that first op is a func.func (the lifted lambda)

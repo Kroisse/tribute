@@ -4,7 +4,7 @@
 //!
 //! ## Transformations
 //!
-//! 1. `ability.prompt` -> `cont.push_prompt`
+//! 1. `tribute.prompt` -> `cont.push_prompt`
 //! 2. `ability.perform` -> `cont.shift` (with evidence lookup)
 //! 3. `ability.resume` -> `cont.resume`
 //! 4. `ability.abort` -> `cont.drop`
@@ -14,7 +14,7 @@
 //! Per `new-plans/implementation.md`:
 //!
 //! ```text
-//! handle expr     → push_prompt(tag, body)
+//! tribute.prompt  → push_prompt(tag, body)
 //! ability.perform → shift(tag, |k| handler(k))
 //! ```
 //!
@@ -179,7 +179,7 @@ impl RewritePattern for LowerPerformPattern {
         // TODO: Create handler region with actual handler logic.
         // The handler region should contain the code that runs when the continuation
         // is captured. In the full implementation, this will be populated based on
-        // the handler patterns from case.case matching on the ability operation.
+        // the handler patterns from tribute.case matching on the ability operation.
         // For now, we create an empty placeholder region.
         let empty_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
         let handler_region = Region::new(db, location, IdVec::from(vec![empty_block]));

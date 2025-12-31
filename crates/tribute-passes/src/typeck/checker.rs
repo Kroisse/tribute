@@ -1091,7 +1091,7 @@ impl<'db> TypeChecker<'db> {
         // ability.prompt: runs body in a delimited context, returns Request
         //
         // The body's effects are captured by the prompt. The resulting Request
-        // will be pattern-matched by case.case, which handles effect elimination.
+        // will be pattern-matched by tribute.case, which handles effect elimination.
 
         let results = op.results(self.db);
         let result_type = results
@@ -1109,9 +1109,9 @@ impl<'db> TypeChecker<'db> {
         }
 
         // The body's effects are "captured" by the prompt.
-        // We propagate body's effects to outer context first, then case.case
+        // We propagate body's effects to outer context first, then tribute.case
         // will eliminate handled abilities based on handler patterns
-        // (pat.handler_suspend in pattern regions).
+        // (tribute_pat.handler_suspend in pattern regions).
         let body_effect = std::mem::replace(&mut self.current_effect, outer_effect);
         self.merge_effect(body_effect);
 

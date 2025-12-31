@@ -1,4 +1,4 @@
-//! Lower `case.case` pattern matching to `scf.if` chains.
+//! Lower `tribute.case` pattern matching to `scf.if` chains.
 //!
 //! This pass currently supports only a minimal pattern subset:
 //! - wildcard (`_`)
@@ -400,7 +400,7 @@ impl<'db> CaseLowerer<'db> {
     }
 
     /// Extract binding names from a pattern region.
-    /// For simple `pat.bind("x")` patterns, returns the binding name.
+    /// For simple `tribute_pat.bind("x")` patterns, returns the binding name.
     /// For variant patterns with bindings, returns all nested binding names.
     fn extract_bindings_from_pattern(&self, region: Region<'db>) -> SymbolVec {
         let mut bindings = SymbolVec::new();

@@ -116,7 +116,7 @@ pub fn lower_expr<'db>(
 
         // === Identifiers and paths ===
         "identifier" => {
-            // Always create src.var for variable references, even for local bindings.
+            // Always create tribute.var for variable references, even for local bindings.
             // This preserves the source span for hover. Resolution will transform
             // local references to identity operations with the correct type.
             let name = node_text(&node, &ctx.source);

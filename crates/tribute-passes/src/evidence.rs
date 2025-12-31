@@ -112,7 +112,7 @@ fn transform_calls_in_block<'db>(
             }
         }
 
-        // Recursively transform nested regions (e.g., in scf.if, case.case)
+        // Recursively transform nested regions (e.g., in scf.if, tribute.case)
         let regions = op.regions(db);
         if !regions.is_empty() {
             let mut region_changed = false;

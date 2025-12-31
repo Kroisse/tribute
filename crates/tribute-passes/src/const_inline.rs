@@ -1,7 +1,7 @@
 //! Constant inlining pass for Tribute.
 //!
 //! This pass inlines constant values at their use sites:
-//! - Finds `src.var` operations marked with `resolved_const=true`
+//! - Finds `tribute.var` operations marked with `resolved_const=true`
 //! - Replaces them with `arith.const` operations containing the inlined value
 //!
 //! ## Example
@@ -14,7 +14,7 @@
 //! }
 //! ```
 //!
-//! After name resolution, `MAX_SIZE` reference is marked as `src.var` with:
+//! After name resolution, `MAX_SIZE` reference is marked as `tribute.var` with:
 //! - `resolved_const = true`
 //! - `value = 1024`
 //!
@@ -43,7 +43,7 @@ trunk_ir::symbols! {
 
 /// Constant inliner context.
 ///
-/// Transforms `src.var` operations marked as resolved constants into
+/// Transforms `tribute.var` operations marked as resolved constants into
 /// `arith.const` operations with inlined values.
 pub struct ConstInliner<'db> {
     db: &'db dyn salsa::Database,
@@ -275,11 +275,11 @@ mod tests {
             }
         }
 
-        // Should have no more src.var with resolved_const
+        // Should have no more tribute.var with resolved_const
         let resolved_consts: Vec<_> = ops
             .iter()
             .filter(|op| {
-                op.dialect(db) == Symbol::new("src")
+                op.dialect(db) == Symbol::new("tribute")
                     && op.name(db) == Symbol::new("var")
                     && matches!(
                         op.attributes(db).get(&Symbol::new("resolved_const")),

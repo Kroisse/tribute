@@ -44,7 +44,7 @@ pub fn lower_block_body<'db>(
 
 /// Lower a let statement.
 ///
-/// Generates a `src.let` operation with a pattern region for name resolution,
+/// Generates a `tribute.let` operation with a pattern region for name resolution,
 /// and also calls `bind_pattern` to register bindings in the lowering context.
 pub fn lower_let_statement<'db>(
     ctx: &mut CstLoweringCtx<'db>,

@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn test_const_declaration() {
         let db = salsa::DatabaseImpl::default();
-        // Test const declaration lowered to src.const
+        // Test const declaration lowered to tribute.const
         // Note: uppercase identifiers like PI are parsed as type_identifier by the grammar
         // so we use lowercase for const names
         let source = "const pi = 42";
@@ -652,11 +652,12 @@ mod tests {
         assert!(!blocks.is_empty());
 
         let ops = blocks[0].operations(&db);
-        // Now only src.const is generated (no separate arith.const for the value)
+        // Now only tribute.const is generated (no separate arith.const for the value)
         assert!(!ops.is_empty(), "Should have at least one operation");
 
-        // The first op should be src.const
-        let const_op = tribute::Const::from_operation(&db, ops[0]).expect("Should be a src.const");
+        // The first op should be tribute.const
+        let const_op =
+            tribute::Const::from_operation(&db, ops[0]).expect("Should be a tribute.const");
         assert_eq!(const_op.name(&db), "pi");
     }
 
