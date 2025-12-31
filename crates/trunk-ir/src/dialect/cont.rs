@@ -8,17 +8,17 @@ use crate::dialect;
 dialect! {
     mod cont {
         /// `cont.push_prompt` operation: installs a prompt and executes body.
-        #[attr(tag: any)]
+        #[attr(tag: u32)]
         fn push_prompt() -> result {
             #[region(body)] {}
         };
 
         /// `cont.shift` operation: captures continuation and jumps to handler.
         ///
-        /// The optional `value` operand is passed to the handler along with
-        /// the captured continuation.
-        #[attr(tag: any)]
-        fn shift(#[rest] values) {
+        /// The optional `value` operands are passed to the handler along with
+        /// the captured continuation. Currently only the first value is used.
+        #[attr(tag: u32)]
+        fn shift(#[rest] value) {
             #[region(handler)] {}
         };
 

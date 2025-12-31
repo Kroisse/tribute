@@ -1134,10 +1134,17 @@ impl RewritePattern for PushPromptPattern {
         // Load continuation from $yield_cont for handler invocation
         let cont_ty = cont_types::continuation_type(db);
         let get_cont = wasm::global_get(db, location, cont_ty, YIELD_CONT_IDX);
+        let cont_val = get_cont.as_operation().result(db, 0);
 
         // Load yield value from $yield_value for handler invocation
         let anyref_ty = wasm::Anyref::new(db).as_type();
         let get_value = wasm::global_get(db, location, anyref_ty, YIELD_VALUE_IDX);
+        let value_val = get_value.as_operation().result(db, 0);
+
+        // Drop the loaded values until handler invocation is implemented
+        // TODO(#100): Replace these drops with actual handler call
+        let drop_cont = wasm::drop(db, location, cont_val);
+        let drop_value = wasm::drop(db, location, value_val);
 
         // Build the "then" block for tag match (handle)
         // TODO(#100): Call handler function with (continuation, value)
@@ -1153,7 +1160,8 @@ impl RewritePattern for PushPromptPattern {
                 reset_yield.as_operation(),
                 get_cont.as_operation(),
                 get_value.as_operation(),
-                // TODO: Call handler with continuation and value
+                drop_cont.as_operation(),
+                drop_value.as_operation(),
             ]),
         );
         let then_region = trunk_ir::Region::new(db, location, IdVec::from(vec![then_block]));
