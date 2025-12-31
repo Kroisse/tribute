@@ -15,7 +15,7 @@
 //!
 //! **Effect definitions** (inside ability_def):
 //! - `tribute.op` (ability operation declaration)
-//! - `tribute.prompt` (handler expression)
+//! - `tribute.handle` (handler expression)
 //!
 //! **Block and control flow**:
 //! - `tribute.block`, `tribute.yield` (unified src.yield + case.yield)
@@ -161,7 +161,7 @@ dialect! {
         #[attr(sym_name: Symbol, r#type: Type)]
         fn op();
 
-        /// `tribute.prompt` operation: runs body in a delimited context.
+        /// `tribute.handle` operation: runs body in a delimited context with a handler.
         ///
         /// Executes the body region until it either:
         /// - Completes with a value → returns `Request::Done(value)`
@@ -169,7 +169,7 @@ dialect! {
         ///
         /// The returned `Request` is typically pattern-matched using `tribute.case`
         /// with handler patterns.
-        fn prompt() -> request {
+        fn handle() -> request {
             #[region(body)] {}
         };
 

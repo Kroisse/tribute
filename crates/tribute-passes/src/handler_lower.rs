@@ -4,7 +4,7 @@
 //!
 //! ## Transformations
 //!
-//! 1. `tribute.prompt` -> `cont.push_prompt`
+//! 1. `tribute.handle` -> `cont.push_prompt`
 //! 2. `ability.perform` -> `cont.shift` (with evidence lookup)
 //! 3. `ability.resume` -> `cont.resume`
 //! 4. `ability.abort` -> `cont.drop`
@@ -14,7 +14,7 @@
 //! Per `new-plans/implementation.md`:
 //!
 //! ```text
-//! tribute.prompt  → push_prompt(tag, body)
+//! tribute.handle  → push_prompt(tag, body)
 //! ability.perform → shift(tag, |k| handler(k))
 //! ```
 //!
@@ -105,9 +105,9 @@ impl RewritePattern for LowerPromptPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        // Match: ability.prompt
-        let prompt_op = match tribute::Prompt::from_operation(db, *op) {
-            Ok(p) => p,
+        // Match: tribute.handle
+        let handle_op = match tribute::Handle::from_operation(db, *op) {
+            Ok(h) => h,
             Err(_) => return RewriteResult::Unchanged,
         };
 
@@ -115,7 +115,7 @@ impl RewritePattern for LowerPromptPattern {
         let tag = fresh_prompt_tag();
 
         // Get the body region
-        let body = prompt_op.body(db);
+        let body = handle_op.body(db);
 
         // Create cont.push_prompt with the same body
         // Note: The body may contain ability.perform ops that will be
@@ -273,14 +273,14 @@ mod tests {
         let body_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
         let body = Region::new(db, location, idvec![body_block]);
 
-        let prompt_op = Operation::of_name(db, location, "tribute.prompt")
+        let handle_op = Operation::of_name(db, location, "tribute.handle")
             .result(*core::Nil::new(db))
             .region(body)
             .build();
 
         // Apply the pattern
         let pattern = LowerPromptPattern::new();
-        let result = pattern.match_and_rewrite(db, &prompt_op);
+        let result = pattern.match_and_rewrite(db, &handle_op);
 
         match result {
             RewriteResult::Replace(new_op) => (new_op.dialect(db), new_op.name(db)),

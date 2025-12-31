@@ -11,12 +11,12 @@
 //! - `ability.resume`: resume a captured continuation
 //! - `ability.abort`: discard a continuation
 //!
-//! Handler pattern matching is done via `tribute.case` with `tribute.prompt`:
+//! Handler pattern matching is done via `tribute.case` with `tribute.handle`:
 //!
 //! ```text
 //! // Source: case handle expr { ... }
 //! // Lowers to:
-//! %request = tribute.prompt { expr }
+//! %request = tribute.handle { expr }
 //! tribute.case(%request) {
 //!     tribute.arm("{result}") { ... }
 //!     tribute.arm("{State::get() -> k}") { ... }

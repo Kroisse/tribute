@@ -1046,7 +1046,7 @@ fn lower_record_expr<'db>(
 /// Source: `handle expr`
 /// Lowers to:
 /// ```text
-/// %request = ability.prompt { expr }
+/// %request = tribute.handle { expr }
 /// ```
 ///
 /// The `handle expr` expression returns a Request value that can be pattern-matched
@@ -1091,9 +1091,9 @@ fn lower_handle_expr<'db>(
 
     let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
-    // Create tribute.prompt to run body and get Request
-    let prompt_op = block.op(tribute::prompt(ctx.db, location, request_ty, body_region));
-    Some(prompt_op.request(ctx.db))
+    // Create tribute.handle to run body and get Request
+    let handle_op = block.op(tribute::handle(ctx.db, location, request_ty, body_region));
+    Some(handle_op.request(ctx.db))
 }
 
 /// Convert a handler pattern to a pattern region.

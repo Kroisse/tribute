@@ -418,7 +418,7 @@ impl<'db> TypeChecker<'db> {
                 self.check_src_const(op);
             } else if name == tribute::CASE() {
                 self.check_case(op);
-            } else if name == tribute::PROMPT() {
+            } else if name == tribute::HANDLE() {
                 self.check_ability_prompt(op);
             } else if name == tribute::STRUCT_DEF()
                 || name == tribute::ENUM_DEF()
@@ -1088,7 +1088,7 @@ impl<'db> TypeChecker<'db> {
     }
 
     fn check_ability_prompt(&mut self, op: &Operation<'db>) {
-        // ability.prompt: runs body in a delimited context, returns Request
+        // tribute.handle: runs body in a delimited context, returns Request
         //
         // The body's effects are captured by the prompt. The resulting Request
         // will be pattern-matched by tribute.case, which handles effect elimination.
