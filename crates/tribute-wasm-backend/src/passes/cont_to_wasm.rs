@@ -42,7 +42,7 @@ use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
-    Attribute, BlockArg, DialectOp, IdVec, Location, Operation, QualifiedName, Symbol, Type, Value,
+    Attribute, DialectOp, IdVec, Location, Operation, QualifiedName, Symbol, Type, Value,
     ValueDef,
 };
 
@@ -101,8 +101,10 @@ pub mod cont_types {
 /// 2. Restores captured locals from state
 /// 3. Continues execution from after the shift point
 pub mod resume_gen {
+    use std::collections::HashMap;
+
     use super::*;
-    use trunk_ir::{Block, BlockId, Region};
+    use trunk_ir::{Block, BlockArg, BlockId, Region};
 
     /// Information about a generated resume function.
     #[derive(Clone, Debug)]
@@ -160,16 +162,16 @@ pub mod resume_gen {
     ///
     /// The resume function has signature: (state: anyref, value: anyref) -> anyref
     ///
-    /// For now, this generates a placeholder that just returns the value.
-    /// Full implementation will:
-    /// 1. Cast state to the concrete state struct type
-    /// 2. Extract captured locals from state
-    /// 3. Execute the continuation body (code after shift)
+    /// This function:
+    /// 1. Casts state to the concrete state struct type
+    /// 2. Extracts captured locals from state using struct_get
+    /// 3. Remaps the continuation operations to use extracted values
+    /// 4. Executes the continuation body (code after shift)
     fn generate_resume_function<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
         name: &QualifiedName,
-        _info: &ShiftPointInfo<'db>,
+        info: &ShiftPointInfo<'db>,
     ) -> Operation<'db> {
         let anyref = wasm::Anyref::new(db).as_type();
         let func_ty = cont_types::resume_fn_type(db);
@@ -179,25 +181,42 @@ pub mod resume_gen {
             BlockArg::of_type(db, anyref),
             BlockArg::of_type(db, anyref),
         ]);
-
-        // For now, create a placeholder that returns the value
-        // TODO: Implement actual continuation body restoration
-        //
-        // The full implementation will:
-        // 1. Cast state to concrete type: (ref.cast $State_N (local.get $state))
-        // 2. Extract each captured local: (struct.get $State_N i (local.get $typed_state))
-        // 3. Execute the code that comes after the shift point
-
-        // Create return instruction that returns the value parameter
-        // Block arg 1 is the value parameter (index 1)
         let block_id = BlockId::fresh();
-        let value_ref = trunk_ir::Value::new(
-            db,
-            ValueDef::BlockArg(block_id),
-            1, // value is second parameter
-        );
 
-        let return_op = wasm::r#return(db, location, Some(value_ref));
+        // Get block argument values
+        let state_param = Value::new(db, ValueDef::BlockArg(block_id), 0);
+        let value_param = Value::new(db, ValueDef::BlockArg(block_id), 1);
+
+        let mut ops: Vec<Operation<'db>> = Vec::new();
+        let mut value_mapping: HashMap<Value<'db>, Value<'db>> = HashMap::new();
+
+        // Extract live locals from state struct
+        let state_ty = cont_types::state_type(db, &info.live_locals);
+
+        for (field_idx, live_local) in info.live_locals.iter().enumerate() {
+            // Generate struct_get to extract this field
+            let struct_get = Operation::of_name(db, location, "wasm.struct_get")
+                .operand(state_param)
+                .attr("type", Attribute::Type(state_ty))
+                .attr("field_idx", Attribute::IntBits(field_idx as u64))
+                .results(IdVec::from(vec![live_local.ty]))
+                .build();
+
+            let extracted_value = Value::new(db, ValueDef::OpResult(struct_get), 0);
+            ops.push(struct_get);
+
+            // Map the original value to the extracted value
+            value_mapping.insert(live_local.value, extracted_value);
+        }
+
+        // Remap continuation operations and add them to the body
+        if !info.continuation_ops.is_empty() {
+            let remapped_ops = remap_operations(db, &info.continuation_ops, &mut value_mapping);
+            ops.extend(remapped_ops);
+        } else {
+            // No continuation body - just return the value parameter
+            ops.push(wasm::r#return(db, location, Some(value_param)).as_operation());
+        }
 
         // Create function body block with typed arguments
         let body_block = Block::new(
@@ -205,12 +224,93 @@ pub mod resume_gen {
             block_id,
             location,
             block_args,
-            IdVec::from(vec![return_op.as_operation()]),
+            ops.into_iter().collect(),
         );
         let body_region = Region::new(db, location, IdVec::from(vec![body_block]));
 
         // Create the wasm.func operation
         wasm::func(db, location, name.clone(), func_ty, body_region).as_operation()
+    }
+
+    /// Remap operations to use new values from the value mapping.
+    ///
+    /// For each operation:
+    /// 1. Remap operands using the value mapping
+    /// 2. Create a new operation with remapped operands
+    /// 3. Add the new operation's results to the mapping
+    fn remap_operations<'db>(
+        db: &'db dyn salsa::Database,
+        ops: &[Operation<'db>],
+        value_mapping: &mut HashMap<Value<'db>, Value<'db>>,
+    ) -> Vec<Operation<'db>> {
+        let mut result = Vec::with_capacity(ops.len());
+
+        for &op in ops {
+            // Remap operands
+            let new_operands: IdVec<Value<'db>> = op
+                .operands(db)
+                .iter()
+                .map(|&v| *value_mapping.get(&v).unwrap_or(&v))
+                .collect();
+
+            // Recursively remap nested regions
+            let new_regions: IdVec<Region<'db>> = op
+                .regions(db)
+                .iter()
+                .map(|region| remap_region(db, region, value_mapping))
+                .collect();
+
+            // Create new operation with remapped operands and regions
+            let new_op = op
+                .modify(db)
+                .operands(new_operands)
+                .regions(new_regions)
+                .build();
+
+            // Map old results to new results
+            let result_types = op.results(db);
+            for i in 0..result_types.len() {
+                let old_result = op.result(db, i);
+                let new_result = new_op.result(db, i);
+                value_mapping.insert(old_result, new_result);
+            }
+
+            result.push(new_op);
+        }
+
+        result
+    }
+
+    /// Remap values in a region.
+    fn remap_region<'db>(
+        db: &'db dyn salsa::Database,
+        region: &Region<'db>,
+        value_mapping: &mut HashMap<Value<'db>, Value<'db>>,
+    ) -> Region<'db> {
+        let new_blocks: IdVec<Block<'db>> = region
+            .blocks(db)
+            .iter()
+            .map(|block| remap_block(db, block, value_mapping))
+            .collect();
+
+        Region::new(db, region.location(db), new_blocks)
+    }
+
+    /// Remap values in a block.
+    fn remap_block<'db>(
+        db: &'db dyn salsa::Database,
+        block: &Block<'db>,
+        value_mapping: &mut HashMap<Value<'db>, Value<'db>>,
+    ) -> Block<'db> {
+        let remapped_ops = remap_operations(db, &block.operations(db).iter().copied().collect::<Vec<_>>(), value_mapping);
+
+        Block::new(
+            db,
+            block.id(db),
+            block.location(db),
+            block.args(db).clone(),
+            remapped_ops.into_iter().collect(),
+        )
     }
 }
 
@@ -271,6 +371,9 @@ pub struct ShiftPointInfo<'db> {
     pub live_locals: Vec<LiveLocal<'db>>,
     /// Generated state struct type name.
     pub state_type_name: Option<QualifiedName>,
+    /// Operations that come after the shift (continuation body).
+    /// These will be executed when the continuation is resumed.
+    pub continuation_ops: Vec<Operation<'db>>,
 }
 
 /// A live local variable that needs to be captured at a shift point.
@@ -375,7 +478,8 @@ impl<'db> ContinuationAnalyzer<'db> {
             if name == cont::PUSH_PROMPT() {
                 self.prompt_count = self.prompt_count.saturating_add(1);
             } else if name == cont::SHIFT() {
-                self.collect_shift_info(op, &[]);
+                // In non-function context, we don't have live locals or continuation ops
+                self.collect_shift_info(op, &[], Vec::new());
             }
         }
 
@@ -401,10 +505,10 @@ impl<'db> ContinuationAnalyzer<'db> {
 
         // Collect entry block arguments (function parameters) and their types
         if let Some(entry_block) = body.blocks(self.db).first() {
-            let arg_types = entry_block.args(self.db);
-            for (i, ty) in arg_types.iter().enumerate() {
+            let block_args = entry_block.args(self.db);
+            for (i, arg) in block_args.iter().enumerate() {
                 self.current_func_args.push(entry_block.arg(self.db, i));
-                self.current_func_arg_types.push(*ty);
+                self.current_func_arg_types.push(arg.ty(self.db));
             }
         }
 
@@ -424,7 +528,10 @@ impl<'db> ContinuationAnalyzer<'db> {
                 } else if name == cont::SHIFT() {
                     // Compute live locals: values defined before shift, used after shift
                     let live_locals = self.compute_live_locals(&flat_ops, op_idx);
-                    self.collect_shift_info(op, &live_locals);
+                    // Collect operations after shift (continuation body)
+                    let continuation_ops: Vec<Operation<'db>> =
+                        flat_ops.iter().skip(op_idx + 1).copied().collect();
+                    self.collect_shift_info(op, &live_locals, continuation_ops);
                 }
             }
         }
@@ -560,7 +667,12 @@ impl<'db> ContinuationAnalyzer<'db> {
         }
     }
 
-    fn collect_shift_info(&mut self, op: &Operation<'db>, live_locals: &[LiveLocal<'db>]) {
+    fn collect_shift_info(
+        &mut self,
+        op: &Operation<'db>,
+        live_locals: &[LiveLocal<'db>],
+        continuation_ops: Vec<Operation<'db>>,
+    ) {
         let location = op.location(self.db);
         let location_key = LocationKey::from_location(self.db, location);
 
@@ -593,6 +705,7 @@ impl<'db> ContinuationAnalyzer<'db> {
             shift_index: self.shift_counter,
             live_locals: live_locals.to_vec(),
             state_type_name,
+            continuation_ops,
         };
 
         self.shift_points.insert(location_key, info);
@@ -617,14 +730,16 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
     // Add resume functions to the module body
     let module = prepend_operations_to_module(db, module, &resume_functions);
 
-    // Apply pattern transformations
-    PatternApplicator::new()
+    // Apply pattern transformations for non-shift operations
+    let module = PatternApplicator::new()
         .add_pattern(PushPromptPattern)
-        .add_pattern(ShiftPattern::new(resume_fn_names))
         .add_pattern(ResumePattern)
         .add_pattern(DropPattern)
         .apply(db, module)
-        .module
+        .module;
+
+    // Transform shift operations with full access to live local analysis
+    transform_shifts(db, module, &analysis, &resume_fn_names)
 }
 
 /// Prepend operations to the first block of a module's body region.
@@ -675,6 +790,237 @@ fn prepend_operations_to_module<'db>(
     let location = module.location(db);
     let new_body = trunk_ir::Region::new(db, location, new_blocks.into_iter().collect());
     Module::create(db, location, module.name(db), new_body)
+}
+
+/// Transform shift operations with access to live local analysis.
+///
+/// This function walks the module and transforms each `cont.shift` operation
+/// into the yield bubbling sequence, capturing live locals in the state struct.
+fn transform_shifts<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+    analysis: &ContAnalysis<'db>,
+    resume_fn_names: &BTreeMap<LocationKey, QualifiedName>,
+) -> Module<'db> {
+    let body = module.body(db);
+    let shift_points = analysis.shift_points(db);
+
+    let (new_body, _changed) = transform_shifts_in_region(db, &body, &shift_points, resume_fn_names);
+
+    Module::create(db, module.location(db), module.name(db), new_body)
+}
+
+/// Transform shifts in a region recursively.
+fn transform_shifts_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &trunk_ir::Region<'db>,
+    shift_points: &ShiftPointMap<'db>,
+    resume_fn_names: &BTreeMap<LocationKey, QualifiedName>,
+) -> (trunk_ir::Region<'db>, bool) {
+    let mut changed = false;
+    let new_blocks: IdVec<trunk_ir::Block<'db>> = region
+        .blocks(db)
+        .iter()
+        .map(|block| {
+            let (new_block, block_changed) =
+                transform_shifts_in_block(db, block, shift_points, resume_fn_names);
+            changed |= block_changed;
+            new_block
+        })
+        .collect();
+
+    let new_region = trunk_ir::Region::new(db, region.location(db), new_blocks);
+    (new_region, changed)
+}
+
+/// Transform shifts in a block.
+fn transform_shifts_in_block<'db>(
+    db: &'db dyn salsa::Database,
+    block: &trunk_ir::Block<'db>,
+    shift_points: &ShiftPointMap<'db>,
+    resume_fn_names: &BTreeMap<LocationKey, QualifiedName>,
+) -> (trunk_ir::Block<'db>, bool) {
+    let mut changed = false;
+    let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
+
+    for &op in block.operations(db).iter() {
+        // First, recursively process nested regions
+        let op_with_processed_regions = if !op.regions(db).is_empty() {
+            let mut region_changed = false;
+            let new_regions: IdVec<trunk_ir::Region<'db>> = op
+                .regions(db)
+                .iter()
+                .map(|region| {
+                    let (new_region, rc) =
+                        transform_shifts_in_region(db, region, shift_points, resume_fn_names);
+                    region_changed |= rc;
+                    new_region
+                })
+                .collect();
+
+            if region_changed {
+                changed = true;
+                op.modify(db).regions(new_regions).build()
+            } else {
+                op
+            }
+        } else {
+            op
+        };
+
+        // Check if this is a shift operation
+        if let Ok(_shift) = cont::Shift::from_operation(db, op_with_processed_regions) {
+            let location = op_with_processed_regions.location(db);
+            let location_key = LocationKey::from_location(db, location);
+
+            // Look up the live locals for this shift point
+            let live_locals = shift_points
+                .get(&location_key)
+                .map(|info| &info.live_locals[..])
+                .unwrap_or(&[]);
+
+            // Generate the shift expansion with live locals
+            let expanded_ops = expand_shift_operation(
+                db,
+                &op_with_processed_regions,
+                live_locals,
+                resume_fn_names.get(&location_key),
+            );
+
+            new_ops.extend(expanded_ops);
+            changed = true;
+        } else {
+            new_ops.push(op_with_processed_regions);
+        }
+    }
+
+    let new_block = trunk_ir::Block::new(
+        db,
+        block.id(db),
+        block.location(db),
+        block.args(db).clone(),
+        new_ops,
+    );
+    (new_block, changed)
+}
+
+/// Expand a shift operation into the yield bubbling sequence.
+///
+/// This generates:
+/// 1. State struct with captured live locals
+/// 2. Continuation struct (resume_fn, state, tag)
+/// 3. Set yield globals
+/// 4. Return to unwind
+fn expand_shift_operation<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    live_locals: &[LiveLocal<'db>],
+    resume_fn_name: Option<&QualifiedName>,
+) -> Vec<Operation<'db>> {
+    let location = op.location(db);
+    let i32_ty = core::I32::new(db).as_type();
+    let funcref_ty = wasm::Funcref::new(db).as_type();
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+
+    // Get the prompt tag
+    let tag = op
+        .attributes(db)
+        .get(&Symbol::new("tag"))
+        .cloned()
+        .unwrap_or(Attribute::IntBits(0));
+
+    let tag_value = match tag {
+        Attribute::IntBits(v) => v,
+        _ => 0,
+    };
+
+    let mut ops = Vec::new();
+
+    // === 1. Build State Struct (capturing live locals) ===
+    let state_ty = cont_types::state_type(db, live_locals);
+
+    // Collect the values to capture
+    let live_values: IdVec<Value<'db>> = live_locals.iter().map(|ll| ll.value).collect();
+
+    let state_struct = Operation::of_name(db, location, "wasm.struct_new")
+        .operands(live_values)
+        .attr("type", Attribute::Type(state_ty))
+        .results(IdVec::from(vec![state_ty]))
+        .build();
+    let state_val = Value::new(db, ValueDef::OpResult(state_struct), 0);
+    ops.push(state_struct);
+
+    // === 2. Create continuation struct: (resume_fn, state, tag) ===
+    // Field 0: resume_fn - reference to the generated resume function
+    let resume_fn_val = if let Some(resume_fn_name) = resume_fn_name {
+        // Use ref.func to get function reference
+        let ref_func = wasm::ref_func(db, location, funcref_ty, resume_fn_name.clone());
+        let val = ref_func.as_operation().result(db, 0);
+        ops.push(ref_func.as_operation());
+        val
+    } else {
+        // Fallback: use null funcref if no resume function was generated
+        let null_resume_fn = wasm::ref_null(
+            db,
+            location,
+            funcref_ty,
+            Attribute::Symbol(Symbol::new("func")),
+        );
+        let val = null_resume_fn.as_operation().result(db, 0);
+        ops.push(null_resume_fn.as_operation());
+        val
+    };
+
+    // Field 1: state (the state struct we just created)
+    // Already have state_val
+
+    // Field 2: tag (i32)
+    let tag_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(tag_value));
+    let tag_val = tag_const.as_operation().result(db, 0);
+    ops.push(tag_const.as_operation());
+
+    // Build the continuation struct
+    let cont_ty = cont_types::continuation_type(db);
+    let cont_struct = Operation::of_name(db, location, "wasm.struct_new")
+        .operands(IdVec::from(vec![resume_fn_val, state_val, tag_val]))
+        .attr("type", Attribute::Type(cont_ty))
+        .results(IdVec::from(vec![cont_ty]))
+        .build();
+    let cont_val = Value::new(db, ValueDef::OpResult(cont_struct), 0);
+    ops.push(cont_struct);
+
+    // === 3. Set Yield Globals ===
+
+    // Set $yield_state = 1 (yielding)
+    let const_1 = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1));
+    let const_1_val = const_1.as_operation().result(db, 0);
+    ops.push(const_1.as_operation());
+    ops.push(wasm::global_set(db, location, const_1_val, YIELD_STATE_IDX).as_operation());
+
+    // Set $yield_tag = tag
+    let tag_const2 = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(tag_value));
+    let tag_const2_val = tag_const2.as_operation().result(db, 0);
+    ops.push(tag_const2.as_operation());
+    ops.push(wasm::global_set(db, location, tag_const2_val, YIELD_TAG_IDX).as_operation());
+
+    // Set $yield_cont = continuation struct
+    ops.push(wasm::global_set(db, location, cont_val, YIELD_CONT_IDX).as_operation());
+
+    // Set $yield_value = null (placeholder - full impl will pass shift value)
+    let null_value = wasm::ref_null(
+        db,
+        location,
+        anyref_ty,
+        Attribute::Symbol(Symbol::new("any")),
+    );
+    let null_value_val = null_value.as_operation().result(db, 0);
+    ops.push(null_value.as_operation());
+    ops.push(wasm::global_set(db, location, null_value_val, YIELD_VALUE_IDX).as_operation());
+
+    // === 4. Return to unwind stack ===
+    ops.push(wasm::r#return(db, location, None).as_operation());
+
+    ops
 }
 
 /// Pattern for `cont.push_prompt` -> yield-checking block
@@ -874,141 +1220,6 @@ fn append_ops_to_region<'db>(
     }
 
     trunk_ir::Region::new(db, location, new_blocks.into_iter().collect())
-}
-
-/// Pattern for `cont.shift` -> set yield state and build continuation
-struct ShiftPattern {
-    /// Map from shift location to resume function name
-    resume_fn_names: BTreeMap<LocationKey, QualifiedName>,
-}
-
-impl ShiftPattern {
-    fn new(resume_fn_names: BTreeMap<LocationKey, QualifiedName>) -> Self {
-        Self { resume_fn_names }
-    }
-}
-
-impl RewritePattern for ShiftPattern {
-    fn match_and_rewrite<'db>(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-    ) -> RewriteResult<'db> {
-        let Ok(_shift) = cont::Shift::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
-        };
-
-        let location = op.location(db);
-        let location_key = LocationKey::from_location(db, location);
-        let i32_ty = core::I32::new(db).as_type();
-        let funcref_ty = wasm::Funcref::new(db).as_type();
-
-        // Get the prompt tag
-        let tag = op
-            .attributes(db)
-            .get(&Symbol::new("tag"))
-            .cloned()
-            .unwrap_or(Attribute::IntBits(0));
-
-        let tag_value = match tag {
-            Attribute::IntBits(v) => v,
-            _ => 0,
-        };
-
-        let mut ops = Vec::new();
-
-        // === Build State Struct (capturing live locals) ===
-        //
-        // TODO: The live local analysis is done in ContinuationAnalyzer, but
-        // we need to pass that information to this pattern. Currently we create
-        // an empty state struct. The full implementation will:
-        // 1. Look up shift point info by location_key
-        // 2. For each live local, add its value as an operand to struct_new
-        // 3. The emit phase will create the appropriate struct type
-        let state_ty = cont_types::state_type(db, &[]);
-        let state_struct = Operation::of_name(db, location, "wasm.struct_new")
-            .attr("type", Attribute::Type(state_ty))
-            .results(IdVec::from(vec![state_ty]))
-            .build();
-        let state_val = Value::new(db, ValueDef::OpResult(state_struct), 0);
-        ops.push(state_struct);
-
-        // Suppress unused warning for location_key (will be used when live locals are integrated)
-        let _ = &location_key;
-
-        // 2. Create continuation struct: (resume_fn, state, tag)
-        // Field 0: resume_fn - reference to the generated resume function
-        let resume_fn_val = if let Some(resume_fn_name) = self.resume_fn_names.get(&location_key) {
-            // Use ref.func to get function reference
-            let ref_func = wasm::ref_func(db, location, funcref_ty, resume_fn_name.clone());
-            let val = ref_func.as_operation().result(db, 0);
-            ops.push(ref_func.as_operation());
-            val
-        } else {
-            // Fallback: use null funcref if no resume function was generated
-            let null_resume_fn = wasm::ref_null(
-                db,
-                location,
-                funcref_ty,
-                Attribute::Symbol(Symbol::new("func")),
-            );
-            let val = null_resume_fn.as_operation().result(db, 0);
-            ops.push(null_resume_fn.as_operation());
-            val
-        };
-
-        // Field 1: state (the state struct we just created)
-        // Already have state_val
-
-        // Field 2: tag (i32)
-        let tag_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(tag_value));
-        let tag_val = tag_const.as_operation().result(db, 0);
-        ops.push(tag_const.as_operation());
-
-        // Build the continuation struct
-        let cont_ty = cont_types::continuation_type(db);
-        let cont_struct = Operation::of_name(db, location, "wasm.struct_new")
-            .operands(IdVec::from(vec![resume_fn_val, state_val, tag_val]))
-            .attr("type", Attribute::Type(cont_ty))
-            .results(IdVec::from(vec![cont_ty]))
-            .build();
-        let cont_val = Value::new(db, ValueDef::OpResult(cont_struct), 0);
-        ops.push(cont_struct);
-
-        // === Set Yield Globals ===
-
-        // 3. Set $yield_state = 1 (yielding)
-        let const_1 = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1));
-        let const_1_val = const_1.as_operation().result(db, 0);
-        ops.push(const_1.as_operation());
-        ops.push(wasm::global_set(db, location, const_1_val, YIELD_STATE_IDX).as_operation());
-
-        // 4. Set $yield_tag = tag
-        let tag_const2 = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(tag_value));
-        let tag_const2_val = tag_const2.as_operation().result(db, 0);
-        ops.push(tag_const2.as_operation());
-        ops.push(wasm::global_set(db, location, tag_const2_val, YIELD_TAG_IDX).as_operation());
-
-        // 5. Set $yield_cont = continuation struct
-        ops.push(wasm::global_set(db, location, cont_val, YIELD_CONT_IDX).as_operation());
-
-        // 6. Set $yield_value = null (placeholder - full impl will pass shift value)
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let null_value = wasm::ref_null(
-            db,
-            location,
-            anyref_ty,
-            Attribute::Symbol(Symbol::new("any")),
-        );
-        let null_value_val = null_value.as_operation().result(db, 0);
-        ops.push(null_value.as_operation());
-        ops.push(wasm::global_set(db, location, null_value_val, YIELD_VALUE_IDX).as_operation());
-
-        // 7. Return to unwind stack (will bubble up to push_prompt)
-        ops.push(wasm::r#return(db, location, None).as_operation());
-
-        RewriteResult::Expand(ops)
-    }
 }
 
 // Yield global indices (must match order in lower_wasm.rs module_preamble_ops)
@@ -1441,5 +1652,157 @@ mod tests {
         assert_eq!(tag, Some(99));
         // Should have correct containing function
         assert_eq!(func_name, Some("my_func".to_string()));
+    }
+
+    // === Tests for live local capture ===
+
+    fn shift_location_for_live(db: &dyn salsa::Database) -> Location<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        Location::new(path, Span::new(200, 220)) // Distinct location
+    }
+
+    #[salsa::tracked]
+    fn make_module_with_live_locals(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let shift_loc = shift_location_for_live(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create a function body with:
+        // 1. A value defined before shift (local_val)
+        // 2. A shift point
+        // 3. An operation that uses local_val after shift
+
+        // Define a value before shift
+        let local_op = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(42))
+            .result(i32_ty)
+            .build();
+        let local_val = Value::new(db, ValueDef::OpResult(local_op), 0);
+
+        // Create shift
+        let handler_block = Block::new(db, BlockId::fresh(), shift_loc, IdVec::new(), idvec![]);
+        let handler_region = Region::new(db, shift_loc, idvec![handler_block]);
+        let shift = Operation::of_name(db, shift_loc, "cont.shift")
+            .attr("tag", Attribute::IntBits(1))
+            .region(handler_region)
+            .build();
+
+        // Use local_val after shift
+        let use_after = Operation::of_name(db, location, "wasm.drop")
+            .operand(local_val)
+            .build();
+
+        // Return
+        let return_op = Operation::of_name(db, location, "wasm.return").build();
+
+        // Create function body
+        let func_body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![local_op, shift, use_after, return_op],
+        );
+        let func_body = Region::new(db, location, idvec![func_body_block]);
+
+        // Create func.func operation
+        let func_ty = core::Func::new(db, idvec![], core::Nil::new(db).as_type()).as_type();
+        let func_op = Operation::of_name(db, location, "func.func")
+            .attr(
+                "sym_name",
+                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("fn_with_live"))),
+            )
+            .attr("type", Attribute::Type(func_ty))
+            .region(func_body)
+            .build();
+
+        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_op]);
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa::tracked]
+    fn analyze_live_locals_test(db: &dyn salsa::Database) -> (usize, usize) {
+        let module = make_module_with_live_locals(db);
+        let analysis = analyze_continuations(db, module);
+        let shift_points = analysis.shift_points(db);
+
+        let count = shift_points.len();
+        let live_count = shift_points
+            .values()
+            .next()
+            .map(|info| info.live_locals.len())
+            .unwrap_or(0);
+
+        (count, live_count)
+    }
+
+    #[salsa_test]
+    fn test_live_local_analysis(db: &salsa::DatabaseImpl) {
+        let (count, live_count) = analyze_live_locals_test(db);
+
+        // Should find one shift point
+        assert_eq!(count, 1);
+        // Should have one live local (local_val is defined before and used after shift)
+        assert_eq!(live_count, 1, "Expected 1 live local, got {}", live_count);
+    }
+
+    #[salsa::tracked]
+    fn check_resume_function_has_struct_get(db: &dyn salsa::Database) -> bool {
+        let module = make_module_with_live_locals(db);
+        let lowered = lower(db, module);
+        let body = lowered.body(db);
+        let ops = body.blocks(db)[0].operations(db);
+
+        // The first operation should be the resume function (wasm.func)
+        if let Some(resume_fn) = ops.first() {
+            if resume_fn.full_name(db) == "wasm.func" {
+                // Check if the resume function body contains struct_get
+                let fn_body = resume_fn.regions(db);
+                if let Some(region) = fn_body.first() {
+                    if let Some(block) = region.blocks(db).first() {
+                        return block
+                            .operations(db)
+                            .iter()
+                            .any(|op| op.full_name(db) == "wasm.struct_get");
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    #[salsa_test]
+    fn test_resume_function_extracts_state(db: &salsa::DatabaseImpl) {
+        let has_struct_get = check_resume_function_has_struct_get(db);
+        assert!(
+            has_struct_get,
+            "Resume function should contain struct_get to extract live locals from state"
+        );
+    }
+
+    #[salsa::tracked]
+    fn check_continuation_ops_captured(db: &dyn salsa::Database) -> usize {
+        let module = make_module_with_live_locals(db);
+        let analysis = analyze_continuations(db, module);
+        let shift_points = analysis.shift_points(db);
+
+        shift_points
+            .values()
+            .next()
+            .map(|info| info.continuation_ops.len())
+            .unwrap_or(0)
+    }
+
+    #[salsa_test]
+    fn test_continuation_ops_captured(db: &salsa::DatabaseImpl) {
+        let cont_op_count = check_continuation_ops_captured(db);
+
+        // Should have captured 2 continuation ops: wasm.drop and wasm.return
+        assert_eq!(
+            cont_op_count, 2,
+            "Expected 2 continuation ops (drop + return), got {}",
+            cont_op_count
+        );
     }
 }
