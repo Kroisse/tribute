@@ -132,6 +132,12 @@ pub mod Bytes {
         bytes
     }
 
+    /// Concatenate two byte sequences.
+    /// Intrinsic: allocates a new array and copies both.
+    pub fn concat(left: Bytes, right: Bytes) -> Bytes {
+        left
+    }
+
     /// Get the byte at the given index.
     /// Returns None if index is out of bounds.
     pub fn get(bytes: Bytes, index: Int) -> Option(Int) {

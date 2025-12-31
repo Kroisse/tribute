@@ -430,6 +430,11 @@ dialect! {
         /// `wasm.array_len` operation: get array length.
         fn array_len(r#ref) -> result;
 
+        /// `wasm.array_copy` operation: copy elements between arrays.
+        /// Operands: dst_ref, dst_offset, src_ref, src_offset, len
+        #[attr(dst_type_idx, src_type_idx)]
+        fn array_copy(dst, dst_offset, src, src_offset, len);
+
         // === WasmGC: References ===
 
         /// `wasm.ref_null` operation: create null reference.
