@@ -531,41 +531,38 @@ fn extract_symbol_from_operation<'db>(
 
     // Try struct
     if let Ok(struct_op) = tribute::StructDef::from_operation(db, *op) {
-        if let trunk_ir::Attribute::Symbol(name) = struct_op.sym_name(db) {
-            return Some(create_symbol(
-                *name,
-                SymbolKind::STRUCT,
-                op.location(db).span,
-                rope,
-                vec![],
-            ));
-        }
+        let name = struct_op.sym_name(db);
+        return Some(create_symbol(
+            name,
+            SymbolKind::STRUCT,
+            op.location(db).span,
+            rope,
+            vec![],
+        ));
     }
 
     // Try enum
     if let Ok(enum_op) = tribute::EnumDef::from_operation(db, *op) {
-        if let trunk_ir::Attribute::Symbol(name) = enum_op.sym_name(db) {
-            return Some(create_symbol(
-                *name,
-                SymbolKind::ENUM,
-                op.location(db).span,
-                rope,
-                vec![],
-            ));
-        }
+        let name = enum_op.sym_name(db);
+        return Some(create_symbol(
+            name,
+            SymbolKind::ENUM,
+            op.location(db).span,
+            rope,
+            vec![],
+        ));
     }
 
     // Try ability
     if let Ok(ability_op) = tribute::AbilityDef::from_operation(db, *op) {
-        if let trunk_ir::Attribute::Symbol(name) = ability_op.sym_name(db) {
-            return Some(create_symbol(
-                *name,
-                SymbolKind::INTERFACE,
-                op.location(db).span,
-                rope,
-                vec![],
-            ));
-        }
+        let name = ability_op.sym_name(db);
+        return Some(create_symbol(
+            name,
+            SymbolKind::INTERFACE,
+            op.location(db).span,
+            rope,
+            vec![],
+        ));
     }
 
     None

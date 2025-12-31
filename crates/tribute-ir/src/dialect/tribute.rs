@@ -123,19 +123,47 @@ dialect! {
 
         /// `tribute.struct_def` operation: defines a struct type.
         ///
+        /// The fields region contains `tribute.field_def` operations.
+        ///
         /// Attributes:
         /// - `sym_name`: The name of the struct type
-        /// - `fields`: Field definitions as [(name, type)] pairs
-        #[attr(sym_name, fields)]
-        fn struct_def() -> result;
+        #[attr(sym_name: Symbol)]
+        fn struct_def() -> result {
+            #[region(fields)] {}
+        };
 
         /// `tribute.enum_def` operation: defines an enum (sum) type.
         ///
+        /// The variants region contains `tribute.variant_def` operations.
+        ///
         /// Attributes:
         /// - `sym_name`: The name of the enum type
-        /// - `variants`: Variant definitions as [(name, fields)] pairs
-        #[attr(sym_name, variants)]
-        fn enum_def() -> result;
+        #[attr(sym_name: Symbol)]
+        fn enum_def() -> result {
+            #[region(variants)] {}
+        };
+
+        /// `tribute.field_def` operation: declares a field within a struct.
+        ///
+        /// Used inside `tribute.struct_def` fields region to define struct fields.
+        ///
+        /// Attributes:
+        /// - `sym_name`: The field name
+        /// - `type`: The field's type
+        #[attr(sym_name: Symbol, r#type: Type)]
+        fn field_def();
+
+        /// `tribute.variant_def` operation: declares a variant within an enum.
+        ///
+        /// Used inside `tribute.enum_def` variants region. The fields region
+        /// contains `tribute.field_def` operations for the variant's fields.
+        ///
+        /// Attributes:
+        /// - `sym_name`: The variant name
+        #[attr(sym_name: Symbol)]
+        fn variant_def() {
+            #[region(fields)] {}
+        };
 
         /// `tribute.ability_def` operation: defines an ability (effect) type.
         ///
@@ -143,7 +171,7 @@ dialect! {
         ///
         /// Attributes:
         /// - `sym_name`: The name of the ability
-        #[attr(sym_name)]
+        #[attr(sym_name: Symbol)]
         fn ability_def() -> result {
             #[region(operations)] {}
         };

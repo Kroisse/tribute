@@ -787,49 +787,51 @@ impl<'db> CaseLowerer<'db> {
     }
 
     fn collect_variant_tags_from_enum(&mut self, op: Operation<'db>) {
-        let Some(Attribute::List(variants)) = op.attributes(self.db).get(&Symbol::new("variants"))
-        else {
+        // Parse as tribute.enum_def with region-based variants
+        let Ok(enum_def) = tribute::EnumDef::from_operation(self.db, op) else {
             return;
         };
-        let type_name = op
-            .attributes(self.db)
-            .get(&Symbol::new("sym_name"))
-            .and_then(|attr| match attr {
-                Attribute::Symbol(sym) => Some(*sym),
-                _ => None,
-            })
-            .unwrap_or_else(|| Symbol::new("_"));
 
+        let type_name = enum_def.sym_name(self.db);
+
+        let variants_region = enum_def.variants(self.db);
         let mut variant_names = SymbolVec::new();
-        for (idx, variant) in variants.iter().enumerate() {
-            let Attribute::List(parts) = variant else {
-                continue;
-            };
-            let Some(Attribute::Symbol(name)) = parts.first() else {
-                continue;
-            };
-            let tag = idx as u32;
-            if self
-                .variant_tags
-                .insert(*name, tag)
-                .is_some_and(|existing| existing != tag)
-            {
-                self.emit_error(
-                    op.location(self.db),
-                    "ambiguous variant name in enum declarations",
-                );
+        let mut idx = 0u32;
+
+        for block in variants_region.blocks(self.db).iter() {
+            for variant_op in block.operations(self.db).iter().copied() {
+                // Check if this is a tribute.variant_def
+                let Ok(variant_def) = tribute::VariantDef::from_operation(self.db, variant_op)
+                else {
+                    continue;
+                };
+
+                let name = variant_def.sym_name(self.db);
+                let tag = idx;
+                idx += 1;
+
+                if self
+                    .variant_tags
+                    .insert(name, tag)
+                    .is_some_and(|existing| existing != tag)
+                {
+                    self.emit_error(
+                        op.location(self.db),
+                        "ambiguous variant name in enum declarations",
+                    );
+                }
+                if self
+                    .variant_owner
+                    .insert(name, type_name)
+                    .is_some_and(|existing| existing != type_name)
+                {
+                    self.emit_error(
+                        op.location(self.db),
+                        "ambiguous variant name in enum declarations",
+                    );
+                }
+                variant_names.push(name);
             }
-            if self
-                .variant_owner
-                .insert(*name, type_name)
-                .is_some_and(|existing| existing != type_name)
-            {
-                self.emit_error(
-                    op.location(self.db),
-                    "ambiguous variant name in enum declarations",
-                );
-            }
-            variant_names.push(*name);
         }
         self.enum_variants.insert(type_name, variant_names);
     }
