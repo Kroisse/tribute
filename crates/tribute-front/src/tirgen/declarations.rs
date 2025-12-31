@@ -129,11 +129,21 @@ fn collect_use_imports<'db>(
 
 /// Lower a function definition to a func.func operation.
 pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<func::Func<'db>> {
-    let location = ctx.location(&node);
+    // function_definition contains either regular_function or extern_function
+    let func_node = node
+        .named_child(0)
+        .filter(|c| c.kind() == "regular_function" || c.kind() == "extern_function")?;
+
+    let location = ctx.location(&func_node);
+
+    // extern_function has no body - skip for now (TODO: handle extern functions)
+    if func_node.kind() == "extern_function" {
+        return None;
+    }
 
     // Use field-based access for cleaner extraction
-    let name_node = node.child_by_field_name("name")?;
-    let body_node = node.child_by_field_name("body")?;
+    let name_node = func_node.child_by_field_name("name")?;
+    let body_node = func_node.child_by_field_name("body")?;
 
     let name_str = node_text(&name_node, &ctx.source);
     let name_sym = Symbol::from_dynamic(&name_str);
@@ -144,12 +154,12 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
     });
 
     // Optional fields
-    let (param_names, param_types) = node
+    let (param_names, param_types) = func_node
         .child_by_field_name("params")
         .map(|params| parse_parameter_list(ctx, params))
         .unwrap_or_default();
 
-    let return_type = node
+    let return_type = func_node
         .child_by_field_name("return_type")
         .and_then(|rt| parse_return_type(ctx, rt));
 
@@ -224,27 +234,20 @@ pub fn lower_struct_decl<'db>(
     let struct_ty = adt::typeref(ctx.db, QualifiedName::simple(type_name));
     let fields = parse_struct_fields(ctx, body_node);
 
-    // Build fields attribute for the struct definition
-    let fields_attr = Attribute::List(
-        fields
-            .iter()
-            .map(|(field_name, field_type)| {
-                Attribute::List(vec![
-                    Attribute::Symbol(sym(field_name)),
-                    Attribute::Type(*field_type),
-                ])
-            })
-            .collect(),
-    );
+    // Build fields region containing tribute.field_def operations
+    let mut fields_block = BlockBuilder::new(ctx.db, location);
+    for (field_name, field_type) in &fields {
+        fields_block.op(tribute::field_def(
+            ctx.db,
+            location,
+            sym(field_name),
+            *field_type,
+        ));
+    }
+    let fields_region = Region::new(ctx.db, location, idvec![fields_block.build()]);
 
     // Create the struct definition operation
-    let struct_op = tribute::struct_def(
-        ctx.db,
-        location,
-        struct_ty,
-        Attribute::Symbol(type_name),
-        fields_attr,
-    );
+    let struct_op = tribute::struct_def(ctx.db, location, struct_ty, type_name, fields_region);
 
     // Create a module with the same name as the struct, containing field accessors
     let fields_clone = fields.clone();
@@ -562,30 +565,37 @@ pub fn lower_enum_decl<'db>(
     // with variant information accessible via adt::get_enum_variants
     let result_ty = adt::enum_type(ctx.db, QualifiedName::simple(sym(&name)), enum_variants);
 
-    // Also build the attribute for ty.enum operation (for backwards compatibility)
-    let variants_attr = Attribute::List(
-        parsed_variants
-            .into_iter()
-            .map(|(variant_name, variant_fields)| {
-                Attribute::List(vec![
-                    Attribute::Symbol(sym(&variant_name)),
-                    Attribute::List(
-                        variant_fields
-                            .into_iter()
-                            .map(|(_f_name, f_type)| Attribute::Type(f_type))
-                            .collect(),
-                    ),
-                ])
-            })
-            .collect(),
-    );
+    // Build variants region containing tribute.variant_def operations
+    let mut variants_block = BlockBuilder::new(ctx.db, location);
+    for (variant_name, variant_fields) in parsed_variants {
+        // Build fields region for this variant
+        let mut variant_fields_block = BlockBuilder::new(ctx.db, location);
+        for (field_name, field_type) in variant_fields {
+            variant_fields_block.op(tribute::field_def(
+                ctx.db,
+                location,
+                sym(&field_name),
+                field_type,
+            ));
+        }
+        let variant_fields_region =
+            Region::new(ctx.db, location, idvec![variant_fields_block.build()]);
+
+        variants_block.op(tribute::variant_def(
+            ctx.db,
+            location,
+            sym(&variant_name),
+            variant_fields_region,
+        ));
+    }
+    let variants_region = Region::new(ctx.db, location, idvec![variants_block.build()]);
 
     Some(tribute::enum_def(
         ctx.db,
         location,
         result_ty,
-        Attribute::Symbol(sym(&name)),
-        variants_attr,
+        sym(&name),
+        variants_region,
     ))
 }
 
@@ -789,7 +799,7 @@ pub fn lower_ability_decl<'db>(
         ctx.db,
         location,
         infer_ty,
-        Attribute::Symbol(sym(&name)),
+        sym(&name),
         operations_region,
     ))
 }

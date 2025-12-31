@@ -112,6 +112,52 @@ pub mod Result {
     }
 }
 
+/// Bytes module with operations for byte sequences.
+pub mod Bytes {
+    /// Get the length of a byte sequence.
+    /// Intrinsic: directly accesses the len field.
+    pub fn len(bytes: Bytes) -> Int {
+        0
+    }
+
+    /// Get the byte at the given index.
+    /// Intrinsic: panics if index is out of bounds.
+    pub fn get_or_panic(bytes: Bytes, index: Int) -> Int {
+        0
+    }
+
+    /// Create a slice of the byte sequence.
+    /// Intrinsic: panics if start or end is out of bounds.
+    pub fn slice_or_panic(bytes: Bytes, start: Int, end: Int) -> Bytes {
+        bytes
+    }
+
+    /// Concatenate two byte sequences.
+    /// Intrinsic: allocates a new array and copies both.
+    pub fn concat(left: Bytes, right: Bytes) -> Bytes {
+        left
+    }
+
+    /// Get the byte at the given index.
+    /// Returns None if index is out of bounds.
+    pub fn get(bytes: Bytes, index: Int) -> Option(Int) {
+        if index >= 0 && index < bytes.len() {
+            Some(bytes.get_or_panic(index))
+        } else {
+            None
+        }
+    }
+
+    /// Create a slice of the byte sequence.
+    /// Clamps start and end to valid bounds.
+    pub fn slice(bytes: Bytes, start: Int, end: Int) -> Bytes {
+        let len = bytes.len()
+        let s = if start < 0 { 0 } else if start > len { len } else { start }
+        let e = if end < s { s } else if end > len { len } else { end }
+        bytes.slice_or_panic(s, e)
+    }
+}
+
 /// Print a line to standard output.
 /// This is handled as an intrinsic by the wasm backend.
 fn print_line(message: String) -> Nil {
