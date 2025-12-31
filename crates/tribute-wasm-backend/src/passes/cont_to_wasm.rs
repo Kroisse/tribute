@@ -1022,16 +1022,24 @@ fn expand_shift_operation<'db>(
     // Set $yield_cont = continuation struct
     ops.push(wasm::global_set(db, location, cont_val, YIELD_CONT_IDX).as_operation());
 
-    // Set $yield_value = null (placeholder - full impl will pass shift value)
-    let null_value = wasm::ref_null(
-        db,
-        location,
-        anyref_ty,
-        Attribute::Symbol(Symbol::new("any")),
-    );
-    let null_value_val = null_value.as_operation().result(db, 0);
-    ops.push(null_value.as_operation());
-    ops.push(wasm::global_set(db, location, null_value_val, YIELD_VALUE_IDX).as_operation());
+    // Set $yield_value from shift's operand (or null if no value provided)
+    let shift_operands = op.operands(db);
+    let yield_value_val = if let Some(&first_value) = shift_operands.first() {
+        // Use the first operand as the yield value
+        first_value
+    } else {
+        // No value provided - use null
+        let null_value = wasm::ref_null(
+            db,
+            location,
+            anyref_ty,
+            Attribute::Symbol(Symbol::new("any")),
+        );
+        let val = null_value.as_operation().result(db, 0);
+        ops.push(null_value.as_operation());
+        val
+    };
+    ops.push(wasm::global_set(db, location, yield_value_val, YIELD_VALUE_IDX).as_operation());
 
     // === 4. Return to unwind stack ===
     ops.push(wasm::r#return(db, location, None).as_operation());
@@ -1105,21 +1113,48 @@ impl RewritePattern for PushPromptPattern {
         let tag_cmp = wasm::i32_eq(db, location, yield_tag_val, our_tag_val, i32_ty);
         let tag_match_val = tag_cmp.as_operation().result(db, 0);
 
-        // If tag matches: reset yield_state and handle
-        // For now, we just reset yield_state. Handler invocation requires more infrastructure.
+        // If tag matches: handle the yielded effect
+        //
+        // Handler invocation flow:
+        // 1. Reset yield_state to 0 (we're handling this yield)
+        // 2. Load the continuation from $yield_cont
+        // 3. Load the yield value from $yield_value
+        // 4. Call the handler with (continuation, value)
+        //
+        // Currently, step 4 requires upstream changes:
+        // - handler_lower.rs needs to populate shift's handler region with actual code
+        // - The handler function would be passed via a global or stored in the continuation
+        //
+        // For now, we reset yield_state and load the values as preparation.
+
         let const_0 = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0));
         let const_0_val = const_0.as_operation().result(db, 0);
         let reset_yield = wasm::global_set(db, location, const_0_val, YIELD_STATE_IDX);
 
+        // Load continuation from $yield_cont for handler invocation
+        let cont_ty = cont_types::continuation_type(db);
+        let get_cont = wasm::global_get(db, location, cont_ty, YIELD_CONT_IDX);
+
+        // Load yield value from $yield_value for handler invocation
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let get_value = wasm::global_get(db, location, anyref_ty, YIELD_VALUE_IDX);
+
         // Build the "then" block for tag match (handle)
-        // TODO: Actually invoke handler with continuation
-        // For now, just reset yield_state
+        // TODO(#100): Call handler function with (continuation, value)
+        // The handler function reference needs to be provided by handler_lower.rs
+        // via the shift's handler region or a separate mechanism.
         let then_block = trunk_ir::Block::new(
             db,
             trunk_ir::BlockId::fresh(),
             location,
             IdVec::new(),
-            IdVec::from(vec![const_0.as_operation(), reset_yield.as_operation()]),
+            IdVec::from(vec![
+                const_0.as_operation(),
+                reset_yield.as_operation(),
+                get_cont.as_operation(),
+                get_value.as_operation(),
+                // TODO: Call handler with continuation and value
+            ]),
         );
         let then_region = trunk_ir::Region::new(db, location, IdVec::from(vec![then_block]));
 

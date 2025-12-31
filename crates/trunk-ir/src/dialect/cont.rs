@@ -14,8 +14,11 @@ dialect! {
         };
 
         /// `cont.shift` operation: captures continuation and jumps to handler.
+        ///
+        /// The optional `value` operand is passed to the handler along with
+        /// the captured continuation.
         #[attr(tag: any)]
-        fn shift() {
+        fn shift(#[rest] values) {
             #[region(handler)] {}
         };
 
