@@ -2940,4 +2940,179 @@ mod tests {
         // Index 3 is the user struct from inside the function body
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
     }
+
+    // ========================================
+    // Test: builtin type indices are skipped
+    // ========================================
+
+    /// Test that array_get with BYTES_ARRAY_IDX (1) doesn't panic.
+    /// This tests the fix for the "attempt to subtract with overflow" bug
+    /// that occurred when operations referenced builtin type indices.
+    #[salsa::tracked]
+    fn make_array_get_builtin_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create a ref.null for the bytes array type
+        let bytes_array_ref = Operation::of_name(db, location, "wasm.ref_null")
+            .attr("heap_type", Attribute::IntBits(BYTES_ARRAY_IDX as u64))
+            .results(idvec![i32_ty]) // placeholder type
+            .build();
+
+        // Create index value
+        let index = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(0))
+            .results(idvec![i32_ty])
+            .build();
+
+        // Create array_get_u with BYTES_ARRAY_IDX (builtin type)
+        let array_get = Operation::of_name(db, location, "wasm.array_get_u")
+            .operands(idvec![bytes_array_ref.result(db, 0), index.result(db, 0)])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(BYTES_ARRAY_IDX as u64))
+            .build();
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![bytes_array_ref, index, array_get],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_array_get_with_builtin_type_idx_does_not_panic(db: &salsa::DatabaseImpl) {
+        let module = make_array_get_builtin_module(db);
+        let result = collect_gc_types(db, module);
+
+        // Should complete without panic
+        assert!(
+            result.is_ok(),
+            "collect_gc_types should not panic for builtin type indices"
+        );
+
+        let (gc_types, _type_map) = result.expect("collect_gc_types failed");
+
+        // Should only have the 3 built-in types (no additional user types allocated)
+        assert_eq!(gc_types.len(), 3);
+        assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
+        assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
+        assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
+    }
+
+    /// Test that struct_get with BYTES_STRUCT_IDX (2) doesn't panic.
+    #[salsa::tracked]
+    fn make_struct_get_builtin_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create a ref.null for the bytes struct type
+        let bytes_struct_ref = Operation::of_name(db, location, "wasm.ref_null")
+            .attr("heap_type", Attribute::IntBits(BYTES_STRUCT_IDX as u64))
+            .results(idvec![i32_ty]) // placeholder type
+            .build();
+
+        // Create struct_get with BYTES_STRUCT_IDX (builtin type)
+        let struct_get = Operation::of_name(db, location, "wasm.struct_get")
+            .operands(idvec![bytes_struct_ref.result(db, 0)])
+            .results(idvec![i32_ty])
+            .attr("type_idx", Attribute::IntBits(BYTES_STRUCT_IDX as u64))
+            .attr("field_idx", Attribute::IntBits(0))
+            .build();
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![bytes_struct_ref, struct_get],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_struct_get_with_builtin_type_idx_does_not_panic(db: &salsa::DatabaseImpl) {
+        let module = make_struct_get_builtin_module(db);
+        let result = collect_gc_types(db, module);
+
+        // Should complete without panic
+        assert!(
+            result.is_ok(),
+            "collect_gc_types should not panic for builtin type indices"
+        );
+
+        let (gc_types, _type_map) = result.expect("collect_gc_types failed");
+
+        // Should only have the 3 built-in types (no additional user types allocated)
+        assert_eq!(gc_types.len(), 3);
+        assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
+        assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
+        assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
+    }
+
+    /// Test that array_set with BYTES_ARRAY_IDX (1) doesn't panic.
+    #[salsa::tracked]
+    fn make_array_set_builtin_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create a ref.null for the bytes array type
+        let bytes_array_ref = Operation::of_name(db, location, "wasm.ref_null")
+            .attr("heap_type", Attribute::IntBits(BYTES_ARRAY_IDX as u64))
+            .results(idvec![i32_ty])
+            .build();
+
+        // Create index value
+        let index = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(0))
+            .results(idvec![i32_ty])
+            .build();
+
+        // Create value to set
+        let value = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(42))
+            .results(idvec![i32_ty])
+            .build();
+
+        // Create array_set with BYTES_ARRAY_IDX (builtin type)
+        let array_set = Operation::of_name(db, location, "wasm.array_set")
+            .operands(idvec![
+                bytes_array_ref.result(db, 0),
+                index.result(db, 0),
+                value.result(db, 0)
+            ])
+            .attr("type_idx", Attribute::IntBits(BYTES_ARRAY_IDX as u64))
+            .build();
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![bytes_array_ref, index, value, array_set],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_array_set_with_builtin_type_idx_does_not_panic(db: &salsa::DatabaseImpl) {
+        let module = make_array_set_builtin_module(db);
+        let result = collect_gc_types(db, module);
+
+        // Should complete without panic
+        assert!(
+            result.is_ok(),
+            "collect_gc_types should not panic for builtin type indices"
+        );
+
+        let (gc_types, _type_map) = result.expect("collect_gc_types failed");
+
+        // Should only have the 3 built-in types
+        assert_eq!(gc_types.len(), 3);
+    }
 }
