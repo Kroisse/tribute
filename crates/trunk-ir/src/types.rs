@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{IdVec, QualifiedName, Span, Symbol, dialect::core};
+use crate::{IdVec, Location, QualifiedName, Span, Symbol, dialect::core};
 
 /// Trait for dialect-specific type wrappers.
 ///
@@ -119,6 +119,8 @@ pub enum Attribute<'db> {
     List(Vec<Attribute<'db>>),
     /// Source span (for tracking source locations in attributes).
     Span(Span),
+    /// Full source location (file path + span).
+    Location(Location<'db>),
 }
 
 impl From<i64> for Attribute<'_> {
@@ -166,5 +168,11 @@ impl From<String> for Attribute<'_> {
 impl From<&str> for Attribute<'_> {
     fn from(value: &str) -> Self {
         Attribute::String(value.to_string())
+    }
+}
+
+impl<'db> From<Location<'db>> for Attribute<'db> {
+    fn from(value: Location<'db>) -> Self {
+        Attribute::Location(value)
     }
 }

@@ -164,6 +164,18 @@ pub mod block_arg_attrs {
     pub fn BIND_NAME() -> Symbol {
         Symbol::new("bind_name")
     }
+
+    /// The source location of the binding.
+    ///
+    /// Used for:
+    /// - LSP hover: show type at binding site
+    /// - Go-to-definition: navigate to binding
+    /// - Diagnostics: precise error locations
+    #[allow(non_snake_case)]
+    #[inline]
+    pub fn BIND_LOCATION() -> Symbol {
+        Symbol::new("bind_location")
+    }
 }
 
 // === Pattern Region Builders ===
