@@ -89,19 +89,8 @@ fn main() { test_ops() }
 // Tests requiring additional lowering passes
 // =============================================================================
 
-#[salsa_test]
-#[ignore = "requires tribute.block lowering for if/else branches"]
-fn test_compile_if_expression(db: &salsa::DatabaseImpl) {
-    let code = r#"
-fn max(a, b) {
-    if a > b { a } else { b }
-}
-fn main() { max(3, 5) }
-"#;
-    let source = source_from_code(db, "if_expr.trb", code);
-    let binary = stage_lower_to_wasm(db, source);
-    assert!(binary.is_some(), "Should compile if expression");
-}
+// Note: Tribute does not have if-else expressions; control flow uses
+// pattern matching (case) and algebraic effects.
 
 #[salsa_test]
 #[ignore = "requires string literal lowering in case patterns"]
