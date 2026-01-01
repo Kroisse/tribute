@@ -9,18 +9,18 @@ use std::sync::LazyLock;
 
 use tracing::debug;
 
-use tribute_ir::dialect::{adt, tribute};
+use tribute_ir::dialect::{adt, closure, tribute};
 use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::{
     Attribute, Attrs, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
     Type, Value, ValueDef,
 };
 use wasm_encoder::{
-    ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
-    DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
-    FieldType, Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection,
-    Instruction, MemorySection, MemoryType, Module, RefType, StorageType, StructType, SubType,
-    TableSection, TableType, TypeSection, ValType,
+    AbstractHeapType, ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType,
+    ConstExpr, DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind,
+    ExportSection, FieldType, Function, FunctionSection, GlobalSection, GlobalType, HeapType,
+    ImportSection, Instruction, MemorySection, MemoryType, Module, RefType, StorageType,
+    StructType, SubType, TableSection, TableType, TypeSection, ValType,
 };
 
 use crate::errors;
@@ -2423,6 +2423,43 @@ fn type_to_valtype<'db>(
         // ADT base types (e.g., adt.Expr) without specific variant type_idx
         // These represent "any variant of this enum" and use anyref
         Ok(ValType::Ref(RefType::ANYREF))
+    } else if core::Func::from_type(db, ty).is_some() {
+        // Function types as values use anyref (closures are passed as structs)
+        // In Tribute, function-typed parameters receive closures at runtime
+        Ok(ValType::Ref(RefType::ANYREF))
+    } else if closure::Closure::from_type(db, ty).is_some() {
+        // Closure types - these are WasmGC structs
+        // If registered in type_idx_by_type, use concrete ref; otherwise anyref
+        if let Some(&type_idx) = type_idx_by_type.get(&ty) {
+            Ok(ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Concrete(type_idx),
+            }))
+        } else {
+            // Fallback to anyref for unregistered closure types
+            Ok(ValType::Ref(RefType::ANYREF))
+        }
+    } else if ty.dialect(db) == wasm::DIALECT_NAME() {
+        // WASM dialect types (e.g., wasm.structref for continuation frames)
+        let name = ty.name(db);
+        if name == Symbol::new("structref") {
+            Ok(ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Struct,
+                },
+            }))
+        } else if name == Symbol::new("funcref") {
+            Ok(ValType::Ref(RefType::FUNCREF))
+        } else if name == Symbol::new("anyref") {
+            Ok(ValType::Ref(RefType::ANYREF))
+        } else {
+            Err(CompilationError::type_error(format!(
+                "unsupported wasm type: wasm.{}",
+                name
+            )))
+        }
     } else {
         Err(CompilationError::type_error(format!(
             "unsupported wasm value type: {}.{}",
