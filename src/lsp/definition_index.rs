@@ -266,6 +266,23 @@ impl DefinitionIndex {
 
         None
     }
+
+    /// Get all definitions in the module.
+    pub fn definitions(&self) -> &[DefinitionEntry] {
+        &self.definitions
+    }
+}
+
+/// Reserved keywords in Tribute.
+/// Based on `contrib/zed/grammars/tribute/grammar.js`.
+pub const KEYWORDS: &[&str] = &[
+    "fn", "let", "case", "struct", "enum", "ability", "const", "pub", "use", "mod", "if", "handle",
+    "as", "True", "False", "Nil",
+];
+
+/// Check if a name is a reserved keyword.
+pub fn is_keyword(name: &str) -> bool {
+    KEYWORDS.contains(&name)
 }
 
 /// Error type for rename validation.
@@ -347,18 +364,6 @@ pub fn validate_identifier(name: &str, kind: DefinitionKind) -> Result<(), Renam
     }
 
     Ok(())
-}
-
-/// Reserved keywords in Tribute.
-/// Based on `contrib/zed/grammars/tribute/grammar.js`.
-pub const KEYWORDS: &[&str] = &[
-    "fn", "let", "case", "struct", "enum", "ability", "const", "pub", "use", "mod", "if", "handle",
-    "as", "True", "False", "Nil",
-];
-
-/// Check if a name is a reserved keyword.
-pub fn is_keyword(name: &str) -> bool {
-    KEYWORDS.contains(&name)
 }
 
 #[cfg(test)]

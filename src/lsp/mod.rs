@@ -6,6 +6,7 @@
 //! - Go to Definition: Navigate to symbol definitions
 
 mod call_index;
+mod completion_index;
 mod definition_index;
 mod pretty;
 mod server;

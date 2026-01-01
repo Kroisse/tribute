@@ -7,6 +7,7 @@ use std::io;
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
+    CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
@@ -20,8 +21,8 @@ use lsp_types::{
         PublishDiagnostics,
     },
     request::{
-        DocumentSymbolRequest, GotoDefinition, HoverRequest, PrepareRenameRequest, References,
-        Rename, SignatureHelpRequest,
+        Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest, PrepareRenameRequest,
+        References, Rename, SignatureHelpRequest,
     },
 };
 use ropey::Rope;
@@ -29,6 +30,7 @@ use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
 use super::call_index::{CallIndex, get_param_names};
+use super::completion_index::{CompletionIndex, CompletionKind};
 use super::definition_index::{DefinitionIndex, validate_identifier};
 use super::pretty::{format_signature, print_type};
 use super::type_index::TypeIndex;
@@ -99,8 +101,12 @@ impl LspServer {
             let result = self.prepare_rename(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
-        } else if let Some((id, params)) = cast_request::<Rename>(req) {
+        } else if let Some((id, params)) = cast_request::<Rename>(req.clone()) {
             let result = self.rename(params);
+            let response = Response::new_ok(id, result);
+            self.connection.sender.send(Message::Response(response))?;
+        } else if let Some((id, params)) = cast_request::<Completion>(req) {
+            let result = self.completion(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
         }
@@ -386,6 +392,64 @@ impl LspServer {
         })
     }
 
+    fn completion(&self, params: CompletionParams) -> Option<CompletionList> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        tracing::debug!(
+            line = position.line,
+            character = position.character,
+            "Completion request"
+        );
+
+        let rope = self.db.source_cst(uri)?.text(&self.db).clone();
+        let offset = offset_from_position(&rope, position.line, position.character)?;
+        let source_cst = self.db.source_cst(uri)?;
+
+        // Extract prefix from current position (for filtering)
+        let prefix = extract_completion_prefix(&rope, offset);
+
+        let items = self.db.attach(|db| {
+            let module = compile(db, source_cst);
+            let index = CompletionIndex::build(db, &module);
+
+            // Get expression completions filtered by prefix
+            let mut completions: Vec<_> = index
+                .complete_expression(&prefix)
+                .into_iter()
+                .cloned()
+                .collect();
+
+            // Add keyword completions
+            completions.extend(CompletionIndex::complete_keywords(&prefix));
+
+            Some(completions)
+        })?;
+
+        // Convert to LSP CompletionItems
+        let completion_items: Vec<CompletionItem> = items
+            .into_iter()
+            .map(|entry| CompletionItem {
+                label: entry.name,
+                kind: Some(match entry.kind {
+                    CompletionKind::Function => CompletionItemKind::FUNCTION,
+                    CompletionKind::Constructor => CompletionItemKind::CONSTRUCTOR,
+                    CompletionKind::Keyword => CompletionItemKind::KEYWORD,
+                    CompletionKind::Ability => CompletionItemKind::INTERFACE,
+                }),
+                detail: entry.detail,
+                ..Default::default()
+            })
+            .collect();
+
+        tracing::debug!(count = completion_items.len(), "Completion items");
+
+        Some(CompletionList {
+            is_incomplete: false,
+            items: completion_items,
+        })
+    }
+
     fn document_symbols(&self, params: DocumentSymbolParams) -> Option<DocumentSymbolResponse> {
         let uri = &params.text_document.uri;
         let source_cst = self.db.source_cst(uri)?;
@@ -599,6 +663,11 @@ pub fn serve(_log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
             prepare_provider: Some(true),
             work_done_progress_options: Default::default(),
         })),
+        completion_provider: Some(CompletionOptions {
+            trigger_characters: Some(vec![".".to_string(), ":".to_string()]),
+            resolve_provider: Some(false),
+            ..Default::default()
+        }),
         ..Default::default()
     };
 
@@ -640,6 +709,38 @@ fn span_to_range(rope: &Rope, span: trunk_ir::Span) -> lsp_types::Range {
             character: end.1,
         },
     }
+}
+
+/// Extract the identifier prefix at the cursor position for completion filtering.
+fn extract_completion_prefix(rope: &Rope, offset: usize) -> String {
+    if offset == 0 {
+        return String::new();
+    }
+
+    let text = rope.slice(..);
+    let mut start = offset;
+
+    // Walk backwards to find start of identifier
+    while start > 0 {
+        let char_idx = rope.byte_to_char(start.saturating_sub(1));
+        if char_idx >= text.len_chars() {
+            break;
+        }
+        let c = text.char(char_idx);
+        if c.is_alphanumeric() || c == '_' {
+            start = start.saturating_sub(c.len_utf8());
+        } else {
+            break;
+        }
+    }
+
+    if start >= offset {
+        return String::new();
+    }
+
+    // Extract the prefix string
+    rope.slice(rope.byte_to_char(start)..rope.byte_to_char(offset))
+        .to_string()
 }
 
 fn position_from_offset(rope: &Rope, offset: usize) -> (u32, u32) {
