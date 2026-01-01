@@ -888,7 +888,12 @@ fn check_for_call_indirect(db: &dyn salsa::Database, region: &trunk_ir::Region<'
     false
 }
 
-/// Test that closure.func/closure.env are generated after closure lowering.
+/// Test that closure operations are properly lowered after closure lowering.
+///
+/// After lowering:
+/// - `closure.new` → `func.constant` + `adt.struct_new`
+/// - `closure.func` → `adt.struct_get` (field 0)
+/// - `closure.env` → `adt.struct_get` (field 1)
 #[test]
 fn test_closure_lowering() {
     use tribute::database::parse_with_thread_local;
@@ -926,46 +931,67 @@ fn main() -> Int {
             diagnostics.len()
         );
 
-        // Check that closure.func and closure.env are generated
+        // Check that closure operations are lowered
         let body = module.body(db);
-        let (has_closure_func, has_closure_env) = check_for_closure_ops(db, &body);
+        let lowered_ops = check_for_lowered_closure_ops(db, &body);
 
+        // Verify closure.func/closure.env are lowered to adt.struct_get
         assert!(
-            has_closure_func,
-            "Expected closure.func in apply function after closure lowering"
-        );
-        assert!(
-            has_closure_env,
-            "Expected closure.env in apply function after closure lowering"
+            lowered_ops.has_struct_get,
+            "Expected adt.struct_get after closure lowering (from closure.func/closure.env)"
         );
     });
 }
 
-/// Helper to check for closure.func and closure.env operations
-fn check_for_closure_ops(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>) -> (bool, bool) {
-    use tribute_ir::dialect::closure;
+/// Tracks what lowered closure operations are present
+struct LoweredClosureOps {
+    has_func_constant: bool,
+    has_struct_new: bool,
+    has_struct_get: bool,
+}
 
-    let mut has_func = false;
-    let mut has_env = false;
+/// Helper to check for lowered closure operations
+fn check_for_lowered_closure_ops(
+    db: &dyn salsa::Database,
+    region: &trunk_ir::Region<'_>,
+) -> LoweredClosureOps {
+    use tribute_ir::dialect::adt;
+    use trunk_ir::dialect::func;
+
+    let mut result = LoweredClosureOps {
+        has_func_constant: false,
+        has_struct_new: false,
+        has_struct_get: false,
+    };
 
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
-            if op.dialect(db) == closure::DIALECT_NAME() {
-                if op.name(db) == closure::FUNC() {
-                    has_func = true;
-                }
-                if op.name(db) == closure::ENV() {
-                    has_env = true;
-                }
+            let dialect = op.dialect(db);
+            let op_name = op.name(db);
+
+            // Check for func.constant (from closure.new lowering)
+            if dialect == func::DIALECT_NAME() && op_name == func::CONSTANT() {
+                result.has_func_constant = true;
             }
+            // Check for adt.struct_new (from closure.new lowering)
+            if dialect == adt::DIALECT_NAME() && op_name == adt::STRUCT_NEW() {
+                result.has_struct_new = true;
+            }
+            // Check for adt.struct_get (from closure.func/closure.env lowering)
+            if dialect == adt::DIALECT_NAME() && op_name == adt::STRUCT_GET() {
+                result.has_struct_get = true;
+            }
+
             // Recurse into nested regions
             for nested in op.regions(db).iter() {
-                let (nested_func, nested_env) = check_for_closure_ops(db, nested);
-                has_func = has_func || nested_func;
-                has_env = has_env || nested_env;
+                let nested_result = check_for_lowered_closure_ops(db, nested);
+                result.has_func_constant =
+                    result.has_func_constant || nested_result.has_func_constant;
+                result.has_struct_new = result.has_struct_new || nested_result.has_struct_new;
+                result.has_struct_get = result.has_struct_get || nested_result.has_struct_get;
             }
         }
     }
 
-    (has_func, has_env)
+    result
 }
