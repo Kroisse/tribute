@@ -554,7 +554,15 @@ impl LspServer {
                     kind: Some(CodeActionKind::QUICKFIX),
                     diagnostics: Some(vec![Diagnostic {
                         range: span_to_range(rope, diag.span),
-                        severity: Some(DiagnosticSeverity::ERROR),
+                        severity: Some(match diag.severity {
+                            tribute_passes::DiagnosticSeverity::Error => DiagnosticSeverity::ERROR,
+                            tribute_passes::DiagnosticSeverity::Warning => {
+                                DiagnosticSeverity::WARNING
+                            }
+                            tribute_passes::DiagnosticSeverity::Info => {
+                                DiagnosticSeverity::INFORMATION
+                            }
+                        }),
                         message: diag.message.clone(),
                         source: Some("tribute".to_string()),
                         ..Default::default()
@@ -589,6 +597,9 @@ impl LspServer {
     fn find_return_type_insert_position(&self, rope: &Rope, span: trunk_ir::Span) -> Option<usize> {
         // Search from the start of the function for the closing paren
         let text: String = rope.slice(..).chars().collect();
+        if span.start >= text.len() {
+            return None;
+        }
         let func_text = &text[span.start..span.end.min(text.len())];
 
         // Find the closing parenthesis of the parameter list
