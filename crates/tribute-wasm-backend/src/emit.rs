@@ -19,7 +19,7 @@ use wasm_encoder::{
     AbstractHeapType, ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType,
     ConstExpr, DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind,
     ExportSection, FieldType, Function, FunctionSection, GlobalSection, GlobalType, HeapType,
-    ImportSection, Instruction, MemorySection, MemoryType, Module, RefType, StorageType,
+    ImportSection, Instruction, MemArg, MemorySection, MemoryType, Module, RefType, StorageType,
     StructType, SubType, TableSection, TableType, TypeSection, ValType,
 };
 
@@ -68,6 +68,8 @@ trunk_ir::symbols! {
     ATTR_PASSIVE => "passive",
     ATTR_DATA_IDX => "data_idx",
     ATTR_LEN => "len",
+    ATTR_ALIGN => "align",
+    ATTR_MEMORY => "memory",
 }
 
 /// Simple wasm operations that follow the pattern:
@@ -2104,6 +2106,134 @@ fn emit_op<'db>(
         function.instruction(&Instruction::StructNew(BYTES_STRUCT_IDX));
 
         set_result_local(db, op, ctx, function)?;
+
+    // === Linear Memory Management ===
+    } else if name == Symbol::new("memory_size") {
+        let memory = extract_memory_index(db, op);
+        function.instruction(&Instruction::MemorySize(memory));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("memory_grow") {
+        emit_operands(db, operands, ctx, function)?;
+        let memory = extract_memory_index(db, op);
+        function.instruction(&Instruction::MemoryGrow(memory));
+        set_result_local(db, op, ctx, function)?;
+
+    // === Full-Width Loads ===
+    } else if name == Symbol::new("i32_load") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 2); // natural align: 4 bytes = log2(4) = 2
+        function.instruction(&Instruction::I32Load(memarg));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("i64_load") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 3); // natural align: 8 bytes = log2(8) = 3
+        function.instruction(&Instruction::I64Load(memarg));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("f32_load") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 2);
+        function.instruction(&Instruction::F32Load(memarg));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("f64_load") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 3);
+        function.instruction(&Instruction::F64Load(memarg));
+        set_result_local(db, op, ctx, function)?;
+
+    // === Partial-Width Loads (i32) ===
+    } else if name == Symbol::new("i32_load8_s") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 0); // natural align: 1 byte = log2(1) = 0
+        function.instruction(&Instruction::I32Load8S(memarg));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("i32_load8_u") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 0);
+        function.instruction(&Instruction::I32Load8U(memarg));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("i32_load16_s") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 1); // natural align: 2 bytes = log2(2) = 1
+        function.instruction(&Instruction::I32Load16S(memarg));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("i32_load16_u") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 1);
+        function.instruction(&Instruction::I32Load16U(memarg));
+        set_result_local(db, op, ctx, function)?;
+
+    // === Partial-Width Loads (i64) ===
+    } else if name == Symbol::new("i64_load8_s") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 0);
+        function.instruction(&Instruction::I64Load8S(memarg));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("i64_load8_u") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 0);
+        function.instruction(&Instruction::I64Load8U(memarg));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("i64_load16_s") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 1);
+        function.instruction(&Instruction::I64Load16S(memarg));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("i64_load16_u") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 1);
+        function.instruction(&Instruction::I64Load16U(memarg));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("i64_load32_s") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 2);
+        function.instruction(&Instruction::I64Load32S(memarg));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("i64_load32_u") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 2);
+        function.instruction(&Instruction::I64Load32U(memarg));
+        set_result_local(db, op, ctx, function)?;
+
+    // === Full-Width Stores ===
+    } else if name == Symbol::new("i32_store") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 2);
+        function.instruction(&Instruction::I32Store(memarg));
+        // No set_result_local - stores don't return a value
+    } else if name == Symbol::new("i64_store") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 3);
+        function.instruction(&Instruction::I64Store(memarg));
+    } else if name == Symbol::new("f32_store") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 2);
+        function.instruction(&Instruction::F32Store(memarg));
+    } else if name == Symbol::new("f64_store") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 3);
+        function.instruction(&Instruction::F64Store(memarg));
+
+    // === Partial-Width Stores ===
+    } else if name == Symbol::new("i32_store8") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 0);
+        function.instruction(&Instruction::I32Store8(memarg));
+    } else if name == Symbol::new("i32_store16") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 1);
+        function.instruction(&Instruction::I32Store16(memarg));
+    } else if name == Symbol::new("i64_store8") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 0);
+        function.instruction(&Instruction::I64Store8(memarg));
+    } else if name == Symbol::new("i64_store16") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 1);
+        function.instruction(&Instruction::I64Store16(memarg));
+    } else if name == Symbol::new("i64_store32") {
+        emit_operands(db, operands, ctx, function)?;
+        let memarg = extract_memarg(db, op, 2);
+        function.instruction(&Instruction::I64Store32(memarg));
     } else {
         return Err(CompilationError::unsupported_feature(
             "wasm op not supported",
@@ -2655,6 +2785,46 @@ fn attr_i32_attr<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<i32>
     }
 }
 
+/// Extract MemArg from operation attributes for linear memory load/store operations.
+/// Defaults: offset=0, align=natural alignment (log2), memory=0
+fn extract_memarg<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    natural_align: u32, // log2 of natural alignment (0=1, 1=2, 2=4, 3=8)
+) -> MemArg {
+    let attrs = op.attributes(db);
+
+    let offset = match attrs.get(&ATTR_OFFSET()) {
+        Some(Attribute::IntBits(v)) => *v,
+        _ => 0,
+    };
+
+    let align = match attrs.get(&ATTR_ALIGN()) {
+        Some(Attribute::IntBits(v)) => *v as u32,
+        _ => natural_align, // Use natural alignment if not specified
+    };
+
+    let memory_index = match attrs.get(&ATTR_MEMORY()) {
+        Some(Attribute::IntBits(v)) => *v as u32,
+        _ => 0, // Default to memory 0
+    };
+
+    MemArg {
+        offset,
+        align,
+        memory_index,
+    }
+}
+
+/// Extract memory index from operation attributes for memory management operations.
+/// Defaults to memory index 0.
+fn extract_memory_index<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> u32 {
+    match op.attributes(db).get(&ATTR_MEMORY()) {
+        Some(Attribute::IntBits(v)) => *v as u32,
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3150,5 +3320,188 @@ mod tests {
 
         // Should only have the 3 built-in types
         assert_eq!(gc_types.len(), 3);
+    }
+
+    // ========================================
+    // Test: memory load/store operations
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_memory_ops_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
+
+        // Create address operand (i32)
+        let addr = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(0))
+            .results(idvec![i32_ty])
+            .build();
+
+        // Create value to store (i32)
+        let value = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(42))
+            .results(idvec![i32_ty])
+            .build();
+
+        // i32_store with offset and align attributes
+        let store_op = Operation::of_name(db, location, "wasm.i32_store")
+            .operands(idvec![addr.result(db, 0), value.result(db, 0)])
+            .attr("offset", Attribute::IntBits(4))
+            .attr("align", Attribute::IntBits(2))
+            .attr("memory", Attribute::IntBits(0))
+            .build();
+
+        // i32_load from same address
+        let load_op = Operation::of_name(db, location, "wasm.i32_load")
+            .operands(idvec![addr.result(db, 0)])
+            .results(idvec![i32_ty])
+            .attr("offset", Attribute::IntBits(4))
+            .attr("align", Attribute::IntBits(2))
+            .attr("memory", Attribute::IntBits(0))
+            .build();
+
+        // Return statement
+        let func_return = Operation::of_name(db, location, "wasm.return")
+            .operands(idvec![])
+            .build();
+
+        let body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![addr, value, store_op, load_op, func_return],
+        );
+        let body_region = Region::new(db, location, idvec![body_block]);
+
+        // Function definition
+        let wasm_func = Operation::of_name(db, location, "wasm.func")
+            .attr(
+                "sym_name",
+                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("test"))),
+            )
+            .attr("type", Attribute::Type(func_ty))
+            .regions(idvec![body_region])
+            .build();
+
+        // Memory definition (required for load/store)
+        let memory_op = Operation::of_name(db, location, "wasm.memory")
+            .attr("min", Attribute::IntBits(1))
+            .attr("max", Attribute::IntBits(1))
+            .attr("shared", Attribute::Bool(false))
+            .attr("memory64", Attribute::Bool(false))
+            .build();
+
+        let module_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![memory_op, wasm_func],
+        );
+        let module_region = Region::new(db, location, idvec![module_block]);
+        core::Module::create(db, location, "test".into(), module_region)
+    }
+
+    #[salsa_test]
+    fn test_memory_load_store_emit(db: &salsa::DatabaseImpl) {
+        let module = make_memory_ops_module(db);
+        let result = emit_wasm(db, module);
+        assert!(
+            result.is_ok(),
+            "Memory load/store should compile: {:?}",
+            result.err()
+        );
+
+        let bytes = result.unwrap();
+        // Check WASM magic number
+        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
+    }
+
+    // ========================================
+    // Test: memory_size and memory_grow
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_memory_grow_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
+
+        // memory_size
+        let size_op = Operation::of_name(db, location, "wasm.memory_size")
+            .results(idvec![i32_ty])
+            .attr("memory", Attribute::IntBits(0))
+            .build();
+
+        // delta for memory_grow
+        let delta = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(1))
+            .results(idvec![i32_ty])
+            .build();
+
+        // memory_grow
+        let grow_op = Operation::of_name(db, location, "wasm.memory_grow")
+            .operands(idvec![delta.result(db, 0)])
+            .results(idvec![i32_ty])
+            .attr("memory", Attribute::IntBits(0))
+            .build();
+
+        // Return statement
+        let func_return = Operation::of_name(db, location, "wasm.return")
+            .operands(idvec![])
+            .build();
+
+        let body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![size_op, delta, grow_op, func_return],
+        );
+        let body_region = Region::new(db, location, idvec![body_block]);
+
+        let wasm_func = Operation::of_name(db, location, "wasm.func")
+            .attr(
+                "sym_name",
+                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("test"))),
+            )
+            .attr("type", Attribute::Type(func_ty))
+            .regions(idvec![body_region])
+            .build();
+
+        let memory_op = Operation::of_name(db, location, "wasm.memory")
+            .attr("min", Attribute::IntBits(1))
+            .attr("max", Attribute::IntBits(2))
+            .attr("shared", Attribute::Bool(false))
+            .attr("memory64", Attribute::Bool(false))
+            .build();
+
+        let module_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![memory_op, wasm_func],
+        );
+        let module_region = Region::new(db, location, idvec![module_block]);
+        core::Module::create(db, location, "test".into(), module_region)
+    }
+
+    #[salsa_test]
+    fn test_memory_grow_emit(db: &salsa::DatabaseImpl) {
+        let module = make_memory_grow_module(db);
+        let result = emit_wasm(db, module);
+        assert!(
+            result.is_ok(),
+            "Memory grow should compile: {:?}",
+            result.err()
+        );
+
+        let bytes = result.unwrap();
+        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
     }
 }

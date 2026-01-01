@@ -554,6 +554,118 @@ dialect! {
         /// `wasm.f64_reinterpret_i64` operation: reinterpret i64 bits as f64.
         fn f64_reinterpret_i64(operand) -> result;
 
+        // === Linear Memory Management ===
+
+        /// `wasm.memory_size` operation: returns current memory size in pages.
+        #[attr(memory: u32)]
+        fn memory_size() -> result;
+
+        /// `wasm.memory_grow` operation: grows memory by delta pages, returns previous size or -1.
+        #[attr(memory: u32)]
+        fn memory_grow(delta) -> result;
+
+        // === Linear Memory Loads (Full Width) ===
+
+        /// `wasm.i32_load` operation: load i32 from linear memory.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i32_load(addr) -> result;
+
+        /// `wasm.i64_load` operation: load i64 from linear memory.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i64_load(addr) -> result;
+
+        /// `wasm.f32_load` operation: load f32 from linear memory.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn f32_load(addr) -> result;
+
+        /// `wasm.f64_load` operation: load f64 from linear memory.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn f64_load(addr) -> result;
+
+        // === Linear Memory Loads (Partial Width - i32) ===
+
+        /// `wasm.i32_load8_s` operation: load 8-bit value, sign-extend to i32.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i32_load8_s(addr) -> result;
+
+        /// `wasm.i32_load8_u` operation: load 8-bit value, zero-extend to i32.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i32_load8_u(addr) -> result;
+
+        /// `wasm.i32_load16_s` operation: load 16-bit value, sign-extend to i32.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i32_load16_s(addr) -> result;
+
+        /// `wasm.i32_load16_u` operation: load 16-bit value, zero-extend to i32.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i32_load16_u(addr) -> result;
+
+        // === Linear Memory Loads (Partial Width - i64) ===
+
+        /// `wasm.i64_load8_s` operation: load 8-bit value, sign-extend to i64.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i64_load8_s(addr) -> result;
+
+        /// `wasm.i64_load8_u` operation: load 8-bit value, zero-extend to i64.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i64_load8_u(addr) -> result;
+
+        /// `wasm.i64_load16_s` operation: load 16-bit value, sign-extend to i64.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i64_load16_s(addr) -> result;
+
+        /// `wasm.i64_load16_u` operation: load 16-bit value, zero-extend to i64.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i64_load16_u(addr) -> result;
+
+        /// `wasm.i64_load32_s` operation: load 32-bit value, sign-extend to i64.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i64_load32_s(addr) -> result;
+
+        /// `wasm.i64_load32_u` operation: load 32-bit value, zero-extend to i64.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i64_load32_u(addr) -> result;
+
+        // === Linear Memory Stores (Full Width) ===
+
+        /// `wasm.i32_store` operation: store i32 to linear memory.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i32_store(addr, value);
+
+        /// `wasm.i64_store` operation: store i64 to linear memory.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i64_store(addr, value);
+
+        /// `wasm.f32_store` operation: store f32 to linear memory.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn f32_store(addr, value);
+
+        /// `wasm.f64_store` operation: store f64 to linear memory.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn f64_store(addr, value);
+
+        // === Linear Memory Stores (Partial Width) ===
+
+        /// `wasm.i32_store8` operation: store low 8 bits of i32.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i32_store8(addr, value);
+
+        /// `wasm.i32_store16` operation: store low 16 bits of i32.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i32_store16(addr, value);
+
+        /// `wasm.i64_store8` operation: store low 8 bits of i64.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i64_store8(addr, value);
+
+        /// `wasm.i64_store16` operation: store low 16 bits of i64.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i64_store16(addr, value);
+
+        /// `wasm.i64_store32` operation: store low 32 bits of i64.
+        #[attr(offset: u32, align: u32, memory: u32)]
+        fn i64_store32(addr, value);
+
         // === WasmGC Types ===
 
         /// `wasm.anyref` type: top reference type (all GC references).
