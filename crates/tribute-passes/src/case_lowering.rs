@@ -397,7 +397,7 @@ impl<'db> CaseLowerer<'db> {
         for (i, (op_idx, body)) in suspend_bodies.iter().enumerate() {
             // Store each suspend arm as a separate region with its op_idx
             let attr_name = format!("op_idx_{}", i);
-            builder = builder.region(body.clone()).attr(
+            builder = builder.region(*body).attr(
                 Symbol::from_dynamic(&attr_name),
                 Attribute::IntBits(*op_idx),
             );

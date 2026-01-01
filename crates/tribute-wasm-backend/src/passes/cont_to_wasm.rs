@@ -966,7 +966,7 @@ fn expand_shift_operation<'db>(
             if let Attribute::Symbol(name) = attr {
                 // Use a simple hash of the operation name as the index
                 // This ensures consistent indices across shift and handler dispatch
-                Some(name.with_str(|s| compute_op_idx_hash(s)))
+                Some(name.with_str(compute_op_idx_hash))
             } else {
                 None
             }
@@ -1416,7 +1416,7 @@ impl RewritePattern for HandlerDispatchPattern {
             // Single or no suspend arm - use directly
             suspend_arms
                 .first()
-                .map(|(_, body)| body.clone())
+                .map(|(_, body)| *body)
                 .unwrap_or_else(|| Region::new(db, location, IdVec::new()))
         } else {
             // Multiple suspend arms - build dispatch chain
@@ -1471,7 +1471,7 @@ fn build_multi_arm_dispatch<'db>(
     }
 
     // Start with the last arm as the base (fallback)
-    let mut current_else = suspend_arms.last().map(|(_, body)| body.clone()).unwrap();
+    let mut current_else = suspend_arms.last().map(|(_, body)| *body).unwrap();
 
     // Build from back to front, creating nested if-else
     for (op_idx, body) in suspend_arms.iter().rev().skip(1) {
@@ -1504,7 +1504,7 @@ fn build_multi_arm_dispatch<'db>(
         // Build if with the comparison result
         // Note: We need to wrap this in a region that first evaluates the condition
         // then branches on the result
-        let if_op = wasm::r#if(db, location, cmp_val, result_ty, body.clone(), current_else);
+        let if_op = wasm::r#if(db, location, cmp_val, result_ty, *body, current_else);
 
         // The new else block becomes this if wrapped in the condition
         let new_block = Block::new(
