@@ -62,6 +62,8 @@ fn main() { add(1, 2) }
     assert!(binary.is_some(), "Should compile function with params");
 }
 
+// Note: String literals work as intrinsic arguments (e.g., print_line)
+// but require additional lowering for case branch return values.
 #[salsa_test]
 fn test_compile_print_line(db: &salsa::DatabaseImpl) {
     let code = r#"fn main() { print_line("Hello, World!") }"#;
@@ -93,7 +95,7 @@ fn main() { test_ops() }
 // pattern matching (case) and algebraic effects.
 
 #[salsa_test]
-#[ignore = "requires string literal lowering in case patterns"]
+#[ignore = "requires string literal lowering for case branch return values"]
 fn test_compile_case_expression(db: &salsa::DatabaseImpl) {
     let code = r#"
 fn classify(n) {
