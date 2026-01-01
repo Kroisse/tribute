@@ -711,7 +711,7 @@ fn extract_call_info(
     let args_node = call_node.child_by_field_name("arguments")?;
 
     // Count commas before the cursor to determine active parameter
-    let active_param = count_commas_before(args_node, rope, cursor_offset);
+    let active_param = count_commas_before(args_node, cursor_offset);
 
     Some(CallInfo {
         callee_name,
@@ -720,7 +720,7 @@ fn extract_call_info(
 }
 
 /// Count the number of commas before the cursor position within an argument list.
-fn count_commas_before(args_node: tree_sitter::Node, _rope: &Rope, cursor_offset: usize) -> u32 {
+fn count_commas_before(args_node: tree_sitter::Node, cursor_offset: usize) -> u32 {
     let mut count = 0;
     let mut cursor = args_node.walk();
 
@@ -766,7 +766,7 @@ fn find_function_node<'tree>(
     rope: &Rope,
     func_name: &str,
 ) -> Option<tree_sitter::Node<'tree>> {
-    if node.kind() == "function_definition" || node.kind() == "function_item" {
+    if node.kind() == "function_definition" {
         // Get the function name
         if let Some(name_node) = node.child_by_field_name("name") {
             let start = name_node.start_byte();
