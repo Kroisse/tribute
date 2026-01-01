@@ -21,8 +21,9 @@
 
 use tribute_ir::dialect::closure;
 use trunk_ir::dialect::core::Module;
+use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, Operation};
+use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation};
 
 /// Lower closure dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -37,7 +38,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 /// Pattern for `closure.new(env) @func_ref` -> `wasm.struct_new`
 ///
 /// Creates a closure struct with:
-/// - Field 0: function reference (preserved as func.constant for later resolution)
+/// - Field 0: function reference (obtained via wasm.ref_func SSA value)
 /// - Field 1: environment struct
 struct ClosureNewPattern;
 
@@ -62,22 +63,23 @@ impl RewritePattern for ClosureNewPattern {
             .copied()
             .expect("closure.new must have exactly one result type");
 
-        // Create wasm.struct_new with the function reference as an attribute
-        // and the environment as an operand.
-        //
-        // The func_ref is stored as an attribute because it's resolved to a
-        // table index at emit time, not as an SSA value.
+        // Create wasm.ref_func to get the function reference as an SSA value
+        let funcref_ty = wasm::Funcref::new(db).as_type();
+        let ref_func = wasm::ref_func(db, location, funcref_ty, func_ref);
+        let func_ref_val = ref_func.as_operation().result(db, 0);
+
+        // Create wasm.struct_new with both the function reference and environment
+        // as operands.
         //
         // Layout: (func_ref: funcref, env: anyref)
         let struct_new = Operation::of_name(db, location, "wasm.struct_new")
-            .operands(trunk_ir::idvec![env])
-            .attr("func_ref", Attribute::QualifiedName(func_ref))
+            .operands(IdVec::from(vec![func_ref_val, env]))
             .attr("type", Attribute::Type(result_ty))
             .attr("is_closure", Attribute::Bool(true))
-            .results(trunk_ir::idvec![result_ty])
+            .results(IdVec::from(vec![result_ty]))
             .build();
 
-        RewriteResult::Replace(struct_new)
+        RewriteResult::Expand(vec![ref_func.as_operation(), struct_new])
     }
 }
 
@@ -220,6 +222,7 @@ mod tests {
         let module = make_closure_new_module(db);
         let op_names = lower_and_check_names(db, module);
 
+        assert!(op_names.iter().any(|n| n == "wasm.ref_func"));
         assert!(op_names.iter().any(|n| n == "wasm.struct_new"));
         assert!(!op_names.iter().any(|n| n == "closure.new"));
     }

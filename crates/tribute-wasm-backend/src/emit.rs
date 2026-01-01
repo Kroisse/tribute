@@ -56,6 +56,7 @@ trunk_ir::symbols! {
     ATTR_MODULE => "module",
     ATTR_NAME => "name",
     ATTR_FUNC => "func",
+    ATTR_FUNC_NAME => "func_name",
     ATTR_MIN => "min",
     ATTR_MAX => "max",
     ATTR_SHARED => "shared",
@@ -2050,6 +2051,12 @@ fn emit_op<'db>(
             .or_else(|| get_type_idx_from_attrs(attrs).map(HeapType::Concrete))
             .ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
         function.instruction(&Instruction::RefNull(heap_type));
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("ref_func") {
+        // wasm.ref_func: create a funcref from function name
+        let func_name = attr_symbol_ref(db, op, ATTR_FUNC_NAME())?;
+        let func_idx = resolve_callee(func_name, module_info)?;
+        function.instruction(&Instruction::RefFunc(func_idx));
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("ref_cast") {
         emit_operands(db, operands, ctx, function)?;
