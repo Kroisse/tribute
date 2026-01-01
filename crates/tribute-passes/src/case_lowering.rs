@@ -22,6 +22,14 @@ use trunk_ir::{Symbol, Value, ValueDef};
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
+/// Compute a deterministic hash-based index from an operation name.
+/// This must match the implementation in cont_to_wasm.rs.
+fn compute_op_idx_hash(name: &str) -> u64 {
+    name.bytes()
+        .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
+        & 0xFFFF // Keep lower 16 bits
+}
+
 #[derive(Debug, Clone)]
 enum ArmPattern<'db> {
     Wildcard,
@@ -339,12 +347,22 @@ impl<'db> CaseLowerer<'db> {
             Region::new(self.db, location, IdVec::new())
         };
 
-        // Process suspend_body - for now, combine all suspend arms into one region
-        // TODO(#100): Support multiple suspend patterns with operation matching
-        // Currently, only the first suspend arm is used; additional arms are ignored.
-        let suspend_body = if let Some(first_suspend) = suspend_arms.first() {
+        // Process suspend arms - build dispatch info for each operation
+        // Each suspend arm has an op_name, and we compute a hash-based index for dispatch
+        let mut suspend_bodies: Vec<(u64, Region<'db>)> = Vec::new();
+
+        for suspend_arm in &suspend_arms {
+            // Get the operation name from the pattern
+            let op_name = match &suspend_arm.pattern {
+                ArmPattern::HandlerSuspend { op_name } => *op_name,
+                _ => continue,
+            };
+
+            // Compute hash-based index (same algorithm as in cont_to_wasm.rs)
+            let op_idx: u64 = op_name.with_str(compute_op_idx_hash);
+
             // Set up bindings for continuation and args
-            if let Some(pattern_region) = first_suspend.pattern_region {
+            if let Some(pattern_region) = suspend_arm.pattern_region {
                 let bindings = self.extract_bindings_from_pattern(pattern_region);
                 // The last binding is typically the continuation (k)
                 // Other bindings are operation arguments
@@ -355,24 +373,43 @@ impl<'db> CaseLowerer<'db> {
                 }
             }
 
-            let lowered_body = self.lower_region(first_suspend.body);
+            let lowered_body = self.lower_region(suspend_arm.body);
 
             // Clear bindings after processing
             self.current_arm_bindings.clear();
 
-            lowered_body
-        } else {
-            // No suspend arms - create empty region
-            Region::new(self.db, location, IdVec::new())
-        };
+            suspend_bodies.push((op_idx, lowered_body));
+        }
 
-        // Create cont.handler_dispatch operation
-        let dispatch_op = Operation::of_name(self.db, location, "cont.handler_dispatch")
+        // Note: Each suspend body is stored as a separate region in handler_dispatch.
+        // The WASM backend will read num_suspend_arms and the op_idx_N attributes
+        // to generate proper dispatch logic.
+
+        // Build the handler_dispatch operation with all suspend arms as regions
+        // Region 0: done_body
+        // Region 1+: suspend_bodies (one per handler arm)
+        let mut builder = Operation::of_name(self.db, location, "cont.handler_dispatch")
             .operand(scrutinee)
             .result(result_type)
-            .region(done_body)
-            .region(suspend_body)
-            .build();
+            .region(done_body);
+
+        // Add all suspend body regions
+        for (i, (op_idx, body)) in suspend_bodies.iter().enumerate() {
+            // Store each suspend arm as a separate region with its op_idx
+            let attr_name = format!("op_idx_{}", i);
+            builder = builder.region(body.clone()).attr(
+                Symbol::from_dynamic(&attr_name),
+                Attribute::IntBits(*op_idx),
+            );
+        }
+
+        // Store the number of suspend arms for the WASM backend
+        builder = builder.attr(
+            "num_suspend_arms",
+            Attribute::IntBits(suspend_bodies.len() as u64),
+        );
+
+        let dispatch_op = builder.build();
 
         // Map original case result to dispatch result
         self.ctx.map_results(self.db, &op, &dispatch_op);

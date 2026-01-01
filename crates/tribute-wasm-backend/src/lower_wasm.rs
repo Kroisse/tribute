@@ -270,6 +270,14 @@ impl<'db> WasmLowerer<'db> {
                 true,
                 0,
             ));
+            // $yield_op_idx: i32 (operation index within ability for multi-op dispatch)
+            builder.op(wasm::global(
+                self.db,
+                module_location,
+                Symbol::new("i32"),
+                true,
+                0,
+            ));
         }
     }
 

@@ -161,7 +161,7 @@ impl RewritePattern for LowerPerformPattern {
 
         // Get operation attributes
         let _ability_ref = perform_op.ability_ref(db);
-        let _op_name = perform_op.op(db);
+        let op_name = perform_op.op(db);
         let _args = perform_op.args(db);
 
         // For now, we create a cont.shift with a placeholder tag.
@@ -184,8 +184,17 @@ impl RewritePattern for LowerPerformPattern {
         let empty_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
         let handler_region = Region::new(db, location, IdVec::from(vec![empty_block]));
 
+        // Pass the operation name so handler dispatch can match it to the correct arm.
+        // The op_idx attribute is set to 0 as a placeholder here; it will be resolved
+        // during handler dispatch based on the order of handler arms.
+        //
+        // NOTE: The op_name is passed through so that handler dispatch can build
+        // a mapping from operation name to index and update the shift's op_idx.
+        // TODO: In full implementation, op_idx would be pre-computed from ability definition.
         let new_op = Operation::of_name(db, location, "cont.shift")
             .attr("tag", Attribute::IntBits(tag as u64))
+            .attr("op_idx", Attribute::IntBits(0)) // Placeholder, resolved by handler dispatch
+            .attr("op_name", Attribute::Symbol(op_name))
             .region(handler_region)
             .build();
 

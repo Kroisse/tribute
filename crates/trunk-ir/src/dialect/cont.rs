@@ -17,7 +17,10 @@ dialect! {
         ///
         /// The optional `value` operands are passed to the handler along with
         /// the captured continuation. Currently only the first value is used.
-        #[attr(tag: u32)]
+        ///
+        /// - `tag`: prompt tag for matching handler
+        /// - `op_idx`: index of the ability operation (for multi-op abilities)
+        #[attr(tag: u32, op_idx: u32)]
         fn shift(#[rest] value) {
             #[region(handler)] {}
         };
