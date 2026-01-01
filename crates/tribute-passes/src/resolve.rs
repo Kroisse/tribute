@@ -299,20 +299,23 @@ fn collect_definition<'db>(
         }
         (d, n) if d == tribute::DIALECT_NAME() && n == tribute::STRUCT_DEF() => {
             // Struct definition → creates constructor
-            let attrs = op.attributes(db);
-
-            if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_SYM_NAME()) {
+            if let Ok(struct_def) = tribute::StructDef::from_operation(db, *op) {
+                let sym = struct_def.sym_name(db);
                 // Use the result type directly (adt.typeref from tirgen)
                 let ty = op
                     .results(db)
                     .first()
                     .copied()
-                    .unwrap_or_else(|| adt::typeref(db, QualifiedName::simple(*sym)));
+                    .unwrap_or_else(|| adt::typeref(db, QualifiedName::simple(sym)));
                 // Add type definition
-                env.add_type(*sym, ty);
+                env.add_type(sym, ty);
+
+                // Collect field info from fields region
+                let (field_names, field_types) = collect_struct_fields(db, struct_def);
+                let params: IdVec<Type<'db>> = field_types.into_iter().collect();
+
                 // Struct constructor has same name as type
-                // TODO: Get field types and names for constructor params
-                env.add_constructor(*sym, ty, None, IdVec::new(), None);
+                env.add_constructor(sym, ty, None, params, Some(field_names));
             }
         }
         (d, n) if d == tribute::DIALECT_NAME() && n == tribute::ENUM_DEF() => {
@@ -401,6 +404,27 @@ fn collect_definition<'db>(
         }
         _ => {}
     }
+}
+
+/// Collect struct field names and types from a struct definition.
+fn collect_struct_fields<'db>(
+    db: &'db dyn salsa::Database,
+    struct_def: tribute::StructDef<'db>,
+) -> (Vec<Symbol>, Vec<Type<'db>>) {
+    let fields_region = struct_def.fields(db);
+    let mut field_names = Vec::new();
+    let mut field_types = Vec::new();
+
+    for block in fields_region.blocks(db).iter() {
+        for field_op in block.operations(db).iter().copied() {
+            if let Ok(field_def) = tribute::FieldDef::from_operation(db, field_op) {
+                field_names.push(field_def.sym_name(db));
+                field_types.push(field_def.r#type(db));
+            }
+        }
+    }
+
+    (field_names, field_types)
 }
 
 /// Collect enum constructors from an enum definition.
@@ -909,8 +933,9 @@ impl<'db> Resolver<'db> {
                 }
             }
             (d, n) if d == tribute::DIALECT_NAME() && n == tribute::CONS() => {
-                if let Some(resolved) = self.try_resolve_cons(&remapped_op) {
-                    vec![resolved]
+                let resolved = self.try_resolve_cons(&remapped_op);
+                if !resolved.is_empty() {
+                    resolved
                 } else {
                     if self.report_unresolved {
                         self.emit_unresolved_cons_diagnostic(&remapped_op);
@@ -1647,10 +1672,12 @@ impl<'db> Resolver<'db> {
     }
 
     /// Try to resolve a `tribute.cons` operation.
-    fn try_resolve_cons(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
+    ///
+    /// Returns a vector of operations (may be multiple for spread case).
+    fn try_resolve_cons(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
         let attrs = op.attributes(self.db);
-        let Attribute::QualifiedName(path) = attrs.get(&ATTR_NAME())? else {
-            return None;
+        let Some(Attribute::QualifiedName(path)) = attrs.get(&ATTR_NAME()) else {
+            return vec![];
         };
 
         let location = op.location(self.db);
@@ -1659,49 +1686,158 @@ impl<'db> Resolver<'db> {
         // Check if this is a spread case by looking for has_spread attribute
         let is_spread = matches!(attrs.get(&ATTR_HAS_SPREAD()), Some(Attribute::Bool(true)));
 
+        // Look up binding first (needed for both spread and non-spread)
+        let binding = if path.is_simple() {
+            let name = path.name();
+            self.lookup_binding(name).cloned()
+        } else {
+            // For now, only support single-level qualified constructors (Type::Variant)
+            if path.len() != 2 {
+                return vec![];
+            }
+            let namespace = *path.as_parent().last().unwrap();
+            let name = path.name();
+            self.env.lookup_qualified(namespace, name).cloned()
+        };
+
+        let Some(binding) = binding else {
+            return vec![];
+        };
+
         if is_spread {
-            // TODO: Implement spread resolution
-            // For spread: first operand is base value, rest are override values
-            // 1. Get override_fields attribute (comma-separated field names)
-            // 2. Get base struct value (first operand)
-            // 3. For non-overridden fields, emit field_get from base
-            // 4. Create struct_new with all field values
-            tracing::warn!("Record spread is not yet fully implemented in resolution");
-            return None;
+            return self.resolve_spread_cons(op, &binding, location, attrs, operands);
         }
 
         // Non-spread case: all operands are field values
         let args: Vec<Value<'db>> = operands.iter().copied().collect();
 
-        let binding = if path.is_simple() {
-            let name = path.name();
-            self.lookup_binding(name)
-        } else {
-            // For now, only support single-level qualified constructors (Type::Variant)
-            if path.len() != 2 {
-                return None;
-            }
-            let namespace = *path.as_parent().last().unwrap();
-            let name = path.name();
-            self.env.lookup_qualified(namespace, name)
-        }?;
-
         match binding {
             Binding::Constructor { ty, tag, .. } => {
                 let new_operation = if let Some(tag) = tag {
-                    adt::variant_new(self.db, location, args, *ty, *ty, *tag).as_operation()
+                    adt::variant_new(self.db, location, args, ty, ty, tag).as_operation()
                 } else {
-                    adt::struct_new(self.db, location, args, *ty, *ty).as_operation()
+                    adt::struct_new(self.db, location, args, ty, ty).as_operation()
                 };
 
                 let old_result = op.result(self.db, 0);
                 let new_result = new_operation.result(self.db, 0);
                 self.ctx.map_value(old_result, new_result);
 
-                Some(new_operation)
+                vec![new_operation]
             }
-            _ => None,
+            _ => vec![],
         }
+    }
+
+    /// Resolve a spread constructor: `Type { ..base, field: value }`
+    ///
+    /// Returns a vector of operations: field_get operations followed by struct_new.
+    fn resolve_spread_cons(
+        &mut self,
+        op: &Operation<'db>,
+        binding: &Binding<'db>,
+        location: trunk_ir::Location<'db>,
+        attrs: &trunk_ir::Attrs<'db>,
+        operands: &IdVec<Value<'db>>,
+    ) -> Vec<Operation<'db>> {
+        let Binding::Constructor {
+            ty,
+            tag,
+            field_names,
+            ..
+        } = binding
+        else {
+            return vec![];
+        };
+
+        // Spread only supported for structs (no tag), not enum variants
+        if tag.is_some() {
+            tracing::warn!("Record spread is not supported for enum variants");
+            return vec![];
+        }
+
+        // Get field names from binding
+        let Some(struct_fields) = field_names.as_ref() else {
+            return vec![];
+        };
+
+        if struct_fields.is_empty() {
+            // No fields, just create empty struct
+            let new_operation = adt::struct_new(self.db, location, vec![], *ty, *ty).as_operation();
+            let old_result = op.result(self.db, 0);
+            let new_result = new_operation.result(self.db, 0);
+            self.ctx.map_value(old_result, new_result);
+            return vec![new_operation];
+        }
+
+        // Get override field names from attribute
+        let override_fields_str = attrs
+            .get(&ATTR_OVERRIDE_FIELDS())
+            .and_then(|a| {
+                if let Attribute::Symbol(s) = a {
+                    Some(s.to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        let override_names: Vec<&str> = if override_fields_str.is_empty() {
+            Vec::new()
+        } else {
+            override_fields_str.split(',').collect()
+        };
+
+        // First operand is base value, rest are override values
+        let Some(base_value) = operands.first().copied() else {
+            return vec![];
+        };
+        let override_values: Vec<Value<'db>> = operands.iter().skip(1).copied().collect();
+
+        // Build field values and collect field_get operations
+        let mut all_ops: Vec<Operation<'db>> = Vec::new();
+        let mut all_values: Vec<Value<'db>> = Vec::new();
+        let mut override_idx = 0;
+
+        for (field_idx, field_name) in struct_fields.iter().enumerate() {
+            let field_name_str = field_name.to_string();
+            let is_overridden = override_names.iter().any(|&n| n == field_name_str);
+
+            if is_overridden {
+                // Use the override value
+                if let Some(&val) = override_values.get(override_idx) {
+                    all_values.push(val);
+                    override_idx += 1;
+                } else {
+                    tracing::warn!("Missing override value for field {}", field_name_str);
+                    return vec![];
+                }
+            } else {
+                // Get field from base using adt.struct_get
+                let field_ty = *ty; // TODO: Get actual field type from struct definition
+                let struct_get = adt::struct_get(
+                    self.db,
+                    location,
+                    base_value,
+                    field_ty,
+                    *ty,
+                    Attribute::IntBits(field_idx as u64),
+                );
+                let field_val = struct_get.result(self.db);
+
+                all_ops.push(struct_get.as_operation());
+                all_values.push(field_val);
+            }
+        }
+
+        // Create struct_new with all field values
+        let new_operation = adt::struct_new(self.db, location, all_values, *ty, *ty).as_operation();
+        let old_result = op.result(self.db, 0);
+        let new_result = new_operation.result(self.db, 0);
+        self.ctx.map_value(old_result, new_result);
+
+        all_ops.push(new_operation);
+        all_ops
     }
 
     // === Diagnostic Helpers ===
