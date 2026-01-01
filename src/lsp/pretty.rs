@@ -3,12 +3,139 @@
 //! This module provides a thin wrapper around `trunk_ir::type_interface::Printable`
 //! for use in the LSP server.
 
-use trunk_ir::Type;
+use lsp_types::{
+    Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, SignatureHelp,
+    SignatureInformation,
+};
+use trunk_ir::dialect::core::{EffectRowType, Func};
 use trunk_ir::type_interface;
+use trunk_ir::{DialectType, Symbol, Type};
 
 /// Pretty-print a type to a user-friendly string.
 pub fn print_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
     type_interface::print_type(db, ty)
+}
+
+/// Format a function signature for LSP signature help.
+pub fn format_signature(
+    db: &dyn salsa::Database,
+    func_ty: Type<'_>,
+    func_name: &str,
+    param_names: &[Option<Symbol>],
+    doc_comment: Option<&str>,
+    active_param: u32,
+) -> SignatureHelp {
+    let Some(func) = Func::from_type(db, func_ty) else {
+        // Not a function type, return empty signature help
+        return SignatureHelp {
+            signatures: vec![],
+            active_signature: None,
+            active_parameter: None,
+        };
+    };
+
+    let params = func.params(db);
+    let result = func.result(db);
+    let effect = func.effect(db);
+
+    // Build parameter information
+    let mut param_infos = Vec::with_capacity(params.len());
+    let mut label_parts = Vec::with_capacity(params.len());
+
+    for (i, &param_ty) in params.iter().enumerate() {
+        let param_name = param_names
+            .get(i)
+            .and_then(|n| n.as_ref())
+            .map(|s| s.to_string());
+
+        let type_str = print_type(db, param_ty);
+        let label = if let Some(name) = &param_name {
+            format!("{}: {}", name, type_str)
+        } else {
+            type_str.clone()
+        };
+
+        label_parts.push(label.clone());
+
+        param_infos.push(ParameterInformation {
+            label: ParameterLabel::Simple(label),
+            documentation: None, // TODO: parameter-level doc comments
+        });
+    }
+
+    // Build the full signature label
+    let params_str = label_parts.join(", ");
+    let result_str = print_type(db, result);
+
+    let signature_label = if let Some(eff) = effect {
+        if let Some(row) = EffectRowType::from_type(db, eff) {
+            if row.is_empty(db) {
+                format!("fn {}({}) -> {}", func_name, params_str, result_str)
+            } else {
+                let effect_str = format_effect_row(db, &row);
+                format!(
+                    "fn {}({}) ->{{{}}} {}",
+                    func_name, params_str, effect_str, result_str
+                )
+            }
+        } else {
+            format!("fn {}({}) -> {}", func_name, params_str, result_str)
+        }
+    } else {
+        format!("fn {}({}) -> {}", func_name, params_str, result_str)
+    };
+
+    let documentation = doc_comment.map(|doc| {
+        Documentation::MarkupContent(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: doc.to_string(),
+        })
+    });
+
+    let signature = SignatureInformation {
+        label: signature_label,
+        documentation,
+        parameters: Some(param_infos),
+        active_parameter: Some(active_param),
+    };
+
+    SignatureHelp {
+        signatures: vec![signature],
+        active_signature: Some(0),
+        active_parameter: Some(active_param),
+    }
+}
+
+/// Format an effect row for display.
+fn format_effect_row(db: &dyn salsa::Database, row: &EffectRowType<'_>) -> String {
+    let abilities = row.abilities(db);
+    let tail = row.tail_var(db);
+
+    let ability_strs: Vec<String> = abilities.iter().map(|&a| print_type(db, a)).collect();
+
+    if let Some(tail_id) = tail {
+        let tail_name = type_var_name(tail_id);
+        if ability_strs.is_empty() {
+            tail_name
+        } else {
+            format!("{} | {}", ability_strs.join(", "), tail_name)
+        }
+    } else {
+        ability_strs.join(", ")
+    }
+}
+
+/// Generate a type variable name from an ID.
+fn type_var_name(id: u64) -> String {
+    if id < 26 {
+        // a-z
+        char::from_u32('a' as u32 + id as u32)
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| format!("t{}", id))
+    } else {
+        // t0, t1, ...
+        format!("t{}", id - 26)
+    }
 }
 
 #[cfg(test)]

@@ -11,20 +11,22 @@ use lsp_types::{
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
     HoverProviderCapability, InitializeParams, MarkupContent, MarkupKind, PublishDiagnosticsParams,
-    ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
+    ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
+    TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, Uri,
     notification::{
         DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
         PublishDiagnostics,
     },
-    request::{DocumentSymbolRequest, GotoDefinition, HoverRequest},
+    request::{DocumentSymbolRequest, GotoDefinition, HoverRequest, SignatureHelpRequest},
 };
 use ropey::Rope;
 use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
+use super::call_index::{CallIndex, get_param_names};
 use super::definition_index::DefinitionIndex;
-use super::pretty::print_type;
+use super::pretty::{format_signature, print_type};
 use super::type_index::TypeIndex;
 use tribute::{TributeDatabaseImpl, compile, database::parse_with_thread_local};
 
@@ -73,12 +75,16 @@ impl LspServer {
             let result = self.goto_definition(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
-        } else if let Some((id, params)) = cast_request::<DocumentSymbolRequest>(req) {
+        } else if let Some((id, params)) = cast_request::<DocumentSymbolRequest>(req.clone()) {
             let result = self.document_symbols(params);
             tracing::debug!(symbols = ?result.as_ref().map(|r| match r {
                 DocumentSymbolResponse::Flat(v) => v.len(),
                 DocumentSymbolResponse::Nested(v) => v.len(),
             }), "Document symbols response");
+            let response = Response::new_ok(id, result);
+            self.connection.sender.send(Message::Response(response))?;
+        } else if let Some((id, params)) = cast_request::<SignatureHelpRequest>(req) {
+            let result = self.signature_help(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
         }
@@ -243,6 +249,62 @@ impl LspServer {
         result
     }
 
+    fn signature_help(&self, params: SignatureHelpParams) -> Option<SignatureHelp> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        tracing::debug!(
+            line = position.line,
+            character = position.character,
+            "Signature help request"
+        );
+
+        let source_cst = self.db.source_cst(uri)?;
+        let rope = source_cst.text(&self.db).clone();
+        let offset = offset_from_position(&rope, position.line, position.character)?;
+
+        // Use tree-sitter to find the enclosing call expression
+        let tree = source_cst.tree(&self.db).as_ref()?;
+        let call_info = find_enclosing_call(tree, &rope, offset)?;
+
+        tracing::debug!(
+            callee = %call_info.callee_name,
+            active_param = call_info.active_param,
+            "Found call expression"
+        );
+
+        // Extract doc comment from CST (before entering Salsa context)
+        let doc_comment = find_doc_comment(tree, &rope, &call_info.callee_name);
+
+        // Compile and look up the function type
+        let callee_name = call_info.callee_name.clone();
+        let active_param = call_info.active_param;
+
+        let result = self.db.attach(|db| {
+            let module = compile(db, source_cst);
+
+            // Find the function definition by name
+            let callee_sym = trunk_ir::Symbol::from_dynamic(&callee_name);
+            let callee_qname = trunk_ir::QualifiedName::simple(callee_sym);
+            let func_ty = CallIndex::find_function_type(db, &module, &callee_qname)?;
+
+            // Get parameter names from the function definition
+            let param_names = get_param_names(db, &module, &callee_qname);
+
+            // Format the signature
+            Some(format_signature(
+                db,
+                func_ty,
+                &callee_name,
+                &param_names,
+                doc_comment.as_deref(),
+                active_param,
+            ))
+        })?;
+
+        Some(result)
+    }
+
     fn publish_diagnostics(&self, uri: &Uri) -> Result<(), Box<dyn Error + Send + Sync>> {
         let Some(source_cst) = self.db.source_cst(uri) else {
             return Ok(());
@@ -368,6 +430,11 @@ pub fn serve(_log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         document_symbol_provider: Some(lsp_types::OneOf::Left(true)),
         definition_provider: Some(lsp_types::OneOf::Left(true)),
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+            retrigger_characters: Some(vec![")".to_string()]),
+            work_done_progress_options: Default::default(),
+        }),
         ..Default::default()
     };
 
@@ -594,5 +661,178 @@ fn create_symbol(
         children,
         #[allow(deprecated)]
         deprecated: None,
+    }
+}
+
+// =============================================================================
+// Signature Help Helpers
+// =============================================================================
+
+/// Information about a function call at a cursor position.
+struct CallInfo {
+    /// Name of the function being called.
+    callee_name: String,
+    /// Index of the currently active parameter (0-based).
+    active_param: u32,
+}
+
+/// Find the enclosing call expression at the given offset using tree-sitter.
+fn find_enclosing_call(tree: &tree_sitter::Tree, rope: &Rope, offset: usize) -> Option<CallInfo> {
+    let root = tree.root_node();
+
+    // Find the smallest node containing the offset
+    let mut node = root.descendant_for_byte_range(offset, offset)?;
+
+    // Walk up the tree to find a call_expression
+    loop {
+        if node.kind() == "call_expression" {
+            return extract_call_info(node, rope, offset);
+        }
+
+        node = node.parent()?;
+    }
+}
+
+/// Extract call information from a call_expression node.
+fn extract_call_info(
+    call_node: tree_sitter::Node,
+    rope: &Rope,
+    cursor_offset: usize,
+) -> Option<CallInfo> {
+    // Get the callee (first child, typically an identifier or member expression)
+    let callee_node = call_node.child_by_field_name("function")?;
+    let callee_start = callee_node.start_byte();
+    let callee_end = callee_node.end_byte();
+    let callee_name = rope
+        .get_byte_slice(callee_start..callee_end)
+        .map(|s| s.to_string())?;
+
+    // Find the arguments node
+    let args_node = call_node.child_by_field_name("arguments")?;
+
+    // Count commas before the cursor to determine active parameter
+    let active_param = count_commas_before(args_node, cursor_offset);
+
+    Some(CallInfo {
+        callee_name,
+        active_param,
+    })
+}
+
+/// Count the number of commas before the cursor position within an argument list.
+fn count_commas_before(args_node: tree_sitter::Node, cursor_offset: usize) -> u32 {
+    let mut count = 0;
+    let mut cursor = args_node.walk();
+
+    // Skip the opening parenthesis
+    if !cursor.goto_first_child() {
+        return 0;
+    }
+
+    loop {
+        let node = cursor.node();
+        let node_end = node.end_byte();
+
+        // Stop if we've passed the cursor
+        if node.start_byte() >= cursor_offset {
+            break;
+        }
+
+        // Count commas
+        if node.kind() == "," && node_end <= cursor_offset {
+            count += 1;
+        }
+
+        if !cursor.goto_next_sibling() {
+            break;
+        }
+    }
+
+    count
+}
+
+/// Find the doc comment for a function definition by name.
+fn find_doc_comment(tree: &tree_sitter::Tree, rope: &Rope, func_name: &str) -> Option<String> {
+    let root = tree.root_node();
+
+    // Find the function definition with the given name
+    find_function_node(&root, rope, func_name)
+        .and_then(|func_node| extract_doc_comment(func_node, rope))
+}
+
+/// Find a function definition node by name.
+fn find_function_node<'tree>(
+    node: &tree_sitter::Node<'tree>,
+    rope: &Rope,
+    func_name: &str,
+) -> Option<tree_sitter::Node<'tree>> {
+    if node.kind() == "function_definition" {
+        // Get the function name
+        if let Some(name_node) = node.child_by_field_name("name") {
+            let start = name_node.start_byte();
+            let end = name_node.end_byte();
+            if let Some(name) = rope.get_byte_slice(start..end)
+                && name == func_name
+            {
+                return Some(*node);
+            }
+        }
+    }
+
+    // Recurse into children
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            if let Some(found) = find_function_node(&cursor.node(), rope, func_name) {
+                return Some(found);
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract doc comments from preceding siblings of a node.
+fn extract_doc_comment(node: tree_sitter::Node, rope: &Rope) -> Option<String> {
+    let mut comments = Vec::new();
+    let mut current = node;
+
+    // Walk backwards through siblings to collect doc comments
+    while let Some(prev) = current.prev_sibling() {
+        current = prev;
+        let kind = current.kind();
+
+        if kind == "line_doc_comment" || kind == "block_doc_comment" {
+            let start = current.start_byte();
+            let end = current.end_byte();
+            if let Some(text) = rope.get_byte_slice(start..end) {
+                let text = text.to_string();
+                // Strip the comment markers
+                let cleaned = if kind == "line_doc_comment" {
+                    text.strip_prefix("///").unwrap_or(&text).trim()
+                } else {
+                    // Block doc comment: /** ... */
+                    text.strip_prefix("/**")
+                        .and_then(|s| s.strip_suffix("*/"))
+                        .map(|s| s.trim())
+                        .unwrap_or(&text)
+                };
+                comments.push(cleaned.to_string());
+            }
+        } else if kind != "line_comment" && kind != "block_comment" {
+            // Stop at non-comment nodes
+            break;
+        }
+    }
+
+    if comments.is_empty() {
+        None
+    } else {
+        // Reverse because we collected in reverse order
+        comments.reverse();
+        Some(comments.join("\n"))
     }
 }
