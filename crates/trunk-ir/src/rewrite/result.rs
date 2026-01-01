@@ -19,7 +19,9 @@ pub enum RewriteResult<'db> {
     Replace(Operation<'db>),
 
     /// Replace the operation with multiple operations.
-    /// The first operation's results are mapped to the original's results.
+    /// The LAST operation's results are mapped to the original's results.
+    /// This supports the common pattern where earlier operations produce
+    /// intermediate values, and the final operation produces the result.
     Expand(Vec<Operation<'db>>),
 
     /// Delete the operation and replace its results with other values.

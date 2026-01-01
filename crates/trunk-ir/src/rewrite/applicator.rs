@@ -226,9 +226,11 @@ impl PatternApplicator {
                         .into_iter()
                         .map(|expanded_op| self.rewrite_op_regions(db, &expanded_op, ctx))
                         .collect();
-                    // Map ORIGINAL op results to first expanded op results
-                    if let Some(first) = final_ops.first() {
-                        ctx.map_results(db, op, first);
+                    // Map ORIGINAL op results to LAST expanded op results.
+                    // The pattern is: earlier ops produce intermediate values,
+                    // the last op produces the final result that replaces the original.
+                    if let Some(last) = final_ops.last() {
+                        ctx.map_results(db, op, last);
                     }
                     return final_ops;
                 }
