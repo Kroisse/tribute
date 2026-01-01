@@ -247,8 +247,7 @@ impl<'db> CaseLowerer<'db> {
             return vec![self.rebuild_case(op, remapped_operands)];
         }
 
-        // Check if any arm has a handler pattern - these require special lowering
-        // in a later pass (handler lowering), so we skip them here.
+        // Check if any arm has a handler pattern - these are lowered to cont.handler_dispatch
         let has_handler_patterns = arms.iter().any(|arm| {
             matches!(
                 arm.pattern,
@@ -256,7 +255,7 @@ impl<'db> CaseLowerer<'db> {
             )
         });
         if has_handler_patterns {
-            return vec![self.rebuild_case(op, remapped_operands)];
+            return self.lower_handler_case(op, scrutinee, result_type, &arms);
         }
 
         if arms.is_empty() {
@@ -279,6 +278,106 @@ impl<'db> CaseLowerer<'db> {
             self.ctx.map_results(self.db, &op, last_op);
         }
         ops
+    }
+
+    /// Lower handler case expressions to `cont.handler_dispatch`.
+    ///
+    /// Handler cases come from `case handle expr { ... }` and contain:
+    /// - `{ result }` (HandlerDone) - matches normal completion
+    /// - `{ Op(args) -> k }` (HandlerSuspend) - matches effect operations
+    ///
+    /// This lowers to `cont.handler_dispatch` which the WASM backend
+    /// will convert to yield-checking dispatch logic.
+    fn lower_handler_case(
+        &mut self,
+        op: Operation<'db>,
+        scrutinee: Value<'db>,
+        result_type: Type<'db>,
+        arms: &[ArmInfo<'db>],
+    ) -> Vec<Operation<'db>> {
+        let location = op.location(self.db);
+
+        // Find the done arm and suspend arms
+        let mut done_arm: Option<&ArmInfo<'db>> = None;
+        let mut suspend_arms: Vec<&ArmInfo<'db>> = Vec::new();
+
+        for arm in arms {
+            match &arm.pattern {
+                ArmPattern::HandlerDone => {
+                    done_arm = Some(arm);
+                }
+                ArmPattern::HandlerSuspend { .. } => {
+                    suspend_arms.push(arm);
+                }
+                _ => {
+                    // Other patterns in handler case - emit warning and skip
+                    self.emit_error(location, "unexpected pattern in handler case expression");
+                }
+            }
+        }
+
+        // Process done_body - lower the body region
+        let done_body = if let Some(done_arm) = done_arm {
+            // Set up bindings for the result value
+            // The done arm's pattern region may have a bind pattern for the result
+            if let Some(pattern_region) = done_arm.pattern_region {
+                let bindings = self.extract_bindings_from_pattern(pattern_region);
+                for name in bindings.iter() {
+                    // In handler_done, the result is the scrutinee (push_prompt result)
+                    self.current_arm_bindings.insert(*name, scrutinee);
+                }
+            }
+
+            let lowered_body = self.lower_region(done_arm.body);
+
+            // Clear bindings after processing
+            self.current_arm_bindings.clear();
+
+            lowered_body
+        } else {
+            // No done arm - create empty region (unreachable case)
+            Region::new(self.db, location, IdVec::new())
+        };
+
+        // Process suspend_body - for now, combine all suspend arms into one region
+        // TODO(#100): Support multiple suspend patterns with operation matching
+        // Currently, only the first suspend arm is used; additional arms are ignored.
+        let suspend_body = if let Some(first_suspend) = suspend_arms.first() {
+            // Set up bindings for continuation and args
+            if let Some(pattern_region) = first_suspend.pattern_region {
+                let bindings = self.extract_bindings_from_pattern(pattern_region);
+                // The last binding is typically the continuation (k)
+                // Other bindings are operation arguments
+                for name in bindings.iter() {
+                    // For now, bind everything to the scrutinee
+                    // The actual values come from yield globals at runtime
+                    self.current_arm_bindings.insert(*name, scrutinee);
+                }
+            }
+
+            let lowered_body = self.lower_region(first_suspend.body);
+
+            // Clear bindings after processing
+            self.current_arm_bindings.clear();
+
+            lowered_body
+        } else {
+            // No suspend arms - create empty region
+            Region::new(self.db, location, IdVec::new())
+        };
+
+        // Create cont.handler_dispatch operation
+        let dispatch_op = Operation::of_name(self.db, location, "cont.handler_dispatch")
+            .operand(scrutinee)
+            .result(result_type)
+            .region(done_body)
+            .region(suspend_body)
+            .build();
+
+        // Map original case result to dispatch result
+        self.ctx.map_results(self.db, &op, &dispatch_op);
+
+        vec![dispatch_op]
     }
 
     fn rebuild_case(
@@ -761,6 +860,17 @@ impl<'db> CaseLowerer<'db> {
             message: message.to_string(),
             span: location.span,
             severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::Optimization,
+        }
+        .accumulate(self.db);
+    }
+
+    #[allow(dead_code)]
+    fn emit_warning(&self, location: Location<'db>, message: &str) {
+        Diagnostic {
+            message: message.to_string(),
+            span: location.span,
+            severity: DiagnosticSeverity::Warning,
             phase: CompilationPhase::Optimization,
         }
         .accumulate(self.db);
