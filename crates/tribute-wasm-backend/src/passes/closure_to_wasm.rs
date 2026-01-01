@@ -38,7 +38,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 /// Pattern for `closure.new(env) @func_ref` -> `wasm.struct_new`
 ///
 /// Creates a closure struct with:
-/// - Field 0: function reference (preserved as func.constant for later resolution)
+/// - Field 0: function reference (obtained via wasm.ref_func SSA value)
 /// - Field 1: environment struct
 struct ClosureNewPattern;
 
@@ -222,6 +222,7 @@ mod tests {
         let module = make_closure_new_module(db);
         let op_names = lower_and_check_names(db, module);
 
+        assert!(op_names.iter().any(|n| n == "wasm.ref_func"));
         assert!(op_names.iter().any(|n| n == "wasm.struct_new"));
         assert!(!op_names.iter().any(|n| n == "closure.new"));
     }
