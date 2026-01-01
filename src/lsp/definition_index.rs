@@ -197,6 +197,44 @@ impl DefinitionIndex {
         let reference = self.reference_at(offset)?;
         self.definition_of(reference.target)
     }
+
+    /// Find a definition at the given byte offset.
+    pub fn definition_at_position(&self, offset: usize) -> Option<&DefinitionEntry> {
+        self.definitions
+            .iter()
+            .filter(|e| e.span.start <= offset && offset < e.span.end)
+            .min_by_key(|e| e.span.end - e.span.start)
+    }
+
+    /// Find all references to a given symbol.
+    pub fn references_of(&self, name: Symbol) -> Vec<&ReferenceEntry> {
+        self.references
+            .iter()
+            .filter(|e| e.target == name)
+            .collect()
+    }
+
+    /// Find all references from a position.
+    ///
+    /// If the position is on a definition, returns all references to that symbol.
+    /// If the position is on a reference, finds the target symbol and returns all references to it.
+    ///
+    /// Returns the symbol name and a list of all references to it.
+    pub fn references_at(&self, offset: usize) -> Option<(Symbol, Vec<&ReferenceEntry>)> {
+        // First check if we're on a definition
+        if let Some(def) = self.definition_at_position(offset) {
+            let refs = self.references_of(def.name);
+            return Some((def.name, refs));
+        }
+
+        // Otherwise check if we're on a reference
+        if let Some(reference) = self.reference_at(offset) {
+            let refs = self.references_of(reference.target);
+            return Some((reference.target, refs));
+        }
+
+        None
+    }
 }
 
 #[cfg(test)]
@@ -259,5 +297,49 @@ mod tests {
             assert_eq!(d.name, Symbol::new("foo"));
             assert_eq!(d.kind, DefinitionKind::Function);
         }
+    }
+
+    #[salsa_test]
+    fn test_find_references(db: &salsa::DatabaseImpl) {
+        //                    0         1         2         3         4         5         6
+        //                    0123456789012345678901234567890123456789012345678901234567890123456789
+        let source_text = "fn foo(x: Int) -> Int { x }\nfn bar() -> Int { foo(1) + foo(2) }";
+        let source = make_source("test.trb", source_text);
+
+        let module = stage_lower_case(db, source);
+        let index = DefinitionIndex::build(db, &module);
+
+        // Find position of "foo" definition
+        let foo_def_pos = source_text.find("foo").unwrap();
+
+        // Should find all references from the definition
+        let result = index.references_at(foo_def_pos);
+        assert!(result.is_some(), "Should find references from definition");
+
+        let (symbol, refs) = result.unwrap();
+        assert_eq!(symbol, Symbol::new("foo"));
+        assert_eq!(refs.len(), 2, "Should find 2 call sites");
+    }
+
+    #[salsa_test]
+    fn test_find_references_from_call_site(db: &salsa::DatabaseImpl) {
+        //                    0         1         2         3         4         5         6
+        //                    0123456789012345678901234567890123456789012345678901234567890123456789
+        let source_text = "fn foo(x: Int) -> Int { x }\nfn bar() -> Int { foo(1) + foo(2) }";
+        let source = make_source("test.trb", source_text);
+
+        let module = stage_lower_case(db, source);
+        let index = DefinitionIndex::build(db, &module);
+
+        // Find position of second "foo" call
+        let foo_call_pos = source_text.rfind("foo").unwrap();
+
+        // Should find all references from the call site too
+        let result = index.references_at(foo_call_pos);
+        assert!(result.is_some(), "Should find references from call site");
+
+        let (symbol, refs) = result.unwrap();
+        assert_eq!(symbol, Symbol::new("foo"));
+        assert_eq!(refs.len(), 2, "Should find 2 call sites");
     }
 }
