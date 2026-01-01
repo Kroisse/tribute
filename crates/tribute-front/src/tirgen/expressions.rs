@@ -414,7 +414,9 @@ fn lower_constructor_expr<'db>(
     };
 
     let args = collect_argument_list(ctx, block, node);
-    let op = block.op(tribute::cons(ctx.db, location, args, infer_ty, ctor_path));
+    let op = block.op(tribute::cons(
+        ctx.db, location, args, infer_ty, ctor_path, None, None,
+    ));
     Some(op.result(ctx.db))
 }
 
@@ -968,6 +970,11 @@ fn lower_tuple_expr<'db>(
 }
 
 /// Lower a record expression.
+///
+/// Handles three forms:
+/// - Full construction: `User { name: "Alice", age: 30 }`
+/// - Shorthand: `User { name, age }` (binds to variables with same names)
+/// - Spread: `User { ..base, age: 31 }` (copies fields from base, overrides specified fields)
 fn lower_record_expr<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
@@ -978,6 +985,8 @@ fn lower_record_expr<'db>(
     let infer_ty = ctx.fresh_type_var();
 
     let mut type_name = None;
+    let mut spread_base: Option<Value<'db>> = None;
+    let mut field_names = Vec::new();
     let mut field_values = Vec::new();
 
     for child in node.named_children(&mut cursor) {
@@ -995,18 +1004,27 @@ fn lower_record_expr<'db>(
                     if is_comment(field.kind()) || field.kind() != "record_field" {
                         continue;
                     }
-                    // record_field has: identifier (field name) and optionally an expression (value)
-                    // For `x: 10`, there's identifier("x") and literal(10)
-                    // For shorthand `{ x }`, there's only identifier("x")
+
                     let mut field_cursor = field.walk();
                     let children: Vec<_> = field
                         .named_children(&mut field_cursor)
                         .filter(|c| !is_comment(c.kind()))
                         .collect();
 
-                    if children.len() == 1 && children[0].kind() == "identifier" {
+                    // Check for spread: ..expr
+                    if children.iter().any(|c| c.kind() == "spread") {
+                        // Find the value expression after spread
+                        for field_child in &children {
+                            if field_child.kind() != "spread" {
+                                if let Some(value) = lower_expr(ctx, block, *field_child) {
+                                    spread_base = Some(value);
+                                }
+                            }
+                        }
+                    } else if children.len() == 1 && children[0].kind() == "identifier" {
                         // Shorthand: { name } means { name: name }
-                        let field_name = node_text(&children[0], &ctx.source).into();
+                        let field_name: Symbol = node_text(&children[0], &ctx.source).into();
+                        field_names.push(field_name);
                         if let Some(value) = ctx.lookup(field_name) {
                             field_values.push(value);
                         } else {
@@ -1016,6 +1034,14 @@ fn lower_record_expr<'db>(
                         }
                     } else {
                         // Full syntax: { name: value }
+                        // Get the field name
+                        let field_name: Symbol = children
+                            .iter()
+                            .find(|c| c.kind() == "identifier")
+                            .map(|c| node_text(c, &ctx.source).into())
+                            .unwrap_or_else(|| Symbol::new(""));
+                        field_names.push(field_name);
+
                         // Find the value expression (skip the identifier)
                         for field_child in &children {
                             if field_child.kind() != "identifier" {
@@ -1032,14 +1058,43 @@ fn lower_record_expr<'db>(
     }
 
     let type_name = type_name?;
-    let op = block.op(tribute::cons(
-        ctx.db,
-        location,
-        field_values,
-        infer_ty,
-        sym_ref(&type_name),
-    ));
-    Some(op.result(ctx.db))
+
+    if let Some(base) = spread_base {
+        // Record spread: User { ..base, field1: val1, ... }
+        // Put base as first arg, followed by override values
+        let mut args = vec![base];
+        args.extend(field_values);
+
+        // Encode override field names as comma-separated string
+        let override_fields: String = field_names
+            .iter()
+            .map(|s| s.with_str(|str| str.to_string()))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let op = block.op(tribute::cons(
+            ctx.db,
+            location,
+            args,
+            infer_ty,
+            sym_ref(&type_name),
+            Some(true),
+            Some(Symbol::from_dynamic(&override_fields)),
+        ));
+        Some(op.result(ctx.db))
+    } else {
+        // Regular construction: User { field1: val1, ... }
+        let op = block.op(tribute::cons(
+            ctx.db,
+            location,
+            field_values,
+            infer_ty,
+            sym_ref(&type_name),
+            None,
+            None,
+        ));
+        Some(op.result(ctx.db))
+    }
 }
 
 // =============================================================================

@@ -55,7 +55,12 @@ dialect! {
 
         /// `tribute.cons` operation: unresolved constructor application.
         /// The constructor name will be resolved to a struct/variant constructor.
-        #[attr(name: QualifiedName)]
+        ///
+        /// Supports record spread syntax: `User { ..base, field: value }`
+        /// - For non-spread: args contains all field values in declaration order
+        /// - For spread: `has_spread=true`, first arg is base value, rest are override values
+        /// - `override_fields`: comma-separated field names being overridden (only for spread)
+        #[attr(name: QualifiedName, has_spread?: bool, override_fields?: Symbol)]
         fn cons(#[rest] args) -> result;
 
         /// `tribute.var` operation: unresolved variable reference (single name).

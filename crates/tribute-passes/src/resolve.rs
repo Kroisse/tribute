@@ -49,6 +49,8 @@ trunk_ir::symbols! {
     ATTR_CALLEE => "callee",
     ATTR_REST_NAME => "rest_name",
     ATTR_RESOLVED_LOCAL => "resolved_local",
+    ATTR_HAS_SPREAD => "has_spread",
+    ATTR_OVERRIDE_FIELDS => "override_fields",
     ATTR_VALUE => "value",
     ATTR_RESOLVED_CONST => "resolved_const",
 }
@@ -82,6 +84,8 @@ pub enum Binding<'db> {
         tag: Option<Symbol>,
         /// Constructor parameter types
         params: IdVec<Type<'db>>,
+        /// Field names (for named structs/variants, None for positional)
+        field_names: Option<Vec<Symbol>>,
     },
     /// A type alias or definition.
     TypeDef {
@@ -143,9 +147,17 @@ impl<'db> ModuleEnv<'db> {
         ty: Type<'db>,
         tag: Option<Symbol>,
         params: IdVec<Type<'db>>,
+        field_names: Option<Vec<Symbol>>,
     ) {
-        self.definitions
-            .insert(name.into(), Binding::Constructor { ty, tag, params });
+        self.definitions.insert(
+            name.into(),
+            Binding::Constructor {
+                ty,
+                tag,
+                params,
+                field_names,
+            },
+        );
     }
 
     /// Add a type definition.
@@ -299,8 +311,8 @@ fn collect_definition<'db>(
                 // Add type definition
                 env.add_type(*sym, ty);
                 // Struct constructor has same name as type
-                // TODO: Get field types for constructor params
-                env.add_constructor(*sym, ty, None, IdVec::new());
+                // TODO: Get field types and names for constructor params
+                env.add_constructor(*sym, ty, None, IdVec::new(), None);
             }
         }
         (d, n) if d == tribute::DIALECT_NAME() && n == tribute::ENUM_DEF() => {
@@ -428,6 +440,7 @@ fn collect_enum_constructors<'db>(
 
             let params: IdVec<Type<'db>> = field_types.into_iter().collect();
 
+            // TODO: Extract field names from variant definition for named variants
             env.add_to_namespace(
                 type_name,
                 variant_sym,
@@ -435,10 +448,11 @@ fn collect_enum_constructors<'db>(
                     ty,
                     tag: Some(variant_sym),
                     params: params.clone(),
+                    field_names: None, // Named field support to be added
                 },
             );
             if env.lookup(variant_sym).is_none() {
-                env.add_constructor(variant_sym, ty, Some(variant_sym), params);
+                env.add_constructor(variant_sym, ty, Some(variant_sym), params, None);
             }
         }
     }
@@ -1640,7 +1654,24 @@ impl<'db> Resolver<'db> {
         };
 
         let location = op.location(self.db);
-        let args: Vec<Value<'db>> = op.operands(self.db).iter().copied().collect();
+        let operands = op.operands(self.db);
+
+        // Check if this is a spread case by looking for has_spread attribute
+        let is_spread = matches!(attrs.get(&ATTR_HAS_SPREAD()), Some(Attribute::Bool(true)));
+
+        if is_spread {
+            // TODO: Implement spread resolution
+            // For spread: first operand is base value, rest are override values
+            // 1. Get override_fields attribute (comma-separated field names)
+            // 2. Get base struct value (first operand)
+            // 3. For non-overridden fields, emit field_get from base
+            // 4. Create struct_new with all field values
+            tracing::warn!("Record spread is not yet fully implemented in resolution");
+            return None;
+        }
+
+        // Non-spread case: all operands are field values
+        let args: Vec<Value<'db>> = operands.iter().copied().collect();
 
         let binding = if path.is_simple() {
             let name = path.name();
