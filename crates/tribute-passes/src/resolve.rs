@@ -49,8 +49,6 @@ trunk_ir::symbols! {
     ATTR_CALLEE => "callee",
     ATTR_REST_NAME => "rest_name",
     ATTR_RESOLVED_LOCAL => "resolved_local",
-    ATTR_HAS_SPREAD => "has_spread",
-    ATTR_OVERRIDE_FIELDS => "override_fields",
     ATTR_VALUE => "value",
     ATTR_RESOLVED_CONST => "resolved_const",
 }
@@ -943,6 +941,17 @@ impl<'db> Resolver<'db> {
                     vec![self.resolve_op_regions(&remapped_op)]
                 }
             }
+            (d, n) if d == tribute::DIALECT_NAME() && n == tribute::RECORD() => {
+                let resolved = self.try_resolve_record(&remapped_op);
+                if !resolved.is_empty() {
+                    resolved
+                } else {
+                    if self.report_unresolved {
+                        self.emit_unresolved_cons_diagnostic(&remapped_op);
+                    }
+                    vec![self.resolve_op_regions(&remapped_op)]
+                }
+            }
             (d, n) if d == core::DIALECT_NAME() && n == core::MODULE() => {
                 self.push_import_scope();
                 let resolved = self.resolve_op_regions(&remapped_op);
@@ -1671,9 +1680,9 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Try to resolve a `tribute.cons` operation.
+    /// Try to resolve a `tribute.cons` operation (positional constructor).
     ///
-    /// Returns a vector of operations (may be multiple for spread case).
+    /// Returns a single operation wrapped in a vector for consistency.
     fn try_resolve_cons(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let Some(Attribute::QualifiedName(path)) = attrs.get(&ATTR_NAME()) else {
@@ -1683,10 +1692,7 @@ impl<'db> Resolver<'db> {
         let location = op.location(self.db);
         let operands = op.operands(self.db);
 
-        // Check if this is a spread case by looking for has_spread attribute
-        let is_spread = matches!(attrs.get(&ATTR_HAS_SPREAD()), Some(Attribute::Bool(true)));
-
-        // Look up binding first (needed for both spread and non-spread)
+        // Look up binding
         let binding = if path.is_simple() {
             let name = path.name();
             self.lookup_binding(name).cloned()
@@ -1704,11 +1710,7 @@ impl<'db> Resolver<'db> {
             return vec![];
         };
 
-        if is_spread {
-            return self.resolve_spread_cons(op, &binding, location, attrs, operands);
-        }
-
-        // Non-spread case: all operands are field values
+        // All operands are field values (positional)
         let args: Vec<Value<'db>> = operands.iter().copied().collect();
 
         match binding {
@@ -1729,109 +1731,123 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Resolve a spread constructor: `Type { ..base, field: value }`
+    /// Try to resolve a `tribute.record` operation (named fields + spread).
     ///
     /// Returns a vector of operations: field_get operations followed by struct_new.
-    fn resolve_spread_cons(
-        &mut self,
-        op: &Operation<'db>,
-        binding: &Binding<'db>,
-        location: trunk_ir::Location<'db>,
-        attrs: &trunk_ir::Attrs<'db>,
-        operands: &IdVec<Value<'db>>,
-    ) -> Vec<Operation<'db>> {
-        let Binding::Constructor {
+    fn try_resolve_record(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
+        let attrs = op.attributes(self.db);
+        let Some(Attribute::QualifiedName(path)) = attrs.get(&ATTR_NAME()) else {
+            return vec![];
+        };
+
+        let location = op.location(self.db);
+        let operands = op.operands(self.db);
+        let regions = op.regions(self.db);
+
+        // Look up binding
+        let binding = if path.is_simple() {
+            let name = path.name();
+            self.lookup_binding(name).cloned()
+        } else {
+            if path.len() != 2 {
+                return vec![];
+            }
+            let namespace = *path.as_parent().last().unwrap();
+            let name = path.name();
+            self.env.lookup_qualified(namespace, name).cloned()
+        };
+
+        let Some(Binding::Constructor {
             ty,
             tag,
             field_names,
             ..
-        } = binding
+        }) = binding
         else {
             return vec![];
         };
 
-        // Spread only supported for structs (no tag), not enum variants
+        // Record syntax only supported for structs (no tag), not enum variants
         if tag.is_some() {
-            tracing::warn!("Record spread is not supported for enum variants");
+            tracing::warn!("Record syntax not supported for enum variants");
             return vec![];
         }
 
-        // Get field names from binding
+        // Get struct field names from binding
         let Some(struct_fields) = field_names.as_ref() else {
             return vec![];
         };
 
+        // Parse field_arg ops from the fields region to get override field names and values
+        let mut override_fields: Vec<(Symbol, Value<'db>)> = Vec::new();
+        if let Some(fields_region) = regions.first() {
+            for block in fields_region.blocks(self.db).iter() {
+                for field_op in block.operations(self.db).iter().copied() {
+                    if let Ok(field_arg) = tribute::FieldArg::from_operation(self.db, field_op) {
+                        let field_name = field_arg.name(self.db);
+                        // Get the value operand - need to remap it
+                        let field_ops = field_op.operands(self.db);
+                        if let Some(&field_value) = field_ops.first() {
+                            let remapped_value = self.ctx.lookup(field_value);
+                            override_fields.push((field_name, remapped_value));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Get base value if spread is present
+        let base_value = operands.first().map(|&v| self.ctx.lookup(v));
+        let has_spread = base_value.is_some();
+
         if struct_fields.is_empty() {
             // No fields, just create empty struct
-            let new_operation = adt::struct_new(self.db, location, vec![], *ty, *ty).as_operation();
+            let new_operation = adt::struct_new(self.db, location, vec![], ty, ty).as_operation();
             let old_result = op.result(self.db, 0);
             let new_result = new_operation.result(self.db, 0);
             self.ctx.map_value(old_result, new_result);
             return vec![new_operation];
         }
 
-        // Get override field names from attribute
-        let override_fields_str = attrs
-            .get(&ATTR_OVERRIDE_FIELDS())
-            .and_then(|a| {
-                if let Attribute::Symbol(s) = a {
-                    Some(s.to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default();
-
-        let override_names: Vec<&str> = if override_fields_str.is_empty() {
-            Vec::new()
-        } else {
-            override_fields_str.split(',').collect()
-        };
-
-        // First operand is base value, rest are override values
-        let Some(base_value) = operands.first().copied() else {
-            return vec![];
-        };
-        let override_values: Vec<Value<'db>> = operands.iter().skip(1).copied().collect();
-
-        // Build field values and collect field_get operations
+        // Build field values
         let mut all_ops: Vec<Operation<'db>> = Vec::new();
         let mut all_values: Vec<Value<'db>> = Vec::new();
-        let mut override_idx = 0;
 
-        for (field_idx, field_name) in struct_fields.iter().enumerate() {
-            let field_name_str = field_name.to_string();
-            let is_overridden = override_names.iter().any(|&n| n == field_name_str);
+        for (field_idx, struct_field_name) in struct_fields.iter().enumerate() {
+            // Check if this field is overridden
+            let override_value = override_fields
+                .iter()
+                .find(|(name, _)| *name == *struct_field_name)
+                .map(|(_, val)| *val);
 
-            if is_overridden {
+            if let Some(val) = override_value {
                 // Use the override value
-                if let Some(&val) = override_values.get(override_idx) {
-                    all_values.push(val);
-                    override_idx += 1;
-                } else {
-                    tracing::warn!("Missing override value for field {}", field_name_str);
-                    return vec![];
-                }
-            } else {
+                all_values.push(val);
+            } else if has_spread {
                 // Get field from base using adt.struct_get
-                let field_ty = *ty; // TODO: Get actual field type from struct definition
+                let base = base_value.unwrap();
+                let field_ty = ty; // TODO: Get actual field type from struct definition
                 let struct_get = adt::struct_get(
                     self.db,
                     location,
-                    base_value,
+                    base,
                     field_ty,
-                    *ty,
+                    ty,
                     Attribute::IntBits(field_idx as u64),
                 );
                 let field_val = struct_get.result(self.db);
 
                 all_ops.push(struct_get.as_operation());
                 all_values.push(field_val);
+            } else {
+                // No spread and no override - this is an error (missing field)
+                tracing::warn!("Missing field {} in record construction", struct_field_name);
+                return vec![];
             }
         }
 
         // Create struct_new with all field values
-        let new_operation = adt::struct_new(self.db, location, all_values, *ty, *ty).as_operation();
+        let new_operation = adt::struct_new(self.db, location, all_values, ty, ty).as_operation();
         let old_result = op.result(self.db, 0);
         let new_result = new_operation.result(self.db, 0);
         self.ctx.map_value(old_result, new_result);

@@ -414,9 +414,7 @@ fn lower_constructor_expr<'db>(
     };
 
     let args = collect_argument_list(ctx, block, node);
-    let op = block.op(tribute::cons(
-        ctx.db, location, args, infer_ty, ctor_path, None, None,
-    ));
+    let op = block.op(tribute::cons(ctx.db, location, args, infer_ty, ctor_path));
     Some(op.result(ctx.db))
 }
 
@@ -1059,42 +1057,32 @@ fn lower_record_expr<'db>(
 
     let type_name = type_name?;
 
-    if let Some(base) = spread_base {
-        // Record spread: User { ..base, field1: val1, ... }
-        // Put base as first arg, followed by override values
-        let mut args = vec![base];
-        args.extend(field_values);
-
-        // Encode override field names as comma-separated string
-        let override_fields: String = field_names
-            .iter()
-            .map(|s| s.with_str(|str| str.to_string()))
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let op = block.op(tribute::cons(
+    // Build fields region containing tribute.field_arg operations
+    // Each field_arg pairs the field name with its value
+    let mut fields_block = BlockBuilder::new(ctx.db, location);
+    for (field_name, field_value) in field_names.iter().zip(field_values.iter()) {
+        fields_block.op(tribute::field_arg(
             ctx.db,
             location,
-            args,
-            infer_ty,
-            sym_ref(&type_name),
-            Some(true),
-            Some(Symbol::from_dynamic(&override_fields)),
+            *field_value,
+            *field_name,
         ));
-        Some(op.result(ctx.db))
-    } else {
-        // Regular construction: User { field1: val1, ... }
-        let op = block.op(tribute::cons(
-            ctx.db,
-            location,
-            field_values,
-            infer_ty,
-            sym_ref(&type_name),
-            None,
-            None,
-        ));
-        Some(op.result(ctx.db))
     }
+    let fields_region = Region::new(ctx.db, location, idvec![fields_block.build()]);
+
+    // Convert spread_base from Option<Value> to Vec<Value>
+    let base: Vec<Value<'db>> = spread_base.into_iter().collect();
+
+    // Create the record operation
+    let op = block.op(tribute::record(
+        ctx.db,
+        location,
+        base,
+        infer_ty,
+        sym_ref(&type_name),
+        fields_region,
+    ));
+    Some(op.result(ctx.db))
 }
 
 // =============================================================================
