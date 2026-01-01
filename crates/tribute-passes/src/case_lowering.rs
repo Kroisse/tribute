@@ -22,6 +22,14 @@ use trunk_ir::{Symbol, Value, ValueDef};
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
+/// Compute a deterministic hash-based index from an operation name.
+/// This must match the implementation in cont_to_wasm.rs.
+fn compute_op_idx_hash(name: &str) -> u64 {
+    name.bytes()
+        .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
+        & 0xFFFF // Keep lower 16 bits
+}
+
 #[derive(Debug, Clone)]
 enum ArmPattern<'db> {
     Wildcard,
@@ -247,8 +255,7 @@ impl<'db> CaseLowerer<'db> {
             return vec![self.rebuild_case(op, remapped_operands)];
         }
 
-        // Check if any arm has a handler pattern - these require special lowering
-        // in a later pass (handler lowering), so we skip them here.
+        // Check if any arm has a handler pattern - these are lowered to cont.handler_dispatch
         let has_handler_patterns = arms.iter().any(|arm| {
             matches!(
                 arm.pattern,
@@ -256,7 +263,7 @@ impl<'db> CaseLowerer<'db> {
             )
         });
         if has_handler_patterns {
-            return vec![self.rebuild_case(op, remapped_operands)];
+            return self.lower_handler_case(op, scrutinee, result_type, &arms);
         }
 
         if arms.is_empty() {
@@ -279,6 +286,135 @@ impl<'db> CaseLowerer<'db> {
             self.ctx.map_results(self.db, &op, last_op);
         }
         ops
+    }
+
+    /// Lower handler case expressions to `cont.handler_dispatch`.
+    ///
+    /// Handler cases come from `case handle expr { ... }` and contain:
+    /// - `{ result }` (HandlerDone) - matches normal completion
+    /// - `{ Op(args) -> k }` (HandlerSuspend) - matches effect operations
+    ///
+    /// This lowers to `cont.handler_dispatch` which the WASM backend
+    /// will convert to yield-checking dispatch logic.
+    fn lower_handler_case(
+        &mut self,
+        op: Operation<'db>,
+        scrutinee: Value<'db>,
+        result_type: Type<'db>,
+        arms: &[ArmInfo<'db>],
+    ) -> Vec<Operation<'db>> {
+        let location = op.location(self.db);
+
+        // Find the done arm and suspend arms
+        let mut done_arm: Option<&ArmInfo<'db>> = None;
+        let mut suspend_arms: Vec<&ArmInfo<'db>> = Vec::new();
+
+        for arm in arms {
+            match &arm.pattern {
+                ArmPattern::HandlerDone => {
+                    done_arm = Some(arm);
+                }
+                ArmPattern::HandlerSuspend { .. } => {
+                    suspend_arms.push(arm);
+                }
+                _ => {
+                    // Other patterns in handler case - emit warning and skip
+                    self.emit_error(location, "unexpected pattern in handler case expression");
+                }
+            }
+        }
+
+        // Process done_body - lower the body region
+        let done_body = if let Some(done_arm) = done_arm {
+            // Set up bindings for the result value
+            // The done arm's pattern region may have a bind pattern for the result
+            if let Some(pattern_region) = done_arm.pattern_region {
+                let bindings = self.extract_bindings_from_pattern(pattern_region);
+                for name in bindings.iter() {
+                    // In handler_done, the result is the scrutinee (push_prompt result)
+                    self.current_arm_bindings.insert(*name, scrutinee);
+                }
+            }
+
+            let lowered_body = self.lower_region(done_arm.body);
+
+            // Clear bindings after processing
+            self.current_arm_bindings.clear();
+
+            lowered_body
+        } else {
+            // No done arm - create empty region (unreachable case)
+            Region::new(self.db, location, IdVec::new())
+        };
+
+        // Process suspend arms - build dispatch info for each operation
+        // Each suspend arm has an op_name, and we compute a hash-based index for dispatch
+        let mut suspend_bodies: Vec<(u64, Region<'db>)> = Vec::new();
+
+        for suspend_arm in &suspend_arms {
+            // Get the operation name from the pattern
+            let op_name = match &suspend_arm.pattern {
+                ArmPattern::HandlerSuspend { op_name } => *op_name,
+                _ => continue,
+            };
+
+            // Compute hash-based index (same algorithm as in cont_to_wasm.rs)
+            let op_idx: u64 = op_name.with_str(compute_op_idx_hash);
+
+            // Set up bindings for continuation and args
+            if let Some(pattern_region) = suspend_arm.pattern_region {
+                let bindings = self.extract_bindings_from_pattern(pattern_region);
+                // The last binding is typically the continuation (k)
+                // Other bindings are operation arguments
+                for name in bindings.iter() {
+                    // For now, bind everything to the scrutinee
+                    // The actual values come from yield globals at runtime
+                    self.current_arm_bindings.insert(*name, scrutinee);
+                }
+            }
+
+            let lowered_body = self.lower_region(suspend_arm.body);
+
+            // Clear bindings after processing
+            self.current_arm_bindings.clear();
+
+            suspend_bodies.push((op_idx, lowered_body));
+        }
+
+        // Note: Each suspend body is stored as a separate region in handler_dispatch.
+        // The WASM backend will read num_suspend_arms and the op_idx_N attributes
+        // to generate proper dispatch logic.
+
+        // Build the handler_dispatch operation with all suspend arms as regions
+        // Region 0: done_body
+        // Region 1+: suspend_bodies (one per handler arm)
+        let mut builder = Operation::of_name(self.db, location, "cont.handler_dispatch")
+            .operand(scrutinee)
+            .result(result_type)
+            .region(done_body);
+
+        // Add all suspend body regions
+        for (i, (op_idx, body)) in suspend_bodies.iter().enumerate() {
+            // Store each suspend arm as a separate region with its op_idx
+            let attr_name = format!("op_idx_{}", i);
+            builder = builder.region(*body).attr(
+                Symbol::from_dynamic(&attr_name),
+                Attribute::IntBits(*op_idx),
+            );
+        }
+
+        // Store the number of suspend arms for the WASM backend
+        builder = builder.attr(
+            "num_suspend_arms",
+            Attribute::IntBits(suspend_bodies.len() as u64),
+        );
+
+        let dispatch_op = builder.build();
+
+        // Map original case result to dispatch result
+        self.ctx.map_results(self.db, &op, &dispatch_op);
+
+        vec![dispatch_op]
     }
 
     fn rebuild_case(
@@ -761,6 +897,17 @@ impl<'db> CaseLowerer<'db> {
             message: message.to_string(),
             span: location.span,
             severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::Optimization,
+        }
+        .accumulate(self.db);
+    }
+
+    #[allow(dead_code)]
+    fn emit_warning(&self, location: Location<'db>, message: &str) {
+        Diagnostic {
+            message: message.to_string(),
+            span: location.span,
+            severity: DiagnosticSeverity::Warning,
             phase: CompilationPhase::Optimization,
         }
         .accumulate(self.db);

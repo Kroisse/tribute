@@ -17,7 +17,10 @@ dialect! {
         ///
         /// The optional `value` operands are passed to the handler along with
         /// the captured continuation. Currently only the first value is used.
-        #[attr(tag: u32)]
+        ///
+        /// - `tag`: prompt tag for matching handler
+        /// - `op_idx`: index of the ability operation (for multi-op abilities)
+        #[attr(tag: u32, op_idx: u32)]
         fn shift(#[rest] value) {
             #[region(handler)] {}
         };
@@ -27,5 +30,22 @@ dialect! {
 
         /// `cont.drop` operation: drops a continuation (satisfies linear type).
         fn drop(continuation);
+
+        /// `cont.handler_dispatch` operation: dispatches on handler result.
+        ///
+        /// This operation is used after `push_prompt` returns to dispatch
+        /// between the "done" case (normal return) and "suspend" cases
+        /// (effect operations).
+        ///
+        /// The `done_body` region is executed when the computation completed normally.
+        /// The `suspend_body` region is executed when an effect was performed.
+        ///
+        /// In yield bubbling, this checks the global yield state:
+        /// - If not yielding: execute done_body
+        /// - If yielding: execute suspend_body with continuation/value bound
+        fn handler_dispatch(result) -> output {
+            #[region(done_body)] {}
+            #[region(suspend_body)] {}
+        };
     }
 }
