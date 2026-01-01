@@ -235,6 +235,11 @@ impl DefinitionIndex {
 
         None
     }
+
+    /// Get all definitions in the module.
+    pub fn definitions(&self) -> &[DefinitionEntry] {
+        &self.definitions
+    }
 }
 
 #[cfg(test)]
