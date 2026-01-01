@@ -4,7 +4,7 @@
 
 use trunk_ir::dialect::core::Module;
 
-use super::definition_index::{DefinitionIndex, DefinitionKind};
+use super::definition_index::{DefinitionIndex, DefinitionKind, KEYWORDS};
 
 /// Entry representing a completion candidate.
 #[derive(Clone, Debug)]
@@ -22,12 +22,6 @@ pub enum CompletionKind {
     Keyword,
     Ability,
 }
-
-/// Keywords that can be completed.
-const KEYWORDS: &[&str] = &[
-    "fn", "let", "case", "handle", "struct", "enum", "ability", "use", "mod", "const", "pub", "if",
-    "as", "True", "False", "Nil",
-];
 
 /// Index for completion lookups.
 pub struct CompletionIndex {
@@ -47,6 +41,8 @@ impl CompletionIndex {
                 DefinitionKind::Function => CompletionKind::Function,
                 DefinitionKind::Type => CompletionKind::Constructor,
                 DefinitionKind::Ability => CompletionKind::Ability,
+                // Skip local variables and parameters in global completion
+                DefinitionKind::Variable | DefinitionKind::Parameter => continue,
             };
             entries.push(CompletionEntry {
                 name: def.name.to_string(),
