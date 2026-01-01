@@ -968,6 +968,11 @@ fn lower_tuple_expr<'db>(
 }
 
 /// Lower a record expression.
+///
+/// Handles three forms:
+/// - Full construction: `User { name: "Alice", age: 30 }`
+/// - Shorthand: `User { name, age }` (binds to variables with same names)
+/// - Spread: `User { ..base, age: 31 }` (copies fields from base, overrides specified fields)
 fn lower_record_expr<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
@@ -978,6 +983,8 @@ fn lower_record_expr<'db>(
     let infer_ty = ctx.fresh_type_var();
 
     let mut type_name = None;
+    let mut spread_base: Option<Value<'db>> = None;
+    let mut field_names = Vec::new();
     let mut field_values = Vec::new();
 
     for child in node.named_children(&mut cursor) {
@@ -995,18 +1002,27 @@ fn lower_record_expr<'db>(
                     if is_comment(field.kind()) || field.kind() != "record_field" {
                         continue;
                     }
-                    // record_field has: identifier (field name) and optionally an expression (value)
-                    // For `x: 10`, there's identifier("x") and literal(10)
-                    // For shorthand `{ x }`, there's only identifier("x")
+
                     let mut field_cursor = field.walk();
                     let children: Vec<_> = field
                         .named_children(&mut field_cursor)
                         .filter(|c| !is_comment(c.kind()))
                         .collect();
 
-                    if children.len() == 1 && children[0].kind() == "identifier" {
+                    // Check for spread: ..expr
+                    if children.iter().any(|c| c.kind() == "spread") {
+                        // Find the value expression after spread
+                        for field_child in &children {
+                            if field_child.kind() != "spread" {
+                                if let Some(value) = lower_expr(ctx, block, *field_child) {
+                                    spread_base = Some(value);
+                                }
+                            }
+                        }
+                    } else if children.len() == 1 && children[0].kind() == "identifier" {
                         // Shorthand: { name } means { name: name }
-                        let field_name = node_text(&children[0], &ctx.source).into();
+                        let field_name: Symbol = node_text(&children[0], &ctx.source).into();
+                        field_names.push(field_name);
                         if let Some(value) = ctx.lookup(field_name) {
                             field_values.push(value);
                         } else {
@@ -1016,6 +1032,14 @@ fn lower_record_expr<'db>(
                         }
                     } else {
                         // Full syntax: { name: value }
+                        // Get the field name
+                        let field_name: Symbol = children
+                            .iter()
+                            .find(|c| c.kind() == "identifier")
+                            .map(|c| node_text(c, &ctx.source).into())
+                            .unwrap_or_else(|| Symbol::new(""));
+                        field_names.push(field_name);
+
                         // Find the value expression (skip the identifier)
                         for field_child in &children {
                             if field_child.kind() != "identifier" {
@@ -1032,12 +1056,31 @@ fn lower_record_expr<'db>(
     }
 
     let type_name = type_name?;
-    let op = block.op(tribute::cons(
+
+    // Build fields region containing tribute.field_arg operations
+    // Each field_arg pairs the field name with its value
+    let mut fields_block = BlockBuilder::new(ctx.db, location);
+    for (field_name, field_value) in field_names.iter().zip(field_values.iter()) {
+        fields_block.op(tribute::field_arg(
+            ctx.db,
+            location,
+            *field_value,
+            *field_name,
+        ));
+    }
+    let fields_region = Region::new(ctx.db, location, idvec![fields_block.build()]);
+
+    // Convert spread_base from Option<Value> to Vec<Value>
+    let base: Vec<Value<'db>> = spread_base.into_iter().collect();
+
+    // Create the record operation
+    let op = block.op(tribute::record(
         ctx.db,
         location,
-        field_values,
+        base,
         infer_ty,
         sym_ref(&type_name),
+        fields_region,
     ));
     Some(op.result(ctx.db))
 }

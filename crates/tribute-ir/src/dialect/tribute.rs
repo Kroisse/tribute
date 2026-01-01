@@ -53,10 +53,40 @@ dialect! {
         #[attr(name: QualifiedName)]
         fn call(#[rest] args) -> result;
 
-        /// `tribute.cons` operation: unresolved constructor application.
-        /// The constructor name will be resolved to a struct/variant constructor.
+        /// `tribute.cons` operation: positional constructor application.
+        ///
+        /// Used for positional/tuple-style construction:
+        /// - Enum variants: `Some(42)`, `Ok(value)`
+        /// - Structs with positional fields
+        ///
+        /// For record-style construction with named fields, use `tribute.record`.
         #[attr(name: QualifiedName)]
         fn cons(#[rest] args) -> result;
+
+        /// `tribute.record` operation: record-style construction with named fields.
+        ///
+        /// The fields region contains `tribute.field_arg` operations, each pairing
+        /// a field name with its value. This ensures field names and values stay in sync.
+        ///
+        /// For normal construction (`User { name: "foo", age: 30 }`):
+        /// - `base` operand is empty (no spread)
+        /// - fields region has field_arg for each field
+        ///
+        /// For record spread syntax (`User { ..base, field: value }`):
+        /// - `base` operand contains the spread source value
+        /// - fields region contains only the override fields
+        /// - resolve pass fills in non-overridden fields from base
+        #[attr(name: QualifiedName)]
+        fn record(#[rest] base) -> result {
+            #[region(fields)] {}
+        };
+
+        /// `tribute.field_arg` operation: a field value within record.
+        ///
+        /// Used inside `tribute.record` fields region to pair field name with its value.
+        /// This ensures the field name and value are always kept together.
+        #[attr(name: Symbol)]
+        fn field_arg(value);
 
         /// `tribute.var` operation: unresolved variable reference (single name).
         /// May resolve to local binding or module-level definition.
