@@ -10,15 +10,17 @@ use lsp_types::{
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
-    HoverProviderCapability, InitializeParams, MarkupContent, MarkupKind, PublishDiagnosticsParams,
-    ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
-    TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, Uri,
+    HoverProviderCapability, InitializeParams, Location, MarkupContent, MarkupKind,
+    PublishDiagnosticsParams, ReferenceParams, ServerCapabilities, SignatureHelp,
+    SignatureHelpOptions, SignatureHelpParams, SymbolKind, TextDocumentContentChangeEvent,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
     notification::{
         DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
         PublishDiagnostics,
     },
-    request::{DocumentSymbolRequest, GotoDefinition, HoverRequest, SignatureHelpRequest},
+    request::{
+        DocumentSymbolRequest, GotoDefinition, HoverRequest, References, SignatureHelpRequest,
+    },
 };
 use ropey::Rope;
 use salsa::{Database, Setter};
@@ -83,8 +85,12 @@ impl LspServer {
             }), "Document symbols response");
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
-        } else if let Some((id, params)) = cast_request::<SignatureHelpRequest>(req) {
+        } else if let Some((id, params)) = cast_request::<SignatureHelpRequest>(req.clone()) {
             let result = self.signature_help(params);
+            let response = Response::new_ok(id, result);
+            self.connection.sender.send(Message::Response(response))?;
+        } else if let Some((id, params)) = cast_request::<References>(req) {
+            let result = self.find_references(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
         }
@@ -225,6 +231,54 @@ impl LspServer {
         };
 
         Some(GotoDefinitionResponse::Scalar(location))
+    }
+
+    fn find_references(&self, params: ReferenceParams) -> Option<Vec<Location>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let include_declaration = params.context.include_declaration;
+
+        tracing::debug!(
+            line = position.line,
+            character = position.character,
+            include_declaration,
+            "Find References request"
+        );
+
+        let rope = self.db.source_cst(uri)?.text(&self.db).clone();
+        let offset = offset_from_position(&rope, position.line, position.character)?;
+        let source_cst = self.db.source_cst(uri)?;
+
+        let locations = self.db.attach(|db| {
+            let module = compile(db, source_cst);
+            let index = DefinitionIndex::build(db, &module);
+
+            let (symbol, refs) = index.references_at(offset)?;
+
+            let mut locations = Vec::new();
+
+            // Optionally include the definition itself
+            if include_declaration && let Some(def) = index.definition_of(symbol) {
+                locations.push(Location {
+                    uri: uri.clone(),
+                    range: span_to_range(&rope, def.span),
+                });
+            }
+
+            // Add all references
+            for reference in refs {
+                locations.push(Location {
+                    uri: uri.clone(),
+                    range: span_to_range(&rope, reference.span),
+                });
+            }
+
+            Some(locations)
+        })?;
+
+        tracing::debug!(count = locations.len(), "Found references");
+
+        Some(locations)
     }
 
     fn document_symbols(&self, params: DocumentSymbolParams) -> Option<DocumentSymbolResponse> {
@@ -435,6 +489,7 @@ pub fn serve(_log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
             retrigger_characters: Some(vec![")".to_string()]),
             work_done_progress_options: Default::default(),
         }),
+        references_provider: Some(lsp_types::OneOf::Left(true)),
         ..Default::default()
     };
 
