@@ -7,13 +7,12 @@
 //! - `func.return` -> `wasm.return`
 //! - `func.tail_call` -> `wasm.return_call`
 //! - `func.unreachable` -> `wasm.unreachable`
-//!
-//! Note: `func.constant` is preserved for later table index resolution.
+//! - `func.constant` -> `wasm.ref_func`
 
 use trunk_ir::dialect::core::Module;
-use trunk_ir::dialect::func;
+use trunk_ir::dialect::{func, wasm};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, Operation};
+use trunk_ir::{Attribute, DialectOp, DialectType, Operation};
 
 /// Lower func dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -24,6 +23,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(FuncReturnPattern)
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncUnreachablePattern)
+        .add_pattern(FuncConstantPattern)
         .apply(db, module)
         .module
 }
@@ -164,6 +164,39 @@ impl RewritePattern for FuncUnreachablePattern {
             .modify(db)
             .dialect_str("wasm")
             .name_str("unreachable")
+            .build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Pattern for `func.constant` -> `wasm.ref_func`
+///
+/// Transforms function constant references to WASM function references.
+/// Used for closures where lifted functions need to be stored as first-class values.
+struct FuncConstantPattern;
+
+impl RewritePattern for FuncConstantPattern {
+    fn match_and_rewrite<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+    ) -> RewriteResult<'db> {
+        let Ok(const_op) = func::Constant::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let func_ref = const_op.func_ref(db);
+
+        // Transform to wasm.ref_func with the same function reference
+        // The result type becomes wasm.funcref
+        let funcref_ty = wasm::Funcref::new(db).as_type();
+        let new_op = op
+            .modify(db)
+            .dialect_str("wasm")
+            .name_str("ref_func")
+            .attr("func_name", Attribute::QualifiedName(func_ref))
+            .result(funcref_ty)
             .build();
 
         RewriteResult::Replace(new_op)
@@ -319,5 +352,40 @@ mod tests {
         // func.call_indirect should become wasm.call_indirect
         assert!(op_names.iter().any(|n| n == "wasm.call_indirect"));
         assert!(!op_names.iter().any(|n| n == "func.call_indirect"));
+    }
+
+    #[salsa::tracked]
+    fn make_func_constant_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let func_ty = core::Func::new(db, idvec![], core::Nil::new(db).as_type()).as_type();
+
+        // Create func.constant
+        let func_constant = Operation::of_name(db, location, "func.constant")
+            .attr(
+                "func_ref",
+                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("test_func"))),
+            )
+            .results(idvec![func_ty])
+            .build();
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![func_constant],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_func_constant_to_wasm(db: &salsa::DatabaseImpl) {
+        let module = make_func_constant_module(db);
+        let op_names = lower_and_check_names(db, module);
+
+        // func.constant should become wasm.ref_func
+        assert!(op_names.iter().any(|n| n == "wasm.ref_func"));
+        assert!(!op_names.iter().any(|n| n == "func.constant"));
     }
 }
