@@ -77,11 +77,12 @@ impl RewritePattern for LowerClosureNewPattern {
         let env = closure_new.env(db);
         let env_ty = get_value_type(db, env).unwrap_or_else(|| *core::Nil::new(db));
 
-        // WORKAROUND: Use only the name part of func_ref to avoid Salsa issues
-        // The parent path in func_ref seems to cause Salsa caching problems when
-        // used in a new QualifiedName within a rewritten operation.
-        // For lambda-lifted functions, the simple name should be sufficient since
+        // WORKAROUND: Use only the name part of func_ref to avoid Salsa issues.
+        // The parent path in func_ref causes Salsa caching problems when used
+        // in a new QualifiedName within a rewritten operation.
+        // For lambda-lifted functions, the simple name is sufficient since
         // they're defined at module scope.
+        // TODO(#152): Investigate root cause of Salsa caching issue with parent paths.
         let func_ref_simple = trunk_ir::QualifiedName::simple(func_ref.name());
 
         // Generate: %funcref = func.constant @func_ref : func_type

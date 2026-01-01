@@ -931,13 +931,14 @@ fn main() -> Int {
             diagnostics.len()
         );
 
-        // Check that closure operations are lowered to adt.struct_get
+        // Check that closure operations are lowered
         let body = module.body(db);
         let lowered_ops = check_for_lowered_closure_ops(db, &body);
 
+        // Verify closure.func/closure.env are lowered to adt.struct_get
         assert!(
             lowered_ops.has_struct_get,
-            "Expected adt.struct_get in apply function after closure lowering (from closure.func/closure.env)"
+            "Expected adt.struct_get after closure lowering (from closure.func/closure.env)"
         );
     });
 }
