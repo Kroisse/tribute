@@ -7,13 +7,15 @@ use std::io;
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionList, CompletionOptions, CompletionParams,
-    Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
-    HoverProviderCapability, InitializeParams, Location, MarkupContent, MarkupKind,
-    PrepareRenameResponse, PublishDiagnosticsParams, ReferenceParams, RenameOptions, RenameParams,
-    ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
+    CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
+    CodeActionProviderCapability, CompletionItem, CompletionItemKind, CompletionList,
+    CompletionOptions, CompletionParams, Diagnostic, DiagnosticSeverity,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeParams, Location, MarkupContent, MarkupKind, PrepareRenameResponse,
+    PublishDiagnosticsParams, ReferenceParams, RenameOptions, RenameParams, ServerCapabilities,
+    SignatureHelp, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
     TextDocumentContentChangeEvent, TextDocumentPositionParams, TextDocumentSyncCapability,
     TextDocumentSyncKind, TextDocumentSyncOptions, TextEdit, Uri, WorkspaceEdit,
     notification::{
@@ -21,8 +23,8 @@ use lsp_types::{
         PublishDiagnostics,
     },
     request::{
-        Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest, PrepareRenameRequest,
-        References, Rename, SignatureHelpRequest,
+        CodeActionRequest, Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest,
+        PrepareRenameRequest, References, Rename, SignatureHelpRequest,
     },
 };
 use ropey::Rope;
@@ -105,8 +107,12 @@ impl LspServer {
             let result = self.rename(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
-        } else if let Some((id, params)) = cast_request::<Completion>(req) {
+        } else if let Some((id, params)) = cast_request::<Completion>(req.clone()) {
             let result = self.completion(params);
+            let response = Response::new_ok(id, result);
+            self.connection.sender.send(Message::Response(response))?;
+        } else if let Some((id, params)) = cast_request::<CodeActionRequest>(req) {
+            let result = self.code_action(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
         }
@@ -450,6 +456,170 @@ impl LspServer {
         })
     }
 
+    fn code_action(&self, params: CodeActionParams) -> Option<Vec<CodeActionOrCommand>> {
+        let uri = &params.text_document.uri;
+        let range = params.range;
+
+        tracing::debug!(
+            start = ?(range.start.line, range.start.character),
+            end = ?(range.end.line, range.end.character),
+            "Code action request"
+        );
+
+        let source_cst = self.db.source_cst(uri)?;
+        let rope = source_cst.text(&self.db).clone();
+
+        // Get the request range in byte offsets
+        let start_offset = offset_from_position(&rope, range.start.line, range.start.character)?;
+        let end_offset = offset_from_position(&rope, range.end.line, range.end.character)?;
+
+        // Collect diagnostics and type information for code action generation
+        let actions = self.db.attach(|db| {
+            let result = tribute::compile_with_diagnostics(db, source_cst);
+            let module = &result.module;
+            let type_index = TypeIndex::build(db, module);
+
+            let mut actions = Vec::new();
+
+            // Find diagnostics that overlap with the requested range
+            for diag in &result.diagnostics {
+                // Check if diagnostic overlaps with range
+                if diag.span.end < start_offset || diag.span.start > end_offset {
+                    continue;
+                }
+
+                // Generate code actions based on diagnostic type
+                if let Some(action) = self.action_for_diagnostic(db, diag, &rope, uri, &type_index)
+                {
+                    actions.push(CodeActionOrCommand::CodeAction(action));
+                }
+            }
+
+            actions
+        });
+
+        tracing::debug!(count = actions.len(), "Code actions generated");
+
+        if actions.is_empty() {
+            None
+        } else {
+            Some(actions)
+        }
+    }
+
+    /// Generate a code action for a specific diagnostic.
+    #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
+    fn action_for_diagnostic(
+        &self,
+        db: &dyn salsa::Database,
+        diag: &tribute_passes::Diagnostic,
+        rope: &Rope,
+        uri: &Uri,
+        type_index: &TypeIndex,
+    ) -> Option<CodeAction> {
+        use super::pretty::print_type;
+
+        // Pattern: "top-level function `{name}` must have an explicit return type annotation"
+        if diag
+            .message
+            .contains("must have an explicit return type annotation")
+        {
+            // Try to find the inferred type at the diagnostic location
+            if let Some(entry) = type_index.type_at(diag.span.start) {
+                let type_str = print_type(db, entry.ty);
+
+                // Find the position after the closing parenthesis of parameters
+                // We need to insert ": Type" before the function body
+                let insert_pos = self.find_return_type_insert_position(rope, diag.span)?;
+                let (line, char) = position_from_offset(rope, insert_pos);
+                let pos = lsp_types::Position {
+                    line,
+                    character: char,
+                };
+                let range = lsp_types::Range {
+                    start: pos,
+                    end: pos,
+                };
+
+                let edit = TextEdit {
+                    range,
+                    new_text: format!(": {}", type_str),
+                };
+
+                let mut changes = std::collections::HashMap::new();
+                changes.insert(uri.clone(), vec![edit]);
+
+                return Some(CodeAction {
+                    title: format!("Add return type annotation: {}", type_str),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![Diagnostic {
+                        range: span_to_range(rope, diag.span),
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        message: diag.message.clone(),
+                        source: Some("tribute".to_string()),
+                        ..Default::default()
+                    }]),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(changes),
+                        document_changes: None,
+                        change_annotations: None,
+                    }),
+                    ..Default::default()
+                });
+            }
+        }
+
+        // Pattern: "parameter N of top-level function `{name}` must have an explicit type annotation"
+        if diag
+            .message
+            .contains("must have an explicit type annotation")
+            && diag.message.contains("parameter")
+        {
+            // For parameter annotations, we would need to find the parameter location
+            // and its inferred type. This is more complex as we need to parse the message
+            // to find which parameter and look up its type.
+            // TODO: Implement parameter type annotation fix
+        }
+
+        None
+    }
+
+    /// Find the position where a return type annotation should be inserted.
+    /// Returns the byte offset right after the closing parenthesis of parameters.
+    fn find_return_type_insert_position(&self, rope: &Rope, span: trunk_ir::Span) -> Option<usize> {
+        // Search from the start of the function for the closing paren
+        let text: String = rope.slice(..).chars().collect();
+        let func_text = &text[span.start..span.end.min(text.len())];
+
+        // Find the closing parenthesis of the parameter list
+        let mut paren_depth = 0;
+        let mut found_open = false;
+
+        for (i, c) in func_text.char_indices() {
+            match c {
+                '(' => {
+                    paren_depth += 1;
+                    found_open = true;
+                }
+                ')' => {
+                    paren_depth -= 1;
+                    if found_open && paren_depth == 0 {
+                        // Found the closing paren, return position after it
+                        return Some(span.start + i + 1);
+                    }
+                }
+                '{' if found_open && paren_depth == 0 => {
+                    // Hit function body without finding return type position
+                    // Insert before the opening brace
+                    return Some(span.start + i);
+                }
+                _ => {}
+            }
+        }
+
+        None
+    }
+
     fn document_symbols(&self, params: DocumentSymbolParams) -> Option<DocumentSymbolResponse> {
         let uri = &params.text_document.uri;
         let source_cst = self.db.source_cst(uri)?;
@@ -668,6 +838,11 @@ pub fn serve(_log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
             resolve_provider: Some(false),
             ..Default::default()
         }),
+        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+            work_done_progress_options: Default::default(),
+            resolve_provider: Some(false),
+        })),
         ..Default::default()
     };
 
