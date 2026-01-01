@@ -2428,17 +2428,9 @@ fn type_to_valtype<'db>(
         // In Tribute, function-typed parameters receive closures at runtime
         Ok(ValType::Ref(RefType::ANYREF))
     } else if closure::Closure::from_type(db, ty).is_some() {
-        // Closure types - these are WasmGC structs
-        // If registered in type_idx_by_type, use concrete ref; otherwise anyref
-        if let Some(&type_idx) = type_idx_by_type.get(&ty) {
-            Ok(ValType::Ref(RefType {
-                nullable: true,
-                heap_type: HeapType::Concrete(type_idx),
-            }))
-        } else {
-            // Fallback to anyref for unregistered closure types
-            Ok(ValType::Ref(RefType::ANYREF))
-        }
+        // Closure types - use anyref for unregistered closures
+        // (registered closures are handled earlier by the generic type_idx_by_type lookup)
+        Ok(ValType::Ref(RefType::ANYREF))
     } else if ty.dialect(db) == wasm::DIALECT_NAME() {
         // WASM dialect types (e.g., wasm.structref for continuation frames)
         let name = ty.name(db);
