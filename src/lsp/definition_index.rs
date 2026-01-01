@@ -28,6 +28,11 @@ pub enum DefinitionKind {
     Type,
     /// An ability definition.
     Ability,
+    /// A local variable (let binding).
+    Variable,
+    /// A function parameter (for future use).
+    #[allow(dead_code)]
+    Parameter,
 }
 
 /// Entry representing a reference (usage) location.
@@ -93,7 +98,7 @@ impl DefinitionIndex {
         definitions: &mut Vec<DefinitionEntry>,
         references: &mut Vec<ReferenceEntry>,
     ) {
-        use tribute_ir::dialect::tribute;
+        use tribute_ir::dialect::{tribute, tribute_pat};
         use trunk_ir::DialectOp;
         use trunk_ir::dialect::func;
 
@@ -146,6 +151,14 @@ impl DefinitionIndex {
                 name,
                 span,
                 kind: DefinitionKind::Ability,
+            });
+        } else if let Ok(bind_op) = tribute_pat::Bind::from_operation(db, *op) {
+            // tribute_pat.bind - pattern binding (variable definition)
+            let name = bind_op.name(db);
+            definitions.push(DefinitionEntry {
+                name,
+                span: op_span,
+                kind: DefinitionKind::Variable,
             });
         }
 
@@ -235,6 +248,117 @@ impl DefinitionIndex {
 
         None
     }
+
+    /// Check if the symbol at the given offset can be renamed.
+    /// Returns the definition entry and the span to highlight if renameable.
+    pub fn can_rename(&self, offset: usize) -> Option<(&DefinitionEntry, Span)> {
+        // First check if we're on a definition
+        if let Some(def) = self.definition_at_position(offset) {
+            return Some((def, def.span));
+        }
+
+        // Otherwise check if we're on a reference
+        if let Some(reference) = self.reference_at(offset)
+            && let Some(def) = self.definition_of(reference.target)
+        {
+            return Some((def, reference.span));
+        }
+
+        None
+    }
+}
+
+/// Error type for rename validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenameError {
+    /// The new name is empty.
+    EmptyName,
+    /// The new name is not a valid identifier.
+    InvalidIdentifier,
+    /// The new name is not a valid type identifier (must start with uppercase).
+    InvalidTypeIdentifier,
+    /// The new name contains invalid characters.
+    InvalidCharacter,
+    /// The new name is a reserved keyword.
+    ReservedKeyword,
+}
+
+impl std::fmt::Display for RenameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RenameError::EmptyName => write!(f, "Name cannot be empty"),
+            RenameError::InvalidIdentifier => {
+                write!(
+                    f,
+                    "Identifier must start with lowercase letter or underscore"
+                )
+            }
+            RenameError::InvalidTypeIdentifier => {
+                write!(f, "Type identifier must start with uppercase letter")
+            }
+            RenameError::InvalidCharacter => {
+                write!(f, "Name contains invalid characters")
+            }
+            RenameError::ReservedKeyword => write!(f, "Name is a reserved keyword"),
+        }
+    }
+}
+
+impl std::error::Error for RenameError {}
+
+/// Validates if a string is a valid Tribute identifier.
+///
+/// Rules:
+/// - Regular identifiers: `[a-z_][a-zA-Z0-9_]*`
+/// - Type identifiers: `[A-Z][a-zA-Z0-9_]*`
+/// - Cannot be a reserved keyword
+pub fn validate_identifier(name: &str, kind: DefinitionKind) -> Result<(), RenameError> {
+    // Check empty
+    if name.is_empty() {
+        return Err(RenameError::EmptyName);
+    }
+
+    let first = name.chars().next().unwrap();
+
+    // Check pattern based on kind
+    match kind {
+        DefinitionKind::Type | DefinitionKind::Ability => {
+            // Type identifiers start with uppercase
+            if !first.is_ascii_uppercase() {
+                return Err(RenameError::InvalidTypeIdentifier);
+            }
+        }
+        _ => {
+            // Regular identifiers start with lowercase or underscore
+            if !first.is_ascii_lowercase() && first != '_' {
+                return Err(RenameError::InvalidIdentifier);
+            }
+        }
+    }
+
+    // Check all characters are alphanumeric or underscore
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(RenameError::InvalidCharacter);
+    }
+
+    // Check for reserved keywords
+    if is_keyword(name) {
+        return Err(RenameError::ReservedKeyword);
+    }
+
+    Ok(())
+}
+
+/// Reserved keywords in Tribute.
+/// Based on `contrib/zed/grammars/tribute/grammar.js`.
+pub const KEYWORDS: &[&str] = &[
+    "fn", "let", "case", "struct", "enum", "ability", "const", "pub", "use", "mod", "if", "handle",
+    "as", "True", "False", "Nil",
+];
+
+/// Check if a name is a reserved keyword.
+pub fn is_keyword(name: &str) -> bool {
+    KEYWORDS.contains(&name)
 }
 
 #[cfg(test)]
@@ -341,5 +465,89 @@ mod tests {
         let (symbol, refs) = result.unwrap();
         assert_eq!(symbol, Symbol::new("foo"));
         assert_eq!(refs.len(), 2, "Should find 2 call sites");
+    }
+
+    #[salsa_test]
+    fn test_can_rename_function(db: &salsa::DatabaseImpl) {
+        let source_text = "fn foo() -> Int { 42 }";
+        let source = make_source("test.trb", source_text);
+
+        let module = stage_lower_case(db, source);
+        let index = DefinitionIndex::build(db, &module);
+
+        let foo_pos = source_text.find("foo").unwrap();
+        let result = index.can_rename(foo_pos);
+
+        assert!(result.is_some(), "Function should be renameable");
+        let (def, _) = result.unwrap();
+        assert_eq!(def.kind, DefinitionKind::Function);
+        assert_eq!(def.name, Symbol::new("foo"));
+    }
+
+    #[salsa_test]
+    fn test_can_rename_from_reference(db: &salsa::DatabaseImpl) {
+        let source_text = "fn foo() -> Int { 1 }\nfn bar() -> Int { foo() }";
+        let source = make_source("test.trb", source_text);
+
+        let module = stage_lower_case(db, source);
+        let index = DefinitionIndex::build(db, &module);
+
+        // Position of "foo" call in bar
+        let foo_call_pos = source_text.rfind("foo").unwrap();
+        let result = index.can_rename(foo_call_pos);
+
+        assert!(result.is_some(), "Should be able to rename from reference");
+        let (def, _) = result.unwrap();
+        assert_eq!(def.name, Symbol::new("foo"));
+    }
+
+    #[test]
+    fn test_validate_identifier_valid() {
+        // Valid function/variable identifiers
+        assert!(validate_identifier("foo", DefinitionKind::Function).is_ok());
+        assert!(validate_identifier("_bar", DefinitionKind::Variable).is_ok());
+        assert!(validate_identifier("foo_bar123", DefinitionKind::Function).is_ok());
+
+        // Valid type identifiers
+        assert!(validate_identifier("Foo", DefinitionKind::Type).is_ok());
+        assert!(validate_identifier("FooBar", DefinitionKind::Ability).is_ok());
+        assert!(validate_identifier("MyType123", DefinitionKind::Type).is_ok());
+    }
+
+    #[test]
+    fn test_validate_identifier_invalid() {
+        // Empty name
+        assert_eq!(
+            validate_identifier("", DefinitionKind::Function),
+            Err(RenameError::EmptyName)
+        );
+
+        // Wrong case for type
+        assert_eq!(
+            validate_identifier("foo", DefinitionKind::Type),
+            Err(RenameError::InvalidTypeIdentifier)
+        );
+
+        // Wrong case for function (starts with uppercase)
+        assert_eq!(
+            validate_identifier("Foo", DefinitionKind::Function),
+            Err(RenameError::InvalidIdentifier)
+        );
+
+        // Invalid characters
+        assert_eq!(
+            validate_identifier("foo bar", DefinitionKind::Function),
+            Err(RenameError::InvalidCharacter)
+        );
+
+        // Reserved keyword
+        assert_eq!(
+            validate_identifier("fn", DefinitionKind::Function),
+            Err(RenameError::ReservedKeyword)
+        );
+        assert_eq!(
+            validate_identifier("let", DefinitionKind::Variable),
+            Err(RenameError::ReservedKeyword)
+        );
     }
 }

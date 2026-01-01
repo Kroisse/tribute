@@ -11,15 +11,17 @@ use lsp_types::{
     DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
     HoverProviderCapability, InitializeParams, Location, MarkupContent, MarkupKind,
-    PublishDiagnosticsParams, ReferenceParams, ServerCapabilities, SignatureHelp,
-    SignatureHelpOptions, SignatureHelpParams, SymbolKind, TextDocumentContentChangeEvent,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
+    PrepareRenameResponse, PublishDiagnosticsParams, ReferenceParams, RenameOptions, RenameParams,
+    ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
+    TextDocumentContentChangeEvent, TextDocumentPositionParams, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TextEdit, Uri, WorkspaceEdit,
     notification::{
         DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
         PublishDiagnostics,
     },
     request::{
-        DocumentSymbolRequest, GotoDefinition, HoverRequest, References, SignatureHelpRequest,
+        DocumentSymbolRequest, GotoDefinition, HoverRequest, PrepareRenameRequest, References,
+        Rename, SignatureHelpRequest,
     },
 };
 use ropey::Rope;
@@ -27,7 +29,7 @@ use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
 use super::call_index::{CallIndex, get_param_names};
-use super::definition_index::DefinitionIndex;
+use super::definition_index::{DefinitionIndex, validate_identifier};
 use super::pretty::{format_signature, print_type};
 use super::type_index::TypeIndex;
 use tribute::{TributeDatabaseImpl, compile, database::parse_with_thread_local};
@@ -89,8 +91,16 @@ impl LspServer {
             let result = self.signature_help(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
-        } else if let Some((id, params)) = cast_request::<References>(req) {
+        } else if let Some((id, params)) = cast_request::<References>(req.clone()) {
             let result = self.find_references(params);
+            let response = Response::new_ok(id, result);
+            self.connection.sender.send(Message::Response(response))?;
+        } else if let Some((id, params)) = cast_request::<PrepareRenameRequest>(req.clone()) {
+            let result = self.prepare_rename(params);
+            let response = Response::new_ok(id, result);
+            self.connection.sender.send(Message::Response(response))?;
+        } else if let Some((id, params)) = cast_request::<Rename>(req) {
+            let result = self.rename(params);
             let response = Response::new_ok(id, result);
             self.connection.sender.send(Message::Response(response))?;
         }
@@ -279,6 +289,101 @@ impl LspServer {
         tracing::debug!(count = locations.len(), "Found references");
 
         Some(locations)
+    }
+
+    fn prepare_rename(&self, params: TextDocumentPositionParams) -> Option<PrepareRenameResponse> {
+        let uri = &params.text_document.uri;
+        let position = params.position;
+
+        tracing::debug!(
+            line = position.line,
+            character = position.character,
+            "Prepare rename request"
+        );
+
+        let rope = self.db.source_cst(uri)?.text(&self.db).clone();
+        let offset = offset_from_position(&rope, position.line, position.character)?;
+        let source_cst = self.db.source_cst(uri)?;
+
+        let result = self.db.attach(|db| {
+            let module = compile(db, source_cst);
+            let index = DefinitionIndex::build(db, &module);
+
+            // Check if rename is possible at this position
+            let (def, span) = index.can_rename(offset)?;
+
+            let range = span_to_range(&rope, span);
+            let placeholder = def.name.to_string();
+
+            Some(PrepareRenameResponse::RangeWithPlaceholder { range, placeholder })
+        })?;
+
+        tracing::debug!("Prepare rename: symbol can be renamed");
+
+        Some(result)
+    }
+
+    #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
+    fn rename(&self, params: RenameParams) -> Option<WorkspaceEdit> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let new_name = &params.new_name;
+
+        tracing::debug!(
+            line = position.line,
+            character = position.character,
+            new_name = %new_name,
+            "Rename request"
+        );
+
+        let rope = self.db.source_cst(uri)?.text(&self.db).clone();
+        let offset = offset_from_position(&rope, position.line, position.character)?;
+        let source_cst = self.db.source_cst(uri)?;
+
+        let text_edits = self.db.attach(|db| {
+            let module = compile(db, source_cst);
+            let index = DefinitionIndex::build(db, &module);
+
+            // Get definition and validate
+            let (def, _) = index.can_rename(offset)?;
+
+            // Validate new name
+            if validate_identifier(new_name, def.kind).is_err() {
+                tracing::warn!(new_name = %new_name, "Invalid identifier for rename");
+                return None;
+            }
+
+            // Collect all locations to rename
+            let mut edits = Vec::new();
+
+            // Add the definition itself
+            edits.push(TextEdit {
+                range: span_to_range(&rope, def.span),
+                new_text: new_name.clone(),
+            });
+
+            // Add all references
+            for reference in index.references_of(def.name) {
+                edits.push(TextEdit {
+                    range: span_to_range(&rope, reference.span),
+                    new_text: new_name.clone(),
+                });
+            }
+
+            Some(edits)
+        })?;
+
+        tracing::debug!(edit_count = text_edits.len(), "Rename edits computed");
+
+        // Build WorkspaceEdit with changes for current file
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(uri.clone(), text_edits);
+
+        Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        })
     }
 
     fn document_symbols(&self, params: DocumentSymbolParams) -> Option<DocumentSymbolResponse> {
@@ -490,6 +595,10 @@ pub fn serve(_log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
             work_done_progress_options: Default::default(),
         }),
         references_provider: Some(lsp_types::OneOf::Left(true)),
+        rename_provider: Some(lsp_types::OneOf::Right(RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: Default::default(),
+        })),
         ..Default::default()
     };
 
