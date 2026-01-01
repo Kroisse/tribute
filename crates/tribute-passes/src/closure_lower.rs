@@ -19,19 +19,99 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
-use tribute_ir::dialect::closure;
+use tribute_ir::dialect::{adt, closure};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{DialectOp, DialectType, Operation, Type, Value, ValueDef};
+use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Type, Value, ValueDef};
 
 /// Lower closure operations in the module.
+///
+/// Pattern ordering is important:
+/// 1. LowerClosureCallPattern - expands call_indirect to use closure.func/closure.env
+/// 2. LowerClosureNewPattern - expands closure.new to func.constant + adt.struct_new
+/// 3. LowerClosureFuncPattern - extracts funcref from struct (field 0)
+/// 4. LowerClosureEnvPattern - extracts env from struct (field 1)
 #[salsa::tracked]
 pub fn lower_closures<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> core::Module<'db> {
-    let applicator = PatternApplicator::new().add_pattern(LowerClosureCallPattern);
+    let applicator = PatternApplicator::new()
+        .add_pattern(LowerClosureCallPattern)
+        .add_pattern(LowerClosureNewPattern)
+        .add_pattern(LowerClosureFuncPattern)
+        .add_pattern(LowerClosureEnvPattern);
     applicator.apply(db, module).module
+}
+
+/// Pattern: Lower `closure.new` to `func.constant` + `adt.struct_new`.
+struct LowerClosureNewPattern;
+
+impl RewritePattern for LowerClosureNewPattern {
+    fn match_and_rewrite<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+    ) -> RewriteResult<'db> {
+        // Match: closure.new
+        let closure_new = match closure::New::from_operation(db, *op) {
+            Ok(c) => c,
+            Err(_) => return RewriteResult::Unchanged,
+        };
+
+        let location = op.location(db);
+        let func_ref = closure_new.func_ref(db);
+
+        // Get the closure type to extract the inner function type
+        let closure_result_ty = op
+            .results(db)
+            .first()
+            .copied()
+            .expect("closure.new should have a result");
+
+        // Extract function type from closure.closure type
+        let func_ty = closure::Closure::from_type(db, closure_result_ty)
+            .map(|ct| ct.func_type(db))
+            .unwrap_or_else(|| *core::Nil::new(db));
+
+        let env = closure_new.env(db);
+        let env_ty = get_value_type(db, env).unwrap_or_else(|| *core::Nil::new(db));
+
+        // WORKAROUND: Use only the name part of func_ref to avoid Salsa issues
+        // The parent path in func_ref seems to cause Salsa caching problems when
+        // used in a new QualifiedName within a rewritten operation.
+        // For lambda-lifted functions, the simple name should be sufficient since
+        // they're defined at module scope.
+        let func_ref_simple = trunk_ir::QualifiedName::simple(func_ref.name());
+
+        // Generate: %funcref = func.constant @func_ref : func_type
+        let constant_op = Operation::of_name(db, location, "func.constant")
+            .attr("func_ref", Attribute::QualifiedName(func_ref_simple))
+            .result(func_ty)
+            .build();
+        let funcref = constant_op.result(db, 0);
+
+        // Create closure struct type: adt.struct with (funcref, env) fields
+        let closure_struct_ty = adt::struct_type(
+            db,
+            trunk_ir::QualifiedName::simple(trunk_ir::Symbol::new("_closure")),
+            vec![
+                (trunk_ir::Symbol::new("funcref"), func_ty),
+                (trunk_ir::Symbol::new("env"), env_ty),
+            ],
+        );
+
+        // Generate: %closure = adt.struct_new(%funcref, %env) : closure_struct_type
+        let struct_new_op = adt::struct_new(
+            db,
+            location,
+            vec![funcref, env],
+            closure_struct_ty,
+            closure_struct_ty,
+        );
+
+        RewriteResult::Expand(vec![constant_op, struct_new_op.as_operation()])
+    }
 }
 
 /// Pattern: Lower `func.call_indirect` on closure values.
@@ -100,6 +180,96 @@ impl RewritePattern for LowerClosureCallPattern {
             env_op.as_operation(),
             new_call.as_operation(),
         ])
+    }
+}
+
+/// Pattern: Lower `closure.func` to `adt.struct_get` field 0.
+///
+/// After closure.new is lowered to an adt.struct with (funcref, env),
+/// closure.func extracts the funcref (first field).
+struct LowerClosureFuncPattern;
+
+impl RewritePattern for LowerClosureFuncPattern {
+    fn match_and_rewrite<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+    ) -> RewriteResult<'db> {
+        // Match: closure.func
+        let closure_func = match closure::Func::from_operation(db, *op) {
+            Ok(f) => f,
+            Err(_) => return RewriteResult::Unchanged,
+        };
+
+        let location = op.location(db);
+        let closure_value = closure_func.closure(db);
+
+        // Get the result type (function type)
+        let result_ty = op
+            .results(db)
+            .first()
+            .copied()
+            .expect("closure.func should have a result");
+
+        // Get the struct type from the closure value
+        let struct_ty = get_value_type(db, closure_value).unwrap_or_else(|| *core::Nil::new(db));
+
+        // Generate: %funcref = adt.struct_get %closure, 0
+        let get_op = adt::struct_get(
+            db,
+            location,
+            closure_value,
+            struct_ty,
+            result_ty,
+            Attribute::IntBits(0),
+        );
+
+        RewriteResult::Replace(get_op.as_operation())
+    }
+}
+
+/// Pattern: Lower `closure.env` to `adt.struct_get` field 1.
+///
+/// After closure.new is lowered to an adt.struct with (funcref, env),
+/// closure.env extracts the env (second field).
+struct LowerClosureEnvPattern;
+
+impl RewritePattern for LowerClosureEnvPattern {
+    fn match_and_rewrite<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+    ) -> RewriteResult<'db> {
+        // Match: closure.env
+        let closure_env = match closure::Env::from_operation(db, *op) {
+            Ok(e) => e,
+            Err(_) => return RewriteResult::Unchanged,
+        };
+
+        let location = op.location(db);
+        let closure_value = closure_env.closure(db);
+
+        // Get the result type (env type)
+        let result_ty = op
+            .results(db)
+            .first()
+            .copied()
+            .expect("closure.env should have a result");
+
+        // Get the struct type from the closure value
+        let struct_ty = get_value_type(db, closure_value).unwrap_or_else(|| *core::Nil::new(db));
+
+        // Generate: %env = adt.struct_get %closure, 1
+        let get_op = adt::struct_get(
+            db,
+            location,
+            closure_value,
+            struct_ty,
+            result_ty,
+            Attribute::IntBits(1),
+        );
+
+        RewriteResult::Replace(get_op.as_operation())
     }
 }
 
