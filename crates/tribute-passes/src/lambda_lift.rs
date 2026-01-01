@@ -534,30 +534,44 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
     fn transform_operation(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
         // Remap operands from previous transformations
         let remapped_op = self.ctx.remap_operands(self.db, op);
-        if remapped_op != *op {
-            self.ctx.map_results(self.db, op, &remapped_op);
-        }
 
         let dialect = remapped_op.dialect(self.db);
         let op_name = remapped_op.name(self.db);
 
         // Handle function definitions - track their scope
         if dialect == func::DIALECT_NAME() && op_name == func::FUNC() {
-            return vec![self.transform_in_function(&remapped_op)];
+            let final_op = self.transform_in_function(&remapped_op);
+            // Map results from original op to final op
+            if final_op != *op {
+                self.ctx.map_results(self.db, op, &final_op);
+            }
+            return vec![final_op];
         }
 
         // Handle lambda expressions - transform to closure.new
         if dialect == tribute::DIALECT_NAME() && op_name == tribute::LAMBDA() {
-            return self.transform_lambda(&remapped_op);
+            let result = self.transform_lambda(&remapped_op);
+            // Lambda transform returns [env_op, closure_op]; the closure result replaces lambda
+            // Note: transform_lambda already maps old_result -> new_result internally
+            return result;
         }
 
         // Handle let bindings - track bound variables
         if dialect == tribute::DIALECT_NAME() && op_name == tribute::LET() {
-            return vec![self.transform_in_let(&remapped_op)];
+            let final_op = self.transform_in_let(&remapped_op);
+            if final_op != *op {
+                self.ctx.map_results(self.db, op, &final_op);
+            }
+            return vec![final_op];
         }
 
         // Default: recursively process regions
-        vec![self.transform_op_regions(&remapped_op)]
+        let final_op = self.transform_op_regions(&remapped_op);
+        // Always map results when the operation changed (operands or regions)
+        if final_op != *op {
+            self.ctx.map_results(self.db, op, &final_op);
+        }
+        vec![final_op]
     }
 
     fn transform_in_function(&mut self, op: &Operation<'db>) -> Operation<'db> {
@@ -666,17 +680,15 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         self.lifted_functions.push(lifted_func);
 
         // Create env struct with captured values
-        let env_value = if capture_values.is_empty() {
+        // IMPORTANT: This operation must be included in the output!
+        let env_op = if capture_values.is_empty() {
             // No captures - create unit/nil value for env
             let nil_ty = core::Nil::new(self.db);
-            adt::struct_new(self.db, location, capture_values, *nil_ty, *nil_ty)
-                .as_operation()
-                .result(self.db, 0)
+            adt::struct_new(self.db, location, capture_values, *nil_ty, *nil_ty).as_operation()
         } else {
-            adt::struct_new(self.db, location, capture_values, env_type, env_type)
-                .as_operation()
-                .result(self.db, 0)
+            adt::struct_new(self.db, location, capture_values, env_type, env_type).as_operation()
         };
+        let env_value = env_op.result(self.db, 0);
 
         // Create closure.new with closure type (not raw function type)
         // This allows us to distinguish closures from bare function refs
@@ -694,7 +706,9 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         let new_result = closure_op.as_operation().result(self.db, 0);
         self.ctx.map_value(old_result, new_result);
 
-        vec![closure_op.as_operation()]
+        // Return both env struct and closure operations
+        // The env struct must come first since closure.new references its result
+        vec![env_op, closure_op.as_operation()]
     }
 
     /// Create an env struct type for the captured variables.
