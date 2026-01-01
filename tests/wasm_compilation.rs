@@ -13,7 +13,7 @@
 //! ## Remaining Work
 //!
 //! The following features need additional lowering passes:
-//! - `tribute.block` → block expressions in if/else branches
+//! - `tribute.block` → block expressions in case branches
 //! - String literals in pattern matching (case expressions)
 
 use salsa_test_macros::salsa_test;
