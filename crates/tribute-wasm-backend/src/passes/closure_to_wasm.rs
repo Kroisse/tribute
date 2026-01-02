@@ -168,8 +168,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::core;
     use trunk_ir::{
-        Block, BlockId, DialectType, Location, PathId, QualifiedName, Region, Span, Symbol, Value,
-        ValueDef, idvec,
+        Block, BlockId, DialectType, Location, PathId, Region, Span, Symbol, Value, ValueDef, idvec,
     };
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
@@ -190,13 +189,7 @@ mod tests {
         let env_val = Value::new(db, ValueDef::OpResult(env_op), 0);
 
         // Create closure.new
-        let closure_new = closure::new(
-            db,
-            location,
-            env_val,
-            closure_ty,
-            QualifiedName::simple(Symbol::new("test_func")),
-        );
+        let closure_new = closure::new(db, location, env_val, closure_ty, Symbol::new("test_func"));
 
         let block = Block::new(
             db,
@@ -240,13 +233,7 @@ mod tests {
         let env_val = Value::new(db, ValueDef::OpResult(env_op), 0);
 
         // Create closure.new
-        let closure_new = closure::new(
-            db,
-            location,
-            env_val,
-            closure_ty,
-            QualifiedName::simple(Symbol::new("test_func")),
-        );
+        let closure_new = closure::new(db, location, env_val, closure_ty, Symbol::new("test_func"));
         let closure_val = Value::new(db, ValueDef::OpResult(closure_new.as_operation()), 0);
 
         // Create closure.func
@@ -280,13 +267,7 @@ mod tests {
         let env_val = Value::new(db, ValueDef::OpResult(env_op), 0);
 
         // Create closure.new
-        let closure_new = closure::new(
-            db,
-            location,
-            env_val,
-            closure_ty,
-            QualifiedName::simple(Symbol::new("test_func")),
-        );
+        let closure_new = closure::new(db, location, env_val, closure_ty, Symbol::new("test_func"));
         let closure_val = Value::new(db, ValueDef::OpResult(closure_new.as_operation()), 0);
 
         // Create closure.env

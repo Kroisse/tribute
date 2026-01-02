@@ -46,7 +46,7 @@ use tribute_ir::dialect::ability;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
-    Block, BlockArg, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Type, Value,
+    Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
 };
 
 /// Insert evidence parameters for effectful functions.
@@ -83,7 +83,7 @@ fn transform_calls_in_block<'db>(
     db: &'db dyn salsa::Database,
     block: &Block<'db>,
     ev_value: Value<'db>,
-    effectful_fns: &HashSet<QualifiedName>,
+    effectful_fns: &HashSet<Symbol>,
 ) -> (Block<'db>, bool) {
     let mut new_ops = Vec::new();
     let mut changed = false;
@@ -154,7 +154,7 @@ fn transform_calls_in_region<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
     ev_value: Value<'db>,
-    effectful_fns: &HashSet<QualifiedName>,
+    effectful_fns: &HashSet<Symbol>,
 ) -> (Region<'db>, bool) {
     let mut changed = false;
     let new_blocks: IdVec<Block<'db>> = region
@@ -178,7 +178,7 @@ fn transform_calls_in_region<'db>(
 fn collect_effectful_functions<'db>(
     db: &'db dyn salsa::Database,
     module: &core::Module<'db>,
-) -> HashSet<QualifiedName> {
+) -> HashSet<Symbol> {
     let mut effectful = HashSet::new();
 
     let body = module.body(db);
@@ -215,11 +215,11 @@ fn is_effectful_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
 
 /// Pattern: Add evidence parameter to effectful function signatures.
 struct AddEvidenceParamPattern {
-    effectful_fns: HashSet<QualifiedName>,
+    effectful_fns: HashSet<Symbol>,
 }
 
 impl AddEvidenceParamPattern {
-    fn new(effectful_fns: HashSet<QualifiedName>) -> Self {
+    fn new(effectful_fns: HashSet<Symbol>) -> Self {
         Self { effectful_fns }
     }
 }
@@ -314,11 +314,11 @@ impl RewritePattern for AddEvidenceParamPattern {
 /// transforms all calls to effectful functions within their bodies to pass
 /// the evidence parameter.
 struct TransformCallsPattern {
-    effectful_fns: HashSet<QualifiedName>,
+    effectful_fns: HashSet<Symbol>,
 }
 
 impl TransformCallsPattern {
-    fn new(effectful_fns: HashSet<QualifiedName>) -> Self {
+    fn new(effectful_fns: HashSet<Symbol>) -> Self {
         Self { effectful_fns }
     }
 }

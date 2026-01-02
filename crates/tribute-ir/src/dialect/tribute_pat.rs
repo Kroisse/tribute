@@ -55,7 +55,7 @@ dialect! {
         /// `tribute_pat.variant` operation: variant/constructor pattern.
         /// Matches a specific variant and destructures its fields.
         /// The fields region contains patterns for each field.
-        #[attr(variant: QualifiedName)]
+        #[attr(variant: Symbol)]
         fn variant() {
             #[region(fields)] {}
         };
@@ -203,9 +203,7 @@ pub mod block_arg_attrs {
 pub mod helpers {
     use super::*;
     use trunk_ir::Location;
-    use trunk_ir::{
-        Attribute, Block, BlockId, DialectOp, IdVec, Operation, QualifiedName, Region, Symbol, Type,
-    };
+    use trunk_ir::{Attribute, Block, BlockId, DialectOp, IdVec, Operation, Region, Symbol, Type};
 
     /// Create a wildcard pattern region (`_`).
     pub fn wildcard_region<'db>(
@@ -260,7 +258,7 @@ pub mod helpers {
     pub fn variant_region<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        variant_path: QualifiedName,
+        variant_path: Symbol,
         fields: Region<'db>,
     ) -> Region<'db> {
         let op = variant(db, location, variant_path, fields);

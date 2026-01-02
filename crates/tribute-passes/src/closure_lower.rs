@@ -77,15 +77,10 @@ impl RewritePattern for LowerClosureNewPattern {
         let env = closure_new.env(db);
         let env_ty = get_value_type(db, env).unwrap_or_else(|| *core::Nil::new(db));
 
-        // Use only the name part of func_ref.
-        // Lambda-lifted functions are defined at module scope, so the simple name
-        // is sufficient. Using the full qualified name can cause issues with
-        // function resolution in some edge cases.
-        let func_ref_simple = trunk_ir::QualifiedName::simple(func_ref.name());
-
         // Generate: %funcref = func.constant @func_ref : func_type
+        // func_ref is already a Symbol, use it directly
         let constant_op = Operation::of_name(db, location, "func.constant")
-            .attr("func_ref", Attribute::QualifiedName(func_ref_simple))
+            .attr("func_ref", Attribute::Symbol(func_ref))
             .result(func_ty)
             .build();
         let funcref = constant_op.result(db, 0);
@@ -93,7 +88,7 @@ impl RewritePattern for LowerClosureNewPattern {
         // Create closure struct type: adt.struct with (funcref, env) fields
         let closure_struct_ty = adt::struct_type(
             db,
-            trunk_ir::QualifiedName::simple(trunk_ir::Symbol::new("_closure")),
+            trunk_ir::Symbol::new("_closure"),
             vec![
                 (trunk_ir::Symbol::new("funcref"), func_ty),
                 (trunk_ir::Symbol::new("env"), env_ty),

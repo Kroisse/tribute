@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use salsa::Accumulator;
+use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::{adt, tribute, tribute_pat};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, core};
@@ -442,7 +443,7 @@ impl<'db> CaseLowerer<'db> {
                 let body_region = op.regions(self.db).get(1).copied();
                 let (pattern, ok) = pattern_region
                     .and_then(|region| self.parse_pattern(region))
-                    .unwrap_or_else(|| (ArmPattern::Wildcard, false));
+                    .unwrap_or((ArmPattern::Wildcard, false));
                 supported &= ok;
                 let body =
                     body_region.unwrap_or_else(|| Region::new(self.db, arm_location, IdVec::new()));
@@ -489,10 +490,10 @@ impl<'db> CaseLowerer<'db> {
             name if name == tribute_pat::VARIANT() => {
                 let attr = op.attributes(self.db).get(&Symbol::new("variant"))?;
                 let variant_path = match attr {
-                    Attribute::QualifiedName(path) => path,
+                    Attribute::Symbol(path) => *path,
                     _ => return Some((ArmPattern::Wildcard, false)),
                 };
-                let name = variant_path.name();
+                let name = variant_path.last_segment();
                 if !self.variant_tags.contains_key(&name) {
                     return Some((ArmPattern::Wildcard, false));
                 }

@@ -1,11 +1,11 @@
 //! Lowering context for CST to TrunkIR conversion.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ropey::Rope;
 use tree_sitter::Node;
 use tribute_ir::dialect::tribute;
-use trunk_ir::{DialectType, IdVec, QualifiedName, Symbol, SymbolVec, Type, Value, dialect::core};
+use trunk_ir::{DialectType, IdVec, Symbol, SymbolVec, Type, Value, dialect::core};
 use trunk_ir::{Location, PathId};
 
 use super::helpers::{node_text, span_from_node};
@@ -17,6 +17,8 @@ pub struct CstLoweringCtx<'db> {
     pub source: Rope,
     /// Map from variable names to their SSA values.
     bindings: HashMap<Symbol, Value<'db>>,
+    /// Tracks local names (including pattern-only bindings).
+    local_names: HashSet<Symbol>,
     /// Map from type variable names to their Type representations.
     type_var_bindings: HashMap<Symbol, Type<'db>>,
     /// Counter for generating unique type variable IDs.
@@ -34,6 +36,7 @@ impl<'db> CstLoweringCtx<'db> {
             path,
             source,
             bindings: HashMap::new(),
+            local_names: HashSet::new(),
             type_var_bindings: HashMap::new(),
             next_type_var_id: 0,
             // Start at 1 because EffectRowType::new treats 0 as "no tail"
@@ -43,8 +46,15 @@ impl<'db> CstLoweringCtx<'db> {
     }
 
     /// Create a qualified name by prepending the current module path.
-    pub fn qualified_name(&self, name: Symbol) -> QualifiedName {
-        QualifiedName::new(self.module_path.clone(), name)
+    /// Returns a Symbol with full path (e.g., "module::func").
+    pub fn qualified_name(&self, name: Symbol) -> Symbol {
+        if self.module_path.is_empty() {
+            name
+        } else {
+            let mut parts: Vec<_> = self.module_path.iter().map(|s| s.to_string()).collect();
+            parts.push(name.to_string());
+            Symbol::from_dynamic(&parts.join("::"))
+        }
     }
 
     /// Enter a module scope.
@@ -268,6 +278,7 @@ impl<'db> CstLoweringCtx<'db> {
     /// Bind a name to a value.
     pub fn bind(&mut self, name: Symbol, value: Value<'db>) {
         self.bindings.insert(name, value);
+        self.local_names.insert(name);
     }
 
     /// Look up a binding by name.
@@ -275,12 +286,24 @@ impl<'db> CstLoweringCtx<'db> {
         self.bindings.get(&name).copied()
     }
 
+    /// Record a local name without a concrete value (e.g., pattern-only bindings).
+    pub fn mark_local(&mut self, name: Symbol) {
+        self.local_names.insert(name);
+    }
+
+    /// Check whether a name is local in the current scope.
+    pub fn is_local(&self, name: Symbol) -> bool {
+        self.local_names.contains(&name)
+    }
+
     /// Execute a closure in a new scope. Bindings created inside are discarded after.
     pub fn scoped<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
         let saved_bindings = self.bindings.clone();
+        let saved_local_names = self.local_names.clone();
         let saved_type_vars = self.type_var_bindings.clone();
         let result = f(self);
         self.bindings = saved_bindings;
+        self.local_names = saved_local_names;
         self.type_var_bindings = saved_type_vars;
         result
     }

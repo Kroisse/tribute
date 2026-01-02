@@ -145,6 +145,7 @@ mod tests {
     use super::*;
     use salsa::Setter;
     use tree_sitter::{InputEdit, Parser, Point};
+    use tribute_ir::ModulePathExt as _;
     use tribute_ir::dialect::{adt, tribute};
     use trunk_ir::Attribute;
     use trunk_ir::DialectOp;
@@ -699,7 +700,7 @@ mod tests {
 
         let func_op =
             func::Func::from_operation(&db, nested_ops[0]).expect("Should be a func.func");
-        assert_eq!(func_op.name(&db), "add");
+        assert_eq!(func_op.name(&db).last_segment(), "add");
     }
 
     #[test]
@@ -735,7 +736,7 @@ mod tests {
         let inner_blocks = inner_body.blocks(&db);
         let inner_ops = inner_blocks[0].operations(&db);
         let func_op = func::Func::from_operation(&db, inner_ops[0]).expect("Should be a func.func");
-        assert_eq!(func_op.name(&db), "value");
+        assert_eq!(func_op.name(&db).last_segment(), "value");
     }
 
     #[test]

@@ -68,7 +68,7 @@ impl RewritePattern for FuncCallPattern {
             .modify(db)
             .dialect_str("wasm")
             .name_str("call")
-            .attr("callee", Attribute::QualifiedName(call_op.callee(db)))
+            .attr("callee", Attribute::Symbol(call_op.callee(db)))
             .build();
 
         RewriteResult::Replace(new_op)
@@ -140,7 +140,7 @@ impl RewritePattern for FuncTailCallPattern {
             .modify(db)
             .dialect_str("wasm")
             .name_str("return_call")
-            .attr("callee", Attribute::QualifiedName(tail_call_op.callee(db)))
+            .attr("callee", Attribute::Symbol(tail_call_op.callee(db)))
             .build();
 
         RewriteResult::Replace(new_op)
@@ -195,7 +195,7 @@ impl RewritePattern for FuncConstantPattern {
             .modify(db)
             .dialect_str("wasm")
             .name_str("ref_func")
-            .attr("func_name", Attribute::QualifiedName(func_ref))
+            .attr("func_name", Attribute::Symbol(func_ref))
             .result(funcref_ty)
             .build();
 
@@ -208,9 +208,7 @@ mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::core;
-    use trunk_ir::{
-        Block, BlockId, DialectType, Location, PathId, QualifiedName, Region, Span, Symbol, idvec,
-    };
+    use trunk_ir::{Block, BlockId, DialectType, Location, PathId, Region, Span, Symbol, idvec};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -224,10 +222,7 @@ mod tests {
 
         // Create a simple func.call
         let func_call = Operation::of_name(db, location, "func.call")
-            .attr(
-                "callee",
-                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("foo"))),
-            )
+            .attr("callee", Attribute::Symbol(Symbol::new("foo")))
             .results(idvec![i32_ty])
             .build();
 
@@ -361,10 +356,7 @@ mod tests {
 
         // Create func.constant
         let func_constant = Operation::of_name(db, location, "func.constant")
-            .attr(
-                "func_ref",
-                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("test_func"))),
-            )
+            .attr("func_ref", Attribute::Symbol(Symbol::new("test_func")))
             .results(idvec![func_ty])
             .build();
 

@@ -21,14 +21,15 @@ use std::collections::HashMap;
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
+use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::{ability, adt, tribute, tribute_pat};
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core::{self, AbilityRefType, Module};
 use trunk_ir::dialect::func;
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
-    Attribute, Attrs, Block, BlockArg, DialectOp, DialectType, IdVec, Operation, QualifiedName,
-    Region, Symbol, Type, Value, ValueDef,
+    Attribute, Attrs, Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol,
+    Type, Value, ValueDef,
 };
 
 // =============================================================================
@@ -63,14 +64,14 @@ pub enum Binding<'db> {
     /// A function defined in this module or imported.
     Function {
         /// Fully qualified path (e.g., "List::map")
-        path: QualifiedName,
+        path: Symbol,
         /// Function type
         ty: Type<'db>,
     },
     /// A module/namespace binding (possibly with an associated type).
     Module {
         /// Fully qualified namespace path (e.g., "collections::List")
-        namespace: QualifiedName,
+        namespace: Symbol,
         /// Optional type definition for the same name.
         type_def: Option<Type<'db>>,
     },
@@ -119,7 +120,7 @@ pub enum Binding<'db> {
 #[derive(Debug, Default)]
 pub struct ModuleEnv<'db> {
     /// Names defined in this module (qualified path → binding).
-    definitions: HashMap<QualifiedName, Binding<'db>>,
+    definitions: HashMap<Symbol, Binding<'db>>,
     /// Names imported via `use` statements (simple name → binding).
     imports: HashMap<Symbol, Binding<'db>>,
     /// Qualified paths (namespace → name → binding).
@@ -133,9 +134,9 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Add a function definition.
-    pub fn add_function(&mut self, path: QualifiedName, ty: Type<'db>) {
+    pub fn add_function(&mut self, path: Symbol, ty: Type<'db>) {
         self.definitions
-            .insert(path.clone(), Binding::Function { path, ty });
+            .insert(path, Binding::Function { path, ty });
     }
 
     /// Add a type constructor.
@@ -148,7 +149,7 @@ impl<'db> ModuleEnv<'db> {
         field_names: Option<Vec<Symbol>>,
     ) {
         self.definitions.insert(
-            name.into(),
+            name,
             Binding::Constructor {
                 ty,
                 tag,
@@ -160,14 +161,13 @@ impl<'db> ModuleEnv<'db> {
 
     /// Add a type definition.
     pub fn add_type(&mut self, name: Symbol, ty: Type<'db>) {
-        self.definitions
-            .insert(name.into(), Binding::TypeDef { ty });
+        self.definitions.insert(name, Binding::TypeDef { ty });
     }
 
     /// Add a constant definition.
     pub fn add_const(&mut self, name: Symbol, value: Attribute<'db>, ty: Type<'db>) {
         self.definitions
-            .insert(name.into(), Binding::Const { name, value, ty });
+            .insert(name, Binding::Const { name, value, ty });
     }
 
     /// Add an ability operation to the environment.
@@ -205,8 +205,8 @@ impl<'db> ModuleEnv<'db> {
 
     /// Look up an unqualified name.
     pub fn lookup(&self, name: Symbol) -> Option<&Binding<'db>> {
-        // First check local definitions (simple name → QualifiedName::simple)
-        if let Some(b) = self.definitions.get(&QualifiedName::simple(name)) {
+        // First check local definitions (simple name)
+        if let Some(b) = self.definitions.get(&name) {
             return Some(b);
         }
         // Then check imports
@@ -220,8 +220,8 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Look up by full qualified name path.
-    pub fn lookup_path(&self, path: &QualifiedName) -> Option<&Binding<'db>> {
-        self.definitions.get(path)
+    pub fn lookup_path(&self, path: Symbol) -> Option<&Binding<'db>> {
+        self.definitions.get(&path)
     }
 
     /// Check whether a namespace exists (e.g., "collections::List").
@@ -230,7 +230,7 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Iterate over all definitions (for type-directed resolution).
-    pub fn definitions_iter(&self) -> impl Iterator<Item = (&QualifiedName, &Binding<'db>)> {
+    pub fn definitions_iter(&self) -> impl Iterator<Item = (&Symbol, &Binding<'db>)> {
         self.definitions.iter()
     }
 
@@ -289,10 +289,10 @@ fn collect_definition<'db>(
             // Function definition
             let attrs = op.attributes(db);
 
-            if let (Some(Attribute::QualifiedName(qn)), Some(Attribute::Type(ty))) =
+            if let (Some(Attribute::Symbol(sym)), Some(Attribute::Type(ty))) =
                 (attrs.get(&ATTR_SYM_NAME()), attrs.get(&ATTR_TYPE()))
             {
-                env.add_function(qn.clone(), *ty);
+                env.add_function(*sym, *ty);
             }
         }
         (d, n) if d == tribute::DIALECT_NAME() && n == tribute::STRUCT_DEF() => {
@@ -304,7 +304,7 @@ fn collect_definition<'db>(
                     .results(db)
                     .first()
                     .copied()
-                    .unwrap_or_else(|| adt::typeref(db, QualifiedName::simple(sym)));
+                    .unwrap_or_else(|| adt::typeref(db, sym));
                 // Add type definition
                 env.add_type(sym, ty);
 
@@ -325,7 +325,7 @@ fn collect_definition<'db>(
                     .results(db)
                     .first()
                     .copied()
-                    .unwrap_or_else(|| adt::typeref(db, QualifiedName::simple(*sym)));
+                    .unwrap_or_else(|| adt::typeref(db, *sym));
                 // Add type definition
                 env.add_type(*sym, ty);
                 // Extract variants from the operation's regions or attributes
@@ -337,12 +337,11 @@ fn collect_definition<'db>(
             // Ability definition → creates operations in the ability's namespace
             if let Ok(ability_decl) = tribute::AbilityDef::from_operation(db, *op) {
                 let ability_name = ability_decl.sym_name(db);
-                let ability_qn = QualifiedName::simple(ability_name);
                 // Also register as a Module binding for the namespace
                 env.definitions.insert(
-                    ability_qn.clone(),
+                    ability_name,
                     Binding::Module {
-                        namespace: ability_qn.clone(),
+                        namespace: ability_name,
                         type_def: None,
                     },
                 );
@@ -382,12 +381,11 @@ fn collect_definition<'db>(
                 // 1. Parent's namespace (for lookup_qualified)
                 // 2. Parent's definitions with full path (for lookup_path)
                 // TODO: Handle visibility (only pub items should be accessible)
-                let module_prefix = QualifiedName::simple(*sym);
-                for (qn, binding) in mod_env.definitions.iter() {
+                for (def_sym, binding) in mod_env.definitions.iter() {
                     // Add to namespace for backward compatibility
-                    env.add_to_namespace(*sym, qn.name(), binding.clone());
+                    env.add_to_namespace(*sym, def_sym.last_segment(), binding.clone());
                     // Add to definitions with the full qualified path (module::name)
-                    let full_path = module_prefix.join(qn);
+                    let full_path = sym.join_path(*def_sym);
                     env.definitions.insert(full_path, binding.clone());
                 }
 
@@ -749,34 +747,34 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    fn binding_from_path(&self, path: &QualifiedName) -> Option<Binding<'db>> {
+    fn binding_from_path(&self, path: Symbol) -> Option<Binding<'db>> {
         if path.is_simple() {
-            return self.env.lookup(path.name()).cloned();
+            return self.env.lookup(path).cloned();
         }
 
         // For now, only support single-level namespaces (Type::Constructor)
         // TODO: Support multi-level namespaces
-        let namespace = *path.as_parent().last()?;
-        let name = path.name();
+        let namespace = path.parent_path()?;
+        let name = path.last_segment();
         self.env.lookup_qualified(namespace, name).cloned()
     }
 
     fn apply_use(&mut self, op: &Operation<'db>) {
         let attrs = op.attributes(self.db);
 
-        let Some(Attribute::QualifiedName(path)) = attrs.get(&ATTR_PATH()) else {
+        let Some(Attribute::Symbol(path)) = attrs.get(&ATTR_PATH()) else {
             return;
         };
 
         let local_name = if let Some(Attribute::Symbol(alias)) = attrs.get(&ATTR_ALIAS()) {
             *alias
         } else {
-            path.name()
+            path.last_segment()
         };
 
         // Check if this path represents a namespace
-        let namespace_sym = path.name();
-        let binding = self.binding_from_path(path);
+        let namespace_sym = path.last_segment();
+        let binding = self.binding_from_path(*path);
 
         if self.env.has_namespace(namespace_sym) {
             let type_def = match binding {
@@ -786,7 +784,7 @@ impl<'db> Resolver<'db> {
             self.add_import(
                 local_name,
                 Binding::Module {
-                    namespace: path.clone(),
+                    namespace: *path,
                     type_def,
                 },
             );
@@ -1414,7 +1412,7 @@ impl<'db> Resolver<'db> {
             Binding::Function { path, ty } => {
                 // Create func.constant operation
                 // func::constant(db, location, result_type, func_ref)
-                let new_op = func::constant(self.db, location, *ty, path.clone());
+                let new_op = func::constant(self.db, location, *ty, *path);
                 let new_operation = new_op.as_operation();
 
                 // Map old result to new result
@@ -1500,26 +1498,26 @@ impl<'db> Resolver<'db> {
     /// Try to resolve a `tribute.path` operation.
     fn try_resolve_path(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let attrs = op.attributes(self.db);
-        let Attribute::QualifiedName(path) = attrs.get(&ATTR_PATH())? else {
+        let Attribute::Symbol(path) = attrs.get(&ATTR_PATH())? else {
             return None;
         };
 
-        if path.len() < 2 {
+        if path.is_simple() {
             return None;
         }
 
         let location = op.location(self.db);
 
         // First try direct lookup in definitions, then fall back to namespace lookup
-        let binding = self.env.lookup_path(path).or_else(|| {
+        let binding = self.env.lookup_path(*path).or_else(|| {
             // Fall back to namespace lookup for enum variants, etc.
-            let namespace = *path.as_parent().last()?;
-            self.env.lookup_qualified(namespace, path.name())
+            let namespace = path.parent_path()?;
+            self.env.lookup_qualified(namespace, path.last_segment())
         })?;
 
         match binding {
             Binding::Function { path, ty } => {
-                let new_op = func::constant(self.db, location, *ty, path.clone());
+                let new_op = func::constant(self.db, location, *ty, *path);
                 let new_operation = new_op.as_operation();
 
                 let old_result = op.result(self.db, 0);
@@ -1580,7 +1578,7 @@ impl<'db> Resolver<'db> {
     /// Try to resolve a `tribute.call` operation.
     fn try_resolve_call(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let attrs = op.attributes(self.db);
-        let Attribute::QualifiedName(path) = attrs.get(&ATTR_NAME())? else {
+        let Attribute::Symbol(path) = attrs.get(&ATTR_NAME())? else {
             return None;
         };
 
@@ -1592,8 +1590,9 @@ impl<'db> Resolver<'db> {
         // Track whether this is a qualified path (affects which path to use in the call)
         let is_qualified = !path.is_simple();
         let binding = if path.is_simple() {
-            let name = path.name();
+            let name = *path;
             if let Some(local) = self.lookup_local(name) {
+                dbg!(local);
                 let callee = match local {
                     LocalBinding::Parameter { value, .. }
                     | LocalBinding::LetBinding { value, .. } => *value,
@@ -1611,10 +1610,10 @@ impl<'db> Resolver<'db> {
             self.lookup_binding(name)
         } else {
             // First try direct lookup in definitions, then fall back to namespace lookup
-            self.env.lookup_path(path).or_else(|| {
+            self.env.lookup_path(*path).or_else(|| {
                 // Fall back to namespace lookup for enum variants, etc.
-                let namespace = *path.as_parent().last()?;
-                self.env.lookup_qualified(namespace, path.name())
+                let namespace = path.parent_path()?;
+                self.env.lookup_qualified(namespace, path.last_segment())
             })
         }?;
 
@@ -1631,11 +1630,7 @@ impl<'db> Resolver<'db> {
                     .unwrap_or(result_ty);
                 // For qualified calls, use the original path (e.g., math::double)
                 // The binding's stored path may just be the simple name (double)
-                let callee_path = if is_qualified {
-                    path.clone()
-                } else {
-                    binding_path.clone()
-                };
+                let callee_path = if is_qualified { *path } else { *binding_path };
                 // func::call(db, location, args, result_type, callee)
                 let new_op = func::call(self.db, location, args, call_result_ty, callee_path);
                 let new_operation = new_op.as_operation();
@@ -1685,7 +1680,7 @@ impl<'db> Resolver<'db> {
     /// Returns a single operation wrapped in a vector for consistency.
     fn try_resolve_cons(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
         let attrs = op.attributes(self.db);
-        let Some(Attribute::QualifiedName(path)) = attrs.get(&ATTR_NAME()) else {
+        let Some(Attribute::Symbol(path)) = attrs.get(&ATTR_NAME()) else {
             return vec![];
         };
 
@@ -1694,15 +1689,14 @@ impl<'db> Resolver<'db> {
 
         // Look up binding
         let binding = if path.is_simple() {
-            let name = path.name();
+            let name = *path;
             self.lookup_binding(name).cloned()
         } else {
             // For now, only support single-level qualified constructors (Type::Variant)
-            if path.len() != 2 {
+            let Some(namespace) = path.parent_path() else {
                 return vec![];
-            }
-            let namespace = *path.as_parent().last().unwrap();
-            let name = path.name();
+            };
+            let name = path.last_segment();
             self.env.lookup_qualified(namespace, name).cloned()
         };
 
@@ -1736,7 +1730,7 @@ impl<'db> Resolver<'db> {
     /// Returns a vector of operations: field_get operations followed by struct_new.
     fn try_resolve_record(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
         let attrs = op.attributes(self.db);
-        let Some(Attribute::QualifiedName(path)) = attrs.get(&ATTR_NAME()) else {
+        let Some(Attribute::Symbol(path)) = attrs.get(&ATTR_NAME()) else {
             return vec![];
         };
 
@@ -1746,14 +1740,13 @@ impl<'db> Resolver<'db> {
 
         // Look up binding
         let binding = if path.is_simple() {
-            let name = path.name();
+            let name = *path;
             self.lookup_binding(name).cloned()
         } else {
-            if path.len() != 2 {
+            let Some(namespace) = path.parent_path() else {
                 return vec![];
-            }
-            let namespace = *path.as_parent().last().unwrap();
-            let name = path.name();
+            };
+            let name = path.last_segment();
             self.env.lookup_qualified(namespace, name).cloned()
         };
 
@@ -1887,8 +1880,8 @@ impl<'db> Resolver<'db> {
             .attributes(self.db)
             .get(&ATTR_PATH())
             .and_then(|a| {
-                if let Attribute::QualifiedName(qual_name) = a {
-                    Some(qual_name.to_string())
+                if let Attribute::Symbol(sym) = a {
+                    Some(sym.to_string())
                 } else {
                     None
                 }
@@ -1910,9 +1903,7 @@ impl<'db> Resolver<'db> {
             .attributes(self.db)
             .get(&ATTR_NAME())
             .and_then(|a| {
-                if let Attribute::QualifiedName(qual_name) = a {
-                    Some(qual_name.to_string())
-                } else if let Attribute::Symbol(s) = a {
+                if let Attribute::Symbol(s) = a {
                     Some(s.to_string())
                 } else {
                     None
@@ -1935,9 +1926,7 @@ impl<'db> Resolver<'db> {
             .attributes(self.db)
             .get(&ATTR_NAME())
             .and_then(|a| {
-                if let Attribute::QualifiedName(qual_name) = a {
-                    Some(qual_name.to_string())
-                } else if let Attribute::Symbol(s) = a {
+                if let Attribute::Symbol(s) = a {
                     Some(s.to_string())
                 } else {
                     None
@@ -1977,7 +1966,7 @@ pub mod tests {
     use salsa_test_macros::salsa_test;
     use tribute_ir::dialect::tribute;
     use trunk_ir::dialect::{arith, core, func};
-    use trunk_ir::{Location, PathId, QualifiedName, Span, idvec};
+    use trunk_ir::{Location, PathId, Span, idvec};
 
     fn test_location<'db>(db: &'db dyn salsa::Database) -> Location<'db> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -2008,11 +1997,11 @@ pub mod tests {
         let helpers = core::Module::build(db, location, Symbol::new("helpers"), |inner| {
             inner.op(simple_func(db, location, "double"));
         });
-        let path = QualifiedName::from_strs(["helpers", "double"]).unwrap();
+        let path = Symbol::new("helpers::double");
         let alias_sym = Symbol::from_dynamic(alias.unwrap_or(""));
 
         let name = alias.unwrap_or("double");
-        let call_path = QualifiedName::simple(Symbol::from_dynamic(name));
+        let call_path = Symbol::from_dynamic(name);
         let arg = arith::Const::i64(db, location, 1);
         let call_result_ty = tribute::unresolved_type(db, Symbol::new("Int"), idvec![]);
         let call = tribute::call(
@@ -2119,7 +2108,7 @@ pub mod tests {
                 && op.name(db) == "call"
                 && matches!(
                     op.attributes(db).get(&ATTR_NAME()),
-                    Some(Attribute::QualifiedName(qual_name)) if qual_name.name() == name_sym
+                    Some(Attribute::Symbol(sym)) if sym.last_segment() == name_sym
                 )
         })
     }
@@ -2135,7 +2124,7 @@ pub mod tests {
                 && op.name(db) == "call"
                 && matches!(
                     op.attributes(db).get(&ATTR_CALLEE()),
-                    Some(Attribute::QualifiedName(qual_name)) if qual_name.name() == name_sym
+                    Some(Attribute::Symbol(sym)) if sym.last_segment() == name_sym
                 )
         })
     }
@@ -2470,16 +2459,10 @@ pub mod tests {
         );
 
         // Create main function that calls Console::print()
-        let print_path = QualifiedName::from_strs(["Console", "print"]).unwrap();
+        let print_path = Symbol::new("Console::print");
         let main_func = func::Func::build(db, location, "main", idvec![], infer_ty, |entry| {
             // tribute.call(Console::print)()
-            let call_result = entry.op(tribute::call(
-                db,
-                location,
-                vec![],
-                infer_ty,
-                print_path.clone(),
-            ));
+            let call_result = entry.op(tribute::call(db, location, vec![], infer_ty, print_path));
             entry.op(func::Return::value(db, location, call_result.result(db)));
         });
 

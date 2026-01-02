@@ -30,6 +30,20 @@ pub fn lower_block_body<'db>(
                 lower_let_statement(ctx, block, child);
                 last_value = None; // Let doesn't produce a value
             }
+            "statement" | "expression_statement" => {
+                let mut stmt_cursor = child.walk();
+                let inner = child
+                    .named_children(&mut stmt_cursor)
+                    .find(|n| !is_comment(n.kind()));
+                if let Some(inner) = inner {
+                    if inner.kind() == "let_statement" {
+                        lower_let_statement(ctx, block, inner);
+                        last_value = None;
+                    } else if let Some(value) = lower_expr(ctx, block, inner) {
+                        last_value = Some(value);
+                    }
+                }
+            }
             _ => {
                 // Try to lower as expression
                 if let Some(value) = lower_expr(ctx, block, child) {
@@ -60,7 +74,6 @@ pub fn lower_let_statement<'db>(
     let Some(value_node) = node.child_by_field_name("value") else {
         return;
     };
-
     if let Some(value) = lower_expr(ctx, block, value_node) {
         // Generate tribute.let with pattern region for resolver
         let pattern_region = pattern_to_region(ctx, pattern_node);
@@ -271,7 +284,36 @@ pub fn bind_pattern<'db>(
             // All bindings are handled through tribute_pat.bind in the pattern region.
             // The resolver registers them as PatternBinding, and case_lowering
             // remaps tribute.var references to the bound values.
-            // No special handling needed in arm body.
+            // Record continuation/result names as locals so call lowering can pick
+            // call_indirect when needed.
+            let mut cursor = pattern.walk();
+            let mut result_name = None;
+            let mut saw_op = false;
+            let mut continuation_name = None;
+
+            for child in pattern.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                match child.kind() {
+                    "identifier" => {
+                        if saw_op {
+                            continuation_name = Some(node_text(&child, &ctx.source).into());
+                            break;
+                        } else if result_name.is_none() {
+                            result_name = Some(node_text(&child, &ctx.source).into());
+                        }
+                    }
+                    "path_expression" => {
+                        saw_op = true;
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(name) = continuation_name.or(result_name) {
+                ctx.mark_local(name);
+            }
         }
         _ => {
             // Unknown pattern - try to handle child patterns

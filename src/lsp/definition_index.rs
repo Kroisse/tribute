@@ -4,6 +4,7 @@
 //! 1. Definition names to their declaration locations (function name → function def location)
 //! 2. Usage locations to definition names (reference span → what it refers to)
 
+use tribute_ir::ModulePathExt as _;
 use trunk_ir::Span;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::{Attribute, Block, Operation, Region, Symbol};
@@ -117,7 +118,7 @@ impl DefinitionIndex {
         if let Ok(func_op) = func::Func::from_operation(db, *op) {
             // func.func - function definition
             let qname = func_op.sym_name(db);
-            let name = qname.name();
+            let name = qname.last_segment();
             let span = name_span.unwrap_or(op_span);
 
             definitions.push(DefinitionEntry {
@@ -168,7 +169,7 @@ impl DefinitionIndex {
             let callee = call_op.callee(db);
             references.push(ReferenceEntry {
                 span: op_span,
-                target: callee.name(),
+                target: callee.last_segment(),
             });
         } else if let Ok(var_op) = tribute::Var::from_operation(db, *op) {
             // tribute.var - variable reference (before resolution)
@@ -182,7 +183,7 @@ impl DefinitionIndex {
             let path = path_op.path(db);
             references.push(ReferenceEntry {
                 span: op_span,
-                target: path.name(),
+                target: path.last_segment(),
             });
         }
 

@@ -8,7 +8,7 @@ use tree_sitter::{Node, Tree};
 use tribute_ir::dialect::tribute;
 use trunk_ir::Span;
 use trunk_ir::dialect::arith;
-use trunk_ir::{DialectType, Location, QualifiedName, Symbol};
+use trunk_ir::{DialectType, Location, Symbol};
 
 // =============================================================================
 // Parsed CST (Salsa-cacheable)
@@ -64,8 +64,8 @@ pub fn sym(name: &str) -> Symbol {
 }
 
 /// Create a symbol reference (path) from a single name.
-pub fn sym_ref(name: &str) -> QualifiedName {
-    QualifiedName::simple(Symbol::from_dynamic(name))
+pub fn sym_ref(name: &str) -> Symbol {
+    Symbol::from_dynamic(name)
 }
 
 // =============================================================================

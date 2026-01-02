@@ -9,11 +9,12 @@ use std::sync::LazyLock;
 
 use tracing::debug;
 
+use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::{adt, closure, tribute};
 use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::{
-    Attribute, Attrs, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
-    Type, Value, ValueDef,
+    Attribute, Attrs, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
+    ValueDef,
 };
 use wasm_encoder::{
     AbstractHeapType, ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType,
@@ -200,13 +201,13 @@ static SIMPLE_OPS: LazyLock<HashMap<Symbol, Instruction<'static>>> = LazyLock::n
 });
 
 struct FunctionDef<'db> {
-    name: QualifiedName,
+    name: Symbol,
     ty: core::Func<'db>,
     op: Operation<'db>,
 }
 
 struct ImportFuncDef<'db> {
-    sym: QualifiedName,
+    sym: Symbol,
     module: Symbol,
     name: Symbol,
     ty: core::Func<'db>,
@@ -220,7 +221,7 @@ struct ExportDef {
 
 #[derive(Debug)]
 enum ExportTarget {
-    Func(QualifiedName),
+    Func(Symbol),
     Memory(u32),
 }
 
@@ -246,7 +247,7 @@ struct TableDef {
 struct ElementDef {
     table: u32,
     offset: i32,
-    funcs: Vec<QualifiedName>,
+    funcs: Vec<Symbol>,
 }
 
 struct GlobalDef {
@@ -268,9 +269,9 @@ struct ModuleInfo<'db> {
     gc_types: Vec<GcTypeDef>,
     type_idx_by_type: HashMap<Type<'db>, u32>,
     /// Function type lookup map for boxing/unboxing at call sites.
-    func_types: HashMap<QualifiedName, core::Func<'db>>,
+    func_types: HashMap<Symbol, core::Func<'db>>,
     /// Function index lookup map (import index or func index).
-    func_indices: HashMap<QualifiedName, u32>,
+    func_indices: HashMap<Symbol, u32>,
 }
 
 /// Context for emitting a single function's code.
@@ -462,7 +463,7 @@ pub fn emit_wasm<'db>(
                 continue;
             };
             // Export with simple name (last segment of qualified name)
-            let name = func_def.name.name().to_string();
+            let name = func_def.name.last_segment().to_string();
             export_section.export(&name, ExportKind::Func, *index);
         }
     }
@@ -632,21 +633,20 @@ fn collect_module_info<'db>(
     // Build function type lookup map for boxing/unboxing.
     // Use the qualified name already stored in func/import definitions.
     for func in &info.funcs {
-        info.func_types.insert(func.name.clone(), func.ty);
+        info.func_types.insert(func.name, func.ty);
     }
     for import in &info.imports {
-        info.func_types.insert(import.sym.clone(), import.ty);
+        info.func_types.insert(import.sym, import.ty);
     }
 
     // Build function index map (import index or func index).
     for (index, import_def) in info.imports.iter().enumerate() {
-        info.func_indices
-            .insert(import_def.sym.clone(), index as u32);
+        info.func_indices.insert(import_def.sym, index as u32);
     }
     let import_count = info.imports.len() as u32;
     for (index, func_def) in info.funcs.iter().enumerate() {
         info.func_indices
-            .insert(func_def.name.clone(), import_count + index as u32);
+            .insert(func_def.name, import_count + index as u32);
     }
 
     Ok(info)
@@ -1207,7 +1207,7 @@ fn extract_function_def<'db>(
     })?;
 
     let name = match name_attr {
-        Attribute::QualifiedName(qn) => qn.clone(),
+        Attribute::Symbol(sym) => *sym,
         _ => {
             return Err(CompilationError::from(
                 errors::CompilationErrorKind::InvalidAttribute("sym_name"),
@@ -1247,7 +1247,7 @@ fn extract_import_def<'db>(
         .ok_or_else(|| CompilationError::type_error("wasm.import_func requires core.func type"))?;
 
     Ok(ImportFuncDef {
-        sym: sym.clone(),
+        sym,
         module,
         name,
         ty: func_ty,
@@ -1264,7 +1264,7 @@ fn extract_export_func<'db>(
     Ok(ExportDef {
         name,
         kind: ExportKind::Func,
-        target: ExportTarget::Func(func.clone()),
+        target: ExportTarget::Func(func),
     })
 }
 
@@ -1890,7 +1890,7 @@ fn emit_op<'db>(
         let target = resolve_callee(callee, module_info)?;
 
         // Check if we need boxing for generic function calls
-        if let Some(callee_ty) = module_info.func_types.get(callee) {
+        if let Some(callee_ty) = module_info.func_types.get(&callee) {
             let param_types = callee_ty.params(db);
             emit_operands_with_boxing(db, operands, &param_types, ctx, module_info, function)?;
         } else {
@@ -1900,7 +1900,7 @@ fn emit_op<'db>(
         function.instruction(&Instruction::Call(target));
 
         // Check if we need unboxing for the return value
-        if let Some(callee_ty) = module_info.func_types.get(callee) {
+        if let Some(callee_ty) = module_info.func_types.get(&callee) {
             let return_ty = callee_ty.result(db);
             // If callee returns anyref (type.var), we need to unbox to the expected concrete type.
             // Since type inference doesn't propagate instantiated types to the IR,
@@ -1925,7 +1925,7 @@ fn emit_op<'db>(
         let target = resolve_callee(callee, module_info)?;
 
         // Check if we need boxing for generic function calls
-        if let Some(callee_ty) = module_info.func_types.get(callee) {
+        if let Some(callee_ty) = module_info.func_types.get(&callee) {
             let param_types = callee_ty.params(db);
             emit_operands_with_boxing(db, operands, &param_types, ctx, module_info, function)?;
         } else {
@@ -2451,7 +2451,7 @@ fn infer_call_result_type<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
     result_ty: Type<'db>,
-    func_types: &HashMap<QualifiedName, core::Func<'db>>,
+    func_types: &HashMap<Symbol, core::Func<'db>>,
 ) -> Type<'db> {
     // Only handle wasm.call operations
     if op.dialect(db) != Symbol::new("wasm") || op.name(db) != Symbol::new("call") {
@@ -2465,7 +2465,7 @@ fn infer_call_result_type<'db>(
     };
 
     // Look up the callee's function type
-    let callee_ty = match func_types.get(callee) {
+    let callee_ty = match func_types.get(&callee) {
         Some(ty) => ty,
         None => return result_ty,
     };
@@ -2507,10 +2507,10 @@ fn set_result_local<'db>(
     Ok(())
 }
 
-fn resolve_callee(path: &QualifiedName, module_info: &ModuleInfo) -> CompilationResult<u32> {
+fn resolve_callee(path: Symbol, module_info: &ModuleInfo) -> CompilationResult<u32> {
     module_info
         .func_indices
-        .get(path)
+        .get(&path)
         .copied()
         .ok_or_else(|| CompilationError::function_not_found(&path.to_string()))
 }
@@ -2702,21 +2702,18 @@ fn attr_symbol_ref<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
     key: Symbol,
-) -> CompilationResult<&'db QualifiedName> {
+) -> CompilationResult<Symbol> {
     match op.attributes(db).get(&key) {
-        Some(Attribute::QualifiedName(path)) => Ok(path),
+        Some(Attribute::Symbol(sym)) => Ok(*sym),
         _ => Err(CompilationError::from(
             errors::CompilationErrorKind::InvalidAttribute("callee"),
         )),
     }
 }
 
-fn attr_symbol_ref_attr<'db>(
-    attrs: &'db Attrs<'db>,
-    key: Symbol,
-) -> CompilationResult<&'db QualifiedName> {
+fn attr_symbol_ref_attr<'db>(attrs: &'db Attrs<'db>, key: Symbol) -> CompilationResult<Symbol> {
     match attrs.get(&key) {
-        Some(Attribute::QualifiedName(path)) => Ok(path),
+        Some(Attribute::Symbol(sym)) => Ok(*sym),
         _ => Err(CompilationError::from(
             errors::CompilationErrorKind::MissingAttribute("symbol_ref"),
         )),
@@ -3117,9 +3114,8 @@ mod tests {
         let body_region = Region::new(db, location, idvec![body_block]);
 
         // Create wasm.func
-        let test_name = QualifiedName::simple(Symbol::new("test_fn"));
         let wasm_func = Operation::of_name(db, location, "wasm.func")
-            .attr("sym_name", Attribute::QualifiedName(test_name))
+            .attr("sym_name", Attribute::Symbol(Symbol::new("test_fn")))
             .attr("type", Attribute::Type(func_ty))
             .region(body_region)
             .build();
@@ -3378,10 +3374,7 @@ mod tests {
 
         // Function definition
         let wasm_func = Operation::of_name(db, location, "wasm.func")
-            .attr(
-                "sym_name",
-                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("test"))),
-            )
+            .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
             .attr("type", Attribute::Type(func_ty))
             .regions(idvec![body_region])
             .build();
@@ -3465,10 +3458,7 @@ mod tests {
         let body_region = Region::new(db, location, idvec![body_block]);
 
         let wasm_func = Operation::of_name(db, location, "wasm.func")
-            .attr(
-                "sym_name",
-                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("test"))),
-            )
+            .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
             .attr("type", Attribute::Type(func_ty))
             .regions(idvec![body_region])
             .build();

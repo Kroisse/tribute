@@ -10,10 +10,11 @@
 
 use std::collections::HashMap;
 
+use tribute_ir::ModulePathExt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, DialectType, Operation, QualifiedName, Symbol, idvec};
+use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, idvec};
 
 // Constants for Bytes struct layout (must match emit.rs)
 const BYTES_ARRAY_IDX: u32 = 1;
@@ -78,8 +79,8 @@ pub fn analyze_intrinsics<'db>(
     ) {
         // Check for wasm.call to print_line
         if let Ok(call) = wasm::Call::from_operation(db, *op)
-            && let Attribute::QualifiedName(callee) = call.callee(db)
-            && callee.name() == Symbol::new("print_line")
+            && let Attribute::Symbol(callee) = call.callee(db)
+            && callee.last_segment() == Symbol::new("print_line")
             && let Some(arg) = op.operands(db).first()
             && let Some((ptr, len)) = get_literal_info(db, *arg)
         {
@@ -227,10 +228,10 @@ impl RewritePattern for PrintLinePattern {
             return RewriteResult::Unchanged;
         };
 
-        let Attribute::QualifiedName(callee) = call_op.callee(db) else {
+        let Attribute::Symbol(callee) = call_op.callee(db) else {
             return RewriteResult::Unchanged;
         };
-        if callee.name() != Symbol::new("print_line") {
+        if callee.last_segment() != Symbol::new("print_line") {
             return RewriteResult::Unchanged;
         }
 
@@ -277,7 +278,6 @@ impl RewritePattern for PrintLinePattern {
             Attribute::IntBits(u64::from(nwritten_offset)),
         );
 
-        let fd_write_callee = QualifiedName::simple(Symbol::new("fd_write"));
         let call = Operation::of_name(db, location, "wasm.call")
             .operands(trunk_ir::idvec![
                 fd_const.result(db),
@@ -286,7 +286,7 @@ impl RewritePattern for PrintLinePattern {
                 nwritten_const.result(db),
             ])
             .results(trunk_ir::idvec![i32_ty])
-            .attr("callee", Attribute::QualifiedName(fd_write_callee))
+            .attr("callee", Attribute::Symbol(Symbol::new("fd_write")))
             .build();
 
         let drop_op = wasm::drop(db, location, call.result(db, 0));
@@ -333,15 +333,14 @@ fn is_bytes_method_call<'db>(
     let Ok(call) = wasm::Call::from_operation(db, *op) else {
         return false;
     };
-    let Attribute::QualifiedName(callee) = call.callee(db) else {
+    let Attribute::Symbol(callee) = call.callee(db) else {
         return false;
     };
-    callee.name() == Symbol::new(method)
+    // Check if callee is "Bytes::method"
+    callee.last_segment() == Symbol::new(method)
         && callee
-            .as_parent()
-            .first()
-            .map(|s| *s == "Bytes")
-            .unwrap_or(false)
+            .parent_path()
+            .is_some_and(|p| p.last_segment() == Symbol::new("Bytes"))
 }
 
 /// Pattern for `Bytes::len(bytes)` -> `struct.get $bytes 2` + `i64.extend_i32_u`
@@ -742,10 +741,7 @@ mod tests {
         let print_line = Operation::of_name(db, location, "wasm.call")
             .operands(idvec![string_const.result(db, 0)])
             .results(idvec![nil_ty])
-            .attr(
-                "callee",
-                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("print_line"))),
-            )
+            .attr("callee", Attribute::Symbol(Symbol::new("print_line")))
             .build();
 
         let block = Block::new(
@@ -800,10 +796,10 @@ mod tests {
                 let Ok(call) = wasm::Call::from_operation(db, *op) else {
                     return None;
                 };
-                let Attribute::QualifiedName(callee) = call.callee(db) else {
+                let Attribute::Symbol(callee) = call.callee(db) else {
                     return None;
                 };
-                Some(callee.name().to_string())
+                Some(callee.last_segment().to_string())
             })
             .collect()
     }
@@ -824,8 +820,8 @@ mod tests {
     // === Bytes intrinsic tests ===
 
     /// Create a qualified name for Bytes::method
-    fn bytes_method_name(method: &'static str) -> QualifiedName {
-        QualifiedName::new(vec![Symbol::new("Bytes")], Symbol::new(method))
+    fn bytes_method_name(method: &'static str) -> Symbol {
+        Symbol::from_dynamic(&format!("Bytes::{}", method))
     }
 
     #[salsa::tracked]
@@ -842,7 +838,7 @@ mod tests {
         let len_call = Operation::of_name(db, location, "wasm.call")
             .operands(idvec![bytes_val])
             .results(idvec![i64_ty])
-            .attr("callee", Attribute::QualifiedName(bytes_method_name("len")))
+            .attr("callee", Attribute::Symbol(bytes_method_name("len")))
             .build();
 
         let block = Block::new(
@@ -885,7 +881,7 @@ mod tests {
             .results(idvec![i64_ty])
             .attr(
                 "callee",
-                Attribute::QualifiedName(bytes_method_name("get_or_panic")),
+                Attribute::Symbol(bytes_method_name("get_or_panic")),
             )
             .build();
 
@@ -934,7 +930,7 @@ mod tests {
             .results(idvec![bytes_ty])
             .attr(
                 "callee",
-                Attribute::QualifiedName(bytes_method_name("slice_or_panic")),
+                Attribute::Symbol(bytes_method_name("slice_or_panic")),
             )
             .build();
 
@@ -981,10 +977,7 @@ mod tests {
         let concat_call = Operation::of_name(db, location, "wasm.call")
             .operands(idvec![left_val, right_val])
             .results(idvec![bytes_ty])
-            .attr(
-                "callee",
-                Attribute::QualifiedName(bytes_method_name("concat")),
-            )
+            .attr("callee", Attribute::Symbol(bytes_method_name("concat")))
             .build();
 
         let block = Block::new(

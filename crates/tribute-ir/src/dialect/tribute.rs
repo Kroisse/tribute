@@ -50,7 +50,7 @@ dialect! {
 
         /// `tribute.call` operation: unresolved function call.
         /// The callee name will be resolved to a concrete function reference.
-        #[attr(name: QualifiedName)]
+        #[attr(name: Symbol)]
         fn call(#[rest] args) -> result;
 
         /// `tribute.cons` operation: positional constructor application.
@@ -60,7 +60,7 @@ dialect! {
         /// - Structs with positional fields
         ///
         /// For record-style construction with named fields, use `tribute.record`.
-        #[attr(name: QualifiedName)]
+        #[attr(name: Symbol)]
         fn cons(#[rest] args) -> result;
 
         /// `tribute.record` operation: record-style construction with named fields.
@@ -76,7 +76,7 @@ dialect! {
         /// - `base` operand contains the spread source value
         /// - fields region contains only the override fields
         /// - resolve pass fills in non-overridden fields from base
-        #[attr(name: QualifiedName)]
+        #[attr(name: Symbol)]
         fn record(#[rest] base) -> result {
             #[region(fields)] {}
         };
@@ -95,7 +95,7 @@ dialect! {
 
         /// `tribute.path` operation: explicitly qualified path reference.
         /// Always refers to a module-level or type-level definition, never local.
-        #[attr(path: QualifiedName)]
+        #[attr(path: Symbol)]
         fn path() -> result;
 
         /// `tribute.binop` operation: unresolved binary operation.
@@ -146,7 +146,7 @@ dialect! {
 
         /// `tribute.use` operation: import declaration.
         /// Carries the fully qualified path and an optional local alias.
-        #[attr(path: QualifiedName, alias: Symbol, is_pub: bool)]
+        #[attr(path: Symbol, alias: Symbol, is_pub: bool)]
         fn r#use();
 
         // === Type declarations (metadata) ===
@@ -365,9 +365,8 @@ impl<'db> Arm<'db> {
         variant_name: Symbol,
         body: trunk_ir::Region<'db>,
     ) -> Self {
-        let variant_path = trunk_ir::QualifiedName::simple(variant_name);
         let fields = pattern::empty_region(db, location);
-        let pattern_region = pattern::variant_region(db, location, variant_path, fields);
+        let pattern_region = pattern::variant_region(db, location, variant_name, fields);
         arm(db, location, pattern_region, body)
     }
 }

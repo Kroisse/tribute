@@ -4,13 +4,15 @@
 
 use tracing::trace;
 use tree_sitter::Node;
+use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::{adt, list, tribute, tribute_pat};
 use trunk_ir::{
-    Attribute, Block, BlockBuilder, BlockId, DialectOp, DialectType, IdVec, Operation,
-    QualifiedName, Region, Symbol, Type, Value,
+    Attribute, Block, BlockBuilder, BlockId, DialectOp, DialectType, IdVec, Operation, Region,
+    Symbol, Type, Value,
     dialect::{
         arith,
         core::{self, AbilityRefType},
+        func,
     },
     idvec,
 };
@@ -27,6 +29,23 @@ use super::statements::{bind_pattern, lower_block_body};
 // =============================================================================
 // Expression Lowering
 // =============================================================================
+
+fn collect_path_segments<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Vec<String> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter_map(|child| match child.kind() {
+            "identifier" | "type_identifier" => Some(node_text(&child, &ctx.source).to_string()),
+            "path_segment" => {
+                let mut inner = child.walk();
+                child
+                    .named_children(&mut inner)
+                    .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
+                    .map(|c| node_text(&c, &ctx.source).to_string())
+            }
+            _ => None,
+        })
+        .collect()
+}
 
 /// Lower an expression node to TrunkIR operations.
 pub fn lower_expr<'db>(
@@ -124,12 +143,11 @@ pub fn lower_expr<'db>(
             Some(op.result(ctx.db))
         }
         "path_expression" => {
-            let mut cursor = node.walk();
-            let path = node
-                .named_children(&mut cursor)
-                .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
-                .map(|n| Symbol::from(node_text(&n, &ctx.source)))
-                .collect::<Option<_>>()?;
+            let segments = collect_path_segments(ctx, node);
+            if segments.is_empty() {
+                return None;
+            }
+            let path = Symbol::from_dynamic(&segments.join("::"));
             let op = block.op(tribute::path(ctx.db, location, infer_ty, path));
             Some(op.result(ctx.db))
         }
@@ -315,14 +333,13 @@ fn lower_binary_expr<'db>(
             .result(ctx.db),
         "<>" => {
             // Concatenation operator - resolved by TDNR based on operand type
-            let op_name = QualifiedName::simple(sym("<>"));
             block
                 .op(tribute::call(
                     ctx.db,
                     location,
                     vec![lhs, rhs],
                     infer_ty,
-                    op_name,
+                    sym("<>"),
                 ))
                 .result(ctx.db)
         }
@@ -370,24 +387,40 @@ fn lower_call_expr<'db>(
 
     // Use field-based access for function
     let func_node = node.child_by_field_name("function")?;
-    let func_path: QualifiedName = match func_node.kind() {
-        "identifier" => sym_ref(&node_text(&func_node, &ctx.source)),
-        "path_expression" => {
-            let mut cursor = func_node.walk();
-            func_node
-                .named_children(&mut cursor)
-                .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
-                .map(|n| node_text(&n, &ctx.source).into())
-                .collect::<Option<_>>()?
+    match func_node.kind() {
+        "identifier" => {
+            let name = sym_ref(&node_text(&func_node, &ctx.source));
+            let args = collect_argument_list(ctx, block, node);
+            if let Some(callee) = ctx.lookup(name) {
+                let op = block.op(func::call_indirect(
+                    ctx.db, location, callee, args, infer_ty,
+                ));
+                Some(op.result(ctx.db))
+            } else if ctx.is_local(name) {
+                let callee_ty = ctx.fresh_type_var();
+                let callee_op = block.op(tribute::var(ctx.db, location, callee_ty, name));
+                let callee = callee_op.result(ctx.db);
+                let op = block.op(func::call_indirect(
+                    ctx.db, location, callee, args, infer_ty,
+                ));
+                Some(op.result(ctx.db))
+            } else {
+                let op = block.op(tribute::call(ctx.db, location, args, infer_ty, name));
+                Some(op.result(ctx.db))
+            }
         }
-        _ => return None,
-    };
-
-    // Arguments need iteration (not a field)
-    let args = collect_argument_list(ctx, block, node);
-
-    let op = block.op(tribute::call(ctx.db, location, args, infer_ty, func_path));
-    Some(op.result(ctx.db))
+        "path_expression" => {
+            let segments = collect_path_segments(ctx, func_node);
+            if segments.is_empty() {
+                return None;
+            }
+            let func_path = Symbol::from_dynamic(&segments.join("::"));
+            let args = collect_argument_list(ctx, block, node);
+            let op = block.op(tribute::call(ctx.db, location, args, infer_ty, func_path));
+            Some(op.result(ctx.db))
+        }
+        _ => None,
+    }
 }
 
 /// Lower a constructor expression.
@@ -400,15 +433,14 @@ fn lower_constructor_expr<'db>(
     let infer_ty = ctx.fresh_type_var();
 
     let ctor_node = node.child_by_field_name("constructor")?;
-    let ctor_path: QualifiedName = match ctor_node.kind() {
+    let ctor_path: Symbol = match ctor_node.kind() {
         "type_identifier" => sym_ref(&node_text(&ctor_node, &ctx.source)),
         "path_expression" => {
-            let mut cursor = ctor_node.walk();
-            ctor_node
-                .named_children(&mut cursor)
-                .filter(|n| n.kind() == "identifier" || n.kind() == "type_identifier")
-                .map(|n| node_text(&n, &ctx.source).into())
-                .collect::<Option<_>>()?
+            let segments = collect_path_segments(ctx, ctor_node);
+            if segments.is_empty() {
+                return None;
+            }
+            Symbol::from_dynamic(&segments.join("::"))
         }
         _ => return None,
     };
@@ -471,29 +503,32 @@ fn lower_method_call_expr<'db>(
     // Handle method: can be a simple identifier or a path with segments
     // e.g., "x" → just identifier
     // e.g., "math::double" → path with segments
-    let method_path: QualifiedName = match method_node.kind() {
+    let method_path: Symbol = match method_node.kind() {
         "identifier" | "type_identifier" => {
             // Simple method name: p.x()
-            let name = node_text(&method_node, &ctx.source);
-            std::iter::once(Symbol::from(name)).collect::<Option<_>>()?
+            Symbol::from(node_text(&method_node, &ctx.source))
         }
         _ => {
             // Qualified path: p.math::double()
             let mut cursor = method_node.walk();
-            method_node
+            let segments: Vec<_> = method_node
                 .named_children(&mut cursor)
                 .filter_map(|n| match n.kind() {
-                    "identifier" | "type_identifier" => Some(node_text(&n, &ctx.source).into()),
+                    "identifier" | "type_identifier" => Some(node_text(&n, &ctx.source)),
                     "path_segment" => {
                         // path_segment contains an identifier or type_identifier
                         let mut inner = n.walk();
                         n.named_children(&mut inner)
                             .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
-                            .map(|c| node_text(&c, &ctx.source).into())
+                            .map(|c| node_text(&c, &ctx.source))
                     }
                     _ => None,
                 })
-                .collect::<Option<_>>()?
+                .collect();
+            if segments.is_empty() {
+                return None;
+            }
+            Symbol::from_dynamic(&segments.join("::"))
         }
     };
 
@@ -675,7 +710,10 @@ pub fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'
         // Wrapper nodes - unwrap and recurse
         "pattern" | "simple_pattern" => {
             let mut cursor = node.walk();
-            if let Some(child) = node.named_children(&mut cursor).next() {
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
                 return pattern_to_region(ctx, child);
             }
             tribute_pat::helpers::wildcard_region(ctx.db, location)
@@ -768,9 +806,8 @@ pub fn pattern_to_region<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> Region<'
             }
 
             let name = ctor_name.unwrap_or_else(|| Symbol::new("_"));
-            let variant_path = QualifiedName::simple(name);
             let fields_region = ops_to_region(ctx.db, location, field_ops);
-            tribute_pat::helpers::variant_region(ctx.db, location, variant_path, fields_region)
+            tribute_pat::helpers::variant_region(ctx.db, location, name, fields_region)
         }
         "tuple_pattern" => {
             let mut cursor = node.walk();
@@ -1248,27 +1285,41 @@ fn parse_operation_path<'db>(ctx: &CstLoweringCtx<'db>, node: Node) -> (Option<T
     let mut cursor = node.walk();
 
     // Collect all path components
-    let path = node
+    let segments: Vec<_> = node
         .named_children(&mut cursor)
         .filter_map(|child| {
             if is_comment(child.kind()) {
                 return None;
             }
-            (child.kind() == "identifier" || child.kind() == "type_identifier")
-                .then(|| Symbol::from_dynamic(&node_text(&child, &ctx.source)))
+            match child.kind() {
+                "identifier" | "type_identifier" => Some(node_text(&child, &ctx.source)),
+                "path_segment" => {
+                    let mut inner = child.walk();
+                    child
+                        .named_children(&mut inner)
+                        .find(|c| c.kind() == "identifier" || c.kind() == "type_identifier")
+                        .map(|c| node_text(&c, &ctx.source))
+                }
+                _ => None,
+            }
         })
-        .collect::<Option<QualifiedName>>()
-        .unwrap_or_else(|| sym_ref("unknown"));
+        .collect();
+
+    let path = if segments.is_empty() {
+        sym_ref("unknown")
+    } else {
+        Symbol::from_dynamic(&segments.join("::"))
+    };
 
     // Convert the parent path (ability name) to an AbilityRefType
     // Note: Type parameters will be inferred/resolved later by the type checker
-    let ability_ref = path.to_parent().map(|parent| {
+    let ability_ref = path.parent_path().map(|parent| {
         // For now, use just the final component as the ability name
         // Multi-module support would require preserving the full qualified name
-        AbilityRefType::simple(ctx.db, parent.name()).as_type()
+        AbilityRefType::simple(ctx.db, parent.last_segment()).as_type()
     });
 
-    (ability_ref, path.name())
+    (ability_ref, path.last_segment())
 }
 
 // =============================================================================

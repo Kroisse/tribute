@@ -14,12 +14,13 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::{adt, closure, tribute, tribute_pat};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
-    Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, QualifiedName, Region,
-    Symbol, SymbolVec, Type, Value, ValueDef,
+    Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol, Type,
+    Value, ValueDef,
 };
 
 // ============================================================================
@@ -41,7 +42,7 @@ pub struct LambdaInfo<'db> {
     /// Captured variables (name + type).
     pub captures: Vec<CaptureInfo<'db>>,
     /// Generated function name.
-    pub lifted_name: QualifiedName,
+    pub lifted_name: Symbol,
 }
 
 /// Map from lambda Location to its capture info.
@@ -118,11 +119,11 @@ impl<'db> LambdaInfoCollector<'db> {
         None
     }
 
-    fn gen_lambda_name(&mut self) -> QualifiedName {
+    fn gen_lambda_name(&mut self) -> Symbol {
         let name = Symbol::from_dynamic(&format!("__lambda_{}", self.lambda_counter));
         self.lambda_counter += 1;
-        let parent: SymbolVec = [self.module_name].into_iter().collect();
-        QualifiedName::new(parent, name)
+        // Build qualified name as Symbol using module_name::lambda_name format
+        self.module_name.join_path(name)
     }
 
     /// Extract parameter names from tribute.var ops at the start of a block.
@@ -663,12 +664,12 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         }
 
         // Create env struct type for captures
-        let env_type = self.create_env_type(&info.captures, &info.lifted_name);
+        let env_type = self.create_env_type(&info.captures, info.lifted_name);
 
         // Build lifted function (takes env as first param)
         let lifted_func = self.build_lifted_function(
             location,
-            info.lifted_name.clone(),
+            info.lifted_name,
             &info.captures,
             env_type,
             &param_types,
@@ -693,13 +694,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         // Create closure.new with closure type (not raw function type)
         // This allows us to distinguish closures from bare function refs
         let closure_ty = closure::Closure::new(self.db, lambda_type);
-        let closure_op = closure::new(
-            self.db,
-            location,
-            env_value,
-            *closure_ty,
-            info.lifted_name.clone(),
-        );
+        let closure_op = closure::new(self.db, location, env_value, *closure_ty, info.lifted_name);
 
         // Map old lambda result to new closure result
         let old_result = op.result(self.db, 0);
@@ -712,11 +707,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
     }
 
     /// Create an env struct type for the captured variables.
-    fn create_env_type(
-        &self,
-        captures: &[CaptureInfo<'db>],
-        lambda_name: &QualifiedName,
-    ) -> Type<'db> {
+    fn create_env_type(&self, captures: &[CaptureInfo<'db>], lambda_name: Symbol) -> Type<'db> {
         if captures.is_empty() {
             return *core::Nil::new(self.db);
         }
@@ -729,10 +720,15 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
             .collect();
 
         // Use lambda name + "_env" for the struct name
-        let env_name = QualifiedName::new(
-            lambda_name.as_parent(),
-            Symbol::from_dynamic(&format!("{}_env", lambda_name.name())),
-        );
+        // e.g., "module::__lambda_0" -> "module::__lambda_0_env"
+        let env_name = if let Some(parent) = lambda_name.parent_path() {
+            parent.join_path(Symbol::from_dynamic(&format!(
+                "{}_env",
+                lambda_name.last_segment()
+            )))
+        } else {
+            Symbol::from_dynamic(&format!("{}_env", lambda_name))
+        };
 
         adt::struct_type(self.db, env_name, fields)
     }
@@ -741,7 +737,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
     fn build_lifted_function(
         &self,
         location: Location<'db>,
-        name: QualifiedName,
+        name: Symbol,
         captures: &[CaptureInfo<'db>],
         env_type: Type<'db>,
         param_types: &IdVec<Type<'db>>,
@@ -1154,7 +1150,7 @@ mod tests {
         // Check that it has the expected name pattern
         if let Ok(lifted_func) = func::Func::from_operation(db, *first_op) {
             let name = lifted_func.sym_name(db);
-            let starts_with_lambda = name.name().with_str(|s| s.starts_with("__lambda_"));
+            let starts_with_lambda = name.last_segment().with_str(|s| s.starts_with("__lambda_"));
             assert!(
                 starts_with_lambda,
                 "Expected lifted function name to start with __lambda_, got {:?}",
@@ -1179,7 +1175,7 @@ mod tests {
                 && op.name(db) == func::FUNC()
                 && let Ok(f) = func::Func::from_operation(db, **op)
             {
-                return f.sym_name(db).name() == "main";
+                return f.sym_name(db).last_segment() == "main";
             }
             false
         });

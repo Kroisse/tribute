@@ -5,6 +5,7 @@ use salsa::Database;
 use tribute::TributeDatabaseImpl;
 use tribute::pipeline::stage_lower_to_wasm;
 use tribute_front::SourceCst;
+use tribute_ir::ModulePathExt as _;
 use trunk_ir::DialectOp;
 
 /// Helper to create a wasmtime engine with GC support
@@ -691,7 +692,7 @@ fn main() -> Int {
         let has_lifted = ops.iter().any(|op| {
             if let Ok(f) = trunk_ir::dialect::func::Func::from_operation(db, *op) {
                 f.sym_name(db)
-                    .name()
+                    .last_segment()
                     .with_str(|s: &str| s.starts_with("__lambda_"))
             } else {
                 false

@@ -36,14 +36,15 @@
 
 use std::collections::BTreeMap;
 
+use tribute_ir::ModulePathExt;
 use trunk_ir::DialectType;
 use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
-    Attribute, Block, BlockId, DialectOp, IdVec, Location, Operation, QualifiedName, Region,
-    Symbol, Type, Value, ValueDef,
+    Attribute, Block, BlockId, DialectOp, IdVec, Location, Operation, Region, Symbol, Type, Value,
+    ValueDef,
 };
 
 /// Continuation struct layout:
@@ -110,7 +111,7 @@ pub mod resume_gen {
     #[derive(Clone, Debug)]
     pub struct ResumeFunctionInfo<'db> {
         /// The qualified name of the resume function.
-        pub name: QualifiedName,
+        pub name: Symbol,
         /// The location for the function.
         pub location: Location<'db>,
         /// The shift point this resume function corresponds to.
@@ -125,13 +126,13 @@ pub mod resume_gen {
         db: &'db dyn salsa::Database,
         analysis: &ContAnalysis<'db>,
         location: Location<'db>,
-    ) -> (Vec<Operation<'db>>, BTreeMap<LocationKey, QualifiedName>) {
+    ) -> (Vec<Operation<'db>>, BTreeMap<LocationKey, Symbol>) {
         let mut functions = Vec::new();
         let mut resume_fn_names = BTreeMap::new();
 
         for (key, info) in analysis.shift_points(db).iter() {
             let resume_fn_name = generate_resume_fn_name(info);
-            let resume_fn = generate_resume_function(db, location, &resume_fn_name, info);
+            let resume_fn = generate_resume_function(db, location, resume_fn_name, info);
 
             functions.push(resume_fn);
             resume_fn_names.insert(key.clone(), resume_fn_name);
@@ -141,20 +142,25 @@ pub mod resume_gen {
     }
 
     /// Generate the resume function name for a shift point.
-    fn generate_resume_fn_name(info: &ShiftPointInfo<'_>) -> QualifiedName {
+    fn generate_resume_fn_name(info: &ShiftPointInfo<'_>) -> Symbol {
         let base_name = info
             .containing_func
             .as_ref()
-            .map(|n| n.name().to_string())
+            .map(|n| n.last_segment().to_string())
             .unwrap_or_else(|| "anon".to_string());
 
         let resume_name =
             Symbol::from_dynamic(&format!("{}$resume${}", base_name, info.shift_index));
 
         if let Some(ref containing) = info.containing_func {
-            QualifiedName::new(containing.as_parent(), resume_name)
+            // Build qualified name: parent::resume_name
+            if let Some(parent) = containing.parent_path() {
+                parent.join_path(resume_name)
+            } else {
+                resume_name
+            }
         } else {
-            QualifiedName::simple(resume_name)
+            resume_name
         }
     }
 
@@ -170,7 +176,7 @@ pub mod resume_gen {
     fn generate_resume_function<'db>(
         db: &'db dyn salsa::Database,
         location: Location<'db>,
-        name: &QualifiedName,
+        name: Symbol,
         info: &ShiftPointInfo<'db>,
     ) -> Operation<'db> {
         let anyref = wasm::Anyref::new(db).as_type();
@@ -229,7 +235,7 @@ pub mod resume_gen {
         let body_region = Region::new(db, location, IdVec::from(vec![body_block]));
 
         // Create the wasm.func operation
-        wasm::func(db, location, name.clone(), func_ty, body_region).as_operation()
+        wasm::func(db, location, name, func_ty, body_region).as_operation()
     }
 
     /// Remap operations to use new values from the value mapping.
@@ -367,14 +373,14 @@ pub struct ShiftPointInfo<'db> {
     /// The prompt tag this shift corresponds to.
     pub tag: u64,
     /// The containing function's name (for generating resume function name).
-    pub containing_func: Option<QualifiedName>,
+    pub containing_func: Option<Symbol>,
     /// Index of this shift within its containing function (for unique naming).
     pub shift_index: u32,
     /// Live local variables at this shift point that need to be captured.
     /// Each entry is (name, type).
     pub live_locals: Vec<LiveLocal<'db>>,
     /// Generated state struct type name.
-    pub state_type_name: Option<QualifiedName>,
+    pub state_type_name: Option<Symbol>,
     /// Operations that come after the shift (continuation body).
     /// These will be executed when the continuation is resumed.
     pub continuation_ops: Vec<Operation<'db>>,
@@ -415,7 +421,7 @@ struct ContinuationAnalyzer<'db> {
     prompt_count: u32,
     shift_points: ShiftPointMap<'db>,
     /// Current containing function name (if inside a function).
-    current_func: Option<QualifiedName>,
+    current_func: Option<Symbol>,
     /// Counter for shifts within current function.
     shift_counter: u32,
     /// Current function's block arguments (entry point parameters).
@@ -496,7 +502,7 @@ impl<'db> ContinuationAnalyzer<'db> {
     /// Analyze a function body with live local analysis for shift points.
     fn analyze_function_with_live_locals(
         &mut self,
-        func_name: QualifiedName,
+        func_name: Symbol,
         body: trunk_ir::Region<'db>,
     ) {
         let prev_func = self.current_func.take();
@@ -709,15 +715,20 @@ impl<'db> ContinuationAnalyzer<'db> {
         let state_type_name = self.current_func.as_ref().map(|func_name| {
             let state_name = Symbol::from_dynamic(&format!(
                 "{}_state_{}",
-                func_name.name(),
+                func_name.last_segment(),
                 self.shift_counter
             ));
-            QualifiedName::new(func_name.as_parent(), state_name)
+            // Build qualified name: parent::state_name
+            if let Some(parent) = func_name.parent_path() {
+                parent.join_path(state_name)
+            } else {
+                state_name
+            }
         });
 
         let info = ShiftPointInfo {
             tag,
-            containing_func: self.current_func.clone(),
+            containing_func: self.current_func,
             shift_index: self.shift_counter,
             live_locals: live_locals.to_vec(),
             state_type_name,
@@ -817,7 +828,7 @@ fn transform_shifts<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
     analysis: &ContAnalysis<'db>,
-    resume_fn_names: &BTreeMap<LocationKey, QualifiedName>,
+    resume_fn_names: &BTreeMap<LocationKey, Symbol>,
 ) -> Module<'db> {
     let body = module.body(db);
     let shift_points = analysis.shift_points(db);
@@ -833,7 +844,7 @@ fn transform_shifts_in_region<'db>(
     db: &'db dyn salsa::Database,
     region: &trunk_ir::Region<'db>,
     shift_points: &ShiftPointMap<'db>,
-    resume_fn_names: &BTreeMap<LocationKey, QualifiedName>,
+    resume_fn_names: &BTreeMap<LocationKey, Symbol>,
 ) -> (trunk_ir::Region<'db>, bool) {
     let mut changed = false;
     let new_blocks: IdVec<trunk_ir::Block<'db>> = region
@@ -856,7 +867,7 @@ fn transform_shifts_in_block<'db>(
     db: &'db dyn salsa::Database,
     block: &trunk_ir::Block<'db>,
     shift_points: &ShiftPointMap<'db>,
-    resume_fn_names: &BTreeMap<LocationKey, QualifiedName>,
+    resume_fn_names: &BTreeMap<LocationKey, Symbol>,
 ) -> (trunk_ir::Block<'db>, bool) {
     let mut changed = false;
     let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
@@ -902,7 +913,7 @@ fn transform_shifts_in_block<'db>(
                 db,
                 &op_with_processed_regions,
                 live_locals,
-                resume_fn_names.get(&location_key),
+                resume_fn_names.get(&location_key).copied(),
             );
 
             new_ops.extend(expanded_ops);
@@ -933,7 +944,7 @@ fn expand_shift_operation<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
     live_locals: &[LiveLocal<'db>],
-    resume_fn_name: Option<&QualifiedName>,
+    resume_fn_name: Option<Symbol>,
 ) -> Vec<Operation<'db>> {
     let location = op.location(db);
     let i32_ty = core::I32::new(db).as_type();
@@ -993,7 +1004,7 @@ fn expand_shift_operation<'db>(
     // Field 0: resume_fn - reference to the generated resume function
     let resume_fn_val = if let Some(resume_fn_name) = resume_fn_name {
         // Use ref.func to get function reference
-        let ref_func = wasm::ref_func(db, location, funcref_ty, resume_fn_name.clone());
+        let ref_func = wasm::ref_func(db, location, funcref_ty, resume_fn_name);
         let val = ref_func.as_operation().result(db, 0);
         ops.push(ref_func.as_operation());
         val
@@ -1917,10 +1928,7 @@ mod tests {
         // Create func.func operation
         let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
         let func_op = Operation::of_name(db, location, "func.func")
-            .attr(
-                "sym_name",
-                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("my_func"))),
-            )
+            .attr("sym_name", Attribute::Symbol(Symbol::new("my_func")))
             .attr("type", Attribute::Type(func_ty))
             .region(func_body)
             .build();
@@ -1931,7 +1939,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn analyze_shift_points_test(db: &dyn salsa::Database) -> (usize, Option<u64>, Option<String>) {
+    fn analyze_shift_points_test(db: &dyn salsa::Database) -> (usize, Option<u64>, Option<Symbol>) {
         let module = make_module_with_shift_in_function(db);
         let analysis = analyze_continuations(db, module);
         let shift_points = analysis.shift_points(db);
@@ -1941,7 +1949,7 @@ mod tests {
         let tag = first_info.map(|info| info.tag);
         let func_name = first_info
             .and_then(|info| info.containing_func.as_ref())
-            .map(|name| name.name().to_string());
+            .map(|name| name.last_segment());
 
         (count, tag, func_name)
     }
@@ -1955,7 +1963,7 @@ mod tests {
         // Should have correct tag
         assert_eq!(tag, Some(99));
         // Should have correct containing function
-        assert_eq!(func_name, Some("my_func".to_string()));
+        assert_eq!(func_name, Some(Symbol::new("my_func")));
     }
 
     // === Tests for live local capture ===
@@ -2012,10 +2020,7 @@ mod tests {
         // Create func.func operation
         let func_ty = core::Func::new(db, idvec![], core::Nil::new(db).as_type()).as_type();
         let func_op = Operation::of_name(db, location, "func.func")
-            .attr(
-                "sym_name",
-                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("fn_with_live"))),
-            )
+            .attr("sym_name", Attribute::Symbol(Symbol::new("fn_with_live")))
             .attr("type", Attribute::Type(func_ty))
             .region(func_body)
             .build();

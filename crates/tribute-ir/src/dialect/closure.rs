@@ -29,7 +29,7 @@ dialect! {
         ///
         /// The func_ref points to a lifted lambda function that takes env as first arg.
         /// The env operand is typically an `adt.struct` containing captured values.
-        #[attr(func_ref: QualifiedName)]
+        #[attr(func_ref: Symbol)]
         fn new(env) -> result;
 
         /// `closure.func` operation: extracts funcref from closure.

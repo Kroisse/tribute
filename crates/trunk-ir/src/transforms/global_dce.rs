@@ -15,7 +15,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::dialect::core;
-use crate::{Attribute, Block, IdVec, Operation, QualifiedName, Region, Symbol};
+use crate::{Attribute, Block, IdVec, Operation, Region, Symbol};
 
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
@@ -43,7 +43,7 @@ pub struct GlobalDceResult<'db> {
     /// Number of functions removed.
     pub removed_count: usize,
     /// Names of removed functions (for debugging).
-    pub removed_functions: Vec<QualifiedName>,
+    pub removed_functions: Vec<Symbol>,
 }
 
 /// Eliminate unreachable functions from a module.
@@ -68,12 +68,12 @@ struct GlobalDcePass<'db> {
     db: &'db dyn salsa::Database,
     config: GlobalDceConfig,
     /// All function definitions found in the module.
-    /// Key: function's qualified name, Value: the func.func operation
-    functions: HashMap<QualifiedName, Operation<'db>>,
+    /// Key: function's symbol name, Value: the func.func operation
+    functions: HashMap<Symbol, Operation<'db>>,
     /// Call graph: caller -> set of callees
-    call_graph: HashMap<QualifiedName, HashSet<QualifiedName>>,
+    call_graph: HashMap<Symbol, HashSet<Symbol>>,
     /// Entry points (roots for reachability analysis)
-    entry_points: HashSet<QualifiedName>,
+    entry_points: HashSet<Symbol>,
     // Cached symbols
     sym_func: Symbol,
     sym_call: Symbol,
@@ -162,25 +162,24 @@ impl<'db> GlobalDcePass<'db> {
                     && name == self.sym_func
                     && let Some(func_name) = self.extract_func_name(op, module_path)
                 {
-                    self.functions.insert(func_name.clone(), *op);
+                    self.functions.insert(func_name, *op);
 
                     // Check if this is an entry point by name
-                    let simple_name = func_name.name();
-                    if simple_name == self.sym_main || simple_name == self.sym_start {
-                        self.entry_points.insert(func_name.clone());
+                    if func_name == self.sym_main || func_name == self.sym_start {
+                        self.entry_points.insert(func_name);
                     }
 
                     // Check extra entry points from config
                     for extra in &self.config.extra_entry_points {
-                        simple_name.with_str(|s| {
+                        func_name.with_str(|s| {
                             if s == extra {
-                                self.entry_points.insert(func_name.clone());
+                                self.entry_points.insert(func_name);
                             }
                         });
                     }
 
                     // Analyze function body for calls
-                    self.analyze_function_body(op, &func_name);
+                    self.analyze_function_body(op, func_name);
                 }
 
                 // Collect wasm.export_func as entry points
@@ -194,50 +193,55 @@ impl<'db> GlobalDcePass<'db> {
         }
     }
 
-    /// Extract the qualified name of a func.func operation.
-    fn extract_func_name(
-        &self,
-        op: &Operation<'db>,
-        module_path: &[Symbol],
-    ) -> Option<QualifiedName> {
+    /// Extract the name of a func.func operation as a Symbol.
+    /// The Symbol contains the full qualified path (e.g., "module::func").
+    fn extract_func_name(&self, op: &Operation<'db>, module_path: &[Symbol]) -> Option<Symbol> {
         let sym_name = op.attributes(self.db).get(&self.sym_sym_name)?;
         match sym_name {
-            // Legacy: sym_name as Symbol (combine with module_path)
-            Attribute::Symbol(name) => Some(QualifiedName::new(module_path.to_vec(), *name)),
-            // New: sym_name as QualifiedName (use directly)
-            Attribute::QualifiedName(qn) => Some(qn.clone()),
+            Attribute::Symbol(name) => {
+                // Combine module_path with name using "::" separator
+                if module_path.is_empty() {
+                    Some(*name)
+                } else {
+                    let mut path = String::new();
+                    for (i, seg) in module_path.iter().enumerate() {
+                        if i > 0 {
+                            path.push_str("::");
+                        }
+                        seg.with_str(|s| path.push_str(s));
+                    }
+                    path.push_str("::");
+                    name.with_str(|s| path.push_str(s));
+                    Some(Symbol::from_dynamic(&path))
+                }
+            }
             _ => None,
         }
     }
 
-    /// Extract a qualified name from an attribute by key.
-    fn extract_qualified_name_attr(
-        &self,
-        op: &Operation<'db>,
-        key: &Symbol,
-    ) -> Option<QualifiedName> {
+    /// Extract a symbol from an attribute by key.
+    fn extract_symbol_attr(&self, op: &Operation<'db>, key: &Symbol) -> Option<Symbol> {
         let attr = op.attributes(self.db).get(key)?;
         match attr {
-            Attribute::Symbol(s) => Some(QualifiedName::simple(*s)),
-            Attribute::QualifiedName(qn) => Some(qn.clone()),
+            Attribute::Symbol(s) => Some(*s),
             _ => None,
         }
     }
 
     /// Extract the target function from wasm.export_func.
-    fn extract_export_func_target(&self, op: &Operation<'db>) -> Option<QualifiedName> {
-        self.extract_qualified_name_attr(op, &self.sym_func_attr)
+    fn extract_export_func_target(&self, op: &Operation<'db>) -> Option<Symbol> {
+        self.extract_symbol_attr(op, &self.sym_func_attr)
     }
 
     /// Analyze a function body to find all callees.
-    fn analyze_function_body(&mut self, func_op: &Operation<'db>, caller: &QualifiedName) {
+    fn analyze_function_body(&mut self, func_op: &Operation<'db>, caller: Symbol) {
         for region in func_op.regions(self.db).iter() {
             self.collect_calls_from_region(region, caller);
         }
     }
 
     /// Recursively collect call targets from a region.
-    fn collect_calls_from_region(&mut self, region: &Region<'db>, caller: &QualifiedName) {
+    fn collect_calls_from_region(&mut self, region: &Region<'db>, caller: Symbol) {
         for block in region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
                 let dialect = op.dialect(self.db);
@@ -248,13 +252,13 @@ impl<'db> GlobalDcePass<'db> {
                     && let Some(callee) = self.extract_callee(op)
                 {
                     // func.call and func.tail_call have callee attribute
-                    self.add_call_edge(caller.clone(), callee);
+                    self.add_call_edge(caller, callee);
                 } else if dialect == self.dialect_func
                     && name == self.sym_constant
                     && let Some(func_ref) = self.extract_func_ref(op)
                 {
                     // func.constant has func_ref attribute
-                    self.add_call_edge(caller.clone(), func_ref);
+                    self.add_call_edge(caller, func_ref);
                 }
 
                 // Recurse into nested regions (e.g., scf.if, case.case)
@@ -266,13 +270,13 @@ impl<'db> GlobalDcePass<'db> {
     }
 
     /// Extract callee from func.call or func.tail_call.
-    fn extract_callee(&self, op: &Operation<'db>) -> Option<QualifiedName> {
-        self.extract_qualified_name_attr(op, &self.sym_callee)
+    fn extract_callee(&self, op: &Operation<'db>) -> Option<Symbol> {
+        self.extract_symbol_attr(op, &self.sym_callee)
     }
 
     /// Extract func_ref from func.constant.
-    fn extract_func_ref(&self, op: &Operation<'db>) -> Option<QualifiedName> {
-        self.extract_qualified_name_attr(op, &self.sym_func_ref)
+    fn extract_func_ref(&self, op: &Operation<'db>) -> Option<Symbol> {
+        self.extract_symbol_attr(op, &self.sym_func_ref)
     }
 
     /// Extend the module path with the nested module's name.
@@ -298,26 +302,26 @@ impl<'db> GlobalDcePass<'db> {
     }
 
     /// Add a call edge to the call graph.
-    fn add_call_edge(&mut self, caller: QualifiedName, callee: QualifiedName) {
+    fn add_call_edge(&mut self, caller: Symbol, callee: Symbol) {
         self.call_graph.entry(caller).or_default().insert(callee);
     }
 
     /// Compute the set of reachable functions from entry points using BFS.
-    fn compute_reachable(&self) -> HashSet<QualifiedName> {
+    fn compute_reachable(&self) -> HashSet<Symbol> {
         let mut reachable = HashSet::new();
-        let mut worklist: VecDeque<QualifiedName> = self.entry_points.iter().cloned().collect();
+        let mut worklist: VecDeque<Symbol> = self.entry_points.iter().copied().collect();
 
         while let Some(func) = worklist.pop_front() {
             if reachable.contains(&func) {
                 continue;
             }
-            reachable.insert(func.clone());
+            reachable.insert(func);
 
             // Add all callees to worklist
             if let Some(callees) = self.call_graph.get(&func) {
                 for callee in callees {
                     if !reachable.contains(callee) {
-                        worklist.push_back(callee.clone());
+                        worklist.push_back(*callee);
                     }
                 }
             }
@@ -330,8 +334,8 @@ impl<'db> GlobalDcePass<'db> {
     fn remove_dead_functions(
         &self,
         module: core::Module<'db>,
-        reachable: &HashSet<QualifiedName>,
-    ) -> (core::Module<'db>, Vec<QualifiedName>) {
+        reachable: &HashSet<Symbol>,
+    ) -> (core::Module<'db>, Vec<Symbol>) {
         let mut removed = Vec::new();
 
         let body = module.body(self.db);
@@ -351,8 +355,8 @@ impl<'db> GlobalDcePass<'db> {
     fn filter_region(
         &self,
         region: &Region<'db>,
-        reachable: &HashSet<QualifiedName>,
-        removed: &mut Vec<QualifiedName>,
+        reachable: &HashSet<Symbol>,
+        removed: &mut Vec<Symbol>,
         module_path: &[Symbol],
     ) -> (Region<'db>, bool) {
         let mut changed = false;
@@ -491,7 +495,7 @@ mod tests {
                 idvec![],
                 core::I32::new(db).as_type(),
                 |entry| {
-                    let callee = QualifiedName::simple(Symbol::new("helper"));
+                    let callee = Symbol::new("helper");
                     let call = entry.op(func::call(
                         db,
                         loc,
@@ -527,7 +531,7 @@ mod tests {
                 idvec![],
                 core::I32::new(db).as_type(),
                 |entry| {
-                    let callee = QualifiedName::simple(Symbol::new("leaf"));
+                    let callee = Symbol::new("leaf");
                     let call = entry.op(func::call(
                         db,
                         loc,
@@ -545,7 +549,7 @@ mod tests {
                 idvec![],
                 core::I32::new(db).as_type(),
                 |entry| {
-                    let callee = QualifiedName::simple(Symbol::new("middle"));
+                    let callee = Symbol::new("middle");
                     let call = entry.op(func::call(
                         db,
                         loc,
@@ -590,7 +594,7 @@ mod tests {
                 idvec![],
                 core::Nil::new(db).as_type(),
                 |entry| {
-                    let func_ref = QualifiedName::simple(Symbol::new("callback"));
+                    let func_ref = Symbol::new("callback");
                     let func_ty = core::Func::new(db, idvec![], core::Nil::new(db).as_type());
                     let _const_op = entry.op(func::constant(db, loc, func_ty.as_type(), func_ref));
                     entry.op(func::Return::empty(db, loc));
@@ -740,7 +744,7 @@ mod tests {
                 db,
                 loc,
                 Attribute::String("my_export".into()),
-                Attribute::QualifiedName(QualifiedName::simple(Symbol::new("exported_func"))),
+                Attribute::Symbol(Symbol::new("exported_func")),
             ));
             // unused_func has no references
             top.op(func::Func::build(

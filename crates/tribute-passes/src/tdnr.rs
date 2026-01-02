@@ -28,12 +28,13 @@ use std::collections::HashMap;
 use tracing::trace;
 
 use crate::resolve::{Binding, ModuleEnv, build_env};
+use tribute_ir::ModulePathExt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func;
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
-    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region,
-    Symbol, Type, Value,
+    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
+    Value,
 };
 
 // =============================================================================
@@ -176,7 +177,7 @@ impl<'db> TdnrResolver<'db> {
 
         // Get method name from attributes
         let attrs = op.attributes(self.db);
-        let Attribute::QualifiedName(qual_name) = attrs.get(&Symbol::new("name"))? else {
+        let Attribute::Symbol(qual_name) = attrs.get(&Symbol::new("name"))? else {
             return None;
         };
         trace!("TDNR: method name = {:?}", qual_name);
@@ -194,29 +195,30 @@ impl<'db> TdnrResolver<'db> {
         // Look up the function - handle both simple and qualified names
         let (func_path, func_ty) = if qual_name.is_simple() {
             // Simple name: first try direct lookup
-            if let Some(binding) = self.env.lookup(qual_name.name()) {
+            if let Some(binding) = self.env.lookup(qual_name.last_segment()) {
                 if let Binding::Function { path, ty } = binding {
-                    (path.clone(), *ty)
+                    (*path, *ty)
                 } else {
                     return None;
                 }
             } else {
                 // Direct lookup failed - try type-based namespace lookup
                 // Find a type whose definition matches the receiver type
-                self.lookup_method_in_type_namespace(qual_name.name(), receiver_type)?
+                self.lookup_method_in_type_namespace(qual_name.last_segment(), receiver_type)?
             }
         } else {
             // Qualified name: look up by full path, fall back to namespace lookup
-            let binding = self.env.lookup_path(qual_name).or_else(|| {
+            let binding = self.env.lookup_path(*qual_name).or_else(|| {
                 // Fall back to namespace lookup for enum variants, etc.
-                let namespace = *qual_name.as_parent().last()?;
-                self.env.lookup_qualified(namespace, qual_name.name())
+                let namespace = qual_name.parent_path()?;
+                self.env
+                    .lookup_qualified(namespace, qual_name.last_segment())
             })?;
             let Binding::Function { ty, .. } = binding else {
                 return None;
             };
             // Use the full qualified name for the call
-            (qual_name.clone(), *ty)
+            (*qual_name, *ty)
         };
 
         // Check if the first parameter type matches the receiver type
@@ -254,7 +256,7 @@ impl<'db> TdnrResolver<'db> {
         &self,
         method_name: Symbol,
         receiver_type: Type<'db>,
-    ) -> Option<(QualifiedName, Type<'db>)> {
+    ) -> Option<(Symbol, Type<'db>)> {
         trace!(
             "TDNR lookup_method_in_type_namespace: method='{}', receiver={}.{}",
             method_name,
@@ -275,7 +277,7 @@ impl<'db> TdnrResolver<'db> {
                                 "  found method {}::{} with matching first param",
                                 ns_name, method_name
                             );
-                            return Some((path.clone(), *ty));
+                            return Some((*path, *ty));
                         }
                     }
                 }

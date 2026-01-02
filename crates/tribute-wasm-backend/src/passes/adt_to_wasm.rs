@@ -40,7 +40,7 @@
 
 use tracing::warn;
 
-use tribute_ir::dialect::adt;
+use tribute_ir::{ModulePathExt as _, dialect::adt};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type, Value};
@@ -217,7 +217,7 @@ fn make_variant_type<'db>(
     // For adt.typeref types, extract the actual type name from the name attribute
     let base_name = if adt::is_typeref(db, base_type) {
         adt::get_type_name(db, base_type)
-            .map(|name| name.name())
+            .map(|name| name.last_segment())
             .unwrap_or_else(|| base_type.name(db))
     } else {
         base_type.name(db)

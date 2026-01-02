@@ -3,7 +3,7 @@
 //! Provides utilities for looking up function definitions by name.
 
 use trunk_ir::dialect::core::Module;
-use trunk_ir::{Attribute, QualifiedName, Region, Symbol, Type};
+use trunk_ir::{Attribute, Region, Symbol, Type};
 
 /// Index for signature help lookups.
 pub struct CallIndex;
@@ -13,7 +13,7 @@ impl CallIndex {
     pub fn find_function_type<'db>(
         db: &'db dyn salsa::Database,
         module: &Module<'db>,
-        name: &QualifiedName,
+        name: Symbol,
     ) -> Option<Type<'db>> {
         Self::find_function_in_region(db, &module.body(db), name)
     }
@@ -21,7 +21,7 @@ impl CallIndex {
     fn find_function_in_region<'db>(
         db: &'db dyn salsa::Database,
         region: &Region<'db>,
-        name: &QualifiedName,
+        name: Symbol,
     ) -> Option<Type<'db>> {
         use trunk_ir::DialectOp;
         use trunk_ir::dialect::func;
@@ -29,7 +29,7 @@ impl CallIndex {
         for block in region.blocks(db).iter() {
             for op in block.operations(db).iter() {
                 if let Ok(func_op) = func::Func::from_operation(db, *op)
-                    && &func_op.sym_name(db) == name
+                    && func_op.sym_name(db) == name
                 {
                     return Some(func_op.ty(db));
                 }
@@ -51,7 +51,7 @@ impl CallIndex {
 pub fn get_param_names<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<'db>,
-    name: &QualifiedName,
+    name: Symbol,
 ) -> Vec<Option<Symbol>> {
     use trunk_ir::DialectOp;
     use trunk_ir::dialect::func;
@@ -59,12 +59,12 @@ pub fn get_param_names<'db>(
     fn find_in_region<'db>(
         db: &'db dyn salsa::Database,
         region: &Region<'db>,
-        name: &QualifiedName,
+        name: Symbol,
     ) -> Option<Vec<Option<Symbol>>> {
         for block in region.blocks(db).iter() {
             for op in block.operations(db).iter() {
                 if let Ok(func_op) = func::Func::from_operation(db, *op)
-                    && &func_op.sym_name(db) == name
+                    && func_op.sym_name(db) == name
                 {
                     // Get parameter names from entry block arguments
                     let body = func_op.body(db);

@@ -3,7 +3,7 @@
 use tree_sitter::Node;
 use tribute_ir::dialect::{adt, tribute};
 use trunk_ir::{
-    Attribute, BlockBuilder, DialectType, QualifiedName, Region, Span, Symbol, SymbolVec, Type,
+    Attribute, BlockBuilder, DialectType, Region, Span, Symbol, SymbolVec, Type,
     dialect::{core, func},
     idvec,
 };
@@ -22,7 +22,7 @@ use super::statements::lower_block_body;
 
 #[derive(Debug)]
 struct UseImport {
-    path: QualifiedName,
+    path: Symbol,
     alias: Option<Symbol>,
 }
 
@@ -113,9 +113,19 @@ fn collect_use_imports<'db>(
                 return;
             }
 
+            // Construct full path as a Symbol with "::" separators
             let path = match base.split_last() {
-                Some((name, parent)) if head == "self" => QualifiedName::new(parent, *name),
-                _ => QualifiedName::new(&base[..], head),
+                Some((name, parent)) if head == "self" => {
+                    // `use foo::bar::self` → import `foo::bar`
+                    let mut parts: Vec<_> = parent.iter().map(|s| s.to_string()).collect();
+                    parts.push(name.to_string());
+                    Symbol::from_dynamic(&parts.join("::"))
+                }
+                _ => {
+                    let mut parts: Vec<_> = base.iter().map(|s| s.to_string()).collect();
+                    parts.push(head.to_string());
+                    Symbol::from_dynamic(&parts.join("::"))
+                }
             };
             out.push(UseImport { path, alias });
         }
@@ -184,33 +194,36 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
     let param_names_clone = param_names.clone();
 
     let effect_type = ctx.fresh_effect_row_type();
-    Some(func::Func::build_with_named_params(
-        ctx.db,
-        location,
-        qualified_name,
-        name_span,
-        named_params,
-        result,
-        Some(effect_type),
-        |entry| {
-            // Bind parameters
-            for param_name in param_names_clone {
-                let infer_ty = ctx.fresh_type_var();
-                let param_value = entry.op(tribute::var(ctx.db, location, infer_ty, param_name));
-                ctx.bind(param_name, param_value.result(ctx.db));
-            }
+    ctx.scoped(|ctx| {
+        Some(func::Func::build_with_named_params(
+            ctx.db,
+            location,
+            qualified_name,
+            name_span,
+            named_params,
+            result,
+            Some(effect_type),
+            |entry| {
+                // Bind parameters
+                for param_name in param_names_clone {
+                    let infer_ty = ctx.fresh_type_var();
+                    let param_value =
+                        entry.op(tribute::var(ctx.db, location, infer_ty, param_name));
+                    ctx.bind(param_name, param_value.result(ctx.db));
+                }
 
-            // Lower body statements
-            let last_value = lower_block_body(ctx, entry, body_node);
+                // Lower body statements
+                let last_value = lower_block_body(ctx, entry, body_node);
 
-            // Return
-            if let Some(value) = last_value {
-                entry.op(func::Return::value(ctx.db, location, value));
-            } else {
-                entry.op(func::Return::empty(ctx.db, location));
-            }
-        },
-    ))
+                // Return
+                if let Some(value) = last_value {
+                    entry.op(func::Return::value(ctx.db, location, value));
+                } else {
+                    entry.op(func::Return::empty(ctx.db, location));
+                }
+            },
+        ))
+    })
 }
 
 // =============================================================================
@@ -241,7 +254,7 @@ pub fn lower_struct_decl<'db>(
 
     // Create adt.typeref as the result type - this provides a proper ADT type
     // instead of type.var, allowing correct type flow through the pipeline
-    let struct_ty = adt::typeref(ctx.db, QualifiedName::simple(type_name));
+    let struct_ty = adt::typeref(ctx.db, type_name);
     let fields = parse_struct_fields(ctx, body_node);
 
     // Build fields region containing tribute.field_def operations
@@ -301,7 +314,7 @@ fn generate_field_getter<'db>(
     func::Func::build(
         ctx.db,
         location,
-        QualifiedName::simple(field_name),
+        field_name,
         idvec![struct_ty],
         field_type,
         |entry| {
@@ -385,7 +398,7 @@ fn generate_field_set<'db>(
     func::Func::build(
         ctx.db,
         location,
-        QualifiedName::simple(sym("set")),
+        sym("set"),
         idvec![struct_ty, field_type],
         struct_ty,
         |entry| {
@@ -444,7 +457,7 @@ fn generate_field_modify<'db>(
     func::Func::build(
         ctx.db,
         location,
-        QualifiedName::simple(sym("modify")),
+        sym("modify"),
         idvec![struct_ty, fn_type],
         struct_ty,
         |entry| {
@@ -573,7 +586,7 @@ pub fn lower_enum_decl<'db>(
 
     // Create adt.enum as the result type - this provides a self-descriptive type
     // with variant information accessible via adt::get_enum_variants
-    let result_ty = adt::enum_type(ctx.db, QualifiedName::simple(sym(&name)), enum_variants);
+    let result_ty = adt::enum_type(ctx.db, sym(&name), enum_variants);
 
     // Build variants region containing tribute.variant_def operations
     let mut variants_block = BlockBuilder::new(ctx.db, location);

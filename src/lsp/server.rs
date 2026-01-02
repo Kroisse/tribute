@@ -689,11 +689,11 @@ impl LspServer {
 
             // Find the function definition by name
             let callee_sym = trunk_ir::Symbol::from_dynamic(&callee_name);
-            let callee_qname = trunk_ir::QualifiedName::simple(callee_sym);
-            let func_ty = CallIndex::find_function_type(db, &module, &callee_qname)?;
+            let callee_qname = callee_sym;
+            let func_ty = CallIndex::find_function_type(db, &module, callee_qname)?;
 
             // Get parameter names from the function definition
-            let param_names = get_param_names(db, &module, &callee_qname);
+            let param_names = get_param_names(db, &module, callee_qname);
 
             // Format the signature
             Some(format_signature(

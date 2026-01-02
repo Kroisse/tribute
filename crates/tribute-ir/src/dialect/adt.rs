@@ -13,7 +13,7 @@
 use std::fmt::Write;
 
 use trunk_ir::type_interface::Printable;
-use trunk_ir::{Attribute, Attrs, IdVec, QualifiedName, Symbol, Type, dialect};
+use trunk_ir::{Attribute, Attrs, IdVec, Symbol, Type, dialect};
 
 // === Type name constants ===
 trunk_ir::symbols! {
@@ -155,7 +155,7 @@ trunk_ir::register_pure_op!(BytesConst<'_>);
 /// * `fields` - Field definitions as (name, type) pairs
 pub fn struct_type<'db>(
     db: &'db dyn salsa::Database,
-    name: QualifiedName,
+    name: impl Into<Symbol>,
     fields: Vec<(Symbol, Type<'db>)>,
 ) -> Type<'db> {
     let fields_attr: Vec<Attribute<'db>> = fields
@@ -169,7 +169,7 @@ pub fn struct_type<'db>(
         .collect();
 
     let mut attrs = Attrs::new();
-    attrs.insert(ATTR_NAME(), Attribute::QualifiedName(name));
+    attrs.insert(ATTR_NAME(), Attribute::Symbol(name.into()));
     attrs.insert(ATTR_FIELDS(), Attribute::List(fields_attr));
 
     Type::new(db, DIALECT_NAME(), STRUCT_TYPE(), IdVec::new(), attrs)
@@ -184,7 +184,7 @@ pub fn struct_type<'db>(
 /// * `variants` - Variant definitions as (name, field_types) pairs
 pub fn enum_type<'db>(
     db: &'db dyn salsa::Database,
-    name: QualifiedName,
+    name: impl Into<Symbol>,
     variants: Vec<(Symbol, Vec<Type<'db>>)>,
 ) -> Type<'db> {
     let variants_attr: Vec<Attribute<'db>> = variants
@@ -200,7 +200,7 @@ pub fn enum_type<'db>(
         .collect();
 
     let mut attrs = Attrs::new();
-    attrs.insert(ATTR_NAME(), Attribute::QualifiedName(name));
+    attrs.insert(ATTR_NAME(), Attribute::Symbol(name.into()));
     attrs.insert(ATTR_VARIANTS(), Attribute::List(variants_attr));
 
     Type::new(db, DIALECT_NAME(), ENUM_TYPE(), IdVec::new(), attrs)
@@ -212,9 +212,9 @@ pub fn enum_type<'db>(
 ///
 /// # Arguments
 /// * `name` - Qualified name of the referenced type
-pub fn typeref<'db>(db: &'db dyn salsa::Database, name: QualifiedName) -> Type<'db> {
+pub fn typeref<'db>(db: &'db dyn salsa::Database, name: impl Into<Symbol>) -> Type<'db> {
     let mut attrs = Attrs::new();
-    attrs.insert(ATTR_NAME(), Attribute::QualifiedName(name));
+    attrs.insert(ATTR_NAME(), Attribute::Symbol(name.into()));
 
     Type::new(db, DIALECT_NAME(), TYPEREF(), IdVec::new(), attrs)
 }
@@ -282,10 +282,10 @@ pub fn get_variant_field_types<'db>(
     )
 }
 
-/// Get the qualified name from an ADT type (struct, enum, or typeref).
-pub fn get_type_name<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<QualifiedName> {
+/// Get the name from an ADT type (struct, enum, or typeref).
+pub fn get_type_name<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Symbol> {
     match ty.get_attr(db, ATTR_NAME()) {
-        Some(Attribute::QualifiedName(name)) => Some(name.clone()),
+        Some(Attribute::Symbol(name)) => Some(*name),
         _ => None,
     }
 }
@@ -374,10 +374,10 @@ pub fn get_struct_fields<'db>(
 
 // === Printable interface registrations ===
 
-// adt.struct -> "struct Name" or just the qualified name
+// adt.struct -> "struct Name" or just the name
 inventory::submit! {
     Printable::implement("adt", "struct", |db, ty, f| {
-        if let Some(Attribute::QualifiedName(name)) = ty.get_attr(db, ATTR_NAME()) {
+        if let Some(Attribute::Symbol(name)) = ty.get_attr(db, ATTR_NAME()) {
             write!(f, "{}", name)
         } else {
             f.write_str("<struct>")
@@ -385,10 +385,10 @@ inventory::submit! {
     })
 }
 
-// adt.enum -> "enum Name" or just the qualified name
+// adt.enum -> "enum Name" or just the name
 inventory::submit! {
     Printable::implement("adt", "enum", |db, ty, f| {
-        if let Some(Attribute::QualifiedName(name)) = ty.get_attr(db, ATTR_NAME()) {
+        if let Some(Attribute::Symbol(name)) = ty.get_attr(db, ATTR_NAME()) {
             write!(f, "{}", name)
         } else {
             f.write_str("<enum>")
@@ -399,7 +399,7 @@ inventory::submit! {
 // adt.typeref -> "Name" (just the referenced type name)
 inventory::submit! {
     Printable::implement("adt", "typeref", |db, ty, f| {
-        if let Some(Attribute::QualifiedName(name)) = ty.get_attr(db, ATTR_NAME()) {
+        if let Some(Attribute::Symbol(name)) = ty.get_attr(db, ATTR_NAME()) {
             write!(f, "{}", name)
         } else {
             f.write_str("<typeref>")

@@ -18,8 +18,7 @@ use salsa::Accumulator;
 use tracing::trace;
 use tribute_ir::dialect::{ability, adt, list, tribute, tribute_pat};
 use trunk_ir::{
-    Attribute, Block, DialectOp, DialectType, IdVec, Operation, QualifiedName, Region, Symbol,
-    Type, Value,
+    Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
     dialect::{arith, core, func},
 };
 
@@ -60,7 +59,7 @@ pub struct TypeChecker<'db> {
     /// Map from function names to their types for looking up callees.
     /// This enables proper type inference for generic function calls.
     /// Wrapped in Arc for cheap cloning across function checks.
-    function_types: Arc<HashMap<QualifiedName, Type<'db>>>,
+    function_types: Arc<HashMap<Symbol, Type<'db>>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -81,7 +80,7 @@ impl<'db> TypeChecker<'db> {
     /// Create a new type checker with a pre-built function type map.
     pub fn with_function_types(
         db: &'db dyn salsa::Database,
-        function_types: Arc<HashMap<QualifiedName, Type<'db>>>,
+        function_types: Arc<HashMap<Symbol, Type<'db>>>,
     ) -> Self {
         Self {
             db,
@@ -183,6 +182,14 @@ impl<'db> TypeChecker<'db> {
     /// This restriction may be lifted in the future with named effects.
     fn check_ability_conflicts(&self, span: trunk_ir::Span) {
         if let Some((name, abilities)) = self.current_effect.find_conflicting_abilities() {
+            if abilities.iter().any(|ability| {
+                ability
+                    .params
+                    .iter()
+                    .any(|ty| tribute::is_type_var(self.db, *ty))
+            }) {
+                return;
+            }
             let ability_strs: Vec<String> = abilities
                 .iter()
                 .map(|a| {
@@ -230,7 +237,7 @@ impl<'db> TypeChecker<'db> {
     fn collect_function_types_from_block(&mut self, block: &Block<'db>) {
         for op in block.operations(self.db).iter() {
             if let Ok(func_op) = func::Func::from_operation(self.db, *op) {
-                let name = func_op.qualified_name(self.db);
+                let name = func_op.name(self.db);
                 let func_type = func_op.r#type(self.db);
                 trace!(
                     "collect_function_types_from_block: {:?} -> {:?}",
@@ -1344,12 +1351,12 @@ pub fn typecheck_module_per_function<'db>(
 fn collect_function_types<'db>(
     db: &'db dyn salsa::Database,
     block: &Block<'db>,
-) -> Arc<HashMap<QualifiedName, Type<'db>>> {
+) -> Arc<HashMap<Symbol, Type<'db>>> {
     let mut function_types = HashMap::new();
 
     for op in block.operations(db).iter() {
         if let Ok(func_op) = func::Func::from_operation(db, *op) {
-            let name = func_op.qualified_name(db);
+            let name = func_op.name(db);
             let func_type = func_op.r#type(db);
             trace!(
                 "collect_function_types: found {:?} with type {:?}",
@@ -1373,7 +1380,7 @@ fn collect_function_types<'db>(
 fn typecheck_function_with_context<'db>(
     db: &'db dyn salsa::Database,
     func_op: Operation<'db>,
-    function_types: Arc<HashMap<QualifiedName, Type<'db>>>,
+    function_types: Arc<HashMap<Symbol, Type<'db>>>,
 ) -> Operation<'db> {
     let mut checker = TypeChecker::with_function_types(db, function_types);
 
