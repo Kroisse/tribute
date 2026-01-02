@@ -1,7 +1,0 @@
-(fn (main)
-  (print_line "Basic test: Hello World")
-  (print_line "Quotes: \"Hello\" and \"World\"")
-  (print_line "Backslash: C:\\Users\\name")
-  (print_line "Mixed: \"Quote\" and \\backslash")
-  (print_line "Special chars: \n\t- Newline and tab")
-  (print_line "Edge case: \\n vs \n (literal vs actual)"))

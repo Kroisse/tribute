@@ -1,5 +1,11 @@
 // Test record pattern matching
 
+// User struct definition
+struct User {
+    name: Text,
+    age: Int
+}
+
 fn get_name(user) {
     case user {
         User { name, age } -> name

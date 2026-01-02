@@ -1,240 +1,66 @@
 // Option Examples
 // Demonstrates the Option type for representing optional values
 
-// ============================================================================
-// Basic Option Usage
-// ============================================================================
+// Option type definition
+enum Option(a) {
+    None,
+    Some(a)
+}
 
 // A function that may or may not return a value
-fn find_user(id: Int) -> Option(String) {
+fn find_value(id: Int) -> Option(Int) {
     case id {
-        1 -> Some("Alice")
-        2 -> Some("Bob")
-        3 -> Some("Charlie")
+        1 -> Some(100)
+        2 -> Some(200)
+        3 -> Some(300)
         _ -> None
     }
 }
 
-// Pattern matching on Option
-fn greet_user(id: Int) -> String {
-    case find_user(id) {
-        Some(name) -> "Hello, " <> name <> "!"
-        None -> "User not found"
+// Pattern matching on Option - the core way to handle optionality
+fn get_or_zero(id: Int) -> Int {
+    case find_value(id) {
+        Some(n) -> n
+        None -> 0
     }
 }
-
-// ============================================================================
-// Option::map - Transform the value inside
-// ============================================================================
-
-// Transform the value if it exists
-fn get_username_length(id: Int) -> Option(Int) {
-    find_user(id).map(fn(name) name.length)
-}
-
-// Chain multiple transformations
-fn get_username_uppercase(id: Int) -> Option(String) {
-    find_user(id)
-        .map(fn(name) name.uppercase)
-        .map(fn(name) "USER: " <> name)
-}
-
-// ============================================================================
-// Option::and_then - Chain Option-returning operations
-// ============================================================================
-
-// Another optional lookup
-fn find_email(name: String) -> Option(String) {
-    case name {
-        "Alice" -> Some("alice@example.com")
-        "Bob" -> Some("bob@example.com")
-        "Charlie" -> Some("charlie@example.com")
-        _ -> None
-    }
-}
-
-// Chain two lookups together
-fn get_user_email(id: Int) -> Option(String) {
-    find_user(id).and_then(fn(name) find_email(name))
-}
-
-// More complex chaining
-fn find_domain(email: String) -> Option(String) {
-    case email.contains("@") {
-        True -> Some(email.split("@").get(1))
-        False -> None
-    }
-}
-
-fn get_user_domain(id: Int) -> Option(String) {
-    find_user(id)
-        .and_then(fn(name) find_email(name))
-        .and_then(fn(email) find_domain(email))
-}
-
-// ============================================================================
-// Option::unwrap_or - Provide a default value
-// ============================================================================
-
-// Get value or use default
-fn display_user(id: Int) -> String {
-    find_user(id).unwrap_or("Unknown User")
-}
-
-// Use default for calculations
-fn get_name_length_or_zero(id: Int) -> Int {
-    get_username_length(id).unwrap_or(0)
-}
-
-// Combine with map
-fn format_user(id: Int) -> String {
-    find_user(id)
-        .map(fn(name) "User: " <> name)
-        .unwrap_or("No user")
-}
-
-// ============================================================================
-// Option::is_some and Option::is_none - Check presence
-// ============================================================================
 
 // Check if a value exists
-fn user_exists(id: Int) -> Bool {
-    find_user(id).is_some
-}
-
-// Check if a value is missing
-fn user_missing(id: Int) -> Bool {
-    find_user(id).is_none
-}
-
-// Use in conditional logic
-fn process_if_exists(id: Int) -> String {
-    let opt = find_user(id)
-    case opt.is_some {
-        True -> "Processing user..."
-        False -> "Cannot process: user not found"
+fn value_exists(id: Int) -> Bool {
+    case find_value(id) {
+        Some(_) -> True
+        None -> False
     }
 }
 
-// ============================================================================
-// Advanced Pattern Matching
-// ============================================================================
-
-// Pattern matching with guards
-fn describe_user(id: Int) -> String {
-    case find_user(id) {
-        Some(name) if name.length > 5 -> "Long name: " <> name
-        Some(name) if name.length > 3 -> "Medium name: " <> name
-        Some(name) -> "Short name: " <> name
-        None -> "No user"
+// Double the value if it exists
+fn double_if_present(id: Int) -> Option(Int) {
+    case find_value(id) {
+        Some(n) -> Some(n * 2)
+        None -> None
     }
 }
 
-// Nested pattern matching
-fn analyze_email(id: Int) -> String {
-    case get_user_email(id) {
-        Some(email) -> {
-            case email.contains("example.com") {
-                True -> "Example domain"
-                False -> "Other domain"
-            }
-        }
-        None -> "No email"
+// Transform the value if it exists
+fn add_bonus(id: Int, bonus: Int) -> Option(Int) {
+    case find_value(id) {
+        Some(n) -> Some(n + bonus)
+        None -> None
     }
 }
 
-// ============================================================================
-// Practical Examples
-// ============================================================================
-
-// Safe array access
-fn safe_get(list: List(a), index: Int) -> Option(a) {
-    case index < list.length && index >= 0 {
-        True -> Some(list.get(index))
-        False -> None
-    }
-}
-
-// Find first matching element
-fn find_first(list: List(Int), predicate: fn(Int) -> Bool) -> Option(Int) {
-    case list {
-        [] -> None
-        [head, ..tail] -> {
-            case predicate(head) {
-                True -> Some(head)
-                False -> find_first(tail, predicate)
-            }
-        }
-    }
-}
-
-// Lookup in a key-value list
-fn lookup(pairs: List(#(String, Int)), key: String) -> Option(Int) {
-    case pairs {
-        [] -> None
-        [#(k, v), ..rest] -> {
-            case k == key {
-                True -> Some(v)
-                False -> lookup(rest, key)
-            }
-        }
-    }
-}
-
-// Combine multiple Options
-fn get_full_user_info(id: Int) -> Option(String) {
-    find_user(id).and_then(fn(name) {
-        get_user_email(id).map(fn(email) {
-            name <> " <" <> email <> ">"
-        })
-    })
-}
-
-// Convert Option to List (0 or 1 elements)
-fn option_to_list(opt: Option(a)) -> List(a) {
-    case opt {
-        Some(x) -> [x]
-        None -> []
-    }
-}
-
-// ============================================================================
 // Main demonstration
-// ============================================================================
-
 fn main() -> Nil {
-    // Basic usage
-    let user1 = find_user(1)              // Some("Alice")
-    let user99 = find_user(99)            // None
-    let greeting = greet_user(1)          // "Hello, Alice!"
-    let no_greeting = greet_user(99)      // "User not found"
+    let val1 = find_value(1)              // Some(100)
+    let val99 = find_value(99)            // None
 
-    // Using map
-    let length = get_username_length(1)   // Some(5)
-    let no_length = get_username_length(99) // None
-    let upper = get_username_uppercase(2) // Some("USER: BOB")
+    let result = get_or_zero(1)           // 100
+    let missing = get_or_zero(99)         // 0
 
-    // Using and_then
-    let email = get_user_email(1)         // Some("alice@example.com")
-    let no_email = get_user_email(99)     // None
-    let domain = get_user_domain(1)       // Some("example.com")
+    let exists = value_exists(1)          // True
+    let not_exists = value_exists(99)     // False
 
-    // Using unwrap_or
-    let display = display_user(1)         // "Alice"
-    let display_missing = display_user(99) // "Unknown User"
-    let len_or_zero = get_name_length_or_zero(99) // 0
-
-    // Using is_some/is_none
-    let exists = user_exists(1)           // True
-    let missing = user_missing(99)        // True
-
-    // Advanced examples
-    let description = describe_user(3)    // depends on name length
-    let info = get_full_user_info(1)      // Some("Alice <alice@example.com>")
-
-    // Print results
-    print_line(greeting)
-    print_line(display)
+    let doubled = double_if_present(2)    // Some(400)
 
     Nil
 }

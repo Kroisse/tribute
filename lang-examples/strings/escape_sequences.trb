@@ -1,6 +1,0 @@
-(fn (main)
-  (print_line "Simple string")
-  (print_line "String with \"quotes\"")
-  (print_line "String with \\backslash")
-  (print_line "String with \nnewline")
-  (print_line "String with \ttab"))
