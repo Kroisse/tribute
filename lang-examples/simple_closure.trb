@@ -1,0 +1,5 @@
+// Simple closure test - no ability evidence
+fn main() -> Int {
+    let f = fn(x) { x + 1 }
+    f(41)
+}

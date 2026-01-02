@@ -1,0 +1,53 @@
+// Milestone 3: Closures & First-class Functions
+// Test for closure and first-class function features
+
+// Higher-order function: takes a function and applies it
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+// Higher-order function: applies function twice
+fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int {
+    f(f(x))
+}
+
+// Test basic lambda
+fn test_lambda() -> Int {
+    let double = fn(x) { x * 2 }
+    double(21)
+}
+
+// Test closure capture
+fn test_capture() -> Int {
+    let a = 10
+    let b = 20
+    let f = fn(x) { x + a + b }
+    f(12)
+}
+
+// Test higher-order function
+fn test_higher_order() -> Int {
+    let offset = 40
+    apply(fn(x) { x + offset }, 2)
+}
+
+// Test nested closures
+fn test_nested() -> Int {
+    let a = 10
+    let f = fn(x) {
+        let g = fn(y) { x + y + a }
+        g(20)
+    }
+    f(12)
+}
+
+// Test apply_twice
+fn test_apply_twice() -> Int {
+    let inc = fn(x) { x + 1 }
+    apply_twice(inc, 40)
+}
+
+// Main: run all tests
+fn main() -> Int {
+    test_lambda()
+}
