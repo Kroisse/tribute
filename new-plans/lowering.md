@@ -493,16 +493,18 @@ pub fn wasi_plan<'db>(
 ) -> WasiPlan<'db> {
     let mut required = HashSet::new();
 
-    // 미리 intern된 prefix
-    let wasi_prefix = QualifiedName::new(db, &["std", "intrinsics", "wasi", "preview1"]);
+    // WASI prefix (Symbol에 "::"로 구분된 경로로 저장됨)
+    let wasi_prefix = "std::intrinsics::wasi::preview1::";
 
     for op in module.all_operations(db) {
         if let Ok(call) = func::Call::from_operation(db, op) {
-            let callee = call.callee(db);  // QualifiedName
-            if let Some(name) = callee.strip_prefix(db, &wasi_prefix) {
-                // name: 마지막 segment (e.g., "fd_write")
-                required.insert(name);
-            }
+            let callee = call.callee(db);  // Symbol
+            callee.with_str(|s| {
+                if let Some(name) = s.strip_prefix(wasi_prefix) {
+                    // name: 마지막 segment (e.g., "fd_write")
+                    required.insert(Symbol::from_dynamic(name));
+                }
+            });
         }
     }
 

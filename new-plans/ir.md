@@ -80,8 +80,10 @@ ref<T>?         // nullable
 #### 식별자 타입
 
 ```rust
-/// Interned 문자열 (단순 이름)
+/// Interned 문자열 (단순 이름 또는 qualified path)
 /// lasso::Spur로 구현되어 4바이트, O(1) 비교
+///
+/// Qualified path는 `::`로 구분된 문자열로 저장됨 (e.g., "std::List::map")
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct Symbol(lasso::Spur);
 
@@ -90,53 +92,32 @@ impl Symbol {
     pub fn from_dynamic(text: &str) -> Self;
     pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R;
 }
-
-/// 완전 한정 이름 (e.g., std::intrinsics::wasi::preview1::fd_write)
-/// 32바이트 (SmallVec<[Symbol; 4]> + Symbol + padding)
-/// Non-empty 구조: parent 경로(비어있을 수 있음) + name(항상 존재)
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct QualifiedName {
-    parent: SymbolVec,  // SmallVec<[Symbol; 4]>, 최대 4개까지 inline
-    name: Symbol,
-}
-
-impl QualifiedName {
-    /// 새 qualified name 생성
-    pub fn new(parent: impl Into<SymbolVec>, name: Symbol) -> Self;
-
-    /// 단일 segment 이름 생성
-    pub fn simple(name: Symbol) -> Self;
-
-    /// 모든 segments 반환
-    pub fn to_segments(&self) -> SmallVec<[Symbol; 6]>;
-
-    /// parent 경로를 slice로 반환
-    pub fn as_parent(&self) -> &[Symbol];
-
-    /// parent를 QualifiedName으로 반환 (없으면 None)
-    pub fn to_parent(&self) -> Option<QualifiedName>;
-
-    /// 마지막 segment (단순 이름)
-    pub fn name(&self) -> Symbol;
-
-    /// 단일 segment인지 확인
-    pub fn is_simple(&self) -> bool;
-
-    /// base 기준 상대 경로 반환
-    pub fn relative(&self, base: &QualifiedName) -> Option<QualifiedName>;
-
-    /// base로 시작하는지 확인
-    pub fn starts_with(&self, base: &QualifiedName) -> bool;
-
-    /// 두 경로를 연결
-    pub fn join(&self, other: &QualifiedName) -> QualifiedName;
-}
 ```
 
-- `Symbol`: 단순 식별자, lasso로 interning되어 4바이트, 비교 O(1)
-- `QualifiedName`: `::` 로 구분된 경로, `func.call`의 callee 등에서 사용
-  - Symbol이 이미 interned이므로 QualifiedName 자체는 interning하지 않음
-  - 32바이트로 고정, SmallVec로 짧은 경로(≤4 segments)는 heap 할당 없음
+Qualified path 조작은 `tribute-ir`의 `ModulePathExt` trait을 통해 제공:
+
+```rust
+// tribute-ir/src/lib.rs
+pub trait ModulePathExt {
+    /// 마지막 segment 반환 (e.g., "std::List::map" → "map")
+    fn last_segment(&self) -> Symbol;
+
+    /// 부모 경로 반환 (e.g., "std::List::map" → Some("std::List"))
+    fn parent_path(&self) -> Option<Symbol>;
+
+    /// 두 경로 연결 (e.g., "std::List" + "map" → "std::List::map")
+    fn join_path(&self, other: Symbol) -> Symbol;
+
+    /// 단일 segment인지 확인 (`::`가 없으면 true)
+    fn is_simple(&self) -> bool;
+}
+
+impl ModulePathExt for Symbol { ... }
+```
+
+- `Symbol`: 단순 식별자 또는 qualified path, lasso로 interning되어 4바이트, 비교 O(1)
+- Qualified path는 `Symbol` 내부에 `::` 구분자로 저장
+- Path 조작이 필요한 곳에서는 `ModulePathExt` trait 사용 (`tribute-ir`에서 제공)
 
 ---
 
@@ -150,8 +131,9 @@ impl QualifiedName {
 #### 연산
 
 ```
-tribute.call : (name: QualifiedName, args...) -> T
+tribute.call : (name: Symbol, args...) -> T
     Unqualified 호출 (foo(x, y) 형태), 미해소
+    name은 단순 이름 또는 qualified path (e.g., "foo" 또는 "math::double")
 
 tribute.var : (name: Symbol) -> T
     변수 참조, 미해소
