@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 use tracing::debug;
 
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{adt, closure, tribute};
+use tribute_ir::dialect::{ability, adt, closure, tribute};
 use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::{
     Attribute, Attrs, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
@@ -815,7 +815,7 @@ fn collect_gc_types<'db>(
                 .get(&ATTR_TYPE())
                 .map(|attr| {
                     if let Attribute::Type(ty) = attr {
-                        ty.dialect(db) == wasm_dialect && ty.name(db) == Symbol::new("structref")
+                        wasm::Structref::from_type(db, *ty).is_some()
                     } else {
                         false
                     }
@@ -2002,7 +2002,7 @@ fn emit_op<'db>(
 
         // Check if this uses a placeholder type (wasm.structref)
         let type_idx = if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-            if ty.dialect(db) == wasm_dialect && ty.name(db) == Symbol::new("structref") {
+            if wasm::Structref::from_type(db, *ty).is_some() {
                 // Use placeholder map for wasm.structref
                 module_info
                     .placeholder_struct_type_idx
@@ -2626,6 +2626,9 @@ fn type_to_valtype<'db>(
     } else if closure::Closure::from_type(db, ty).is_some() {
         // Closure types - use anyref for unregistered closures
         // (registered closures are handled earlier by the generic type_idx_by_type lookup)
+        Ok(ValType::Ref(RefType::ANYREF))
+    } else if ability::EvidencePtr::from_type(db, ty).is_some() {
+        // Evidence pointer for ability system - use anyref as runtime handle
         Ok(ValType::Ref(RefType::ANYREF))
     } else if ty.dialect(db) == wasm::DIALECT_NAME() {
         // WASM dialect types (e.g., wasm.structref for continuation frames)
