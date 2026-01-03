@@ -79,7 +79,7 @@ use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverit
 use tribute_passes::evidence::insert_evidence;
 use tribute_passes::handler_lower::lower_handlers;
 use tribute_passes::lambda_lift::lift_lambdas;
-use tribute_passes::lower_case_to_scf;
+use tribute_passes::lower_tribute_to_scf;
 use tribute_passes::resolve::{Resolver, build_env};
 use tribute_passes::tdnr::resolve_tdnr;
 use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
@@ -404,11 +404,11 @@ pub fn stage_handler_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst)
     lower_handlers(db, module)
 }
 
-/// Stage 10: Lower `case.case` to `scf.if` chains.
+/// Stage 10: Lower tribute dialect to scf dialect.
 #[salsa::tracked]
 pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let module = stage_handler_lower(db, source);
-    lower_case_to_scf(db, module)
+    lower_tribute_to_scf(db, module)
 }
 
 /// Stage 11: Dead Code Elimination (DCE).

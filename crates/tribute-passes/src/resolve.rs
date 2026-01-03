@@ -1392,12 +1392,12 @@ impl<'db> Resolver<'db> {
                 }
                 LocalBinding::PatternBinding { ty } => {
                     // Pattern binding - keep tribute.var with resolved type
-                    // case_lowering will remap the result to the bound value
+                    // tribute_to_scf will remap the result to the bound value
                     let resolved_ty = self.resolve_type(*ty);
                     let new_op = tribute::var(self.db, location, resolved_ty, *sym);
                     let new_operation = self.mark_resolved_local(new_op.as_operation());
 
-                    // Map old result to new tribute.var result (will be remapped in case_lowering)
+                    // Map old result to new tribute.var result (will be remapped in tribute_to_scf)
                     let old_result = op.result(self.db, 0);
                     let new_result = new_operation.result(self.db, 0);
                     self.ctx.map_value(old_result, new_result);

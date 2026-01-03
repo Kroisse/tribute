@@ -1,6 +1,11 @@
-//! Lower `tribute.case` pattern matching to `scf.if` chains.
+//! Lower tribute dialect operations to scf dialect.
 //!
-//! This pass currently supports only a minimal pattern subset:
+//! This pass transforms:
+//! - `tribute.case` → `scf.if` chains (pattern matching)
+//! - `tribute.block` → `scf.if` with always-true condition (block expressions)
+//! - `tribute.yield` → `scf.yield`
+//!
+//! Pattern matching currently supports a minimal subset:
 //! - wildcard (`_`)
 //! - bind (`x`)
 //! - literal int/bool
@@ -53,7 +58,7 @@ struct ArmInfo<'db> {
     body: Region<'db>,
 }
 
-pub fn lower_case_to_scf<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+pub fn lower_tribute_to_scf<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     // Sanity check: verify all operand references point to operations in the same module
     #[cfg(debug_assertions)]
     verify_operand_references(db, module);
@@ -102,7 +107,7 @@ fn verify_refs_in_region<'db>(
                     && !all_ops.contains(&ref_op)
                 {
                     tracing::warn!(
-                        "STALE REFERENCE DETECTED in input to case_lowering!\n  \
+                        "STALE REFERENCE DETECTED in input to tribute_to_scf!\n  \
                          Operation {}.{} references {}.{} which is NOT in the module",
                         op.dialect(db),
                         op.name(db),
@@ -197,6 +202,12 @@ impl<'db> CaseLowerer<'db> {
                 .operands(remapped_operands)
                 .build();
             return vec![new_op];
+        }
+
+        // Lower tribute.block to scf.if with always-true condition
+        // This converts block expressions { ... } into structured control flow
+        if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::BLOCK() {
+            return self.lower_block_expr(op);
         }
 
         // Handle tribute.var for case pattern bindings: replace with the bound value
@@ -416,6 +427,76 @@ impl<'db> CaseLowerer<'db> {
         self.ctx.map_results(self.db, &op, &dispatch_op);
 
         vec![dispatch_op]
+    }
+
+    /// Lower `tribute.block` to `scf.if` with always-true condition.
+    ///
+    /// Block expressions `{ statements; result }` are converted to:
+    /// ```text
+    /// %true = arith.const true
+    /// %result = scf.if %true {
+    ///     ... statements ...
+    ///     scf.yield %result
+    /// } else {
+    ///     scf.yield %result  // unreachable but required for scf.if
+    /// }
+    /// ```
+    fn lower_block_expr(&mut self, op: Operation<'db>) -> Vec<Operation<'db>> {
+        let location = op.location(self.db);
+        let Some(result_type) = op.results(self.db).first().copied() else {
+            // No result - just lower the body operations inline
+            return self.inline_block_body(op);
+        };
+
+        let Some(body_region) = op.regions(self.db).first().copied() else {
+            return vec![op];
+        };
+
+        // Lower the body region (this will convert tribute.yield to scf.yield)
+        let lowered_body = self.lower_region(body_region);
+
+        // Create always-true condition
+        let bool_ty = core::I1::new(self.db).as_type();
+        let true_const = arith::r#const(self.db, location, bool_ty, true.into()).as_operation();
+        let cond = true_const.result(self.db, 0);
+
+        // Create scf.if with the lowered body as both then and else branches
+        // (else is required but unreachable with true condition)
+        let if_op = Operation::of_name(self.db, location, "scf.if")
+            .operands(IdVec::from(vec![cond]))
+            .results(IdVec::from(vec![result_type]))
+            .regions(IdVec::from(vec![lowered_body, lowered_body]))
+            .build();
+
+        // Map the block result to the if result
+        self.ctx.map_results(self.db, &op, &if_op);
+
+        vec![true_const, if_op]
+    }
+
+    /// Inline block body operations when the block has no result.
+    fn inline_block_body(&mut self, op: Operation<'db>) -> Vec<Operation<'db>> {
+        let Some(body_region) = op.regions(self.db).first().copied() else {
+            return vec![];
+        };
+
+        let lowered_body = self.lower_region(body_region);
+        let mut ops = Vec::new();
+
+        // Extract all operations from the lowered body, skipping scf.yield
+        for block in lowered_body.blocks(self.db).iter() {
+            for body_op in block.operations(self.db).iter().copied() {
+                // Skip scf.yield since we're inlining (no value to yield)
+                if body_op.dialect(self.db) == Symbol::new("scf")
+                    && body_op.name(self.db) == Symbol::new("yield")
+                {
+                    continue;
+                }
+                ops.push(body_op);
+            }
+        }
+
+        ops
     }
 
     fn rebuild_case(
