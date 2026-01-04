@@ -805,12 +805,18 @@ impl<'db> Resolver<'db> {
         let new_body = self.resolve_region(&body);
         self.pop_import_scope();
 
-        Module::create(
+        let result = Module::create(
             self.db,
             module.location(self.db),
             module.name(self.db),
             new_body,
-        )
+        );
+
+        // Sanity check: verify output module has no stale references
+        #[cfg(debug_assertions)]
+        verify_operand_references(self.db, result, "Resolver::resolve_module output");
+
+        result
     }
 
     /// Resolve names in a region.
@@ -1318,7 +1324,7 @@ impl<'db> Resolver<'db> {
             results.iter().map(|&ty| self.resolve_type(ty)).collect();
         let results_changed = new_results.as_slice() != results.as_slice();
 
-        // Resolve nested regions
+        // Resolve nested regions (operand remapping happens in resolve_operation)
         let regions = op.regions(self.db);
         let new_regions: IdVec<Region<'db>> = regions
             .iter()
@@ -1957,7 +1963,76 @@ pub fn resolve_module<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) -
 
     // Create resolver and transform module
     let mut resolver = Resolver::new(db, env);
-    resolver.resolve_module(module)
+    let result = resolver.resolve_module(module);
+
+    // Sanity check: verify output module has no stale references
+    #[cfg(debug_assertions)]
+    verify_operand_references(db, result, "resolve output");
+
+    result
+}
+
+#[cfg(debug_assertions)]
+fn verify_operand_references<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+    context: &str,
+) {
+    use std::collections::HashSet;
+
+    // Collect all operations in the module
+    let mut all_ops: HashSet<trunk_ir::Operation<'db>> = HashSet::new();
+    collect_ops_in_region(db, module.body(db), &mut all_ops);
+
+    // Verify all operand references point to operations in the set
+    verify_refs_in_region(db, module.body(db), &all_ops, context);
+}
+
+#[cfg(debug_assertions)]
+fn collect_ops_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: Region<'db>,
+    ops: &mut std::collections::HashSet<trunk_ir::Operation<'db>>,
+) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter().copied() {
+            ops.insert(op);
+            for nested in op.regions(db).iter().copied() {
+                collect_ops_in_region(db, nested, ops);
+            }
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+fn verify_refs_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: Region<'db>,
+    all_ops: &std::collections::HashSet<trunk_ir::Operation<'db>>,
+    context: &str,
+) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter().copied() {
+            for operand in op.operands(db).iter() {
+                if let ValueDef::OpResult(ref_op) = operand.def(db)
+                    && !all_ops.contains(&ref_op)
+                {
+                    tracing::warn!(
+                        "STALE REFERENCE DETECTED in {}!\n  \
+                         Operation {}.{} references {}.{} which is NOT in the module",
+                        context,
+                        op.dialect(db),
+                        op.name(db),
+                        ref_op.dialect(db),
+                        ref_op.name(db)
+                    );
+                }
+            }
+            for nested in op.regions(db).iter().copied() {
+                verify_refs_in_region(db, nested, all_ops, context);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

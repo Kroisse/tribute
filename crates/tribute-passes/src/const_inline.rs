@@ -21,11 +21,10 @@
 //! After this pass, it becomes:
 //! - `arith.const(1024)` with type `i64`
 
-use std::collections::HashMap;
-
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core::Module;
-use trunk_ir::{Block, IdVec, Operation, Region, Value};
+use trunk_ir::rewrite::RewriteContext;
+use trunk_ir::{Block, IdVec, Operation, Region};
 
 // =============================================================================
 // Attribute Keys
@@ -47,8 +46,8 @@ trunk_ir::symbols! {
 /// `arith.const` operations with inlined values.
 pub struct ConstInliner<'db> {
     db: &'db dyn salsa::Database,
-    /// Maps old values to their replacements during transformation.
-    value_map: HashMap<Value<'db>, Value<'db>>,
+    /// Rewrite context for tracking value mappings.
+    ctx: RewriteContext<'db>,
 }
 
 impl<'db> ConstInliner<'db> {
@@ -56,18 +55,8 @@ impl<'db> ConstInliner<'db> {
     pub fn new(db: &'db dyn salsa::Database) -> Self {
         Self {
             db,
-            value_map: HashMap::new(),
+            ctx: RewriteContext::new(),
         }
-    }
-
-    /// Look up a mapped value, or return the original if not mapped.
-    fn lookup_value(&self, old: Value<'db>) -> Value<'db> {
-        self.value_map.get(&old).copied().unwrap_or(old)
-    }
-
-    /// Map a value from old to new.
-    fn map_value(&mut self, old: Value<'db>, new: Value<'db>) {
-        self.value_map.insert(old, new);
     }
 
     /// Inline constants in a module.
@@ -117,18 +106,11 @@ impl<'db> ConstInliner<'db> {
     /// or a single transformed operation.
     fn inline_operation(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
         // First, remap operands from previous transformations
-        let remapped_op = self.remap_operands(op);
+        let remapped_op = self.ctx.remap_operands(self.db, op);
 
         // If operands were remapped, map old results to new results
         if remapped_op != *op {
-            let old_results = op.results(self.db);
-            let new_results = remapped_op.results(self.db);
-            let count = old_results.len().min(new_results.len());
-            for i in 0..count {
-                let old_val = op.result(self.db, i);
-                let new_val = remapped_op.result(self.db, i);
-                self.map_value(old_val, new_val);
-            }
+            self.ctx.map_results(self.db, op, &remapped_op);
         }
 
         // Check if this is a resolved const reference
@@ -169,32 +151,9 @@ impl<'db> ConstInliner<'db> {
         let new_operation = const_op.as_operation();
 
         // Map old result to new result
-        let old_result = op.result(self.db, 0);
-        let new_result = new_operation.result(self.db, 0);
-        self.map_value(old_result, new_result);
+        self.ctx.map_results(self.db, op, &new_operation);
 
         Some(new_operation)
-    }
-
-    /// Remap operands using the current value map.
-    fn remap_operands(&self, op: &Operation<'db>) -> Operation<'db> {
-        let operands = op.operands(self.db);
-        let mut new_operands: IdVec<Value<'db>> = IdVec::new();
-        let mut changed = false;
-
-        for &operand in operands.iter() {
-            let mapped = self.lookup_value(operand);
-            new_operands.push(mapped);
-            if mapped != operand {
-                changed = true;
-            }
-        }
-
-        if !changed {
-            return *op;
-        }
-
-        op.modify(self.db).operands(new_operands).build()
     }
 
     /// Recursively inline constants in regions within an operation.
@@ -204,6 +163,7 @@ impl<'db> ConstInliner<'db> {
             return *op;
         }
 
+        // Process nested regions - operand remapping happens in inline_operation
         let new_regions: IdVec<Region<'db>> = regions
             .iter()
             .map(|region| self.inline_region(region))
@@ -212,14 +172,7 @@ impl<'db> ConstInliner<'db> {
         let new_op = op.modify(self.db).regions(new_regions).build();
 
         // Map old results to new results so subsequent operations can find them
-        let old_results = op.results(self.db);
-        let new_results = new_op.results(self.db);
-        let count = old_results.len().min(new_results.len());
-        for i in 0..count {
-            let old_val = op.result(self.db, i);
-            let new_val = new_op.result(self.db, i);
-            self.map_value(old_val, new_val);
-        }
+        self.ctx.map_results(self.db, op, &new_op);
 
         new_op
     }
@@ -233,8 +186,82 @@ impl<'db> ConstInliner<'db> {
 ///
 /// The tracked version is in pipeline.rs (stage_const_inline).
 pub fn inline_module<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) -> Module<'db> {
+    // Sanity check: verify input module has no stale references
+    #[cfg(debug_assertions)]
+    verify_operand_references(db, *module, "const_inline input");
+
     let mut inliner = ConstInliner::new(db);
-    inliner.inline_module(module)
+    let result = inliner.inline_module(module);
+
+    // Sanity check: verify output module has no stale references
+    #[cfg(debug_assertions)]
+    verify_operand_references(db, result, "const_inline output");
+
+    result
+}
+
+#[cfg(debug_assertions)]
+fn verify_operand_references<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+    context: &str,
+) {
+    use std::collections::HashSet;
+
+    // Collect all operations in the module
+    let mut all_ops: HashSet<trunk_ir::Operation<'db>> = HashSet::new();
+    collect_ops_in_region(db, module.body(db), &mut all_ops);
+
+    // Verify all operand references point to operations in the set
+    verify_refs_in_region(db, module.body(db), &all_ops, context);
+}
+
+#[cfg(debug_assertions)]
+fn collect_ops_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: Region<'db>,
+    ops: &mut std::collections::HashSet<trunk_ir::Operation<'db>>,
+) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter().copied() {
+            ops.insert(op);
+            for nested in op.regions(db).iter().copied() {
+                collect_ops_in_region(db, nested, ops);
+            }
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+fn verify_refs_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: Region<'db>,
+    all_ops: &std::collections::HashSet<trunk_ir::Operation<'db>>,
+    context: &str,
+) {
+    use trunk_ir::ValueDef;
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter().copied() {
+            for operand in op.operands(db).iter() {
+                if let ValueDef::OpResult(ref_op) = operand.def(db)
+                    && !all_ops.contains(&ref_op)
+                {
+                    tracing::warn!(
+                        "STALE REFERENCE DETECTED in {}!\n  \
+                         Operation {}.{} references {}.{} which is NOT in the module",
+                        context,
+                        op.dialect(db),
+                        op.name(db),
+                        ref_op.dialect(db),
+                        ref_op.name(db)
+                    );
+                }
+            }
+            for nested in op.regions(db).iter().copied() {
+                verify_refs_in_region(db, nested, all_ops, context);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

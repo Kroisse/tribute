@@ -153,6 +153,7 @@ impl<'db> TdnrResolver<'db> {
             return *op;
         }
 
+        // Resolve nested regions (operand remapping happens in resolve_operation)
         let new_regions: IdVec<Region<'db>> = regions
             .iter()
             .map(|region| self.resolve_region(region))

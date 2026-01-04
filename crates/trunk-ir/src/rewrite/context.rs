@@ -108,6 +108,69 @@ impl<'db> RewriteContext<'db> {
             self.map_value(old_val, new_val);
         }
     }
+
+    /// Recursively remap all operands in a region and its nested regions.
+    ///
+    /// This is useful when a value mapping needs to be applied to an
+    /// already-constructed region (e.g., arm bodies in case expressions
+    /// that reference a scrutinee value that was later remapped).
+    pub fn remap_region_operands(
+        &self,
+        db: &'db dyn salsa::Database,
+        region: &crate::Region<'db>,
+    ) -> crate::Region<'db> {
+        let new_blocks: IdVec<crate::Block<'db>> = region
+            .blocks(db)
+            .iter()
+            .map(|block| self.remap_block_operands(db, block))
+            .collect();
+        crate::Region::new(db, region.location(db), new_blocks)
+    }
+
+    /// Remap all operands in a block and its operations' nested regions.
+    fn remap_block_operands(
+        &self,
+        db: &'db dyn salsa::Database,
+        block: &crate::Block<'db>,
+    ) -> crate::Block<'db> {
+        let new_ops: IdVec<Operation<'db>> = block
+            .operations(db)
+            .iter()
+            .map(|op| self.remap_operation_deep(db, op))
+            .collect();
+        crate::Block::new(
+            db,
+            block.id(db),
+            block.location(db),
+            block.args(db).clone(),
+            new_ops,
+        )
+    }
+
+    /// Remap operands of an operation and recursively remap its nested regions.
+    fn remap_operation_deep(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+    ) -> Operation<'db> {
+        // First remap the operands
+        let remapped = self.remap_operands(db, op);
+
+        // If no nested regions, we're done
+        if op.regions(db).is_empty() {
+            return remapped;
+        }
+
+        // Recursively remap nested regions
+        let new_regions: IdVec<crate::Region<'db>> = op
+            .regions(db)
+            .iter()
+            .map(|r| self.remap_region_operands(db, r))
+            .collect();
+
+        // Rebuild operation with new regions
+        remapped.modify(db).regions(new_regions).build()
+    }
 }
 
 impl Default for RewriteContext<'_> {
