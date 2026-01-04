@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 use tracing::debug;
 
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{adt, closure, tribute};
+use tribute_ir::dialect::{ability, adt, closure, tribute};
 use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::{
     Attribute, Attrs, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
@@ -268,6 +268,8 @@ struct ModuleInfo<'db> {
     globals: Vec<GlobalDef>,
     gc_types: Vec<GcTypeDef>,
     type_idx_by_type: HashMap<Type<'db>, u32>,
+    /// Placeholder struct type_idx lookup (for wasm.structref types)
+    placeholder_struct_type_idx: HashMap<(Type<'db>, usize), u32>,
     /// Function type lookup map for boxing/unboxing at call sites.
     func_types: HashMap<Symbol, core::Func<'db>>,
     /// Function index lookup map (import index or func index).
@@ -626,9 +628,10 @@ fn collect_module_info<'db>(
     collect_wasm_ops_from_region(db, &module.body(db), &mut info)?;
 
     // Collect GC types (structs, arrays)
-    let (gc_types, type_idx_by_type) = collect_gc_types(db, module)?;
+    let (gc_types, type_idx_by_type, placeholder_struct_type_idx) = collect_gc_types(db, module)?;
     info.gc_types = gc_types;
     info.type_idx_by_type = type_idx_by_type;
+    info.placeholder_struct_type_idx = placeholder_struct_type_idx;
 
     // Build function type lookup map for boxing/unboxing.
     // Use the qualified name already stored in func/import definitions.
@@ -655,10 +658,16 @@ fn collect_module_info<'db>(
 /// Collect GC types (structs, arrays) and return:
 /// - Vec<GcTypeDef>: The GC type definitions (BoxedF64 is always at index 0)
 /// - HashMap<Type, u32>: Mapping from Type to type index
+type GcTypesResult<'db> = (
+    Vec<GcTypeDef>,
+    HashMap<Type<'db>, u32>,
+    HashMap<(Type<'db>, usize), u32>,
+);
+
 fn collect_gc_types<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
-) -> CompilationResult<(Vec<GcTypeDef>, HashMap<Type<'db>, u32>)> {
+) -> CompilationResult<GcTypesResult<'db>> {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum GcKind {
         Struct,
@@ -687,6 +696,9 @@ fn collect_gc_types<'db>(
     let wasm_dialect = Symbol::new("wasm");
     let mut builders: Vec<GcTypeBuilder<'db>> = Vec::new();
     let mut type_idx_by_type: HashMap<Type<'db>, u32> = HashMap::new();
+    // For placeholder types like wasm.structref, use (type, field_count) as key
+    // to handle multiple structs with same placeholder type but different field counts
+    let mut placeholder_struct_type_idx: HashMap<(Type<'db>, usize), u32> = HashMap::new();
 
     // Start at FIRST_USER_TYPE_IDX since indices 0-2 are reserved for built-in types:
     // 0: BoxedF64, 1: BytesArray, 2: BytesStruct
@@ -795,49 +807,78 @@ fn collect_gc_types<'db>(
         let name = op.name(db);
         if name == Symbol::new("struct_new") {
             let attrs = op.attributes(db);
-            let Some(type_idx) = get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx)
-            else {
-                return Ok(());
+            let field_count = op.operands(db).len();
+
+            // Check if this uses a placeholder type (wasm.structref) that allows
+            // multiple structs with same type but different field counts
+            let is_placeholder_type = attrs
+                .get(&ATTR_TYPE())
+                .map(|attr| {
+                    if let Attribute::Type(ty) = attr {
+                        wasm::Structref::from_type(db, *ty).is_some()
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
+
+            let type_idx = if is_placeholder_type {
+                // For placeholder types, use (type, field_count) as key to allow
+                // different field counts with same placeholder type
+                let ty = match attrs.get(&ATTR_TYPE()) {
+                    Some(Attribute::Type(ty)) => *ty,
+                    _ => unreachable!("checked above"),
+                };
+                let key = (ty, field_count);
+                if let Some(&idx) = placeholder_struct_type_idx.get(&key) {
+                    idx
+                } else {
+                    let idx = next_type_idx;
+                    next_type_idx += 1;
+                    placeholder_struct_type_idx.insert(key, idx);
+                    // Note: Placeholder types are NOT inserted into type_idx_by_type
+                    // They are only stored in placeholder_struct_type_idx to avoid
+                    // confusion and ensure proper lookup via (type, field_count) key
+                    debug!(
+                        "GC: struct_new allocated type_idx={} for placeholder (field_count={})",
+                        idx, field_count
+                    );
+                    idx
+                }
+            } else {
+                // For regular types, use standard type_idx lookup
+                let Some(idx) = get_type_idx(attrs, &mut type_idx_by_type, &mut next_type_idx)
+                else {
+                    return Ok(());
+                };
+                idx
             };
+
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
                 builder.kind = GcKind::Struct;
-                let field_count = op.operands(db).len();
-                debug!(
-                    "GC: struct_new type_idx={} field_count={}",
-                    type_idx, field_count
-                );
-                if matches!(builder.field_count, Some(existing_count) if existing_count != field_count)
+
+                // For placeholder types, we allow different field counts via different type_idx
+                // For explicit type_idx, check for mismatch (error case)
+                if !is_placeholder_type
+                    && matches!(builder.field_count, Some(existing_count) if existing_count != field_count)
                 {
                     let existing_count = builder.field_count.expect("count checked by matches");
                     return Err(CompilationError::type_error(format!(
                         "struct type index {type_idx} field count mismatch ({existing_count} vs {field_count})",
                     )));
-                } else {
-                    builder.field_count = Some(field_count);
-                    if builder.fields.len() < field_count {
-                        builder.fields.resize_with(field_count, || None);
-                    }
                 }
+
+                builder.field_count = Some(field_count);
+                if builder.fields.len() < field_count {
+                    builder.fields.resize_with(field_count, || None);
+                }
+
                 if let Some(result_ty) = op.results(db).first().copied() {
-                    debug!(
-                        "GC: struct_new result_ty={}.{}",
-                        result_ty.dialect(db),
-                        result_ty.name(db)
-                    );
                     register_type(&mut type_idx_by_type, type_idx, result_ty);
                 }
                 for (field_idx, value) in op.operands(db).iter().enumerate() {
                     if let Some(ty) = value_type(db, *value) {
-                        debug!(
-                            "GC: struct_new field {} type={}.{} is_var={}",
-                            field_idx,
-                            ty.dialect(db),
-                            ty.name(db),
-                            tribute::is_type_var(db, ty)
-                        );
                         record_struct_field(type_idx, builder, field_idx as u32, ty)?;
-                    } else {
-                        debug!("GC: struct_new field {} has no type", field_idx);
                     }
                 }
             }
@@ -1191,7 +1232,7 @@ fn collect_gc_types<'db>(
     }]);
     result.insert(0, boxed_f64_type);
 
-    Ok((result, type_idx_by_type))
+    Ok((result, type_idx_by_type, placeholder_struct_type_idx))
 }
 
 fn extract_function_def<'db>(
@@ -1959,8 +2000,28 @@ fn emit_op<'db>(
     } else if name == Symbol::new("struct_new") {
         emit_operands(db, operands, ctx, function)?;
         let attrs = op.attributes(db);
-        let type_idx = get_type_idx_from_attrs(attrs)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
+        let field_count = operands.len();
+
+        // Check if this uses a placeholder type (wasm.structref)
+        let type_idx = if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
+            if wasm::Structref::from_type(db, *ty).is_some() {
+                // Use placeholder map for wasm.structref
+                // All (type, field_count) pairs are registered by collect_gc_types upfront
+                module_info
+                    .placeholder_struct_type_idx
+                    .get(&(*ty, field_count))
+                    .copied()
+            } else {
+                // Regular type
+                module_info.type_idx_by_type.get(ty).copied()
+            }
+        } else if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+            Some(*idx as u32)
+        } else {
+            None
+        }
+        .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
+
         function.instruction(&Instruction::StructNew(type_idx));
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("struct_get") {
@@ -2545,6 +2606,29 @@ fn type_to_valtype<'db>(
     {
         // String and ptr still use linear memory (i32 pointer)
         Ok(ValType::I32)
+    } else if ty.dialect(db) == wasm::DIALECT_NAME() {
+        // WASM dialect types (e.g., wasm.structref for continuation frames)
+        // IMPORTANT: Must check BEFORE type_idx_by_type.get() to avoid returning
+        // incorrect concrete type_idx for placeholder types like wasm.structref
+        let name = ty.name(db);
+        if name == Symbol::new("structref") {
+            Ok(ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Struct,
+                },
+            }))
+        } else if name == Symbol::new("funcref") {
+            Ok(ValType::Ref(RefType::FUNCREF))
+        } else if name == Symbol::new("anyref") {
+            Ok(ValType::Ref(RefType::ANYREF))
+        } else {
+            Err(CompilationError::type_error(format!(
+                "unsupported wasm type: wasm.{}",
+                name
+            )))
+        }
     } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
         // ADT types (structs, variants) - use concrete GC type reference
         // Check this BEFORE tribute::is_type_var to handle struct types with type_idx
@@ -2568,27 +2652,9 @@ fn type_to_valtype<'db>(
         // Closure types - use anyref for unregistered closures
         // (registered closures are handled earlier by the generic type_idx_by_type lookup)
         Ok(ValType::Ref(RefType::ANYREF))
-    } else if ty.dialect(db) == wasm::DIALECT_NAME() {
-        // WASM dialect types (e.g., wasm.structref for continuation frames)
-        let name = ty.name(db);
-        if name == Symbol::new("structref") {
-            Ok(ValType::Ref(RefType {
-                nullable: true,
-                heap_type: HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::Struct,
-                },
-            }))
-        } else if name == Symbol::new("funcref") {
-            Ok(ValType::Ref(RefType::FUNCREF))
-        } else if name == Symbol::new("anyref") {
-            Ok(ValType::Ref(RefType::ANYREF))
-        } else {
-            Err(CompilationError::type_error(format!(
-                "unsupported wasm type: wasm.{}",
-                name
-            )))
-        }
+    } else if ability::EvidencePtr::from_type(db, ty).is_some() {
+        // Evidence pointer for ability system - use anyref as runtime handle
+        Ok(ValType::Ref(RefType::ANYREF))
     } else {
         Err(CompilationError::type_error(format!(
             "unsupported wasm value type: {}.{}",
@@ -2884,7 +2950,8 @@ mod tests {
     #[salsa_test]
     fn test_struct_new_collects_field_types(db: &salsa::DatabaseImpl) {
         let module = make_struct_new_module(db);
-        let (gc_types, type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
+        let (gc_types, type_map, _) =
+            collect_gc_types(db, module).expect("collect_gc_types failed");
 
         // Should have 4 GC types: 3 built-in (BoxedF64, BytesArray, BytesStruct) + 1 user struct
         assert_eq!(gc_types.len(), 4);
@@ -2945,7 +3012,8 @@ mod tests {
     #[salsa_test]
     fn test_array_new_collects_element_type(db: &salsa::DatabaseImpl) {
         let module = make_array_new_module(db);
-        let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
+        let (gc_types, _type_map, _) =
+            collect_gc_types(db, module).expect("collect_gc_types failed");
 
         // Should have 4 GC types: 3 built-in (BoxedF64, BytesArray, BytesStruct) + 1 user array
         assert_eq!(gc_types.len(), 4);
@@ -3005,7 +3073,8 @@ mod tests {
     #[salsa_test]
     fn test_type_index_deduplication(db: &salsa::DatabaseImpl) {
         let module = make_dedup_module(db);
-        let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
+        let (gc_types, _type_map, _) =
+            collect_gc_types(db, module).expect("collect_gc_types failed");
 
         // Should have 4 GC types: 3 built-in + 1 user struct (same type_idx used twice)
         assert_eq!(gc_types.len(), 4);
@@ -3080,6 +3149,120 @@ mod tests {
     }
 
     // ========================================
+    // Test: placeholder struct types (wasm.structref)
+    // ========================================
+
+    /// Create a module with multiple struct_new operations using wasm.structref
+    /// placeholder type but with different field counts.
+    #[salsa::tracked]
+    fn make_placeholder_struct_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let structref_ty = wasm::Structref::new(db).as_type();
+
+        // Create struct_new with 1 field using wasm.structref type attribute
+        let field1 = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(1))
+            .results(idvec![i32_ty])
+            .build();
+
+        let struct_new1 = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![field1.result(db, 0)])
+            .results(idvec![structref_ty])
+            .attr("type", Attribute::Type(structref_ty))
+            .build();
+
+        // Create struct_new with 2 fields using same wasm.structref type
+        let field2a = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(2))
+            .results(idvec![i32_ty])
+            .build();
+
+        let field2b = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(3))
+            .results(idvec![i32_ty])
+            .build();
+
+        let struct_new2 = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![field2a.result(db, 0), field2b.result(db, 0)])
+            .results(idvec![structref_ty])
+            .attr("type", Attribute::Type(structref_ty))
+            .build();
+
+        // Create struct_new with 0 fields (empty struct)
+        let struct_new3 = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![])
+            .results(idvec![structref_ty])
+            .attr("type", Attribute::Type(structref_ty))
+            .build();
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                field1,
+                struct_new1,
+                field2a,
+                field2b,
+                struct_new2,
+                struct_new3
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_placeholder_struct_types(db: &salsa::DatabaseImpl) {
+        let module = make_placeholder_struct_module(db);
+        let (gc_types, _type_map, placeholder_map) =
+            collect_gc_types(db, module).expect("collect_gc_types failed");
+
+        // Should have 6 GC types: 3 built-in + 3 user structs (one per field count)
+        assert_eq!(gc_types.len(), 6);
+
+        // Verify placeholder_map has entries for each (type, field_count) pair
+        let structref_ty = wasm::Structref::new(db).as_type();
+        assert!(
+            placeholder_map.contains_key(&(structref_ty, 0)),
+            "placeholder_map should have entry for (structref, 0)"
+        );
+        assert!(
+            placeholder_map.contains_key(&(structref_ty, 1)),
+            "placeholder_map should have entry for (structref, 1)"
+        );
+        assert!(
+            placeholder_map.contains_key(&(structref_ty, 2)),
+            "placeholder_map should have entry for (structref, 2)"
+        );
+
+        // Verify each entry has a distinct type_idx
+        let idx_0 = placeholder_map[&(structref_ty, 0)];
+        let idx_1 = placeholder_map[&(structref_ty, 1)];
+        let idx_2 = placeholder_map[&(structref_ty, 2)];
+        assert_ne!(idx_0, idx_1, "type_idx for 0 and 1 fields should differ");
+        assert_ne!(idx_1, idx_2, "type_idx for 1 and 2 fields should differ");
+        assert_ne!(idx_0, idx_2, "type_idx for 0 and 2 fields should differ");
+
+        // Verify GC type definitions have correct field counts
+        // User types start at index FIRST_USER_TYPE_IDX (3)
+        let field_counts: Vec<usize> = gc_types[FIRST_USER_TYPE_IDX as usize..]
+            .iter()
+            .map(|gc_type| match gc_type {
+                GcTypeDef::Struct(fields) => fields.len(),
+                _ => panic!("expected struct type"),
+            })
+            .collect();
+
+        // Should have structs with 0, 1, and 2 fields (order may vary)
+        assert!(field_counts.contains(&0), "should have 0-field struct");
+        assert!(field_counts.contains(&1), "should have 1-field struct");
+        assert!(field_counts.contains(&2), "should have 2-field struct");
+    }
+
+    // ========================================
     // Test: nested operations in function body
     // ========================================
 
@@ -3128,7 +3311,8 @@ mod tests {
     #[salsa_test]
     fn test_nested_operations_in_function_body(db: &salsa::DatabaseImpl) {
         let module = make_func_with_struct_module(db);
-        let (gc_types, _type_map) = collect_gc_types(db, module).expect("collect_gc_types failed");
+        let (gc_types, _type_map, _) =
+            collect_gc_types(db, module).expect("collect_gc_types failed");
 
         // Should find the struct type from inside the function body
         // (4 types: 3 built-in + 1 user struct)
@@ -3196,7 +3380,7 @@ mod tests {
             "collect_gc_types should not panic for builtin type indices"
         );
 
-        let (gc_types, _type_map) = result.expect("collect_gc_types failed");
+        let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
         // Should only have the 3 built-in types (no additional user types allocated)
         assert_eq!(gc_types.len(), 3);
@@ -3247,7 +3431,7 @@ mod tests {
             "collect_gc_types should not panic for builtin type indices"
         );
 
-        let (gc_types, _type_map) = result.expect("collect_gc_types failed");
+        let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
         // Should only have the 3 built-in types (no additional user types allocated)
         assert_eq!(gc_types.len(), 3);
@@ -3312,7 +3496,7 @@ mod tests {
             "collect_gc_types should not panic for builtin type indices"
         );
 
-        let (gc_types, _type_map) = result.expect("collect_gc_types failed");
+        let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
         // Should only have the 3 built-in types
         assert_eq!(gc_types.len(), 3);
