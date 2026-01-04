@@ -240,3 +240,8 @@ impl<'db> Return<'db> {
 // Only func.constant is pure (it just creates a reference)
 
 crate::register_pure_op!(func.constant);
+
+// === IsolatedFromAbove registrations ===
+// func.func has an isolated body - it cannot reference values from outside
+
+crate::register_isolated_op!(func.func);
