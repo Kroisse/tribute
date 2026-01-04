@@ -2004,11 +2004,11 @@ fn emit_op<'db>(
         let type_idx = if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
             if wasm::Structref::from_type(db, *ty).is_some() {
                 // Use placeholder map for wasm.structref
+                // All (type, field_count) pairs are registered by collect_gc_types upfront
                 module_info
                     .placeholder_struct_type_idx
                     .get(&(*ty, field_count))
                     .copied()
-                    .or_else(|| module_info.type_idx_by_type.get(ty).copied())
             } else {
                 // Regular type
                 module_info.type_idx_by_type.get(ty).copied()
