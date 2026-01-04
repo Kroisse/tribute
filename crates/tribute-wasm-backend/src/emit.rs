@@ -3145,6 +3145,120 @@ mod tests {
     }
 
     // ========================================
+    // Test: placeholder struct types (wasm.structref)
+    // ========================================
+
+    /// Create a module with multiple struct_new operations using wasm.structref
+    /// placeholder type but with different field counts.
+    #[salsa::tracked]
+    fn make_placeholder_struct_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let structref_ty = wasm::Structref::new(db).as_type();
+
+        // Create struct_new with 1 field using wasm.structref type attribute
+        let field1 = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(1))
+            .results(idvec![i32_ty])
+            .build();
+
+        let struct_new1 = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![field1.result(db, 0)])
+            .results(idvec![structref_ty])
+            .attr("type", Attribute::Type(structref_ty))
+            .build();
+
+        // Create struct_new with 2 fields using same wasm.structref type
+        let field2a = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(2))
+            .results(idvec![i32_ty])
+            .build();
+
+        let field2b = Operation::of_name(db, location, "wasm.i32_const")
+            .attr("value", Attribute::IntBits(3))
+            .results(idvec![i32_ty])
+            .build();
+
+        let struct_new2 = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![field2a.result(db, 0), field2b.result(db, 0)])
+            .results(idvec![structref_ty])
+            .attr("type", Attribute::Type(structref_ty))
+            .build();
+
+        // Create struct_new with 0 fields (empty struct)
+        let struct_new3 = Operation::of_name(db, location, "wasm.struct_new")
+            .operands(idvec![])
+            .results(idvec![structref_ty])
+            .attr("type", Attribute::Type(structref_ty))
+            .build();
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                field1,
+                struct_new1,
+                field2a,
+                field2b,
+                struct_new2,
+                struct_new3
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_placeholder_struct_types(db: &salsa::DatabaseImpl) {
+        let module = make_placeholder_struct_module(db);
+        let (gc_types, _type_map, placeholder_map) =
+            collect_gc_types(db, module).expect("collect_gc_types failed");
+
+        // Should have 6 GC types: 3 built-in + 3 user structs (one per field count)
+        assert_eq!(gc_types.len(), 6);
+
+        // Verify placeholder_map has entries for each (type, field_count) pair
+        let structref_ty = wasm::Structref::new(db).as_type();
+        assert!(
+            placeholder_map.contains_key(&(structref_ty, 0)),
+            "placeholder_map should have entry for (structref, 0)"
+        );
+        assert!(
+            placeholder_map.contains_key(&(structref_ty, 1)),
+            "placeholder_map should have entry for (structref, 1)"
+        );
+        assert!(
+            placeholder_map.contains_key(&(structref_ty, 2)),
+            "placeholder_map should have entry for (structref, 2)"
+        );
+
+        // Verify each entry has a distinct type_idx
+        let idx_0 = placeholder_map[&(structref_ty, 0)];
+        let idx_1 = placeholder_map[&(structref_ty, 1)];
+        let idx_2 = placeholder_map[&(structref_ty, 2)];
+        assert_ne!(idx_0, idx_1, "type_idx for 0 and 1 fields should differ");
+        assert_ne!(idx_1, idx_2, "type_idx for 1 and 2 fields should differ");
+        assert_ne!(idx_0, idx_2, "type_idx for 0 and 2 fields should differ");
+
+        // Verify GC type definitions have correct field counts
+        // User types start at index FIRST_USER_TYPE_IDX (3)
+        let field_counts: Vec<usize> = gc_types[FIRST_USER_TYPE_IDX as usize..]
+            .iter()
+            .map(|gc_type| match gc_type {
+                GcTypeDef::Struct(fields) => fields.len(),
+                _ => panic!("expected struct type"),
+            })
+            .collect();
+
+        // Should have structs with 0, 1, and 2 fields (order may vary)
+        assert!(field_counts.contains(&0), "should have 0-field struct");
+        assert!(field_counts.contains(&1), "should have 1-field struct");
+        assert!(field_counts.contains(&2), "should have 2-field struct");
+    }
+
+    // ========================================
     // Test: nested operations in function body
     // ========================================
 
