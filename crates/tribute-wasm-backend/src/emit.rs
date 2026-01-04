@@ -836,7 +836,9 @@ fn collect_gc_types<'db>(
                     let idx = next_type_idx;
                     next_type_idx += 1;
                     placeholder_struct_type_idx.insert(key, idx);
-                    type_idx_by_type.entry(ty).or_insert(idx);
+                    // Note: Placeholder types are NOT inserted into type_idx_by_type
+                    // They are only stored in placeholder_struct_type_idx to avoid
+                    // confusion and ensure proper lookup via (type, field_count) key
                     debug!(
                         "GC: struct_new allocated type_idx={} for placeholder (field_count={})",
                         idx, field_count
