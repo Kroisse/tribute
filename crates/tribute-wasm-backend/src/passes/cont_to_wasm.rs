@@ -274,9 +274,16 @@ pub mod resume_gen {
         ops: &[Operation<'db>],
         value_mapping: &mut HashMap<Value<'db>, Value<'db>>,
     ) -> Vec<Operation<'db>> {
+        use tribute_ir::dialect::tribute;
         let mut result = Vec::with_capacity(ops.len());
 
         for &op in ops {
+            // Skip tribute.var operations - kept for LSP, no runtime effect
+            // Their results should already be mapped by earlier passes
+            if op.dialect(db) == tribute::DIALECT_NAME() && op.name(db) == tribute::VAR() {
+                continue;
+            }
+
             // Remap operands
             let new_operands: IdVec<Value<'db>> = op
                 .operands(db)
@@ -1001,6 +1008,8 @@ fn transform_shifts_in_block<'db>(
             let live_locals = compute_current_live_locals(db, block, &block_args, op_idx);
 
             // Collect continuation operations (operations after this shift)
+            // Note: tribute.var operations are kept for LSP support and will be
+            // skipped during emission in emit.rs
             let continuation_ops: Vec<Operation<'db>> =
                 ops.iter().skip(op_idx + 1).copied().collect();
 

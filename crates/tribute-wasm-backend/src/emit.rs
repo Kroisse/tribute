@@ -1590,6 +1590,11 @@ fn assign_locals_in_region<'db>(
 ) -> CompilationResult<()> {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
+            // Skip tribute.var operations - kept for LSP support, no runtime effect
+            if op.dialect(db) == tribute::DIALECT_NAME() && op.name(db) == tribute::VAR() {
+                continue;
+            }
+
             // IMPORTANT: Process nested regions FIRST so that their effective types
             // are available when we compute the effective type for this operation.
             // This is critical for wasm.if which needs to know the branch result types.
@@ -1747,6 +1752,10 @@ fn emit_region_ops<'db>(
     }
     let block = &blocks[0];
     for op in block.operations(db).iter() {
+        // Skip tribute.var operations - kept for LSP support, no runtime effect
+        if op.dialect(db) == tribute::DIALECT_NAME() && op.name(db) == tribute::VAR() {
+            continue;
+        }
         emit_op(db, op, ctx, module_info, function)?;
     }
     Ok(())
@@ -2478,12 +2487,32 @@ fn emit_operands<'db>(
 
         // If operand not found and not a block arg, this is an ERROR - stale value reference!
         if let ValueDef::OpResult(stale_op) = value.def(db) {
-            tracing::error!(
-                "emit_operands: stale SSA value: {}.{} index={}",
-                stale_op.dialect(db),
-                stale_op.name(db),
-                value.index(db)
-            );
+            // For tribute.var, try to find what it references by looking at its name attribute
+            if stale_op.dialect(db) == tribute::DIALECT_NAME()
+                && stale_op.name(db) == tribute::VAR()
+            {
+                if let Some(Attribute::Symbol(var_name)) =
+                    stale_op.attributes(db).get(&Symbol::new("name"))
+                {
+                    tracing::error!(
+                        "emit_operands: stale SSA value: tribute.var '{}' index={} (var references should have been resolved)",
+                        var_name,
+                        value.index(db)
+                    );
+                } else {
+                    tracing::error!(
+                        "emit_operands: stale SSA value: tribute.var (no name) index={}",
+                        value.index(db)
+                    );
+                }
+            } else {
+                tracing::error!(
+                    "emit_operands: stale SSA value: {}.{} index={}",
+                    stale_op.dialect(db),
+                    stale_op.name(db),
+                    value.index(db)
+                );
+            }
             return Err(CompilationError::invalid_module(
                 "stale SSA value in wasm backend (missing local mapping)",
             ));
