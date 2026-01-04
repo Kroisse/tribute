@@ -2604,6 +2604,29 @@ fn type_to_valtype<'db>(
     {
         // String and ptr still use linear memory (i32 pointer)
         Ok(ValType::I32)
+    } else if ty.dialect(db) == wasm::DIALECT_NAME() {
+        // WASM dialect types (e.g., wasm.structref for continuation frames)
+        // IMPORTANT: Must check BEFORE type_idx_by_type.get() to avoid returning
+        // incorrect concrete type_idx for placeholder types like wasm.structref
+        let name = ty.name(db);
+        if name == Symbol::new("structref") {
+            Ok(ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Struct,
+                },
+            }))
+        } else if name == Symbol::new("funcref") {
+            Ok(ValType::Ref(RefType::FUNCREF))
+        } else if name == Symbol::new("anyref") {
+            Ok(ValType::Ref(RefType::ANYREF))
+        } else {
+            Err(CompilationError::type_error(format!(
+                "unsupported wasm type: wasm.{}",
+                name
+            )))
+        }
     } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
         // ADT types (structs, variants) - use concrete GC type reference
         // Check this BEFORE tribute::is_type_var to handle struct types with type_idx
@@ -2630,27 +2653,6 @@ fn type_to_valtype<'db>(
     } else if ability::EvidencePtr::from_type(db, ty).is_some() {
         // Evidence pointer for ability system - use anyref as runtime handle
         Ok(ValType::Ref(RefType::ANYREF))
-    } else if ty.dialect(db) == wasm::DIALECT_NAME() {
-        // WASM dialect types (e.g., wasm.structref for continuation frames)
-        let name = ty.name(db);
-        if name == Symbol::new("structref") {
-            Ok(ValType::Ref(RefType {
-                nullable: true,
-                heap_type: HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::Struct,
-                },
-            }))
-        } else if name == Symbol::new("funcref") {
-            Ok(ValType::Ref(RefType::FUNCREF))
-        } else if name == Symbol::new("anyref") {
-            Ok(ValType::Ref(RefType::ANYREF))
-        } else {
-            Err(CompilationError::type_error(format!(
-                "unsupported wasm type: wasm.{}",
-                name
-            )))
-        }
     } else {
         Err(CompilationError::type_error(format!(
             "unsupported wasm value type: {}.{}",
