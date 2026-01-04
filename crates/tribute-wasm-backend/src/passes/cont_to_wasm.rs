@@ -1728,14 +1728,17 @@ mod tests {
     #[salsa::tracked]
     fn make_module_with_shift(db: &dyn salsa::Database) -> Module<'_> {
         let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
 
         // Create empty handler region for shift
         let handler_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
         let handler_region = Region::new(db, location, idvec![handler_block]);
 
+        // cont.shift now has a result (the value passed when continuation is resumed)
         let shift = Operation::of_name(db, location, "cont.shift")
             .attr("tag", Attribute::IntBits(42))
             .attr("op_idx", Attribute::IntBits(0)) // Required attribute for multi-op dispatch
+            .result(i32_ty)
             .region(handler_region)
             .build();
 
@@ -1916,8 +1919,10 @@ mod tests {
         let handler_block = Block::new(db, BlockId::fresh(), shift_loc, IdVec::new(), idvec![]);
         let handler_region = Region::new(db, shift_loc, idvec![handler_block]);
 
+        // cont.shift now has a result (the value passed when continuation is resumed)
         let shift = Operation::of_name(db, shift_loc, "cont.shift")
             .attr("tag", Attribute::IntBits(99))
+            .result(i32_ty)
             .region(handler_region)
             .build();
 
@@ -1994,8 +1999,11 @@ mod tests {
         // Create shift
         let handler_block = Block::new(db, BlockId::fresh(), shift_loc, IdVec::new(), idvec![]);
         let handler_region = Region::new(db, shift_loc, idvec![handler_block]);
+        // cont.shift now has a result (the value passed when continuation is resumed)
         let shift = Operation::of_name(db, shift_loc, "cont.shift")
             .attr("tag", Attribute::IntBits(1))
+            .attr("op_idx", Attribute::IntBits(0))
+            .result(i32_ty)
             .region(handler_region)
             .build();
 

@@ -176,6 +176,14 @@ impl RewritePattern for LowerPerformPattern {
 
         let location = op.location(db);
 
+        // Get the result type from ability.perform to pass to cont.shift.
+        // This is the type that will be returned when the continuation is resumed.
+        let result_ty = op
+            .results(db)
+            .first()
+            .copied()
+            .unwrap_or_else(|| *core::Nil::new(db));
+
         // TODO: Create handler region with actual handler logic.
         // The handler region should contain the code that runs when the continuation
         // is captured. In the full implementation, this will be populated based on
@@ -195,6 +203,7 @@ impl RewritePattern for LowerPerformPattern {
             .attr("tag", Attribute::IntBits(tag as u64))
             .attr("op_idx", Attribute::IntBits(0)) // Placeholder, resolved by handler dispatch
             .attr("op_name", Attribute::Symbol(op_name))
+            .result(result_ty)
             .region(handler_region)
             .build();
 
