@@ -793,3 +793,8 @@ fn fmt_var_id(f: &mut Formatter<'_>, id: u64) -> fmt::Result {
         write!(f, "t{}", id - 26)
     }
 }
+
+// === IsolatedFromAbove registrations ===
+// core.module has an isolated body - it cannot reference values from outside
+
+crate::register_isolated_op!(core.module);
