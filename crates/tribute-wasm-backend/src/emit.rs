@@ -2296,6 +2296,7 @@ fn emit_op<'db>(
         let memarg = extract_memarg(db, op, 2);
         function.instruction(&Instruction::I64Store32(memarg));
     } else {
+        tracing::error!("unsupported wasm op: {}", name);
         return Err(CompilationError::unsupported_feature(
             "wasm op not supported",
         ));

@@ -122,6 +122,7 @@ pub mod resume_gen {
     ///
     /// Returns a list of resume function operations to add to the module,
     /// and a map from shift location to resume function name.
+    #[allow(dead_code)]
     pub fn generate_resume_functions<'db>(
         db: &'db dyn salsa::Database,
         analysis: &ContAnalysis<'db>,
@@ -139,6 +140,30 @@ pub mod resume_gen {
         }
 
         (functions, resume_fn_names)
+    }
+
+    /// Generate only resume function names (not the actual functions).
+    ///
+    /// This is used for inline resume function generation where we need
+    /// to know the names upfront for ref.func, but generate the functions
+    /// on-the-fly during shift transformation.
+    pub fn generate_resume_fn_names<'db>(
+        db: &'db dyn salsa::Database,
+        analysis: &ContAnalysis<'db>,
+    ) -> BTreeMap<LocationKey, Symbol> {
+        let mut resume_fn_names = BTreeMap::new();
+
+        for (key, info) in analysis.shift_points(db).iter() {
+            let resume_fn_name = generate_resume_fn_name(info);
+            resume_fn_names.insert(key.clone(), resume_fn_name);
+        }
+
+        resume_fn_names
+    }
+
+    /// Make generate_resume_fn_name public for inline generation.
+    pub fn make_resume_fn_name(info: &ShiftPointInfo<'_>) -> Symbol {
+        generate_resume_fn_name(info)
     }
 
     /// Generate the resume function name for a shift point.
@@ -244,7 +269,7 @@ pub mod resume_gen {
     /// 1. Remap operands using the value mapping
     /// 2. Create a new operation with remapped operands
     /// 3. Add the new operation's results to the mapping
-    fn remap_operations<'db>(
+    pub fn remap_operations<'db>(
         db: &'db dyn salsa::Database,
         ops: &[Operation<'db>],
         value_mapping: &mut HashMap<Value<'db>, Value<'db>>,
@@ -748,14 +773,9 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         return module;
     }
 
-    let location = module.location(db);
-
-    // Generate resume functions for all shift points
-    let (resume_functions, resume_fn_names) =
-        resume_gen::generate_resume_functions(db, &analysis, location);
-
-    // Add resume functions to the module body
-    let module = prepend_operations_to_module(db, module, &resume_functions);
+    // Generate only resume function names upfront (for ref.func references).
+    // The actual resume functions are generated inline during transform_shifts.
+    let resume_fn_names = resume_gen::generate_resume_fn_names(db, &analysis);
 
     // Apply pattern transformations for non-shift operations
     let module = PatternApplicator::new()
@@ -766,7 +786,9 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .apply(db, module)
         .module;
 
-    // Transform shift operations with full access to live local analysis
+    // Transform shift operations with inline resume function generation.
+    // This is done in a loop because expanding shifts inside resume functions
+    // creates new shifts that need to be processed.
     transform_shifts(db, module, &analysis, &resume_fn_names)
 }
 
@@ -820,23 +842,68 @@ fn prepend_operations_to_module<'db>(
     Module::create(db, location, module.name(db), new_body)
 }
 
-/// Transform shift operations with access to live local analysis.
+/// Transform shift operations with inline resume function generation.
 ///
 /// This function walks the module and transforms each `cont.shift` operation
 /// into the yield bubbling sequence, capturing live locals in the state struct.
+/// Resume functions are generated inline during transformation to avoid stale
+/// SSA references when functions contain multiple shifts.
+///
+/// The transformation is done in a loop because expanding shifts inside resume
+/// functions creates new shifts that need to be processed.
 fn transform_shifts<'db>(
     db: &'db dyn salsa::Database,
-    module: Module<'db>,
+    mut module: Module<'db>,
     analysis: &ContAnalysis<'db>,
     resume_fn_names: &BTreeMap<LocationKey, Symbol>,
 ) -> Module<'db> {
-    let body = module.body(db);
     let shift_points = analysis.shift_points(db);
+    let location = module.location(db);
 
-    let (new_body, _changed) =
-        transform_shifts_in_region(db, &body, &shift_points, resume_fn_names);
+    tracing::debug!(
+        "transform_shifts: {} shift points in analysis",
+        shift_points.len()
+    );
 
-    Module::create(db, module.location(db), module.name(db), new_body)
+    // Track inline resume function counter for unique naming
+    let mut inline_resume_counter: usize = 0;
+
+    // Loop until no more shifts are found.
+    // This handles nested shifts created when expanding shifts inside resume functions.
+    const MAX_ITERATIONS: usize = 10;
+    for iteration in 0..MAX_ITERATIONS {
+        let body = module.body(db);
+        let mut generated_resume_fns: Vec<Operation<'db>> = Vec::new();
+
+        let (new_body, changed) = transform_shifts_in_region(
+            db,
+            &body,
+            &shift_points,
+            resume_fn_names,
+            &mut generated_resume_fns,
+            &mut inline_resume_counter,
+        );
+
+        tracing::debug!(
+            "transform_shifts iteration {}: changed={}, generated {} resume fns",
+            iteration,
+            changed,
+            generated_resume_fns.len()
+        );
+
+        if !changed && generated_resume_fns.is_empty() {
+            break;
+        }
+
+        module = Module::create(db, location, module.name(db), new_body);
+
+        // Prepend generated resume functions to the module
+        if !generated_resume_fns.is_empty() {
+            module = prepend_operations_to_module(db, module, &generated_resume_fns);
+        }
+    }
+
+    module
 }
 
 /// Transform shifts in a region recursively.
@@ -845,14 +912,22 @@ fn transform_shifts_in_region<'db>(
     region: &trunk_ir::Region<'db>,
     shift_points: &ShiftPointMap<'db>,
     resume_fn_names: &BTreeMap<LocationKey, Symbol>,
+    generated_resume_fns: &mut Vec<Operation<'db>>,
+    inline_resume_counter: &mut usize,
 ) -> (trunk_ir::Region<'db>, bool) {
     let mut changed = false;
     let new_blocks: IdVec<trunk_ir::Block<'db>> = region
         .blocks(db)
         .iter()
         .map(|block| {
-            let (new_block, block_changed) =
-                transform_shifts_in_block(db, block, shift_points, resume_fn_names);
+            let (new_block, block_changed) = transform_shifts_in_block(
+                db,
+                block,
+                shift_points,
+                resume_fn_names,
+                generated_resume_fns,
+                inline_resume_counter,
+            );
             changed |= block_changed;
             new_block
         })
@@ -862,17 +937,26 @@ fn transform_shifts_in_region<'db>(
     (new_region, changed)
 }
 
-/// Transform shifts in a block.
+/// Transform shifts in a block with inline resume function generation.
 fn transform_shifts_in_block<'db>(
     db: &'db dyn salsa::Database,
     block: &trunk_ir::Block<'db>,
     shift_points: &ShiftPointMap<'db>,
     resume_fn_names: &BTreeMap<LocationKey, Symbol>,
+    generated_resume_fns: &mut Vec<Operation<'db>>,
+    inline_resume_counter: &mut usize,
 ) -> (trunk_ir::Block<'db>, bool) {
     let mut changed = false;
     let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
 
-    for &op in block.operations(db).iter() {
+    // Collect block arguments for live local computation
+    let block_args: Vec<Value<'db>> = (0..block.args(db).len())
+        .map(|i| block.arg(db, i))
+        .collect();
+
+    let ops: Vec<Operation<'db>> = block.operations(db).iter().copied().collect();
+
+    for (op_idx, &op) in ops.iter().enumerate() {
         // First, recursively process nested regions
         let op_with_processed_regions = if !op.regions(db).is_empty() {
             let mut region_changed = false;
@@ -880,8 +964,14 @@ fn transform_shifts_in_block<'db>(
                 .regions(db)
                 .iter()
                 .map(|region| {
-                    let (new_region, rc) =
-                        transform_shifts_in_region(db, region, shift_points, resume_fn_names);
+                    let (new_region, rc) = transform_shifts_in_region(
+                        db,
+                        region,
+                        shift_points,
+                        resume_fn_names,
+                        generated_resume_fns,
+                        inline_resume_counter,
+                    );
                     region_changed |= rc;
                     new_region
                 })
@@ -902,22 +992,71 @@ fn transform_shifts_in_block<'db>(
             let location = op_with_processed_regions.location(db);
             let location_key = LocationKey::from_location(db, location);
 
-            // Look up the live locals for this shift point
-            let live_locals = shift_points
-                .get(&location_key)
-                .map(|info| &info.live_locals[..])
-                .unwrap_or(&[]);
+            tracing::debug!(
+                "transform_shifts_in_block: found cont.shift at {:?}",
+                location_key
+            );
 
-            // Generate the shift expansion with live locals
+            // Compute live locals on-the-fly based on current block context
+            let live_locals = compute_current_live_locals(db, block, &block_args, op_idx);
+
+            // Collect continuation operations (operations after this shift)
+            let continuation_ops: Vec<Operation<'db>> =
+                ops.iter().skip(op_idx + 1).copied().collect();
+
+            // Get the shift's result value (used by continuation ops)
+            let shift_result = op_with_processed_regions
+                .results(db)
+                .first()
+                .map(|_| op_with_processed_regions.result(db, 0));
+
+            // Determine if we need a resume function
+            let needs_resume_fn = !continuation_ops.is_empty() || !live_locals.is_empty();
+
+            // Generate the resume function name if needed
+            let resume_fn_name = if needs_resume_fn {
+                let name = resume_fn_names
+                    .get(&location_key)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        // Generate a unique name for inline resume functions
+                        let name = Symbol::from_dynamic(&format!(
+                            "__inline_resume${}",
+                            *inline_resume_counter
+                        ));
+                        *inline_resume_counter += 1;
+                        name
+                    });
+
+                // Generate the resume function inline
+                let resume_fn = generate_inline_resume_function(
+                    db,
+                    location,
+                    name,
+                    &live_locals,
+                    &continuation_ops,
+                    shift_result,
+                );
+                generated_resume_fns.push(resume_fn);
+
+                Some(name)
+            } else {
+                None
+            };
+
+            // Generate the shift expansion with computed live locals
             let expanded_ops = expand_shift_operation(
                 db,
                 &op_with_processed_regions,
-                live_locals,
-                resume_fn_names.get(&location_key).copied(),
+                &live_locals,
+                resume_fn_name,
             );
 
             new_ops.extend(expanded_ops);
             changed = true;
+
+            // Skip remaining ops - they're now in the resume function
+            break;
         } else {
             new_ops.push(op_with_processed_regions);
         }
@@ -931,6 +1070,177 @@ fn transform_shifts_in_block<'db>(
         new_ops,
     );
     (new_block, changed)
+}
+
+/// Compute live locals on-the-fly based on current block context.
+///
+/// This computes live locals at the shift point by analyzing the current block
+/// rather than relying on pre-computed analysis. This prevents stale SSA references
+/// when shifts appear inside resume functions after transformation.
+fn compute_current_live_locals<'db>(
+    db: &'db dyn salsa::Database,
+    block: &trunk_ir::Block<'db>,
+    block_args: &[Value<'db>],
+    shift_op_idx: usize,
+) -> Vec<LiveLocal<'db>> {
+    use std::collections::{HashMap, HashSet};
+
+    // Collect values defined before the shift along with their types
+    let mut defined_before: HashMap<Value<'db>, Type<'db>> = HashMap::new();
+
+    // Block arguments are defined before any operation
+    for (i, &arg) in block_args.iter().enumerate() {
+        if let Some(block_arg) = block.args(db).get(i) {
+            defined_before.insert(arg, block_arg.ty(db));
+        }
+    }
+
+    // Results of operations before the shift
+    let ops: Vec<Operation<'db>> = block.operations(db).iter().copied().collect();
+    for op in ops.iter().take(shift_op_idx) {
+        let result_types = op.results(db);
+        for i in 0..result_types.len() {
+            let ty = result_types[i];
+            defined_before.insert(op.result(db, i), ty);
+        }
+    }
+
+    // Collect values used after the shift
+    let mut used_after: HashSet<Value<'db>> = HashSet::new();
+    for op in ops.iter().skip(shift_op_idx + 1) {
+        for operand in op.operands(db).iter() {
+            used_after.insert(*operand);
+        }
+        for region in op.regions(db).iter() {
+            collect_uses_in_region_recursive(db, region, &mut used_after);
+        }
+    }
+
+    // Live locals = defined before ∩ used after
+    let mut live_locals = Vec::new();
+    for (value, ty) in defined_before {
+        if used_after.contains(&value) {
+            live_locals.push(LiveLocal {
+                value,
+                name: None,
+                ty,
+            });
+        }
+    }
+
+    // Sort for deterministic ordering
+    live_locals.sort_by_key(|l| match l.value.def(db) {
+        ValueDef::BlockArg(block_id) => (0, block_id.0, l.value.index(db) as u64),
+        ValueDef::OpResult(op) => (
+            1,
+            op.location(db).span.start as u64,
+            l.value.index(db) as u64,
+        ),
+    });
+
+    live_locals
+}
+
+/// Collect all value uses in a region recursively.
+fn collect_uses_in_region_recursive<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    uses: &mut std::collections::HashSet<Value<'db>>,
+) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            for operand in op.operands(db).iter() {
+                uses.insert(*operand);
+            }
+            for nested in op.regions(db).iter() {
+                collect_uses_in_region_recursive(db, nested, uses);
+            }
+        }
+    }
+}
+
+/// Generate a resume function inline during shift transformation.
+///
+/// This creates a resume function with the current live locals and continuation ops,
+/// avoiding stale SSA references that would occur if generated upfront.
+///
+/// The `shift_result` is the result value of the cont.shift operation. If the
+/// continuation ops use this value, we map it to the `value` parameter of the
+/// resume function (the value passed when the continuation is resumed).
+fn generate_inline_resume_function<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    name: Symbol,
+    live_locals: &[LiveLocal<'db>],
+    continuation_ops: &[Operation<'db>],
+    shift_result: Option<Value<'db>>,
+) -> Operation<'db> {
+    use std::collections::HashMap;
+    use trunk_ir::{BlockArg, BlockId};
+
+    let anyref = wasm::Anyref::new(db).as_type();
+    let func_ty = cont_types::resume_fn_type(db);
+
+    // Block arguments are typed (state: anyref, value: anyref)
+    let block_args = IdVec::from(vec![
+        BlockArg::of_type(db, anyref),
+        BlockArg::of_type(db, anyref),
+    ]);
+    let block_id = BlockId::fresh();
+
+    // Get block argument values
+    let state_param = Value::new(db, ValueDef::BlockArg(block_id), 0);
+    let value_param = Value::new(db, ValueDef::BlockArg(block_id), 1);
+
+    let mut ops: Vec<Operation<'db>> = Vec::new();
+    let mut value_mapping: HashMap<Value<'db>, Value<'db>> = HashMap::new();
+
+    // Map the shift's result to the value parameter
+    // This is the value passed when the continuation is resumed
+    if let Some(shift_result_value) = shift_result {
+        value_mapping.insert(shift_result_value, value_param);
+    }
+
+    // Extract live locals from state struct
+    let state_ty = cont_types::state_type(db, live_locals);
+
+    for (field_idx, live_local) in live_locals.iter().enumerate() {
+        // Generate struct_get to extract this field
+        let struct_get = Operation::of_name(db, location, "wasm.struct_get")
+            .operand(state_param)
+            .attr("type", Attribute::Type(state_ty))
+            .attr("field_idx", Attribute::IntBits(field_idx as u64))
+            .results(IdVec::from(vec![live_local.ty]))
+            .build();
+
+        let extracted_value = Value::new(db, ValueDef::OpResult(struct_get), 0);
+        ops.push(struct_get);
+
+        // Map the original value to the extracted value
+        value_mapping.insert(live_local.value, extracted_value);
+    }
+
+    // Remap continuation operations and add them to the body
+    if !continuation_ops.is_empty() {
+        let remapped_ops = resume_gen::remap_operations(db, continuation_ops, &mut value_mapping);
+        ops.extend(remapped_ops);
+    } else {
+        // No continuation body - just return the value parameter
+        ops.push(wasm::r#return(db, location, Some(value_param)).as_operation());
+    }
+
+    // Create function body block with typed arguments
+    let body_block = Block::new(
+        db,
+        block_id,
+        location,
+        block_args,
+        ops.into_iter().collect(),
+    );
+    let body_region = Region::new(db, location, IdVec::from(vec![body_block]));
+
+    // Create the wasm.func operation
+    wasm::func(db, location, name, func_ty, body_region).as_operation()
 }
 
 /// Expand a shift operation into the yield bubbling sequence.
@@ -1760,31 +2070,31 @@ mod tests {
         let module = make_module_with_shift(db);
         let op_names = lower_shift_and_check(db, module);
 
-        // Module now has resume function prepended, followed by shift expansion:
-        // 0. wasm.func (generated resume function)
-        // 1. wasm.struct_new (state struct)
-        // 2. wasm.ref_func (resume_fn reference)
-        // 3. wasm.i32_const (tag value for continuation struct)
-        // 4. wasm.struct_new (continuation struct)
-        // 5. wasm.i32_const (yield_state = 1)
-        // 6. wasm.global_set (yield_state)
-        // 7. wasm.i32_const (yield_tag)
-        // 8. wasm.global_set (yield_tag)
-        // 9. wasm.global_set (yield_cont)
-        // 10. wasm.ref_null (yield_value = null)
-        // 11. wasm.global_set (yield_value)
-        // 12. wasm.i32_const (yield_op_idx = 0)
-        // 13. wasm.global_set (yield_op_idx)
-        // 14. wasm.return
+        // This test has a bare shift with no continuation ops and no live locals,
+        // so no resume function is generated. The shift expansion is:
+        // 0. wasm.struct_new (empty state struct)
+        // 1. wasm.ref_null (null funcref for resume_fn since no resume function)
+        // 2. wasm.i32_const (tag value for continuation struct)
+        // 3. wasm.struct_new (continuation struct)
+        // 4. wasm.i32_const (yield_state = 1)
+        // 5. wasm.global_set (yield_state)
+        // 6. wasm.i32_const (yield_tag)
+        // 7. wasm.global_set (yield_tag)
+        // 8. wasm.global_set (yield_cont)
+        // 9. wasm.ref_null (yield_value = null)
+        // 10. wasm.global_set (yield_value)
+        // 11. wasm.i32_const (yield_op_idx = 0)
+        // 12. wasm.global_set (yield_op_idx)
+        // 13. wasm.return
 
-        // First op: wasm.func (resume function)
-        assert_eq!(op_names.first(), Some(&"wasm.func".to_string()));
-        // Second op: struct_new (state struct - now using struct_new instead of nop)
-        assert_eq!(op_names.get(1), Some(&"wasm.struct_new".to_string()));
+        // First op: struct_new (empty state struct)
+        assert_eq!(op_names.first(), Some(&"wasm.struct_new".to_string()));
         // Last op: return (to unwind stack)
         assert_eq!(op_names.last(), Some(&"wasm.return".to_string()));
-        // Should contain ref_func for resume function reference
-        assert!(op_names.contains(&"wasm.ref_func".to_string()));
+        // Should NOT contain ref_func (no resume function when no continuation)
+        assert!(!op_names.contains(&"wasm.ref_func".to_string()));
+        // Should contain ref_null for resume_fn
+        assert!(op_names.contains(&"wasm.ref_null".to_string()));
         // Should contain struct_new for continuation (and state)
         let struct_new_count = op_names.iter().filter(|n| *n == "wasm.struct_new").count();
         assert!(
@@ -1792,8 +2102,8 @@ mod tests {
             "expected at least 2 struct_new (state + continuation), got {}",
             struct_new_count
         );
-        // Total: 15 operations (1 resume function + 14 shift expansion, including op_idx)
-        assert_eq!(op_names.len(), 15);
+        // Total: 14 operations (no resume function, just shift expansion)
+        assert_eq!(op_names.len(), 14);
     }
 
     #[salsa::tracked]
