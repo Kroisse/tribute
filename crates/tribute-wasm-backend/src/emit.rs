@@ -628,8 +628,13 @@ fn collect_module_info<'db>(
     collect_wasm_ops_from_region(db, &module.body(db), &mut info)?;
 
     // Collect GC types (structs, arrays)
-    let (gc_types, type_idx_by_type, placeholder_struct_type_idx) = collect_gc_types(db, module)?;
+    let (gc_types, mut type_idx_by_type, placeholder_struct_type_idx) =
+        collect_gc_types(db, module)?;
     info.gc_types = gc_types;
+
+    // Collect function types from call_indirect operations
+    collect_call_indirect_types(db, module, &mut type_idx_by_type)?;
+
     info.type_idx_by_type = type_idx_by_type;
     info.placeholder_struct_type_idx = placeholder_struct_type_idx;
 
@@ -1233,6 +1238,79 @@ fn collect_gc_types<'db>(
     result.insert(0, boxed_f64_type);
 
     Ok((result, type_idx_by_type, placeholder_struct_type_idx))
+}
+
+/// Collect function types from wasm.call_indirect operations.
+///
+/// This ensures that all function types used in call_indirect are registered
+/// in the type section before emission.
+fn collect_call_indirect_types<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+    type_idx_by_type: &mut HashMap<Type<'db>, u32>,
+) -> CompilationResult<()> {
+    fn collect_from_region<'db>(
+        db: &'db dyn salsa::Database,
+        region: &trunk_ir::Region<'db>,
+        type_idx_by_type: &mut HashMap<Type<'db>, u32>,
+        next_type_idx: &mut u32,
+    ) -> CompilationResult<()> {
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                // Recursively process nested regions
+                for nested in op.regions(db).iter() {
+                    collect_from_region(db, nested, type_idx_by_type, next_type_idx)?;
+                }
+
+                // Check if this is a call_indirect
+                if op.dialect(db) == Symbol::new("wasm")
+                    && op.name(db) == Symbol::new("call_indirect")
+                {
+                    // Build function type from operands and results
+                    let operands = op.operands(db);
+
+                    if operands.is_empty() {
+                        continue; // Skip invalid call_indirect
+                    }
+
+                    // Parameters: all operands except last (funcref)
+                    let param_types: IdVec<Type<'db>> = operands
+                        .iter()
+                        .take(operands.len() - 1)
+                        .filter_map(|v| value_type(db, *v))
+                        .collect();
+
+                    // Result type
+                    let result_ty = match op.results(db).first().copied() {
+                        Some(ty) => ty,
+                        None => continue, // Skip if no result
+                    };
+
+                    // Create function type
+                    let func_type = core::Func::new(db, param_types, result_ty).as_type();
+
+                    // Register if not already registered
+                    type_idx_by_type.entry(func_type).or_insert_with(|| {
+                        let idx = *next_type_idx;
+                        *next_type_idx += 1;
+                        idx
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Start with the next available type index (after GC types)
+    let mut next_type_idx = type_idx_by_type
+        .values()
+        .max()
+        .map(|&idx| idx + 1)
+        .unwrap_or(0);
+
+    collect_from_region(db, &module.body(db), type_idx_by_type, &mut next_type_idx)?;
+
+    Ok(())
 }
 
 fn extract_function_def<'db>(
@@ -1959,6 +2037,65 @@ fn emit_op<'db>(
                 }
             }
         }
+
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("call_indirect") {
+        // wasm.call_indirect: indirect function call through a funcref
+        // Operands: [arg1, arg2, ..., argN, funcref]
+        // The funcref is the last operand (on top of stack in WebAssembly)
+
+        // Get or compute type_idx
+        let type_idx = match attr_u32(op.attributes(db), Symbol::new("type_idx")) {
+            Ok(idx) => idx,
+            Err(_) => {
+                // type_idx not provided (from func_to_wasm) - compute from signature
+                // Signature: (param1, param2, ..., paramN) -> result
+                // where params are all operands except the last (funcref)
+
+                if operands.is_empty() {
+                    return Err(CompilationError::invalid_module(
+                        "wasm.call_indirect requires at least a funcref operand",
+                    ));
+                }
+
+                // Build parameter types (all operands except last)
+                let param_types: Vec<Type<'db>> = operands
+                    .iter()
+                    .take(operands.len() - 1)
+                    .filter_map(|v| value_type(db, *v))
+                    .collect();
+
+                // Get result type
+                let result_ty = op.results(db).first().copied().ok_or_else(|| {
+                    CompilationError::invalid_module("wasm.call_indirect must have a result type")
+                })?;
+
+                // Construct function type
+                let func_type =
+                    core::Func::new(db, param_types.into_iter().collect(), result_ty).as_type();
+
+                // Look up type index
+                module_info
+                    .type_idx_by_type
+                    .get(&func_type)
+                    .copied()
+                    .ok_or_else(|| {
+                        CompilationError::invalid_module(
+                            "wasm.call_indirect function type not registered in type section",
+                        )
+                    })?
+            }
+        };
+        let table = attr_u32(op.attributes(db), Symbol::new("table")).unwrap_or(0);
+
+        // Emit all operands (arguments first, then funcref)
+        emit_operands(db, operands, ctx, function)?;
+
+        // Emit call_indirect instruction
+        function.instruction(&Instruction::CallIndirect {
+            type_index: type_idx,
+            table_index: table,
+        });
 
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("return_call") {
