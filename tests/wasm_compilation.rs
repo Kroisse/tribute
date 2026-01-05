@@ -18,7 +18,8 @@
 
 use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
-use tribute::{SourceCst, stage_lower_to_wasm};
+use tribute::SourceCst;
+use tribute::pipeline::compile_to_wasm_binary;
 
 /// Helper to create a source file from code
 fn source_from_code(db: &dyn salsa::Database, name: &str, code: &str) -> SourceCst {
@@ -37,7 +38,7 @@ fn source_from_code(db: &dyn salsa::Database, name: &str, code: &str) -> SourceC
 #[salsa_test]
 fn test_compile_simple_literal(db: &salsa::DatabaseImpl) {
     let source = source_from_code(db, "literal.trb", "fn main() { 42 }");
-    let binary = stage_lower_to_wasm(db, source);
+    let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile literal return");
 
     let bytes = binary.unwrap().bytes(db);
@@ -47,7 +48,7 @@ fn test_compile_simple_literal(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn test_compile_arithmetic_expr(db: &salsa::DatabaseImpl) {
     let source = source_from_code(db, "arith.trb", "fn main() { 1 + 2 * 3 }");
-    let binary = stage_lower_to_wasm(db, source);
+    let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile arithmetic expression");
 }
 
@@ -58,7 +59,7 @@ fn add(a, b) { a + b }
 fn main() { add(1, 2) }
 "#;
     let source = source_from_code(db, "params.trb", code);
-    let binary = stage_lower_to_wasm(db, source);
+    let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile function with params");
 }
 
@@ -68,7 +69,7 @@ fn main() { add(1, 2) }
 fn test_compile_print_line(db: &salsa::DatabaseImpl) {
     let code = r#"fn main() { print_line("Hello, World!") }"#;
     let source = source_from_code(db, "hello.trb", code);
-    let binary = stage_lower_to_wasm(db, source);
+    let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile print_line");
 }
 
@@ -83,7 +84,7 @@ fn test_ops() {
 fn main() { test_ops() }
 "#;
     let source = source_from_code(db, "locals.trb", code);
-    let binary = stage_lower_to_wasm(db, source);
+    let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile local variables");
 }
 
@@ -108,6 +109,6 @@ fn classify(n) {
 fn main() { classify(1) }
 "#;
     let source = source_from_code(db, "case_expr.trb", code);
-    let binary = stage_lower_to_wasm(db, source);
+    let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile case expression");
 }

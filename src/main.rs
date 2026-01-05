@@ -11,7 +11,9 @@ use salsa::Database;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
-use tribute::pipeline::{compile_with_diagnostics, stage_lower_to_wasm, stage_resolve};
+use tribute::pipeline::{
+    compile_to_wasm_binary, compile_with_diagnostics, parse_and_lower, stage_resolve,
+};
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic};
 use tribute_passes::resolve::build_env;
@@ -101,7 +103,7 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
             "wasm" => {
                 println!("Compiling {} to WebAssembly...", input_path.display());
 
-                if let Some(wasm_binary) = stage_lower_to_wasm(db, source) {
+                if let Some(wasm_binary) = compile_to_wasm_binary(db, source) {
                     let bytes = wasm_binary.bytes(db);
                     let output = output_path.unwrap_or_else(|| input_path.with_extension("wasm"));
 
@@ -123,7 +125,7 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
 
                     // Collect diagnostics from wasm lowering
                     let wasm_diags: Vec<_> =
-                        stage_lower_to_wasm::accumulated::<Diagnostic>(db, source);
+                        compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
                     if !wasm_diags.is_empty() {
                         for diag in &wasm_diags {
                             print_diagnostic(diag, source_text, &file_path);
@@ -196,7 +198,8 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
         // Show environment if requested
         if show_env {
             println!("\n=== Module Environment ===");
-            let resolved = stage_resolve(db, source);
+            let module = parse_and_lower(db, source);
+            let resolved = stage_resolve(db, module);
             let env = build_env(db, &resolved);
             println!("{:#?}", env);
         }

@@ -82,7 +82,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use tree_sitter::Parser;
     use tribute::SourceCst;
-    use tribute::stage_lower_case;
+    use tribute::run_lower_case;
 
     fn make_source(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| {
@@ -101,7 +101,7 @@ mod tests {
         let source_text = "fn foo() { }\nfn bar() { }\nfn baz() { }";
         let source = make_source("test.trb", source_text);
 
-        let module = stage_lower_case(db, source);
+        let module = run_lower_case(db, source);
         let index = CompletionIndex::build(db, &module);
 
         // Complete with "ba" prefix

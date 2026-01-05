@@ -446,39 +446,127 @@ impl Continuation {
 
 ## Compilation Pipeline
 
+### 아키텍처 원칙
+
+Tribute 컴파일러 파이프라인은 다음 원칙을 따른다:
+
+1. **순수 변환 (Pure Transformations)**: 각 패스는 `Module → Module` 순수 함수로 구현
+2. **중앙 오케스트레이션**: 패스 연결은 `pipeline.rs`에서 관리
+3. **선택적 캐싱**: 비용이 큰 패스만 `#[salsa::tracked]`로 캐싱
+4. **관심사 분리**: 패스 구현과 파이프라인 조합을 분리
+
+```rust
+// 패스 구현 (tribute-passes): 순수 변환만 담당
+pub fn typecheck(db: &dyn Database, module: Module) -> Module { ... }
+pub fn lambda_lift(db: &dyn Database, module: Module) -> Module { ... }
+
+// 파이프라인 (src/pipeline.rs): 오케스트레이션만 담당
+pub fn compile(db, source: SourceCst) -> Module {
+    let module = parse_and_lower(db, source);
+    let module = resolve(db, module);
+    let module = typecheck(db, module);
+    let module = lambda_lift(db, module);
+    // ...
+}
 ```
-Tribute Source
+
+### 파이프라인 구조
+
+```
+Tribute Source (.trb)
     │
-    ▼ Parse
-Surface AST
+    ▼ parse_cst + lower_cst
+TrunkIR Module (src.* ops)
     │
-    ▼ Type Inference + Ability Inference
-Typed HIR (ability 정보 포함)
+    ▼ merge_with_prelude
+Module (with prelude definitions)
     │
-    ▼ Evidence Insertion
-    │   └─ 모든 함수에 evidence 파라미터 추가
-    │   └─ Ability operation을 evidence 조회로 변환
+    ├─────────────── Frontend Passes ───────────────┤
     │
-    ▼ Handler Lowering
-    │   └─ handle → push_prompt
-    │   └─ operation → shift (또는 tail-resumptive 최적화)
+    ▼ resolve
+Module (resolved names, src.var → func.call 등)
     │
-    ▼ Tail-Resumptive Analysis
-    │   └─ 즉시 resume하는 handler 감지
-    │   └─ shift 제거, 직접 호출로 변환
+    ▼ inline_constants
+Module (const values inlined)
     │
-Core IR
+    ▼ typecheck
+Typed Module (concrete types)
     │
-    ├─────────────────────┬─────────────────────┐
-    │                     │                     │
-    ▼                     ▼                     ▼
-WasmGC Backend      Cranelift Backend     (Future)
+    ├─────────────── Closure Processing ────────────┤
+    │
+    ▼ lambda_lift
+Module (lambdas → top-level funcs + closure.new)
+    │
+    ▼ closure_lower
+Module (closure.* → func.call_indirect)
+    │
+    ▼ tdnr (Type-Directed Name Resolution)
+Module (UFCS resolved: x.method() → Type::method(x))
+    │
+    ├─────────────── Ability Processing ────────────┤
+    │
+    ▼ evidence_insert
+Module (evidence params added to effectful functions)
+    │
+    ▼ handler_lower
+Module (ability.* → cont.*)
+    │   └─ ability.prompt → cont.push_prompt
+    │   └─ ability.perform → cont.shift
+    │   └─ ability.resume → cont.resume
+    │
+    ▼ (TODO) tail_resumptive_optimize
+Module (direct calls for tail-resumptive handlers)
+    │
+    ├─────────────── Final Lowering ────────────────┤
+    │
+    ▼ lower_case
+Module (case.case → scf.if)
+    │
+    ▼ dce (Dead Code Elimination)
+Core IR Module
+    │
+    ├─────────────────────┬─────────────────────────┤
+    │                     │                         │
+    ▼                     ▼                         ▼
+WasmGC Backend      Cranelift Backend         (Future)
     │                     │
-    │ Yield bubbling      │ libmprompt 연동
-    │                     │ Boehm GC 연동
+    │ cont → wasm         │ cont → libmprompt
+    │ (yield bubbling)    │ (stack copying)
+    │                     │
     ▼                     ▼
 .wasm                 native binary
 ```
+
+### 패스 분류
+
+| 카테고리 | 패스 | 입력 | 출력 | 캐싱 |
+|----------|------|------|------|------|
+| **Frontend** | `resolve` | src.* ops | func.*, adt.* | ✓ |
+| | `inline_constants` | const refs | inlined values | |
+| | `typecheck` | type.var | concrete types | ✓ |
+| **Closure** | `lambda_lift` | lambdas | top-level funcs | |
+| | `closure_lower` | closure.new | func.call_indirect | |
+| | `tdnr` | x.method() | Type::method(x) | |
+| **Ability** | `evidence_insert` | effectful funcs | +ev param | |
+| | `handler_lower` | ability.* | cont.* | |
+| | `tail_resumptive` | cont.shift | direct calls | |
+| **Lowering** | `lower_case` | case.case | scf.if | |
+| | `dce` | all funcs | reachable funcs | |
+
+### 점진적 개선 방향
+
+현재 구조는 모듈 단위(coarse-grained) 처리를 한다. 향후 rust-analyzer 스타일의 fine-grained 쿼리로 발전 가능:
+
+```rust
+// 현재: 모듈 단위
+fn typecheck(db, module: Module) -> Module
+
+// 미래: 함수 단위 (fine-grained incrementality)
+fn type_of_function(db, func_id: FunctionId) -> Type
+fn infer_function(db, func_id: FunctionId) -> InferenceResult
+```
+
+이를 통해 "함수 하나 수정 시 해당 함수만 재처리"하는 진정한 incremental compilation이 가능해진다.
 
 ---
 
