@@ -553,18 +553,40 @@ WasmGC Backend      Cranelift Backend         (Future)
 | **Lowering** | `lower_case` | case.case | scf.if | |
 | | `dce` | all funcs | reachable funcs | |
 
-### 점진적 개선 방향
+### 점진적 개선 방향: Fine-Grained Queries
 
-현재 구조는 모듈 단위(coarse-grained) 처리를 한다. 향후 rust-analyzer 스타일의 fine-grained 쿼리로 발전 가능:
+현재 구조는 모듈 단위(coarse-grained) 처리를 한다. 장기적으로 rust-analyzer 스타일의 fine-grained 쿼리 기반 아키텍처로 발전을 고려한다.
 
+**현재 (Coarse-Grained)**
 ```rust
-// 현재: 모듈 단위
+// 모듈 전체를 처리
 fn typecheck(db, module: Module) -> Module
-
-// 미래: 함수 단위 (fine-grained incrementality)
-fn type_of_function(db, func_id: FunctionId) -> Type
-fn infer_function(db, func_id: FunctionId) -> InferenceResult
+fn resolve(db, module: Module) -> Module
 ```
+
+**목표 (Fine-Grained, rust-analyzer 스타일)**
+```rust
+// 개별 항목 단위로 쿼리
+fn type_of_function(db, func_id: FunctionId) -> Type
+fn body_of_function(db, func_id: FunctionId) -> Body
+fn signature_of_function(db, func_id: FunctionId) -> Signature
+fn infer_function(db, func_id: FunctionId) -> InferenceResult
+
+// 의존성 기반 재계산
+// 함수 A 수정 시 → A의 body만 재파싱
+//                → A를 호출하는 함수들만 재검사
+```
+
+**rust-analyzer 아키텍처 참고점:**
+- `base_db`: 입력 쿼리 (파일 내용, 크레이트 그래프)
+- `hir_def`: 정의 추출 (함수, 타입, 모듈 구조)
+- `hir_ty`: 타입 추론 및 검사
+- ItemTree: 함수 본문 변경에 영향받지 않는 요약 구조
+
+**전환 시 고려사항:**
+- `FunctionId`, `TypeId` 등 안정적인 ID 체계 필요
+- 모듈 구조와 개별 항목 분리
+- 점진적 마이그레이션 전략 (일부 패스부터 적용)
 
 이를 통해 "함수 하나 수정 시 해당 함수만 재처리"하는 진정한 incremental compilation이 가능해진다.
 
@@ -636,6 +658,11 @@ ev.get(STATE_ID)  // binary search로 찾음
 3. **User-defined Linear Types**: FFI 안전성을 위해 필요
    - 문법 설계
    - Continuation과의 상호작용
+
+4. **Fine-Grained Query 아키텍처**: 장기적 incremental compilation 개선
+   - rust-analyzer 스타일의 ID 기반 쿼리 시스템 도입 시점
+   - 기존 Module 기반 패스와의 공존 전략
+   - LSP 성능 요구사항에 따른 우선순위 결정
 
 ---
 
