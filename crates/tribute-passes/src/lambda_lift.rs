@@ -196,6 +196,11 @@ impl<'db> LambdaInfoCollector<'db> {
             return self.collect_in_let(let_op);
         }
 
+        // Handle case arm pattern bindings (including handler arm continuations)
+        if let Ok(arm_op) = tribute::Arm::from_operation(self.db, *op) {
+            return self.collect_in_arm(arm_op);
+        }
+
         // Default: recurse into regions
         let mut lambda_info = BTreeMap::new();
         for region in op.regions(self.db).iter() {
@@ -243,6 +248,22 @@ impl<'db> LambdaInfoCollector<'db> {
         self.collect_region(&pattern_region)
     }
 
+    fn collect_in_arm(&mut self, op: tribute::Arm<'db>) -> LambdaInfoMap<'db> {
+        self.push_scope();
+
+        // Extract pattern bindings (recursively includes handler_suspend.continuation)
+        let pattern_region = op.pattern(self.db);
+        // Use a type variable as the scrutinee type - actual type comes from the bind op's result
+        let scrutinee_ty = tribute::new_type_var(self.db, std::collections::BTreeMap::new());
+        self.collect_pattern_bindings(&pattern_region, scrutinee_ty);
+
+        // Process arm body (lambdas inside will now see pattern bindings including continuations)
+        let result = self.collect_region(&op.body(self.db));
+
+        self.pop_scope();
+        result
+    }
+
     fn get_value_type(&self, value: Value<'db>) -> Type<'db> {
         match value.def(self.db) {
             ValueDef::OpResult(op) => {
@@ -270,6 +291,10 @@ impl<'db> LambdaInfoCollector<'db> {
                     let name = bind_op.name(self.db);
                     let binding_ty = op.results(self.db).first().copied().unwrap_or(ty);
                     self.add_local(name, binding_ty);
+                }
+                // Recurse into nested regions (for variant fields, handler_suspend.continuation, etc.)
+                for nested_region in op.regions(self.db).iter() {
+                    self.collect_pattern_bindings(nested_region, ty);
                 }
             }
         }
@@ -839,18 +864,25 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                             continue;
                         }
 
-                        // For other ops, remap operands and copy
+                        // For other ops, remap operands and transform nested regions
                         let remapped_operands: IdVec<Value<'db>> = op
                             .operands(db)
                             .iter()
                             .map(|&v| *value_map.get(&v).unwrap_or(&v))
                             .collect();
 
-                        let new_op = if remapped_operands != *op.operands(db) {
-                            op.modify(db).operands(remapped_operands).build()
-                        } else {
-                            *op
-                        };
+                        // Transform nested regions (for tribute.block, etc.)
+                        let new_regions =
+                            transform_nested_regions(db, op, &capture_values, &mut value_map);
+
+                        let mut builder = op.modify(db);
+                        if remapped_operands != *op.operands(db) {
+                            builder = builder.operands(remapped_operands);
+                        }
+                        if !new_regions.is_empty() {
+                            builder = builder.regions(new_regions);
+                        }
+                        let new_op = builder.build();
 
                         entry.op(new_op);
 
@@ -868,7 +900,104 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         )
         .as_operation()
     }
+}
 
+/// Recursively transform nested regions, replacing tribute.var references
+/// to captured variables with the extracted values.
+fn transform_nested_regions<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    capture_values: &HashMap<Symbol, Value<'db>>,
+    value_map: &mut HashMap<Value<'db>, Value<'db>>,
+) -> IdVec<Region<'db>> {
+    let regions = op.regions(db);
+    if regions.is_empty() {
+        return IdVec::new();
+    }
+
+    regions
+        .iter()
+        .map(|region| transform_region_for_captures(db, region, capture_values, value_map))
+        .collect()
+}
+
+fn transform_region_for_captures<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    capture_values: &HashMap<Symbol, Value<'db>>,
+    value_map: &mut HashMap<Value<'db>, Value<'db>>,
+) -> Region<'db> {
+    let new_blocks: IdVec<Block<'db>> = region
+        .blocks(db)
+        .iter()
+        .map(|block| transform_block_for_captures(db, block, capture_values, value_map))
+        .collect();
+    Region::new(db, region.location(db), new_blocks)
+}
+
+fn transform_block_for_captures<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    capture_values: &HashMap<Symbol, Value<'db>>,
+    value_map: &mut HashMap<Value<'db>, Value<'db>>,
+) -> Block<'db> {
+    let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
+
+    for op in block.operations(db).iter() {
+        // Handle tribute.var - map captured variables
+        if let Ok(var_op) = tribute::Var::from_operation(db, *op) {
+            let var_name = var_op.name(db);
+
+            if let Some(&extracted_val) = capture_values.get(&var_name) {
+                // Map this var's result to the captured value
+                let orig_result = op.result(db, 0);
+                value_map.insert(orig_result, extracted_val);
+                // Don't emit the tribute.var - it's now the captured value
+                continue;
+            }
+        }
+
+        // Remap operands
+        let remapped_operands: IdVec<Value<'db>> = op
+            .operands(db)
+            .iter()
+            .map(|&v| *value_map.get(&v).unwrap_or(&v))
+            .collect();
+
+        // Recursively transform nested regions
+        let new_regions = transform_nested_regions(db, op, capture_values, value_map);
+
+        let mut builder = op.modify(db);
+        if remapped_operands != *op.operands(db) {
+            builder = builder.operands(remapped_operands);
+        }
+        if !new_regions.is_empty() {
+            builder = builder.regions(new_regions);
+        }
+        let new_op = builder.build();
+
+        new_ops.push(new_op);
+
+        // Map old results to new results
+        for (i, _) in op.results(db).iter().enumerate() {
+            let old_result = op.result(db, i);
+            let new_result = new_op.result(db, i);
+            if old_result != new_result {
+                value_map.insert(old_result, new_result);
+            }
+        }
+    }
+
+    Block::new(
+        db,
+        block.id(db),
+        block.location(db),
+        block.args(db).clone(),
+        new_ops,
+    )
+}
+
+impl<'db, 'a> LambdaTransformer<'db, 'a> {
     fn transform_op_regions(&mut self, op: &Operation<'db>) -> Operation<'db> {
         let regions = op.regions(self.db);
         if regions.is_empty() {

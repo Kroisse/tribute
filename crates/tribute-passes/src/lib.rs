@@ -13,7 +13,6 @@ pub mod diagnostic;
 // === TrunkIR passes ===
 pub mod closure_lower;
 pub mod const_inline;
-pub mod cont_capture_fixup;
 pub mod evidence;
 pub mod handler_lower;
 pub mod lambda_lift;
@@ -25,7 +24,6 @@ pub mod typeck;
 // Re-exports
 pub use closure_lower::lower_closures;
 pub use const_inline::{ConstInliner, inline_module};
-pub use cont_capture_fixup::fix_continuation_captures;
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use evidence::insert_evidence;
 pub use handler_lower::lower_handlers;
