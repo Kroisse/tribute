@@ -472,69 +472,64 @@ pub fn compile(db, source: SourceCst) -> Module {
 
 ### 파이프라인 구조
 
-```
-Tribute Source (.trb)
-    │
-    ▼ parse_cst + lower_cst
-TrunkIR Module (src.* ops)
-    │
-    ▼ merge_with_prelude
-Module (with prelude definitions)
-    │
-    ├─────────────── Frontend Passes ───────────────┤
-    │
-    ▼ resolve
-Module (resolved names, src.var → func.call 등)
-    │
-    ▼ inline_constants
-Module (const values inlined)
-    │
-    ▼ typecheck
-Typed Module (concrete types)
-    │
-    ├─────────────── Closure Processing ────────────┤
-    │
-    ▼ lambda_lift
-Module (lambdas → top-level funcs + closure.new)
-    │
-    ▼ closure_lower
-Module (closure.* → func.call_indirect)
-    │
-    ▼ tdnr (Type-Directed Name Resolution)
-Module (UFCS resolved: x.method() → Type::method(x))
-    │
-    ├─────────────── Ability Processing ────────────┤
-    │
-    ▼ evidence_insert
-Module (evidence params added to effectful functions)
-    │
-    ▼ handler_lower
-Module (ability.* → cont.*)
-    │   └─ ability.prompt → cont.push_prompt
-    │   └─ ability.perform → cont.shift
-    │   └─ ability.resume → cont.resume
-    │
-    ▼ (TODO) tail_resumptive_optimize
-Module (direct calls for tail-resumptive handlers)
-    │
-    ├─────────────── Final Lowering ────────────────┤
-    │
-    ▼ lower_case
-Module (case.case → scf.if)
-    │
-    ▼ dce (Dead Code Elimination)
-Core IR Module
-    │
-    ├─────────────────────┬─────────────────────────┤
-    │                     │                         │
-    ▼                     ▼                         ▼
-WasmGC Backend      Cranelift Backend         (Future)
-    │                     │
-    │ cont → wasm         │ cont → libmprompt
-    │ (yield bubbling)    │ (stack copying)
-    │                     │
-    ▼                     ▼
-.wasm                 native binary
+```mermaid
+flowchart TB
+    subgraph input["Input"]
+        source["Tribute Source (.trb)"]
+    end
+
+    subgraph frontend["Frontend Passes"]
+        parse["parse_cst + lower_cst"]
+        prelude["merge_with_prelude"]
+        resolve["resolve"]
+        const_inline["inline_constants"]
+        typecheck["typecheck"]
+    end
+
+    subgraph closure["Closure Processing"]
+        lambda_lift["lambda_lift"]
+        closure_lower["closure_lower"]
+        tdnr["tdnr"]
+    end
+
+    subgraph ability["Ability Processing"]
+        evidence["evidence_insert"]
+        handler["handler_lower"]
+        tail_opt["tail_resumptive_optimize (TODO)"]
+    end
+
+    subgraph lowering["Final Lowering"]
+        lower_case["lower_case"]
+        dce["dce"]
+    end
+
+    subgraph backends["Code Generation"]
+        wasm["WasmGC Backend"]
+        cranelift["Cranelift Backend"]
+        future["(Future)"]
+    end
+
+    subgraph output["Output"]
+        wasm_bin[".wasm"]
+        native["native binary"]
+    end
+
+    source --> parse
+    parse -->|"src.* ops"| prelude
+    prelude --> resolve
+    resolve -->|"func.*, adt.*"| const_inline
+    const_inline --> typecheck
+    typecheck -->|"typed module"| lambda_lift
+    lambda_lift -->|"closure.new"| closure_lower
+    closure_lower -->|"call_indirect"| tdnr
+    tdnr --> evidence
+    evidence -->|"+evidence param"| handler
+    handler -->|"cont.*"| tail_opt
+    tail_opt --> lower_case
+    lower_case -->|"scf.if"| dce
+    dce --> wasm & cranelift & future
+    wasm -->|"yield bubbling"| wasm_bin
+    cranelift -->|"libmprompt"| native
 ```
 
 ### 패스 분류
