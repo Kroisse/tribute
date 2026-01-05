@@ -36,7 +36,9 @@
 //! Note: `adt.string_const` and `adt.bytes_const` are handled by WasmLowerer
 //! because they require data segment allocation.
 //!
-//! Type attributes are preserved and converted to type_idx at emit time.
+//! Type information is preserved as `type` attribute when available from the source operation.
+//! For operations where the result type is set explicitly (e.g., variant_new, variant_cast),
+//! emit can infer type_idx from result/operand types without the attribute.
 
 use tracing::warn;
 
@@ -115,12 +117,13 @@ impl RewritePattern for StructGetPattern {
         };
 
         // Build wasm.struct_get with renamed attributes
+        // Preserve type attribute for cases where emit can't infer from operand types
+        // (e.g., when operand comes from a block argument)
         let mut builder = Operation::of_name(db, op.location(db), "wasm.struct_get")
             .operands(op.operands(db).clone())
             .results(op.results(db).clone())
             .attr("field_idx", Attribute::IntBits(field_idx));
 
-        // Preserve type attribute (will be converted to type_idx at emit time)
         if let Some(ty_attr) = op.attributes(db).get(&Symbol::new("type")) {
             builder = builder.attr("type", ty_attr.clone());
         }
@@ -153,11 +156,12 @@ impl RewritePattern for StructSetPattern {
         };
 
         // Build wasm.struct_set with renamed attributes
+        // Preserve type attribute for cases where emit can't infer from operand types
+        // (e.g., when operand comes from a block argument)
         let mut builder = Operation::of_name(db, op.location(db), "wasm.struct_set")
             .operands(op.operands(db).clone())
             .attr("field_idx", Attribute::IntBits(field_idx));
 
-        // Preserve type attribute
         if let Some(ty_attr) = op.attributes(db).get(&Symbol::new("type")) {
             builder = builder.attr("type", ty_attr.clone());
         }
@@ -189,12 +193,11 @@ impl RewritePattern for VariantNewPattern {
         let variant_type = make_variant_type(db, variant_new.r#type(db), tag_sym);
 
         // Create wasm.struct_new with variant-specific type (no tag field)
-        // Result type must be the variant-specific type for correct GC type collection
+        // Result type is the variant-specific type - emit infers type_idx from it
         let fields: IdVec<Value<'db>> = variant_new.fields(db).iter().copied().collect();
         let struct_new = Operation::of_name(db, location, "wasm.struct_new")
             .operands(fields)
             .results(IdVec::from(vec![variant_type]))
-            .attr("type", Attribute::Type(variant_type))
             .build();
 
         RewriteResult::Replace(struct_new)
@@ -257,12 +260,12 @@ impl RewritePattern for VariantTagPattern {
         let location = op.location(db);
 
         // Tag is always field 0
+        // Preserve type attribute for cases where emit can't infer from operand types
         let mut struct_get = Operation::of_name(db, location, "wasm.struct_get")
             .operands(op.operands(db).clone())
             .attr("field_idx", Attribute::IntBits(0))
             .results(op.results(db).clone());
 
-        // Preserve type attribute
         if let Some(ty_attr) = op.attributes(db).get(&Symbol::new("type")) {
             struct_get = struct_get.attr("type", ty_attr.clone());
         }
@@ -341,11 +344,10 @@ impl RewritePattern for VariantCastPattern {
         let variant_type = make_variant_type(db, enum_type, tag);
 
         // Create wasm.ref_cast with variant-specific type
-        // Result type must be the variant-specific type so struct_get can find it
+        // Result type is the variant-specific type - emit infers type_idx from it
         let ref_cast = Operation::of_name(db, location, "wasm.ref_cast")
             .operands(op.operands(db).clone())
             .results(IdVec::from(vec![variant_type]))
-            .attr("type", Attribute::Type(variant_type))
             .build();
 
         RewriteResult::Replace(ref_cast)
@@ -381,12 +383,13 @@ impl RewritePattern for VariantGetPattern {
             return RewriteResult::Unchanged;
         };
 
+        // Infer type from the operand (the cast result has the variant-specific type)
+        // Store as type attribute for emit to use
         let mut struct_get = Operation::of_name(db, location, "wasm.struct_get")
             .operands(op.operands(db).clone())
             .attr("field_idx", Attribute::IntBits(field_idx))
             .results(op.results(db).clone());
 
-        // Get type from the operand (the cast result has the variant-specific type)
         if let Some(ref_operand) = op.operands(db).first()
             && let Some(ref_type) = operand_type(db, *ref_operand)
         {

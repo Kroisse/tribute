@@ -223,7 +223,7 @@ pub mod resume_gen {
         let mut value_mapping: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
         // Extract live locals from state struct
-        let state_ty = cont_types::state_type(db, &info.live_locals);
+        let _state_ty = cont_types::state_type(db, &info.live_locals);
 
         for (field_idx, live_local) in info.live_locals.iter().enumerate() {
             // Generate struct_get to extract this field
@@ -1319,7 +1319,7 @@ fn generate_inline_resume_function<'db>(
     }
 
     // Extract live locals from state struct
-    let state_ty = cont_types::state_type(db, live_locals);
+    let _state_ty = cont_types::state_type(db, live_locals);
 
     for (field_idx, live_local) in live_locals.iter().enumerate() {
         // Generate struct_get to extract this field
@@ -2100,7 +2100,7 @@ impl RewritePattern for ResumePattern {
         let i32_ty = core::I32::new(db).as_type();
         let funcref_ty = wasm::Funcref::new(db).as_type();
         let anyref_ty = wasm::Anyref::new(db).as_type();
-        let cont_ty = cont_types::continuation_type(db);
+        let _cont_ty = cont_types::continuation_type(db);
 
         let mut ops = Vec::new();
 
@@ -2117,7 +2117,7 @@ impl RewritePattern for ResumePattern {
             continuation,
             funcref_ty,
             0, // type_idx - Placeholder, resolved at emit time
-            CONT_FIELD_RESUME_FN as u32,
+            CONT_FIELD_RESUME_FN,
         );
         let resume_fn_val = Value::new(db, ValueDef::OpResult(get_resume_fn.as_operation()), 0);
         ops.push(get_resume_fn.as_operation());
@@ -2129,7 +2129,7 @@ impl RewritePattern for ResumePattern {
             continuation,
             anyref_ty,
             0, // type_idx - Placeholder, resolved at emit time
-            CONT_FIELD_STATE as u32,
+            CONT_FIELD_STATE,
         );
         let state_val = Value::new(db, ValueDef::OpResult(get_state.as_operation()), 0);
         ops.push(get_state.as_operation());
