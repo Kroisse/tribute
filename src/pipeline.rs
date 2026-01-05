@@ -540,12 +540,20 @@ pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'
 /// Compile to WebAssembly binary.
 ///
 /// Runs the full pipeline and then lowers to WebAssembly.
+///
+/// Note: This duplicates the `compile` pipeline stages explicitly rather than
+/// calling `compile` because:
+/// 1. Each `stage_*` is `#[salsa::tracked]`, so stages are individually cached
+///    and reused if `compile` was already called on the same source
+/// 2. The wasm path skips the final resolver pass (diagnostic reporting) since
+///    we only need the lowered module, not error messages
+/// 3. Allows the wasm pipeline to diverge from `compile` in the future if needed
 #[salsa::tracked]
 pub fn compile_to_wasm_binary<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<WasmBinary<'db>> {
-    // Run pipeline up to DCE
+    // Run pipeline up to DCE (stages are cached and reused from compile if already run)
     let module = parse_and_lower(db, source);
     let module = stage_resolve(db, module);
     let module = stage_const_inline(db, module);
