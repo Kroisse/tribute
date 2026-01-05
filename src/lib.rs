@@ -25,8 +25,8 @@ pub mod database;
 pub mod pipeline;
 
 pub use pipeline::{
-    CompilationResult, compile, compile_with_diagnostics, stage_lower_case, stage_lower_to_wasm,
-    stage_resolve, stage_tdnr, stage_typecheck,
+    CompilationResult, compile, compile_for_lsp, compile_to_wasm_binary, compile_with_diagnostics,
+    parse_and_lower,
 };
 
 /// Lower a Tribute source string to TrunkIR module.

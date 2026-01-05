@@ -154,7 +154,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use tree_sitter::Parser;
     use tribute::SourceCst;
-    use tribute::stage_lower_case;
+    use tribute::compile_for_lsp;
 
     fn make_source(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| {
@@ -175,8 +175,7 @@ mod tests {
         let source_text = "fn add(x: Int, y: Int) -> Int { x + y }";
         let source = make_source("test.trb", source_text);
 
-        // Use stage_lower_case to preserve functions before DCE removes them
-        let module = stage_lower_case(db, source);
+        let module = compile_for_lsp(db, source);
         let index = TypeIndex::build(db, &module);
 
         // Should find the function type at the function name "add" (position 3-6)
@@ -194,8 +193,7 @@ mod tests {
         let source_text = "fn foo(a: Int) -> Int { a }";
         let source = make_source("test.trb", source_text);
 
-        // Use stage_lower_case to preserve functions before DCE removes them
-        let module = stage_lower_case(db, source);
+        let module = compile_for_lsp(db, source);
         let index = TypeIndex::build(db, &module);
 
         // Position of 'a' in body "{ a }" should show type Int

@@ -446,39 +446,146 @@ impl Continuation {
 
 ## Compilation Pipeline
 
+### 아키텍처 원칙
+
+Tribute 컴파일러 파이프라인은 다음 원칙을 따른다:
+
+1. **순수 변환 (Pure Transformations)**: 각 패스는 `Module → Module` 순수 함수로 구현
+2. **중앙 오케스트레이션**: 패스 연결은 `pipeline.rs`에서 관리
+3. **선택적 캐싱**: 비용이 큰 패스만 `#[salsa::tracked]`로 캐싱
+4. **관심사 분리**: 패스 구현과 파이프라인 조합을 분리
+
+```rust
+// 패스 구현 (tribute-passes): 순수 변환만 담당
+pub fn typecheck(db: &dyn Database, module: Module) -> Module { ... }
+pub fn lambda_lift(db: &dyn Database, module: Module) -> Module { ... }
+
+// 파이프라인 (src/pipeline.rs): 오케스트레이션만 담당
+pub fn compile(db, source: SourceCst) -> Module {
+    let module = parse_and_lower(db, source);
+    let module = resolve(db, module);
+    let module = typecheck(db, module);
+    let module = lambda_lift(db, module);
+    // ...
+}
 ```
-Tribute Source
-    │
-    ▼ Parse
-Surface AST
-    │
-    ▼ Type Inference + Ability Inference
-Typed HIR (ability 정보 포함)
-    │
-    ▼ Evidence Insertion
-    │   └─ 모든 함수에 evidence 파라미터 추가
-    │   └─ Ability operation을 evidence 조회로 변환
-    │
-    ▼ Handler Lowering
-    │   └─ handle → push_prompt
-    │   └─ operation → shift (또는 tail-resumptive 최적화)
-    │
-    ▼ Tail-Resumptive Analysis
-    │   └─ 즉시 resume하는 handler 감지
-    │   └─ shift 제거, 직접 호출로 변환
-    │
-Core IR
-    │
-    ├─────────────────────┬─────────────────────┐
-    │                     │                     │
-    ▼                     ▼                     ▼
-WasmGC Backend      Cranelift Backend     (Future)
-    │                     │
-    │ Yield bubbling      │ libmprompt 연동
-    │                     │ Boehm GC 연동
-    ▼                     ▼
-.wasm                 native binary
+
+### 파이프라인 구조
+
+```mermaid
+flowchart TB
+    subgraph input["Input"]
+        source["Tribute Source (.trb)"]
+    end
+
+    subgraph frontend["Frontend Passes"]
+        parse["parse_cst + lower_cst"]
+        prelude["merge_with_prelude"]
+        resolve["resolve"]
+        const_inline["inline_constants"]
+        typecheck["typecheck"]
+    end
+
+    subgraph closure["Closure Processing"]
+        lambda_lift["lambda_lift"]
+        closure_lower["closure_lower"]
+        tdnr["tdnr"]
+    end
+
+    subgraph ability["Ability Processing"]
+        evidence["evidence_insert"]
+        handler["handler_lower"]
+        tail_opt["tail_resumptive_optimize (TODO)"]
+    end
+
+    subgraph lowering["Final Lowering"]
+        lower_case["lower_case"]
+        dce["dce"]
+    end
+
+    subgraph backends["Code Generation"]
+        wasm["WasmGC Backend"]
+        cranelift["Cranelift Backend"]
+        future["(Future)"]
+    end
+
+    subgraph output["Output"]
+        wasm_bin[".wasm"]
+        native["native binary"]
+    end
+
+    source --> parse
+    parse -->|"tribute.* ops"| prelude
+    prelude --> resolve
+    resolve -->|"func.*, adt.*"| const_inline
+    const_inline --> typecheck
+    typecheck -->|"typed module"| lambda_lift
+    lambda_lift -->|"closure.new"| closure_lower
+    closure_lower -->|"call_indirect"| tdnr
+    tdnr --> evidence
+    evidence -->|"+evidence param"| handler
+    handler -->|"cont.*"| tail_opt
+    tail_opt --> lower_case
+    lower_case -->|"scf.if"| dce
+    dce --> wasm & cranelift & future
+    wasm -->|"yield bubbling"| wasm_bin
+    cranelift -->|"libmprompt"| native
 ```
+
+### 패스 분류
+
+| 카테고리 | 패스 | 입력 | 출력 | 캐싱 |
+|----------|------|------|------|------|
+| **Frontend** | `resolve` | tribute.* ops | func.*, adt.* | ✓ |
+| | `inline_constants` | const refs | inlined values | |
+| | `typecheck` | type.var | concrete types | ✓ |
+| **Closure** | `lambda_lift` | lambdas | top-level funcs | |
+| | `closure_lower` | closure.new | func.call_indirect | |
+| | `tdnr` | x.method() | Type::method(x) | |
+| **Ability** | `evidence_insert` | effectful funcs | +ev param | |
+| | `handler_lower` | ability.* | cont.* | |
+| | `tail_resumptive` | cont.shift | direct calls | |
+| **Lowering** | `lower_case` | tribute.case | scf.if | |
+| | `dce` | all funcs | reachable funcs | |
+
+### 점진적 개선 방향: Fine-Grained Queries
+
+현재 구조는 모듈 단위(coarse-grained) 처리를 한다. 장기적으로 rust-analyzer 스타일의 fine-grained 쿼리 기반 아키텍처로 발전을 고려한다.
+
+#### 현재 (Coarse-Grained)
+
+```rust
+// 모듈 전체를 처리
+fn typecheck(db, module: Module) -> Module
+fn resolve(db, module: Module) -> Module
+```
+
+#### 목표 (Fine-Grained, rust-analyzer 스타일)
+
+```rust
+// 개별 항목 단위로 쿼리
+fn type_of_function(db, func_id: FunctionId) -> Type
+fn body_of_function(db, func_id: FunctionId) -> Body
+fn signature_of_function(db, func_id: FunctionId) -> Signature
+fn infer_function(db, func_id: FunctionId) -> InferenceResult
+
+// 의존성 기반 재계산
+// 함수 A 수정 시 → A의 body만 재파싱
+//                → A를 호출하는 함수들만 재검사
+```
+
+#### rust-analyzer 아키텍처 참고점
+- `base_db`: 입력 쿼리 (파일 내용, 크레이트 그래프)
+- `hir_def`: 정의 추출 (함수, 타입, 모듈 구조)
+- `hir_ty`: 타입 추론 및 검사
+- ItemTree: 함수 본문 변경에 영향받지 않는 요약 구조
+
+**전환 시 고려사항:**
+- `FunctionId`, `TypeId` 등 안정적인 ID 체계 필요
+- 모듈 구조와 개별 항목 분리
+- 점진적 마이그레이션 전략 (일부 패스부터 적용)
+
+이를 통해 "함수 하나 수정 시 해당 함수만 재처리"하는 진정한 incremental compilation이 가능해진다.
 
 ---
 
@@ -548,6 +655,40 @@ ev.get(STATE_ID)  // binary search로 찾음
 3. **User-defined Linear Types**: FFI 안전성을 위해 필요
    - 문법 설계
    - Continuation과의 상호작용
+
+4. **Fine-Grained Query 아키텍처**: 장기적 incremental compilation 개선
+   - rust-analyzer 스타일의 ID 기반 쿼리 시스템 도입 시점
+   - 기존 Module 기반 패스와의 공존 전략
+   - LSP 성능 요구사항에 따른 우선순위 결정
+
+5. **Operation Identity와 Origin Tracking**
+
+   Pass를 거치면서 변환된 operation 사이의 equivalence를 추적하는 방법:
+
+   **현재 상태: Location 기반 추적**
+   - 각 operation은 `location: Location` 필드로 소스 위치 보존
+   - 모든 pass가 location을 잘 보존하고 있음:
+     - `op.modify(db)`: 자동 보존
+     - 새 operation 생성 시: `let location = op.location(db);` 패턴
+     - Region/Block 재생성 시: 원본 location 복사
+   - "같은 소스에서 유래한 operation"은 같은 location을 공유
+
+   **고려했던 대안들**
+
+   | 방식 | 장점 | 단점 |
+   |------|------|------|
+   | `OperationId` (BlockId와 유사) | 명시적 identity | 1:N 변환 시 대표 선택 필요 |
+   | Fractional indexing (42.1.0) | 계층적 추적 가능 | ID 길이 폭발, N:1 여전히 문제 |
+   | Origin tag (중복 허용) | 1:N 자연스럽게 해결 | Location과 기능 중복 |
+
+   **결론**: 당장은 Location 기반으로 충분함
+   - Source-level equivalence ("같은 소스에서 유래"): Location으로 해결
+   - Fine-grained query (함수/타입 단위): top-level item의 Symbol로 식별
+   - 별도 ID 시스템은 필요성이 구체화될 때 도입 검토
+
+   **주의 사항**
+   - Synthetic operation (helper function 등) 생성 시 의미 있는 location 부여 필요
+   - Pass 추가 시 location 보존 패턴 준수 필요
 
 ---
 

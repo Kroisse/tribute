@@ -15,18 +15,18 @@ Parses source code into a Concrete Syntax Tree using Tree-sitter.
 ### 2. lower_cst
 **Function**: `lower_cst(db, source_file, cst) -> Module`
 
-Converts CST to TrunkIR with unresolved `src.*` operations.
+Converts CST to TrunkIR with unresolved `tribute.*` operations.
 - Input: `ParsedCst`
-- Output: `Module` with `src.var`, `src.call`, `src.path`, `src.binop`, etc.
+- Output: `Module` with `tribute.var`, `tribute.call`, `tribute.path`, `tribute.binop`, etc.
 - Location: `crates/tribute-front/src/tirgen/`
 
 ### 3. stage_resolve
 **Function**: `stage_resolve(db, source_file) -> Module`
 
-Resolves names and converts `src.*` operations to concrete ops.
+Resolves names and converts `tribute.*` operations to concrete ops.
 - Builds `ModuleEnv` (collects definitions)
 - Resolves bindings: Function, Constructor, TypeDef
-- Transforms: `src.var` → `func.call`, `src.call` → `func.call`, etc.
+- Transforms: `tribute.var` → `func.call`, `tribute.call` → `func.call`, etc.
 - Location: `crates/tribute-passes/src/resolve.rs`
 
 ### 4. stage_typecheck
@@ -55,10 +55,10 @@ Source File (.trb)
 ParsedCst (Tree-sitter tree)
     │
     ▼ lower_cst
-Module [src.*, func.*, adt.*, arith.*]
+Module [tribute.*, func.*, adt.*, arith.*]
     │
     ▼ stage_resolve
-Module [func.*, adt.*, arith.*, case.*]
+Module [func.*, adt.*, arith.*, tribute.case]
     │
     ▼ stage_typecheck
 Module (with inferred types)

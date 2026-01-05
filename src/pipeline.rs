@@ -1,65 +1,63 @@
 //! Compilation pipeline for Tribute.
 //!
-//! This module defines the compilation stages as Salsa tracked functions.
-//! Each stage is independently cacheable for incremental compilation.
+//! This module orchestrates the compilation stages with centralized control flow.
+//! Each pass is a pure `Module → Module` transformation, and this module handles
+//! the sequencing and optional caching of expensive stages.
+//!
+//! ## Architecture Principles
+//!
+//! 1. **Pure Transformations**: Each pass is a pure function `(db, Module) -> Module`
+//! 2. **Centralized Orchestration**: Pass sequencing is managed here, not in passes
+//! 3. **Selective Caching**: Only expensive passes use `#[salsa::tracked]` caching
+//! 4. **Separation of Concerns**: Pass implementation vs pipeline composition
 //!
 //! ## Pipeline Stages
 //!
 //! ```text
 //! SourceCst
 //!     │
-//!     ▼
-//! parse_cst ─► ParsedCst
+//!     ▼ parse_cst + lower_cst
+//! Module (tribute.* ops)
 //!     │
-//!     ▼
-//! lower_cst ─► Module (src.* ops, type.var)
+//!     ▼ merge_with_prelude
+//! Module (with prelude definitions)
 //!     │
-//!     ▼
-//! stage_resolve ─► Module (resolved references, const refs marked)
+//!     ├─────────────── Frontend Passes ───────────────┤
+//!     ▼ resolve
+//! Module (resolved names)
 //!     │
-//!     ▼
-//! stage_const_inline ─► Module (const values inlined)
+//!     ▼ inline_constants
+//! Module (const values inlined)
 //!     │
-//!     ▼
-//! stage_typecheck ─► Module (concrete types)
+//!     ▼ typecheck
+//! Typed Module
 //!     │
-//!     ▼
-//! stage_lambda_lift ─► Module (lambdas lifted, closure.new created)
+//!     ├─────────────── Closure Processing ────────────┤
+//!     ▼ lambda_lift
+//! Module (lambdas lifted)
 //!     │
-//!     ▼
-//! stage_closure_lower ─► Module (closure.func/env extracted for indirect calls)
+//!     ▼ closure_lower
+//! Module (closure.* lowered)
 //!     │
-//!     ▼
-//! stage_tdnr ─► Module (UFCS method calls resolved)
+//!     ▼ tdnr
+//! Module (UFCS resolved)
 //!     │
-//!     ▼
-//! stage_evidence ─► Module (evidence params added to effectful functions)
+//!     ├─────────────── Ability Processing ────────────┤
+//!     ▼ evidence_insert
+//! Module (evidence params added)
 //!     │
-//!     ▼
-//! stage_handler_lower ─► Module (ability ops lowered to cont ops)
+//!     ▼ handler_lower
+//! Module (ability.* → cont.*)
 //!     │
-//!     ▼
-//! stage_lower_case ─► Module (case.case lowered to scf.if)
+//!     ├─────────────── Final Lowering ────────────────┤
+//!     ▼ lower_case
+//! Module (case → scf.if)
 //!     │
-//!     ▼
-//! stage_dce ─► Module (dead code eliminated)
+//!     ▼ dce
+//! Core IR Module
 //!     │
-//!     ├─► [No target] ─► Full Tribute module (diagnostic/analysis)
-//!     │
-//!     └─► [target: wasm] ─► stage_lower_to_wasm ─► WasmBinary (WebAssembly bytes)
+//!     └─► [target: wasm] ─► compile_to_wasm ─► WasmBinary
 //! ```
-//!
-//! ## Incremental Compilation
-//!
-//! Salsa tracks dependencies between queries. If a source file changes:
-//! - `parse_cst` re-runs for that file
-//! - `lower_cst` re-runs if the CST changed
-//! - `stage_resolve` re-runs if the module changed
-//! - `stage_typecheck` re-runs if resolved module changed
-//! - `stage_tdnr` re-runs if typed module changed
-//!
-//! If only a type annotation changes in file A, but file B's code hasn't changed,
-//! file B won't be re-parsed or re-lowered.
 //!
 //! ## Diagnostics
 //!
@@ -162,11 +160,23 @@ pub fn merge_with_prelude<'db>(
         );
     }
 
-    // Fallback: just use user module if structure doesn't match
+    // Fallback: emit diagnostic if structure doesn't match
+    Diagnostic {
+        message: format!(
+            "Prelude merge failed: expected single block in both modules, got {} prelude blocks and {} user blocks",
+            prelude_blocks.len(),
+            user_blocks.len()
+        ),
+        span: Span::new(0, 0),
+        severity: DiagnosticSeverity::Warning,
+        phase: CompilationPhase::NameResolution,
+    }
+    .accumulate(db);
+
     user_module
 }
 
-// Re-export for convenience
+// Re-exports for external use
 pub use tribute_passes::resolve::build_env as build_module_env;
 
 /// Result of the full compilation pipeline.
@@ -180,33 +190,19 @@ pub struct CompilationResult<'db> {
 }
 
 // =============================================================================
-// Pipeline Stages
+// Pipeline Stages (Pure Transformations)
 // =============================================================================
+//
+// Each stage is a #[salsa::tracked] function that takes a Module as input
+// and returns a transformed Module. Stages do not call other stages directly;
+// orchestration is handled by the compile() function.
 
-/// Stage 1: Parse source to CST.
+/// Parse source to CST and lower to initial TrunkIR module.
 ///
-/// Re-exported from `tribute-front` for convenience.
-pub use tribute_front::parse_cst as stage_parse;
-
-/// Stage 2: Lower CST to TrunkIR.
-///
-/// Re-exported from `tribute-front` for convenience.
-pub use tribute_front::lower_cst as stage_lower;
-
-/// Stage 3: Resolve names in the module.
-///
-/// This pass resolves:
-/// - `src.var` → `func.constant` or `adt.struct_new`/`adt.variant_new`
-/// - `src.call` → `func.call` with resolved callee
-/// - `src.path` → resolved module paths
-///
-/// After this pass, all resolvable `src.*` operations are transformed.
-/// Some may remain for type-directed resolution (UFCS).
-///
-/// The prelude is automatically merged into the module before resolution,
-/// making standard library types (Option, Result, etc.) available.
+/// This is the entry point that converts source text to TrunkIR.
+/// Returns a module with `tribute.*` operations that need further processing.
 #[salsa::tracked]
-pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+pub fn parse_and_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let Some(cst) = parse_cst(db, source) else {
         let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
         let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
@@ -216,8 +212,20 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Mo
     let user_module = lower_cst(db, source, cst);
 
     // Merge prelude definitions into the user module
-    let module = merge_with_prelude(db, user_module);
+    merge_with_prelude(db, user_module)
+}
 
+/// Resolve names in the module.
+///
+/// This pass resolves:
+/// - `tribute.var` → `func.constant` or `adt.struct_new`/`adt.variant_new`
+/// - `tribute.call` → `func.call` with resolved callee
+/// - `tribute.path` → resolved module paths
+///
+/// After this pass, all resolvable `tribute.*` operations are transformed.
+/// Some may remain for type-directed resolution (UFCS).
+#[salsa::tracked]
+pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     // Build module environment from declarations (including prelude)
     let env = build_env(db, &module);
 
@@ -285,21 +293,17 @@ fn format_node_kind(kind: &str) -> String {
     kind.replace('_', " ")
 }
 
-/// Stage 3.5: Inline constant values.
+/// Inline constant values.
 ///
 /// This pass inlines constant values at their use sites:
 /// - Finds `src.var` operations marked with `resolved_const=true`
 /// - Replaces them with `arith.const` operations containing the inlined value
-///
-/// This happens after name resolution (which marks const references)
-/// but before type checking (which needs the concrete inlined values).
 #[salsa::tracked]
-pub fn stage_const_inline<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_resolve(db, source);
+pub fn stage_const_inline<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     inline_module(db, &module)
 }
 
-/// Stage 4: Infer and check types.
+/// Infer and check types.
 ///
 /// This pass:
 /// - Collects type constraints from the module
@@ -307,10 +311,7 @@ pub fn stage_const_inline<'db>(db: &'db dyn salsa::Database, source: SourceCst) 
 /// - Substitutes inferred types back into the module
 /// - Reports type errors
 #[salsa::tracked]
-pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    // Get the module with inlined constants from the previous stage
-    let module = stage_const_inline(db, source);
-
+pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     let mut checker = TypeChecker::new(db);
     checker.check_module(&module);
 
@@ -327,35 +328,28 @@ pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
     }
 }
 
-/// Stage 5: Lambda Lifting.
+/// Lambda Lifting.
 ///
 /// This pass transforms lambda expressions into:
 /// 1. Lifted top-level functions (with captured variables as parameters)
 /// 2. `closure.new` operations at the original lambda locations
-///
-/// This happens after type checking (to know captured variable types)
-/// and before closure lowering.
 #[salsa::tracked]
-pub fn stage_lambda_lift<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_typecheck(db, source);
+pub fn stage_lambda_lift<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     lift_lambdas(db, module)
 }
 
-/// Stage 6: Closure Lowering.
+/// Closure Lowering.
 ///
 /// This pass transforms `func.call_indirect` operations on closures:
 /// - Extracts funcref via `closure.func`
 /// - Extracts env via `closure.env`
 /// - Passes env as first argument to the call
-///
-/// This happens after lambda lifting (closures exist) and before TDNR.
 #[salsa::tracked]
-pub fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_lambda_lift(db, source);
+pub fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     lower_closures(db, module)
 }
 
-/// Stage 7: Type-Directed Name Resolution (TDNR).
+/// Type-Directed Name Resolution (TDNR).
 ///
 /// This pass resolves UFCS method calls that couldn't be resolved during
 /// initial name resolution because they required type information.
@@ -363,16 +357,12 @@ pub fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst)
 /// For example:
 /// - `list.len()` → `List::len(list)` (based on list's type being `List(a)`)
 /// - `x.map(f)` → `Type::map(x, f)` (based on x's inferred type)
-///
-/// TDNR runs before evidence insertion because it creates new `func.call`
-/// operations (from UFCS resolution) that need evidence parameters.
 #[salsa::tracked]
-pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_closure_lower(db, source);
+pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     resolve_tdnr(db, module)
 }
 
-/// Stage 8: Evidence Insertion.
+/// Evidence Insertion.
 ///
 /// This pass transforms effectful functions for ability system support:
 /// - Adds evidence parameter as first argument to effectful functions
@@ -380,70 +370,52 @@ pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Modul
 ///
 /// Evidence is a runtime structure for dynamic handler dispatch.
 /// Pure functions (with empty effect row) are unchanged.
-///
-/// This runs after TDNR because TDNR creates new `func.call` operations
-/// (from UFCS `x.method()` → `Type::method(x)`) that need evidence parameters.
 #[salsa::tracked]
-pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_tdnr(db, source);
+pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     insert_evidence(db, module)
 }
 
-/// Stage 9: Handler Lowering.
+/// Handler Lowering.
 ///
 /// This pass transforms ability dialect operations to continuation dialect operations:
 /// - `ability.prompt` → `cont.push_prompt`
 /// - `ability.perform` → `cont.shift` (with evidence lookup)
 /// - `ability.resume` → `cont.resume`
 /// - `ability.abort` → `cont.drop`
-///
-/// This happens after evidence insertion (evidence params exist) and before case lowering.
 #[salsa::tracked]
-pub fn stage_handler_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_evidence(db, source);
+pub fn stage_handler_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     lower_handlers(db, module)
 }
 
-/// Stage 10: Lower tribute dialect to scf dialect.
+/// Lower tribute dialect to scf dialect.
+///
+/// This pass lowers `tribute.case` expressions to `scf.if` operations.
 #[salsa::tracked]
-pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_handler_lower(db, source);
+pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     lower_tribute_to_scf(db, module)
 }
 
-/// Stage 11: Dead Code Elimination (DCE).
+/// Dead Code Elimination (DCE).
 ///
 /// This pass removes unreachable function definitions from the module.
 /// Entry points include:
 /// - Functions named "main" or "_start"
 /// - Functions referenced by `wasm.export_func` (for wasm target)
-///
-/// This should run after all high-level transformations but before
-/// target-specific lowering, to avoid emitting unused functions
-/// (e.g., unused prelude functions with incomplete lowering).
 #[salsa::tracked]
-pub fn stage_dce<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_lower_case(db, source);
+pub fn stage_dce<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     let result = eliminate_dead_functions(db, module);
     result.module
 }
 
-/// Stage 12: Lower to WebAssembly target.
+/// Lower to WebAssembly binary.
 ///
 /// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
-/// It performs:
-/// - Lowering mid-level IR (func, scf, arith) to wasm dialect operations
-/// - Emission to WebAssembly binary format
-/// - Extraction of metadata (exports, imports) for tooling
-///
-/// The result is a `WasmBinary` artifact containing the compiled WebAssembly bytes.
 /// Returns None if compilation fails, with error message accumulated.
 #[salsa::tracked]
 pub fn stage_lower_to_wasm<'db>(
     db: &'db dyn salsa::Database,
-    source: SourceCst,
+    module: Module<'db>,
 ) -> Option<WasmBinary<'db>> {
-    let module = stage_dce(db, source);
     match compile_to_wasm(db, module) {
         Ok(binary) => Some(binary),
         Err(e) => {
@@ -461,28 +433,153 @@ pub fn stage_lower_to_wasm<'db>(
 }
 
 // =============================================================================
-// Full Pipeline
+// Pipeline Entry Points (SourceCst → Module)
+// =============================================================================
+//
+// These functions take SourceCst and run the pipeline up to a specific stage.
+// Useful for testing individual stages or for tools that need intermediate results.
+
+/// Compile for LSP: minimal pipeline preserving source structure.
+///
+/// This entry point runs only the passes needed for LSP features:
+/// - Parse & Lower: CST to TrunkIR
+/// - Resolve: Name resolution (completion, go-to-definition)
+/// - Typecheck: Type inference (hover)
+/// - TDNR: Type-directed name resolution (method calls)
+///
+/// Excluded passes (preserve source structure):
+/// - const_inline: Keep const references for go-to-definition
+/// - lambda_lift/closure_lower: Keep closure structure
+/// - evidence/handler_lower: Keep ability structure
+/// - lower_case: Keep case/pattern structure
+/// - dce: Keep all functions
+#[salsa::tracked]
+pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = parse_and_lower(db, source);
+    let module = stage_resolve(db, module);
+    let module = stage_typecheck(db, module);
+    stage_tdnr(db, module)
+}
+
+/// Run pipeline up to resolve stage.
+#[salsa::tracked]
+pub fn run_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = parse_and_lower(db, source);
+    stage_resolve(db, module)
+}
+
+/// Run pipeline up to typecheck stage.
+#[salsa::tracked]
+pub fn run_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = parse_and_lower(db, source);
+    let module = stage_resolve(db, module);
+    let module = stage_const_inline(db, module);
+    stage_typecheck(db, module)
+}
+
+/// Run pipeline up to lambda lift stage.
+#[salsa::tracked]
+pub fn run_lambda_lift<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = parse_and_lower(db, source);
+    let module = stage_resolve(db, module);
+    let module = stage_const_inline(db, module);
+    let module = stage_typecheck(db, module);
+    stage_lambda_lift(db, module)
+}
+
+/// Run pipeline up to closure lower stage.
+#[salsa::tracked]
+pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = parse_and_lower(db, source);
+    let module = stage_resolve(db, module);
+    let module = stage_const_inline(db, module);
+    let module = stage_typecheck(db, module);
+    let module = stage_lambda_lift(db, module);
+    stage_closure_lower(db, module)
+}
+
+// =============================================================================
+// Full Pipeline (Orchestration)
 // =============================================================================
 
 /// Run the full compilation pipeline on a source file.
 ///
-/// This combines all stages:
-/// 1. Parse CST
-/// 2. Lower to TrunkIR
-/// 3. Resolve names
-/// 4. Infer types
-/// 5. TDNR (Type-Directed Name Resolution)
-/// 6. Lower case expressions to `scf.if`
-/// 7. Dead code elimination
-/// 8. Final resolution pass (reports unresolved references)
+/// This is the central orchestration function that sequences all stages.
+/// Each stage is a pure transformation that takes a Module and returns a Module.
+///
+/// Pipeline:
+/// 1. Parse & Lower - CST to TrunkIR with prelude merged
+/// 2. Resolve - Name resolution
+/// 3. Const Inline - Inline constant values
+/// 4. Typecheck - Type inference and checking
+/// 5. Lambda Lift - Lift lambdas to top-level
+/// 6. Closure Lower - Lower closure operations
+/// 7. TDNR - Type-directed name resolution
+/// 8. Evidence - Insert evidence parameters
+/// 9. Handler Lower - Lower ability ops to cont ops
+/// 10. Lower Case - Lower case to scf.if
+/// 11. DCE - Dead code elimination
+/// 12. Final resolve - Report unresolved references
 #[salsa::tracked]
 pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_dce(db, source);
+    // Parse and lower to initial IR
+    let module = parse_and_lower(db, source);
+
+    // Frontend passes
+    let module = stage_resolve(db, module);
+    let module = stage_const_inline(db, module);
+    let module = stage_typecheck(db, module);
+
+    // Closure processing
+    let module = stage_lambda_lift(db, module);
+    let module = stage_closure_lower(db, module);
+    let module = stage_tdnr(db, module);
+
+    // Ability processing
+    let module = stage_evidence(db, module);
+    let module = stage_handler_lower(db, module);
+
+    // Final lowering
+    let module = stage_lower_case(db, module);
+    let module = stage_dce(db, module);
 
     // Final pass: resolve any remaining unresolved references and emit diagnostics
     let env = build_env(db, &module);
     let mut resolver = Resolver::with_unresolved_reporting(db, env);
     resolver.resolve_module(&module)
+}
+
+/// Compile to WebAssembly binary.
+///
+/// Runs the full pipeline and then lowers to WebAssembly.
+///
+/// Note: This duplicates the `compile` pipeline stages explicitly rather than
+/// calling `compile` because:
+/// 1. Each `stage_*` is `#[salsa::tracked]`, so stages are individually cached
+///    and reused if `compile` was already called on the same source
+/// 2. The wasm path skips the final resolver pass (diagnostic reporting) since
+///    we only need the lowered module, not error messages
+/// 3. Allows the wasm pipeline to diverge from `compile` in the future if needed
+#[salsa::tracked]
+pub fn compile_to_wasm_binary<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<WasmBinary<'db>> {
+    // Run pipeline up to DCE (stages are cached and reused from compile if already run)
+    let module = parse_and_lower(db, source);
+    let module = stage_resolve(db, module);
+    let module = stage_const_inline(db, module);
+    let module = stage_typecheck(db, module);
+    let module = stage_lambda_lift(db, module);
+    let module = stage_closure_lower(db, module);
+    let module = stage_tdnr(db, module);
+    let module = stage_evidence(db, module);
+    let module = stage_handler_lower(db, module);
+    let module = stage_lower_case(db, module);
+    let module = stage_dce(db, module);
+
+    // Lower to WebAssembly
+    stage_lower_to_wasm(db, module)
 }
 
 /// Run compilation and return detailed results including diagnostics.
@@ -497,7 +594,8 @@ pub fn compile_with_diagnostics<'db>(
 
     // Re-run type checking to capture the solver for the result
     // (compile already checked types, but we need the solver for diagnostics)
-    let resolved_module = stage_resolve(db, source);
+    let parsed_module = parse_and_lower(db, source);
+    let resolved_module = stage_resolve(db, parsed_module);
     let mut checker = TypeChecker::new(db);
     checker.check_module(&resolved_module);
 

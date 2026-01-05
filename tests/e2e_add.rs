@@ -3,7 +3,7 @@
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
-use tribute::pipeline::stage_lower_to_wasm;
+use tribute::pipeline::compile_to_wasm_binary;
 use tribute_front::SourceCst;
 use tribute_ir::ModulePathExt as _;
 use trunk_ir::DialectOp;
@@ -28,7 +28,7 @@ fn test_add_compiles_and_runs() {
         let source_file = SourceCst::from_path(db, "add.trb", source_code.clone(), tree);
 
         // Run full compilation pipeline including WASM lowering
-        let wasm_binary = stage_lower_to_wasm(db, source_file).expect("WASM compilation failed");
+        let wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
         // Execute with wasmtime (no WASI needed for add.trb)
         let engine = create_gc_engine();
@@ -68,7 +68,7 @@ fn main() -> Int { identity(42) }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "int_identity.trb", source_code.clone(), tree);
 
-        let wasm_binary = stage_lower_to_wasm(db, source_file).expect("WASM compilation failed");
+        let wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
         let engine = create_gc_engine();
         let module = wasmtime::Module::new(&engine, wasm_binary.bytes(db)).unwrap();
@@ -109,7 +109,7 @@ fn main() -> Int {
         let source_file =
             SourceCst::from_path(db, "struct_construction.trb", source_code.clone(), tree);
 
-        let wasm_binary = stage_lower_to_wasm(db, source_file).expect("WASM compilation failed");
+        let wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
         let engine = create_gc_engine();
         let module = wasmtime::Module::new(&engine, wasm_binary.bytes(db)).unwrap();
@@ -148,9 +148,9 @@ fn main() -> Int {
         let source_file =
             SourceCst::from_path(db, "struct_accessor.trb", source_code.clone(), tree);
 
-        let wasm_binary = stage_lower_to_wasm(db, source_file).unwrap_or_else(|| {
+        let wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
             let diagnostics: Vec<_> =
-                stage_lower_to_wasm::accumulated::<tribute::Diagnostic>(db, source_file);
+                compile_to_wasm_binary::accumulated::<tribute::Diagnostic>(db, source_file);
             for diag in &diagnostics {
                 eprintln!("Diagnostic: {:?}", diag);
             }
@@ -194,7 +194,7 @@ fn main() -> Float { identity(3.125) }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "float_identity.trb", source_code.clone(), tree);
 
-        let wasm_binary = stage_lower_to_wasm(db, source_file).expect("WASM compilation failed");
+        let wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
         let engine = create_gc_engine();
         let module = wasmtime::Module::new(&engine, wasm_binary.bytes(db)).unwrap();
@@ -242,9 +242,9 @@ fn main() -> Int {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "generic_struct.trb", source_code.clone(), tree);
 
-        let wasm_binary = stage_lower_to_wasm(db, source_file).unwrap_or_else(|| {
+        let wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
             let diagnostics: Vec<_> =
-                stage_lower_to_wasm::accumulated::<tribute::Diagnostic>(db, source_file);
+                compile_to_wasm_binary::accumulated::<tribute::Diagnostic>(db, source_file);
             for diag in &diagnostics {
                 eprintln!("Diagnostic: {:?}", diag);
             }
@@ -292,9 +292,9 @@ fn main() -> Int {
         let source_file =
             SourceCst::from_path(db, "generic_multiple.trb", source_code.clone(), tree);
 
-        let wasm_binary = stage_lower_to_wasm(db, source_file).unwrap_or_else(|| {
+        let wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
             let diagnostics: Vec<_> =
-                stage_lower_to_wasm::accumulated::<tribute::Diagnostic>(db, source_file);
+                compile_to_wasm_binary::accumulated::<tribute::Diagnostic>(db, source_file);
             for diag in &diagnostics {
                 eprintln!("Diagnostic: {:?}", diag);
             }
@@ -340,9 +340,9 @@ fn main() -> Int {
         let source_file =
             SourceCst::from_path(db, "generic_two_params.trb", source_code.clone(), tree);
 
-        let wasm_binary = stage_lower_to_wasm(db, source_file).unwrap_or_else(|| {
+        let wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
             let diagnostics: Vec<_> =
-                stage_lower_to_wasm::accumulated::<tribute::Diagnostic>(db, source_file);
+                compile_to_wasm_binary::accumulated::<tribute::Diagnostic>(db, source_file);
             for diag in &diagnostics {
                 eprintln!("Diagnostic: {:?}", diag);
             }
@@ -387,9 +387,9 @@ fn main() -> Int {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "generic_nested.trb", source_code.clone(), tree);
 
-        let wasm_binary = stage_lower_to_wasm(db, source_file).unwrap_or_else(|| {
+        let wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
             let diagnostics: Vec<_> =
-                stage_lower_to_wasm::accumulated::<tribute::Diagnostic>(db, source_file);
+                compile_to_wasm_binary::accumulated::<tribute::Diagnostic>(db, source_file);
             for diag in &diagnostics {
                 eprintln!("Diagnostic: {:?}", diag);
             }
@@ -424,7 +424,7 @@ fn main() -> Int {
 #[test]
 fn test_generic_indirect_call() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::stage_typecheck;
+    use tribute::pipeline::run_typecheck;
 
     let source_code = Rope::from_str(
         r#"
@@ -441,11 +441,11 @@ fn main() -> Int {
             SourceCst::from_path(db, "generic_indirect.trb", source_code.clone(), tree);
 
         // Run typecheck stage - this should succeed with generic instantiation
-        let _module = stage_typecheck(db, source_file);
+        let _module = run_typecheck(db, source_file);
 
         // Check for type errors
         let diagnostics: Vec<_> =
-            stage_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -467,7 +467,7 @@ fn main() -> Int {
 #[test]
 fn test_function_type_parameter() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::stage_typecheck;
+    use tribute::pipeline::run_typecheck;
 
     let source_code = Rope::from_str(
         r#"
@@ -490,11 +490,11 @@ fn main() -> Int {
         let source_file = SourceCst::from_path(db, "function_type.trb", source_code.clone(), tree);
 
         // Run typecheck stage
-        let _module = stage_typecheck(db, source_file);
+        let _module = run_typecheck(db, source_file);
 
         // Check for type errors
         let diagnostics: Vec<_> =
-            stage_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -513,7 +513,7 @@ fn main() -> Int {
 #[test]
 fn test_nested_function_type() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::stage_typecheck;
+    use tribute::pipeline::run_typecheck;
 
     let source_code = Rope::from_str(
         r#"
@@ -536,11 +536,11 @@ fn main() -> Int {
             SourceCst::from_path(db, "nested_function_type.trb", source_code.clone(), tree);
 
         // Run typecheck stage
-        let _module = stage_typecheck(db, source_file);
+        let _module = run_typecheck(db, source_file);
 
         // Check for type errors
         let diagnostics: Vec<_> =
-            stage_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -559,7 +559,7 @@ fn main() -> Int {
 #[test]
 fn test_generic_function_type() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::stage_typecheck;
+    use tribute::pipeline::run_typecheck;
 
     let source_code = Rope::from_str(
         r#"
@@ -583,11 +583,11 @@ fn main() -> Float {
             SourceCst::from_path(db, "generic_function_type.trb", source_code.clone(), tree);
 
         // Run typecheck stage
-        let _module = stage_typecheck(db, source_file);
+        let _module = run_typecheck(db, source_file);
 
         // Check for type errors
         let diagnostics: Vec<_> =
-            stage_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -614,9 +614,9 @@ fn test_calc_eval() {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "calc.trb", source_code.clone(), tree);
 
-        let wasm_binary = stage_lower_to_wasm(db, source_file).unwrap_or_else(|| {
+        let wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
             let diagnostics: Vec<_> =
-                stage_lower_to_wasm::accumulated::<tribute::Diagnostic>(db, source_file);
+                compile_to_wasm_binary::accumulated::<tribute::Diagnostic>(db, source_file);
             for diag in &diagnostics {
                 eprintln!("Diagnostic: {:?}", diag);
             }
@@ -651,7 +651,7 @@ fn test_calc_eval() {
 #[test]
 fn test_lambda_identity() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::stage_lambda_lift;
+    use tribute::pipeline::run_lambda_lift;
 
     let source_code = Rope::from_str(
         r#"
@@ -668,11 +668,11 @@ fn main() -> Int {
             SourceCst::from_path(db, "lambda_identity.trb", source_code.clone(), tree);
 
         // Run lambda lifting stage
-        let module = stage_lambda_lift(db, source_file);
+        let module = run_lambda_lift(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
-            stage_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -710,7 +710,7 @@ fn main() -> Int {
 #[test]
 fn test_lambda_with_capture() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::stage_lambda_lift;
+    use tribute::pipeline::run_lambda_lift;
 
     let source_code = Rope::from_str(
         r#"
@@ -731,11 +731,11 @@ fn main() -> Int {
         let source_file = SourceCst::from_path(db, "lambda_capture.trb", source_code.clone(), tree);
 
         // Run lambda lifting stage
-        let module = stage_lambda_lift(db, source_file);
+        let module = run_lambda_lift(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
-            stage_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
 
         assert!(
             diagnostics.is_empty(),
@@ -782,7 +782,7 @@ fn check_for_closure_new(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>
 #[test]
 fn test_indirect_call_ir_generation() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::stage_lambda_lift;
+    use tribute::pipeline::run_lambda_lift;
 
     let source_code = Rope::from_str(
         r#"
@@ -797,11 +797,11 @@ fn main() -> Int {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "indirect_call.trb", source_code.clone(), tree);
 
-        let module = stage_lambda_lift(db, source_file);
+        let module = run_lambda_lift(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
-            stage_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
 
         assert!(
             diagnostics.is_empty(),
@@ -824,7 +824,7 @@ fn main() -> Int {
 #[test]
 fn test_higher_order_function_ir() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::stage_lambda_lift;
+    use tribute::pipeline::run_lambda_lift;
 
     let source_code = Rope::from_str(
         r#"
@@ -842,11 +842,11 @@ fn main() -> Int {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "higher_order.trb", source_code.clone(), tree);
 
-        let module = stage_lambda_lift(db, source_file);
+        let module = run_lambda_lift(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
-            stage_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -898,7 +898,7 @@ fn check_for_call_indirect(db: &dyn salsa::Database, region: &trunk_ir::Region<'
 #[test]
 fn test_closure_lowering() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::stage_closure_lower;
+    use tribute::pipeline::run_closure_lower;
 
     let source_code = Rope::from_str(
         r#"
@@ -916,11 +916,11 @@ fn main() -> Int {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "closure_lower.trb", source_code.clone(), tree);
 
-        let module = stage_closure_lower(db, source_file);
+        let module = run_closure_lower(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
-            stage_closure_lower::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_closure_lower::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
