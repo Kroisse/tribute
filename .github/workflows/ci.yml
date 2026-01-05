@@ -30,7 +30,7 @@ jobs:
 
   format:
     name: Format
-    runs-on: [self-hosted, macOS]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,7 +40,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt
-          cache: false
+          cache: true
 
       - name: Check formatting
         uses: actions-rust-lang/rustfmt@v1
