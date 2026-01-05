@@ -664,6 +664,35 @@ ev.get(STATE_ID)  // binary search로 찾음
    - 기존 Module 기반 패스와의 공존 전략
    - LSP 성능 요구사항에 따른 우선순위 결정
 
+5. **Operation Identity와 Origin Tracking**
+
+   Pass를 거치면서 변환된 operation 사이의 equivalence를 추적하는 방법:
+
+   **현재 상태: Location 기반 추적**
+   - 각 operation은 `location: Location` 필드로 소스 위치 보존
+   - 모든 pass가 location을 잘 보존하고 있음:
+     - `op.modify(db)`: 자동 보존
+     - 새 operation 생성 시: `let location = op.location(db);` 패턴
+     - Region/Block 재생성 시: 원본 location 복사
+   - "같은 소스에서 유래한 operation"은 같은 location을 공유
+
+   **고려했던 대안들**
+
+   | 방식 | 장점 | 단점 |
+   |------|------|------|
+   | `OperationId` (BlockId와 유사) | 명시적 identity | 1:N 변환 시 대표 선택 필요 |
+   | Fractional indexing (42.1.0) | 계층적 추적 가능 | ID 길이 폭발, N:1 여전히 문제 |
+   | Origin tag (중복 허용) | 1:N 자연스럽게 해결 | Location과 기능 중복 |
+
+   **결론**: 당장은 Location 기반으로 충분함
+   - Source-level equivalence ("같은 소스에서 유래"): Location으로 해결
+   - Fine-grained query (함수/타입 단위): top-level item의 Symbol로 식별
+   - 별도 ID 시스템은 필요성이 구체화될 때 도입 검토
+
+   **주의 사항**
+   - Synthetic operation (helper function 등) 생성 시 의미 있는 location 부여 필요
+   - Pass 추가 시 location 보존 패턴 준수 필요
+
 ---
 
 ## References
