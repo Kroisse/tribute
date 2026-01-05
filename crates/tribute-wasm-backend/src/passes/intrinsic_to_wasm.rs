@@ -14,7 +14,7 @@ use tribute_ir::ModulePathExt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, idvec};
+use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
 // Constants for Bytes struct layout (must match emit.rs)
 const BYTES_ARRAY_IDX: u32 = 1;
@@ -79,8 +79,7 @@ pub fn analyze_intrinsics<'db>(
     ) {
         // Check for wasm.call to print_line
         if let Ok(call) = wasm::Call::from_operation(db, *op)
-            && let Attribute::Symbol(callee) = call.callee(db)
-            && callee.last_segment() == Symbol::new("print_line")
+            && call.callee(db).last_segment() == Symbol::new("print_line")
             && let Some(arg) = op.operands(db).first()
             && let Some((ptr, len)) = get_literal_info(db, *arg)
         {
@@ -228,10 +227,7 @@ impl RewritePattern for PrintLinePattern {
             return RewriteResult::Unchanged;
         };
 
-        let Attribute::Symbol(callee) = call_op.callee(db) else {
-            return RewriteResult::Unchanged;
-        };
-        if callee.last_segment() != Symbol::new("print_line") {
+        if call_op.callee(db).last_segment() != Symbol::new("print_line") {
             return RewriteResult::Unchanged;
         }
 
@@ -263,31 +259,23 @@ impl RewritePattern for PrintLinePattern {
         // result = wasm.call(fd_write, fd_const, iovec_const, iovec_len_const, nwritten_const)
         // wasm.drop(result)
 
-        let fd_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1)); // stdout
-        let iovec_const = wasm::i32_const(
-            db,
-            location,
-            i32_ty,
-            Attribute::IntBits(u64::from(iovec_offset)),
-        );
-        let iovec_len_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1)); // one iovec entry
-        let nwritten_const = wasm::i32_const(
-            db,
-            location,
-            i32_ty,
-            Attribute::IntBits(u64::from(nwritten_offset)),
-        );
+        let fd_const = wasm::i32_const(db, location, i32_ty, 1); // stdout
+        let iovec_const = wasm::i32_const(db, location, i32_ty, iovec_offset as i32);
+        let iovec_len_const = wasm::i32_const(db, location, i32_ty, 1); // one iovec entry
+        let nwritten_const = wasm::i32_const(db, location, i32_ty, nwritten_offset as i32);
 
-        let call = Operation::of_name(db, location, "wasm.call")
-            .operands(trunk_ir::idvec![
+        let call = wasm::call(
+            db,
+            location,
+            vec![
                 fd_const.result(db),
                 iovec_const.result(db),
                 iovec_len_const.result(db),
                 nwritten_const.result(db),
-            ])
-            .results(trunk_ir::idvec![i32_ty])
-            .attr("callee", Attribute::Symbol(Symbol::new("fd_write")))
-            .build();
+            ],
+            vec![i32_ty],
+            Symbol::new("fd_write"),
+        );
 
         let drop_op = wasm::drop(db, location, call.result(db, 0));
 
@@ -304,7 +292,7 @@ impl RewritePattern for PrintLinePattern {
                 iovec_const.operation(),
                 iovec_len_const.operation(),
                 nwritten_const.operation(),
-                call,
+                call.operation(),
                 drop_op.operation(),
             ])
         } else {
@@ -314,7 +302,7 @@ impl RewritePattern for PrintLinePattern {
                 iovec_const.operation(),
                 iovec_len_const.operation(),
                 nwritten_const.operation(),
-                call,
+                call.operation(),
             ])
         }
     }
@@ -333,9 +321,7 @@ fn is_bytes_method_call<'db>(
     let Ok(call) = wasm::Call::from_operation(db, *op) else {
         return false;
     };
-    let Attribute::Symbol(callee) = call.callee(db) else {
-        return false;
-    };
+    let callee = call.callee(db);
     // Check if callee is "Bytes::method"
     callee.last_segment() == Symbol::new(method)
         && callee
@@ -366,20 +352,19 @@ impl RewritePattern for BytesLenPattern {
         let i64_ty = core::I64::new(db).as_type();
 
         // struct.get to get len field (field 2)
-        let get_len = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(idvec![bytes_ref])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_LEN_FIELD)))
-            .build();
+        let get_len = wasm::struct_get(
+            db,
+            location,
+            bytes_ref,
+            i32_ty,
+            BYTES_STRUCT_IDX,
+            BYTES_LEN_FIELD,
+        );
 
         // Extend i32 to i64 (Int type in Tribute is i64)
-        let extend = Operation::of_name(db, location, "wasm.i64_extend_i32_u")
-            .operands(idvec![get_len.result(db, 0)])
-            .results(idvec![i64_ty])
-            .build();
+        let extend = wasm::i64_extend_i32_u(db, location, get_len.result(db), i64_ty);
 
-        RewriteResult::Expand(vec![get_len, extend])
+        RewriteResult::Expand(vec![get_len.operation(), extend.operation()])
     }
 }
 
@@ -411,42 +396,43 @@ impl RewritePattern for BytesGetOrPanicPattern {
         // Get data array ref (field 0)
         let array_ref_ty =
             core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
-        let get_data = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(idvec![bytes_ref])
-            .results(idvec![array_ref_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_DATA_FIELD)))
-            .build();
+        let get_data = wasm::struct_get(
+            db,
+            location,
+            bytes_ref,
+            array_ref_ty,
+            BYTES_STRUCT_IDX,
+            BYTES_DATA_FIELD,
+        );
 
         // Get offset (field 1)
-        let get_offset = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(idvec![bytes_ref])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .attr(
-                "field_idx",
-                Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
-            )
-            .build();
+        let get_offset = wasm::struct_get(
+            db,
+            location,
+            bytes_ref,
+            i32_ty,
+            BYTES_STRUCT_IDX,
+            BYTES_OFFSET_FIELD,
+        );
 
         // Wrap index to i32
-        let index_i32 = Operation::of_name(db, location, "wasm.i32_wrap_i64")
-            .operands(idvec![index])
-            .results(idvec![i32_ty])
-            .build();
+        let index_i32 = wasm::i32_wrap_i64(db, location, index, i32_ty);
 
         // Add offset to index: actual_index = offset + index
-        let add_offset = Operation::of_name(db, location, "wasm.i32_add")
-            .operands(idvec![get_offset.result(db, 0), index_i32.result(db, 0)])
-            .results(idvec![i32_ty])
-            .build();
+        let add_offset = wasm::i32_add(
+            db,
+            location,
+            get_offset.result(db),
+            index_i32.result(db),
+            i32_ty,
+        );
 
         // array.get_u (unsigned extend to i32, for byte values 0-255)
         let array_get = wasm::array_get_u(
             db,
             location,
-            get_data.result(db, 0),
-            add_offset.result(db, 0),
+            get_data.result(db),
+            add_offset.result(db),
             i32_ty,
             BYTES_ARRAY_IDX,
         );
@@ -455,10 +441,10 @@ impl RewritePattern for BytesGetOrPanicPattern {
         let extend = wasm::i64_extend_i32_u(db, location, array_get.result(db), i64_ty);
 
         RewriteResult::Expand(vec![
-            get_data,
-            get_offset,
-            index_i32,
-            add_offset,
+            get_data.operation(),
+            get_offset.operation(),
+            index_i32.operation(),
+            add_offset.operation(),
             array_get.operation(),
             extend.operation(),
         ])
@@ -494,60 +480,69 @@ impl RewritePattern for BytesSliceOrPanicPattern {
         // Get data array ref (field 0) - shared, zero-copy
         let array_ref_ty =
             core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
-        let get_data = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(idvec![bytes_ref])
-            .results(idvec![array_ref_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_DATA_FIELD)))
-            .build();
+        let get_data = wasm::struct_get(
+            db,
+            location,
+            bytes_ref,
+            array_ref_ty,
+            BYTES_STRUCT_IDX,
+            BYTES_DATA_FIELD,
+        );
 
         // Get current offset (field 1)
-        let get_offset = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(idvec![bytes_ref])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .attr(
-                "field_idx",
-                Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
-            )
-            .build();
+        let get_offset = wasm::struct_get(
+            db,
+            location,
+            bytes_ref,
+            i32_ty,
+            BYTES_STRUCT_IDX,
+            BYTES_OFFSET_FIELD,
+        );
 
         // Wrap start and end to i32
-        let start_i32 = Operation::of_name(db, location, "wasm.i32_wrap_i64")
-            .operands(idvec![start])
-            .results(idvec![i32_ty])
-            .build();
+        let start_i32 = wasm::i32_wrap_i64(db, location, start, i32_ty);
 
-        let end_i32 = Operation::of_name(db, location, "wasm.i32_wrap_i64")
-            .operands(idvec![end])
-            .results(idvec![i32_ty])
-            .build();
+        let end_i32 = wasm::i32_wrap_i64(db, location, end, i32_ty);
 
         // new_offset = offset + start
-        let new_offset = Operation::of_name(db, location, "wasm.i32_add")
-            .operands(idvec![get_offset.result(db, 0), start_i32.result(db, 0)])
-            .results(idvec![i32_ty])
-            .build();
+        let new_offset = wasm::i32_add(
+            db,
+            location,
+            get_offset.result(db),
+            start_i32.result(db),
+            i32_ty,
+        );
 
         // new_len = end - start
-        let new_len = Operation::of_name(db, location, "wasm.i32_sub")
-            .operands(idvec![end_i32.result(db, 0), start_i32.result(db, 0)])
-            .results(idvec![i32_ty])
-            .build();
+        let new_len = wasm::i32_sub(
+            db,
+            location,
+            end_i32.result(db),
+            start_i32.result(db),
+            i32_ty,
+        );
 
         // struct.new to create new Bytes (shares the underlying array)
-        let struct_new = Operation::of_name(db, location, "wasm.struct_new")
-            .operands(idvec![
-                get_data.result(db, 0),
-                new_offset.result(db, 0),
-                new_len.result(db, 0)
-            ])
-            .results(idvec![bytes_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .build();
+        let struct_new = wasm::struct_new(
+            db,
+            location,
+            vec![
+                get_data.result(db),
+                new_offset.result(db),
+                new_len.result(db),
+            ],
+            bytes_ty,
+            BYTES_STRUCT_IDX,
+        );
 
         RewriteResult::Expand(vec![
-            get_data, get_offset, start_i32, end_i32, new_offset, new_len, struct_new,
+            get_data.operation(),
+            get_offset.operation(),
+            start_i32.operation(),
+            end_i32.operation(),
+            new_offset.operation(),
+            new_len.operation(),
+            struct_new.operation(),
         ])
     }
 }
@@ -580,135 +575,129 @@ impl RewritePattern for BytesConcatPattern {
             core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
 
         // Get left's data, offset, len
-        let left_data = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(idvec![left])
-            .results(idvec![array_ref_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_DATA_FIELD)))
-            .build();
+        let left_data = wasm::struct_get(
+            db,
+            location,
+            left,
+            array_ref_ty,
+            BYTES_STRUCT_IDX,
+            BYTES_DATA_FIELD,
+        );
 
-        let left_offset = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(idvec![left])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .attr(
-                "field_idx",
-                Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
-            )
-            .build();
+        let left_offset = wasm::struct_get(
+            db,
+            location,
+            left,
+            i32_ty,
+            BYTES_STRUCT_IDX,
+            BYTES_OFFSET_FIELD,
+        );
 
-        let left_len = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(idvec![left])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_LEN_FIELD)))
-            .build();
+        let left_len = wasm::struct_get(
+            db,
+            location,
+            left,
+            i32_ty,
+            BYTES_STRUCT_IDX,
+            BYTES_LEN_FIELD,
+        );
 
         // Get right's data, offset, len
-        let right_data = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(idvec![right])
-            .results(idvec![array_ref_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_DATA_FIELD)))
-            .build();
+        let right_data = wasm::struct_get(
+            db,
+            location,
+            right,
+            array_ref_ty,
+            BYTES_STRUCT_IDX,
+            BYTES_DATA_FIELD,
+        );
 
-        let right_offset = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(idvec![right])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .attr(
-                "field_idx",
-                Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
-            )
-            .build();
+        let right_offset = wasm::struct_get(
+            db,
+            location,
+            right,
+            i32_ty,
+            BYTES_STRUCT_IDX,
+            BYTES_OFFSET_FIELD,
+        );
 
-        let right_len = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(idvec![right])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .attr("field_idx", Attribute::IntBits(u64::from(BYTES_LEN_FIELD)))
-            .build();
+        let right_len = wasm::struct_get(
+            db,
+            location,
+            right,
+            i32_ty,
+            BYTES_STRUCT_IDX,
+            BYTES_LEN_FIELD,
+        );
 
         // Calculate total_len = left.len + right.len
-        let total_len = Operation::of_name(db, location, "wasm.i32_add")
-            .operands(idvec![left_len.result(db, 0), right_len.result(db, 0)])
-            .results(idvec![i32_ty])
-            .build();
+        let total_len = wasm::i32_add(
+            db,
+            location,
+            left_len.result(db),
+            right_len.result(db),
+            i32_ty,
+        );
 
         // Allocate new array: array_new_default(total_len)
-        let new_array = Operation::of_name(db, location, "wasm.array_new_default")
-            .operands(idvec![total_len.result(db, 0)])
-            .results(idvec![array_ref_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)))
-            .build();
+        let new_array = wasm::array_new_default(
+            db,
+            location,
+            total_len.result(db),
+            array_ref_ty,
+            BYTES_ARRAY_IDX,
+        );
 
         // Copy left bytes: array_copy(new_arr, 0, left.data, left.offset, left.len)
-        let zero = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(0))
-            .results(idvec![i32_ty])
-            .build();
+        let zero = wasm::i32_const(db, location, i32_ty, 0);
 
-        let copy_left = Operation::of_name(db, location, "wasm.array_copy")
-            .operands(idvec![
-                new_array.result(db, 0),
-                zero.result(db, 0),
-                left_data.result(db, 0),
-                left_offset.result(db, 0),
-                left_len.result(db, 0)
-            ])
-            .attr(
-                "dst_type_idx",
-                Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
-            )
-            .attr(
-                "src_type_idx",
-                Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
-            )
-            .build();
+        let copy_left = wasm::array_copy(
+            db,
+            location,
+            new_array.result(db),
+            zero.result(db),
+            left_data.result(db),
+            left_offset.result(db),
+            left_len.result(db),
+            BYTES_ARRAY_IDX,
+            BYTES_ARRAY_IDX,
+        );
 
         // Copy right bytes: array_copy(new_arr, left.len, right.data, right.offset, right.len)
-        let copy_right = Operation::of_name(db, location, "wasm.array_copy")
-            .operands(idvec![
-                new_array.result(db, 0),
-                left_len.result(db, 0),
-                right_data.result(db, 0),
-                right_offset.result(db, 0),
-                right_len.result(db, 0)
-            ])
-            .attr(
-                "dst_type_idx",
-                Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
-            )
-            .attr(
-                "src_type_idx",
-                Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
-            )
-            .build();
+        let copy_right = wasm::array_copy(
+            db,
+            location,
+            new_array.result(db),
+            left_len.result(db),
+            right_data.result(db),
+            right_offset.result(db),
+            right_len.result(db),
+            BYTES_ARRAY_IDX,
+            BYTES_ARRAY_IDX,
+        );
 
         // Create new Bytes struct: struct_new(new_arr, 0, total_len)
-        let struct_new = Operation::of_name(db, location, "wasm.struct_new")
-            .operands(idvec![
-                new_array.result(db, 0),
-                zero.result(db, 0),
-                total_len.result(db, 0)
-            ])
-            .results(idvec![bytes_ty])
-            .attr("type_idx", Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)))
-            .build();
+        let struct_new = wasm::struct_new(
+            db,
+            location,
+            vec![new_array.result(db), zero.result(db), total_len.result(db)],
+            bytes_ty,
+            BYTES_STRUCT_IDX,
+        );
 
         RewriteResult::Expand(vec![
-            left_data,
-            left_offset,
-            left_len,
-            right_data,
-            right_offset,
-            right_len,
-            total_len,
-            new_array,
-            zero,
-            copy_left,
-            copy_right,
-            struct_new,
+            left_data.operation(),
+            left_offset.operation(),
+            left_len.operation(),
+            right_data.operation(),
+            right_offset.operation(),
+            right_len.operation(),
+            total_len.operation(),
+            new_array.operation(),
+            zero.operation(),
+            copy_left.operation(),
+            copy_right.operation(),
+            struct_new.operation(),
         ])
     }
 }
@@ -796,10 +785,7 @@ mod tests {
                 let Ok(call) = wasm::Call::from_operation(db, *op) else {
                     return None;
                 };
-                let Attribute::Symbol(callee) = call.callee(db) else {
-                    return None;
-                };
-                Some(callee.last_segment().to_string())
+                Some(call.callee(db).last_segment().to_string())
             })
             .collect()
     }

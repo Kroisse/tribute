@@ -54,18 +54,48 @@ impl RewritePattern for ArithConstPattern {
             return RewriteResult::Replace(nop.as_operation());
         }
 
-        let wasm_op_name = match type_name {
-            "i32" => "wasm.i32_const",
-            "i64" => "wasm.i64_const",
-            "f32" => "wasm.f32_const",
-            "f64" => "wasm.f64_const",
-            _ => "wasm.i32_const",
-        };
+        let location = op.location(db);
+        let result_ty = result_ty.unwrap();
+        let value = const_op.value(db).clone();
 
-        let new_op = Operation::of_name(db, op.location(db), wasm_op_name)
-            .results(op.results(db).clone())
-            .attr("value", const_op.value(db).clone())
-            .build();
+        let new_op = match type_name {
+            "i32" => {
+                if let Attribute::IntBits(v) = value {
+                    wasm::i32_const(db, location, result_ty, v as i32).as_operation()
+                } else {
+                    wasm::i32_const(db, location, result_ty, 0).as_operation()
+                }
+            }
+            "i64" => {
+                if let Attribute::IntBits(v) = value {
+                    wasm::i64_const(db, location, result_ty, v as i64).as_operation()
+                } else {
+                    wasm::i64_const(db, location, result_ty, 0).as_operation()
+                }
+            }
+            "f32" => {
+                if let Attribute::FloatBits(v) = value {
+                    wasm::f32_const(db, location, result_ty, f32::from_bits(v as u32))
+                        .as_operation()
+                } else {
+                    wasm::f32_const(db, location, result_ty, 0.0).as_operation()
+                }
+            }
+            "f64" => {
+                if let Attribute::FloatBits(v) = value {
+                    wasm::f64_const(db, location, result_ty, f64::from_bits(v)).as_operation()
+                } else {
+                    wasm::f64_const(db, location, result_ty, 0.0).as_operation()
+                }
+            }
+            _ => {
+                if let Attribute::IntBits(v) = value {
+                    wasm::i32_const(db, location, result_ty, v as i32).as_operation()
+                } else {
+                    wasm::i32_const(db, location, result_ty, 0).as_operation()
+                }
+            }
+        };
 
         RewriteResult::Replace(new_op)
     }
@@ -95,56 +125,57 @@ impl RewritePattern for ArithBinOpPattern {
             return RewriteResult::Unchanged;
         }
 
-        let result_ty = op.results(db).first().copied();
-        let suffix = type_suffix(db, result_ty);
+        let result_ty =
+            op.results(db).first().copied().unwrap_or_else(|| {
+                panic!("arith binop missing result type at {:?}", op.location(db))
+            });
+        let suffix = type_suffix(db, Some(result_ty));
+        let location = op.location(db);
+        let operands = op.operands(db);
+        let lhs = operands[0];
+        let rhs = operands[1];
 
-        let wasm_op_name = if name == arith::ADD() {
+        let new_op = if name == arith::ADD() {
             match suffix {
-                "i32" => "wasm.i32_add",
-                "i64" => "wasm.i64_add",
-                "f32" => "wasm.f32_add",
-                "f64" => "wasm.f64_add",
-                _ => "wasm.i32_add",
+                "i32" => wasm::i32_add(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => wasm::i64_add(db, location, lhs, rhs, result_ty).as_operation(),
+                "f32" => wasm::f32_add(db, location, lhs, rhs, result_ty).as_operation(),
+                "f64" => wasm::f64_add(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_add(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::SUB() {
             match suffix {
-                "i32" => "wasm.i32_sub",
-                "i64" => "wasm.i64_sub",
-                "f32" => "wasm.f32_sub",
-                "f64" => "wasm.f64_sub",
-                _ => "wasm.i32_sub",
+                "i32" => wasm::i32_sub(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => wasm::i64_sub(db, location, lhs, rhs, result_ty).as_operation(),
+                "f32" => wasm::f32_sub(db, location, lhs, rhs, result_ty).as_operation(),
+                "f64" => wasm::f64_sub(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_sub(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::MUL() {
             match suffix {
-                "i32" => "wasm.i32_mul",
-                "i64" => "wasm.i64_mul",
-                "f32" => "wasm.f32_mul",
-                "f64" => "wasm.f64_mul",
-                _ => "wasm.i32_mul",
+                "i32" => wasm::i32_mul(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => wasm::i64_mul(db, location, lhs, rhs, result_ty).as_operation(),
+                "f32" => wasm::f32_mul(db, location, lhs, rhs, result_ty).as_operation(),
+                "f64" => wasm::f64_mul(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_mul(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::DIV() {
             match suffix {
-                "i32" => "wasm.i32_div_s",
-                "i64" => "wasm.i64_div_s",
-                "f32" => "wasm.f32_div",
-                "f64" => "wasm.f64_div",
-                _ => "wasm.i32_div_s",
+                "i32" => wasm::i32_div_s(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => wasm::i64_div_s(db, location, lhs, rhs, result_ty).as_operation(),
+                "f32" => wasm::f32_div(db, location, lhs, rhs, result_ty).as_operation(),
+                "f64" => wasm::f64_div(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_div_s(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::REM() {
             match suffix {
-                "i32" => "wasm.i32_rem_s",
-                "i64" => "wasm.i64_rem_s",
-                _ => "wasm.i32_rem_s",
+                "i32" => wasm::i32_rem_s(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => wasm::i64_rem_s(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_rem_s(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else {
             return RewriteResult::Unchanged;
         };
-
-        // Note: op is already remapped by PatternApplicator
-        let new_op = Operation::of_name(db, op.location(db), wasm_op_name)
-            .operands(op.operands(db).clone())
-            .results(op.results(db).clone())
-            .build();
 
         RewriteResult::Replace(new_op)
     }
@@ -180,63 +211,66 @@ impl RewritePattern for ArithCmpPattern {
         let suffix = type_suffix(db, operand_ty);
         let is_integer = matches!(suffix, "i32" | "i64");
 
-        let wasm_op_name = if name == arith::CMP_EQ() {
+        let result_ty =
+            op.results(db).first().copied().unwrap_or_else(|| {
+                panic!("arith cmp missing result type at {:?}", op.location(db))
+            });
+        let location = op.location(db);
+        let operands = op.operands(db);
+        let lhs = operands[0];
+        let rhs = operands[1];
+
+        let new_op = if name == arith::CMP_EQ() {
             match suffix {
-                "i32" => "wasm.i32_eq",
-                "i64" => "wasm.i64_eq",
-                "f32" => "wasm.f32_eq",
-                "f64" => "wasm.f64_eq",
-                _ => "wasm.i32_eq",
+                "i32" => wasm::i32_eq(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => wasm::i64_eq(db, location, lhs, rhs, result_ty).as_operation(),
+                "f32" => wasm::f32_eq(db, location, lhs, rhs, result_ty).as_operation(),
+                "f64" => wasm::f64_eq(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_eq(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::CMP_NE() {
             match suffix {
-                "i32" => "wasm.i32_ne",
-                "i64" => "wasm.i64_ne",
-                "f32" => "wasm.f32_ne",
-                "f64" => "wasm.f64_ne",
-                _ => "wasm.i32_ne",
+                "i32" => wasm::i32_ne(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => wasm::i64_ne(db, location, lhs, rhs, result_ty).as_operation(),
+                "f32" => wasm::f32_ne(db, location, lhs, rhs, result_ty).as_operation(),
+                "f64" => wasm::f64_ne(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_ne(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::CMP_LT() {
             match (suffix, is_integer) {
-                ("i32", true) => "wasm.i32_lt_s",
-                ("i64", true) => "wasm.i64_lt_s",
-                ("f32", false) => "wasm.f32_lt",
-                ("f64", false) => "wasm.f64_lt",
-                _ => "wasm.i32_lt_s",
+                ("i32", true) => wasm::i32_lt_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("i64", true) => wasm::i64_lt_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("f32", false) => wasm::f32_lt(db, location, lhs, rhs, result_ty).as_operation(),
+                ("f64", false) => wasm::f64_lt(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_lt_s(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::CMP_LE() {
             match (suffix, is_integer) {
-                ("i32", true) => "wasm.i32_le_s",
-                ("i64", true) => "wasm.i64_le_s",
-                ("f32", false) => "wasm.f32_le",
-                ("f64", false) => "wasm.f64_le",
-                _ => "wasm.i32_le_s",
+                ("i32", true) => wasm::i32_le_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("i64", true) => wasm::i64_le_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("f32", false) => wasm::f32_le(db, location, lhs, rhs, result_ty).as_operation(),
+                ("f64", false) => wasm::f64_le(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_le_s(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::CMP_GT() {
             match (suffix, is_integer) {
-                ("i32", true) => "wasm.i32_gt_s",
-                ("i64", true) => "wasm.i64_gt_s",
-                ("f32", false) => "wasm.f32_gt",
-                ("f64", false) => "wasm.f64_gt",
-                _ => "wasm.i32_gt_s",
+                ("i32", true) => wasm::i32_gt_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("i64", true) => wasm::i64_gt_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("f32", false) => wasm::f32_gt(db, location, lhs, rhs, result_ty).as_operation(),
+                ("f64", false) => wasm::f64_gt(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_gt_s(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::CMP_GE() {
             match (suffix, is_integer) {
-                ("i32", true) => "wasm.i32_ge_s",
-                ("i64", true) => "wasm.i64_ge_s",
-                ("f32", false) => "wasm.f32_ge",
-                ("f64", false) => "wasm.f64_ge",
-                _ => "wasm.i32_ge_s",
+                ("i32", true) => wasm::i32_ge_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("i64", true) => wasm::i64_ge_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("f32", false) => wasm::f32_ge(db, location, lhs, rhs, result_ty).as_operation(),
+                ("f64", false) => wasm::f64_ge(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_ge_s(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else {
             return RewriteResult::Unchanged;
         };
-
-        // Note: op is already remapped by PatternApplicator
-        let new_op = Operation::of_name(db, op.location(db), wasm_op_name)
-            .operands(op.operands(db).clone())
-            .results(op.results(db).clone())
-            .build();
 
         RewriteResult::Replace(new_op)
     }
@@ -274,7 +308,7 @@ impl RewritePattern for ArithNegPattern {
             "i64" => {
                 // For i64: 0 - x
                 let i64_ty = core::I64::new(db).as_type();
-                let zero = wasm::i64_const(db, location, i64_ty, Attribute::IntBits(0));
+                let zero = wasm::i64_const(db, location, i64_ty, 0);
                 let zero_val = zero.result(db);
                 let sub = wasm::i64_sub(db, location, zero_val, operand, i64_ty);
                 RewriteResult::Expand(vec![zero.operation(), sub.operation()])
@@ -282,7 +316,7 @@ impl RewritePattern for ArithNegPattern {
             _ => {
                 // Default to i32: 0 - x
                 let i32_ty = core::I32::new(db).as_type();
-                let zero = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0));
+                let zero = wasm::i32_const(db, location, i32_ty, 0);
                 let zero_val = zero.result(db);
                 let sub = wasm::i32_sub(db, location, zero_val, operand, i32_ty);
                 RewriteResult::Expand(vec![zero.operation(), sub.operation()])
@@ -316,50 +350,53 @@ impl RewritePattern for ArithBitwisePattern {
             return RewriteResult::Unchanged;
         }
 
-        let result_ty = op.results(db).first().copied();
-        let suffix = type_suffix(db, result_ty);
+        let result_ty = op.results(db).first().copied().unwrap_or_else(|| {
+            panic!(
+                "arith bitwise op missing result type at {:?}",
+                op.location(db)
+            )
+        });
+        let suffix = type_suffix(db, Some(result_ty));
+        let location = op.location(db);
+        let operands = op.operands(db);
+        let lhs = operands[0];
+        let rhs = operands[1];
 
-        let wasm_op_name = if name == arith::AND() {
+        let new_op = if name == arith::AND() {
             match suffix {
-                "i64" => "wasm.i64_and",
-                _ => "wasm.i32_and",
+                "i64" => wasm::i64_and(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_and(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::OR() {
             match suffix {
-                "i64" => "wasm.i64_or",
-                _ => "wasm.i32_or",
+                "i64" => wasm::i64_or(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_or(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::XOR() {
             match suffix {
-                "i64" => "wasm.i64_xor",
-                _ => "wasm.i32_xor",
+                "i64" => wasm::i64_xor(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_xor(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::SHL() {
             match suffix {
-                "i64" => "wasm.i64_shl",
-                _ => "wasm.i32_shl",
+                "i64" => wasm::i64_shl(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_shl(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::SHR() {
             // Signed shift right
             match suffix {
-                "i64" => "wasm.i64_shr_s",
-                _ => "wasm.i32_shr_s",
+                "i64" => wasm::i64_shr_s(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_shr_s(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::SHRU() {
             // Unsigned shift right
             match suffix {
-                "i64" => "wasm.i64_shr_u",
-                _ => "wasm.i32_shr_u",
+                "i64" => wasm::i64_shr_u(db, location, lhs, rhs, result_ty).as_operation(),
+                _ => wasm::i32_shr_u(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else {
             return RewriteResult::Unchanged;
         };
-
-        // Note: op is already remapped by PatternApplicator
-        let new_op = Operation::of_name(db, op.location(db), wasm_op_name)
-            .operands(op.operands(db).clone())
-            .results(op.results(db).clone())
-            .build();
 
         RewriteResult::Replace(new_op)
     }
@@ -393,59 +430,96 @@ impl RewritePattern for ArithConversionPattern {
         let src_suffix = type_suffix(db, src_ty);
 
         // Get destination type from result
-        let dst_ty = op.results(db).first().copied();
-        let dst_suffix = type_suffix(db, dst_ty);
+        let dst_ty = op.results(db).first().copied().unwrap_or_else(|| {
+            panic!(
+                "arith conversion missing result type at {:?}",
+                op.location(db)
+            )
+        });
+        let dst_suffix = type_suffix(db, Some(dst_ty));
 
-        let wasm_op_name = if name == arith::CAST() {
+        let location = op.location(db);
+        let operand = op.operands(db)[0];
+
+        let new_op = if name == arith::CAST() {
             // cast: integer sign extension/truncation (i32 <-> i64)
             match (src_suffix, dst_suffix) {
-                ("i64", "i32") => "wasm.i32_wrap_i64",
-                ("i32", "i64") => "wasm.i64_extend_i32_s", // signed extension by default
-                _ => return RewriteResult::Unchanged,      // unsupported cast
+                ("i64", "i32") => wasm::i32_wrap_i64(db, location, operand, dst_ty).as_operation(),
+                ("i32", "i64") => {
+                    wasm::i64_extend_i32_s(db, location, operand, dst_ty).as_operation()
+                }
+                _ => return RewriteResult::Unchanged, // unsupported cast
             }
         } else if name == arith::TRUNC() {
             // trunc: float -> int truncation (signed by default)
             match (src_suffix, dst_suffix) {
-                ("f32", "i32") => "wasm.i32_trunc_f32_s",
-                ("f64", "i32") => "wasm.i32_trunc_f64_s",
-                ("f32", "i64") => "wasm.i64_trunc_f32_s",
-                ("f64", "i64") => "wasm.i64_trunc_f64_s",
-                ("i64", "i32") => "wasm.i32_wrap_i64", // integer truncation
+                ("f32", "i32") => {
+                    wasm::i32_trunc_f32_s(db, location, operand, dst_ty).as_operation()
+                }
+                ("f64", "i32") => {
+                    wasm::i32_trunc_f64_s(db, location, operand, dst_ty).as_operation()
+                }
+                ("f32", "i64") => {
+                    wasm::i64_trunc_f32_s(db, location, operand, dst_ty).as_operation()
+                }
+                ("f64", "i64") => {
+                    wasm::i64_trunc_f64_s(db, location, operand, dst_ty).as_operation()
+                }
+                ("i64", "i32") => wasm::i32_wrap_i64(db, location, operand, dst_ty).as_operation(), // integer truncation
                 _ => return RewriteResult::Unchanged,
             }
         } else if name == arith::EXTEND() {
             // extend: smaller -> larger type
             match (src_suffix, dst_suffix) {
-                ("i32", "i64") => "wasm.i64_extend_i32_s", // signed by default
-                ("f32", "f64") => "wasm.f64_promote_f32",
+                ("i32", "i64") => {
+                    wasm::i64_extend_i32_s(db, location, operand, dst_ty).as_operation()
+                }
+                ("f32", "f64") => {
+                    wasm::f64_promote_f32(db, location, operand, dst_ty).as_operation()
+                }
                 _ => return RewriteResult::Unchanged,
             }
         } else if name == arith::CONVERT() {
             // convert: int <-> float conversion
             match (src_suffix, dst_suffix) {
                 // int to float (signed by default)
-                ("i32", "f32") => "wasm.f32_convert_i32_s",
-                ("i32", "f64") => "wasm.f64_convert_i32_s",
-                ("i64", "f32") => "wasm.f32_convert_i64_s",
-                ("i64", "f64") => "wasm.f64_convert_i64_s",
+                ("i32", "f32") => {
+                    wasm::f32_convert_i32_s(db, location, operand, dst_ty).as_operation()
+                }
+                ("i32", "f64") => {
+                    wasm::f64_convert_i32_s(db, location, operand, dst_ty).as_operation()
+                }
+                ("i64", "f32") => {
+                    wasm::f32_convert_i64_s(db, location, operand, dst_ty).as_operation()
+                }
+                ("i64", "f64") => {
+                    wasm::f64_convert_i64_s(db, location, operand, dst_ty).as_operation()
+                }
                 // float to int (signed by default)
-                ("f32", "i32") => "wasm.i32_trunc_f32_s",
-                ("f64", "i32") => "wasm.i32_trunc_f64_s",
-                ("f32", "i64") => "wasm.i64_trunc_f32_s",
-                ("f64", "i64") => "wasm.i64_trunc_f64_s",
+                ("f32", "i32") => {
+                    wasm::i32_trunc_f32_s(db, location, operand, dst_ty).as_operation()
+                }
+                ("f64", "i32") => {
+                    wasm::i32_trunc_f64_s(db, location, operand, dst_ty).as_operation()
+                }
+                ("f32", "i64") => {
+                    wasm::i64_trunc_f32_s(db, location, operand, dst_ty).as_operation()
+                }
+                ("f64", "i64") => {
+                    wasm::i64_trunc_f64_s(db, location, operand, dst_ty).as_operation()
+                }
                 // float to float
-                ("f32", "f64") => "wasm.f64_promote_f32",
-                ("f64", "f32") => "wasm.f32_demote_f64",
+                ("f32", "f64") => {
+                    wasm::f64_promote_f32(db, location, operand, dst_ty).as_operation()
+                }
+                ("f64", "f32") => {
+                    wasm::f32_demote_f64(db, location, operand, dst_ty).as_operation()
+                }
                 _ => return RewriteResult::Unchanged,
             }
         } else {
             return RewriteResult::Unchanged;
         };
-
-        let new_op = Operation::of_name(db, op.location(db), wasm_op_name)
-            .operands(op.operands(db).clone())
-            .results(op.results(db).clone())
-            .build();
 
         RewriteResult::Replace(new_op)
     }

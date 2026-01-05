@@ -72,6 +72,10 @@ impl RewritePattern for ClosureNewPattern {
         // as operands.
         //
         // Layout: (func_ref: funcref, env: anyref)
+        //
+        // Note: Using Operation::of_name here because we need custom attributes:
+        // - "type" (used during transformation, converted to "type_idx" at emit)
+        // - "is_closure" (marker attribute for closure struct identification)
         let struct_new = Operation::of_name(db, location, "wasm.struct_new")
             .operands(IdVec::from(vec![func_ref_val, env]))
             .attr("type", Attribute::Type(result_ty))
@@ -104,6 +108,9 @@ impl RewritePattern for ClosureFuncPattern {
         let closure_ty = op.operands(db).first().and_then(|v| get_value_type(db, *v));
 
         // Create wasm.struct_get for field 0 (function reference)
+        //
+        // Note: Using Operation::of_name here because we need a custom "type" attribute
+        // that's used during transformation and converted to "type_idx" at emit time.
         let mut struct_get = Operation::of_name(db, location, "wasm.struct_get")
             .operands(op.operands(db).clone())
             .attr("field_idx", Attribute::IntBits(0))
@@ -138,6 +145,9 @@ impl RewritePattern for ClosureEnvPattern {
         let closure_ty = op.operands(db).first().and_then(|v| get_value_type(db, *v));
 
         // Create wasm.struct_get for field 1 (environment)
+        //
+        // Note: Using Operation::of_name here because we need a custom "type" attribute
+        // that's used during transformation and converted to "type_idx" at emit time.
         let mut struct_get = Operation::of_name(db, location, "wasm.struct_get")
             .operands(op.operands(db).clone())
             .attr("field_idx", Attribute::IntBits(1))

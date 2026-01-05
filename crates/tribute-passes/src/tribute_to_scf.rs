@@ -18,7 +18,7 @@ use salsa::Accumulator;
 use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::{adt, tribute, tribute_pat};
 use trunk_ir::dialect::core::Module;
-use trunk_ir::dialect::{arith, core};
+use trunk_ir::dialect::{arith, core, scf};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region,
@@ -198,10 +198,8 @@ impl<'db> CaseLowerer<'db> {
         }
 
         if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::YIELD() {
-            let new_op = Operation::of_name(self.db, op.location(self.db), "scf.yield")
-                .operands(remapped_operands)
-                .build();
-            return vec![new_op];
+            let new_op = scf::r#yield(self.db, op.location(self.db), remapped_operands);
+            return vec![new_op.as_operation()];
         }
 
         // Lower tribute.block to scf.if with always-true condition
@@ -400,6 +398,8 @@ impl<'db> CaseLowerer<'db> {
         // Build the handler_dispatch operation with all suspend arms as regions
         // Region 0: done_body
         // Region 1+: suspend_bodies (one per handler arm)
+        // Note: Using Operation::of_name here because we need to add dynamic regions
+        // and attributes (op_idx_N, num_suspend_arms) that the typed helper doesn't support
         let mut builder = Operation::of_name(self.db, location, "cont.handler_dispatch")
             .operand(scrutinee)
             .result(result_type)
@@ -462,16 +462,19 @@ impl<'db> CaseLowerer<'db> {
 
         // Create scf.if with the lowered body as both then and else branches
         // (else is required but unreachable with true condition)
-        let if_op = Operation::of_name(self.db, location, "scf.if")
-            .operands(IdVec::from(vec![cond]))
-            .results(IdVec::from(vec![result_type]))
-            .regions(IdVec::from(vec![lowered_body, lowered_body]))
-            .build();
+        let if_op = scf::r#if(
+            self.db,
+            location,
+            cond,
+            result_type,
+            lowered_body,
+            lowered_body,
+        );
 
         // Map the block result to the if result
-        self.ctx.map_results(self.db, &op, &if_op);
+        self.ctx.map_results(self.db, &op, &if_op.as_operation());
 
-        vec![true_const, if_op]
+        vec![true_const, if_op.as_operation()]
     }
 
     /// Inline block body operations when the block has no result.
@@ -861,31 +864,37 @@ impl<'db> CaseLowerer<'db> {
             let then_region = body_region;
             // Single-arm cases are irrefutable; reuse the body for the else branch.
             let else_region = body_region;
-            let if_op = Operation::of_name(self.db, location, "scf.if")
-                .operands(IdVec::from(vec![cond]))
-                .results(IdVec::from(vec![result_type]))
-                .regions(IdVec::from(vec![then_region, else_region]))
-                .build();
+            let if_op = scf::r#if(
+                self.db,
+                location,
+                cond,
+                result_type,
+                then_region,
+                else_region,
+            );
             let mut ops = Vec::new();
             ops.extend(cond_ops);
-            ops.push(if_op);
-            return (ops, if_op.result(self.db, 0));
+            ops.push(if_op.as_operation());
+            return (ops, if_op.as_operation().result(self.db, 0));
         }
 
         let (cond_ops, cond) = self.build_condition_ops(location, scrutinee, &arms[0].pattern);
         let then_region = self.lower_arm_body(scrutinee, &arms[0]);
         let else_region = self.build_else_region(location, scrutinee, result_type, &arms[1..]);
 
-        let if_op = Operation::of_name(self.db, location, "scf.if")
-            .operands(IdVec::from(vec![cond]))
-            .results(IdVec::from(vec![result_type]))
-            .regions(IdVec::from(vec![then_region, else_region]))
-            .build();
+        let if_op = scf::r#if(
+            self.db,
+            location,
+            cond,
+            result_type,
+            then_region,
+            else_region,
+        );
 
         let mut ops = Vec::new();
         ops.extend(cond_ops);
-        ops.push(if_op);
-        (ops, if_op.result(self.db, 0))
+        ops.push(if_op.as_operation());
+        (ops, if_op.as_operation().result(self.db, 0))
     }
 
     fn build_else_region(
@@ -900,10 +909,8 @@ impl<'db> CaseLowerer<'db> {
         }
 
         let (mut ops, value) = self.build_arm_chain(location, scrutinee, result_type, arms);
-        let yield_op = Operation::of_name(self.db, location, "scf.yield")
-            .operands(IdVec::from(vec![value]))
-            .build();
-        ops.push(yield_op);
+        let yield_op = scf::r#yield(self.db, location, IdVec::from(vec![value]));
+        ops.push(yield_op.as_operation());
 
         let block = Block::new(
             self.db,

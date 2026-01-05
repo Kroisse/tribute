@@ -62,6 +62,8 @@ macro_rules! raw_ident_str {
 /// Provides conversions between Rust types and `Attribute` variants:
 /// - `any` → `Attribute<'db>` (passthrough)
 /// - `bool` → `Attribute::Bool`
+/// - `i32`, `i64`, `u32`, `u64` → `Attribute::IntBits`
+/// - `f32`, `f64` → `Attribute::FloatBits`
 /// - `Type` → `Attribute::Type`
 /// - `String` → `Attribute::String`
 /// - `Symbol` → `Attribute::Symbol`
@@ -75,6 +77,8 @@ macro_rules! attr_type_helper {
     (@rust_type i64) => { i64 };
     (@rust_type u32) => { u32 };
     (@rust_type u64) => { u64 };
+    (@rust_type f32) => { f32 };
+    (@rust_type f64) => { f64 };
     (@rust_type Type) => { $crate::Type<'db> };
     (@rust_type String) => { std::string::String };
     (@rust_type Symbol) => { $crate::Symbol };
@@ -88,6 +92,8 @@ macro_rules! attr_type_helper {
     (@to_attr i64, $val:expr) => { $crate::Attribute::IntBits($val as u64) };
     (@to_attr u32, $val:expr) => { $crate::Attribute::IntBits($val as u64) };
     (@to_attr u64, $val:expr) => { $crate::Attribute::IntBits($val) };
+    (@to_attr f32, $val:expr) => { $crate::Attribute::FloatBits(($val as f64).to_bits()) };
+    (@to_attr f64, $val:expr) => { $crate::Attribute::FloatBits($val.to_bits()) };
     (@to_attr Type, $val:expr) => { $crate::Attribute::Type($val) };
     (@to_attr String, $val:expr) => { $crate::Attribute::String($val) };
     (@to_attr Symbol, $val:expr) => { $crate::Attribute::Symbol($val) };
@@ -124,6 +130,18 @@ macro_rules! attr_type_helper {
         match $attr {
             $crate::Attribute::IntBits(v) => *v,
             _ => panic!("expected IntBits attribute"),
+        }
+    };
+    (@from_attr f32, $attr:expr) => {
+        match $attr {
+            $crate::Attribute::FloatBits(v) => f64::from_bits(*v) as f32,
+            _ => panic!("expected FloatBits attribute"),
+        }
+    };
+    (@from_attr f64, $attr:expr) => {
+        match $attr {
+            $crate::Attribute::FloatBits(v) => f64::from_bits(*v),
+            _ => panic!("expected FloatBits attribute"),
         }
     };
     (@from_attr Type, $attr:expr) => {
@@ -234,7 +252,7 @@ impl<'db> DialectOp<'db> for Operation<'db> {
 ///     mod dialect_name {
 ///         // Operations
 ///         /// Doc comment
-///         #[attr(attr1, attr2)]
+///         #[attr(attr1: u32, attr2: bool)]
 ///         fn op_name(operand1, operand2) -> result {
 ///             #[region(body)] {}
 ///         };
@@ -266,7 +284,7 @@ impl<'db> DialectOp<'db> for Operation<'db> {
 /// dialect! {
 ///     mod arith {
 ///         /// Constant value operation.
-///         #[attr(value)]
+///         #[attr(value: i64)]
 ///         fn r#const() -> result;
 ///
 ///         /// Addition operation.
@@ -620,7 +638,7 @@ macro_rules! define_op {
         );
     };
 
-    // Untyped attr: `name, ...`
+    // Untyped attr: `name, ...` - FORBIDDEN: all attributes must have explicit types
     (@munch_attrs
         doc: $doc:tt,
         dialect: $dialect:ident,
@@ -631,19 +649,14 @@ macro_rules! define_op {
         result: $result:tt,
         region_tokens: $region_tokens:tt
     ) => {
-        $crate::define_op!(@munch_attrs
-            doc: $doc,
-            dialect: $dialect,
-            op: $op,
-            attrs: [$($attrs)* { $attr }],
-            tokens: [$($rest)*],
-            operand_tokens: $operand_tokens,
-            result: $result,
-            region_tokens: $region_tokens
-        );
+        compile_error!(concat!(
+            "Attribute `", stringify!($attr), "` in `", stringify!($dialect), ".", stringify!($op),
+            "` is missing a type annotation. ",
+            "Use `", stringify!($attr), ": <type>` syntax (e.g., u32, i64, bool, Symbol, String, Type).",
+        ));
     };
 
-    // Untyped attr (last): `name`
+    // Untyped attr (last): `name` - FORBIDDEN: all attributes must have explicit types
     (@munch_attrs
         doc: $doc:tt,
         dialect: $dialect:ident,
@@ -654,16 +667,11 @@ macro_rules! define_op {
         result: $result:tt,
         region_tokens: $region_tokens:tt
     ) => {
-        $crate::define_op!(@munch_attrs
-            doc: $doc,
-            dialect: $dialect,
-            op: $op,
-            attrs: [$($attrs)* { $attr }],
-            tokens: [],
-            operand_tokens: $operand_tokens,
-            result: $result,
-            region_tokens: $region_tokens
-        );
+        compile_error!(concat!(
+            "Attribute `", stringify!($attr), "` in `", stringify!($dialect), ".", stringify!($op),
+            "` is missing a type annotation. ",
+            "Use `", stringify!($attr), ": <type>` syntax (e.g., u32, i64, bool, Symbol, String, Type).",
+        ));
     };
 
     // ========================================================================

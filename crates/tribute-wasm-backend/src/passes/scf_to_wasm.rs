@@ -36,19 +36,31 @@ impl RewritePattern for ScfIfPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        let Ok(_if_op) = scf::If::from_operation(db, *op) else {
+        let Ok(scf_if_op) = scf::If::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
         // wasm.if has the same structure: cond operand, result, then/else regions
         // PatternApplicator will recursively process the regions
-        let new_op = Operation::of_name(db, op.location(db), "wasm.if")
-            .operands(op.operands(db).clone())
-            .results(op.results(db).clone())
-            .regions(op.regions(db).clone())
-            .build();
+        let cond = scf_if_op.cond(db);
+        let then_region = scf_if_op.then(db);
+        let else_region = scf_if_op.r#else(db);
+        let result_ty = op
+            .results(db)
+            .first()
+            .copied()
+            .unwrap_or_else(|| core::Nil::new(db).as_type());
 
-        RewriteResult::Replace(new_op)
+        let new_op = wasm::r#if(
+            db,
+            op.location(db),
+            cond,
+            result_ty,
+            then_region,
+            else_region,
+        );
+
+        RewriteResult::Replace(new_op.as_operation())
     }
 }
 
@@ -74,6 +86,8 @@ impl RewritePattern for ScfLoopPattern {
 
         // Create wasm.loop with the body region
         // PatternApplicator will recursively process the body
+        // Note: wasm::loop typed helper requires label attribute, but we don't set one.
+        // Use Operation::of_name for flexibility.
         let wasm_loop = Operation::of_name(db, location, "wasm.loop")
             .regions(idvec![body])
             .build();
@@ -94,6 +108,8 @@ impl RewritePattern for ScfLoopPattern {
         );
         let block_body = Region::new(db, location, idvec![block_body_block]);
 
+        // Note: wasm::block typed helper requires label attribute, but we don't set one.
+        // Use Operation::of_name for flexibility.
         let wasm_block = Operation::of_name(db, location, "wasm.block")
             .results(idvec![result_ty])
             .regions(idvec![block_body])
@@ -154,6 +170,8 @@ impl RewritePattern for ScfContinuePattern {
         };
 
         // Branch to loop (depth 1: block=0, loop=1)
+        // Note: wasm::br typed helper expects Symbol (label name), but we use integer depths.
+        // Use Operation::of_name for depth-based branching.
         let br_op = Operation::of_name(db, op.location(db), "wasm.br")
             .attr("target", Attribute::IntBits(1))
             .build();
@@ -178,6 +196,8 @@ impl RewritePattern for ScfBreakPattern {
         };
 
         // Branch to block (depth 0) with result value
+        // Note: The wasm.br typed helper doesn't support operands, but we need to
+        // pass the break value. Use Operation::of_name for this case.
         let br_op = Operation::of_name(db, op.location(db), "wasm.br")
             .attr("target", Attribute::IntBits(0))
             .operands(op.operands(db).clone())
@@ -212,7 +232,7 @@ mod tests {
         let else_region = Region::new(db, location, idvec![else_block]);
 
         // Create a dummy condition value
-        let cond_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1));
+        let cond_const = wasm::i32_const(db, location, i32_ty, 1);
 
         let scf_if = Operation::of_name(db, location, "scf.if")
             .operands(idvec![cond_const.result(db)])

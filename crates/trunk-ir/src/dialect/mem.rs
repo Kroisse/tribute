@@ -7,15 +7,15 @@ use crate::dialect;
 dialect! {
     mod mem {
         /// `mem.data` operation: places bytes in data section, returns pointer.
-        #[attr(bytes)]
+        #[attr(bytes: any)]
         fn data() -> result;
 
         /// `mem.load` operation: reads from memory.
-        #[attr(offset)]
+        #[attr(offset: u32)]
         fn load(ptr) -> result;
 
         /// `mem.store` operation: writes to memory.
-        #[attr(offset)]
+        #[attr(offset: u32)]
         fn store(ptr, value);
     }
 }

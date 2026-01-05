@@ -127,13 +127,9 @@ impl RewritePattern for LowerPromptPattern {
             .copied()
             .unwrap_or_else(|| *core::Nil::new(db));
 
-        let new_op = Operation::of_name(db, location, "cont.push_prompt")
-            .attr("tag", Attribute::IntBits(tag as u64))
-            .result(result_ty)
-            .region(body)
-            .build();
+        let new_op = cont::push_prompt(db, location, result_ty, tag, body);
 
-        RewriteResult::Replace(new_op)
+        RewriteResult::Replace(new_op.as_operation())
     }
 }
 
@@ -192,22 +188,24 @@ impl RewritePattern for LowerPerformPattern {
         let empty_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
         let handler_region = Region::new(db, location, IdVec::from(vec![empty_block]));
 
-        // Pass the operation name so handler dispatch can match it to the correct arm.
+        // Create cont.shift with typed helper function.
         // The op_idx attribute is set to 0 as a placeholder here; it will be resolved
         // during handler dispatch based on the order of handler arms.
-        //
-        // NOTE: The op_name is passed through so that handler dispatch can build
-        // a mapping from operation name to index and update the shift's op_idx.
+        let shift_op = cont::shift(db, location, vec![], result_ty, tag, 0, handler_region);
+
+        // Add the op_name attribute for handler dispatch
+        // (not part of the dialect definition but needed for current implementation)
         // TODO: In full implementation, op_idx would be pre-computed from ability definition.
-        let new_op = Operation::of_name(db, location, "cont.shift")
+        let op_with_name = Operation::of(db, location, shift_op.dialect(db), shift_op.name(db))
+            .operands(shift_op.operands(db).clone())
+            .results(shift_op.results(db).clone())
             .attr("tag", Attribute::IntBits(tag as u64))
-            .attr("op_idx", Attribute::IntBits(0)) // Placeholder, resolved by handler dispatch
+            .attr("op_idx", Attribute::IntBits(0))
             .attr("op_name", Attribute::Symbol(op_name))
-            .result(result_ty)
             .region(handler_region)
             .build();
 
-        RewriteResult::Replace(new_op)
+        RewriteResult::Replace(op_with_name)
     }
 }
 

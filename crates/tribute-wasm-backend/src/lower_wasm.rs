@@ -186,7 +186,9 @@ impl<'db> WasmLowerer<'db> {
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
         let location = block.location(self.db);
         let args = block.args(self.db).clone();
-        let mut builder = BlockBuilder::new(self.db, location).block_args(args);
+        let mut builder = BlockBuilder::new(self.db, location)
+            .id(block.id(self.db))
+            .block_args(args);
 
         for op in block.operations(self.db).iter().copied() {
             self.lower_op(&mut builder, op);
@@ -227,10 +229,10 @@ impl<'db> WasmLowerer<'db> {
             builder.op(wasm::memory(
                 self.db,
                 module_location,
-                Attribute::IntBits(required_pages as u64),
-                Attribute::Unit,
-                Attribute::Bool(false),
-                Attribute::Bool(false),
+                required_pages,
+                0,
+                false,
+                false,
             ));
             self.memory_plan.has_memory = true;
         }
@@ -341,8 +343,8 @@ impl<'db> WasmLowerer<'db> {
             builder.op(wasm::export_memory(
                 self.db,
                 module_location,
-                Attribute::String("memory".into()),
-                Attribute::IntBits(0),
+                "memory".into(),
+                0,
             ));
             self.memory_plan.has_exported_memory = true;
         }
@@ -351,8 +353,8 @@ impl<'db> WasmLowerer<'db> {
             builder.op(wasm::export_func(
                 self.db,
                 module_location,
-                Attribute::String("main".into()),
-                Attribute::Symbol(Symbol::new("main")),
+                "main".into(),
+                Symbol::new("main"),
             ));
             self.main_exports.main_exported = true;
         }
@@ -362,8 +364,8 @@ impl<'db> WasmLowerer<'db> {
             builder.op(wasm::export_func(
                 self.db,
                 module_location,
-                Attribute::String("_start".into()),
-                Attribute::Symbol(Symbol::new("_start")),
+                "_start".into(),
+                Symbol::new("_start"),
             ));
         }
     }
@@ -386,7 +388,7 @@ impl<'db> WasmLowerer<'db> {
             location,
             None,
             main_result,
-            Attribute::Symbol(Symbol::new("main")),
+            Symbol::new("main"),
         ));
 
         // Drop result if main returns a value
@@ -405,11 +407,7 @@ impl<'db> WasmLowerer<'db> {
             core::Func::new(self.db, idvec![], core::Nil::new(self.db).as_type()).as_type();
 
         // Create wasm.func directly (not func.func) since we're past the func_to_wasm pass
-        Operation::of_name(self.db, location, "wasm.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("_start")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(region)
-            .build()
+        wasm::func(self.db, location, Symbol::new("_start"), func_ty, region).as_operation()
     }
 
     fn lower_op(&mut self, builder: &mut BlockBuilder<'db>, op: Operation<'db>) {

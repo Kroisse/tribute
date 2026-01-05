@@ -10,13 +10,13 @@ dialect! {
         // === Control Flow ===
 
         /// `wasm.block` operation: structured block with a label.
-        #[attr(label)]
+        #[attr(label: Symbol)]
         fn block() -> result {
             #[region(body)] {}
         };
 
         /// `wasm.loop` operation: loop construct.
-        #[attr(label)]
+        #[attr(label: Symbol)]
         fn r#loop() -> result {
             #[region(body)] {}
         };
@@ -28,11 +28,11 @@ dialect! {
         };
 
         /// `wasm.br` operation: unconditional branch to a label.
-        #[attr(target)]
+        #[attr(target: Symbol)]
         fn br();
 
         /// `wasm.br_if` operation: conditional branch to a label.
-        #[attr(target)]
+        #[attr(target: Symbol)]
         fn br_if(cond);
 
         /// `wasm.return` operation: return from function.
@@ -48,15 +48,15 @@ dialect! {
         fn drop(value);
 
         /// `wasm.return_call` operation: tail call (return_call).
-        #[attr(callee)]
+        #[attr(callee: Symbol)]
         fn return_call(#[rest] args);
 
         /// `wasm.call` operation: function call.
-        #[attr(callee)]
+        #[attr(callee: Symbol)]
         fn call(#[rest] args) -> #[rest] results;
 
         /// `wasm.call_indirect` operation: indirect function call.
-        #[attr(type_idx, table)]
+        #[attr(type_idx: u32, table: u32)]
         fn call_indirect(#[rest] args) -> #[rest] results;
 
         /// `wasm.unreachable` operation: trap / unreachable code.
@@ -79,15 +79,15 @@ dialect! {
         fn import_func();
 
         /// `wasm.export_func` operation: export a function by symbol.
-        #[attr(name, func)]
+        #[attr(name: String, func: Symbol)]
         fn export_func();
 
         /// `wasm.export_memory` operation: export a memory by index.
-        #[attr(name, index)]
+        #[attr(name: String, index: u32)]
         fn export_memory();
 
         /// `wasm.memory` operation: define linear memory.
-        #[attr(min, max, shared, memory64)]
+        #[attr(min: u32, max: u32, shared: bool, memory64: bool)]
         fn memory();
 
         /// `wasm.data` operation: define a data segment.
@@ -130,7 +130,7 @@ dialect! {
         // === Integer Arithmetic (i32) ===
 
         /// `wasm.i32_const` operation: i32 constant.
-        #[attr(value)]
+        #[attr(value: i32)]
         fn i32_const() -> result;
 
         /// `wasm.i32_add` operation: i32 addition.
@@ -189,7 +189,7 @@ dialect! {
         // === Integer Arithmetic (i64) ===
 
         /// `wasm.i64_const` operation: i64 constant.
-        #[attr(value)]
+        #[attr(value: i64)]
         fn i64_const() -> result;
 
         /// `wasm.i64_add` operation: i64 addition.
@@ -288,7 +288,7 @@ dialect! {
         // === Floating Point (f32) ===
 
         /// `wasm.f32_const` operation: f32 constant.
-        #[attr(value)]
+        #[attr(value: f32)]
         fn f32_const() -> result;
 
         /// `wasm.f32_add` operation: f32 addition.
@@ -329,7 +329,7 @@ dialect! {
         // === Floating Point (f64) ===
 
         /// `wasm.f64_const` operation: f64 constant.
-        #[attr(value)]
+        #[attr(value: f64)]
         fn f64_const() -> result;
 
         /// `wasm.f64_add` operation: f64 addition.
@@ -370,44 +370,44 @@ dialect! {
         // === Local Variables ===
 
         /// `wasm.local_get` operation: get local variable.
-        #[attr(index)]
+        #[attr(index: u32)]
         fn local_get() -> result;
 
         /// `wasm.local_set` operation: set local variable.
-        #[attr(index)]
+        #[attr(index: u32)]
         fn local_set(value);
 
         /// `wasm.local_tee` operation: set local and return value.
-        #[attr(index)]
+        #[attr(index: u32)]
         fn local_tee(value) -> result;
 
         // === WasmGC: Structs ===
 
         /// `wasm.struct_new` operation: create a new struct instance.
-        #[attr(type_idx)]
+        #[attr(type_idx: u32)]
         fn struct_new(#[rest] fields) -> result;
 
         /// `wasm.struct_get` operation: get a field from a struct.
-        #[attr(type_idx, field_idx)]
+        #[attr(type_idx: u32, field_idx: u32)]
         fn struct_get(r#ref) -> result;
 
         /// `wasm.struct_set` operation: set a field in a struct.
-        #[attr(type_idx, field_idx)]
+        #[attr(type_idx: u32, field_idx: u32)]
         fn struct_set(r#ref, value);
 
         // === WasmGC: Arrays ===
 
         /// `wasm.array_new` operation: create a new array.
-        #[attr(type_idx)]
+        #[attr(type_idx: u32)]
         fn array_new(size, init) -> result;
 
         /// `wasm.array_new_default` operation: create array with default values.
-        #[attr(type_idx)]
+        #[attr(type_idx: u32)]
         fn array_new_default(size) -> result;
 
         /// `wasm.array_new_data` operation: create array from data segment.
         /// Operands: offset (i32), size (i32) - offset and length within data segment.
-        #[attr(type_idx, data_idx)]
+        #[attr(type_idx: u32, data_idx: u32)]
         fn array_new_data(offset, size) -> result;
 
         /// `wasm.bytes_from_data` operation: create Bytes struct from data segment.
@@ -418,7 +418,7 @@ dialect! {
         fn bytes_from_data() -> result;
 
         /// `wasm.array_get` operation: get element from array.
-        #[attr(type_idx)]
+        #[attr(type_idx: u32)]
         fn array_get(r#ref, index) -> result;
 
         /// `wasm.array_get_s` operation: get packed element with sign extension.
@@ -430,7 +430,7 @@ dialect! {
         fn array_get_u(r#ref, index) -> result;
 
         /// `wasm.array_set` operation: set element in array.
-        #[attr(type_idx)]
+        #[attr(type_idx: u32)]
         fn array_set(r#ref, index, value);
 
         /// `wasm.array_len` operation: get array length.
@@ -438,13 +438,13 @@ dialect! {
 
         /// `wasm.array_copy` operation: copy elements between arrays.
         /// Operands: dst_ref, dst_offset, src_ref, src_offset, len
-        #[attr(dst_type_idx, src_type_idx)]
+        #[attr(dst_type_idx: u32, src_type_idx: u32)]
         fn array_copy(dst, dst_offset, src, src_offset, len);
 
         // === WasmGC: References ===
 
         /// `wasm.ref_null` operation: create null reference.
-        #[attr(heap_type)]
+        #[attr(heap_type: Type)]
         fn ref_null() -> result;
 
         /// `wasm.ref_func` operation: create funcref from function name.
@@ -456,11 +456,11 @@ dialect! {
         fn ref_is_null(r#ref) -> result;
 
         /// `wasm.ref_cast` operation: cast reference type.
-        #[attr(target_type)]
+        #[attr(target_type: Type)]
         fn ref_cast(r#ref) -> result;
 
         /// `wasm.ref_test` operation: test reference type.
-        #[attr(target_type)]
+        #[attr(target_type: Type)]
         fn ref_test(r#ref) -> result;
 
         // === WasmGC: i31ref (Fixnum) ===

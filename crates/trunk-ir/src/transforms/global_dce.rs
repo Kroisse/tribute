@@ -743,8 +743,8 @@ mod tests {
             top.op(wasm::export_func(
                 db,
                 loc,
-                Attribute::String("my_export".into()),
-                Attribute::Symbol(Symbol::new("exported_func")),
+                "my_export".into(),
+                Symbol::new("exported_func"),
             ));
             // unused_func has no references
             top.op(func::Func::build(

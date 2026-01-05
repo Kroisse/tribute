@@ -301,7 +301,7 @@ mod tests {
     use crate::typeck::TypeChecker;
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::{arith, core, func};
-    use trunk_ir::{Attribute, BlockId, Location, PathId, Span, idvec};
+    use trunk_ir::{BlockId, Location, PathId, Span, idvec};
 
     /// Helper to create a module with an operation that has type variable 42 as result.
     #[salsa::tracked]
@@ -311,9 +311,10 @@ mod tests {
         let type_var = tribute::type_var_with_id(db, 42);
 
         // Build operation with type variable result
-        let op = Operation::of_name(db, location, "arith.const")
-            .attr("value", Attribute::IntBits(123))
-            .result(type_var)
+        let op = arith::Const::i64(db, location, 123)
+            .operation()
+            .modify(db)
+            .results(idvec![type_var])
             .build();
 
         // Build block containing the operation
@@ -334,9 +335,10 @@ mod tests {
         let type_var = tribute::type_var_with_id(db, 1);
 
         // Build operation with type variable result
-        let op = Operation::of_name(db, location, "arith.const")
-            .attr("value", Attribute::IntBits(123))
-            .result(type_var)
+        let op = arith::Const::i64(db, location, 123)
+            .operation()
+            .modify(db)
+            .results(idvec![type_var])
             .build();
 
         // Build block containing the operation
@@ -354,13 +356,9 @@ mod tests {
     fn make_module_with_concrete_type(db: &dyn salsa::Database) -> core::Module<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
-        let i64_ty = *core::I64::new(db);
 
         // Build operation with concrete result type
-        let op = Operation::of_name(db, location, "arith.const")
-            .attr("value", Attribute::IntBits(123))
-            .result(i64_ty)
-            .build();
+        let op = arith::Const::i64(db, location, 123).operation();
 
         // Build block containing the operation
         let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
