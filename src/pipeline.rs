@@ -42,6 +42,9 @@
 //! stage_lower_case ─► Module (case.case lowered to scf.if)
 //!     │
 //!     ▼
+//! stage_cont_capture_fixup ─► Module (continuation captures fixed)
+//!     │
+//!     ▼
 //! stage_dce ─► Module (dead code eliminated)
 //!     │
 //!     ├─► [No target] ─► Full Tribute module (diagnostic/analysis)
@@ -75,6 +78,7 @@ use tribute_front::source_file::parse_with_rope;
 use tribute_front::{lower_cst, parse_cst};
 use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::const_inline::inline_module;
+use tribute_passes::cont_capture_fixup::fix_continuation_captures;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence::insert_evidence;
 use tribute_passes::handler_lower::lower_handlers;
@@ -411,7 +415,21 @@ pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) ->
     lower_tribute_to_scf(db, module)
 }
 
-/// Stage 11: Dead Code Elimination (DCE).
+/// Stage 11: Fix Continuation Captures.
+///
+/// This pass fixes continuation variable captures in closures within ability handler arms.
+/// Due to phase ordering (lambda lift happens before handler lowering), continuation
+/// variables aren't captured properly. This pass fixes unresolved tribute.var operations.
+#[salsa::tracked]
+pub fn stage_cont_capture_fixup<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Module<'db> {
+    let module = stage_lower_case(db, source);
+    fix_continuation_captures(db, module)
+}
+
+/// Stage 12: Dead Code Elimination (DCE).
 ///
 /// This pass removes unreachable function definitions from the module.
 /// Entry points include:
@@ -423,7 +441,7 @@ pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) ->
 /// (e.g., unused prelude functions with incomplete lowering).
 #[salsa::tracked]
 pub fn stage_dce<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = stage_lower_case(db, source);
+    let module = stage_cont_capture_fixup(db, source);
     let result = eliminate_dead_functions(db, module);
     result.module
 }
