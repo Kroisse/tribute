@@ -628,8 +628,13 @@ fn collect_module_info<'db>(
     collect_wasm_ops_from_region(db, &module.body(db), &mut info)?;
 
     // Collect GC types (structs, arrays)
-    let (gc_types, type_idx_by_type, placeholder_struct_type_idx) = collect_gc_types(db, module)?;
+    let (gc_types, mut type_idx_by_type, placeholder_struct_type_idx) =
+        collect_gc_types(db, module)?;
     info.gc_types = gc_types;
+
+    // Collect function types from call_indirect operations
+    collect_call_indirect_types(db, module, &mut type_idx_by_type)?;
+
     info.type_idx_by_type = type_idx_by_type;
     info.placeholder_struct_type_idx = placeholder_struct_type_idx;
 
@@ -1235,6 +1240,79 @@ fn collect_gc_types<'db>(
     Ok((result, type_idx_by_type, placeholder_struct_type_idx))
 }
 
+/// Collect function types from wasm.call_indirect operations.
+///
+/// This ensures that all function types used in call_indirect are registered
+/// in the type section before emission.
+fn collect_call_indirect_types<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+    type_idx_by_type: &mut HashMap<Type<'db>, u32>,
+) -> CompilationResult<()> {
+    fn collect_from_region<'db>(
+        db: &'db dyn salsa::Database,
+        region: &trunk_ir::Region<'db>,
+        type_idx_by_type: &mut HashMap<Type<'db>, u32>,
+        next_type_idx: &mut u32,
+    ) -> CompilationResult<()> {
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                // Recursively process nested regions
+                for nested in op.regions(db).iter() {
+                    collect_from_region(db, nested, type_idx_by_type, next_type_idx)?;
+                }
+
+                // Check if this is a call_indirect
+                if op.dialect(db) == Symbol::new("wasm")
+                    && op.name(db) == Symbol::new("call_indirect")
+                {
+                    // Build function type from operands and results
+                    let operands = op.operands(db);
+
+                    if operands.is_empty() {
+                        continue; // Skip invalid call_indirect
+                    }
+
+                    // Parameters: all operands except last (funcref)
+                    let param_types: IdVec<Type<'db>> = operands
+                        .iter()
+                        .take(operands.len() - 1)
+                        .filter_map(|v| value_type(db, *v))
+                        .collect();
+
+                    // Result type
+                    let result_ty = match op.results(db).first().copied() {
+                        Some(ty) => ty,
+                        None => continue, // Skip if no result
+                    };
+
+                    // Create function type
+                    let func_type = core::Func::new(db, param_types, result_ty).as_type();
+
+                    // Register if not already registered
+                    type_idx_by_type.entry(func_type).or_insert_with(|| {
+                        let idx = *next_type_idx;
+                        *next_type_idx += 1;
+                        idx
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // Start with the next available type index (after GC types)
+    let mut next_type_idx = type_idx_by_type
+        .values()
+        .max()
+        .map(|&idx| idx + 1)
+        .unwrap_or(0);
+
+    collect_from_region(db, &module.body(db), type_idx_by_type, &mut next_type_idx)?;
+
+    Ok(())
+}
+
 fn extract_function_def<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
@@ -1512,6 +1590,11 @@ fn assign_locals_in_region<'db>(
 ) -> CompilationResult<()> {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
+            // Skip tribute.var operations - kept for LSP support, no runtime effect
+            if op.dialect(db) == tribute::DIALECT_NAME() && op.name(db) == tribute::VAR() {
+                continue;
+            }
+
             // IMPORTANT: Process nested regions FIRST so that their effective types
             // are available when we compute the effective type for this operation.
             // This is critical for wasm.if which needs to know the branch result types.
@@ -1669,6 +1752,10 @@ fn emit_region_ops<'db>(
     }
     let block = &blocks[0];
     for op in block.operations(db).iter() {
+        // Skip tribute.var operations - kept for LSP support, no runtime effect
+        if op.dialect(db) == tribute::DIALECT_NAME() && op.name(db) == tribute::VAR() {
+            continue;
+        }
         emit_op(db, op, ctx, module_info, function)?;
     }
     Ok(())
@@ -1959,6 +2046,65 @@ fn emit_op<'db>(
                 }
             }
         }
+
+        set_result_local(db, op, ctx, function)?;
+    } else if name == Symbol::new("call_indirect") {
+        // wasm.call_indirect: indirect function call through a funcref
+        // Operands: [arg1, arg2, ..., argN, funcref]
+        // The funcref is the last operand (on top of stack in WebAssembly)
+
+        // Get or compute type_idx
+        let type_idx = match attr_u32(op.attributes(db), Symbol::new("type_idx")) {
+            Ok(idx) => idx,
+            Err(_) => {
+                // type_idx not provided (from func_to_wasm) - compute from signature
+                // Signature: (param1, param2, ..., paramN) -> result
+                // where params are all operands except the last (funcref)
+
+                if operands.is_empty() {
+                    return Err(CompilationError::invalid_module(
+                        "wasm.call_indirect requires at least a funcref operand",
+                    ));
+                }
+
+                // Build parameter types (all operands except last)
+                let param_types: Vec<Type<'db>> = operands
+                    .iter()
+                    .take(operands.len() - 1)
+                    .filter_map(|v| value_type(db, *v))
+                    .collect();
+
+                // Get result type
+                let result_ty = op.results(db).first().copied().ok_or_else(|| {
+                    CompilationError::invalid_module("wasm.call_indirect must have a result type")
+                })?;
+
+                // Construct function type
+                let func_type =
+                    core::Func::new(db, param_types.into_iter().collect(), result_ty).as_type();
+
+                // Look up type index
+                module_info
+                    .type_idx_by_type
+                    .get(&func_type)
+                    .copied()
+                    .ok_or_else(|| {
+                        CompilationError::invalid_module(
+                            "wasm.call_indirect function type not registered in type section",
+                        )
+                    })?
+            }
+        };
+        let table = attr_u32(op.attributes(db), Symbol::new("table")).unwrap_or(0);
+
+        // Emit all operands (arguments first, then funcref)
+        emit_operands(db, operands, ctx, function)?;
+
+        // Emit call_indirect instruction
+        function.instruction(&Instruction::CallIndirect {
+            type_index: type_idx,
+            table_index: table,
+        });
 
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("return_call") {
@@ -2296,6 +2442,7 @@ fn emit_op<'db>(
         let memarg = extract_memarg(db, op, 2);
         function.instruction(&Instruction::I64Store32(memarg));
     } else {
+        tracing::error!("unsupported wasm op: {}", name);
         return Err(CompilationError::unsupported_feature(
             "wasm op not supported",
         ));
@@ -2339,7 +2486,33 @@ fn emit_operands<'db>(
         }
 
         // If operand not found and not a block arg, this is an ERROR - stale value reference!
-        if let ValueDef::OpResult(_stale_op) = value.def(db) {
+        if let ValueDef::OpResult(stale_op) = value.def(db) {
+            // For tribute.var, try to find what it references by looking at its name attribute
+            if stale_op.dialect(db) == tribute::DIALECT_NAME()
+                && stale_op.name(db) == tribute::VAR()
+            {
+                if let Some(Attribute::Symbol(var_name)) =
+                    stale_op.attributes(db).get(&Symbol::new("name"))
+                {
+                    tracing::error!(
+                        "emit_operands: stale SSA value: tribute.var '{}' index={} (var references should have been resolved)",
+                        var_name,
+                        value.index(db)
+                    );
+                } else {
+                    tracing::error!(
+                        "emit_operands: stale SSA value: tribute.var (no name) index={}",
+                        value.index(db)
+                    );
+                }
+            } else {
+                tracing::error!(
+                    "emit_operands: stale SSA value: {}.{} index={}",
+                    stale_op.dialect(db),
+                    stale_op.name(db),
+                    value.index(db)
+                );
+            }
             return Err(CompilationError::invalid_module(
                 "stale SSA value in wasm backend (missing local mapping)",
             ));
@@ -2423,6 +2596,14 @@ fn emit_value<'db>(
     }
 
     // If operand not found and not a block arg, this is an error
+    if let ValueDef::OpResult(stale_op) = value.def(db) {
+        tracing::error!(
+            "stale SSA value: {}.{} index={}",
+            stale_op.dialect(db),
+            stale_op.name(db),
+            value.index(db)
+        );
+    }
     Err(CompilationError::invalid_module(
         "stale SSA value in wasm backend (missing local mapping)",
     ))
@@ -2557,7 +2738,12 @@ fn set_result_local<'db>(
     ctx: &FunctionEmitContext<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    if op.results(db).is_empty() {
+    let results = op.results(db);
+    if results.is_empty() {
+        return Ok(());
+    }
+    // Skip nil types - they don't have local mappings and don't need local.set
+    if is_nil_type(db, results[0]) {
         return Ok(());
     }
     let local = ctx
@@ -2830,6 +3016,38 @@ fn attr_field_idx<'db>(attrs: &Attrs<'db>) -> CompilationResult<u32> {
 fn attr_heap_type<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<HeapType> {
     match attrs.get(&key) {
         Some(Attribute::IntBits(bits)) => Ok(HeapType::Concrete(*bits as u32)),
+        Some(Attribute::Symbol(sym)) => {
+            // Handle abstract heap types specified by name
+            sym.with_str(|name| match name {
+                "any" => Ok(HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Any,
+                }),
+                "func" => Ok(HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Func,
+                }),
+                "extern" => Ok(HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Extern,
+                }),
+                "none" => Ok(HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::None,
+                }),
+                "struct" => Ok(HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Struct,
+                }),
+                "array" => Ok(HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Array,
+                }),
+                _ => Err(CompilationError::from(
+                    errors::CompilationErrorKind::MissingAttribute("unknown abstract heap type"),
+                )),
+            })
+        }
         _ => Err(CompilationError::from(
             errors::CompilationErrorKind::MissingAttribute("heap_type"),
         )),

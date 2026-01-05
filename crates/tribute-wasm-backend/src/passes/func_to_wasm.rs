@@ -12,7 +12,7 @@
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{func, wasm};
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, DialectType, Operation};
+use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation};
 
 /// Lower func dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -190,13 +190,16 @@ impl RewritePattern for FuncConstantPattern {
 
         // Transform to wasm.ref_func with the same function reference
         // The result type becomes wasm.funcref
+        // NOTE: Use .results() not .result() since .result() appends while
+        // .results() replaces the result list (important since .modify() clones
+        // the original operation's results).
         let funcref_ty = wasm::Funcref::new(db).as_type();
         let new_op = op
             .modify(db)
             .dialect_str("wasm")
             .name_str("ref_func")
             .attr("func_name", Attribute::Symbol(func_ref))
-            .result(funcref_ty)
+            .results(IdVec::from(vec![funcref_ty]))
             .build();
 
         RewriteResult::Replace(new_op)
