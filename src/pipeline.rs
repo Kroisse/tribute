@@ -160,7 +160,19 @@ pub fn merge_with_prelude<'db>(
         );
     }
 
-    // Fallback: just use user module if structure doesn't match
+    // Fallback: emit diagnostic if structure doesn't match
+    Diagnostic {
+        message: format!(
+            "Prelude merge failed: expected single block in both modules, got {} prelude blocks and {} user blocks",
+            prelude_blocks.len(),
+            user_blocks.len()
+        ),
+        span: Span::new(0, 0),
+        severity: DiagnosticSeverity::Warning,
+        phase: CompilationPhase::NameResolution,
+    }
+    .accumulate(db);
+
     user_module
 }
 
