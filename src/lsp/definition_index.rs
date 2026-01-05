@@ -373,7 +373,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use tree_sitter::Parser;
     use tribute::SourceCst;
-    use tribute::run_lower_case;
+    use tribute::compile_for_lsp;
 
     fn make_source(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| {
@@ -394,7 +394,7 @@ mod tests {
         let source_text = "fn add(x: Int, y: Int) -> Int { x + y }";
         let source = make_source("test.trb", source_text);
 
-        let module = run_lower_case(db, source);
+        let module = compile_for_lsp(db, source);
         let index = DefinitionIndex::build(db, &module);
 
         // Should find the function definition "add"
@@ -410,7 +410,7 @@ mod tests {
         let source_text = "fn foo(x: Int) -> Int { x }\nfn bar() -> Int { foo(1) }";
         let source = make_source("test.trb", source_text);
 
-        let module = run_lower_case(db, source);
+        let module = compile_for_lsp(db, source);
         let index = DefinitionIndex::build(db, &module);
 
         // Find position of "foo" call in bar (around position 46)
@@ -436,7 +436,7 @@ mod tests {
         let source_text = "fn foo(x: Int) -> Int { x }\nfn bar() -> Int { foo(1) + foo(2) }";
         let source = make_source("test.trb", source_text);
 
-        let module = run_lower_case(db, source);
+        let module = compile_for_lsp(db, source);
         let index = DefinitionIndex::build(db, &module);
 
         // Find position of "foo" definition
@@ -458,7 +458,7 @@ mod tests {
         let source_text = "fn foo(x: Int) -> Int { x }\nfn bar() -> Int { foo(1) + foo(2) }";
         let source = make_source("test.trb", source_text);
 
-        let module = run_lower_case(db, source);
+        let module = compile_for_lsp(db, source);
         let index = DefinitionIndex::build(db, &module);
 
         // Find position of second "foo" call
@@ -478,7 +478,7 @@ mod tests {
         let source_text = "fn foo() -> Int { 42 }";
         let source = make_source("test.trb", source_text);
 
-        let module = run_lower_case(db, source);
+        let module = compile_for_lsp(db, source);
         let index = DefinitionIndex::build(db, &module);
 
         let foo_pos = source_text.find("foo").unwrap();
@@ -495,7 +495,7 @@ mod tests {
         let source_text = "fn foo() -> Int { 1 }\nfn bar() -> Int { foo() }";
         let source = make_source("test.trb", source_text);
 
-        let module = run_lower_case(db, source);
+        let module = compile_for_lsp(db, source);
         let index = DefinitionIndex::build(db, &module);
 
         // Position of "foo" call in bar

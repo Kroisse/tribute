@@ -36,7 +36,7 @@ use super::completion_index::{CompletionIndex, CompletionKind};
 use super::definition_index::{DefinitionIndex, validate_identifier};
 use super::pretty::{format_signature, print_type};
 use super::type_index::TypeIndex;
-use tribute::{TributeDatabaseImpl, compile, database::parse_with_thread_local};
+use tribute::{TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local};
 
 /// Main LSP server state.
 struct LspServer {
@@ -196,7 +196,7 @@ impl LspServer {
 
         // Run Salsa compilation
         let (type_str, span) = self.db.attach(|db| {
-            let module = compile(db, source_cst);
+            let module = compile_for_lsp(db, source_cst);
             let type_index = TypeIndex::build(db, &module);
 
             type_index.type_at(offset).map(|entry| {
@@ -235,7 +235,7 @@ impl LspServer {
 
         // Run Salsa compilation and build definition index
         let definition = self.db.attach(|db| {
-            let module = compile(db, source_cst);
+            let module = compile_for_lsp(db, source_cst);
             let index = DefinitionIndex::build(db, &module);
             index.definition_at(offset).cloned()
         })?;
@@ -272,7 +272,7 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let locations = self.db.attach(|db| {
-            let module = compile(db, source_cst);
+            let module = compile_for_lsp(db, source_cst);
             let index = DefinitionIndex::build(db, &module);
 
             let (symbol, refs) = index.references_at(offset)?;
@@ -318,7 +318,7 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let result = self.db.attach(|db| {
-            let module = compile(db, source_cst);
+            let module = compile_for_lsp(db, source_cst);
             let index = DefinitionIndex::build(db, &module);
 
             // Check if rename is possible at this position
@@ -353,7 +353,7 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let text_edits = self.db.attach(|db| {
-            let module = compile(db, source_cst);
+            let module = compile_for_lsp(db, source_cst);
             let index = DefinitionIndex::build(db, &module);
 
             // Get definition and validate
@@ -416,7 +416,7 @@ impl LspServer {
         let prefix = extract_completion_prefix(&rope, offset);
 
         let items = self.db.attach(|db| {
-            let module = compile(db, source_cst);
+            let module = compile_for_lsp(db, source_cst);
             let index = CompletionIndex::build(db, &module);
 
             // Get expression completions filtered by prefix
@@ -641,7 +641,7 @@ impl LspServer {
         let result = self
             .db
             .attach(|db| {
-                let module = compile(db, source_cst);
+                let module = compile_for_lsp(db, source_cst);
                 Some(extract_symbols_from_module(db, &module, rope))
             })
             .map(DocumentSymbolResponse::Nested);
@@ -685,7 +685,7 @@ impl LspServer {
         let active_param = call_info.active_param;
 
         let result = self.db.attach(|db| {
-            let module = compile(db, source_cst);
+            let module = compile_for_lsp(db, source_cst);
 
             // Find the function definition by name
             let callee_sym = trunk_ir::Symbol::from_dynamic(&callee_name);

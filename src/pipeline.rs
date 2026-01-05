@@ -427,6 +427,28 @@ pub fn stage_lower_to_wasm<'db>(
 // These functions take SourceCst and run the pipeline up to a specific stage.
 // Useful for testing individual stages or for tools that need intermediate results.
 
+/// Compile for LSP: minimal pipeline preserving source structure.
+///
+/// This entry point runs only the passes needed for LSP features:
+/// - Parse & Lower: CST to TrunkIR
+/// - Resolve: Name resolution (completion, go-to-definition)
+/// - Typecheck: Type inference (hover)
+/// - TDNR: Type-directed name resolution (method calls)
+///
+/// Excluded passes (preserve source structure):
+/// - const_inline: Keep const references for go-to-definition
+/// - lambda_lift/closure_lower: Keep closure structure
+/// - evidence/handler_lower: Keep ability structure
+/// - lower_case: Keep case/pattern structure
+/// - dce: Keep all functions
+#[salsa::tracked]
+pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = parse_and_lower(db, source);
+    let module = stage_resolve(db, module);
+    let module = stage_typecheck(db, module);
+    stage_tdnr(db, module)
+}
+
 /// Run pipeline up to resolve stage.
 #[salsa::tracked]
 pub fn run_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
@@ -462,21 +484,6 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
     let module = stage_typecheck(db, module);
     let module = stage_lambda_lift(db, module);
     stage_closure_lower(db, module)
-}
-
-/// Run pipeline up to lower_case stage (case → scf.if).
-#[salsa::tracked]
-pub fn run_lower_case<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = parse_and_lower(db, source);
-    let module = stage_resolve(db, module);
-    let module = stage_const_inline(db, module);
-    let module = stage_typecheck(db, module);
-    let module = stage_lambda_lift(db, module);
-    let module = stage_closure_lower(db, module);
-    let module = stage_tdnr(db, module);
-    let module = stage_evidence(db, module);
-    let module = stage_handler_lower(db, module);
-    stage_lower_case(db, module)
 }
 
 // =============================================================================
