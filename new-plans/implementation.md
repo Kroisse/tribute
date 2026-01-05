@@ -552,14 +552,16 @@ flowchart TB
 
 현재 구조는 모듈 단위(coarse-grained) 처리를 한다. 장기적으로 rust-analyzer 스타일의 fine-grained 쿼리 기반 아키텍처로 발전을 고려한다.
 
-**현재 (Coarse-Grained)**
+#### 현재 (Coarse-Grained)
+
 ```rust
 // 모듈 전체를 처리
 fn typecheck(db, module: Module) -> Module
 fn resolve(db, module: Module) -> Module
 ```
 
-**목표 (Fine-Grained, rust-analyzer 스타일)**
+#### 목표 (Fine-Grained, rust-analyzer 스타일)
+
 ```rust
 // 개별 항목 단위로 쿼리
 fn type_of_function(db, func_id: FunctionId) -> Type
@@ -572,7 +574,7 @@ fn infer_function(db, func_id: FunctionId) -> InferenceResult
 //                → A를 호출하는 함수들만 재검사
 ```
 
-**rust-analyzer 아키텍처 참고점:**
+#### rust-analyzer 아키텍처 참고점
 - `base_db`: 입력 쿼리 (파일 내용, 크레이트 그래프)
 - `hir_def`: 정의 추출 (함수, 타입, 모듈 구조)
 - `hir_ty`: 타입 추론 및 검사
