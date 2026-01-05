@@ -59,11 +59,42 @@ impl RewritePattern for ArithConstPattern {
         let value = const_op.value(db).clone();
 
         let new_op = match type_name {
-            "i32" => wasm::i32_const(db, location, result_ty, value).as_operation(),
-            "i64" => wasm::i64_const(db, location, result_ty, value).as_operation(),
-            "f32" => wasm::f32_const(db, location, result_ty, value).as_operation(),
-            "f64" => wasm::f64_const(db, location, result_ty, value).as_operation(),
-            _ => wasm::i32_const(db, location, result_ty, value).as_operation(),
+            "i32" => {
+                if let Attribute::IntBits(v) = value {
+                    wasm::i32_const(db, location, result_ty, v as i32).as_operation()
+                } else {
+                    wasm::i32_const(db, location, result_ty, 0).as_operation()
+                }
+            }
+            "i64" => {
+                if let Attribute::IntBits(v) = value {
+                    wasm::i64_const(db, location, result_ty, v as i64).as_operation()
+                } else {
+                    wasm::i64_const(db, location, result_ty, 0).as_operation()
+                }
+            }
+            "f32" => {
+                if let Attribute::FloatBits(v) = value {
+                    wasm::f32_const(db, location, result_ty, f32::from_bits(v as u32))
+                        .as_operation()
+                } else {
+                    wasm::f32_const(db, location, result_ty, 0.0).as_operation()
+                }
+            }
+            "f64" => {
+                if let Attribute::FloatBits(v) = value {
+                    wasm::f64_const(db, location, result_ty, f64::from_bits(v)).as_operation()
+                } else {
+                    wasm::f64_const(db, location, result_ty, 0.0).as_operation()
+                }
+            }
+            _ => {
+                if let Attribute::IntBits(v) = value {
+                    wasm::i32_const(db, location, result_ty, v as i32).as_operation()
+                } else {
+                    wasm::i32_const(db, location, result_ty, 0).as_operation()
+                }
+            }
         };
 
         RewriteResult::Replace(new_op)
@@ -271,7 +302,7 @@ impl RewritePattern for ArithNegPattern {
             "i64" => {
                 // For i64: 0 - x
                 let i64_ty = core::I64::new(db).as_type();
-                let zero = wasm::i64_const(db, location, i64_ty, Attribute::IntBits(0));
+                let zero = wasm::i64_const(db, location, i64_ty, 0);
                 let zero_val = zero.result(db);
                 let sub = wasm::i64_sub(db, location, zero_val, operand, i64_ty);
                 RewriteResult::Expand(vec![zero.operation(), sub.operation()])
@@ -279,7 +310,7 @@ impl RewritePattern for ArithNegPattern {
             _ => {
                 // Default to i32: 0 - x
                 let i32_ty = core::I32::new(db).as_type();
-                let zero = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0));
+                let zero = wasm::i32_const(db, location, i32_ty, 0);
                 let zero_val = zero.result(db);
                 let sub = wasm::i32_sub(db, location, zero_val, operand, i32_ty);
                 RewriteResult::Expand(vec![zero.operation(), sub.operation()])

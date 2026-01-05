@@ -670,7 +670,7 @@ mod tests {
     // Test the new define_op! macro
     mod define_op_tests {
         use crate::{
-            Attribute, BlockId, DialectType, Location, PathId, Region, Span, dialect,
+            BlockId, DialectType, Location, PathId, Region, Span, dialect,
             dialect::core, idvec,
         };
         use salsa_test_macros::salsa_test;
@@ -682,14 +682,14 @@ mod tests {
                 fn binary(lhs, rhs) -> result;
 
                 /// Test constant operation.
-                #[attr(value)]
+                #[attr(value: i64)]
                 fn constant() -> result;
 
                 /// Test variadic operation.
                 fn variadic(#[rest] args);
 
                 /// Test region operation.
-                #[attr(name)]
+                #[attr(name: String)]
                 fn container() {
                     #[region(body)] {}
                 };
@@ -734,7 +734,7 @@ mod tests {
             let path = PathId::new(db, "file:///test.trb".to_owned());
             let location = Location::new(path, Span::new(0, 0));
 
-            constant(db, location, core::I64::new(db).as_type(), 42i64.into())
+            constant(db, location, core::I64::new(db).as_type(), 42i64)
         }
 
         #[salsa_test]
@@ -743,7 +743,7 @@ mod tests {
             assert_eq!(constant.result_ty(db), core::I64::new(db).as_type());
 
             // Test auto-generated attribute accessor
-            assert_eq!(constant.value(db), &Attribute::IntBits(42));
+            assert_eq!(constant.value(db), 42i64);
         }
 
         #[salsa::tracked]
@@ -768,7 +768,7 @@ mod tests {
             let block = crate::Block::new(db, BlockId::fresh(), location, idvec![], idvec![]);
             let region = Region::new(db, location, idvec![block]);
 
-            container(db, location, Attribute::String("test".to_string()), region)
+            container(db, location, "test".to_string(), region)
         }
 
         #[salsa_test]

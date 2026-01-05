@@ -227,10 +227,10 @@ impl<'db> WasmLowerer<'db> {
             builder.op(wasm::memory(
                 self.db,
                 module_location,
-                Attribute::IntBits(required_pages as u64),
-                Attribute::Unit,
-                Attribute::Bool(false),
-                Attribute::Bool(false),
+                required_pages,
+                0,
+                false,
+                false,
             ));
             self.memory_plan.has_memory = true;
         }
@@ -341,8 +341,8 @@ impl<'db> WasmLowerer<'db> {
             builder.op(wasm::export_memory(
                 self.db,
                 module_location,
-                Attribute::String("memory".into()),
-                Attribute::IntBits(0),
+                "memory".into(),
+                0,
             ));
             self.memory_plan.has_exported_memory = true;
         }
@@ -351,8 +351,8 @@ impl<'db> WasmLowerer<'db> {
             builder.op(wasm::export_func(
                 self.db,
                 module_location,
-                Attribute::String("main".into()),
-                Attribute::Symbol(Symbol::new("main")),
+                "main".into(),
+                Symbol::new("main"),
             ));
             self.main_exports.main_exported = true;
         }
@@ -362,8 +362,8 @@ impl<'db> WasmLowerer<'db> {
             builder.op(wasm::export_func(
                 self.db,
                 module_location,
-                Attribute::String("_start".into()),
-                Attribute::Symbol(Symbol::new("_start")),
+                "_start".into(),
+                Symbol::new("_start"),
             ));
         }
     }
@@ -386,7 +386,7 @@ impl<'db> WasmLowerer<'db> {
             location,
             None,
             main_result,
-            Attribute::Symbol(Symbol::new("main")),
+            Symbol::new("main"),
         ));
 
         // Drop result if main returns a value

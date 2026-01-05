@@ -45,7 +45,7 @@ use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, IdVec, Location, Operation, Region, Symbol, Type, Value,
-    ValueDef,
+    ValueDef, idvec,
 };
 
 /// Continuation struct layout:
@@ -232,8 +232,8 @@ pub mod resume_gen {
                 location,
                 state_param,
                 live_local.ty,
-                Attribute::Type(state_ty),
-                Attribute::IntBits(field_idx as u64),
+                0, // type_idx - Placeholder, resolved at emit time
+                field_idx as u32,
             );
 
             let extracted_value = Value::new(db, ValueDef::OpResult(struct_get.as_operation()), 0);
@@ -1328,8 +1328,8 @@ fn generate_inline_resume_function<'db>(
             location,
             state_param,
             live_local.ty,
-            Attribute::Type(state_ty),
-            Attribute::IntBits(field_idx as u64),
+            0, // type_idx - Placeholder, resolved at emit time
+            field_idx as u32,
         );
 
         let extracted_value = Value::new(db, ValueDef::OpResult(struct_get.as_operation()), 0);
@@ -1426,7 +1426,7 @@ fn expand_shift_operation<'db>(
         location,
         live_values,
         state_ty,
-        Attribute::Type(state_ty),
+        0, // type_idx - Placeholder, resolved at emit time
     );
     let state_val = Value::new(db, ValueDef::OpResult(state_struct.as_operation()), 0);
     ops.push(state_struct.as_operation());
@@ -1441,12 +1441,7 @@ fn expand_shift_operation<'db>(
         val
     } else {
         // Fallback: use null funcref if no resume function was generated
-        let null_resume_fn = wasm::ref_null(
-            db,
-            location,
-            funcref_ty,
-            Attribute::Symbol(Symbol::new("func")),
-        );
+        let null_resume_fn = wasm::ref_null(db, location, funcref_ty, funcref_ty);
         let val = null_resume_fn.as_operation().result(db, 0);
         ops.push(null_resume_fn.as_operation());
         val
@@ -1456,7 +1451,7 @@ fn expand_shift_operation<'db>(
     // Already have state_val
 
     // Field 2: tag (i32)
-    let tag_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(tag_value));
+    let tag_const = wasm::i32_const(db, location, i32_ty, tag_value as i32);
     let tag_val = tag_const.as_operation().result(db, 0);
     ops.push(tag_const.as_operation());
 
@@ -1467,7 +1462,7 @@ fn expand_shift_operation<'db>(
         location,
         IdVec::from(vec![resume_fn_val, state_val, tag_val]),
         cont_ty,
-        Attribute::Type(cont_ty),
+        0, // type_idx - Placeholder, resolved at emit time
     );
     let cont_val = Value::new(db, ValueDef::OpResult(cont_struct.as_operation()), 0);
     ops.push(cont_struct.as_operation());
@@ -1475,13 +1470,13 @@ fn expand_shift_operation<'db>(
     // === 3. Set Yield Globals ===
 
     // Set $yield_state = 1 (yielding)
-    let const_1 = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1));
+    let const_1 = wasm::i32_const(db, location, i32_ty, 1);
     let const_1_val = const_1.as_operation().result(db, 0);
     ops.push(const_1.as_operation());
     ops.push(wasm::global_set(db, location, const_1_val, YIELD_STATE_IDX).as_operation());
 
     // Set $yield_tag = tag
-    let tag_const2 = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(tag_value));
+    let tag_const2 = wasm::i32_const(db, location, i32_ty, tag_value as i32);
     let tag_const2_val = tag_const2.as_operation().result(db, 0);
     ops.push(tag_const2.as_operation());
     ops.push(wasm::global_set(db, location, tag_const2_val, YIELD_TAG_IDX).as_operation());
@@ -1506,12 +1501,7 @@ fn expand_shift_operation<'db>(
         }
     } else {
         // No value provided - use null
-        let null_value = wasm::ref_null(
-            db,
-            location,
-            anyref_ty,
-            Attribute::Symbol(Symbol::new("any")),
-        );
+        let null_value = wasm::ref_null(db, location, anyref_ty, anyref_ty);
         let val = null_value.as_operation().result(db, 0);
         ops.push(null_value.as_operation());
         val
@@ -1519,7 +1509,7 @@ fn expand_shift_operation<'db>(
     ops.push(wasm::global_set(db, location, yield_value_val, YIELD_VALUE_IDX).as_operation());
 
     // Set $yield_op_idx = op_idx (for multi-op ability dispatch)
-    let op_idx_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(op_idx_value));
+    let op_idx_const = wasm::i32_const(db, location, i32_ty, op_idx_value as i32);
     let op_idx_val = op_idx_const.as_operation().result(db, 0);
     ops.push(op_idx_const.as_operation());
     ops.push(wasm::global_set(db, location, op_idx_val, YIELD_OP_IDX).as_operation());
@@ -1589,7 +1579,7 @@ impl RewritePattern for PushPromptPattern {
         let yield_tag_val = get_yield_tag.as_operation().result(db, 0);
 
         // Create our tag constant
-        let our_tag = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(tag_value));
+        let our_tag = wasm::i32_const(db, location, i32_ty, tag_value as i32);
         let our_tag_val = our_tag.as_operation().result(db, 0);
 
         // Compare: yield_tag == our_tag
@@ -1610,7 +1600,7 @@ impl RewritePattern for PushPromptPattern {
         //
         // For now, we reset yield_state and load the values as preparation.
 
-        let const_0 = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0));
+        let const_0 = wasm::i32_const(db, location, i32_ty, 0);
         let const_0_val = const_0.as_operation().result(db, 0);
         let reset_yield = wasm::global_set(db, location, const_0_val, YIELD_STATE_IDX);
 
@@ -1732,15 +1722,15 @@ impl RewritePattern for PushPromptPattern {
             .first()
             .copied()
             .unwrap_or_else(|| core::Nil::new(db).as_type());
-        let new_op = wasm::block(
-            db,
-            location,
-            result_ty,
-            Attribute::IntBits(tag_value),
-            new_body,
-        );
+        // Note: wasm::block typed helper expects Symbol (label name), but we use integer tags.
+        // Use Operation::of_name for tag-based block labeling.
+        let new_op = Operation::of_name(db, location, "wasm.block")
+            .results(idvec![result_ty])
+            .attr("label", Attribute::IntBits(tag_value))
+            .regions(idvec![new_body])
+            .build();
 
-        RewriteResult::Replace(new_op.as_operation())
+        RewriteResult::Replace(new_op)
     }
 }
 
@@ -2028,7 +2018,7 @@ fn build_multi_arm_dispatch<'db>(
         let op_idx_val = get_op_idx.as_operation().result(db, 0);
 
         // i32.const <op_idx>
-        let expected_idx = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(*op_idx));
+        let expected_idx = wasm::i32_const(db, location, i32_ty, *op_idx as i32);
         let expected_idx_val = expected_idx.as_operation().result(db, 0);
 
         // i32.eq
@@ -2115,7 +2105,7 @@ impl RewritePattern for ResumePattern {
         let mut ops = Vec::new();
 
         // 1. Reset $yield_state = 0 (not yielding anymore)
-        let const_0 = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0));
+        let const_0 = wasm::i32_const(db, location, i32_ty, 0);
         let const_0_val = const_0.as_operation().result(db, 0);
         ops.push(const_0.as_operation());
         ops.push(wasm::global_set(db, location, const_0_val, YIELD_STATE_IDX).as_operation());
@@ -2126,8 +2116,8 @@ impl RewritePattern for ResumePattern {
             location,
             continuation,
             funcref_ty,
-            Attribute::Type(cont_ty),
-            Attribute::IntBits(CONT_FIELD_RESUME_FN as u64),
+            0, // type_idx - Placeholder, resolved at emit time
+            CONT_FIELD_RESUME_FN as u32,
         );
         let resume_fn_val = Value::new(db, ValueDef::OpResult(get_resume_fn.as_operation()), 0);
         ops.push(get_resume_fn.as_operation());
@@ -2138,8 +2128,8 @@ impl RewritePattern for ResumePattern {
             location,
             continuation,
             anyref_ty,
-            Attribute::Type(cont_ty),
-            Attribute::IntBits(CONT_FIELD_STATE as u64),
+            0, // type_idx - Placeholder, resolved at emit time
+            CONT_FIELD_STATE as u32,
         );
         let state_val = Value::new(db, ValueDef::OpResult(get_state.as_operation()), 0);
         ops.push(get_state.as_operation());
@@ -2166,8 +2156,8 @@ impl RewritePattern for ResumePattern {
             location,
             IdVec::from(vec![state_val, boxed_value, resume_fn_val]),
             IdVec::from(vec![result_ty]),
-            Attribute::IntBits(0), // type_idx - Placeholder - resolved at emit
-            Attribute::IntBits(0), // table - Default table
+            0, // type_idx - Placeholder - resolved at emit
+            0, // table - Default table
         );
         ops.push(call_indirect.as_operation());
 

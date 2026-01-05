@@ -171,9 +171,13 @@ impl RewritePattern for ScfContinuePattern {
         };
 
         // Branch to loop (depth 1: block=0, loop=1)
-        let br_op = wasm::br(db, op.location(db), Attribute::IntBits(1));
+        // Note: wasm::br typed helper expects Symbol (label name), but we use integer depths.
+        // Use Operation::of_name for depth-based branching.
+        let br_op = Operation::of_name(db, op.location(db), "wasm.br")
+            .attr("target", Attribute::IntBits(1))
+            .build();
 
-        RewriteResult::Replace(br_op.as_operation())
+        RewriteResult::Replace(br_op)
     }
 }
 
@@ -229,7 +233,7 @@ mod tests {
         let else_region = Region::new(db, location, idvec![else_block]);
 
         // Create a dummy condition value
-        let cond_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1));
+        let cond_const = wasm::i32_const(db, location, i32_ty, 1);
 
         let scf_if = Operation::of_name(db, location, "scf.if")
             .operands(idvec![cond_const.result(db)])

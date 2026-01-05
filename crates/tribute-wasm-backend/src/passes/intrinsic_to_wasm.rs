@@ -79,8 +79,7 @@ pub fn analyze_intrinsics<'db>(
     ) {
         // Check for wasm.call to print_line
         if let Ok(call) = wasm::Call::from_operation(db, *op)
-            && let Attribute::Symbol(callee) = call.callee(db)
-            && callee.last_segment() == Symbol::new("print_line")
+            && call.callee(db).last_segment() == Symbol::new("print_line")
             && let Some(arg) = op.operands(db).first()
             && let Some((ptr, len)) = get_literal_info(db, *arg)
         {
@@ -228,10 +227,7 @@ impl RewritePattern for PrintLinePattern {
             return RewriteResult::Unchanged;
         };
 
-        let Attribute::Symbol(callee) = call_op.callee(db) else {
-            return RewriteResult::Unchanged;
-        };
-        if callee.last_segment() != Symbol::new("print_line") {
+        if call_op.callee(db).last_segment() != Symbol::new("print_line") {
             return RewriteResult::Unchanged;
         }
 
@@ -263,20 +259,10 @@ impl RewritePattern for PrintLinePattern {
         // result = wasm.call(fd_write, fd_const, iovec_const, iovec_len_const, nwritten_const)
         // wasm.drop(result)
 
-        let fd_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1)); // stdout
-        let iovec_const = wasm::i32_const(
-            db,
-            location,
-            i32_ty,
-            Attribute::IntBits(u64::from(iovec_offset)),
-        );
-        let iovec_len_const = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(1)); // one iovec entry
-        let nwritten_const = wasm::i32_const(
-            db,
-            location,
-            i32_ty,
-            Attribute::IntBits(u64::from(nwritten_offset)),
-        );
+        let fd_const = wasm::i32_const(db, location, i32_ty, 1); // stdout
+        let iovec_const = wasm::i32_const(db, location, i32_ty, iovec_offset as i32);
+        let iovec_len_const = wasm::i32_const(db, location, i32_ty, 1); // one iovec entry
+        let nwritten_const = wasm::i32_const(db, location, i32_ty, nwritten_offset as i32);
 
         let call = wasm::call(
             db,
@@ -288,7 +274,7 @@ impl RewritePattern for PrintLinePattern {
                 nwritten_const.result(db),
             ],
             vec![i32_ty],
-            Attribute::Symbol(Symbol::new("fd_write")),
+            Symbol::new("fd_write"),
         );
 
         let drop_op = wasm::drop(db, location, call.result(db, 0));
@@ -335,9 +321,7 @@ fn is_bytes_method_call<'db>(
     let Ok(call) = wasm::Call::from_operation(db, *op) else {
         return false;
     };
-    let Attribute::Symbol(callee) = call.callee(db) else {
-        return false;
-    };
+    let callee = call.callee(db);
     // Check if callee is "Bytes::method"
     callee.last_segment() == Symbol::new(method)
         && callee
@@ -373,8 +357,8 @@ impl RewritePattern for BytesLenPattern {
             location,
             bytes_ref,
             i32_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
-            Attribute::IntBits(u64::from(BYTES_LEN_FIELD)),
+            BYTES_STRUCT_IDX,
+            BYTES_LEN_FIELD,
         );
 
         // Extend i32 to i64 (Int type in Tribute is i64)
@@ -417,8 +401,8 @@ impl RewritePattern for BytesGetOrPanicPattern {
             location,
             bytes_ref,
             array_ref_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
-            Attribute::IntBits(u64::from(BYTES_DATA_FIELD)),
+            BYTES_STRUCT_IDX,
+            BYTES_DATA_FIELD,
         );
 
         // Get offset (field 1)
@@ -427,8 +411,8 @@ impl RewritePattern for BytesGetOrPanicPattern {
             location,
             bytes_ref,
             i32_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
-            Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
+            BYTES_STRUCT_IDX,
+            BYTES_OFFSET_FIELD,
         );
 
         // Wrap index to i32
@@ -501,8 +485,8 @@ impl RewritePattern for BytesSliceOrPanicPattern {
             location,
             bytes_ref,
             array_ref_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
-            Attribute::IntBits(u64::from(BYTES_DATA_FIELD)),
+            BYTES_STRUCT_IDX,
+            BYTES_DATA_FIELD,
         );
 
         // Get current offset (field 1)
@@ -511,8 +495,8 @@ impl RewritePattern for BytesSliceOrPanicPattern {
             location,
             bytes_ref,
             i32_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
-            Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
+            BYTES_STRUCT_IDX,
+            BYTES_OFFSET_FIELD,
         );
 
         // Wrap start and end to i32
@@ -548,7 +532,7 @@ impl RewritePattern for BytesSliceOrPanicPattern {
                 new_len.result(db),
             ],
             bytes_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
+            BYTES_STRUCT_IDX,
         );
 
         RewriteResult::Expand(vec![
@@ -596,8 +580,8 @@ impl RewritePattern for BytesConcatPattern {
             location,
             left,
             array_ref_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
-            Attribute::IntBits(u64::from(BYTES_DATA_FIELD)),
+            BYTES_STRUCT_IDX,
+            BYTES_DATA_FIELD,
         );
 
         let left_offset = wasm::struct_get(
@@ -605,8 +589,8 @@ impl RewritePattern for BytesConcatPattern {
             location,
             left,
             i32_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
-            Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
+            BYTES_STRUCT_IDX,
+            BYTES_OFFSET_FIELD,
         );
 
         let left_len = wasm::struct_get(
@@ -614,8 +598,8 @@ impl RewritePattern for BytesConcatPattern {
             location,
             left,
             i32_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
-            Attribute::IntBits(u64::from(BYTES_LEN_FIELD)),
+            BYTES_STRUCT_IDX,
+            BYTES_LEN_FIELD,
         );
 
         // Get right's data, offset, len
@@ -624,8 +608,8 @@ impl RewritePattern for BytesConcatPattern {
             location,
             right,
             array_ref_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
-            Attribute::IntBits(u64::from(BYTES_DATA_FIELD)),
+            BYTES_STRUCT_IDX,
+            BYTES_DATA_FIELD,
         );
 
         let right_offset = wasm::struct_get(
@@ -633,8 +617,8 @@ impl RewritePattern for BytesConcatPattern {
             location,
             right,
             i32_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
-            Attribute::IntBits(u64::from(BYTES_OFFSET_FIELD)),
+            BYTES_STRUCT_IDX,
+            BYTES_OFFSET_FIELD,
         );
 
         let right_len = wasm::struct_get(
@@ -642,8 +626,8 @@ impl RewritePattern for BytesConcatPattern {
             location,
             right,
             i32_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
-            Attribute::IntBits(u64::from(BYTES_LEN_FIELD)),
+            BYTES_STRUCT_IDX,
+            BYTES_LEN_FIELD,
         );
 
         // Calculate total_len = left.len + right.len
@@ -661,11 +645,11 @@ impl RewritePattern for BytesConcatPattern {
             location,
             total_len.result(db),
             array_ref_ty,
-            Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
+            BYTES_ARRAY_IDX,
         );
 
         // Copy left bytes: array_copy(new_arr, 0, left.data, left.offset, left.len)
-        let zero = wasm::i32_const(db, location, i32_ty, Attribute::IntBits(0));
+        let zero = wasm::i32_const(db, location, i32_ty, 0);
 
         let copy_left = wasm::array_copy(
             db,
@@ -675,8 +659,8 @@ impl RewritePattern for BytesConcatPattern {
             left_data.result(db),
             left_offset.result(db),
             left_len.result(db),
-            Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
-            Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
+            BYTES_ARRAY_IDX,
+            BYTES_ARRAY_IDX,
         );
 
         // Copy right bytes: array_copy(new_arr, left.len, right.data, right.offset, right.len)
@@ -688,8 +672,8 @@ impl RewritePattern for BytesConcatPattern {
             right_data.result(db),
             right_offset.result(db),
             right_len.result(db),
-            Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
-            Attribute::IntBits(u64::from(BYTES_ARRAY_IDX)),
+            BYTES_ARRAY_IDX,
+            BYTES_ARRAY_IDX,
         );
 
         // Create new Bytes struct: struct_new(new_arr, 0, total_len)
@@ -698,7 +682,7 @@ impl RewritePattern for BytesConcatPattern {
             location,
             vec![new_array.result(db), zero.result(db), total_len.result(db)],
             bytes_ty,
-            Attribute::IntBits(u64::from(BYTES_STRUCT_IDX)),
+            BYTES_STRUCT_IDX,
         );
 
         RewriteResult::Expand(vec![
@@ -801,10 +785,7 @@ mod tests {
                 let Ok(call) = wasm::Call::from_operation(db, *op) else {
                     return None;
                 };
-                let Attribute::Symbol(callee) = call.callee(db) else {
-                    return None;
-                };
-                Some(callee.last_segment().to_string())
+                Some(call.callee(db).last_segment().to_string())
             })
             .collect()
     }
