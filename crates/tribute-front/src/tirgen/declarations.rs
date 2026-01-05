@@ -3,7 +3,7 @@
 use tree_sitter::Node;
 use tribute_ir::dialect::{adt, tribute};
 use trunk_ir::{
-    Attribute, BlockBuilder, DialectType, Region, Span, Symbol, SymbolVec, Type,
+    Attribute, BlockBuilder, DialectOp, DialectType, Region, Span, Symbol, SymbolVec, Type,
     dialect::{core, func},
     idvec,
 };
@@ -146,9 +146,9 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
 
     let location = ctx.location(&func_node);
 
-    // extern_function has no body - skip for now (TODO: handle extern functions)
+    // Handle extern functions separately
     if func_node.kind() == "extern_function" {
-        return None;
+        return lower_extern_function(ctx, func_node);
     }
 
     // Use field-based access for cleaner extraction
@@ -224,6 +224,122 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
             },
         ))
     })
+}
+
+/// Lower an extern function definition to a func.func operation with ABI attribute.
+///
+/// Handles extern functions like:
+/// - `extern fn foo() -> Int` - plain extern (no ABI specified)
+/// - `extern "intrinsic" fn bar(x: Int) -> Bool` - with ABI specifier
+///
+/// The function body contains only `func.unreachable` since extern functions
+/// have no Tribute implementation.
+fn lower_extern_function<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
+    node: Node,
+) -> Option<func::Func<'db>> {
+    let location = ctx.location(&node);
+
+    // Extract extern marker to get ABI
+    let extern_marker = node
+        .named_children(&mut node.walk())
+        .find(|c| c.kind() == "extern_marker");
+
+    // Get ABI string if present (e.g., "intrinsic" from `extern "intrinsic" fn`)
+    let abi = extern_marker
+        .and_then(|marker| marker.child_by_field_name("abi"))
+        .map(|abi_node| {
+            let text = node_text(&abi_node, &ctx.source);
+            // Strip quotes from string literal
+            text.strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .unwrap_or(&text)
+                .to_string()
+        });
+
+    // Use field-based access for cleaner extraction
+    let name_node = node.child_by_field_name("name")?;
+
+    // For operator_name nodes like (<>), extract just the operator
+    let name_str = if name_node.kind() == "operator_name" {
+        let text = node_text(&name_node, &ctx.source);
+        text.strip_prefix('(')
+            .and_then(|s| s.strip_suffix(')'))
+            .unwrap_or(&text)
+            .to_string()
+    } else {
+        node_text(&name_node, &ctx.source).to_string()
+    };
+    let name_sym = Symbol::from_dynamic(&name_str);
+    let qualified_name = ctx.qualified_name(name_sym);
+    let name_span = Some(Span {
+        start: name_node.start_byte(),
+        end: name_node.end_byte(),
+    });
+
+    // Optional fields
+    let (param_names, param_types) = node
+        .child_by_field_name("params")
+        .map(|params| parse_parameter_list(ctx, params))
+        .unwrap_or_default();
+
+    let return_type = node
+        .child_by_field_name("return_type")
+        .and_then(|rt| parse_return_type(ctx, rt));
+
+    // Resolve return type or create fresh type var
+    let result = return_type.unwrap_or_else(|| ctx.fresh_type_var());
+
+    let effect_type = ctx.fresh_effect_row_type();
+
+    // Create func type first (before moving param_types)
+    let func_type = core::Func::with_effect(
+        ctx.db,
+        param_types.clone().into(),
+        result,
+        Some(effect_type),
+    )
+    .as_type();
+
+    // Zip parameter types with names for bind_name attributes on block args
+    let named_params: Vec<_> = param_types
+        .into_iter()
+        .zip(param_names.iter().copied().map(Some))
+        .collect();
+
+    // Build func.func with unreachable body and optional ABI attribute
+    let mut entry = trunk_ir::BlockBuilder::new(ctx.db, location);
+
+    // Add parameters
+    for (ty, param_name) in named_params {
+        entry = entry.arg(ty);
+        if let Some(name) = param_name {
+            entry = entry.attr(Symbol::new("bind_name"), name);
+        }
+    }
+
+    // Extern function body is just unreachable
+    entry.op(func::unreachable(ctx.db, location));
+
+    let region = trunk_ir::Region::new(ctx.db, location, idvec![entry.build()]);
+
+    let mut builder = trunk_ir::Operation::of_name(ctx.db, location, "func.func")
+        .attr("sym_name", Attribute::Symbol(qualified_name))
+        .attr("type", Attribute::Type(func_type))
+        .region(region);
+
+    // Add name_location for hover support
+    if let Some(span) = name_span {
+        let name_loc = trunk_ir::Location::new(location.path, span);
+        builder = builder.attr("name_location", Attribute::Location(name_loc));
+    }
+
+    // Add ABI attribute if present
+    if let Some(abi_str) = abi {
+        builder = builder.attr("abi", Attribute::String(abi_str));
+    }
+
+    func::Func::from_operation(ctx.db, builder.build()).ok()
 }
 
 // =============================================================================
