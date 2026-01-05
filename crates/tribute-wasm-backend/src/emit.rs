@@ -2738,7 +2738,12 @@ fn set_result_local<'db>(
     ctx: &FunctionEmitContext<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    if op.results(db).is_empty() {
+    let results = op.results(db);
+    if results.is_empty() {
+        return Ok(());
+    }
+    // Skip nil types - they don't have local mappings and don't need local.set
+    if is_nil_type(db, results[0]) {
         return Ok(());
     }
     let local = ctx

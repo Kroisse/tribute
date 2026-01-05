@@ -1580,8 +1580,21 @@ impl RewritePattern for PushPromptPattern {
 
         yield_check_ops.push(outer_if);
 
-        // Append yield_check_ops to the original body's last block
-        let new_body = append_ops_to_region(db, location, &original_body, &yield_check_ops);
+        // For blocks with results, we need to insert yield check BEFORE the last
+        // result-producing operation so the block's result is preserved.
+        // For blocks without results, we can simply append the yield check.
+        let new_body = if result_types.is_empty()
+            || result_types
+                .first()
+                .map(|ty| is_nil_type(db, *ty))
+                .unwrap_or(true)
+        {
+            // No result - just append yield check
+            append_ops_to_region(db, location, &original_body, &yield_check_ops)
+        } else {
+            // Has result - insert yield check before last op so result is preserved
+            insert_ops_before_last(db, location, &original_body, &yield_check_ops)
+        };
 
         // Create the wrapper block with the modified body
         let new_op = Operation::of_name(db, location, "wasm.block")
@@ -1592,6 +1605,11 @@ impl RewritePattern for PushPromptPattern {
 
         RewriteResult::Replace(new_op)
     }
+}
+
+/// Check if a type is nil type
+fn is_nil_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == core::NIL()
 }
 
 /// Append operations to the last block of a region.
@@ -1622,6 +1640,69 @@ fn append_ops_to_region<'db>(
             let existing_ops = block.operations(db);
             let mut all_ops: Vec<Operation<'db>> = existing_ops.iter().copied().collect();
             all_ops.extend(ops_to_append.iter().copied());
+
+            let new_block = trunk_ir::Block::new(
+                db,
+                block.id(db),
+                block.location(db),
+                block.args(db).clone(),
+                all_ops.into_iter().collect(),
+            );
+            new_blocks.push(new_block);
+        } else {
+            // Other blocks: keep as-is
+            new_blocks.push(*block);
+        }
+    }
+
+    trunk_ir::Region::new(db, location, new_blocks.into_iter().collect())
+}
+
+/// Insert operations before the last operation in the region's last block.
+/// This preserves the last operation (typically the result-producing one) at the end.
+fn insert_ops_before_last<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    region: &trunk_ir::Region<'db>,
+    ops_to_insert: &[Operation<'db>],
+) -> trunk_ir::Region<'db> {
+    let blocks = region.blocks(db);
+    if blocks.is_empty() {
+        // Create a new block with just the inserted ops
+        let new_block = trunk_ir::Block::new(
+            db,
+            trunk_ir::BlockId::fresh(),
+            location,
+            IdVec::new(),
+            ops_to_insert.iter().copied().collect(),
+        );
+        return trunk_ir::Region::new(db, location, IdVec::from(vec![new_block]));
+    }
+
+    // Clone all blocks, modifying only the last one
+    let mut new_blocks: Vec<trunk_ir::Block<'db>> = Vec::with_capacity(blocks.len());
+    for (i, block) in blocks.iter().enumerate() {
+        if i == blocks.len() - 1 {
+            // Last block: insert operations before the last op
+            let existing_ops = block.operations(db);
+            let mut all_ops: Vec<Operation<'db>> =
+                Vec::with_capacity(existing_ops.len() + ops_to_insert.len());
+
+            if existing_ops.is_empty() {
+                // No existing ops, just add the inserted ones
+                all_ops.extend(ops_to_insert.iter().copied());
+            } else {
+                // Add all ops except last
+                for op in existing_ops.iter().take(existing_ops.len() - 1) {
+                    all_ops.push(*op);
+                }
+                // Insert new ops
+                all_ops.extend(ops_to_insert.iter().copied());
+                // Add last op at the end
+                if let Some(last_op) = existing_ops.last() {
+                    all_ops.push(*last_op);
+                }
+            }
 
             let new_block = trunk_ir::Block::new(
                 db,
