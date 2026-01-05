@@ -36,13 +36,12 @@ impl RewritePattern for ScfIfPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        let Ok(_if_op) = scf::If::from_operation(db, *op) else {
+        let Ok(scf_if_op) = scf::If::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
         // wasm.if has the same structure: cond operand, result, then/else regions
         // PatternApplicator will recursively process the regions
-        let scf_if_op = scf::If::from_operation(db, *op).unwrap();
         let cond = scf_if_op.cond(db);
         let then_region = scf_if_op.then(db);
         let else_region = scf_if_op.r#else(db);

@@ -194,7 +194,7 @@ impl RewritePattern for VariantNewPattern {
             .modify(db)
             .dialect_str("wasm")
             .name_str("struct_new")
-            .attrs(std::collections::BTreeMap::new()) // Clear original type/tag attrs
+            .attrs(trunk_ir::Attrs::new()) // Clear original type/tag attrs
             .attr("type", Attribute::Type(variant_type))
             .results(IdVec::from(vec![variant_type]))
             .build();

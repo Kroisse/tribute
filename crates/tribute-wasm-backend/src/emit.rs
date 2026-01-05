@@ -666,11 +666,11 @@ fn collect_module_info<'db>(
 
     // Collect GC types (structs, arrays)
     let (gc_types, mut type_idx_by_type, placeholder_struct_type_idx) =
-        collect_gc_types(db, module)?;
+        collect_gc_types(db, module, &info.block_arg_types)?;
     info.gc_types = gc_types;
 
     // Collect function types from call_indirect operations
-    collect_call_indirect_types(db, module, &mut type_idx_by_type)?;
+    collect_call_indirect_types(db, module, &mut type_idx_by_type, &info.block_arg_types)?;
 
     info.type_idx_by_type = type_idx_by_type;
     info.placeholder_struct_type_idx = placeholder_struct_type_idx;
@@ -709,6 +709,7 @@ type GcTypesResult<'db> = (
 fn collect_gc_types<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
+    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
 ) -> CompilationResult<GcTypesResult<'db>> {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum GcKind {
@@ -734,9 +735,6 @@ fn collect_gc_types<'db>(
             }
         }
     }
-
-    // Collect block argument types for resolving block argument types
-    let block_arg_types = collect_block_arg_types(db, module);
 
     let wasm_dialect = Symbol::new("wasm");
     let mut builders: Vec<GcTypeBuilder<'db>> = Vec::new();
@@ -940,7 +938,7 @@ fn collect_gc_types<'db>(
                     register_type(&mut type_idx_by_type, type_idx, result_ty);
                 }
                 for (field_idx, value) in op.operands(db).iter().enumerate() {
-                    if let Some(ty) = value_type(db, *value, &block_arg_types) {
+                    if let Some(ty) = value_type(db, *value, block_arg_types) {
                         record_struct_field(type_idx, builder, field_idx as u32, ty)?;
                     }
                 }
@@ -951,7 +949,7 @@ fn collect_gc_types<'db>(
             let inferred_type = op
                 .operands(db)
                 .first()
-                .and_then(|v| value_type(db, *v, &block_arg_types));
+                .and_then(|v| value_type(db, *v, block_arg_types));
             let Some(type_idx) = get_type_idx(
                 attrs,
                 &mut type_idx_by_type,
@@ -973,7 +971,7 @@ fn collect_gc_types<'db>(
                     .operands(db)
                     .first()
                     .copied()
-                    .and_then(|value| value_type(db, value, &block_arg_types))
+                    .and_then(|value| value_type(db, value, block_arg_types))
                 {
                     register_type(&mut type_idx_by_type, type_idx, ty);
                 }
@@ -991,7 +989,7 @@ fn collect_gc_types<'db>(
             let inferred_type = op
                 .operands(db)
                 .first()
-                .and_then(|v| value_type(db, *v, &block_arg_types));
+                .and_then(|v| value_type(db, *v, block_arg_types));
             let Some(type_idx) = get_type_idx(
                 attrs,
                 &mut type_idx_by_type,
@@ -1013,7 +1011,7 @@ fn collect_gc_types<'db>(
                     .operands(db)
                     .first()
                     .copied()
-                    .and_then(|value| value_type(db, value, &block_arg_types))
+                    .and_then(|value| value_type(db, value, block_arg_types))
                 {
                     register_type(&mut type_idx_by_type, type_idx, ty);
                 }
@@ -1021,7 +1019,7 @@ fn collect_gc_types<'db>(
                     .operands(db)
                     .get(1)
                     .copied()
-                    .and_then(|value| value_type(db, value, &block_arg_types))
+                    .and_then(|value| value_type(db, value, block_arg_types))
                 {
                     record_struct_field(type_idx, builder, field_idx, ty)?;
                 }
@@ -1047,7 +1045,7 @@ fn collect_gc_types<'db>(
                     .operands(db)
                     .get(1)
                     .copied()
-                    .and_then(|value| value_type(db, value, &block_arg_types))
+                    .and_then(|value| value_type(db, value, block_arg_types))
                 {
                     record_array_elem(type_idx, builder, ty)?;
                 }
@@ -1061,7 +1059,7 @@ fn collect_gc_types<'db>(
             let inferred_type = op
                 .operands(db)
                 .first()
-                .and_then(|v| value_type(db, *v, &block_arg_types));
+                .and_then(|v| value_type(db, *v, block_arg_types));
             let Some(type_idx) = get_type_idx(
                 attrs,
                 &mut type_idx_by_type,
@@ -1076,7 +1074,7 @@ fn collect_gc_types<'db>(
                     .operands(db)
                     .first()
                     .copied()
-                    .and_then(|value| value_type(db, value, &block_arg_types))
+                    .and_then(|value| value_type(db, value, block_arg_types))
                 {
                     register_type(&mut type_idx_by_type, type_idx, ty);
                 }
@@ -1093,7 +1091,7 @@ fn collect_gc_types<'db>(
             let inferred_type = op
                 .operands(db)
                 .first()
-                .and_then(|v| value_type(db, *v, &block_arg_types));
+                .and_then(|v| value_type(db, *v, block_arg_types));
             let Some(type_idx) = get_type_idx(
                 attrs,
                 &mut type_idx_by_type,
@@ -1108,7 +1106,7 @@ fn collect_gc_types<'db>(
                     .operands(db)
                     .first()
                     .copied()
-                    .and_then(|value| value_type(db, value, &block_arg_types))
+                    .and_then(|value| value_type(db, value, block_arg_types))
                 {
                     register_type(&mut type_idx_by_type, type_idx, ty);
                 }
@@ -1116,7 +1114,7 @@ fn collect_gc_types<'db>(
                     .operands(db)
                     .get(2)
                     .copied()
-                    .and_then(|value| value_type(db, value, &block_arg_types))
+                    .and_then(|value| value_type(db, value, block_arg_types))
                 {
                     record_array_elem(type_idx, builder, ty)?;
                 }
@@ -1379,10 +1377,8 @@ fn collect_call_indirect_types<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
     type_idx_by_type: &mut HashMap<Type<'db>, u32>,
+    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
 ) -> CompilationResult<()> {
-    // Collect block argument types for resolving block argument types
-    let block_arg_types = collect_block_arg_types(db, module);
-
     fn collect_from_region<'db>(
         db: &'db dyn salsa::Database,
         region: &trunk_ir::Region<'db>,
@@ -1454,7 +1450,7 @@ fn collect_call_indirect_types<'db>(
         &module.body(db),
         type_idx_by_type,
         &mut next_type_idx,
-        &block_arg_types,
+        block_arg_types,
     )?;
 
     Ok(())
@@ -3420,7 +3416,7 @@ mod tests {
     fn test_struct_new_collects_field_types(db: &salsa::DatabaseImpl) {
         let module = make_struct_new_module(db);
         let (gc_types, type_map, _) =
-            collect_gc_types(db, module).expect("collect_gc_types failed");
+            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
         // Should have 4 GC types: 3 built-in (BoxedF64, BytesArray, BytesStruct) + 1 user struct
         assert_eq!(gc_types.len(), 4);
@@ -3482,7 +3478,7 @@ mod tests {
     fn test_array_new_collects_element_type(db: &salsa::DatabaseImpl) {
         let module = make_array_new_module(db);
         let (gc_types, _type_map, _) =
-            collect_gc_types(db, module).expect("collect_gc_types failed");
+            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
         // Should have 4 GC types: 3 built-in (BoxedF64, BytesArray, BytesStruct) + 1 user array
         assert_eq!(gc_types.len(), 4);
@@ -3543,7 +3539,7 @@ mod tests {
     fn test_type_index_deduplication(db: &salsa::DatabaseImpl) {
         let module = make_dedup_module(db);
         let (gc_types, _type_map, _) =
-            collect_gc_types(db, module).expect("collect_gc_types failed");
+            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
         // Should have 4 GC types: 3 built-in + 1 user struct (same type_idx used twice)
         assert_eq!(gc_types.len(), 4);
@@ -3609,7 +3605,7 @@ mod tests {
     #[salsa_test]
     fn test_field_count_mismatch_error(db: &salsa::DatabaseImpl) {
         let module = make_field_count_mismatch_module(db);
-        let result = collect_gc_types(db, module);
+        let result = collect_gc_types(db, module, &HashMap::new());
 
         // Should return an error due to field count mismatch
         assert!(result.is_err());
@@ -3687,7 +3683,7 @@ mod tests {
     fn test_placeholder_struct_types(db: &salsa::DatabaseImpl) {
         let module = make_placeholder_struct_module(db);
         let (gc_types, _type_map, placeholder_map) =
-            collect_gc_types(db, module).expect("collect_gc_types failed");
+            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
         // Should have 6 GC types: 3 built-in + 3 user structs (one per field count)
         assert_eq!(gc_types.len(), 6);
@@ -3781,7 +3777,7 @@ mod tests {
     fn test_nested_operations_in_function_body(db: &salsa::DatabaseImpl) {
         let module = make_func_with_struct_module(db);
         let (gc_types, _type_map, _) =
-            collect_gc_types(db, module).expect("collect_gc_types failed");
+            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
         // Should find the struct type from inside the function body
         // (4 types: 3 built-in + 1 user struct)
@@ -3841,7 +3837,7 @@ mod tests {
     #[salsa_test]
     fn test_array_get_with_builtin_type_idx_does_not_panic(db: &salsa::DatabaseImpl) {
         let module = make_array_get_builtin_module(db);
-        let result = collect_gc_types(db, module);
+        let result = collect_gc_types(db, module, &HashMap::new());
 
         // Should complete without panic
         assert!(
@@ -3892,7 +3888,7 @@ mod tests {
     #[salsa_test]
     fn test_struct_get_with_builtin_type_idx_does_not_panic(db: &salsa::DatabaseImpl) {
         let module = make_struct_get_builtin_module(db);
-        let result = collect_gc_types(db, module);
+        let result = collect_gc_types(db, module, &HashMap::new());
 
         // Should complete without panic
         assert!(
@@ -3957,7 +3953,7 @@ mod tests {
     #[salsa_test]
     fn test_array_set_with_builtin_type_idx_does_not_panic(db: &salsa::DatabaseImpl) {
         let module = make_array_set_builtin_module(db);
-        let result = collect_gc_types(db, module);
+        let result = collect_gc_types(db, module, &HashMap::new());
 
         // Should complete without panic
         assert!(

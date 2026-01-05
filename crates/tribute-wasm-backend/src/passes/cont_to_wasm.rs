@@ -223,8 +223,6 @@ pub mod resume_gen {
         let mut value_mapping: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
         // Extract live locals from state struct
-        let _state_ty = cont_types::state_type(db, &info.live_locals);
-
         for (field_idx, live_local) in info.live_locals.iter().enumerate() {
             // Generate struct_get to extract this field
             let struct_get = wasm::struct_get(
@@ -2100,7 +2098,6 @@ impl RewritePattern for ResumePattern {
         let i32_ty = core::I32::new(db).as_type();
         let funcref_ty = wasm::Funcref::new(db).as_type();
         let anyref_ty = wasm::Anyref::new(db).as_type();
-        let _cont_ty = cont_types::continuation_type(db);
 
         let mut ops = Vec::new();
 

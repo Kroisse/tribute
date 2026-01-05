@@ -125,7 +125,10 @@ impl RewritePattern for ArithBinOpPattern {
             return RewriteResult::Unchanged;
         }
 
-        let result_ty = op.results(db).first().copied().unwrap();
+        let result_ty =
+            op.results(db).first().copied().unwrap_or_else(|| {
+                panic!("arith binop missing result type at {:?}", op.location(db))
+            });
         let suffix = type_suffix(db, Some(result_ty));
         let location = op.location(db);
         let operands = op.operands(db);
@@ -208,7 +211,10 @@ impl RewritePattern for ArithCmpPattern {
         let suffix = type_suffix(db, operand_ty);
         let is_integer = matches!(suffix, "i32" | "i64");
 
-        let result_ty = op.results(db).first().copied().unwrap();
+        let result_ty =
+            op.results(db).first().copied().unwrap_or_else(|| {
+                panic!("arith cmp missing result type at {:?}", op.location(db))
+            });
         let location = op.location(db);
         let operands = op.operands(db);
         let lhs = operands[0];
@@ -344,7 +350,12 @@ impl RewritePattern for ArithBitwisePattern {
             return RewriteResult::Unchanged;
         }
 
-        let result_ty = op.results(db).first().copied().unwrap();
+        let result_ty = op.results(db).first().copied().unwrap_or_else(|| {
+            panic!(
+                "arith bitwise op missing result type at {:?}",
+                op.location(db)
+            )
+        });
         let suffix = type_suffix(db, Some(result_ty));
         let location = op.location(db);
         let operands = op.operands(db);
@@ -419,7 +430,12 @@ impl RewritePattern for ArithConversionPattern {
         let src_suffix = type_suffix(db, src_ty);
 
         // Get destination type from result
-        let dst_ty = op.results(db).first().copied().unwrap();
+        let dst_ty = op.results(db).first().copied().unwrap_or_else(|| {
+            panic!(
+                "arith conversion missing result type at {:?}",
+                op.location(db)
+            )
+        });
         let dst_suffix = type_suffix(db, Some(dst_ty));
 
         let location = op.location(db);
