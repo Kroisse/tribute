@@ -1067,6 +1067,24 @@ fn collect_gc_types<'db>(
     };
 
     // Recursively visit operations, including nested core.module operations.
+    /// Recursively visit all operations in a region, including nested regions.
+    fn visit_all_ops_recursive<'db>(
+        db: &'db dyn salsa::Database,
+        region: &Region<'db>,
+        visit_op: &mut impl FnMut(&Operation<'db>) -> CompilationResult<()>,
+    ) -> CompilationResult<()> {
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                visit_op(op)?;
+                // Recursively visit nested regions (for wasm.if, wasm.block, etc.)
+                for nested_region in op.regions(db).iter() {
+                    visit_all_ops_recursive(db, nested_region, visit_op)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn visit_region<'db>(
         db: &'db dyn salsa::Database,
         region: &Region<'db>,
@@ -1090,17 +1108,17 @@ fn collect_gc_types<'db>(
                     continue;
                 }
 
-                // Visit wasm.func body
+                // Visit wasm.func body (recursively including nested regions)
                 if dialect == wasm_dialect && name == func_name {
                     if let Some(func_region) = op.regions(db).first() {
-                        for block in func_region.blocks(db).iter() {
-                            for inner_op in block.operations(db).iter() {
-                                visit_op(inner_op)?;
-                            }
-                        }
+                        visit_all_ops_recursive(db, func_region, visit_op)?;
                     }
                 } else {
                     visit_op(op)?;
+                    // Also visit nested regions for control flow ops (wasm.if, wasm.block, etc.)
+                    for nested_region in op.regions(db).iter() {
+                        visit_all_ops_recursive(db, nested_region, visit_op)?;
+                    }
                 }
             }
         }
