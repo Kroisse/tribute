@@ -2841,6 +2841,14 @@ fn type_to_valtype<'db>(
             Ok(ValType::Ref(RefType::FUNCREF))
         } else if name == Symbol::new("anyref") {
             Ok(ValType::Ref(RefType::ANYREF))
+        } else if name == Symbol::new("i31ref") {
+            Ok(ValType::Ref(RefType {
+                nullable: false,
+                heap_type: HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::I31,
+                },
+            }))
         } else {
             Err(CompilationError::type_error(format!(
                 "unsupported wasm type: wasm.{}",
@@ -3074,6 +3082,10 @@ fn attr_heap_type<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<Hea
                 "array" => Ok(HeapType::Abstract {
                     shared: false,
                     ty: AbstractHeapType::Array,
+                }),
+                "i31" => Ok(HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::I31,
                 }),
                 _ => Err(CompilationError::from(
                     errors::CompilationErrorKind::MissingAttribute("unknown abstract heap type"),

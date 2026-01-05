@@ -37,6 +37,7 @@
 use std::collections::BTreeMap;
 
 use tribute_ir::ModulePathExt;
+use tribute_ir::dialect::tribute;
 use trunk_ir::DialectType;
 use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self, Module};
@@ -1013,11 +1014,12 @@ fn transform_shifts_in_block<'db>(
             let continuation_ops: Vec<Operation<'db>> =
                 ops.iter().skip(op_idx + 1).copied().collect();
 
-            // Get the shift's result value (used by continuation ops)
+            // Get the shift's result value and type (used by continuation ops)
             let shift_result = op_with_processed_regions
                 .results(db)
                 .first()
                 .map(|_| op_with_processed_regions.result(db, 0));
+            let shift_result_type = op_with_processed_regions.results(db).first().copied();
 
             // Determine if we need a resume function
             let needs_resume_fn = !continuation_ops.is_empty() || !live_locals.is_empty();
@@ -1045,6 +1047,7 @@ fn transform_shifts_in_block<'db>(
                     &live_locals,
                     &continuation_ops,
                     shift_result,
+                    shift_result_type,
                 );
                 generated_resume_fns.push(resume_fn);
 
@@ -1168,6 +1171,112 @@ fn collect_uses_in_region_recursive<'db>(
     }
 }
 
+/// Generate unboxing operations if the target type is a primitive.
+///
+/// When the resume function receives a value as `anyref`, but the continuation
+/// expects a primitive type (Int/Nat), we need to unbox:
+/// - Int (i64): anyref → i31ref → i32 → i64 (sign-extend)
+/// - Nat (i64): anyref → i31ref → i32 → i64 (zero-extend)
+///
+/// Returns the unboxed value (or the original value if no unboxing needed).
+fn unbox_value_if_needed<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    value: Value<'db>,
+    target_ty: Type<'db>,
+    ops: &mut Vec<Operation<'db>>,
+) -> Value<'db> {
+    let i32_ty = core::I32::new(db).as_type();
+    let i64_ty = core::I64::new(db).as_type();
+    let i31ref_ty = wasm::I31ref::new(db).as_type();
+
+    if tribute::Int::from_type(db, target_ty).is_some() {
+        // Unbox Int: anyref → i31ref → i32 → i64 (sign-extend)
+
+        // Step 1: ref.cast anyref to i31ref
+        let ref_cast = wasm::ref_cast(
+            db,
+            location,
+            value,
+            i31ref_ty,
+            Attribute::Symbol(Symbol::new("i31")),
+        );
+        ops.push(ref_cast.as_operation());
+
+        // Step 2: i31.get_s to extract signed i32
+        let i31_get_s = wasm::i31_get_s(db, location, ref_cast.result(db), i32_ty);
+        ops.push(i31_get_s.as_operation());
+
+        // Step 3: i64.extend_i32_s to sign-extend to i64
+        let extend = wasm::i64_extend_i32_s(db, location, i31_get_s.result(db), i64_ty);
+        ops.push(extend.as_operation());
+
+        extend.result(db)
+    } else if tribute::Nat::from_type(db, target_ty).is_some() {
+        // Unbox Nat: anyref → i31ref → i32 → i64 (zero-extend)
+
+        // Step 1: ref.cast anyref to i31ref
+        let ref_cast = wasm::ref_cast(
+            db,
+            location,
+            value,
+            i31ref_ty,
+            Attribute::Symbol(Symbol::new("i31")),
+        );
+        ops.push(ref_cast.as_operation());
+
+        // Step 2: i31.get_u to extract unsigned i32
+        let i31_get_u = wasm::i31_get_u(db, location, ref_cast.result(db), i32_ty);
+        ops.push(i31_get_u.as_operation());
+
+        // Step 3: i64.extend_i32_u to zero-extend to i64
+        let extend = wasm::i64_extend_i32_u(db, location, i31_get_u.result(db), i64_ty);
+        ops.push(extend.as_operation());
+
+        extend.result(db)
+    } else {
+        // No unboxing needed for reference types
+        value
+    }
+}
+
+/// Generate boxing operations if the value type is a primitive.
+///
+/// When passing a primitive value to a function expecting `anyref`, we need to box:
+/// - Int (i64): i64 → i32 → i31ref (truncate and wrap)
+/// - Nat (i64): i64 → i32 → i31ref (truncate and wrap)
+///
+/// Returns the boxed value (or the original value if no boxing needed).
+fn box_value_if_needed<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    value: Value<'db>,
+    value_ty: Type<'db>,
+    ops: &mut Vec<Operation<'db>>,
+) -> Value<'db> {
+    let i32_ty = core::I32::new(db).as_type();
+    let i31ref_ty = wasm::I31ref::new(db).as_type();
+
+    if tribute::Int::from_type(db, value_ty).is_some()
+        || tribute::Nat::from_type(db, value_ty).is_some()
+    {
+        // Box Int/Nat: i64 → i32 → i31ref
+
+        // Step 1: i32.wrap_i64 to truncate to i32
+        let wrap = wasm::i32_wrap_i64(db, location, value, i32_ty);
+        ops.push(wrap.as_operation());
+
+        // Step 2: ref.i31 to convert to i31ref
+        let ref_i31 = wasm::ref_i31(db, location, wrap.result(db), i31ref_ty);
+        ops.push(ref_i31.as_operation());
+
+        ref_i31.result(db)
+    } else {
+        // No boxing needed for reference types
+        value
+    }
+}
+
 /// Generate a resume function inline during shift transformation.
 ///
 /// This creates a resume function with the current live locals and continuation ops,
@@ -1176,6 +1285,9 @@ fn collect_uses_in_region_recursive<'db>(
 /// The `shift_result` is the result value of the cont.shift operation. If the
 /// continuation ops use this value, we map it to the `value` parameter of the
 /// resume function (the value passed when the continuation is resumed).
+///
+/// The `shift_result_type` is the expected type of the shift result. If it's a
+/// primitive type (Int, Nat), we need to unbox the value parameter (anyref → i64).
 fn generate_inline_resume_function<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
@@ -1183,6 +1295,7 @@ fn generate_inline_resume_function<'db>(
     live_locals: &[LiveLocal<'db>],
     continuation_ops: &[Operation<'db>],
     shift_result: Option<Value<'db>>,
+    shift_result_type: Option<Type<'db>>,
 ) -> Operation<'db> {
     use std::collections::HashMap;
     use trunk_ir::{BlockArg, BlockId};
@@ -1204,10 +1317,15 @@ fn generate_inline_resume_function<'db>(
     let mut ops: Vec<Operation<'db>> = Vec::new();
     let mut value_mapping: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
-    // Map the shift's result to the value parameter
-    // This is the value passed when the continuation is resumed
+    // Map the shift's result to the value parameter (possibly after unboxing)
+    // The value parameter is anyref, but the shift result may expect a primitive type
     if let Some(shift_result_value) = shift_result {
-        value_mapping.insert(shift_result_value, value_param);
+        let mapped_value = if let Some(result_ty) = shift_result_type {
+            unbox_value_if_needed(db, location, value_param, result_ty, &mut ops)
+        } else {
+            value_param
+        };
+        value_mapping.insert(shift_result_value, mapped_value);
     }
 
     // Extract live locals from state struct
@@ -1376,10 +1494,20 @@ fn expand_shift_operation<'db>(
     ops.push(wasm::global_set(db, location, cont_val, YIELD_CONT_IDX).as_operation());
 
     // Set $yield_value from shift's operand (or null if no value provided)
+    // Primitives need to be boxed since $yield_value is anyref
     let shift_operands = op.operands(db);
     let yield_value_val = if let Some(&first_value) = shift_operands.first() {
-        // Use the first operand as the yield value
-        first_value
+        // Get the type of the value to check if boxing is needed
+        let value_ty = match first_value.def(db) {
+            ValueDef::OpResult(def_op) => def_op.results(db).get(first_value.index(db)).copied(),
+            ValueDef::BlockArg(_) => None,
+        };
+        // Box primitive values before storing in anyref global
+        if let Some(ty) = value_ty {
+            box_value_if_needed(db, location, first_value, ty, &mut ops)
+        } else {
+            first_value
+        }
     } else {
         // No value provided - use null
         let null_value = wasm::ref_null(
@@ -2003,13 +2131,25 @@ impl RewritePattern for ResumePattern {
         let state_val = Value::new(db, ValueDef::OpResult(get_state), 0);
         ops.push(get_state);
 
-        // 4. Call resume_fn(state, value) via call_indirect
+        // 4. Box the value if it's a primitive type
+        // Resume function expects (state: anyref, value: anyref), so primitives need boxing
+        let value_ty = match value.def(db) {
+            ValueDef::OpResult(def_op) => def_op.results(db).get(value.index(db)).copied(),
+            ValueDef::BlockArg(_) => None,
+        };
+        let boxed_value = if let Some(ty) = value_ty {
+            box_value_if_needed(db, location, value, ty, &mut ops)
+        } else {
+            value
+        };
+
+        // 5. Call resume_fn(state, value) via call_indirect
         // Resume function signature: (state: anyref, value: anyref) -> result
         // For now, we use call_indirect with type_idx 0 (placeholder)
         // The actual type will be resolved at emit time
         let result_ty = op.results(db).first().copied().unwrap_or(anyref_ty);
         let call_indirect = Operation::of_name(db, location, "wasm.call_indirect")
-            .operands(IdVec::from(vec![state_val, value, resume_fn_val]))
+            .operands(IdVec::from(vec![state_val, boxed_value, resume_fn_val]))
             .attr("type_idx", Attribute::IntBits(0)) // Placeholder - resolved at emit
             .attr("table", Attribute::IntBits(0)) // Default table
             .results(IdVec::from(vec![result_ty]))
