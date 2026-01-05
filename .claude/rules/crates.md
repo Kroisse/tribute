@@ -17,7 +17,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 **Role**: Compiler transformation passes (name resolution, type checking, TDNR)
 
 **Key Modules**:
-- `resolve.rs` - Name resolution (`src.*` ops → concrete ops)
+- `resolve.rs` - Name resolution (`tribute.*` ops → concrete ops)
 - `typeck/` - Type checking (bidirectional, row-polymorphic effects)
 - `tdnr.rs` - Type-directed name resolution (UFCS method calls)
 

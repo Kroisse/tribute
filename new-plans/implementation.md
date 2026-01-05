@@ -515,7 +515,7 @@ flowchart TB
     end
 
     source --> parse
-    parse -->|"src.* ops"| prelude
+    parse -->|"tribute.* ops"| prelude
     prelude --> resolve
     resolve -->|"func.*, adt.*"| const_inline
     const_inline --> typecheck
@@ -536,7 +536,7 @@ flowchart TB
 
 | 카테고리 | 패스 | 입력 | 출력 | 캐싱 |
 |----------|------|------|------|------|
-| **Frontend** | `resolve` | src.* ops | func.*, adt.* | ✓ |
+| **Frontend** | `resolve` | tribute.* ops | func.*, adt.* | ✓ |
 | | `inline_constants` | const refs | inlined values | |
 | | `typecheck` | type.var | concrete types | ✓ |
 | **Closure** | `lambda_lift` | lambdas | top-level funcs | |
@@ -545,7 +545,7 @@ flowchart TB
 | **Ability** | `evidence_insert` | effectful funcs | +ev param | |
 | | `handler_lower` | ability.* | cont.* | |
 | | `tail_resumptive` | cont.shift | direct calls | |
-| **Lowering** | `lower_case` | case.case | scf.if | |
+| **Lowering** | `lower_case` | tribute.case | scf.if | |
 | | `dce` | all funcs | reachable funcs | |
 
 ### 점진적 개선 방향: Fine-Grained Queries

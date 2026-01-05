@@ -17,7 +17,7 @@
 //! SourceCst
 //!     │
 //!     ▼ parse_cst + lower_cst
-//! Module (src.* ops)
+//! Module (tribute.* ops)
 //!     │
 //!     ▼ merge_with_prelude
 //! Module (with prelude definitions)
@@ -188,7 +188,7 @@ pub struct CompilationResult<'db> {
 /// Parse source to CST and lower to initial TrunkIR module.
 ///
 /// This is the entry point that converts source text to TrunkIR.
-/// Returns a module with `src.*` operations that need further processing.
+/// Returns a module with `tribute.*` operations that need further processing.
 #[salsa::tracked]
 pub fn parse_and_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let Some(cst) = parse_cst(db, source) else {
@@ -206,11 +206,11 @@ pub fn parse_and_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
 /// Resolve names in the module.
 ///
 /// This pass resolves:
-/// - `src.var` → `func.constant` or `adt.struct_new`/`adt.variant_new`
-/// - `src.call` → `func.call` with resolved callee
-/// - `src.path` → resolved module paths
+/// - `tribute.var` → `func.constant` or `adt.struct_new`/`adt.variant_new`
+/// - `tribute.call` → `func.call` with resolved callee
+/// - `tribute.path` → resolved module paths
 ///
-/// After this pass, all resolvable `src.*` operations are transformed.
+/// After this pass, all resolvable `tribute.*` operations are transformed.
 /// Some may remain for type-directed resolution (UFCS).
 #[salsa::tracked]
 pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -377,7 +377,7 @@ pub fn stage_handler_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db
 
 /// Lower tribute dialect to scf dialect.
 ///
-/// This pass lowers `case.case` expressions to `scf.if` operations.
+/// This pass lowers `tribute.case` expressions to `scf.if` operations.
 #[salsa::tracked]
 pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     lower_tribute_to_scf(db, module)
