@@ -3,12 +3,13 @@
 //! This pass converts structured control flow operations to wasm control:
 //! - `scf.if` -> `wasm.if`
 //! - `scf.loop` -> `wasm.block(wasm.loop(...))`
-//! - `scf.yield` -> removed (values stay on stack)
+//! - `scf.yield` -> `wasm.yield` (tracks region result value)
 //! - `scf.continue` -> `wasm.br(target=1)` (branch to loop)
 //! - `scf.break` -> `wasm.br(target=0)` (branch to block)
 
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::scf;
+use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, idvec,
@@ -102,11 +103,15 @@ impl RewritePattern for ScfLoopPattern {
     }
 }
 
-/// Pattern for `scf.yield` -> removed
+/// Pattern for `scf.yield` -> `wasm.yield`
 ///
 /// In wasm, block results are implicit - the last value on the stack is the result.
-/// We erase the yield operation; the yielded values are already produced by
-/// preceding operations.
+/// We convert scf.yield to wasm.yield to track which value should be the region's
+/// result. This is especially important for handler dispatch where the result value
+/// may be defined outside the region (e.g., the scrutinee in `{ result } -> result`).
+///
+/// At emit time, wasm.yield is handled specially: its operand is emitted as a
+/// local.get, and the wasm.yield itself produces no Wasm instruction.
 struct ScfYieldPattern;
 
 impl RewritePattern for ScfYieldPattern {
@@ -115,14 +120,21 @@ impl RewritePattern for ScfYieldPattern {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
     ) -> RewriteResult<'db> {
-        let Ok(_yield_op) = scf::Yield::from_operation(db, *op) else {
+        let Ok(yield_op) = scf::Yield::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
-        // Erase the yield - values are already on the stack
-        RewriteResult::Erase {
-            replacement_values: vec![],
-        }
+        // Convert to wasm.yield which tracks the result value
+        // This is needed because the yielded value may be defined outside the region
+        let Some(value) = yield_op.values(db).first().copied() else {
+            // No value to yield - just erase
+            return RewriteResult::Erase {
+                replacement_values: vec![],
+            };
+        };
+
+        let new_op = wasm::r#yield(db, op.location(db), value);
+        RewriteResult::Replace(new_op.as_operation())
     }
 }
 
