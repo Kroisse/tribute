@@ -116,19 +116,17 @@ impl RewritePattern for StructGetPattern {
             return RewriteResult::Unchanged;
         };
 
-        // Build wasm.struct_get with renamed attributes
-        // Preserve type attribute for cases where emit can't infer from operand types
-        // (e.g., when operand comes from a block argument)
-        let mut builder = Operation::of_name(db, op.location(db), "wasm.struct_get")
-            .operands(op.operands(db).clone())
-            .results(op.results(db).clone())
-            .attr("field_idx", Attribute::IntBits(field_idx));
+        // Build wasm.struct_get: change dialect/name and add field_idx attr
+        // Preserve type attribute (if present) for cases where emit can't infer from operand types
+        // Note: original 'field' attr remains but emit only looks for 'field_idx'
+        let new_op = op
+            .modify(db)
+            .dialect_str("wasm")
+            .name_str("struct_get")
+            .attr("field_idx", Attribute::IntBits(field_idx))
+            .build();
 
-        if let Some(ty_attr) = op.attributes(db).get(&Symbol::new("type")) {
-            builder = builder.attr("type", ty_attr.clone());
-        }
-
-        RewriteResult::Replace(builder.build())
+        RewriteResult::Replace(new_op)
     }
 }
 
@@ -155,18 +153,16 @@ impl RewritePattern for StructSetPattern {
             return RewriteResult::Unchanged;
         };
 
-        // Build wasm.struct_set with renamed attributes
-        // Preserve type attribute for cases where emit can't infer from operand types
-        // (e.g., when operand comes from a block argument)
-        let mut builder = Operation::of_name(db, op.location(db), "wasm.struct_set")
-            .operands(op.operands(db).clone())
-            .attr("field_idx", Attribute::IntBits(field_idx));
+        // Build wasm.struct_set: change dialect/name and add field_idx attr
+        // Preserve type attribute (if present) for cases where emit can't infer from operand types
+        let new_op = op
+            .modify(db)
+            .dialect_str("wasm")
+            .name_str("struct_set")
+            .attr("field_idx", Attribute::IntBits(field_idx))
+            .build();
 
-        if let Some(ty_attr) = op.attributes(db).get(&Symbol::new("type")) {
-            builder = builder.attr("type", ty_attr.clone());
-        }
-
-        RewriteResult::Replace(builder.build())
+        RewriteResult::Replace(new_op)
     }
 }
 
@@ -186,7 +182,6 @@ impl RewritePattern for VariantNewPattern {
             return RewriteResult::Unchanged;
         };
 
-        let location = op.location(db);
         let tag_sym = variant_new.tag(db);
 
         // Create variant-specific type: Expr + Add -> Expr$Add
@@ -194,9 +189,13 @@ impl RewritePattern for VariantNewPattern {
 
         // Create wasm.struct_new with variant-specific type (no tag field)
         // Result type is the variant-specific type - emit infers type_idx from it
-        let fields: IdVec<Value<'db>> = variant_new.fields(db).iter().copied().collect();
-        let struct_new = Operation::of_name(db, location, "wasm.struct_new")
-            .operands(fields)
+        // Clear original attrs (type, tag) and set only what wasm.struct_new needs
+        let struct_new = op
+            .modify(db)
+            .dialect_str("wasm")
+            .name_str("struct_new")
+            .attrs(std::collections::BTreeMap::new()) // Clear original type/tag attrs
+            .attr("type", Attribute::Type(variant_type))
             .results(IdVec::from(vec![variant_type]))
             .build();
 
@@ -257,20 +256,16 @@ impl RewritePattern for VariantTagPattern {
 
         warn!("adt.variant_tag is deprecated, use adt.variant_is instead");
 
-        let location = op.location(db);
-
         // Tag is always field 0
-        // Preserve type attribute for cases where emit can't infer from operand types
-        let mut struct_get = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(op.operands(db).clone())
+        // Preserve type attribute (if present) for cases where emit can't infer from operand types
+        let struct_get = op
+            .modify(db)
+            .dialect_str("wasm")
+            .name_str("struct_get")
             .attr("field_idx", Attribute::IntBits(0))
-            .results(op.results(db).clone());
+            .build();
 
-        if let Some(ty_attr) = op.attributes(db).get(&Symbol::new("type")) {
-            struct_get = struct_get.attr("type", ty_attr.clone());
-        }
-
-        RewriteResult::Replace(struct_get.build())
+        RewriteResult::Replace(struct_get)
     }
 }
 
@@ -289,7 +284,6 @@ impl RewritePattern for VariantIsPattern {
             return RewriteResult::Unchanged;
         };
 
-        let location = op.location(db);
         let tag = variant_is.tag(db);
 
         // Get the enum type - prefer operand type over attribute type
@@ -304,9 +298,11 @@ impl RewritePattern for VariantIsPattern {
         let variant_type = make_variant_type(db, enum_type, tag);
 
         // Create wasm.ref_test with variant-specific type
-        let ref_test = Operation::of_name(db, location, "wasm.ref_test")
-            .operands(op.operands(db).clone())
-            .results(op.results(db).clone())
+        // Override 'type' attribute with variant type (original has base enum type)
+        let ref_test = op
+            .modify(db)
+            .dialect_str("wasm")
+            .name_str("ref_test")
             .attr("type", Attribute::Type(variant_type))
             .build();
 
@@ -329,7 +325,6 @@ impl RewritePattern for VariantCastPattern {
             return RewriteResult::Unchanged;
         };
 
-        let location = op.location(db);
         let tag = variant_cast.tag(db);
 
         // Get the enum type - prefer operand type over attribute type
@@ -345,8 +340,12 @@ impl RewritePattern for VariantCastPattern {
 
         // Create wasm.ref_cast with variant-specific type
         // Result type is the variant-specific type - emit infers type_idx from it
-        let ref_cast = Operation::of_name(db, location, "wasm.ref_cast")
-            .operands(op.operands(db).clone())
+        // Override 'type' attribute with variant type (original has base enum type)
+        let ref_cast = op
+            .modify(db)
+            .dialect_str("wasm")
+            .name_str("ref_cast")
+            .attr("type", Attribute::Type(variant_type))
             .results(IdVec::from(vec![variant_type]))
             .build();
 
@@ -371,8 +370,6 @@ impl RewritePattern for VariantGetPattern {
             return RewriteResult::Unchanged;
         };
 
-        let location = op.location(db);
-
         // Get field index directly (no offset - tag field removed in WasmGC subtyping)
         let Attribute::IntBits(field_idx) = variant_get.field(db) else {
             #[cfg(debug_assertions)]
@@ -384,19 +381,21 @@ impl RewritePattern for VariantGetPattern {
         };
 
         // Infer type from the operand (the cast result has the variant-specific type)
-        // Store as type attribute for emit to use
-        let mut struct_get = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(op.operands(db).clone())
-            .attr("field_idx", Attribute::IntBits(field_idx))
-            .results(op.results(db).clone());
+        // Set as type attribute for emit to use; clear any original attrs via fresh builder
+        let mut builder = op
+            .modify(db)
+            .dialect_str("wasm")
+            .name_str("struct_get")
+            .attr("field_idx", Attribute::IntBits(field_idx));
 
+        // Override type attribute with operand type (original might have base enum type)
         if let Some(ref_operand) = op.operands(db).first()
             && let Some(ref_type) = operand_type(db, *ref_operand)
         {
-            struct_get = struct_get.attr("type", Attribute::Type(ref_type));
+            builder = builder.attr("type", Attribute::Type(ref_type));
         }
 
-        RewriteResult::Replace(struct_get.build())
+        RewriteResult::Replace(builder.build())
     }
 }
 
@@ -596,10 +595,7 @@ mod tests {
         let i32_ty = core::I32::new(db).as_type();
 
         // Create adt.struct_new with type attribute
-        let struct_new = Operation::of_name(db, location, "adt.struct_new")
-            .attr("type", Attribute::Type(i32_ty))
-            .results(idvec![i32_ty])
-            .build();
+        let struct_new = adt::struct_new(db, location, vec![], i32_ty, i32_ty).as_operation();
 
         let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![struct_new]);
         let region = Region::new(db, location, idvec![block]);

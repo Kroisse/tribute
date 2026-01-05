@@ -186,7 +186,9 @@ impl<'db> WasmLowerer<'db> {
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
         let location = block.location(self.db);
         let args = block.args(self.db).clone();
-        let mut builder = BlockBuilder::new(self.db, location).block_args(args);
+        let mut builder = BlockBuilder::new(self.db, location)
+            .id(block.id(self.db))
+            .block_args(args);
 
         for op in block.operations(self.db).iter().copied() {
             self.lower_op(&mut builder, op);
