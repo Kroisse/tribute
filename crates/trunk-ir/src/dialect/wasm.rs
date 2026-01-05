@@ -38,6 +38,12 @@ dialect! {
         /// `wasm.return` operation: return from function.
         fn r#return(#[rest] values);
 
+        /// `wasm.yield` operation: marks the region's result value.
+        /// This is not a real Wasm instruction - it's used to track which value
+        /// should be left on the stack at the end of a block/if region.
+        /// At emit time, this is handled specially to emit local.get for the operand.
+        fn r#yield(value);
+
         /// `wasm.drop` operation: drop a value on the stack.
         fn drop(value);
 

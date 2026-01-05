@@ -1774,6 +1774,11 @@ fn emit_region_ops<'db>(
         if op.dialect(db) == tribute::DIALECT_NAME() && op.name(db) == tribute::VAR() {
             continue;
         }
+        // Skip wasm.yield - it's handled by region_result_value + emit_value_get,
+        // not emitted as a real Wasm instruction
+        if wasm::Yield::from_operation(db, *op).is_ok() {
+            continue;
+        }
         emit_op(db, op, ctx, module_info, function)?;
     }
     Ok(())
@@ -1786,6 +1791,15 @@ fn region_result_value<'db>(
     let blocks = region.blocks(db);
     let block = blocks.last()?;
     let op = block.operations(db).last()?;
+
+    // Check for wasm.yield - its operand is the region's result value.
+    // This handles cases where the result is defined outside the region
+    // (e.g., handler dispatch done body where result is the scrutinee).
+    if let Ok(yield_op) = wasm::Yield::from_operation(db, *op) {
+        return Some(yield_op.value(db));
+    }
+
+    // Fallback: the last operation's first result
     if op.results(db).is_empty() {
         None
     } else {

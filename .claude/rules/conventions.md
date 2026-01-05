@@ -77,13 +77,30 @@ Two-phase resolution:
    - `expr.method(args)` → `Type::method(expr, args)`
    - Requires inferred type information
 
-## Dialect Operation Matching
+## Dialect Operations
+
+### Creating Operations
+
+When creating dialect operations, prefer typed helper functions over `Operation::of_name`:
+
+```rust
+// ✅ Preferred: Use typed helper functions
+let yield_op = wasm::r#yield(db, location, value);
+let call_op = func::call(db, location, callee, args, result_ty);
+
+// ❌ Avoid: Manual operation construction
+let yield_op = Operation::of_name(db, location, "wasm.yield")
+    .operands(idvec![value])
+    .build();
+```
+
+### Matching Operations
 
 When matching dialect operations, prefer typed wrappers over manual dialect/name comparison:
 
 ```rust
 // ✅ Preferred: Use from_operation for type-safe matching
-if let Ok(bind_op) = pat::Bind::from_operation(db, op) {
+if let Ok(bind_op) = tribute_pat::Bind::from_operation(db, op) {
     let name = bind_op.name(db);
     // ...
 }
@@ -91,13 +108,13 @@ if let Ok(bind_op) = pat::Bind::from_operation(db, op) {
 // ❌ Avoid: Manual dialect and name comparison
 let dialect = op.dialect(db);
 let op_name = op.name(db);
-if dialect == pat::DIALECT_NAME() && op_name == pat::BIND() {
+if dialect == tribute_pat::DIALECT_NAME() && op_name == tribute_pat::BIND() {
     // ...
 }
 ```
 
-Benefits of typed wrappers:
-- Type-safe access to operation attributes
+Benefits of typed helpers and wrappers:
+- Type-safe access to operation attributes and operands
 - Compile-time verification of operation structure
 - Cleaner, more readable code
 
