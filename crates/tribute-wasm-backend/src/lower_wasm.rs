@@ -405,11 +405,7 @@ impl<'db> WasmLowerer<'db> {
             core::Func::new(self.db, idvec![], core::Nil::new(self.db).as_type()).as_type();
 
         // Create wasm.func directly (not func.func) since we're past the func_to_wasm pass
-        Operation::of_name(self.db, location, "wasm.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("_start")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(region)
-            .build()
+        wasm::func(self.db, location, Symbol::new("_start"), func_ty, region).as_operation()
     }
 
     fn lower_op(&mut self, builder: &mut BlockBuilder<'db>, op: Operation<'db>) {

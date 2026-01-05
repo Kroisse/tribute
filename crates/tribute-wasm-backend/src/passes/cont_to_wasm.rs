@@ -227,15 +227,17 @@ pub mod resume_gen {
 
         for (field_idx, live_local) in info.live_locals.iter().enumerate() {
             // Generate struct_get to extract this field
-            let struct_get = Operation::of_name(db, location, "wasm.struct_get")
-                .operand(state_param)
-                .attr("type", Attribute::Type(state_ty))
-                .attr("field_idx", Attribute::IntBits(field_idx as u64))
-                .results(IdVec::from(vec![live_local.ty]))
-                .build();
+            let struct_get = wasm::struct_get(
+                db,
+                location,
+                state_param,
+                live_local.ty,
+                Attribute::Type(state_ty),
+                Attribute::IntBits(field_idx as u64),
+            );
 
-            let extracted_value = Value::new(db, ValueDef::OpResult(struct_get), 0);
-            ops.push(struct_get);
+            let extracted_value = Value::new(db, ValueDef::OpResult(struct_get.as_operation()), 0);
+            ops.push(struct_get.as_operation());
 
             // Map the original value to the extracted value
             value_mapping.insert(live_local.value, extracted_value);
@@ -1194,13 +1196,7 @@ fn unbox_value_if_needed<'db>(
         // Unbox Int: anyref → i31ref → i32 → i64 (sign-extend)
 
         // Step 1: ref.cast anyref to i31ref
-        let ref_cast = wasm::ref_cast(
-            db,
-            location,
-            value,
-            i31ref_ty,
-            Attribute::Symbol(Symbol::new("i31")),
-        );
+        let ref_cast = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty);
         ops.push(ref_cast.as_operation());
 
         // Step 2: i31.get_s to extract signed i32
@@ -1216,13 +1212,7 @@ fn unbox_value_if_needed<'db>(
         // Unbox Nat: anyref → i31ref → i32 → i64 (zero-extend)
 
         // Step 1: ref.cast anyref to i31ref
-        let ref_cast = wasm::ref_cast(
-            db,
-            location,
-            value,
-            i31ref_ty,
-            Attribute::Symbol(Symbol::new("i31")),
-        );
+        let ref_cast = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty);
         ops.push(ref_cast.as_operation());
 
         // Step 2: i31.get_u to extract unsigned i32
@@ -1333,15 +1323,17 @@ fn generate_inline_resume_function<'db>(
 
     for (field_idx, live_local) in live_locals.iter().enumerate() {
         // Generate struct_get to extract this field
-        let struct_get = Operation::of_name(db, location, "wasm.struct_get")
-            .operand(state_param)
-            .attr("type", Attribute::Type(state_ty))
-            .attr("field_idx", Attribute::IntBits(field_idx as u64))
-            .results(IdVec::from(vec![live_local.ty]))
-            .build();
+        let struct_get = wasm::struct_get(
+            db,
+            location,
+            state_param,
+            live_local.ty,
+            Attribute::Type(state_ty),
+            Attribute::IntBits(field_idx as u64),
+        );
 
-        let extracted_value = Value::new(db, ValueDef::OpResult(struct_get), 0);
-        ops.push(struct_get);
+        let extracted_value = Value::new(db, ValueDef::OpResult(struct_get.as_operation()), 0);
+        ops.push(struct_get.as_operation());
 
         // Map the original value to the extracted value
         value_mapping.insert(live_local.value, extracted_value);
@@ -1429,13 +1421,15 @@ fn expand_shift_operation<'db>(
     // Collect the values to capture
     let live_values: IdVec<Value<'db>> = live_locals.iter().map(|ll| ll.value).collect();
 
-    let state_struct = Operation::of_name(db, location, "wasm.struct_new")
-        .operands(live_values)
-        .attr("type", Attribute::Type(state_ty))
-        .results(IdVec::from(vec![state_ty]))
-        .build();
-    let state_val = Value::new(db, ValueDef::OpResult(state_struct), 0);
-    ops.push(state_struct);
+    let state_struct = wasm::struct_new(
+        db,
+        location,
+        live_values,
+        state_ty,
+        Attribute::Type(state_ty),
+    );
+    let state_val = Value::new(db, ValueDef::OpResult(state_struct.as_operation()), 0);
+    ops.push(state_struct.as_operation());
 
     // === 2. Create continuation struct: (resume_fn, state, tag) ===
     // Field 0: resume_fn - reference to the generated resume function
@@ -1468,13 +1462,15 @@ fn expand_shift_operation<'db>(
 
     // Build the continuation struct
     let cont_ty = cont_types::continuation_type(db);
-    let cont_struct = Operation::of_name(db, location, "wasm.struct_new")
-        .operands(IdVec::from(vec![resume_fn_val, state_val, tag_val]))
-        .attr("type", Attribute::Type(cont_ty))
-        .results(IdVec::from(vec![cont_ty]))
-        .build();
-    let cont_val = Value::new(db, ValueDef::OpResult(cont_struct), 0);
-    ops.push(cont_struct);
+    let cont_struct = wasm::struct_new(
+        db,
+        location,
+        IdVec::from(vec![resume_fn_val, state_val, tag_val]),
+        cont_ty,
+        Attribute::Type(cont_ty),
+    );
+    let cont_val = Value::new(db, ValueDef::OpResult(cont_struct.as_operation()), 0);
+    ops.push(cont_struct.as_operation());
 
     // === 3. Set Yield Globals ===
 
@@ -1665,12 +1661,16 @@ impl RewritePattern for PushPromptPattern {
         );
         let else_region = trunk_ir::Region::new(db, location, IdVec::from(vec![else_block]));
 
-        // Inner if: check tag match
-        let inner_if = Operation::of_name(db, location, "wasm.if")
-            .operand(tag_match_val)
-            .region(then_region)
-            .region(else_region)
-            .build();
+        // Inner if: check tag match - no result type needed
+        let nil_ty = core::Nil::new(db).as_type();
+        let inner_if = wasm::r#if(
+            db,
+            location,
+            tag_match_val,
+            nil_ty,
+            then_region,
+            else_region,
+        );
 
         // Build then block for outer if (yield_state check)
         let outer_then_block = trunk_ir::Block::new(
@@ -1682,7 +1682,7 @@ impl RewritePattern for PushPromptPattern {
                 get_yield_tag.as_operation(),
                 our_tag.as_operation(),
                 tag_cmp.as_operation(),
-                inner_if,
+                inner_if.as_operation(),
             ]),
         );
         let outer_then_region =
@@ -1700,13 +1700,16 @@ impl RewritePattern for PushPromptPattern {
             trunk_ir::Region::new(db, location, IdVec::from(vec![empty_else_block]));
 
         // Outer if: check yield_state
-        let outer_if = Operation::of_name(db, location, "wasm.if")
-            .operand(yield_state_val)
-            .region(outer_then_region)
-            .region(outer_else_region)
-            .build();
+        let outer_if = wasm::r#if(
+            db,
+            location,
+            yield_state_val,
+            nil_ty,
+            outer_then_region,
+            outer_else_region,
+        );
 
-        yield_check_ops.push(outer_if);
+        yield_check_ops.push(outer_if.as_operation());
 
         // For blocks with results, we need to insert yield check BEFORE the last
         // result-producing operation so the block's result is preserved.
@@ -1725,13 +1728,19 @@ impl RewritePattern for PushPromptPattern {
         };
 
         // Create the wrapper block with the modified body
-        let new_op = Operation::of_name(db, location, "wasm.block")
-            .attr("label", Attribute::IntBits(tag_value))
-            .results(result_types)
-            .region(new_body)
-            .build();
+        let result_ty = result_types
+            .first()
+            .copied()
+            .unwrap_or_else(|| core::Nil::new(db).as_type());
+        let new_op = wasm::block(
+            db,
+            location,
+            result_ty,
+            Attribute::IntBits(tag_value),
+            new_body,
+        );
 
-        RewriteResult::Replace(new_op)
+        RewriteResult::Replace(new_op.as_operation())
     }
 }
 
@@ -2112,24 +2121,28 @@ impl RewritePattern for ResumePattern {
         ops.push(wasm::global_set(db, location, const_0_val, YIELD_STATE_IDX).as_operation());
 
         // 2. Extract resume_fn from continuation (field 0)
-        let get_resume_fn = Operation::of_name(db, location, "wasm.struct_get")
-            .operand(continuation)
-            .attr("type", Attribute::Type(cont_ty))
-            .attr("field_idx", Attribute::IntBits(CONT_FIELD_RESUME_FN as u64))
-            .results(IdVec::from(vec![funcref_ty]))
-            .build();
-        let resume_fn_val = Value::new(db, ValueDef::OpResult(get_resume_fn), 0);
-        ops.push(get_resume_fn);
+        let get_resume_fn = wasm::struct_get(
+            db,
+            location,
+            continuation,
+            funcref_ty,
+            Attribute::Type(cont_ty),
+            Attribute::IntBits(CONT_FIELD_RESUME_FN as u64),
+        );
+        let resume_fn_val = Value::new(db, ValueDef::OpResult(get_resume_fn.as_operation()), 0);
+        ops.push(get_resume_fn.as_operation());
 
         // 3. Extract state from continuation (field 1)
-        let get_state = Operation::of_name(db, location, "wasm.struct_get")
-            .operand(continuation)
-            .attr("type", Attribute::Type(cont_ty))
-            .attr("field_idx", Attribute::IntBits(CONT_FIELD_STATE as u64))
-            .results(IdVec::from(vec![anyref_ty]))
-            .build();
-        let state_val = Value::new(db, ValueDef::OpResult(get_state), 0);
-        ops.push(get_state);
+        let get_state = wasm::struct_get(
+            db,
+            location,
+            continuation,
+            anyref_ty,
+            Attribute::Type(cont_ty),
+            Attribute::IntBits(CONT_FIELD_STATE as u64),
+        );
+        let state_val = Value::new(db, ValueDef::OpResult(get_state.as_operation()), 0);
+        ops.push(get_state.as_operation());
 
         // 4. Box the value if it's a primitive type
         // Resume function expects (state: anyref, value: anyref), so primitives need boxing
@@ -2148,13 +2161,15 @@ impl RewritePattern for ResumePattern {
         // For now, we use call_indirect with type_idx 0 (placeholder)
         // The actual type will be resolved at emit time
         let result_ty = op.results(db).first().copied().unwrap_or(anyref_ty);
-        let call_indirect = Operation::of_name(db, location, "wasm.call_indirect")
-            .operands(IdVec::from(vec![state_val, boxed_value, resume_fn_val]))
-            .attr("type_idx", Attribute::IntBits(0)) // Placeholder - resolved at emit
-            .attr("table", Attribute::IntBits(0)) // Default table
-            .results(IdVec::from(vec![result_ty]))
-            .build();
-        ops.push(call_indirect);
+        let call_indirect = wasm::call_indirect(
+            db,
+            location,
+            IdVec::from(vec![state_val, boxed_value, resume_fn_val]),
+            IdVec::from(vec![result_ty]),
+            Attribute::IntBits(0), // type_idx - Placeholder - resolved at emit
+            Attribute::IntBits(0), // table - Default table
+        );
+        ops.push(call_indirect.as_operation());
 
         RewriteResult::Expand(ops)
     }
@@ -2178,11 +2193,9 @@ impl RewritePattern for DropPattern {
 
         // In WasmGC, continuations are GC-managed, so "drop" just
         // removes the reference. We use wasm.drop to pop the value.
-        let new_op = Operation::of_name(db, location, "wasm.drop")
-            .operand(continuation)
-            .build();
+        let new_op = wasm::drop(db, location, continuation);
 
-        RewriteResult::Replace(new_op)
+        RewriteResult::Replace(new_op.as_operation())
     }
 }
 

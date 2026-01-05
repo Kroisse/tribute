@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use tribute_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
+use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
@@ -220,6 +221,8 @@ impl RewritePattern for StringConstPattern {
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
 
+        // Note: Using Operation::of_name here because we need to add a custom
+        // "literal_len" attribute that's not part of the standard wasm.i32_const definition
         let new_op = Operation::of_name(db, location, "wasm.i32_const")
             .attr("value", Attribute::IntBits(u64::from(offset)))
             .attr("literal_len", Attribute::IntBits(u64::from(len)))
@@ -276,12 +279,7 @@ impl RewritePattern for BytesConstPattern {
         let bytes_ty = core::Bytes::new(db).as_type();
 
         // Create wasm.bytes_from_data operation
-        let new_op = Operation::of_name(db, location, "wasm.bytes_from_data")
-            .attr("data_idx", Attribute::IntBits(u64::from(data_idx)))
-            .attr("offset", Attribute::IntBits(0)) // offset within data segment
-            .attr("len", Attribute::IntBits(u64::from(len)))
-            .results(trunk_ir::idvec![bytes_ty])
-            .build();
+        let new_op = wasm::bytes_from_data(db, location, bytes_ty, data_idx, 0, len).as_operation();
 
         RewriteResult::Replace(new_op)
     }

@@ -79,11 +79,8 @@ impl RewritePattern for LowerClosureNewPattern {
 
         // Generate: %funcref = func.constant @func_ref : func_type
         // func_ref is already a Symbol, use it directly
-        let constant_op = Operation::of_name(db, location, "func.constant")
-            .attr("func_ref", Attribute::Symbol(func_ref))
-            .result(func_ty)
-            .build();
-        let funcref = constant_op.result(db, 0);
+        let constant_op = func::constant(db, location, func_ty, func_ref);
+        let funcref = constant_op.as_operation().result(db, 0);
 
         // Create closure struct type: adt.struct with (funcref, env) fields
         let closure_struct_ty = adt::struct_type(
@@ -104,7 +101,10 @@ impl RewritePattern for LowerClosureNewPattern {
             closure_struct_ty,
         );
 
-        RewriteResult::Expand(vec![constant_op, struct_new_op.as_operation()])
+        RewriteResult::Expand(vec![
+            constant_op.as_operation(),
+            struct_new_op.as_operation(),
+        ])
     }
 }
 
