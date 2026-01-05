@@ -7,7 +7,7 @@
 Tribute는 WasmGC (Wasm 3.0)를 주요 타겟으로 한다. 백엔드는 다음 원칙을 따른다:
 
 1. **타겟 독립적 IR 유지**: trunk-ir는 특정 타겟에 종속되지 않음
-2. **명시적 타입 정의**: 타입 정보는 attribute가 아닌 연산으로 표현
+2. **Backend-specific 타입 처리**: WasmGC 타입 정의는 백엔드에서 처리
 3. **관심사 분리**: lowering (tribute-passes)과 emission (trunk-ir-wasm-backend) 분리
 
 ---
@@ -18,81 +18,25 @@ Tribute는 WasmGC (Wasm 3.0)를 주요 타겟으로 한다. 백엔드는 다음 
 trunk-ir/
 ├── dialect/
 │   ├── wasm.rs           # wasm ops (struct_new, array_new, call, ...)
-│   ├── gc_type.rs        # GC 타입 정의 연산
-│   └── ...
+│   └── ...               # target-independent dialects only
 
 trunk-ir-wasm-backend/    # trunk-ir만 의존
-├── emit.rs               # wasm.* + gc_type.* → binary
-├── type_section.rs       # gc_type.* → wasm type section
-├── func_to_wasm.rs       # func.* → wasm.*
-├── arith_to_wasm.rs      # arith.* → wasm.*
-├── scf_to_wasm.rs        # scf.* → wasm.*
+├── emit.rs               # IR → WebAssembly binary
+├── type_section.rs       # WasmGC type section 생성 (rec group, subtype 처리)
+├── type_collector.rs     # wasm.* ops에서 타입 정보 수집
+├── func_to_wasm.rs       # func.* → wasm instructions
+├── arith_to_wasm.rs      # arith.* → wasm instructions
+├── scf_to_wasm.rs        # scf.* → wasm instructions
 └── ...
 
 tribute-passes/           # tribute-ir 의존
-├── adt_to_wasmgc.rs      # adt.* → gc_type.* + wasm.*
-├── closure_to_wasmgc.rs  # closure.* → gc_type.* + wasm.*
+├── adt_to_wasmgc.rs      # adt.* → wasm.* (struct_new, array_new 등)
+├── closure_to_wasmgc.rs  # closure.* → wasm.*
 └── ...
 
 tribute/                  # main crate - 파이프라인 조율
 └── pipeline.rs
 ```
-
----
-
-## gc_type Dialect
-
-WasmGC 타입 정의를 위한 dialect. trunk-ir에 위치한다.
-
-### 연산 정의
-
-```rust
-dialect! {
-    mod gc_type {
-        /// Struct 타입 정의
-        #[attr(name: Symbol, fields: Vec<(Symbol, Type, bool)>)]
-        fn struct_def() -> type_ref;
-
-        /// Array 타입 정의
-        #[attr(name: Symbol, element: Type, mutable: bool)]
-        fn array_def() -> type_ref;
-
-        /// 재귀 타입 그룹 (WasmGC rec group)
-        fn rec_group() { #[region(types)] {} };
-
-        /// Subtype 관계 선언
-        #[attr(sub: TypeRef, super: TypeRef)]
-        fn subtype();
-    }
-}
-```
-
-### IR 예시
-
-```
-// 타입 정의 (모듈 최상단)
-gc_type.struct_def @Point { x: f64, y: f64 }
-gc_type.struct_def @Node { value: i32, next: ref<@Node>? }
-
-gc_type.rec_group {
-    gc_type.struct_def @Tree { left: ref<@Tree>?, right: ref<@Tree>? }
-}
-
-// 사용
-func.func @make_point(%x: f64, %y: f64) -> ref<@Point> {
-    %p = wasm.struct_new @Point (%x, %y)
-    func.return %p
-}
-```
-
-### WasmGC 대응
-
-| gc_type 연산 | WasmGC |
-|-------------|--------|
-| `struct_def` | type section의 struct type |
-| `array_def` | type section의 array type |
-| `rec_group` | recursive type group |
-| `subtype` | subtype declaration |
 
 ---
 
@@ -109,11 +53,13 @@ tribute-ir (High-level)
 ▼ tribute-passes/adt_to_wasmgc.rs
 │
 trunk-ir (Mid-level)
-├── gc_type.struct_def    # 타입 정의 생성
 ├── wasm.struct_new       # 인스턴스 생성
-├── wasm.struct_get/set
+├── wasm.struct_get/set   # 필드 접근
+├── wasm.array_new        # 배열 생성
 │
 ▼ trunk-ir-wasm-backend
+│   (type_collector: wasm.* ops에서 타입 수집)
+│   (type_section: rec group 분석, type section 생성)
 │
 WebAssembly Binary
 ```
@@ -137,9 +83,41 @@ WebAssembly Binary (linear memory) 또는 Native Binary
 
 ---
 
+## WasmGC 타입 처리
+
+### Backend에서 타입 수집
+
+trunk-ir-wasm-backend는 `wasm.*` 연산들에서 타입 정보를 수집한다:
+
+```rust
+// wasm.struct_new 연산에서 타입 정보 추출
+// @Point 타입과 필드 타입들을 수집
+%p = wasm.struct_new @Point (%x: f64, %y: f64) : ref<@Point>
+
+// wasm.array_new에서 배열 타입 정보 추출
+%arr = wasm.array_new @IntArray (%len) : ref<@IntArray>
+```
+
+### Type Section 생성
+
+수집된 타입 정보로 WasmGC type section 생성:
+
+1. **타입 의존성 분석**: 타입 간 참조 관계 파악
+2. **SCC 분석**: 상호 재귀 타입 탐지 → rec group 생성
+3. **Type section emit**: struct/array type 정의 출력
+
+```wasm
+;; 생성된 type section 예시
+(rec
+  (type $Node (struct (field i32) (field (ref null $Node)))))
+(type $Point (struct (field f64) (field f64)))
+```
+
+---
+
 ## 설계 결정 배경
 
-### gc dialect를 추가하지 않는 이유
+### GC 관련 타입을 trunk-ir에 추가하지 않는 이유
 
 Cranelift 팀의 교훈 참고 ([Stack Maps 문서](https://bytecodealliance.org/articles/new-stack-maps-for-wasmtime)):
 
@@ -152,23 +130,19 @@ Cranelift는 초기에 GC 참조를 IR 전체에서 추적했으나, 다음 문�
 
 해결책: "User Stack Maps" - frontend가 GC 관련 처리를 담당
 
-Tribute에서의 적용:
-- trunk-ir에 범용 `gc` dialect 추가하지 않음
-- WasmGC-specific ops는 `wasm` dialect에 유지
-- 타입 정의만 `gc_type` dialect로 분리 (이는 GC 추적이 아닌 타입 선언)
+**Tribute에서의 적용:**
+- trunk-ir에 GC 관련 dialect 추가하지 않음 (gc, gc_type 등)
+- WasmGC-specific 개념 (rec_group, subtype)은 백엔드에서 처리
+- trunk-ir는 target-independent하게 유지
 
-### 타입 정의를 연산으로 표현하는 이유
+### wasm dialect의 역할
 
-Attribute 방식의 문제:
-- 타입 정보가 분산됨
-- 중복 정의 가능
-- Emit 시 수집 로직 필요
+wasm dialect는 WasmGC 인스턴스 연산만 포함:
+- `wasm.struct_new`, `wasm.struct_get`, `wasm.struct_set`
+- `wasm.array_new`, `wasm.array_get`, `wasm.array_set`
+- 기타 Wasm 명령어들
 
-연산 방식의 장점:
-- 타입이 IR에 명시적으로 존재
-- WasmGC type section과 직접 대응
-- Subtyping, 재귀 타입 자연스럽게 표현
-- 모듈이 self-contained
+타입 정의 (type section)는 백엔드가 이 연산들에서 추론하여 생성한다.
 
 ### tribute-wasm-backend 제거
 
@@ -181,24 +155,19 @@ Attribute 방식의 문제:
 
 ## 구현 단계 (제안)
 
-### Phase 1: gc_type dialect 추가
-1. `trunk-ir/src/dialect/gc_type.rs` 생성
-2. struct_def, array_def, rec_group, subtype 연산 정의
-3. 기본 테스트
+### Phase 1: trunk-ir-wasm-backend 생성
+1. 새 크레이트 생성 (trunk-ir만 의존)
+2. type_collector.rs: wasm.* 연산에서 타입 정보 수집
+3. type_section.rs: rec group 분석 및 type section 생성
+4. emit.rs: WebAssembly binary 출력
 
-### Phase 2: trunk-ir-wasm-backend 분리
-1. 새 크레이트 생성
-2. func/arith/scf → wasm 변환 이동
-3. gc_type → type section 변환 구현
-4. emit.rs 이동 및 리팩토링
-
-### Phase 3: adt/closure lowering 이동
+### Phase 2: Lowering passes 이동
 1. tribute-passes에 adt_to_wasmgc.rs 추가
-2. adt.* → gc_type.* + wasm.* 변환 구현
+2. adt.* → wasm.* 변환 구현
 3. closure_to_wasmgc.rs 추가
 4. 기존 tribute-wasm-backend에서 해당 코드 제거
 
-### Phase 4: tribute-wasm-backend 제거
+### Phase 3: tribute-wasm-backend 제거
 1. 남은 기능을 tribute main으로 이동
 2. 크레이트 삭제
 3. 문서 업데이트
