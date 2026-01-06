@@ -25,6 +25,10 @@ use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation};
 
+/// Closure struct field count.
+/// Closure structs always have 2 fields: (func_ref: funcref, env: anyref)
+const CLOSURE_FIELD_COUNT: u64 = 2;
+
 /// Lower closure dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     PatternApplicator::new()
@@ -56,7 +60,7 @@ impl RewritePattern for ClosureNewPattern {
         let func_ref = closure_new.func_ref(db);
         let env = closure_new.env(db);
 
-        // Get the closure type from the result
+        // Get the closure type from the result for the result type
         let result_ty = op
             .results(db)
             .first()
@@ -68,17 +72,22 @@ impl RewritePattern for ClosureNewPattern {
         let ref_func = wasm::ref_func(db, location, funcref_ty, func_ref);
         let func_ref_val = ref_func.as_operation().result(db, 0);
 
+        // Use structref as placeholder type for proper type resolution.
+        // Closure structs always have 2 fields: (func_ref, env).
+        // This ensures the struct_new matches with struct_get via placeholder lookup.
+        let structref_ty = wasm::Structref::new(db).as_type();
+
         // Create wasm.struct_new with both the function reference and environment
         // as operands.
         //
         // Layout: (func_ref: funcref, env: anyref)
         //
         // Note: Using Operation::of_name here because we need custom attributes:
-        // - "type" (used during transformation, converted to "type_idx" at emit)
+        // - "type" (structref placeholder for type resolution)
         // - "is_closure" (marker attribute for closure struct identification)
         let struct_new = Operation::of_name(db, location, "wasm.struct_new")
             .operands(IdVec::from(vec![func_ref_val, env]))
-            .attr("type", Attribute::Type(result_ty))
+            .attr("type", Attribute::Type(structref_ty))
             .attr("is_closure", Attribute::Bool(true))
             .results(IdVec::from(vec![result_ty]))
             .build();
@@ -104,23 +113,26 @@ impl RewritePattern for ClosureFuncPattern {
 
         let location = op.location(db);
 
-        // Get the closure type from operand for struct.get
-        let closure_ty = op.operands(db).first().and_then(|v| get_value_type(db, *v));
+        // Use structref as placeholder type with field_count for proper type resolution.
+        // Closure structs always have 2 fields: (func_ref, env).
+        // This ensures the struct_get matches with the struct_new via placeholder lookup.
+        let structref_ty = wasm::Structref::new(db).as_type();
 
         // Create wasm.struct_get for field 0 (function reference)
         //
-        // Note: Using Operation::of_name here because we need a custom "type" attribute
-        // that's used during transformation and converted to "type_idx" at emit time.
-        let mut struct_get = Operation::of_name(db, location, "wasm.struct_get")
+        // Note: Using Operation::of_name here because we need custom attributes:
+        // - "type": structref placeholder type
+        // - "field_count": number of fields for placeholder resolution
+        // - "field_idx": field to extract
+        let struct_get = Operation::of_name(db, location, "wasm.struct_get")
             .operands(op.operands(db).clone())
             .attr("field_idx", Attribute::IntBits(0))
-            .results(op.results(db).clone());
+            .attr("type", Attribute::Type(structref_ty))
+            .attr("field_count", Attribute::IntBits(CLOSURE_FIELD_COUNT))
+            .results(op.results(db).clone())
+            .build();
 
-        if let Some(ty) = closure_ty {
-            struct_get = struct_get.attr("type", Attribute::Type(ty));
-        }
-
-        RewriteResult::Replace(struct_get.build())
+        RewriteResult::Replace(struct_get)
     }
 }
 
@@ -141,34 +153,26 @@ impl RewritePattern for ClosureEnvPattern {
 
         let location = op.location(db);
 
-        // Get the closure type from operand for struct.get
-        let closure_ty = op.operands(db).first().and_then(|v| get_value_type(db, *v));
+        // Use structref as placeholder type with field_count for proper type resolution.
+        // Closure structs always have 2 fields: (func_ref, env).
+        // This ensures the struct_get matches with the struct_new via placeholder lookup.
+        let structref_ty = wasm::Structref::new(db).as_type();
 
         // Create wasm.struct_get for field 1 (environment)
         //
-        // Note: Using Operation::of_name here because we need a custom "type" attribute
-        // that's used during transformation and converted to "type_idx" at emit time.
-        let mut struct_get = Operation::of_name(db, location, "wasm.struct_get")
+        // Note: Using Operation::of_name here because we need custom attributes:
+        // - "type": structref placeholder type
+        // - "field_count": number of fields for placeholder resolution
+        // - "field_idx": field to extract
+        let struct_get = Operation::of_name(db, location, "wasm.struct_get")
             .operands(op.operands(db).clone())
             .attr("field_idx", Attribute::IntBits(1))
-            .results(op.results(db).clone());
+            .attr("type", Attribute::Type(structref_ty))
+            .attr("field_count", Attribute::IntBits(CLOSURE_FIELD_COUNT))
+            .results(op.results(db).clone())
+            .build();
 
-        if let Some(ty) = closure_ty {
-            struct_get = struct_get.attr("type", Attribute::Type(ty));
-        }
-
-        RewriteResult::Replace(struct_get.build())
-    }
-}
-
-/// Get the type of a value from its defining operation's result type.
-fn get_value_type<'db>(
-    db: &'db dyn salsa::Database,
-    value: trunk_ir::Value<'db>,
-) -> Option<trunk_ir::Type<'db>> {
-    match value.def(db) {
-        trunk_ir::ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
-        trunk_ir::ValueDef::BlockArg(_) => None,
+        RewriteResult::Replace(struct_get)
     }
 }
 

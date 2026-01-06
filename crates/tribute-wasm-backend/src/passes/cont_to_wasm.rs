@@ -223,8 +223,13 @@ pub mod resume_gen {
         let mut value_mapping: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
         // Extract live locals from state struct
+        // Use structref as placeholder type - emit will resolve via placeholder map
+        let structref_ty = wasm::Structref::new(db).as_type();
+        let field_count = info.live_locals.len() as u64;
+
         for (field_idx, live_local) in info.live_locals.iter().enumerate() {
             // Generate struct_get to extract this field
+            // Add type and field_count attributes for proper type resolution at emit time
             let struct_get = wasm::struct_get(
                 db,
                 location,
@@ -232,10 +237,15 @@ pub mod resume_gen {
                 live_local.ty,
                 0, // type_idx - Placeholder, resolved at emit time
                 field_idx as u32,
-            );
+            )
+            .as_operation()
+            .modify(db)
+            .attr("type", Attribute::Type(structref_ty))
+            .attr("field_count", Attribute::IntBits(field_count))
+            .build();
 
-            let extracted_value = Value::new(db, ValueDef::OpResult(struct_get.as_operation()), 0);
-            ops.push(struct_get.as_operation());
+            let extracted_value = Value::new(db, ValueDef::OpResult(struct_get), 0);
+            ops.push(struct_get);
 
             // Map the original value to the extracted value
             value_mapping.insert(live_local.value, extracted_value);
@@ -298,6 +308,44 @@ pub mod resume_gen {
                 .iter()
                 .map(|region| remap_region(db, region, value_mapping))
                 .collect();
+
+            // Special handling for wasm.return in resume functions:
+            // If the return value is a primitive type (Int/Nat), we need to box it
+            // since the resume function returns anyref.
+            if op.dialect(db) == wasm::DIALECT_NAME()
+                && op.name(db) == wasm::RETURN()
+                && let Some(&return_value) = new_operands.first()
+            {
+                // Look up value type from its definition
+                let value_ty = match return_value.def(db) {
+                    ValueDef::OpResult(defining_op) => {
+                        defining_op.results(db).get(return_value.index(db)).copied()
+                    }
+                    ValueDef::BlockArg(_) => None, // Block args in resume should not be primitives
+                };
+
+                if let Some(value_ty) = value_ty
+                    && (core::I64::from_type(db, value_ty).is_some()
+                        || tribute::Int::from_type(db, value_ty).is_some()
+                        || tribute::Nat::from_type(db, value_ty).is_some())
+                {
+                    // Box the primitive value before returning
+                    let mut boxing_ops = Vec::new();
+                    let boxed = super::box_value_if_needed(
+                        db,
+                        op.location(db),
+                        return_value,
+                        value_ty,
+                        &mut boxing_ops,
+                    );
+                    result.extend(boxing_ops);
+
+                    // Create new return with boxed value
+                    let new_return = wasm::r#return(db, op.location(db), Some(boxed));
+                    result.push(new_return.as_operation());
+                    continue;
+                }
+            }
 
             // Create new operation with remapped operands and regions
             let new_op = op
@@ -1245,10 +1293,11 @@ fn box_value_if_needed<'db>(
     let i32_ty = core::I32::new(db).as_type();
     let i31ref_ty = wasm::I31ref::new(db).as_type();
 
-    if tribute::Int::from_type(db, value_ty).is_some()
+    if core::I64::from_type(db, value_ty).is_some()
+        || tribute::Int::from_type(db, value_ty).is_some()
         || tribute::Nat::from_type(db, value_ty).is_some()
     {
-        // Box Int/Nat: i64 → i32 → i31ref
+        // Box Int/Nat/I64: i64 → i32 → i31ref
 
         // Step 1: i32.wrap_i64 to truncate to i32
         let wrap = wasm::i32_wrap_i64(db, location, value, i32_ty);
@@ -1317,21 +1366,42 @@ fn generate_inline_resume_function<'db>(
     }
 
     // Extract live locals from state struct
-    let _state_ty = cont_types::state_type(db, live_locals);
+    // Cast state_param from anyref to structref for struct_get operations
+    let structref_ty = wasm::Structref::new(db).as_type();
+    let field_count = live_locals.len();
+    let state_cast = if !live_locals.is_empty() {
+        // Add field_count attribute so emit can look up concrete type index from placeholder map
+        let ref_cast_op = wasm::ref_cast(db, location, state_param, structref_ty, structref_ty)
+            .as_operation()
+            .modify(db)
+            .attr("field_count", Attribute::IntBits(field_count as u64))
+            .build();
+        let cast_result = Value::new(db, ValueDef::OpResult(ref_cast_op), 0);
+        ops.push(ref_cast_op);
+        cast_result
+    } else {
+        state_param
+    };
 
     for (field_idx, live_local) in live_locals.iter().enumerate() {
         // Generate struct_get to extract this field
+        // Use structref as the type attribute - emit will resolve via placeholder map
         let struct_get = wasm::struct_get(
             db,
             location,
-            state_param,
+            state_cast,
             live_local.ty,
-            0, // type_idx - Placeholder, resolved at emit time
+            0, // type_idx - Will be resolved via placeholder map
             field_idx as u32,
-        );
+        )
+        .as_operation()
+        .modify(db)
+        .attr("type", Attribute::Type(structref_ty))
+        .attr("field_count", Attribute::IntBits(field_count as u64))
+        .build();
 
-        let extracted_value = Value::new(db, ValueDef::OpResult(struct_get.as_operation()), 0);
-        ops.push(struct_get.as_operation());
+        let extracted_value = Value::new(db, ValueDef::OpResult(struct_get), 0);
+        ops.push(struct_get);
 
         // Map the original value to the extracted value
         value_mapping.insert(live_local.value, extracted_value);
@@ -1513,7 +1583,13 @@ fn expand_shift_operation<'db>(
     ops.push(wasm::global_set(db, location, op_idx_val, YIELD_OP_IDX).as_operation());
 
     // === 4. Return to unwind stack ===
-    ops.push(wasm::r#return(db, location, None).as_operation());
+    // Return a dummy value (ref.null any) since the caller will check yield_state
+    // and know to ignore this return value.
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+    let null_val = wasm::ref_null(db, location, anyref_ty, anyref_ty);
+    let null_val_result = null_val.as_operation().result(db, 0);
+    ops.push(null_val.as_operation());
+    ops.push(wasm::r#return(db, location, Some(null_val_result)).as_operation());
 
     ops
 }
@@ -2108,6 +2184,11 @@ impl RewritePattern for ResumePattern {
         ops.push(wasm::global_set(db, location, const_0_val, YIELD_STATE_IDX).as_operation());
 
         // 2. Extract resume_fn from continuation (field 0)
+        // The continuation is a struct with 3 fields: (resume_fn, state, tag)
+        // We need to add type and field_count attributes for emit to resolve the correct type
+        let structref_ty = wasm::Structref::new(db).as_type();
+        const CONT_FIELD_COUNT: u64 = 3; // (resume_fn, state, tag)
+
         let get_resume_fn = wasm::struct_get(
             db,
             location,
@@ -2115,9 +2196,14 @@ impl RewritePattern for ResumePattern {
             funcref_ty,
             0, // type_idx - Placeholder, resolved at emit time
             CONT_FIELD_RESUME_FN,
-        );
-        let resume_fn_val = Value::new(db, ValueDef::OpResult(get_resume_fn.as_operation()), 0);
-        ops.push(get_resume_fn.as_operation());
+        )
+        .as_operation()
+        .modify(db)
+        .attr("type", Attribute::Type(structref_ty))
+        .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+        .build();
+        let resume_fn_val = Value::new(db, ValueDef::OpResult(get_resume_fn), 0);
+        ops.push(get_resume_fn);
 
         // 3. Extract state from continuation (field 1)
         let get_state = wasm::struct_get(
@@ -2127,9 +2213,14 @@ impl RewritePattern for ResumePattern {
             anyref_ty,
             0, // type_idx - Placeholder, resolved at emit time
             CONT_FIELD_STATE,
-        );
-        let state_val = Value::new(db, ValueDef::OpResult(get_state.as_operation()), 0);
-        ops.push(get_state.as_operation());
+        )
+        .as_operation()
+        .modify(db)
+        .attr("type", Attribute::Type(structref_ty))
+        .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+        .build();
+        let state_val = Value::new(db, ValueDef::OpResult(get_state), 0);
+        ops.push(get_state);
 
         // 4. Box the value if it's a primitive type
         // Resume function expects (state: anyref, value: anyref), so primitives need boxing
@@ -2332,8 +2423,9 @@ mod tests {
             "expected at least 2 struct_new (state + continuation), got {}",
             struct_new_count
         );
-        // Total: 14 operations (no resume function, just shift expansion)
-        assert_eq!(op_names.len(), 14);
+        // Total: 15 operations (no resume function, just shift expansion)
+        // +1 for ref.null that provides the dummy return value when yielding
+        assert_eq!(op_names.len(), 15);
     }
 
     #[salsa::tracked]
