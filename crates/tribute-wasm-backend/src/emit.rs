@@ -999,6 +999,19 @@ fn collect_gc_types<'db>(
                 })
                 .unwrap_or(false);
 
+            // Check if this uses an adt.struct type (which should also use placeholder lookup)
+            let adt_struct_field_count = attrs.get(&ATTR_TYPE()).and_then(|attr| {
+                if let Attribute::Type(ty) = attr {
+                    if adt::is_struct_type(db, *ty) {
+                        adt::get_struct_fields(db, *ty).map(|fields| fields.len())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            });
+
             let type_idx = if is_placeholder_type {
                 // For placeholder types, use (type, field_count) as key
                 let ty = match attrs.get(&ATTR_TYPE()) {
@@ -1021,6 +1034,27 @@ fn collect_gc_types<'db>(
                     placeholder_struct_type_idx.insert(key, idx);
                     debug!(
                         "GC: struct_get allocated type_idx={} for placeholder (field_count={})",
+                        idx, field_count
+                    );
+                    idx
+                }
+            } else if let Some(field_count) = adt_struct_field_count {
+                // For adt.struct types, use structref as placeholder key with field count
+                let structref_ty = wasm::Structref::new(db).as_type();
+                let key = (structref_ty, field_count);
+                if let Some(&idx) = placeholder_struct_type_idx.get(&key) {
+                    debug!(
+                        "GC: struct_get reusing type_idx={} for adt.struct (field_count={})",
+                        idx, field_count
+                    );
+                    idx
+                } else {
+                    // Allocate new type_idx for this placeholder
+                    let idx = next_type_idx;
+                    next_type_idx += 1;
+                    placeholder_struct_type_idx.insert(key, idx);
+                    debug!(
+                        "GC: struct_get allocated type_idx={} for adt.struct placeholder (field_count={})",
                         idx, field_count
                     );
                     idx
@@ -1052,6 +1086,16 @@ fn collect_gc_types<'db>(
                     && let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
                 {
                     let fc = *fc as usize;
+                    builder.field_count = Some(fc);
+                    if builder.fields.len() < fc {
+                        builder.fields.resize_with(fc, || None);
+                    }
+                }
+
+                // For adt.struct types, set field_count from the type's fields attribute
+                if let Some(fc) = adt_struct_field_count
+                    && builder.field_count.is_none()
+                {
                     builder.field_count = Some(fc);
                     if builder.fields.len() < fc {
                         builder.fields.resize_with(fc, || None);
@@ -2047,6 +2091,80 @@ fn assign_locals_in_region<'db>(
                             // For other types (like Expr), keep effective_ty
                             // as type.var which maps to anyref
                         }
+
+                        // For adt.struct types, look up the actual field type from the struct definition.
+                        // This handles closure environment access where captured values have concrete types.
+                        if adt::is_struct_type(db, struct_ty)
+                            && let Ok(field_idx) = attr_field_idx(op.attributes(db))
+                            && let Some(fields) = adt::get_struct_fields(db, struct_ty)
+                            && let Some((_, field_ty)) = fields.get(field_idx as usize)
+                        {
+                            let type_name = if field_ty.dialect(db) == Symbol::new("tribute")
+                                && field_ty.name(db) == Symbol::new("type")
+                            {
+                                field_ty
+                                    .get_attr(db, Symbol::new("name"))
+                                    .and_then(|a| {
+                                        if let Attribute::Symbol(s) = a {
+                                            Some(*s)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or_else(|| field_ty.name(db))
+                            } else {
+                                field_ty.name(db)
+                            };
+                            debug!(
+                                "  -> adt.struct field {} resolved type name: {}",
+                                field_idx, type_name
+                            );
+                            // Convert to resolved types for local allocation.
+                            if type_name == Symbol::new("Int") {
+                                effective_ty = tribute::Int::new(db).as_type();
+                            } else if type_name == Symbol::new("Nat") {
+                                effective_ty = tribute::Nat::new(db).as_type();
+                            } else if type_name == Symbol::new("Float") {
+                                effective_ty = core::F64::new(db).as_type();
+                            } else if type_name == Symbol::new("Bool") {
+                                effective_ty = core::I1::new(db).as_type();
+                            }
+                        }
+
+                        // For placeholder structref types with field_count, look up the GC type
+                        // to determine the actual field type. This handles cases where the struct
+                        // type is already lowered to a WASM structref placeholder.
+                        if wasm::Structref::from_type(db, struct_ty).is_some()
+                            && let Ok(field_idx) = attr_field_idx(op.attributes(db))
+                            && let Some(Attribute::IntBits(fc)) =
+                                op.attributes(db).get(&Symbol::new("field_count"))
+                        {
+                            let key = (struct_ty, *fc as usize);
+                            if let Some(&type_idx) =
+                                module_info.placeholder_struct_type_idx.get(&key)
+                                && let Some(GcTypeDef::Struct(fields)) =
+                                    module_info.gc_types.get(type_idx as usize)
+                                && let Some(field) = fields.get(field_idx as usize)
+                            {
+                                // If field is i64, allocate local as i64 (Int/Nat type)
+                                if matches!(field.element_type, StorageType::Val(ValType::I64)) {
+                                    debug!(
+                                        "  -> structref placeholder field {} is i64, using Int type",
+                                        field_idx
+                                    );
+                                    effective_ty = tribute::Int::new(db).as_type();
+                                } else if matches!(
+                                    field.element_type,
+                                    StorageType::Val(ValType::F64)
+                                ) {
+                                    debug!(
+                                        "  -> structref placeholder field {} is f64, using Float type",
+                                        field_idx
+                                    );
+                                    effective_ty = core::F64::new(db).as_type();
+                                }
+                            }
+                        }
                     } else {
                         debug!(
                             "struct_get has no type info, result_ty: {}.{}",
@@ -2690,6 +2808,27 @@ fn emit_op<'db>(
                     debug!("struct_get: placeholder type but no field_count attribute");
                     None
                 }
+            } else if adt::is_struct_type(db, *ty) {
+                // For adt.struct types, extract field count from fields attribute
+                // and use placeholder lookup with structref key
+                let field_count = adt::get_struct_fields(db, *ty)
+                    .map(|fields| fields.len())
+                    .unwrap_or(0);
+                debug!(
+                    "struct_get: adt.struct type with {} fields, using placeholder lookup",
+                    field_count
+                );
+                let structref_ty = wasm::Structref::new(db).as_type();
+                let result = module_info
+                    .placeholder_struct_type_idx
+                    .get(&(structref_ty, field_count))
+                    .copied();
+                debug!(
+                    "struct_get: adt.struct placeholder lookup result={:?}",
+                    result
+                );
+                // If not found in placeholder map, try regular type lookup
+                result.or_else(|| module_info.type_idx_by_type.get(ty).copied())
             } else {
                 debug!("struct_get: non-placeholder type attr={:?}", ty);
                 // Regular type
@@ -2713,6 +2852,70 @@ fn emit_op<'db>(
             struct_type_index: type_idx,
             field_index: field_idx,
         });
+
+        // Check if boxing is needed: result local expects anyref but struct field is i64
+        // This happens when extracting values from structs where the IR uses generic/wrapper
+        // types but the actual struct field contains a primitive (i64).
+        let needs_boxing = if !op.results(db).is_empty() {
+            let result_value = op.result(db, 0);
+
+            // Check if the result local would be anyref by examining the effective type
+            // or IR result type and seeing what WASM type it maps to
+            let result_ty = ctx
+                .effective_types
+                .get(&result_value)
+                .copied()
+                .or_else(|| op.results(db).first().copied());
+
+            let expects_anyref = result_ty
+                .and_then(|ty| type_to_valtype(db, ty, &module_info.type_idx_by_type).ok())
+                .map(|vt| {
+                    matches!(
+                        vt,
+                        ValType::Ref(RefType {
+                            heap_type: HeapType::Abstract {
+                                ty: AbstractHeapType::Any,
+                                ..
+                            },
+                            ..
+                        })
+                    )
+                })
+                .unwrap_or(false);
+
+            // Check if struct field type is i64
+            let field_is_i64 = module_info
+                .gc_types
+                .get(type_idx as usize)
+                .map(|gc_type| {
+                    if let GcTypeDef::Struct(fields) = gc_type {
+                        fields
+                            .get(field_idx as usize)
+                            .map(|field| {
+                                matches!(field.element_type, StorageType::Val(ValType::I64))
+                            })
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
+
+            debug!(
+                "struct_get boxing check: expects_anyref={}, field_is_i64={}, type_idx={}, field_idx={}",
+                expects_anyref, field_is_i64, type_idx, field_idx
+            );
+            expects_anyref && field_is_i64
+        } else {
+            false
+        };
+
+        if needs_boxing {
+            debug!("struct_get: boxing i64 to i31ref for anyref local");
+            function.instruction(&Instruction::I32WrapI64);
+            function.instruction(&Instruction::RefI31);
+        }
+
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("struct_set") {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
