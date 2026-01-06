@@ -26,8 +26,8 @@ use wasm_encoder::{
 
 use crate::errors;
 use crate::gc_types::{
-    ATTR_FIELD_IDX, ATTR_TYPE, ATTR_TYPE_IDX, BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX,
-    FIRST_USER_TYPE_IDX, GcTypeDef,
+    self, ATTR_FIELD_IDX, ATTR_TYPE, ATTR_TYPE_IDX, BOXED_F64_IDX, BYTES_ARRAY_IDX,
+    BYTES_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, GcTypeRegistry,
 };
 use crate::{CompilationError, CompilationResult};
 
@@ -1393,101 +1393,11 @@ fn collect_gc_types<'db>(
 
     visit_region(db, &module.body(db), &mut visit_op)?;
 
-    // Check if a type is a variant instance type (created by adt_to_wasm lowering).
-    // Uses the is_variant attribute instead of name-based heuristics.
-    let is_variant_type = |ty: Type<'db>| -> bool { adt::is_variant_instance_type(db, ty) };
-
-    let to_field_type = |ty: Type<'db>, type_idx_by_type: &HashMap<_, _>| -> FieldType {
-        debug!(
-            "GC: to_field_type called with {}.{}",
-            ty.dialect(db),
-            ty.name(db)
-        );
-        let element_type = if core::I32::from_type(db, ty).is_some() {
-            debug!("GC: to_field_type -> I32");
-            StorageType::Val(ValType::I32)
-        } else if core::I64::from_type(db, ty).is_some()
-            || tribute::Int::from_type(db, ty).is_some()
-            || tribute::Nat::from_type(db, ty).is_some()
-        {
-            // Int/Nat (arbitrary precision) is lowered to i64 for Phase 1
-            // TODO: Implement i31ref/BigInt hybrid for WasmGC
-            debug!("GC: to_field_type -> I64");
-            StorageType::Val(ValType::I64)
-        } else if core::F32::from_type(db, ty).is_some() {
-            StorageType::Val(ValType::F32)
-        } else if core::F64::from_type(db, ty).is_some() {
-            StorageType::Val(ValType::F64)
-        } else if ty.dialect(db) == wasm::DIALECT_NAME() {
-            // Handle wasm dialect types (funcref, anyref, structref, etc.)
-            let name = ty.name(db);
-            if name == Symbol::new("funcref") {
-                debug!("GC: to_field_type -> FUNCREF");
-                StorageType::Val(ValType::Ref(RefType::FUNCREF))
-            } else if name == Symbol::new("anyref") {
-                debug!("GC: to_field_type -> ANYREF");
-                StorageType::Val(ValType::Ref(RefType::ANYREF))
-            } else if name == Symbol::new("structref") {
-                debug!("GC: to_field_type -> STRUCTREF");
-                StorageType::Val(ValType::Ref(RefType {
-                    nullable: true,
-                    heap_type: HeapType::Abstract {
-                        shared: false,
-                        ty: AbstractHeapType::Struct,
-                    },
-                }))
-            } else if name == Symbol::new("i31ref") {
-                debug!("GC: to_field_type -> I31REF");
-                StorageType::Val(ValType::Ref(RefType {
-                    nullable: true,
-                    heap_type: HeapType::Abstract {
-                        shared: false,
-                        ty: AbstractHeapType::I31,
-                    },
-                }))
-            } else {
-                debug!(
-                    "GC: to_field_type wasm.{} -> ANYREF (unsupported wasm type)",
-                    name
-                );
-                StorageType::Val(ValType::Ref(RefType::ANYREF))
-            }
-        } else if is_variant_type(ty) {
-            // For variant types (e.g., type.var$Num), use anyref to enable polymorphism.
-            // Without proper WasmGC subtyping hierarchy, concrete struct refs
-            // are not subtypes of anyref. Using anyref for all variant fields
-            // allows values of any variant type to be stored uniformly.
-            debug!(
-                "GC: to_field_type {}.{} -> ANYREF (variant type needs polymorphism)",
-                ty.dialect(db),
-                ty.name(db)
-            );
-            StorageType::Val(ValType::Ref(RefType::ANYREF))
-        } else if let Some(type_idx) = type_idx_by_type.get(&ty).copied() {
-            // Non-variant struct types use concrete refs
-            debug!(
-                "GC: to_field_type {}.{} -> Concrete({})",
-                ty.dialect(db),
-                ty.name(db),
-                type_idx
-            );
-            StorageType::Val(ValType::Ref(RefType {
-                nullable: true,
-                heap_type: HeapType::Concrete(type_idx),
-            }))
-        } else {
-            debug!(
-                "GC: to_field_type {}.{} -> ANYREF (not in type_idx_by_type)",
-                ty.dialect(db),
-                ty.name(db)
-            );
-            StorageType::Val(ValType::Ref(RefType::ANYREF))
-        };
-        FieldType {
-            element_type,
-            mutable: false,
-        }
-    };
+    // Create a registry view for type conversion (uses gc_types::type_to_field_type)
+    let registry = GcTypeRegistry::from_type_maps(
+        type_idx_by_type.clone(),
+        placeholder_struct_type_idx.clone(),
+    );
 
     // Build user-defined types from builders
     let mut user_types = Vec::new();
@@ -1496,7 +1406,7 @@ fn collect_gc_types<'db>(
             GcKind::Array => {
                 let elem = builder
                     .array_elem
-                    .map(|ty| to_field_type(ty, &type_idx_by_type))
+                    .map(|ty| gc_types::type_to_field_type(db, ty, &registry))
                     .unwrap_or(FieldType {
                         element_type: StorageType::Val(ValType::I32),
                         mutable: false,
@@ -1508,7 +1418,7 @@ fn collect_gc_types<'db>(
                     .fields
                     .into_iter()
                     .map(|ty| {
-                        ty.map(|ty| to_field_type(ty, &type_idx_by_type))
+                        ty.map(|ty| gc_types::type_to_field_type(db, ty, &registry))
                             .unwrap_or(FieldType {
                                 element_type: StorageType::Val(ValType::I32),
                                 mutable: false,
@@ -1521,7 +1431,7 @@ fn collect_gc_types<'db>(
     }
 
     // Combine builtin types (from GcTypeRegistry) with user-defined types
-    let mut result = crate::gc_types::GcTypeRegistry::builtin_types();
+    let mut result = GcTypeRegistry::builtin_types();
     result.extend(user_types);
 
     Ok((result, type_idx_by_type, placeholder_struct_type_idx))

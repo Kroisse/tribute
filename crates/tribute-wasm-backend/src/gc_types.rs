@@ -223,6 +223,39 @@ impl<'db> GcTypeRegistry<'db> {
     pub fn total_count(&self) -> u32 {
         FIRST_USER_TYPE_IDX + self.types.len() as u32
     }
+
+    /// Create a registry view from existing type index maps.
+    ///
+    /// This is useful for compatibility with code that maintains its own
+    /// type index HashMaps. The returned registry can be used with
+    /// `type_to_field_type` and other functions that take a `&GcTypeRegistry`.
+    ///
+    /// Note: The returned registry does not contain type definitions (types vec is empty).
+    /// It is only suitable for type index lookups, not for building new types.
+    pub fn from_type_maps(
+        type_indices: HashMap<Type<'db>, u32>,
+        placeholder_indices: HashMap<(Type<'db>, usize), u32>,
+    ) -> Self {
+        // Calculate next_type_idx from the maximum index in the maps
+        let max_type_idx = type_indices
+            .values()
+            .copied()
+            .max()
+            .unwrap_or(FIRST_USER_TYPE_IDX);
+        let max_placeholder_idx = placeholder_indices
+            .values()
+            .copied()
+            .max()
+            .unwrap_or(FIRST_USER_TYPE_IDX);
+        let next_type_idx = max_type_idx.max(max_placeholder_idx).saturating_add(1);
+
+        Self {
+            types: Vec::new(), // No type definitions - this is a view-only registry
+            type_indices,
+            placeholder_indices,
+            next_type_idx,
+        }
+    }
 }
 
 impl Default for GcTypeRegistry<'_> {
