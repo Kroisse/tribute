@@ -3,7 +3,7 @@
 use tree_sitter::Node;
 use tribute_ir::dialect::{adt, tribute};
 use trunk_ir::{
-    Attribute, BlockBuilder, DialectOp, DialectType, Region, Span, Symbol, SymbolVec, Type,
+    Attribute, BlockBuilder, DialectType, Region, Span, Symbol, SymbolVec, Type,
     dialect::{core, func},
     idvec,
 };
@@ -290,54 +290,22 @@ fn lower_extern_function<'db>(
 
     let effect_type = ctx.fresh_effect_row_type();
 
-    // Create func type first (before moving param_types)
-    let func_type = core::Func::with_effect(
-        ctx.db,
-        param_types.clone().into(),
-        result,
-        Some(effect_type),
-    )
-    .as_type();
-
     // Zip parameter types with names for bind_name attributes on block args
     let named_params: Vec<_> = param_types
         .into_iter()
         .zip(param_names.iter().copied().map(Some))
         .collect();
 
-    // Build func.func with unreachable body and optional ABI attribute
-    let mut entry = trunk_ir::BlockBuilder::new(ctx.db, location);
-
-    // Add parameters
-    for (ty, param_name) in named_params {
-        entry = entry.arg(ty);
-        if let Some(name) = param_name {
-            entry = entry.attr(Symbol::new("bind_name"), name);
-        }
-    }
-
-    // Extern function body is just unreachable
-    entry.op(func::unreachable(ctx.db, location));
-
-    let region = trunk_ir::Region::new(ctx.db, location, idvec![entry.build()]);
-
-    let mut builder = trunk_ir::Operation::of_name(ctx.db, location, "func.func")
-        .attr("sym_name", Attribute::Symbol(qualified_name))
-        .attr("type", Attribute::Type(func_type))
-        .region(region);
-
-    // Add name_location for hover support
-    if let Some(span) = name_span {
-        let name_loc = trunk_ir::Location::new(location.path, span);
-        builder = builder.attr("name_location", Attribute::Location(name_loc));
-    }
-
-    // Add ABI attribute if present
-    if let Some(abi_str) = abi {
-        builder = builder.attr("abi", Attribute::String(abi_str));
-    }
-
-    func::Func::from_operation(ctx.db, builder.build()).ok()
+    Some(func::Func::build_extern(
+        ctx.db,
+        location,
+        qualified_name,
+        name_span,
+        named_params,
+        result,
+        Some(effect_type),
+        abi.as_deref(),
+    ))
 }
 
 // =============================================================================

@@ -159,6 +159,57 @@ impl<'db> Func<'db> {
         Func::from_operation(db, builder.build()).expect("valid func.func operation")
     }
 
+    /// Build an extern function declaration with optional ABI.
+    ///
+    /// Extern functions have no implementation body - only a `func.unreachable`
+    /// placeholder. The optional `abi` attribute indicates the calling convention
+    /// (e.g., "intrinsic", "C").
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_extern(
+        db: &'db dyn salsa::Database,
+        location: Location<'db>,
+        name: impl Into<Symbol>,
+        name_span: Option<Span>,
+        params: impl IntoIterator<Item = (Type<'db>, Option<Symbol>)>,
+        result: Type<'db>,
+        effect: Option<Type<'db>>,
+        abi: Option<&str>,
+    ) -> Self {
+        let mut entry = BlockBuilder::new(db, location);
+        let mut param_types = IdVec::new();
+
+        for (ty, param_name) in params {
+            param_types.push(ty);
+            entry = entry.arg(ty);
+            if let Some(name) = param_name {
+                entry = entry.attr(Symbol::new("bind_name"), name);
+            }
+        }
+
+        // Extern function body is just unreachable
+        entry.op(unreachable(db, location));
+        let region = Region::new(db, location, idvec![entry.build()]);
+
+        let mut builder = Operation::of_name(db, location, "func.func")
+            .attr("sym_name", Attribute::Symbol(name.into()))
+            .attr(
+                "type",
+                Attribute::Type(core::Func::with_effect(db, param_types, result, effect).as_type()),
+            )
+            .region(region);
+
+        if let Some(span) = name_span {
+            let name_loc = crate::Location::new(location.path, span);
+            builder = builder.attr("name_location", Attribute::Location(name_loc));
+        }
+
+        if let Some(abi_str) = abi {
+            builder = builder.attr("abi", Attribute::String(abi_str.to_string()));
+        }
+
+        Func::from_operation(db, builder.build()).expect("valid func.func operation")
+    }
+
     /// Get the function's simple name.
     pub fn name(&self, db: &'db dyn salsa::Database) -> Symbol {
         self.sym_name(db)
