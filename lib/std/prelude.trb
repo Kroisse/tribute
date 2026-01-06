@@ -112,30 +112,44 @@ pub mod Result {
     }
 }
 
+// =============================================================================
+// Intrinsic declarations
+// =============================================================================
+// These functions are implemented by the backend (e.g., wasm).
+// The `__` prefix marks them as internal/reserved.
+
+extern "intrinsic" fn __bytes_len(bytes: Bytes) -> Int
+extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Int) -> Int
+extern "intrinsic" fn __bytes_slice_or_panic(bytes: Bytes, start: Int, end: Int) -> Bytes
+extern "intrinsic" fn __bytes_concat(left: Bytes, right: Bytes) -> Bytes
+extern "intrinsic" fn __print_line(message: String) -> Nil
+
+// =============================================================================
+// Bytes module
+// =============================================================================
+
 /// Bytes module with operations for byte sequences.
 pub mod Bytes {
     /// Get the length of a byte sequence.
-    /// Intrinsic: directly accesses the len field.
     pub fn len(bytes: Bytes) -> Int {
-        0
+        __bytes_len(bytes)
     }
 
     /// Get the byte at the given index.
-    /// Intrinsic: panics if index is out of bounds.
+    /// Panics if index is out of bounds.
     pub fn get_or_panic(bytes: Bytes, index: Int) -> Int {
-        0
+        __bytes_get_or_panic(bytes, index)
     }
 
     /// Create a slice of the byte sequence.
-    /// Intrinsic: panics if start or end is out of bounds.
+    /// Panics if start or end is out of bounds.
     pub fn slice_or_panic(bytes: Bytes, start: Int, end: Int) -> Bytes {
-        bytes
+        __bytes_slice_or_panic(bytes, start, end)
     }
 
     /// Concatenate two byte sequences.
-    /// Intrinsic: allocates a new array and copies both.
     pub fn concat(left: Bytes, right: Bytes) -> Bytes {
-        left
+        __bytes_concat(left, right)
     }
 
     /// Concatenation operator for byte sequences.
@@ -163,8 +177,11 @@ pub mod Bytes {
     }
 }
 
+// =============================================================================
+// I/O functions
+// =============================================================================
+
 /// Print a line to standard output.
-/// This is handled as an intrinsic by the wasm backend.
 fn print_line(message: String) -> Nil {
-    Nil
+    __print_line(message)
 }
