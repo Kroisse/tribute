@@ -1,8 +1,8 @@
 //! Lower intrinsic calls to WASM operations.
 //!
 //! This pass transforms high-level intrinsic calls to low-level WASM instructions:
-//! - `print_line` -> WASI `fd_write` call
-//! - `Bytes::len`, `Bytes::get_or_panic`, etc. -> WasmGC struct/array operations
+//! - `__print_line` -> WASI `fd_write` call
+//! - `__bytes_len`, `__bytes_get_or_panic`, etc. -> WasmGC struct/array operations
 //!
 //! Two-phase approach for WASI intrinsics:
 //! 1. Analysis: Collect all intrinsic calls and allocate runtime data segments
@@ -68,7 +68,7 @@ pub fn analyze_intrinsics<'db>(
         value.div_ceil(align) * align
     }
 
-    // Visit operations to find print_line calls with literal args
+    // Visit operations to find __print_line calls with literal args
     fn visit_op<'db>(
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -77,9 +77,9 @@ pub fn analyze_intrinsics<'db>(
         iovec_allocations: &mut Vec<(u32, u32, u32)>,
         next_offset: &mut u32,
     ) {
-        // Check for wasm.call to print_line
+        // Check for wasm.call to __print_line
         if let Ok(call) = wasm::Call::from_operation(db, *op)
-            && call.callee(db).last_segment() == Symbol::new("print_line")
+            && call.callee(db).last_segment() == Symbol::new("__print_line")
             && let Some(arg) = op.operands(db).first()
             && let Some((ptr, len)) = get_literal_info(db, *arg)
         {
@@ -176,7 +176,7 @@ pub fn lower<'db>(
 ) -> Module<'db> {
     let mut applicator = PatternApplicator::new();
 
-    // Add print_line pattern if needed
+    // Add __print_line pattern if needed
     if analysis.needs_fd_write(db) {
         let iovec_allocations = analysis.iovec_allocations(db).clone();
         let nwritten_offset = analysis.nwritten_offset(db);
@@ -194,7 +194,7 @@ pub fn lower<'db>(
     applicator.apply(db, module).module
 }
 
-/// Pattern for `wasm.call(print_line)` -> `fd_write` sequence
+/// Pattern for `wasm.call(__print_line)` -> `fd_write` sequence
 struct PrintLinePattern {
     iovec_allocations: Vec<(u32, u32, u32)>,
     nwritten_offset: Option<u32>,
@@ -222,12 +222,12 @@ impl RewritePattern for PrintLinePattern {
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
     ) -> RewriteResult<'a> {
-        // Check if this is wasm.call to print_line
+        // Check if this is wasm.call to __print_line
         let Ok(call_op) = wasm::Call::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
-        if call_op.callee(db).last_segment() != Symbol::new("print_line") {
+        if call_op.callee(db).last_segment() != Symbol::new("__print_line") {
             return RewriteResult::Unchanged;
         }
 
@@ -312,24 +312,21 @@ impl RewritePattern for PrintLinePattern {
 // Bytes intrinsic patterns
 // =============================================================================
 
-/// Check if operation is a wasm.call to the given Bytes:: method.
-fn is_bytes_method_call<'db>(
+/// Check if operation is a wasm.call to a `__bytes_*` intrinsic.
+fn is_bytes_intrinsic_call<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
-    method: &'static str,
+    intrinsic_name: &'static str,
 ) -> bool {
     let Ok(call) = wasm::Call::from_operation(db, *op) else {
         return false;
     };
     let callee = call.callee(db);
-    // Check if callee is "Bytes::method"
-    callee.last_segment() == Symbol::new(method)
-        && callee
-            .parent_path()
-            .is_some_and(|p| p.last_segment() == Symbol::new("Bytes"))
+    // Check if callee is "__bytes_xxx"
+    callee.last_segment() == Symbol::new(intrinsic_name)
 }
 
-/// Pattern for `Bytes::len(bytes)` -> `struct.get $bytes 2` + `i64.extend_i32_u`
+/// Pattern for `__bytes_len(bytes)` -> `struct.get $bytes 2` + `i64.extend_i32_u`
 struct BytesLenPattern;
 
 impl RewritePattern for BytesLenPattern {
@@ -338,7 +335,7 @@ impl RewritePattern for BytesLenPattern {
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
     ) -> RewriteResult<'a> {
-        if !is_bytes_method_call(db, op, "len") {
+        if !is_bytes_intrinsic_call(db, op, "__bytes_len") {
             return RewriteResult::Unchanged;
         }
 
@@ -377,7 +374,7 @@ impl RewritePattern for BytesGetOrPanicPattern {
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
     ) -> RewriteResult<'a> {
-        if !is_bytes_method_call(db, op, "get_or_panic") {
+        if !is_bytes_intrinsic_call(db, op, "__bytes_get_or_panic") {
             return RewriteResult::Unchanged;
         }
 
@@ -460,7 +457,7 @@ impl RewritePattern for BytesSliceOrPanicPattern {
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
     ) -> RewriteResult<'a> {
-        if !is_bytes_method_call(db, op, "slice_or_panic") {
+        if !is_bytes_intrinsic_call(db, op, "__bytes_slice_or_panic") {
             return RewriteResult::Unchanged;
         }
 
@@ -556,7 +553,7 @@ impl RewritePattern for BytesConcatPattern {
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
     ) -> RewriteResult<'a> {
-        if !is_bytes_method_call(db, op, "concat") {
+        if !is_bytes_intrinsic_call(db, op, "__bytes_concat") {
             return RewriteResult::Unchanged;
         }
 
@@ -726,11 +723,11 @@ mod tests {
             .results(idvec![i32_ty])
             .build();
 
-        // Create print_line call
+        // Create __print_line call
         let print_line = Operation::of_name(db, location, "wasm.call")
             .operands(idvec![string_const.result(db, 0)])
             .results(idvec![nil_ty])
-            .attr("callee", Attribute::Symbol(Symbol::new("print_line")))
+            .attr("callee", Attribute::Symbol(Symbol::new("__print_line")))
             .build();
 
         let block = Block::new(
@@ -798,16 +795,16 @@ mod tests {
 
         // Should have wasm.call operations
         assert!(op_names.iter().any(|n| n == "wasm.call"));
-        // The call should be to fd_write, not print_line
+        // The call should be to fd_write, not __print_line
         assert!(callees.contains(&"fd_write".to_string()));
-        assert!(!callees.contains(&"print_line".to_string()));
+        assert!(!callees.contains(&"__print_line".to_string()));
     }
 
     // === Bytes intrinsic tests ===
 
-    /// Create a qualified name for Bytes::method
-    fn bytes_method_name(method: &'static str) -> Symbol {
-        Symbol::from_dynamic(&format!("Bytes::{}", method))
+    /// Create an intrinsic name for __bytes_* functions
+    fn bytes_intrinsic_name(method: &'static str) -> Symbol {
+        Symbol::from_dynamic(&format!("__bytes_{}", method))
     }
 
     #[salsa::tracked]
@@ -824,7 +821,7 @@ mod tests {
         let len_call = Operation::of_name(db, location, "wasm.call")
             .operands(idvec![bytes_val])
             .results(idvec![i64_ty])
-            .attr("callee", Attribute::Symbol(bytes_method_name("len")))
+            .attr("callee", Attribute::Symbol(bytes_intrinsic_name("len")))
             .build();
 
         let block = Block::new(
@@ -848,7 +845,7 @@ mod tests {
         assert!(op_names.iter().any(|n| n == "wasm.i64_extend_i32_u"));
         // No Bytes::len call should remain
         let callees = extract_callees(db, module);
-        assert!(!callees.iter().any(|n| n == "len"));
+        assert!(!callees.iter().any(|n| n == "__bytes_len"));
     }
 
     #[salsa::tracked]
@@ -867,7 +864,7 @@ mod tests {
             .results(idvec![i64_ty])
             .attr(
                 "callee",
-                Attribute::Symbol(bytes_method_name("get_or_panic")),
+                Attribute::Symbol(bytes_intrinsic_name("get_or_panic")),
             )
             .build();
 
@@ -896,7 +893,7 @@ mod tests {
         assert!(op_names.iter().any(|n| n == "wasm.array_get_u"));
         // No Bytes::get_or_panic call should remain
         let callees = extract_callees(db, module);
-        assert!(!callees.iter().any(|n| n == "get_or_panic"));
+        assert!(!callees.iter().any(|n| n == "__bytes_get_or_panic"));
     }
 
     #[salsa::tracked]
@@ -916,7 +913,7 @@ mod tests {
             .results(idvec![bytes_ty])
             .attr(
                 "callee",
-                Attribute::Symbol(bytes_method_name("slice_or_panic")),
+                Attribute::Symbol(bytes_intrinsic_name("slice_or_panic")),
             )
             .build();
 
@@ -947,7 +944,7 @@ mod tests {
         assert!(op_names.iter().any(|n| n == "wasm.struct_new"));
         // No Bytes::slice_or_panic call should remain
         let callees = extract_callees(db, module);
-        assert!(!callees.iter().any(|n| n == "slice_or_panic"));
+        assert!(!callees.iter().any(|n| n == "__bytes_slice_or_panic"));
     }
 
     #[salsa::tracked]
@@ -963,7 +960,7 @@ mod tests {
         let concat_call = Operation::of_name(db, location, "wasm.call")
             .operands(idvec![left_val, right_val])
             .results(idvec![bytes_ty])
-            .attr("callee", Attribute::Symbol(bytes_method_name("concat")))
+            .attr("callee", Attribute::Symbol(bytes_intrinsic_name("concat")))
             .build();
 
         let block = Block::new(
@@ -993,6 +990,6 @@ mod tests {
         assert!(op_names.iter().any(|n| n == "wasm.struct_new"));
         // No Bytes::concat call should remain
         let callees = extract_callees(db, module);
-        assert!(!callees.iter().any(|n| n == "concat"));
+        assert!(!callees.iter().any(|n| n == "__bytes_concat"));
     }
 }

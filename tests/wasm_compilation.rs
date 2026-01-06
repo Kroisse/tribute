@@ -20,6 +20,7 @@ use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
 use tribute::SourceCst;
 use tribute::pipeline::compile_to_wasm_binary;
+use tribute_passes::diagnostic::Diagnostic;
 
 /// Helper to create a source file from code
 fn source_from_code(db: &dyn salsa::Database, name: &str, code: &str) -> SourceCst {
@@ -63,13 +64,27 @@ fn main() { add(1, 2) }
     assert!(binary.is_some(), "Should compile function with params");
 }
 
-// Note: String literals work as intrinsic arguments (e.g., print_line)
+// Note: String literals work as intrinsic arguments (e.g., __print_line)
 // but require additional lowering for case branch return values.
 #[salsa_test]
 fn test_compile_print_line(db: &salsa::DatabaseImpl) {
-    let code = r#"fn main() { print_line("Hello, World!") }"#;
+    // Declare the intrinsic and a wrapper, as the prelude does
+    let code = r#"
+extern "intrinsic" fn __print_line(message: String) -> Nil
+fn print_line(message: String) -> Nil { __print_line(message) }
+fn main() { print_line("Hello, World!") }
+"#;
     let source = source_from_code(db, "hello.trb", code);
     let binary = compile_to_wasm_binary(db, source);
+
+    if binary.is_none() {
+        // Collect and print diagnostics
+        let diagnostics = compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+    }
+
     assert!(binary.is_some(), "Should compile print_line");
 }
 

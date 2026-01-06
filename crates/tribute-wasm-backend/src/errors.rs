@@ -25,7 +25,11 @@ where
 #[allow(dead_code)]
 impl CompilationError {
     pub fn unsupported_feature(feature: &'static str) -> Self {
-        CompilationErrorKind::UnsupportedFeature(feature).into()
+        CompilationErrorKind::UnsupportedFeature(feature.to_string()).into()
+    }
+
+    pub fn unsupported_feature_msg(msg: impl std::fmt::Display) -> Self {
+        CompilationErrorKind::UnsupportedFeature(msg.to_string()).into()
     }
 
     pub fn type_error(msg: impl std::fmt::Display) -> Self {
@@ -52,7 +56,7 @@ impl CompilationError {
 #[derive(Clone, Display, Debug, PartialEq)]
 pub enum CompilationErrorKind {
     #[display("Unsupported feature: {_0}")]
-    UnsupportedFeature(&'static str),
+    UnsupportedFeature(String),
 
     #[display("Type error: {_0}")]
     TypeError(String),

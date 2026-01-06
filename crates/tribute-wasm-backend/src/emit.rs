@@ -188,6 +188,7 @@ static SIMPLE_OPS: LazyLock<HashMap<Symbol, Instruction<'static>>> = LazyLock::n
         // Misc
         ("drop", Instruction::Drop),
         ("return", Instruction::Return),
+        ("unreachable", Instruction::Unreachable),
         ("ref_is_null", Instruction::RefIsNull),
         ("array_len", Instruction::ArrayLen),
         // i31ref (WasmGC fixnum)
@@ -2673,9 +2674,10 @@ fn emit_op<'db>(
         function.instruction(&Instruction::I64Store32(memarg));
     } else {
         tracing::error!("unsupported wasm op: {}", name);
-        return Err(CompilationError::unsupported_feature(
-            "wasm op not supported",
-        ));
+        return Err(CompilationError::unsupported_feature_msg(format!(
+            "wasm op not supported: {}",
+            name
+        )));
     }
 
     Ok(())
