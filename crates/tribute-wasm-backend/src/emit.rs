@@ -1491,7 +1491,8 @@ fn collect_gc_types<'db>(
         }
     };
 
-    let mut result = Vec::new();
+    // Build user-defined types from builders
+    let mut user_types = Vec::new();
     for builder in builders {
         match builder.kind {
             GcKind::Array => {
@@ -1502,7 +1503,7 @@ fn collect_gc_types<'db>(
                         element_type: StorageType::Val(ValType::I32),
                         mutable: false,
                     });
-                result.push(GcTypeDef::Array(elem));
+                user_types.push(GcTypeDef::Array(elem));
             }
             GcKind::Struct | GcKind::Unknown => {
                 let fields = builder
@@ -1516,46 +1517,14 @@ fn collect_gc_types<'db>(
                             })
                     })
                     .collect::<Vec<_>>();
-                result.push(GcTypeDef::Struct(fields));
+                user_types.push(GcTypeDef::Struct(fields));
             }
         }
     }
 
-    // Insert built-in types at reserved indices (in reverse order since we insert at 0)
-    // Index 2: BytesStruct (struct { data: ref BytesArray, offset: i32, len: i32 })
-    let bytes_struct_type = GcTypeDef::Struct(vec![
-        FieldType {
-            element_type: StorageType::Val(ValType::Ref(RefType {
-                nullable: false,
-                heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
-            })),
-            mutable: false,
-        },
-        FieldType {
-            element_type: StorageType::Val(ValType::I32),
-            mutable: false,
-        },
-        FieldType {
-            element_type: StorageType::Val(ValType::I32),
-            mutable: false,
-        },
-    ]);
-    result.insert(0, bytes_struct_type);
-
-    // Index 1: BytesArray (array i8)
-    // NOTE: mutable: true is required for array.copy operation in Bytes::concat
-    let bytes_array_type = GcTypeDef::Array(FieldType {
-        element_type: StorageType::I8,
-        mutable: true,
-    });
-    result.insert(0, bytes_array_type);
-
-    // Index 0: BoxedF64 (struct with single f64 field for Float boxing)
-    let boxed_f64_type = GcTypeDef::Struct(vec![FieldType {
-        element_type: StorageType::Val(ValType::F64),
-        mutable: false,
-    }]);
-    result.insert(0, boxed_f64_type);
+    // Combine builtin types (from GcTypeRegistry) with user-defined types
+    let mut result = crate::gc_types::GcTypeRegistry::builtin_types();
+    result.extend(user_types);
 
     Ok((result, type_idx_by_type, placeholder_struct_type_idx))
 }
