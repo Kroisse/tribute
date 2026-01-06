@@ -25,22 +25,10 @@ use wasm_encoder::{
 };
 
 use crate::errors;
+use crate::gc_types::{
+    BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef,
+};
 use crate::{CompilationError, CompilationResult};
-
-/// Type index for BoxedF64 (Float wrapper for polymorphic contexts).
-/// This is always index 0 in the GC type section.
-const BOXED_F64_IDX: u32 = 0;
-
-/// Type index for BytesArray (array i8) - backing storage for Bytes.
-/// This is always index 1 in the GC type section.
-const BYTES_ARRAY_IDX: u32 = 1;
-
-/// Type index for BytesStruct (struct { data: ref BytesArray, offset: i32, len: i32 }).
-/// This is always index 2 in the GC type section.
-const BYTES_STRUCT_IDX: u32 = 2;
-
-/// First type index available for user-defined types.
-const FIRST_USER_TYPE_IDX: u32 = 3;
 
 trunk_ir::symbols! {
     ATTR_SYM_NAME => "sym_name",
@@ -287,11 +275,6 @@ struct FunctionEmitContext<'db> {
     value_locals: HashMap<Value<'db>, u32>,
     /// Effective types for values (after unification).
     effective_types: HashMap<Value<'db>, Type<'db>>,
-}
-
-enum GcTypeDef {
-    Struct(Vec<FieldType>),
-    Array(FieldType),
 }
 
 pub fn emit_wasm<'db>(
