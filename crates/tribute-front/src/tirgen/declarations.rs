@@ -10,6 +10,23 @@ use trunk_ir::{
 
 use super::context::CstLoweringCtx;
 use super::helpers::{is_comment, node_text, sym};
+
+/// Extract function name from a name node, handling operator_name nodes.
+///
+/// For regular identifiers, returns the text as-is.
+/// For operator_name nodes like `(<>)`, strips the surrounding parentheses.
+fn extract_function_name(source: &ropey::Rope, name_node: tree_sitter::Node) -> String {
+    if name_node.kind() == "operator_name" {
+        let text = node_text(&name_node, source);
+        // Strip surrounding parentheses: "(<>)" -> "<>"
+        text.strip_prefix('(')
+            .and_then(|s| s.strip_suffix(')'))
+            .unwrap_or(&text)
+            .to_string()
+    } else {
+        node_text(&name_node, source).to_string()
+    }
+}
 use super::literals::{
     parse_float_literal, parse_int_literal, parse_nat_literal, parse_rune_literal,
     parse_string_literal,
@@ -155,17 +172,7 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
     let name_node = func_node.child_by_field_name("name")?;
     let body_node = func_node.child_by_field_name("body")?;
 
-    // For operator_name nodes like (<>), extract just the operator
-    let name_str = if name_node.kind() == "operator_name" {
-        let text = node_text(&name_node, &ctx.source);
-        // Strip surrounding parentheses: "(<>)" -> "<>"
-        text.strip_prefix('(')
-            .and_then(|s| s.strip_suffix(')'))
-            .unwrap_or(&text)
-            .to_string()
-    } else {
-        node_text(&name_node, &ctx.source).to_string()
-    };
+    let name_str = extract_function_name(&ctx.source, name_node);
     let name_sym = Symbol::from_dynamic(&name_str);
     let qualified_name = ctx.qualified_name(name_sym);
     let name_span = Some(Span {
@@ -260,16 +267,7 @@ fn lower_extern_function<'db>(
     // Use field-based access for cleaner extraction
     let name_node = node.child_by_field_name("name")?;
 
-    // For operator_name nodes like (<>), extract just the operator
-    let name_str = if name_node.kind() == "operator_name" {
-        let text = node_text(&name_node, &ctx.source);
-        text.strip_prefix('(')
-            .and_then(|s| s.strip_suffix(')'))
-            .unwrap_or(&text)
-            .to_string()
-    } else {
-        node_text(&name_node, &ctx.source).to_string()
-    };
+    let name_str = extract_function_name(&ctx.source, name_node);
     let name_sym = Symbol::from_dynamic(&name_str);
     let qualified_name = ctx.qualified_name(name_sym);
     let name_span = Some(Span {
