@@ -2,6 +2,7 @@
 
 mod emit;
 mod errors;
+pub mod gc_types;
 pub mod lower_wasm;
 pub mod passes;
 mod plan;
