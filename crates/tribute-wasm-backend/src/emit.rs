@@ -4169,8 +4169,7 @@ mod tests {
         let result = collect_gc_types(db, module, &HashMap::new());
 
         // Should return an error due to field count mismatch
-        assert!(result.is_err());
-        let err = result.err().expect("expected error");
+        let err = result.expect_err("expected error");
         assert!(err.to_string().contains("field count mismatch"));
     }
 
