@@ -10,6 +10,23 @@ use trunk_ir::{
 
 use super::context::CstLoweringCtx;
 use super::helpers::{is_comment, node_text, sym};
+
+/// Extract function name from a name node, handling operator_name nodes.
+///
+/// For regular identifiers, returns the text as-is.
+/// For operator_name nodes like `(<>)`, strips the surrounding parentheses.
+fn extract_function_name(source: &ropey::Rope, name_node: tree_sitter::Node) -> String {
+    if name_node.kind() == "operator_name" {
+        let text = node_text(&name_node, source);
+        // Strip surrounding parentheses: "(<>)" -> "<>"
+        text.strip_prefix('(')
+            .and_then(|s| s.strip_suffix(')'))
+            .unwrap_or(&text)
+            .to_string()
+    } else {
+        node_text(&name_node, source).to_string()
+    }
+}
 use super::literals::{
     parse_float_literal, parse_int_literal, parse_nat_literal, parse_rune_literal,
     parse_string_literal,
@@ -146,26 +163,16 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
 
     let location = ctx.location(&func_node);
 
-    // extern_function has no body - skip for now (TODO: handle extern functions)
+    // Handle extern functions separately
     if func_node.kind() == "extern_function" {
-        return None;
+        return lower_extern_function(ctx, func_node);
     }
 
     // Use field-based access for cleaner extraction
     let name_node = func_node.child_by_field_name("name")?;
     let body_node = func_node.child_by_field_name("body")?;
 
-    // For operator_name nodes like (<>), extract just the operator
-    let name_str = if name_node.kind() == "operator_name" {
-        let text = node_text(&name_node, &ctx.source);
-        // Strip surrounding parentheses: "(<>)" -> "<>"
-        text.strip_prefix('(')
-            .and_then(|s| s.strip_suffix(')'))
-            .unwrap_or(&text)
-            .to_string()
-    } else {
-        node_text(&name_node, &ctx.source).to_string()
-    };
+    let name_str = extract_function_name(&ctx.source, name_node);
     let name_sym = Symbol::from_dynamic(&name_str);
     let qualified_name = ctx.qualified_name(name_sym);
     let name_span = Some(Span {
@@ -224,6 +231,81 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
             },
         ))
     })
+}
+
+/// Lower an extern function definition to a func.func operation with ABI attribute.
+///
+/// Handles extern functions like:
+/// - `extern fn foo() -> Int` - plain extern (no ABI specified)
+/// - `extern "intrinsic" fn bar(x: Int) -> Bool` - with ABI specifier
+///
+/// The function body contains only `func.unreachable` since extern functions
+/// have no Tribute implementation.
+fn lower_extern_function<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
+    node: Node,
+) -> Option<func::Func<'db>> {
+    let location = ctx.location(&node);
+
+    // Extract extern marker to get ABI
+    let extern_marker = node
+        .named_children(&mut node.walk())
+        .find(|c| c.kind() == "extern_marker");
+
+    // Get ABI string if present (e.g., "intrinsic" from `extern "intrinsic" fn`)
+    let abi = extern_marker
+        .and_then(|marker| marker.child_by_field_name("abi"))
+        .map(|abi_node| {
+            let text = node_text(&abi_node, &ctx.source);
+            // Strip quotes from string literal
+            text.strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .unwrap_or(&text)
+                .to_string()
+        });
+
+    // Use field-based access for cleaner extraction
+    let name_node = node.child_by_field_name("name")?;
+
+    let name_str = extract_function_name(&ctx.source, name_node);
+    let name_sym = Symbol::from_dynamic(&name_str);
+    let qualified_name = ctx.qualified_name(name_sym);
+    let name_span = Some(Span {
+        start: name_node.start_byte(),
+        end: name_node.end_byte(),
+    });
+
+    // Optional fields
+    let (param_names, param_types) = node
+        .child_by_field_name("params")
+        .map(|params| parse_parameter_list(ctx, params))
+        .unwrap_or_default();
+
+    let return_type = node
+        .child_by_field_name("return_type")
+        .and_then(|rt| parse_return_type(ctx, rt));
+
+    // Resolve return type or create fresh type var
+    let result = return_type.unwrap_or_else(|| ctx.fresh_type_var());
+
+    let effect_type = ctx.fresh_effect_row_type();
+
+    // Zip parameter types with names for bind_name attributes on block args
+    let named_params: Vec<_> = param_types
+        .into_iter()
+        .zip(param_names.iter().copied().map(Some))
+        .collect();
+
+    Some(func::Func::build_extern(
+        ctx.db,
+        location,
+        qualified_name,
+        name_span,
+        named_params,
+        result,
+        Some(effect_type),
+        abi.as_deref(),
+    ))
 }
 
 // =============================================================================

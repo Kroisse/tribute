@@ -914,4 +914,57 @@ mod tests {
             "Should have a row variable even when not at the end"
         );
     }
+
+    #[test]
+    fn test_extern_function() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"
+            extern "intrinsic" fn int_is_small(x: Int) -> Bool
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        let ops = blocks[0].operations(&db);
+
+        let func_op = func::Func::from_operation(&db, ops[0]).expect("Should be a func.func");
+        assert_eq!(func_op.name(&db), "int_is_small");
+
+        // Check the ABI attribute is set
+        let abi = func_op
+            .operation()
+            .attributes(&db)
+            .get(&trunk_ir::Symbol::new("abi"));
+        assert_eq!(abi, Some(&Attribute::String("intrinsic".to_string())));
+
+        // Check the body contains func.unreachable
+        let body = func_op.body(&db);
+        let body_blocks = body.blocks(&db);
+        let body_ops = body_blocks[0].operations(&db);
+        assert_eq!(body_ops.len(), 1);
+        assert_eq!(body_ops[0].full_name(&db), "func.unreachable");
+    }
+
+    #[test]
+    fn test_extern_function_no_abi() {
+        let db = salsa::DatabaseImpl::default();
+        let source = r#"
+            extern fn native_add(a: Int, b: Int) -> Int
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        let ops = blocks[0].operations(&db);
+
+        let func_op = func::Func::from_operation(&db, ops[0]).expect("Should be a func.func");
+        assert_eq!(func_op.name(&db), "native_add");
+
+        // No ABI attribute when not specified
+        let abi = func_op
+            .operation()
+            .attributes(&db)
+            .get(&trunk_ir::Symbol::new("abi"));
+        assert!(abi.is_none());
+    }
 }
