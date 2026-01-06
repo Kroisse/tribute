@@ -26,15 +26,13 @@ use wasm_encoder::{
 
 use crate::errors;
 use crate::gc_types::{
-    BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef,
+    ATTR_FIELD_IDX, ATTR_TYPE, ATTR_TYPE_IDX, BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX,
+    FIRST_USER_TYPE_IDX, GcTypeDef,
 };
 use crate::{CompilationError, CompilationResult};
 
 trunk_ir::symbols! {
     ATTR_SYM_NAME => "sym_name",
-    ATTR_TYPE => "type",
-    ATTR_TYPE_IDX => "type_idx",
-    ATTR_FIELD_IDX => "field_idx",
     ATTR_FIELD => "field",
     ATTR_HEAP_TYPE => "heap_type",
     ATTR_TARGET_TYPE => "target_type",
