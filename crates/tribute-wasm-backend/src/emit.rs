@@ -25,28 +25,14 @@ use wasm_encoder::{
 };
 
 use crate::errors;
+use crate::gc_types::{
+    ATTR_FIELD_IDX, ATTR_TYPE, ATTR_TYPE_IDX, BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX,
+    FIRST_USER_TYPE_IDX, GcTypeDef,
+};
 use crate::{CompilationError, CompilationResult};
-
-/// Type index for BoxedF64 (Float wrapper for polymorphic contexts).
-/// This is always index 0 in the GC type section.
-const BOXED_F64_IDX: u32 = 0;
-
-/// Type index for BytesArray (array i8) - backing storage for Bytes.
-/// This is always index 1 in the GC type section.
-const BYTES_ARRAY_IDX: u32 = 1;
-
-/// Type index for BytesStruct (struct { data: ref BytesArray, offset: i32, len: i32 }).
-/// This is always index 2 in the GC type section.
-const BYTES_STRUCT_IDX: u32 = 2;
-
-/// First type index available for user-defined types.
-const FIRST_USER_TYPE_IDX: u32 = 3;
 
 trunk_ir::symbols! {
     ATTR_SYM_NAME => "sym_name",
-    ATTR_TYPE => "type",
-    ATTR_TYPE_IDX => "type_idx",
-    ATTR_FIELD_IDX => "field_idx",
     ATTR_FIELD => "field",
     ATTR_HEAP_TYPE => "heap_type",
     ATTR_TARGET_TYPE => "target_type",
@@ -287,11 +273,6 @@ struct FunctionEmitContext<'db> {
     value_locals: HashMap<Value<'db>, u32>,
     /// Effective types for values (after unification).
     effective_types: HashMap<Value<'db>, Type<'db>>,
-}
-
-enum GcTypeDef {
-    Struct(Vec<FieldType>),
-    Array(FieldType),
 }
 
 pub fn emit_wasm<'db>(
@@ -1508,7 +1489,8 @@ fn collect_gc_types<'db>(
         }
     };
 
-    let mut result = Vec::new();
+    // Build user-defined types from builders
+    let mut user_types = Vec::new();
     for builder in builders {
         match builder.kind {
             GcKind::Array => {
@@ -1519,7 +1501,7 @@ fn collect_gc_types<'db>(
                         element_type: StorageType::Val(ValType::I32),
                         mutable: false,
                     });
-                result.push(GcTypeDef::Array(elem));
+                user_types.push(GcTypeDef::Array(elem));
             }
             GcKind::Struct | GcKind::Unknown => {
                 let fields = builder
@@ -1533,46 +1515,14 @@ fn collect_gc_types<'db>(
                             })
                     })
                     .collect::<Vec<_>>();
-                result.push(GcTypeDef::Struct(fields));
+                user_types.push(GcTypeDef::Struct(fields));
             }
         }
     }
 
-    // Insert built-in types at reserved indices (in reverse order since we insert at 0)
-    // Index 2: BytesStruct (struct { data: ref BytesArray, offset: i32, len: i32 })
-    let bytes_struct_type = GcTypeDef::Struct(vec![
-        FieldType {
-            element_type: StorageType::Val(ValType::Ref(RefType {
-                nullable: false,
-                heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
-            })),
-            mutable: false,
-        },
-        FieldType {
-            element_type: StorageType::Val(ValType::I32),
-            mutable: false,
-        },
-        FieldType {
-            element_type: StorageType::Val(ValType::I32),
-            mutable: false,
-        },
-    ]);
-    result.insert(0, bytes_struct_type);
-
-    // Index 1: BytesArray (array i8)
-    // NOTE: mutable: true is required for array.copy operation in Bytes::concat
-    let bytes_array_type = GcTypeDef::Array(FieldType {
-        element_type: StorageType::I8,
-        mutable: true,
-    });
-    result.insert(0, bytes_array_type);
-
-    // Index 0: BoxedF64 (struct with single f64 field for Float boxing)
-    let boxed_f64_type = GcTypeDef::Struct(vec![FieldType {
-        element_type: StorageType::Val(ValType::F64),
-        mutable: false,
-    }]);
-    result.insert(0, boxed_f64_type);
+    // Combine builtin types (from GcTypeRegistry) with user-defined types
+    let mut result = crate::gc_types::GcTypeRegistry::builtin_types();
+    result.extend(user_types);
 
     Ok((result, type_idx_by_type, placeholder_struct_type_idx))
 }
@@ -4217,8 +4167,7 @@ mod tests {
         let result = collect_gc_types(db, module, &HashMap::new());
 
         // Should return an error due to field count mismatch
-        assert!(result.is_err());
-        let err = result.err().expect("expected error");
+        let err = result.expect_err("expected error");
         assert!(err.to_string().contains("field count mismatch"));
     }
 
