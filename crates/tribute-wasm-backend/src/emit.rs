@@ -4,7 +4,7 @@
 //! a WebAssembly binary using the `wasm_encoder` crate.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use tracing::debug;
@@ -276,6 +276,8 @@ struct ModuleInfo<'db> {
     func_indices: HashMap<Symbol, u32>,
     /// Block argument types map for resolving block argument types.
     block_arg_types: HashMap<(BlockId, usize), Type<'db>>,
+    /// Functions referenced via ref.func that need declarative elem segment.
+    ref_funcs: HashSet<Symbol>,
 }
 
 /// Context for emitting a single function's code.
@@ -498,6 +500,19 @@ pub fn emit_wasm<'db>(
         }
     }
 
+    // Generate declarative element segment for functions referenced via ref.func
+    // This is required by WebAssembly to declare that these functions can be referenced
+    if !module_info.ref_funcs.is_empty() {
+        let func_idxs: Vec<u32> = module_info
+            .ref_funcs
+            .iter()
+            .filter_map(|name| module_info.func_indices.get(name).copied())
+            .collect();
+        if !func_idxs.is_empty() {
+            element_section.declared(Elements::Functions(Cow::Owned(func_idxs)));
+        }
+    }
+
     debug!(
         "emit_wasm: emitting {} functions...",
         module_info.funcs.len()
@@ -535,7 +550,7 @@ pub fn emit_wasm<'db>(
         module_bytes.section(&global_section);
     }
     module_bytes.section(&export_section);
-    if !module_info.elements.is_empty() {
+    if !module_info.elements.is_empty() || !module_info.ref_funcs.is_empty() {
         module_bytes.section(&element_section);
     }
     // Data count section is required when using array.new_data or memory.init
@@ -693,6 +708,9 @@ fn collect_module_info<'db>(
         info.func_indices
             .insert(func_def.name, import_count + index as u32);
     }
+
+    // Collect functions referenced via ref.func for declarative elem segment
+    info.ref_funcs = collect_ref_funcs(db, module);
 
     Ok(info)
 }
@@ -864,29 +882,42 @@ fn collect_gc_types<'db>(
         if name == Symbol::new("struct_new") {
             let attrs = op.attributes(db);
             let field_count = op.operands(db).len();
+            let result_type = op.results(db).first().copied();
 
             // Check if this uses a placeholder type (wasm.structref) that allows
-            // multiple structs with same type but different field counts
-            let is_placeholder_type = attrs
-                .get(&ATTR_TYPE())
-                .map(|attr| {
-                    if let Attribute::Type(ty) = attr {
-                        wasm::Structref::from_type(db, *ty).is_some()
+            // multiple structs with same type but different field counts.
+            // Check both the `type` attribute and the result type for placeholder.
+            let placeholder_type_from_attr = attrs.get(&ATTR_TYPE()).and_then(|attr| {
+                if let Attribute::Type(ty) = attr {
+                    if wasm::Structref::from_type(db, *ty).is_some() {
+                        Some(*ty)
                     } else {
-                        false
+                        None
                     }
-                })
-                .unwrap_or(false);
+                } else {
+                    None
+                }
+            });
 
-            let type_idx = if is_placeholder_type {
+            let placeholder_type_from_result = result_type.and_then(|ty| {
+                if wasm::Structref::from_type(db, ty).is_some() {
+                    Some(ty)
+                } else {
+                    None
+                }
+            });
+
+            let placeholder_type = placeholder_type_from_attr.or(placeholder_type_from_result);
+
+            let type_idx = if let Some(ty) = placeholder_type {
                 // For placeholder types, use (type, field_count) as key to allow
                 // different field counts with same placeholder type
-                let ty = match attrs.get(&ATTR_TYPE()) {
-                    Some(Attribute::Type(ty)) => *ty,
-                    _ => unreachable!("checked above"),
-                };
                 let key = (ty, field_count);
                 if let Some(&idx) = placeholder_struct_type_idx.get(&key) {
+                    debug!(
+                        "GC: struct_new reusing existing type_idx={} for placeholder (field_count={})",
+                        idx, field_count
+                    );
                     idx
                 } else {
                     let idx = next_type_idx;
@@ -920,7 +951,7 @@ fn collect_gc_types<'db>(
 
                 // For placeholder types, we allow different field counts via different type_idx
                 // For explicit type_idx, check for mismatch (error case)
-                if !is_placeholder_type
+                if placeholder_type.is_none()
                     && matches!(builder.field_count, Some(existing_count) if existing_count != field_count)
                 {
                     let existing_count = builder.field_count.expect("count checked by matches");
@@ -939,28 +970,94 @@ fn collect_gc_types<'db>(
                 }
                 for (field_idx, value) in op.operands(db).iter().enumerate() {
                     if let Some(ty) = value_type(db, *value, block_arg_types) {
+                        debug!(
+                            "GC: struct_new type_idx={} recording field {} with type {:?}",
+                            type_idx, field_idx, ty
+                        );
                         record_struct_field(type_idx, builder, field_idx as u32, ty)?;
+                    } else {
+                        debug!(
+                            "GC: struct_new type_idx={} field {} has no type (value_type returned None)",
+                            type_idx, field_idx
+                        );
                     }
                 }
             }
         } else if name == Symbol::new("struct_get") {
             let attrs = op.attributes(db);
-            // Infer type from operand[0] (the struct ref)
-            let inferred_type = op
-                .operands(db)
-                .first()
-                .and_then(|v| value_type(db, *v, block_arg_types));
-            let Some(type_idx) = get_type_idx(
-                attrs,
-                &mut type_idx_by_type,
-                &mut next_type_idx,
-                inferred_type,
-            ) else {
-                return Ok(());
+
+            // Check if this uses a placeholder type (wasm.structref) that allows
+            // multiple structs with same type but different field counts
+            let is_placeholder_type = attrs
+                .get(&ATTR_TYPE())
+                .map(|attr| {
+                    if let Attribute::Type(ty) = attr {
+                        wasm::Structref::from_type(db, *ty).is_some()
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
+
+            let type_idx = if is_placeholder_type {
+                // For placeholder types, use (type, field_count) as key
+                let ty = match attrs.get(&ATTR_TYPE()) {
+                    Some(Attribute::Type(ty)) => *ty,
+                    _ => unreachable!("checked above"),
+                };
+                let Some(Attribute::IntBits(field_count)) = attrs.get(&Symbol::new("field_count"))
+                else {
+                    // Missing field_count attribute for placeholder type
+                    return Ok(());
+                };
+                let field_count = *field_count as usize;
+                let key = (ty, field_count);
+                if let Some(&idx) = placeholder_struct_type_idx.get(&key) {
+                    idx
+                } else {
+                    // Allocate new type_idx for this placeholder
+                    let idx = next_type_idx;
+                    next_type_idx += 1;
+                    placeholder_struct_type_idx.insert(key, idx);
+                    debug!(
+                        "GC: struct_get allocated type_idx={} for placeholder (field_count={})",
+                        idx, field_count
+                    );
+                    idx
+                }
+            } else {
+                // For regular types, use standard type_idx lookup
+                let inferred_type = op
+                    .operands(db)
+                    .first()
+                    .and_then(|v| value_type(db, *v, block_arg_types));
+                let Some(idx) = get_type_idx(
+                    attrs,
+                    &mut type_idx_by_type,
+                    &mut next_type_idx,
+                    inferred_type,
+                ) else {
+                    return Ok(());
+                };
+                idx
             };
+
             let field_idx = attr_field_idx(attrs)?;
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
                 builder.kind = GcKind::Struct;
+
+                // For placeholder types, set field_count from attribute if not already set
+                if is_placeholder_type
+                    && builder.field_count.is_none()
+                    && let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
+                {
+                    let fc = *fc as usize;
+                    builder.field_count = Some(fc);
+                    if builder.fields.len() < fc {
+                        builder.fields.resize_with(fc, || None);
+                    }
+                }
+
                 if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
                     let count = builder.field_count.expect("count checked by matches");
                     return Err(CompilationError::type_error(format!(
@@ -1142,6 +1239,38 @@ fn collect_gc_types<'db>(
             // For ref_null: use result type as fallback
             // For ref_cast/ref_test: `type` attribute may differ from operand type, so keep it
             let inferred_type = op.results(db).first().copied();
+
+            // Special handling for ref_cast with placeholder type (wasm.structref + field_count)
+            if name == Symbol::new("ref_cast")
+                && let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE())
+                && wasm::Structref::from_type(db, *target_ty).is_some()
+                && let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
+            {
+                let field_count = *fc as usize;
+                let key = (*target_ty, field_count);
+                placeholder_struct_type_idx.entry(key).or_insert_with(|| {
+                    let idx = next_type_idx;
+                    next_type_idx += 1;
+                    // Use try_get_builder to create/get the builder at the right index
+                    // Initialize fields vec so struct_new can populate field types later
+                    if let Some(builder) = try_get_builder(&mut builders, idx) {
+                        builder.kind = GcKind::Struct;
+                        builder.field_count = Some(field_count);
+                        // Pre-allocate fields vec to be populated by struct_new
+                        if builder.fields.len() < field_count {
+                            builder.fields.resize_with(field_count, || None);
+                        }
+                    }
+                    debug!(
+                        "GC: ref_cast allocated type_idx={} for placeholder (field_count={})",
+                        idx, field_count
+                    );
+                    idx
+                });
+                // Don't fall through to regular handling
+                return Ok(());
+            }
+
             // Try specific attribute names first, then fall back to generic "type" attribute
             let type_idx = if name == Symbol::new("ref_null") {
                 attr_u32(attrs, ATTR_HEAP_TYPE()).ok().or_else(|| {
@@ -1263,6 +1392,40 @@ fn collect_gc_types<'db>(
             StorageType::Val(ValType::F32)
         } else if core::F64::from_type(db, ty).is_some() {
             StorageType::Val(ValType::F64)
+        } else if ty.dialect(db) == wasm::DIALECT_NAME() {
+            // Handle wasm dialect types (funcref, anyref, structref, etc.)
+            let name = ty.name(db);
+            if name == Symbol::new("funcref") {
+                debug!("GC: to_field_type -> FUNCREF");
+                StorageType::Val(ValType::Ref(RefType::FUNCREF))
+            } else if name == Symbol::new("anyref") {
+                debug!("GC: to_field_type -> ANYREF");
+                StorageType::Val(ValType::Ref(RefType::ANYREF))
+            } else if name == Symbol::new("structref") {
+                debug!("GC: to_field_type -> STRUCTREF");
+                StorageType::Val(ValType::Ref(RefType {
+                    nullable: true,
+                    heap_type: HeapType::Abstract {
+                        shared: false,
+                        ty: AbstractHeapType::Struct,
+                    },
+                }))
+            } else if name == Symbol::new("i31ref") {
+                debug!("GC: to_field_type -> I31REF");
+                StorageType::Val(ValType::Ref(RefType {
+                    nullable: true,
+                    heap_type: HeapType::Abstract {
+                        shared: false,
+                        ty: AbstractHeapType::I31,
+                    },
+                }))
+            } else {
+                debug!(
+                    "GC: to_field_type wasm.{} -> ANYREF (unsupported wasm type)",
+                    name
+                );
+                StorageType::Val(ValType::Ref(RefType::ANYREF))
+            }
         } else if is_variant_type(ty) {
             // For variant types (e.g., type.var$Num), use anyref to enable polymorphism.
             // Without proper WasmGC subtyping hierarchy, concrete struct refs
@@ -1454,6 +1617,41 @@ fn collect_call_indirect_types<'db>(
     )?;
 
     Ok(())
+}
+
+/// Collect function names referenced via wasm.ref_func.
+/// These functions need to be declared in a declarative elem segment.
+fn collect_ref_funcs<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+) -> HashSet<Symbol> {
+    fn collect_from_region<'db>(
+        db: &'db dyn salsa::Database,
+        region: &trunk_ir::Region<'db>,
+        ref_funcs: &mut HashSet<Symbol>,
+    ) {
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                // Recursively process nested regions
+                for nested in op.regions(db).iter() {
+                    collect_from_region(db, nested, ref_funcs);
+                }
+
+                // Check if this is a ref_func
+                if op.dialect(db) == Symbol::new("wasm")
+                    && op.name(db) == Symbol::new("ref_func")
+                    && let Some(Attribute::Symbol(func_name)) =
+                        op.attributes(db).get(&ATTR_FUNC_NAME())
+                {
+                    ref_funcs.insert(*func_name);
+                }
+            }
+        }
+    }
+
+    let mut ref_funcs = HashSet::new();
+    collect_from_region(db, &module.body(db), &mut ref_funcs);
+    ref_funcs
 }
 
 fn extract_function_def<'db>(
@@ -1880,7 +2078,101 @@ fn assign_locals_in_region<'db>(
                     effective_ty = *eff_ty;
                 }
 
-                let val_type =
+                // For wasm.ref_cast and wasm.struct_new with placeholder structref type,
+                // use the concrete type from the placeholder map for the local variable type.
+                // This ensures struct.get operations can access the correct type.
+                let val_type = if op.dialect(db) == Symbol::new("wasm")
+                    && (op.name(db) == Symbol::new("ref_cast")
+                        || op.name(db) == Symbol::new("struct_new"))
+                {
+                    let attrs = op.attributes(db);
+                    let is_ref_cast = op.name(db) == Symbol::new("ref_cast");
+                    let is_struct_new = op.name(db) == Symbol::new("struct_new");
+
+                    // For ref_cast: check target_type attr; for struct_new: check type attr or result type
+                    let placeholder_ty = if is_ref_cast {
+                        attrs.get(&ATTR_TARGET_TYPE()).and_then(|attr| {
+                            if let Attribute::Type(ty) = attr {
+                                if wasm::Structref::from_type(db, *ty).is_some() {
+                                    Some(*ty)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                    } else if is_struct_new {
+                        // Check type attribute or result type for structref
+                        attrs
+                            .get(&ATTR_TYPE())
+                            .and_then(|attr| {
+                                if let Attribute::Type(ty) = attr {
+                                    if wasm::Structref::from_type(db, *ty).is_some() {
+                                        Some(*ty)
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                            .or_else(|| {
+                                op.results(db).first().copied().and_then(|ty| {
+                                    if wasm::Structref::from_type(db, ty).is_some() {
+                                        Some(ty)
+                                    } else {
+                                        None
+                                    }
+                                })
+                            })
+                    } else {
+                        None
+                    };
+
+                    if let Some(placeholder_type) = placeholder_ty {
+                        // Get field_count: from attribute for ref_cast, from operands for struct_new
+                        let field_count = if is_struct_new {
+                            Some(op.operands(db).len())
+                        } else {
+                            attrs.get(&Symbol::new("field_count")).and_then(|attr| {
+                                if let Attribute::IntBits(fc) = attr {
+                                    Some(*fc as usize)
+                                } else {
+                                    None
+                                }
+                            })
+                        };
+
+                        if let Some(fc) = field_count {
+                            if let Some(&type_idx) = module_info
+                                .placeholder_struct_type_idx
+                                .get(&(placeholder_type, fc))
+                            {
+                                debug!(
+                                    "{} local: using concrete type_idx={} for placeholder (field_count={})",
+                                    if is_ref_cast {
+                                        "ref_cast"
+                                    } else {
+                                        "struct_new"
+                                    },
+                                    type_idx,
+                                    fc
+                                );
+                                ValType::Ref(RefType {
+                                    nullable: true,
+                                    heap_type: HeapType::Concrete(type_idx),
+                                })
+                            } else {
+                                type_to_valtype(db, effective_ty, &module_info.type_idx_by_type)?
+                            }
+                        } else {
+                            type_to_valtype(db, effective_ty, &module_info.type_idx_by_type)?
+                        }
+                    } else {
+                        type_to_valtype(db, effective_ty, &module_info.type_idx_by_type)?
+                    }
+                } else {
                     match type_to_valtype(db, effective_ty, &module_info.type_idx_by_type) {
                         Ok(vt) => vt,
                         Err(e) => {
@@ -1892,7 +2184,8 @@ fn assign_locals_in_region<'db>(
                             );
                             return Err(e);
                         }
-                    };
+                    }
+                };
                 let local_index = param_count + locals.len() as u32;
                 let result_value = op.result(db, 0);
                 ctx.value_locals.insert(result_value, local_index);
@@ -2336,6 +2629,7 @@ fn emit_op<'db>(
         let result_type = op.results(db).first().copied();
 
         // Check if this uses a placeholder type (wasm.structref)
+        // Priority: explicit type attr > placeholder result type > type_idx attr > inferred result type
         let type_idx = if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
             if wasm::Structref::from_type(db, *ty).is_some() {
                 // Use placeholder map for wasm.structref
@@ -2348,18 +2642,20 @@ fn emit_op<'db>(
                 // Regular type
                 module_info.type_idx_by_type.get(ty).copied()
             }
+        } else if let Some(ty) = result_type
+            && wasm::Structref::from_type(db, ty).is_some()
+        {
+            // Result type is a placeholder (wasm.structref) - use placeholder map
+            // This takes precedence over explicit type_idx=0 for placeholder types
+            module_info
+                .placeholder_struct_type_idx
+                .get(&(ty, field_count))
+                .copied()
         } else if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
             Some(*idx as u32)
         } else if let Some(ty) = result_type {
-            // Infer type from result type
-            if wasm::Structref::from_type(db, ty).is_some() {
-                module_info
-                    .placeholder_struct_type_idx
-                    .get(&(ty, field_count))
-                    .copied()
-            } else {
-                module_info.type_idx_by_type.get(&ty).copied()
-            }
+            // Infer type from result type (non-placeholder)
+            module_info.type_idx_by_type.get(&ty).copied()
         } else {
             None
         }
@@ -2374,9 +2670,45 @@ fn emit_op<'db>(
         let inferred_type = operands
             .first()
             .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(attrs, inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
+
+        // Check if this uses a placeholder type (wasm.structref) with field_count
+        let type_idx = if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
+            if wasm::Structref::from_type(db, *ty).is_some() {
+                // Use placeholder map for wasm.structref
+                if let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count")) {
+                    debug!(
+                        "struct_get: placeholder type with field_count={}, looking up in map",
+                        fc
+                    );
+                    let result = module_info
+                        .placeholder_struct_type_idx
+                        .get(&(*ty, *fc as usize))
+                        .copied();
+                    debug!("struct_get: placeholder lookup result={:?}", result);
+                    result
+                } else {
+                    debug!("struct_get: placeholder type but no field_count attribute");
+                    None
+                }
+            } else {
+                debug!("struct_get: non-placeholder type attr={:?}", ty);
+                // Regular type
+                module_info.type_idx_by_type.get(ty).copied()
+            }
+        } else {
+            debug!(
+                "struct_get: no type attr, using fallback. inferred_type={:?}",
+                inferred_type
+            );
+            get_type_idx_from_attrs(attrs, inferred_type)
+        }
+        .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
+
         let field_idx = attr_field_idx(attrs)?;
+        debug!(
+            "struct_get: emitting StructGet with type_idx={}, field_idx={}",
+            type_idx, field_idx
+        );
         function.instruction(&Instruction::StructGet {
             struct_type_index: type_idx,
             field_index: field_idx,
@@ -2482,7 +2814,7 @@ fn emit_op<'db>(
         let attrs = op.attributes(db);
         // Infer type from result type
         let inferred_type = op.results(db).first().copied();
-        let heap_type = attr_heap_type(attrs, ATTR_HEAP_TYPE())
+        let heap_type = attr_heap_type(db, attrs, ATTR_HEAP_TYPE())
             .ok()
             .or_else(|| get_type_idx_from_attrs(attrs, inferred_type).map(HeapType::Concrete))
             .ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
@@ -2499,17 +2831,64 @@ fn emit_op<'db>(
         let attrs = op.attributes(db);
         // Infer type from result type (the target type it casts to)
         let inferred_type = op.results(db).first().copied();
-        let heap_type = attr_heap_type(attrs, ATTR_TARGET_TYPE())
-            .ok()
-            .or_else(|| get_type_idx_from_attrs(attrs, inferred_type).map(HeapType::Concrete))
-            .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
+
+        // Check if this is a placeholder struct type (wasm.structref with field_count)
+        // If so, use the concrete type index from the placeholder map
+        let heap_type = if let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE()) {
+            if wasm::Structref::from_type(db, *target_ty).is_some() {
+                // structref placeholder - try to find concrete type via field_count
+                if let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count")) {
+                    if let Some(&type_idx) = module_info
+                        .placeholder_struct_type_idx
+                        .get(&(*target_ty, *fc as usize))
+                    {
+                        debug!(
+                            "ref_cast: found placeholder type_idx={} for field_count={}",
+                            type_idx, fc
+                        );
+                        HeapType::Concrete(type_idx)
+                    } else {
+                        debug!(
+                            "ref_cast: placeholder lookup FAILED for field_count={}, falling back to abstract structref",
+                            fc
+                        );
+                        // Fallback to abstract structref if not found
+                        HeapType::Abstract {
+                            shared: false,
+                            ty: AbstractHeapType::Struct,
+                        }
+                    }
+                } else {
+                    debug!("ref_cast: no field_count attribute, using abstract structref");
+                    // No field_count - use abstract structref
+                    HeapType::Abstract {
+                        shared: false,
+                        ty: AbstractHeapType::Struct,
+                    }
+                }
+            } else {
+                // Non-placeholder type - use attr_heap_type
+                attr_heap_type(db, attrs, ATTR_TARGET_TYPE())?
+            }
+        } else {
+            debug!("ref_cast: no target_type attribute");
+            // No target_type attribute - use standard resolution
+            attr_heap_type(db, attrs, ATTR_TARGET_TYPE())
+                .ok()
+                .or_else(|| get_type_idx_from_attrs(attrs, inferred_type).map(HeapType::Concrete))
+                .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?
+        };
+        debug!(
+            "ref_cast: emitting RefCastNullable with heap_type={:?}",
+            heap_type
+        );
         function.instruction(&Instruction::RefCastNullable(heap_type));
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("ref_test") {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let attrs = op.attributes(db);
         // ref_test result is i32, target type must be in attribute (can't infer)
-        let heap_type = attr_heap_type(attrs, ATTR_TARGET_TYPE())
+        let heap_type = attr_heap_type(db, attrs, ATTR_TARGET_TYPE())
             .ok()
             .or_else(|| get_type_idx_from_attrs(attrs, None).map(HeapType::Concrete))
             .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
@@ -3045,8 +3424,10 @@ fn type_to_valtype<'db>(
         } else if name == Symbol::new("anyref") {
             Ok(ValType::Ref(RefType::ANYREF))
         } else if name == Symbol::new("i31ref") {
+            // i31ref is the nullable form (ref null i31)
+            // This matches the output of ref.cast i31ref
             Ok(ValType::Ref(RefType {
-                nullable: false,
+                nullable: true,
                 heap_type: HeapType::Abstract {
                     shared: false,
                     ty: AbstractHeapType::I31,
@@ -3256,47 +3637,70 @@ fn attr_field_idx<'db>(attrs: &Attrs<'db>) -> CompilationResult<u32> {
     attr_u32(attrs, ATTR_FIELD_IDX()).or_else(|_| attr_u32(attrs, ATTR_FIELD()))
 }
 
-fn attr_heap_type<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<HeapType> {
+fn attr_heap_type<'db>(
+    db: &'db dyn salsa::Database,
+    attrs: &Attrs<'db>,
+    key: Symbol,
+) -> CompilationResult<HeapType> {
     match attrs.get(&key) {
         Some(Attribute::IntBits(bits)) => Ok(HeapType::Concrete(*bits as u32)),
         Some(Attribute::Symbol(sym)) => {
             // Handle abstract heap types specified by name
-            sym.with_str(|name| match name {
-                "any" => Ok(HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::Any,
-                }),
-                "func" => Ok(HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::Func,
-                }),
-                "extern" => Ok(HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::Extern,
-                }),
-                "none" => Ok(HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::None,
-                }),
-                "struct" => Ok(HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::Struct,
-                }),
-                "array" => Ok(HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::Array,
-                }),
-                "i31" => Ok(HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::I31,
-                }),
-                _ => Err(CompilationError::from(
-                    errors::CompilationErrorKind::MissingAttribute("unknown abstract heap type"),
-                )),
-            })
+            sym.with_str(symbol_to_abstract_heap_type)
+        }
+        Some(Attribute::Type(ty)) => {
+            // Handle wasm abstract heap types like wasm.i31ref, wasm.anyref, etc.
+            if ty.dialect(db) == Symbol::new("wasm") {
+                ty.name(db).with_str(symbol_to_abstract_heap_type)
+            } else {
+                Err(CompilationError::from(
+                    errors::CompilationErrorKind::MissingAttribute("non-wasm type for heap_type"),
+                ))
+            }
         }
         _ => Err(CompilationError::from(
             errors::CompilationErrorKind::MissingAttribute("heap_type"),
+        )),
+    }
+}
+
+/// Convert a type name string to an abstract heap type.
+fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<HeapType> {
+    match name {
+        "any" | "anyref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Any,
+        }),
+        "func" | "funcref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Func,
+        }),
+        "extern" | "externref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Extern,
+        }),
+        "none" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::None,
+        }),
+        "struct" | "structref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Struct,
+        }),
+        "array" | "arrayref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Array,
+        }),
+        "i31" | "i31ref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::I31,
+        }),
+        "eq" | "eqref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Eq,
+        }),
+        _ => Err(CompilationError::from(
+            errors::CompilationErrorKind::MissingAttribute("unknown abstract heap type"),
         )),
     }
 }
@@ -4142,5 +4546,70 @@ mod tests {
 
         let bytes = result.unwrap();
         assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
+    }
+
+    // ========================================
+    // Test: struct_new with result type placeholder (no type attr)
+    // ========================================
+
+    /// Test that struct_new with result type wasm.structref (but without explicit type attr)
+    /// is detected as a placeholder type and gets a unique type index.
+    /// This simulates what happens in cont_to_wasm.rs when creating state structs.
+    #[salsa::tracked]
+    fn make_struct_new_result_type_placeholder_module(
+        db: &dyn salsa::Database,
+    ) -> core::Module<'_> {
+        let location = test_location(db);
+        let i64_ty = core::I64::new(db).as_type();
+        let structref_ty = wasm::Structref::new(db).as_type();
+
+        // Create struct_new using the dialect helper function (like cont_to_wasm.rs does)
+        // This sets type_idx as an attribute but NOT the "type" attribute
+        let field_value = Operation::of_name(db, location, "wasm.i64_const")
+            .attr("value", Attribute::IntBits(42))
+            .results(idvec![i64_ty])
+            .build();
+
+        let field_val = field_value.result(db, 0);
+
+        // Use wasm::struct_new helper function - this sets type_idx=0 but result type is structref
+        let fields: IdVec<Value> = idvec![field_val];
+        let struct_new_op = wasm::struct_new(db, location, fields, structref_ty, 0);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![field_value, struct_new_op.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_struct_new_result_type_placeholder(db: &salsa::DatabaseImpl) {
+        let module = make_struct_new_result_type_placeholder_module(db);
+        let (gc_types, _type_map, placeholder_map) =
+            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
+
+        // The structref_ty placeholder with 1 field should be registered
+        let structref_ty = wasm::Structref::new(db).as_type();
+        let key = (structref_ty, 1usize);
+        assert!(
+            placeholder_map.contains_key(&key),
+            "placeholder map should contain (structref_ty, 1) key"
+        );
+
+        // Should have 4 types: 3 built-in + 1 user placeholder struct
+        assert_eq!(gc_types.len(), 4, "gc_types should have 4 types");
+
+        // The user struct (index 3) should have 1 field of type I64
+        let user_struct = &gc_types[3];
+        if let GcTypeDef::Struct(fields) = user_struct {
+            assert_eq!(fields.len(), 1, "struct should have 1 field");
+        } else {
+            panic!("expected struct type at index 3");
+        }
     }
 }
