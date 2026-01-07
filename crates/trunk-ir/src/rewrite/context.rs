@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{IdVec, Operation, Value};
+use crate::{BlockId, IdVec, Operation, Type, Value, ValueDef};
 
 /// Context for IR rewriting.
 ///
@@ -16,6 +16,10 @@ pub struct RewriteContext<'db> {
     /// Maps old values to their replacements.
     value_map: HashMap<Value<'db>, Value<'db>>,
 
+    /// Maps block arguments to their types.
+    /// Key is (BlockId, argument index).
+    block_arg_types: HashMap<(BlockId, usize), Type<'db>>,
+
     /// Number of changes made in this context.
     changes: usize,
 }
@@ -25,6 +29,16 @@ impl<'db> RewriteContext<'db> {
     pub fn new() -> Self {
         Self {
             value_map: HashMap::new(),
+            block_arg_types: HashMap::new(),
+            changes: 0,
+        }
+    }
+
+    /// Create a rewrite context with pre-collected block argument types.
+    pub fn with_block_arg_types(block_arg_types: HashMap<(BlockId, usize), Type<'db>>) -> Self {
+        Self {
+            value_map: HashMap::new(),
+            block_arg_types,
             changes: 0,
         }
     }
@@ -57,6 +71,29 @@ impl<'db> RewriteContext<'db> {
     /// Get the number of changes made.
     pub fn changes_made(&self) -> usize {
         self.changes
+    }
+
+    /// Get the type of a value, including block arguments.
+    ///
+    /// For operation results, returns the type from the operation's result list.
+    /// For block arguments, looks up the type in the pre-collected block_arg_types map.
+    pub fn get_value_type(
+        &self,
+        db: &'db dyn salsa::Database,
+        value: Value<'db>,
+    ) -> Option<Type<'db>> {
+        match value.def(db) {
+            ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
+            ValueDef::BlockArg(block_id) => self
+                .block_arg_types
+                .get(&(block_id, value.index(db)))
+                .copied(),
+        }
+    }
+
+    /// Set the block argument types map.
+    pub fn set_block_arg_types(&mut self, types: HashMap<(BlockId, usize), Type<'db>>) {
+        self.block_arg_types = types;
     }
 
     /// Remap all operands of an operation using the current value map.

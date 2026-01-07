@@ -44,7 +44,7 @@ use tracing::warn;
 
 use tribute_ir::{ModulePathExt as _, dialect::adt};
 use trunk_ir::dialect::core::Module;
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type, Value};
 
 /// Lower adt dialect to wasm dialect.
@@ -77,6 +77,7 @@ impl RewritePattern for StructNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_struct_new) = adt::StructNew::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -101,6 +102,7 @@ impl RewritePattern for StructGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(struct_get) = adt::StructGet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -138,6 +140,7 @@ impl RewritePattern for StructSetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(struct_set) = adt::StructSet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -177,6 +180,7 @@ impl RewritePattern for VariantNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(variant_new) = adt::VariantNew::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -249,6 +253,7 @@ impl RewritePattern for VariantTagPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_variant_tag) = adt::VariantTag::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -279,6 +284,7 @@ impl RewritePattern for VariantIsPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(variant_is) = adt::VariantIs::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -320,6 +326,7 @@ impl RewritePattern for VariantCastPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(variant_cast) = adt::VariantCast::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -365,6 +372,7 @@ impl RewritePattern for VariantGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(variant_get) = adt::VariantGet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -415,6 +423,7 @@ impl RewritePattern for ArrayNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_NEW() {
             return RewriteResult::Unchanged;
@@ -447,6 +456,7 @@ impl RewritePattern for ArrayGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_GET() {
             return RewriteResult::Unchanged;
@@ -470,6 +480,7 @@ impl RewritePattern for ArraySetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_SET() {
             return RewriteResult::Unchanged;
@@ -493,6 +504,7 @@ impl RewritePattern for ArrayLenPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_LEN() {
             return RewriteResult::Unchanged;
@@ -516,6 +528,7 @@ impl RewritePattern for RefNullPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_NULL() {
             return RewriteResult::Unchanged;
@@ -539,6 +552,7 @@ impl RewritePattern for RefIsNullPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_IS_NULL() {
             return RewriteResult::Unchanged;
@@ -562,6 +576,7 @@ impl RewritePattern for RefCastPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_CAST() {
             return RewriteResult::Unchanged;

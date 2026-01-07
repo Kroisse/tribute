@@ -42,7 +42,7 @@ use trunk_ir::DialectType;
 use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, IdVec, Location, Operation, Region, Symbol, Type, Value,
     ValueDef, idvec,
@@ -1695,6 +1695,7 @@ impl RewritePattern for PushPromptPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(push_prompt) = cont::PushPrompt::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -2043,6 +2044,7 @@ impl RewritePattern for HandlerDispatchPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_dispatch) = cont::HandlerDispatch::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -2248,6 +2250,7 @@ impl RewritePattern for ResumePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(resume) = cont::Resume::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -2347,6 +2350,7 @@ impl RewritePattern for DropPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(drop_op) = cont::Drop::from_operation(db, *op) else {
             return RewriteResult::Unchanged;

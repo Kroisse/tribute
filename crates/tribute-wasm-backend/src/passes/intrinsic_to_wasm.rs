@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use tribute_ir::ModulePathExt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
 // Constants for Bytes struct layout (must match emit.rs)
@@ -221,6 +221,7 @@ impl RewritePattern for PrintLinePattern {
         &self,
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
+        _adaptor: &OpAdaptor<'a, '_>,
     ) -> RewriteResult<'a> {
         // Check if this is wasm.call to __print_line
         let Ok(call_op) = wasm::Call::from_operation(db, *op) else {
@@ -334,6 +335,7 @@ impl RewritePattern for BytesLenPattern {
         &self,
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
+        _adaptor: &OpAdaptor<'a, '_>,
     ) -> RewriteResult<'a> {
         if !is_bytes_intrinsic_call(db, op, "__bytes_len") {
             return RewriteResult::Unchanged;
@@ -373,6 +375,7 @@ impl RewritePattern for BytesGetOrPanicPattern {
         &self,
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
+        _adaptor: &OpAdaptor<'a, '_>,
     ) -> RewriteResult<'a> {
         if !is_bytes_intrinsic_call(db, op, "__bytes_get_or_panic") {
             return RewriteResult::Unchanged;
@@ -456,6 +459,7 @@ impl RewritePattern for BytesSliceOrPanicPattern {
         &self,
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
+        _adaptor: &OpAdaptor<'a, '_>,
     ) -> RewriteResult<'a> {
         if !is_bytes_intrinsic_call(db, op, "__bytes_slice_or_panic") {
             return RewriteResult::Unchanged;
@@ -552,6 +556,7 @@ impl RewritePattern for BytesConcatPattern {
         &self,
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
+        _adaptor: &OpAdaptor<'a, '_>,
     ) -> RewriteResult<'a> {
         if !is_bytes_intrinsic_call(db, op, "__bytes_concat") {
             return RewriteResult::Unchanged;

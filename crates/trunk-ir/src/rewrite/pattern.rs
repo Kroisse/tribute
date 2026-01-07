@@ -5,6 +5,7 @@
 
 use crate::Operation;
 
+use super::op_adaptor::OpAdaptor;
 use super::result::RewriteResult;
 
 /// A pattern that can match and transform IR operations.
@@ -17,13 +18,14 @@ use super::result::RewriteResult;
 /// - Operands are remapped before calling `match_and_rewrite`
 /// - Results are mapped after the pattern returns
 ///
+/// The `OpAdaptor` provides:
+/// - Access to remapped operands via `adaptor.operands()`
+/// - Value type lookup including block arguments via `adaptor.get_value_type()`
+///
 /// # Example
 ///
-/// ```
-/// # use salsa::Database;
-/// # use salsa::DatabaseImpl;
-/// # use trunk_ir::{Location, Operation, PathId, Span};
-/// use trunk_ir::rewrite::{RewritePattern, RewriteResult};
+/// ```ignore
+/// use trunk_ir::rewrite::{OpAdaptor, RewritePattern, RewriteResult};
 ///
 /// struct RenamePattern;
 ///
@@ -32,33 +34,20 @@ use super::result::RewriteResult;
 ///         &self,
 ///         db: &'db dyn salsa::Database,
 ///         op: &Operation<'db>,
+///         adaptor: &OpAdaptor<'db, '_>,
 ///     ) -> RewriteResult<'db> {
 ///         if op.dialect(db) != "test" || op.name(db) != "source" {
 ///             return RewriteResult::Unchanged;
+///         }
+///         // Access remapped operands and their types
+///         if let Some(operand) = adaptor.operand(0) {
+///             let ty = adaptor.get_value_type(db, operand);
+///             // ...
 ///         }
 ///         let new_op = op.modify(db).name_str("target").build();
 ///         RewriteResult::Replace(new_op)
 ///     }
 /// }
-/// # #[salsa::tracked]
-/// # fn make_op(db: &dyn salsa::Database) -> Operation<'_> {
-/// #     let path = PathId::new(db, "file:///test.trb".to_owned());
-/// #     let location = Location::new(path, Span::new(0, 0));
-/// #     Operation::of_name(db, location, "test.source").build()
-/// # }
-/// # #[salsa::tracked]
-/// # fn rewrite_once(db: &dyn salsa::Database, op: Operation<'_>) -> String {
-/// #     let result = RenamePattern.match_and_rewrite(db, &op);
-/// #     match result {
-/// #         RewriteResult::Replace(new_op) => new_op.full_name(db),
-/// #         _ => "unchanged".to_string(),
-/// #     }
-/// # }
-/// # DatabaseImpl::default().attach(|db| {
-/// #     let op = make_op(db);
-/// #     let result = rewrite_once(db, op);
-/// #     assert_eq!(result, "test.target");
-/// # });
 /// ```
 pub trait RewritePattern {
     /// Attempt to match and rewrite an operation.
@@ -66,12 +55,14 @@ pub trait RewritePattern {
     /// Returns `RewriteResult::Unchanged` if the pattern doesn't apply.
     /// Otherwise returns the transformation result.
     ///
-    /// Note: The operation's operands are already remapped by the applicator.
-    /// Patterns should use `op.operands(db)` directly without additional remapping.
+    /// The `adaptor` provides access to:
+    /// - Remapped operands via `adaptor.operands()`
+    /// - Value types (including block arguments) via `adaptor.get_value_type()`
     fn match_and_rewrite<'db>(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db>;
 
     /// Optional: return a human-readable name for debugging.

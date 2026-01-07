@@ -12,7 +12,7 @@ use tracing::warn;
 
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, core, wasm};
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type};
 
 /// Lower arith dialect to wasm dialect.
@@ -36,6 +36,7 @@ impl RewritePattern for ArithConstPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(const_op) = arith::Const::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -109,6 +110,7 @@ impl RewritePattern for ArithBinOpPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != arith::DIALECT_NAME() {
             return RewriteResult::Unchanged;
@@ -189,6 +191,7 @@ impl RewritePattern for ArithCmpPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != arith::DIALECT_NAME() {
             return RewriteResult::Unchanged;
@@ -284,6 +287,7 @@ impl RewritePattern for ArithNegPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(neg_op) = arith::Neg::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -333,6 +337,7 @@ impl RewritePattern for ArithBitwisePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != arith::DIALECT_NAME() {
             return RewriteResult::Unchanged;
@@ -410,6 +415,7 @@ impl RewritePattern for ArithConversionPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != arith::DIALECT_NAME() {
             return RewriteResult::Unchanged;

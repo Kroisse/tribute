@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use tribute_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
 /// Result of const analysis - maps content to allocated offset.
@@ -207,6 +207,7 @@ impl RewritePattern for StringConstPattern {
         &self,
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
+        _adaptor: &OpAdaptor<'a, '_>,
     ) -> RewriteResult<'a> {
         let Ok(string_const) = adt::StringConst::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -260,6 +261,7 @@ impl RewritePattern for BytesConstPattern {
         &self,
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
+        _adaptor: &OpAdaptor<'a, '_>,
     ) -> RewriteResult<'a> {
         let Ok(bytes_const) = adt::BytesConst::from_operation(db, *op) else {
             return RewriteResult::Unchanged;

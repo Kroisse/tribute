@@ -22,7 +22,7 @@
 use tribute_ir::dialect::closure;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation};
 
 /// Closure struct field count.
@@ -51,6 +51,7 @@ impl RewritePattern for ClosureNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(closure_new) = closure::New::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -106,6 +107,7 @@ impl RewritePattern for ClosureFuncPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_closure_func) = closure::Func::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -146,6 +148,7 @@ impl RewritePattern for ClosureEnvPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_closure_env) = closure::Env::from_operation(db, *op) else {
             return RewriteResult::Unchanged;

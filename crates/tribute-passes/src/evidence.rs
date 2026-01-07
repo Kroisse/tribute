@@ -44,7 +44,7 @@ use std::collections::HashSet;
 
 use tribute_ir::dialect::ability;
 use trunk_ir::dialect::{core, func};
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
     Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
 };
@@ -229,6 +229,7 @@ impl RewritePattern for AddEvidenceParamPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: func.func
         let func_op = match func::Func::from_operation(db, *op) {
@@ -328,6 +329,7 @@ impl RewritePattern for TransformCallsPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: func.func
         let func_op = match func::Func::from_operation(db, *op) {
