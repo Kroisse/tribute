@@ -40,23 +40,32 @@
 //! For operations where the result type is set explicitly (e.g., variant_new, variant_cast),
 //! emit can infer type_idx from result/operand types without the attribute.
 
+use std::sync::Arc;
+
 use tracing::warn;
 
 use tribute_ir::{ModulePathExt as _, dialect::adt};
 use trunk_ir::dialect::core::Module;
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+};
 use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type};
+
+use crate::type_converter::wasm_type_converter;
 
 /// Lower adt dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    // Create shared TypeConverter for patterns that need type conversion
+    let converter = Arc::new(wasm_type_converter());
+
     PatternApplicator::new()
         .add_pattern(StructNewPattern)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
-        .add_pattern(VariantNewPattern)
+        .add_pattern(VariantNewPattern::new(converter.clone()))
         .add_pattern(VariantTagPattern) // deprecated, kept for compatibility
-        .add_pattern(VariantIsPattern)
-        .add_pattern(VariantCastPattern)
+        .add_pattern(VariantIsPattern::new(converter.clone()))
+        .add_pattern(VariantCastPattern::new(converter.clone()))
         .add_pattern(VariantGetPattern)
         .add_pattern(ArrayNewPattern)
         .add_pattern(ArrayGetPattern)
@@ -84,6 +93,9 @@ impl RewritePattern for StructNewPattern {
         };
 
         // Keep type attribute, emit will convert to type_idx
+        // Note: Result type is preserved as-is; emit phase uses type_to_field_type
+        // for wasm type conversion. The wasm_type_converter is available for
+        // IR-level conversions where type information needs to be transformed.
         let new_op = op
             .modify(db)
             .dialect_str("wasm")
@@ -173,7 +185,16 @@ impl RewritePattern for StructSetPattern {
 ///
 /// With WasmGC subtyping, variants are represented as separate struct types
 /// without an explicit tag field. The type itself serves as the discriminant.
-struct VariantNewPattern;
+struct VariantNewPattern {
+    #[allow(dead_code)]
+    converter: Arc<TypeConverter>,
+}
+
+impl VariantNewPattern {
+    fn new(converter: Arc<TypeConverter>) -> Self {
+        Self { converter }
+    }
+}
 
 impl RewritePattern for VariantNewPattern {
     fn match_and_rewrite<'db>(
@@ -277,7 +298,16 @@ impl RewritePattern for VariantTagPattern {
 /// Pattern for `adt.variant_is` -> `wasm.ref_test`
 ///
 /// Tests if a variant reference is of a specific variant type.
-struct VariantIsPattern;
+struct VariantIsPattern {
+    #[allow(dead_code)]
+    converter: Arc<TypeConverter>,
+}
+
+impl VariantIsPattern {
+    fn new(converter: Arc<TypeConverter>) -> Self {
+        Self { converter }
+    }
+}
 
 impl RewritePattern for VariantIsPattern {
     fn match_and_rewrite<'db>(
@@ -318,7 +348,16 @@ impl RewritePattern for VariantIsPattern {
 /// Pattern for `adt.variant_cast` -> `wasm.ref_cast`
 ///
 /// Casts a variant reference to a specific variant type after pattern matching.
-struct VariantCastPattern;
+struct VariantCastPattern {
+    #[allow(dead_code)]
+    converter: Arc<TypeConverter>,
+}
+
+impl VariantCastPattern {
+    fn new(converter: Arc<TypeConverter>) -> Self {
+        Self { converter }
+    }
+}
 
 impl RewritePattern for VariantCastPattern {
     fn match_and_rewrite<'db>(

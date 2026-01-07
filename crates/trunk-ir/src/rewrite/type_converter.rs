@@ -3,10 +3,6 @@
 //! Provides MLIR-style type conversion with support for:
 //! - Type conversion registration via closures
 //! - Materialization for generating conversion IR
-//! - Caching of conversion results
-
-use std::cell::RefCell;
-use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
@@ -41,24 +37,50 @@ impl<'db> MaterializeResult<'db> {
     }
 }
 
-type TypeConversionFn<'db> =
-    Box<dyn Fn(&'db dyn salsa::Database, Type<'db>) -> Option<Type<'db>> + 'db>;
+/// Type conversion function trait using higher-ranked trait bounds.
+/// The closure works with any `'db` lifetime.
+pub trait TypeConversionFn:
+    for<'db> Fn(&'db dyn salsa::Database, Type<'db>) -> Option<Type<'db>> + Send + Sync
+{
+}
 
-type MaterializeFn<'db> = Box<
-    dyn Fn(
+impl<F> TypeConversionFn for F where
+    F: for<'db> Fn(&'db dyn salsa::Database, Type<'db>) -> Option<Type<'db>> + Send + Sync
+{
+}
+
+/// Materialization function trait using higher-ranked trait bounds.
+pub trait MaterializeFn:
+    for<'db> Fn(
+        &'db dyn salsa::Database,
+        Location<'db>,
+        Value<'db>,
+        Type<'db>,
+        Type<'db>,
+    ) -> MaterializeResult<'db>
+    + Send
+    + Sync
+{
+}
+
+impl<F> MaterializeFn for F where
+    F: for<'db> Fn(
             &'db dyn salsa::Database,
             Location<'db>,
             Value<'db>,
             Type<'db>,
             Type<'db>,
         ) -> MaterializeResult<'db>
-        + 'db,
->;
+        + Send
+        + Sync
+{
+}
 
 /// Type converter for dialect lowering.
 ///
 /// Manages type conversions and materializations during IR transformation.
-/// Conversions are registered via closures and cached for efficiency.
+/// Conversions are registered via closures. The converter is `'static` and
+/// can be stored in patterns or shared across passes.
 ///
 /// # Example
 ///
@@ -79,19 +101,17 @@ type MaterializeFn<'db> = Box<
 ///         }
 ///     });
 /// ```
-pub struct TypeConverter<'db> {
-    conversions: Vec<TypeConversionFn<'db>>,
-    materializations: Vec<MaterializeFn<'db>>,
-    cache: RefCell<HashMap<Type<'db>, Option<Type<'db>>>>,
+pub struct TypeConverter {
+    conversions: Vec<Box<dyn TypeConversionFn>>,
+    materializations: Vec<Box<dyn MaterializeFn>>,
 }
 
-impl<'db> TypeConverter<'db> {
+impl TypeConverter {
     /// Create a new empty type converter.
     pub fn new() -> Self {
         Self {
             conversions: Vec::new(),
             materializations: Vec::new(),
-            cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -102,7 +122,7 @@ impl<'db> TypeConverter<'db> {
     /// or `None` to try the next converter.
     pub fn add_conversion<F>(mut self, f: F) -> Self
     where
-        F: Fn(&'db dyn salsa::Database, Type<'db>) -> Option<Type<'db>> + 'db,
+        F: TypeConversionFn + 'static,
     {
         self.conversions.push(Box::new(f));
         self
@@ -119,14 +139,7 @@ impl<'db> TypeConverter<'db> {
     /// - `MaterializeResult::Ops(ops)` to insert the given operations
     pub fn add_materialization<M>(mut self, m: M) -> Self
     where
-        M: Fn(
-                &'db dyn salsa::Database,
-                Location<'db>,
-                Value<'db>,
-                Type<'db>,
-                Type<'db>,
-            ) -> MaterializeResult<'db>
-            + 'db,
+        M: MaterializeFn + 'static,
     {
         self.materializations.push(Box::new(m));
         self
@@ -136,24 +149,16 @@ impl<'db> TypeConverter<'db> {
     ///
     /// Returns `Some(converted_type)` if the type should be converted,
     /// or `None` if the type is already legal (no conversion needed).
-    ///
-    /// Results are cached for efficiency.
-    pub fn convert_type(&self, db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Type<'db>> {
-        // Check cache first
-        if let Some(cached) = self.cache.borrow().get(&ty) {
-            return *cached;
-        }
-
-        // Try each converter in order
-        let result = self.conversions.iter().find_map(|f| f(db, ty));
-
-        // Cache and return
-        self.cache.borrow_mut().insert(ty, result);
-        result
+    pub fn convert_type<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+    ) -> Option<Type<'db>> {
+        self.conversions.iter().find_map(|f| f(db, ty))
     }
 
     /// Check if a type is legal (needs no conversion).
-    pub fn is_legal(&self, db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    pub fn is_legal<'db>(&self, db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
         self.convert_type(db, ty).is_none()
     }
 
@@ -163,7 +168,7 @@ impl<'db> TypeConverter<'db> {
     /// Tries registered materializers in order until one handles the conversion.
     ///
     /// Returns `None` if no materializer handles this conversion.
-    pub fn materialize(
+    pub fn materialize<'db>(
         &self,
         db: &'db dyn salsa::Database,
         location: Location<'db>,
@@ -182,7 +187,7 @@ impl<'db> TypeConverter<'db> {
     }
 }
 
-impl Default for TypeConverter<'_> {
+impl Default for TypeConverter {
     fn default() -> Self {
         Self::new()
     }

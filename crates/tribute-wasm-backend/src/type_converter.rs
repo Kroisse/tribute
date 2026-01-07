@@ -28,6 +28,9 @@ use trunk_ir::{DialectOp, DialectType, Type};
 /// lowering passes. It complements the emit-phase `gc_types::type_to_field_type`
 /// by performing conversions at the IR level.
 ///
+/// The returned TypeConverter is `'static` and can be stored in patterns
+/// or shared across passes.
+///
 /// # Example
 ///
 /// ```ignore
@@ -38,7 +41,7 @@ use trunk_ir::{DialectOp, DialectType, Type};
 /// // Convert tribute.int to core.i32
 /// let i32_ty = converter.convert_type(db, tribute_int_ty);
 /// ```
-pub fn wasm_type_converter<'db>() -> TypeConverter<'db> {
+pub fn wasm_type_converter() -> TypeConverter {
     TypeConverter::new()
         // Convert tribute.int → core.i32 (Phase 1: arbitrary precision as i32)
         .add_conversion(|db, ty| {
@@ -103,7 +106,7 @@ fn is_struct_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
 /// Each parameter and the return type are converted using the type converter.
 pub fn convert_function_type<'db>(
     db: &'db dyn salsa::Database,
-    converter: &TypeConverter<'db>,
+    converter: &TypeConverter,
     param_types: &[Type<'db>],
     return_type: Type<'db>,
 ) -> (Vec<Type<'db>>, Type<'db>) {
