@@ -5,11 +5,11 @@
 //!
 //! ## Type Conversion Rules
 //!
-//! | Source Type      | Target Type     | Notes                              |
-//! |------------------|-----------------|-------------------------------------|
-//! | `tribute.int`    | `core.i32`      | Arbitrary precision → i32 (Phase 1) |
-//! | `tribute.nat`    | `core.i32`      | Arbitrary precision → i32 (Phase 1) |
-//! | `adt.typeref<T>` | `wasm.structref`| Generic struct reference            |
+//! | Source Type         | Target Type     | Notes                              |
+//! |---------------------|-----------------|-------------------------------------|
+//! | `tribute_rt.int`    | `core.i32`      | Arbitrary precision → i32 (Phase 1) |
+//! | `tribute_rt.nat`    | `core.i32`      | Arbitrary precision → i32 (Phase 1) |
+//! | `adt.typeref<T>`    | `wasm.structref`| Generic struct reference            |
 //!
 //! ## Materializations
 //!
@@ -17,7 +17,7 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
-use tribute_ir::dialect::{adt, tribute};
+use tribute_ir::dialect::{adt, tribute_rt};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::rewrite::{MaterializeResult, OpVec, TypeConverter};
 use trunk_ir::{DialectOp, DialectType, Type};
@@ -43,13 +43,13 @@ use trunk_ir::{DialectOp, DialectType, Type};
 /// ```
 pub fn wasm_type_converter() -> TypeConverter {
     TypeConverter::new()
-        // Convert tribute.int → core.i32 (Phase 1: arbitrary precision as i32)
+        // Convert tribute_rt.int → core.i32 (Phase 1: arbitrary precision as i32)
         .add_conversion(|db, ty| {
-            tribute::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+            tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
         })
-        // Convert tribute.nat → core.i32 (Phase 1: arbitrary precision as i32)
+        // Convert tribute_rt.nat → core.i32 (Phase 1: arbitrary precision as i32)
         .add_conversion(|db, ty| {
-            tribute::Nat::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+            tribute_rt::Nat::from_type(db, ty).map(|_| core::I32::new(db).as_type())
         })
         // Convert adt.typeref → wasm.structref (generic struct reference)
         .add_conversion(|db, ty| {
@@ -129,11 +129,11 @@ mod tests {
     use trunk_ir::Symbol;
 
     #[salsa_test]
-    fn test_convert_tribute_int(db: &salsa::DatabaseImpl) {
+    fn test_convert_tribute_rt_int(db: &salsa::DatabaseImpl) {
         let converter = wasm_type_converter();
 
-        // Create tribute.int type
-        let int_ty = tribute::Int::new(db).as_type();
+        // Create tribute_rt.int type
+        let int_ty = tribute_rt::Int::new(db).as_type();
 
         // Convert to core.i32
         let result = converter.convert_type(db, int_ty);
@@ -145,11 +145,11 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_convert_tribute_nat(db: &salsa::DatabaseImpl) {
+    fn test_convert_tribute_rt_nat(db: &salsa::DatabaseImpl) {
         let converter = wasm_type_converter();
 
-        // Create tribute.nat type
-        let nat_ty = tribute::Nat::new(db).as_type();
+        // Create tribute_rt.nat type
+        let nat_ty = tribute_rt::Nat::new(db).as_type();
 
         // Convert to core.i32
         let result = converter.convert_type(db, nat_ty);
