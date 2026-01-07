@@ -80,6 +80,50 @@ pub fn wasm_type_converter() -> TypeConverter {
             // Cannot materialize this conversion
             MaterializeResult::Skip
         })
+        // Boxing: primitive types → i31ref/anyref
+        .add_materialization(|db, location, value, from_ty, to_ty| {
+            let to_i31ref = wasm::I31ref::from_type(db, to_ty).is_some();
+            let to_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
+
+            if !to_i31ref && !to_anyref {
+                return MaterializeResult::Skip;
+            }
+
+            // Int/Nat/I32 → i31ref/anyref: use tribute_rt.box_int
+            let is_int_like = tribute_rt::Int::from_type(db, from_ty).is_some()
+                || tribute_rt::Nat::from_type(db, from_ty).is_some()
+                || core::I32::from_type(db, from_ty).is_some();
+
+            if is_int_like {
+                let i31ref_ty = wasm::I31ref::new(db).as_type();
+                let box_op = tribute_rt::box_int(db, location, value, i31ref_ty);
+                return MaterializeResult::single(box_op.as_operation());
+            }
+
+            MaterializeResult::Skip
+        })
+        // Unboxing: i31ref/anyref → primitive types
+        .add_materialization(|db, location, value, from_ty, to_ty| {
+            let from_i31ref = wasm::I31ref::from_type(db, from_ty).is_some();
+            let from_anyref = wasm::Anyref::from_type(db, from_ty).is_some();
+
+            if !from_i31ref && !from_anyref {
+                return MaterializeResult::Skip;
+            }
+
+            // i31ref/anyref → Int/Nat/I32: use tribute_rt.unbox_int
+            let is_int_like = tribute_rt::Int::from_type(db, to_ty).is_some()
+                || tribute_rt::Nat::from_type(db, to_ty).is_some()
+                || core::I32::from_type(db, to_ty).is_some();
+
+            if is_int_like {
+                let i32_ty = core::I32::new(db).as_type();
+                let unbox_op = tribute_rt::unbox_int(db, location, value, i32_ty);
+                return MaterializeResult::single(unbox_op.as_operation());
+            }
+
+            MaterializeResult::Skip
+        })
 }
 
 /// Check if a type is a struct-like reference type.
@@ -189,5 +233,104 @@ mod tests {
         let converted = result.unwrap();
         assert_eq!(converted.dialect(db), wasm::DIALECT_NAME());
         assert_eq!(converted.name(db), Symbol::new("structref"));
+    }
+
+    /// Helper: test boxing materialization (i32 → i31ref)
+    #[salsa::tracked]
+    fn do_materialize_box_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{Location, Operation, PathId, Span, Value, ValueDef};
+
+        let converter = wasm_type_converter();
+        let path = PathId::new(db, "test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+
+        let i32_ty = core::I32::new(db).as_type();
+        let dummy_op = Operation::of_name(db, location, "test.value")
+            .result(i32_ty)
+            .build();
+        let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);
+
+        let i31ref_ty = wasm::I31ref::new(db).as_type();
+        let result = converter.materialize(db, location, value, i32_ty, i31ref_ty);
+
+        match result {
+            Some(trunk_ir::rewrite::MaterializeResult::Ops(ops)) => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_box_int_to_i31ref(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_materialize_box_test(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::BOX_INT());
+    }
+
+    /// Helper: test unboxing materialization (i31ref → i32)
+    #[salsa::tracked]
+    fn do_materialize_unbox_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{Location, Operation, PathId, Span, Value, ValueDef};
+
+        let converter = wasm_type_converter();
+        let path = PathId::new(db, "test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+
+        let i31ref_ty = wasm::I31ref::new(db).as_type();
+        let dummy_op = Operation::of_name(db, location, "test.value")
+            .result(i31ref_ty)
+            .build();
+        let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);
+
+        let i32_ty = core::I32::new(db).as_type();
+        let result = converter.materialize(db, location, value, i31ref_ty, i32_ty);
+
+        match result {
+            Some(trunk_ir::rewrite::MaterializeResult::Ops(ops)) => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_unbox_i31ref_to_int(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_materialize_unbox_test(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::UNBOX_INT());
+    }
+
+    /// Helper: test boxing tribute_rt.int → anyref
+    #[salsa::tracked]
+    fn do_materialize_int_to_anyref_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{Location, Operation, PathId, Span, Value, ValueDef};
+
+        let converter = wasm_type_converter();
+        let path = PathId::new(db, "test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+
+        let int_ty = tribute_rt::Int::new(db).as_type();
+        let dummy_op = Operation::of_name(db, location, "test.value")
+            .result(int_ty)
+            .build();
+        let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);
+
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let result = converter.materialize(db, location, value, int_ty, anyref_ty);
+
+        match result {
+            Some(trunk_ir::rewrite::MaterializeResult::Ops(ops)) => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_tribute_rt_int_to_anyref(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_materialize_int_to_anyref_test(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::BOX_INT());
     }
 }
