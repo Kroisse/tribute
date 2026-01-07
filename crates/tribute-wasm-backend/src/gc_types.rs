@@ -323,11 +323,11 @@ pub fn type_to_storage_type<'db>(
         return StorageType::Val(ValType::F64);
     }
 
-    // Tribute Int/Nat types (arbitrary precision, lowered to i64)
-    if ty.dialect(db) == Symbol::new("tribute") {
+    // Tribute-rt Int/Nat types (31-bit, lowered to i32)
+    if ty.dialect(db) == Symbol::new("tribute_rt") {
         let name = ty.name(db);
         if name == Symbol::new("int") || name == Symbol::new("nat") {
-            return StorageType::Val(ValType::I64);
+            return StorageType::Val(ValType::I32);
         }
     }
 

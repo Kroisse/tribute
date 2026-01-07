@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 use tracing::debug;
 
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{ability, adt, closure, tribute};
+use tribute_ir::dialect::{ability, adt, closure, tribute, tribute_rt};
 use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::{
     Attribute, Attrs, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
@@ -1941,13 +1941,13 @@ fn assign_locals_in_region<'db>(
                             // The types from adt.enum are unresolved (src.Int),
                             // but we need resolved types for local allocation.
                             if type_name == Symbol::new("Int") {
-                                effective_ty = tribute::Int::new(db).as_type();
+                                effective_ty = tribute_rt::int_type(db);
                             } else if type_name == Symbol::new("Nat") {
-                                effective_ty = tribute::Nat::new(db).as_type();
+                                effective_ty = tribute_rt::nat_type(db);
                             } else if type_name == Symbol::new("Float") {
-                                effective_ty = core::F64::new(db).as_type();
+                                effective_ty = tribute_rt::float_type(db);
                             } else if type_name == Symbol::new("Bool") {
-                                effective_ty = core::I1::new(db).as_type();
+                                effective_ty = tribute_rt::bool_type(db);
                             }
                             // For other types (like Expr), keep effective_ty
                             // as type.var which maps to anyref
@@ -1982,13 +1982,13 @@ fn assign_locals_in_region<'db>(
                             );
                             // Convert to resolved types for local allocation.
                             if type_name == Symbol::new("Int") {
-                                effective_ty = tribute::Int::new(db).as_type();
+                                effective_ty = tribute_rt::int_type(db);
                             } else if type_name == Symbol::new("Nat") {
-                                effective_ty = tribute::Nat::new(db).as_type();
+                                effective_ty = tribute_rt::nat_type(db);
                             } else if type_name == Symbol::new("Float") {
-                                effective_ty = core::F64::new(db).as_type();
+                                effective_ty = tribute_rt::float_type(db);
                             } else if type_name == Symbol::new("Bool") {
-                                effective_ty = core::I1::new(db).as_type();
+                                effective_ty = tribute_rt::bool_type(db);
                             }
                         }
 
@@ -2013,7 +2013,7 @@ fn assign_locals_in_region<'db>(
                                         "  -> structref placeholder field {} is i64, using Int type",
                                         field_idx
                                     );
-                                    effective_ty = tribute::Int::new(db).as_type();
+                                    effective_ty = tribute_rt::int_type(db);
                                 } else if matches!(
                                     field.element_type,
                                     StorageType::Val(ValType::F64)
@@ -2022,7 +2022,7 @@ fn assign_locals_in_region<'db>(
                                         "  -> structref placeholder field {} is f64, using Float type",
                                         field_idx
                                     );
-                                    effective_ty = core::F64::new(db).as_type();
+                                    effective_ty = tribute_rt::float_type(db);
                                 }
                             }
                         }
@@ -3285,7 +3285,7 @@ fn emit_value<'db>(
 }
 
 /// Emit boxing instructions to convert a concrete type to anyref.
-/// - Int (i64) → i31ref: truncate to i32 and use ref.i31
+/// - Int (i32) → i31ref: use ref.i31 directly
 /// - Float (f64) → BoxedF64 struct: wrap in a struct with single f64 field
 fn emit_boxing<'db>(
     db: &'db dyn salsa::Database,
@@ -3293,16 +3293,12 @@ fn emit_boxing<'db>(
     function: &mut Function,
 ) -> CompilationResult<()> {
     debug!("emit_boxing: type={}.{}", ty.dialect(db), ty.name(db));
-    if tribute::Int::from_type(db, ty).is_some() || tribute::Nat::from_type(db, ty).is_some() {
+    if tribute_rt::is_int(db, ty) || tribute_rt::is_nat(db, ty) {
         debug!("  -> boxing Int/Nat to i31ref");
-        // Int/Nat (i64) → i31ref
-        // Truncate i64 to i32, then convert to i31ref
-        // Note: This only works correctly for values that fit in 31 bits!
-        // Phase 1 limitation: values outside -2^30..2^30-1 will be incorrect
-        function.instruction(&Instruction::I32WrapI64);
+        // Int/Nat (i32) → i31ref (direct, 31-bit values)
         function.instruction(&Instruction::RefI31);
         Ok(())
-    } else if core::F64::from_type(db, ty).is_some() {
+    } else if tribute_rt::is_float(db, ty) || core::F64::from_type(db, ty).is_some() {
         // Float (f64) → BoxedF64 struct
         // Create a struct with the f64 value
         function.instruction(&Instruction::StructNew(BOXED_F64_IDX));
@@ -3315,28 +3311,26 @@ fn emit_boxing<'db>(
 }
 
 /// Emit unboxing instructions to convert anyref to a concrete type.
-/// - i31ref → Int (i64): extract i32 and extend to i64
+/// - i31ref → Int (i32): extract i32 directly
 /// - BoxedF64 → Float (f64): cast and extract f64 field
 fn emit_unboxing<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    if tribute::Int::from_type(db, ty).is_some() {
-        // anyref → i31ref → Int (i64)
-        // Cast anyref to i31ref, extract i32, then sign-extend to i64
+    if tribute_rt::is_int(db, ty) {
+        // anyref → i31ref → Int (i32)
+        // Cast anyref to i31ref, extract i32 (signed)
         function.instruction(&Instruction::RefCastNullable(HeapType::I31));
         function.instruction(&Instruction::I31GetS);
-        function.instruction(&Instruction::I64ExtendI32S);
         Ok(())
-    } else if tribute::Nat::from_type(db, ty).is_some() {
-        // anyref → i31ref → Nat (i64)
-        // Cast anyref to i31ref, extract u32, then zero-extend to i64
+    } else if tribute_rt::is_nat(db, ty) {
+        // anyref → i31ref → Nat (i32)
+        // Cast anyref to i31ref, extract u32 (unsigned)
         function.instruction(&Instruction::RefCastNullable(HeapType::I31));
         function.instruction(&Instruction::I31GetU);
-        function.instruction(&Instruction::I64ExtendI32U);
         Ok(())
-    } else if core::F64::from_type(db, ty).is_some() {
+    } else if tribute_rt::is_float(db, ty) || core::F64::from_type(db, ty).is_some() {
         // anyref → BoxedF64 → Float (f64)
         // Cast to BoxedF64 struct, then extract f64 field
         function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(
@@ -3446,19 +3440,19 @@ fn type_to_valtype<'db>(
     ty: Type<'db>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
 ) -> CompilationResult<ValType> {
-    if core::I32::from_type(db, ty).is_some() || core::I1::from_type(db, ty).is_some() {
-        // core.i1 (Bool) is represented as i32 in WebAssembly
-        Ok(ValType::I32)
-    } else if core::I64::from_type(db, ty).is_some()
-        || tribute::Int::from_type(db, ty).is_some()
-        || tribute::Nat::from_type(db, ty).is_some()
+    if core::I32::from_type(db, ty).is_some()
+        || core::I1::from_type(db, ty).is_some()
+        || tribute_rt::is_int(db, ty)
+        || tribute_rt::is_nat(db, ty)
+        || tribute_rt::is_bool(db, ty)
     {
-        // Int/Nat (arbitrary precision) is lowered to i64 for Phase 1
-        // TODO: Implement i31ref/BigInt hybrid for WasmGC
+        // tribute_rt.int/nat/bool are represented as i32 in WebAssembly
+        Ok(ValType::I32)
+    } else if core::I64::from_type(db, ty).is_some() {
         Ok(ValType::I64)
     } else if core::F32::from_type(db, ty).is_some() {
         Ok(ValType::F32)
-    } else if core::F64::from_type(db, ty).is_some() {
+    } else if core::F64::from_type(db, ty).is_some() || tribute_rt::is_float(db, ty) {
         Ok(ValType::F64)
     } else if core::Bytes::from_type(db, ty).is_some() {
         // Bytes uses WasmGC struct representation

@@ -26,7 +26,7 @@
 //!
 //! **Types**:
 //! - `tribute.type` (unresolved type reference)
-//! - `tribute.int`, `tribute.nat` (primitive types)
+//! - (primitive types moved to `tribute_rt` dialect)
 //! - `tribute.type_var`, `tribute.error_type` (type inference)
 //!
 //! ## Pattern Region
@@ -265,13 +265,7 @@ dialect! {
         #[attr(name: Symbol)]
         type r#type(#[rest] params);
 
-        /// `tribute.int` type: arbitrary precision integer (Fixnum/Bignum hybrid).
-        /// At runtime, represented as i31ref (fixnum) or BigInt struct (bignum).
-        type int;
-
-        /// `tribute.nat` type: arbitrary precision natural number (non-negative).
-        /// Semantically a subset of Int, but may have optimized representation.
-        type nat;
+        // NOTE: Primitive types (int, nat, float, bool) are now in `tribute_rt` dialect.
 
         /// `tribute.type_var` type: a type variable to be resolved during type inference.
         /// The `id` attribute holds a unique variable ID.
@@ -423,11 +417,7 @@ inventory::submit! {
 // tribute.error_type -> "<error>"
 inventory::submit! { Printable::implement("tribute", "error_type", |_, _, f| f.write_str("<error>")) }
 
-// tribute.int -> "Int"
-inventory::submit! { Printable::implement("tribute", "int", |_, _, f| f.write_str("Int")) }
-
-// tribute.nat -> "Nat"
-inventory::submit! { Printable::implement("tribute", "nat", |_, _, f| f.write_str("Nat")) }
+// NOTE: tribute.int and tribute.nat Printable implementations moved to tribute_rt dialect
 
 /// Convert a variable ID to a readable name (a, b, c, ..., t0, t1, ...).
 fn fmt_var_id(f: &mut Formatter<'_>, id: u64) -> std::fmt::Result {
