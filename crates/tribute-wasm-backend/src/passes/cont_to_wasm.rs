@@ -42,11 +42,13 @@ use trunk_ir::DialectType;
 use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, IdVec, Location, Operation, Region, Symbol, Type, Value,
     ValueDef, idvec,
 };
+
+use crate::type_converter::wasm_type_converter;
 
 /// Continuation struct layout:
 /// - Field 0: resume_fn (funcref) - function to call when resuming
@@ -857,7 +859,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
     let resume_fn_names = resume_gen::generate_resume_fn_names(db, &analysis);
 
     // Apply pattern transformations for non-shift operations
-    let module = PatternApplicator::new()
+    let module = PatternApplicator::with_type_converter(wasm_type_converter())
         .add_pattern(PushPromptPattern)
         .add_pattern(HandlerDispatchPattern)
         .add_pattern(ResumePattern)
@@ -1695,6 +1697,7 @@ impl RewritePattern for PushPromptPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(push_prompt) = cont::PushPrompt::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -2043,6 +2046,7 @@ impl RewritePattern for HandlerDispatchPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_dispatch) = cont::HandlerDispatch::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -2248,6 +2252,7 @@ impl RewritePattern for ResumePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(resume) = cont::Resume::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -2347,6 +2352,7 @@ impl RewritePattern for DropPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(drop_op) = cont::Drop::from_operation(db, *op) else {
             return RewriteResult::Unchanged;

@@ -11,8 +11,10 @@ use std::collections::HashMap;
 use tribute_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
+
+use crate::type_converter::wasm_type_converter;
 
 /// Result of const analysis - maps content to allocated offset.
 #[salsa::tracked]
@@ -173,7 +175,7 @@ pub fn lower<'db>(
     let string_allocations = analysis.string_allocations(db).clone();
     let bytes_allocations = analysis.bytes_allocations(db).clone();
 
-    PatternApplicator::new()
+    PatternApplicator::with_type_converter(wasm_type_converter())
         .add_pattern(StringConstPattern::new(string_allocations))
         .add_pattern(BytesConstPattern::new(bytes_allocations))
         .apply(db, module)
@@ -207,6 +209,7 @@ impl RewritePattern for StringConstPattern {
         &self,
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
+        _adaptor: &OpAdaptor<'a, '_>,
     ) -> RewriteResult<'a> {
         let Ok(string_const) = adt::StringConst::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -260,6 +263,7 @@ impl RewritePattern for BytesConstPattern {
         &self,
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
+        _adaptor: &OpAdaptor<'a, '_>,
     ) -> RewriteResult<'a> {
         let Ok(bytes_const) = adt::BytesConst::from_operation(db, *op) else {
             return RewriteResult::Unchanged;

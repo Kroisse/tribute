@@ -25,7 +25,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tribute_ir::dialect::{ability, tribute};
 use trunk_ir::dialect::{cont, core};
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+#[cfg(test)]
+use trunk_ir::rewrite::RewriteContext;
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, Block, BlockId, DialectOp, IdVec, Operation, Region};
 
 /// Lower handler operations from ability dialect to cont dialect.
@@ -104,6 +106,7 @@ impl RewritePattern for LowerPromptPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: tribute.handle
         let handle_op = match tribute::Handle::from_operation(db, *op) {
@@ -148,6 +151,7 @@ impl RewritePattern for LowerPerformPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: ability.perform
         let perform_op = match ability::Perform::from_operation(db, *op) {
@@ -218,6 +222,7 @@ impl RewritePattern for LowerResumePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: ability.resume
         let resume_op = match ability::Resume::from_operation(db, *op) {
@@ -251,6 +256,7 @@ impl RewritePattern for LowerAbortPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: ability.abort
         let abort_op = match ability::Abort::from_operation(db, *op) {
@@ -296,7 +302,9 @@ mod tests {
 
         // Apply the pattern
         let pattern = LowerPromptPattern::new();
-        let result = pattern.match_and_rewrite(db, &handle_op);
+        let ctx = RewriteContext::new();
+        let adaptor = OpAdaptor::new(handle_op, handle_op.operands(db).clone(), vec![], &ctx);
+        let result = pattern.match_and_rewrite(db, &handle_op, &adaptor);
 
         match result {
             RewriteResult::Replace(new_op) => (new_op.dialect(db), new_op.name(db)),
@@ -329,7 +337,10 @@ mod tests {
         let resume_op = ability::resume(db, location, cont_val, val_val, val_ty);
 
         // Apply the pattern
-        let result = LowerResumePattern.match_and_rewrite(db, &resume_op.as_operation());
+        let op = resume_op.as_operation();
+        let ctx = RewriteContext::new();
+        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx);
+        let result = LowerResumePattern.match_and_rewrite(db, &op, &adaptor);
 
         match result {
             RewriteResult::Replace(new_op) => (new_op.dialect(db), new_op.name(db)),
@@ -354,7 +365,10 @@ mod tests {
         let abort_op = ability::abort(db, location, cont_val);
 
         // Apply the pattern
-        let result = LowerAbortPattern.match_and_rewrite(db, &abort_op.as_operation());
+        let op = abort_op.as_operation();
+        let ctx = RewriteContext::new();
+        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx);
+        let result = LowerAbortPattern.match_and_rewrite(db, &op, &adaptor);
 
         match result {
             RewriteResult::Replace(new_op) => (new_op.dialect(db), new_op.name(db)),
@@ -380,7 +394,9 @@ mod tests {
 
         // Apply the pattern
         let pattern = LowerPerformPattern::new();
-        let result = pattern.match_and_rewrite(db, &perform_op);
+        let ctx = RewriteContext::new();
+        let adaptor = OpAdaptor::new(perform_op, perform_op.operands(db).clone(), vec![], &ctx);
+        let result = pattern.match_and_rewrite(db, &perform_op, &adaptor);
 
         match result {
             RewriteResult::Replace(new_op) => (new_op.dialect(db), new_op.name(db)),

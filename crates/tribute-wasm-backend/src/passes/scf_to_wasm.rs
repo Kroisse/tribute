@@ -10,14 +10,16 @@
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, idvec,
 };
 
+use crate::type_converter::wasm_type_converter;
+
 /// Lower scf dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    PatternApplicator::new()
+    PatternApplicator::with_type_converter(wasm_type_converter())
         .add_pattern(ScfIfPattern)
         .add_pattern(ScfLoopPattern)
         .add_pattern(ScfYieldPattern)
@@ -35,6 +37,7 @@ impl RewritePattern for ScfIfPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(scf_if_op) = scf::If::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -76,6 +79,7 @@ impl RewritePattern for ScfLoopPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(loop_op) = scf::Loop::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -135,6 +139,7 @@ impl RewritePattern for ScfYieldPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(yield_op) = scf::Yield::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -164,6 +169,7 @@ impl RewritePattern for ScfContinuePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_continue_op) = scf::Continue::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -190,6 +196,7 @@ impl RewritePattern for ScfBreakPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_break_op) = scf::Break::from_operation(db, *op) else {
             return RewriteResult::Unchanged;

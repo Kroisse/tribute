@@ -3,10 +3,13 @@
 //! The `PatternApplicator` manages a set of rewrite patterns and
 //! applies them to a module until fixpoint is reached.
 
+use std::collections::HashMap;
+
 use crate::dialect::core::Module;
-use crate::{Block, IdVec, Operation, Region};
+use crate::{Block, BlockId, IdVec, Operation, Region, Type};
 
 use super::context::RewriteContext;
+use super::op_adaptor::OpAdaptor;
 use super::pattern::RewritePattern;
 use super::result::RewriteResult;
 
@@ -31,7 +34,7 @@ pub struct ApplyResult<'db> {
 /// # use salsa::DatabaseImpl;
 /// # use trunk_ir::{Block, BlockId, Location, Operation, PathId, Region, Span, Symbol, idvec};
 /// # use trunk_ir::dialect::core::Module;
-/// use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+/// use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 ///
 /// struct RenamePattern;
 ///
@@ -40,6 +43,7 @@ pub struct ApplyResult<'db> {
 ///         &self,
 ///         db: &'db dyn salsa::Database,
 ///         op: &Operation<'db>,
+///         _adaptor: &OpAdaptor<'db, '_>,
 ///     ) -> RewriteResult<'db> {
 ///         if op.dialect(db) != "test" || op.name(db) != "source" {
 ///             return RewriteResult::Unchanged;
@@ -74,14 +78,28 @@ pub struct ApplyResult<'db> {
 pub struct PatternApplicator {
     patterns: Vec<Box<dyn RewritePattern>>,
     max_iterations: usize,
+    type_converter: super::TypeConverter,
 }
 
 impl PatternApplicator {
-    /// Create a new empty pattern applicator.
+    /// Create a new pattern applicator with an empty type converter.
     pub fn new() -> Self {
         Self {
             patterns: Vec::new(),
             max_iterations: 100,
+            type_converter: super::TypeConverter::new(),
+        }
+    }
+
+    /// Create a new pattern applicator with a type converter.
+    ///
+    /// The `OpAdaptor` will convert types using this converter,
+    /// providing patterns with already-converted types via `operand_type()`.
+    pub fn with_type_converter(converter: super::TypeConverter) -> Self {
+        Self {
+            patterns: Vec::new(),
+            max_iterations: 100,
+            type_converter: converter,
         }
     }
 
@@ -110,7 +128,9 @@ impl PatternApplicator {
         let mut total_changes = 0;
 
         for iteration in 0..self.max_iterations {
-            let mut ctx = RewriteContext::new();
+            // Collect block argument types for this iteration
+            let block_arg_types = collect_block_arg_types(db, &current);
+            let mut ctx = RewriteContext::with_block_arg_types(block_arg_types);
             let new_module = self.rewrite_module(db, &current, &mut ctx);
 
             if ctx.changes_made() == 0 {
@@ -192,10 +212,12 @@ impl PatternApplicator {
     ///
     /// This is the core rewrite loop:
     /// 1. Remap operands using the current value map
-    /// 2. Try each pattern in order
-    /// 3. If a pattern matches, apply it and record mappings
-    /// 4. Recursively rewrite any nested regions
-    /// 5. Map original operation results to final operation results
+    /// 2. Compute converted operand types using the type converter
+    /// 3. Create OpAdaptor with remapped operands and pre-converted types
+    /// 4. Try each pattern in order
+    /// 5. If a pattern matches, apply it and record mappings
+    /// 6. Recursively rewrite any nested regions
+    /// 7. Map original operation results to final operation results
     fn rewrite_operation<'db>(
         &self,
         db: &'db dyn salsa::Database,
@@ -205,9 +227,22 @@ impl PatternApplicator {
         // Step 1: Remap operands from previous transformations
         let remapped_op = ctx.remap_operands(db, op);
 
-        // Step 2: Try each pattern
+        // Step 2: Compute converted operand types
+        let remapped_operands = remapped_op.operands(db).clone();
+        let operand_types: Vec<Option<Type<'db>>> = remapped_operands
+            .iter()
+            .map(|v| {
+                ctx.get_value_type(db, *v)
+                    .map(|ty| self.type_converter.convert_type(db, ty).unwrap_or(ty))
+            })
+            .collect();
+
+        // Step 3: Create OpAdaptor with remapped operands and pre-converted types
+        let adaptor = OpAdaptor::new(remapped_op, remapped_operands, operand_types, ctx);
+
+        // Step 4: Try each pattern
         for pattern in &self.patterns {
-            match pattern.match_and_rewrite(db, &remapped_op) {
+            match pattern.match_and_rewrite(db, &remapped_op, &adaptor) {
                 RewriteResult::Unchanged => continue,
 
                 RewriteResult::Replace(new_op) => {
@@ -247,10 +282,10 @@ impl PatternApplicator {
             }
         }
 
-        // Step 3: No pattern matched - recursively process regions
+        // Step 5: No pattern matched - recursively process regions
         let final_op = self.rewrite_op_regions(db, &remapped_op, ctx);
 
-        // Step 4: Map ORIGINAL op results to FINAL op results if they differ
+        // Step 6: Map ORIGINAL op results to FINAL op results if they differ
         // This is critical when operands were remapped but no pattern matched
         if final_op != *op {
             ctx.map_results(db, op, &final_op);
@@ -286,6 +321,39 @@ impl Default for PatternApplicator {
     }
 }
 
+/// Collect block argument types from a module.
+///
+/// Traverses all blocks in the module and collects the types of their arguments.
+/// This is needed because `ValueDef::BlockArg` only stores the `BlockId`,
+/// not the type information.
+fn collect_block_arg_types<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<'db>,
+) -> HashMap<(BlockId, usize), Type<'db>> {
+    let mut map = HashMap::new();
+    collect_from_region(db, &module.body(db), &mut map);
+    map
+}
+
+fn collect_from_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    map: &mut HashMap<(BlockId, usize), Type<'db>>,
+) {
+    for block in region.blocks(db).iter() {
+        let block_id = block.id(db);
+        for (idx, arg) in block.args(db).iter().enumerate() {
+            map.insert((block_id, idx), arg.ty(db));
+        }
+        // Recursively collect from nested regions in operations
+        for op in block.operations(db).iter() {
+            for nested_region in op.regions(db).iter() {
+                collect_from_region(db, nested_region, map);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +368,7 @@ mod tests {
             &self,
             db: &'db dyn salsa::Database,
             op: &Operation<'db>,
+            _adaptor: &OpAdaptor<'db, '_>,
         ) -> RewriteResult<'db> {
             if op.dialect(db) != "test" || op.name(db) != "source" {
                 return RewriteResult::Unchanged;

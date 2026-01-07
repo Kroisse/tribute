@@ -44,12 +44,14 @@ use tracing::warn;
 
 use tribute_ir::{ModulePathExt as _, dialect::adt};
 use trunk_ir::dialect::core::Module;
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type, Value};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type};
+
+use crate::type_converter::wasm_type_converter;
 
 /// Lower adt dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    PatternApplicator::new()
+    PatternApplicator::with_type_converter(wasm_type_converter())
         .add_pattern(StructNewPattern)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
@@ -77,12 +79,16 @@ impl RewritePattern for StructNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_struct_new) = adt::StructNew::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
         // Keep type attribute, emit will convert to type_idx
+        // Note: Result type is preserved as-is; emit phase uses type_to_field_type
+        // for wasm type conversion. The wasm_type_converter is available for
+        // IR-level conversions where type information needs to be transformed.
         let new_op = op
             .modify(db)
             .dialect_str("wasm")
@@ -101,6 +107,7 @@ impl RewritePattern for StructGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(struct_get) = adt::StructGet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -138,6 +145,7 @@ impl RewritePattern for StructSetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(struct_set) = adt::StructSet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -177,15 +185,17 @@ impl RewritePattern for VariantNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(variant_new) = adt::VariantNew::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
         let tag_sym = variant_new.tag(db);
+        let base_type = variant_new.r#type(db);
 
         // Create variant-specific type: Expr + Add -> Expr$Add
-        let variant_type = make_variant_type(db, variant_new.r#type(db), tag_sym);
+        let variant_type = make_variant_type(db, base_type, tag_sym);
 
         // Create wasm.struct_new with variant-specific type (no tag field)
         // Result type is the variant-specific type - emit infers type_idx from it
@@ -249,6 +259,7 @@ impl RewritePattern for VariantTagPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_variant_tag) = adt::VariantTag::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -279,6 +290,7 @@ impl RewritePattern for VariantIsPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(variant_is) = adt::VariantIs::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -288,10 +300,9 @@ impl RewritePattern for VariantIsPattern {
 
         // Get the enum type - prefer operand type over attribute type
         // (attribute may have unsubstituted type.var, operand has concrete type)
-        let enum_type = op
-            .operands(db)
-            .first()
-            .and_then(|v| operand_type(db, *v))
+        // Using OpAdaptor.operand_type() handles both OpResult and BlockArg cases
+        let enum_type = adaptor
+            .operand_type(0)
             .unwrap_or_else(|| variant_is.r#type(db));
 
         // Create variant-specific type for the ref.test
@@ -320,6 +331,7 @@ impl RewritePattern for VariantCastPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(variant_cast) = adt::VariantCast::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -329,10 +341,9 @@ impl RewritePattern for VariantCastPattern {
 
         // Get the enum type - prefer operand type over attribute type
         // (attribute may have unsubstituted type.var, operand has concrete type)
-        let enum_type = op
-            .operands(db)
-            .first()
-            .and_then(|v| operand_type(db, *v))
+        // Using OpAdaptor.operand_type() handles both OpResult and BlockArg cases
+        let enum_type = adaptor
+            .operand_type(0)
             .unwrap_or_else(|| variant_cast.r#type(db));
 
         // Create variant-specific type for the ref.cast
@@ -365,6 +376,7 @@ impl RewritePattern for VariantGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(variant_get) = adt::VariantGet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -382,6 +394,7 @@ impl RewritePattern for VariantGetPattern {
 
         // Infer type from the operand (the cast result has the variant-specific type)
         // Set as type attribute for emit to use; clear any original attrs via fresh builder
+        // Using OpAdaptor.operand_type() handles both OpResult and BlockArg cases
         let mut builder = op
             .modify(db)
             .dialect_str("wasm")
@@ -389,21 +402,11 @@ impl RewritePattern for VariantGetPattern {
             .attr("field_idx", Attribute::IntBits(field_idx));
 
         // Override type attribute with operand type (original might have base enum type)
-        if let Some(ref_operand) = op.operands(db).first()
-            && let Some(ref_type) = operand_type(db, *ref_operand)
-        {
+        if let Some(ref_type) = adaptor.operand_type(0) {
             builder = builder.attr("type", Attribute::Type(ref_type));
         }
 
         RewriteResult::Replace(builder.build())
-    }
-}
-
-/// Get the type of a value from its defining operation's result type.
-fn operand_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
-    match value.def(db) {
-        trunk_ir::ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
-        trunk_ir::ValueDef::BlockArg(_) => None,
     }
 }
 
@@ -415,6 +418,7 @@ impl RewritePattern for ArrayNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_NEW() {
             return RewriteResult::Unchanged;
@@ -447,6 +451,7 @@ impl RewritePattern for ArrayGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_GET() {
             return RewriteResult::Unchanged;
@@ -470,6 +475,7 @@ impl RewritePattern for ArraySetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_SET() {
             return RewriteResult::Unchanged;
@@ -493,6 +499,7 @@ impl RewritePattern for ArrayLenPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_LEN() {
             return RewriteResult::Unchanged;
@@ -516,6 +523,7 @@ impl RewritePattern for RefNullPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_NULL() {
             return RewriteResult::Unchanged;
@@ -539,6 +547,7 @@ impl RewritePattern for RefIsNullPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_IS_NULL() {
             return RewriteResult::Unchanged;
@@ -562,6 +571,7 @@ impl RewritePattern for RefCastPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_CAST() {
             return RewriteResult::Unchanged;

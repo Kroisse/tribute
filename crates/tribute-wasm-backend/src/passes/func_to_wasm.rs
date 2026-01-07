@@ -11,12 +11,14 @@
 
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{func, wasm};
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation};
+
+use crate::type_converter::wasm_type_converter;
 
 /// Lower func dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    PatternApplicator::new()
+    PatternApplicator::with_type_converter(wasm_type_converter())
         .add_pattern(FuncFuncPattern)
         .add_pattern(FuncCallPattern)
         .add_pattern(FuncCallIndirectPattern)
@@ -36,6 +38,7 @@ impl RewritePattern for FuncFuncPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_func_op) = func::Func::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -57,6 +60,7 @@ impl RewritePattern for FuncCallPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(call_op) = func::Call::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -86,6 +90,7 @@ impl RewritePattern for FuncCallIndirectPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_call_indirect) = func::CallIndirect::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -111,6 +116,7 @@ impl RewritePattern for FuncReturnPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_return_op) = func::Return::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -130,6 +136,7 @@ impl RewritePattern for FuncTailCallPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(tail_call_op) = func::TailCall::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -155,6 +162,7 @@ impl RewritePattern for FuncUnreachablePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(_unreachable_op) = func::Unreachable::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -181,6 +189,7 @@ impl RewritePattern for FuncConstantPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(const_op) = func::Constant::from_operation(db, *op) else {
             return RewriteResult::Unchanged;

@@ -13,12 +13,14 @@
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{DialectOp, DialectType, Operation};
+
+use crate::type_converter::wasm_type_converter;
 
 /// Lower tribute_rt dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    PatternApplicator::new()
+    PatternApplicator::with_type_converter(wasm_type_converter())
         .add_pattern(BoxIntPattern)
         .add_pattern(UnboxIntPattern)
         .apply(db, module)
@@ -36,6 +38,7 @@ impl RewritePattern for BoxIntPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(box_op) = tribute_rt::BoxInt::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -64,6 +67,7 @@ impl RewritePattern for UnboxIntPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(unbox_op) = tribute_rt::UnboxInt::from_operation(db, *op) else {
             return RewriteResult::Unchanged;

@@ -21,7 +21,7 @@
 
 use tribute_ir::dialect::{adt, closure};
 use trunk_ir::dialect::{core, func};
-use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Type, Value, ValueDef};
 
 /// Lower closure operations in the module.
@@ -52,6 +52,7 @@ impl RewritePattern for LowerClosureNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: closure.new
         let closure_new = match closure::New::from_operation(db, *op) {
@@ -126,6 +127,7 @@ impl RewritePattern for LowerClosureCallPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: func.call_indirect
         let call = match func::CallIndirect::from_operation(db, *op) {
@@ -188,6 +190,7 @@ impl RewritePattern for LowerClosureFuncPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: closure.func
         let closure_func = match closure::Func::from_operation(db, *op) {
@@ -233,6 +236,7 @@ impl RewritePattern for LowerClosureEnvPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: closure.env
         let closure_env = match closure::Env::from_operation(db, *op) {

@@ -19,7 +19,7 @@
 //! # use salsa::DatabaseImpl;
 //! # use trunk_ir::{Block, BlockId, Location, Operation, PathId, Region, Span, Symbol, idvec};
 //! # use trunk_ir::dialect::core::Module;
-//! use trunk_ir::rewrite::{PatternApplicator, RewritePattern, RewriteResult};
+//! use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 //!
 //! struct RenamePattern;
 //!
@@ -28,6 +28,7 @@
 //!         &self,
 //!         db: &'db dyn salsa::Database,
 //!         op: &Operation<'db>,
+//!         _adaptor: &OpAdaptor<'db, '_>,
 //!     ) -> RewriteResult<'db> {
 //!         // Note: op.operands() are already remapped by the applicator
 //!         if op.dialect(db) != "test" || op.name(db) != "source" {
@@ -71,10 +72,14 @@
 
 mod applicator;
 mod context;
+mod op_adaptor;
 mod pattern;
 mod result;
+mod type_converter;
 
 pub use applicator::{ApplyResult, PatternApplicator};
 pub use context::RewriteContext;
+pub use op_adaptor::OpAdaptor;
 pub use pattern::{OperationMatcher, RewritePattern};
 pub use result::RewriteResult;
+pub use type_converter::{MaterializeResult, OpVec, TypeConverter};
