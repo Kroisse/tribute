@@ -324,10 +324,7 @@ pub fn type_to_storage_type<'db>(
     }
 
     // Tribute-rt Int/Nat/Bool types (31-bit, lowered to i32)
-    if tribute_rt::is_int(db, ty)
-        || tribute_rt::is_nat(db, ty)
-        || tribute_rt::is_bool(db, ty)
-    {
+    if tribute_rt::is_int(db, ty) || tribute_rt::is_nat(db, ty) || tribute_rt::is_bool(db, ty) {
         return StorageType::Val(ValType::I32);
     }
     // Tribute-rt Float type (f64)
