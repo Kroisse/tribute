@@ -193,7 +193,7 @@ impl RewritePattern for ArithCmpPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != arith::DIALECT_NAME() {
             return RewriteResult::Unchanged;
@@ -211,8 +211,8 @@ impl RewritePattern for ArithCmpPattern {
             return RewriteResult::Unchanged;
         }
 
-        // Get operand type to determine wasm type
-        let operand_ty = op.operands(db).first().and_then(|v| value_type(db, *v));
+        // Get operand type from OpAdaptor (handles BlockArg via RewriteContext)
+        let operand_ty = adaptor.operand_type(0);
         let suffix = type_suffix(db, operand_ty);
         let is_integer = matches!(suffix, "i32" | "i64");
 
@@ -417,7 +417,7 @@ impl RewritePattern for ArithConversionPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         if op.dialect(db) != arith::DIALECT_NAME() {
             return RewriteResult::Unchanged;
@@ -433,8 +433,8 @@ impl RewritePattern for ArithConversionPattern {
             return RewriteResult::Unchanged;
         }
 
-        // Get source type from operand
-        let src_ty = op.operands(db).first().and_then(|v| value_type(db, *v));
+        // Get source type from OpAdaptor (handles BlockArg via RewriteContext)
+        let src_ty = adaptor.operand_type(0);
         let src_suffix = type_suffix(db, src_ty);
 
         // Get destination type from result
@@ -572,15 +572,6 @@ fn type_suffix<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> &'st
             warn!("No type in arith_to_wasm, defaulting to i32");
             "i32"
         }
-    }
-}
-
-/// Get the type of a value.
-fn value_type<'db>(db: &'db dyn salsa::Database, value: trunk_ir::Value<'db>) -> Option<Type<'db>> {
-    match value.def(db) {
-        trunk_ir::ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
-        // BlockArg type lookup requires block context; callers handle None
-        trunk_ir::ValueDef::BlockArg(_block_id) => None,
     }
 }
 
