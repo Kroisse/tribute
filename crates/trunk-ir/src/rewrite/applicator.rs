@@ -78,14 +78,28 @@ pub struct ApplyResult<'db> {
 pub struct PatternApplicator {
     patterns: Vec<Box<dyn RewritePattern>>,
     max_iterations: usize,
+    type_converter: super::TypeConverter,
 }
 
 impl PatternApplicator {
-    /// Create a new empty pattern applicator.
+    /// Create a new pattern applicator with an empty type converter.
     pub fn new() -> Self {
         Self {
             patterns: Vec::new(),
             max_iterations: 100,
+            type_converter: super::TypeConverter::new(),
+        }
+    }
+
+    /// Create a new pattern applicator with a type converter.
+    ///
+    /// The `OpAdaptor` will convert types using this converter,
+    /// providing patterns with already-converted types via `operand_type()`.
+    pub fn with_type_converter(converter: super::TypeConverter) -> Self {
+        Self {
+            patterns: Vec::new(),
+            max_iterations: 100,
+            type_converter: converter,
         }
     }
 
@@ -198,11 +212,12 @@ impl PatternApplicator {
     ///
     /// This is the core rewrite loop:
     /// 1. Remap operands using the current value map
-    /// 2. Create OpAdaptor with remapped operands and context
-    /// 3. Try each pattern in order
-    /// 4. If a pattern matches, apply it and record mappings
-    /// 5. Recursively rewrite any nested regions
-    /// 6. Map original operation results to final operation results
+    /// 2. Compute converted operand types using the type converter
+    /// 3. Create OpAdaptor with remapped operands and pre-converted types
+    /// 4. Try each pattern in order
+    /// 5. If a pattern matches, apply it and record mappings
+    /// 6. Recursively rewrite any nested regions
+    /// 7. Map original operation results to final operation results
     fn rewrite_operation<'db>(
         &self,
         db: &'db dyn salsa::Database,
@@ -212,11 +227,20 @@ impl PatternApplicator {
         // Step 1: Remap operands from previous transformations
         let remapped_op = ctx.remap_operands(db, op);
 
-        // Step 2: Create OpAdaptor with remapped operands
+        // Step 2: Compute converted operand types
         let remapped_operands = remapped_op.operands(db).clone();
-        let adaptor = OpAdaptor::new(remapped_op, remapped_operands, ctx);
+        let operand_types: Vec<Option<Type<'db>>> = remapped_operands
+            .iter()
+            .map(|v| {
+                ctx.get_value_type(db, *v)
+                    .map(|ty| self.type_converter.convert_type(db, ty).unwrap_or(ty))
+            })
+            .collect();
 
-        // Step 3: Try each pattern
+        // Step 3: Create OpAdaptor with remapped operands and pre-converted types
+        let adaptor = OpAdaptor::new(remapped_op, remapped_operands, operand_types, ctx);
+
+        // Step 4: Try each pattern
         for pattern in &self.patterns {
             match pattern.match_and_rewrite(db, &remapped_op, &adaptor) {
                 RewriteResult::Unchanged => continue,
@@ -258,10 +282,10 @@ impl PatternApplicator {
             }
         }
 
-        // Step 3: No pattern matched - recursively process regions
+        // Step 5: No pattern matched - recursively process regions
         let final_op = self.rewrite_op_regions(db, &remapped_op, ctx);
 
-        // Step 4: Map ORIGINAL op results to FINAL op results if they differ
+        // Step 6: Map ORIGINAL op results to FINAL op results if they differ
         // This is critical when operands were remapped but no pattern matched
         if final_op != *op {
             ctx.map_results(db, op, &final_op);

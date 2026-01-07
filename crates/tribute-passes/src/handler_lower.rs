@@ -303,7 +303,7 @@ mod tests {
         // Apply the pattern
         let pattern = LowerPromptPattern::new();
         let ctx = RewriteContext::new();
-        let adaptor = OpAdaptor::new(handle_op, handle_op.operands(db).clone(), &ctx);
+        let adaptor = OpAdaptor::new(handle_op, handle_op.operands(db).clone(), vec![], &ctx);
         let result = pattern.match_and_rewrite(db, &handle_op, &adaptor);
 
         match result {
@@ -339,7 +339,7 @@ mod tests {
         // Apply the pattern
         let op = resume_op.as_operation();
         let ctx = RewriteContext::new();
-        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), &ctx);
+        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx);
         let result = LowerResumePattern.match_and_rewrite(db, &op, &adaptor);
 
         match result {
@@ -367,7 +367,7 @@ mod tests {
         // Apply the pattern
         let op = abort_op.as_operation();
         let ctx = RewriteContext::new();
-        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), &ctx);
+        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx);
         let result = LowerAbortPattern.match_and_rewrite(db, &op, &adaptor);
 
         match result {
@@ -395,7 +395,7 @@ mod tests {
         // Apply the pattern
         let pattern = LowerPerformPattern::new();
         let ctx = RewriteContext::new();
-        let adaptor = OpAdaptor::new(perform_op, perform_op.operands(db).clone(), &ctx);
+        let adaptor = OpAdaptor::new(perform_op, perform_op.operands(db).clone(), vec![], &ctx);
         let result = pattern.match_and_rewrite(db, &perform_op, &adaptor);
 
         match result {

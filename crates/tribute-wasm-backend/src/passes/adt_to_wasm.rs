@@ -40,32 +40,25 @@
 //! For operations where the result type is set explicitly (e.g., variant_new, variant_cast),
 //! emit can infer type_idx from result/operand types without the attribute.
 
-use std::sync::Arc;
-
 use tracing::warn;
 
 use tribute_ir::{ModulePathExt as _, dialect::adt};
 use trunk_ir::dialect::core::Module;
-use trunk_ir::rewrite::{
-    OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
-};
+use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type};
 
 use crate::type_converter::wasm_type_converter;
 
 /// Lower adt dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    // Create shared TypeConverter for patterns that need type conversion
-    let converter = Arc::new(wasm_type_converter());
-
-    PatternApplicator::new()
+    PatternApplicator::with_type_converter(wasm_type_converter())
         .add_pattern(StructNewPattern)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
-        .add_pattern(VariantNewPattern::new(converter.clone()))
+        .add_pattern(VariantNewPattern)
         .add_pattern(VariantTagPattern) // deprecated, kept for compatibility
-        .add_pattern(VariantIsPattern::new(converter.clone()))
-        .add_pattern(VariantCastPattern::new(converter.clone()))
+        .add_pattern(VariantIsPattern)
+        .add_pattern(VariantCastPattern)
         .add_pattern(VariantGetPattern)
         .add_pattern(ArrayNewPattern)
         .add_pattern(ArrayGetPattern)
@@ -185,16 +178,7 @@ impl RewritePattern for StructSetPattern {
 ///
 /// With WasmGC subtyping, variants are represented as separate struct types
 /// without an explicit tag field. The type itself serves as the discriminant.
-struct VariantNewPattern {
-    #[allow(dead_code)]
-    converter: Arc<TypeConverter>,
-}
-
-impl VariantNewPattern {
-    fn new(converter: Arc<TypeConverter>) -> Self {
-        Self { converter }
-    }
-}
+struct VariantNewPattern;
 
 impl RewritePattern for VariantNewPattern {
     fn match_and_rewrite<'db>(
@@ -208,9 +192,10 @@ impl RewritePattern for VariantNewPattern {
         };
 
         let tag_sym = variant_new.tag(db);
+        let base_type = variant_new.r#type(db);
 
         // Create variant-specific type: Expr + Add -> Expr$Add
-        let variant_type = make_variant_type(db, variant_new.r#type(db), tag_sym);
+        let variant_type = make_variant_type(db, base_type, tag_sym);
 
         // Create wasm.struct_new with variant-specific type (no tag field)
         // Result type is the variant-specific type - emit infers type_idx from it
@@ -298,16 +283,7 @@ impl RewritePattern for VariantTagPattern {
 /// Pattern for `adt.variant_is` -> `wasm.ref_test`
 ///
 /// Tests if a variant reference is of a specific variant type.
-struct VariantIsPattern {
-    #[allow(dead_code)]
-    converter: Arc<TypeConverter>,
-}
-
-impl VariantIsPattern {
-    fn new(converter: Arc<TypeConverter>) -> Self {
-        Self { converter }
-    }
-}
+struct VariantIsPattern;
 
 impl RewritePattern for VariantIsPattern {
     fn match_and_rewrite<'db>(
@@ -326,7 +302,7 @@ impl RewritePattern for VariantIsPattern {
         // (attribute may have unsubstituted type.var, operand has concrete type)
         // Using OpAdaptor.operand_type() handles both OpResult and BlockArg cases
         let enum_type = adaptor
-            .operand_type(db, 0)
+            .operand_type(0)
             .unwrap_or_else(|| variant_is.r#type(db));
 
         // Create variant-specific type for the ref.test
@@ -348,16 +324,7 @@ impl RewritePattern for VariantIsPattern {
 /// Pattern for `adt.variant_cast` -> `wasm.ref_cast`
 ///
 /// Casts a variant reference to a specific variant type after pattern matching.
-struct VariantCastPattern {
-    #[allow(dead_code)]
-    converter: Arc<TypeConverter>,
-}
-
-impl VariantCastPattern {
-    fn new(converter: Arc<TypeConverter>) -> Self {
-        Self { converter }
-    }
-}
+struct VariantCastPattern;
 
 impl RewritePattern for VariantCastPattern {
     fn match_and_rewrite<'db>(
@@ -376,7 +343,7 @@ impl RewritePattern for VariantCastPattern {
         // (attribute may have unsubstituted type.var, operand has concrete type)
         // Using OpAdaptor.operand_type() handles both OpResult and BlockArg cases
         let enum_type = adaptor
-            .operand_type(db, 0)
+            .operand_type(0)
             .unwrap_or_else(|| variant_cast.r#type(db));
 
         // Create variant-specific type for the ref.cast
@@ -435,7 +402,7 @@ impl RewritePattern for VariantGetPattern {
             .attr("field_idx", Attribute::IntBits(field_idx));
 
         // Override type attribute with operand type (original might have base enum type)
-        if let Some(ref_type) = adaptor.operand_type(db, 0) {
+        if let Some(ref_type) = adaptor.operand_type(0) {
             builder = builder.attr("type", Attribute::Type(ref_type));
         }
 
