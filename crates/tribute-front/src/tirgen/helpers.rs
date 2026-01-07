@@ -5,10 +5,10 @@ use std::hash::{Hash, Hasher};
 
 use ropey::Rope;
 use tree_sitter::{Node, Tree};
-use tribute_ir::dialect::tribute;
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Span;
 use trunk_ir::dialect::arith;
-use trunk_ir::{DialectType, Location, Symbol};
+use trunk_ir::{Location, Symbol};
 
 // =============================================================================
 // Parsed CST (Salsa-cacheable)
@@ -105,5 +105,5 @@ pub fn int_const<'db>(
     location: Location<'db>,
     value: i64,
 ) -> arith::Const<'db> {
-    arith::r#const(db, location, tribute::Int::new(db).as_type(), value.into())
+    arith::r#const(db, location, tribute_rt::int_type(db), value.into())
 }

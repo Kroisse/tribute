@@ -38,9 +38,9 @@ fn test_add_compiles_and_runs() {
             wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
 
         // Call main directly (add.trb doesn't use print_line, so no _start is generated)
-        // Note: Tribute's Int type compiles to i64 in WASM
+        // Note: Tribute's Int type compiles to i32 in WASM (31-bit signed)
         let main = instance
-            .get_typed_func::<(), i64>(&mut store, "main")
+            .get_typed_func::<(), i32>(&mut store, "main")
             .expect("main function not found");
 
         let result = main.call(&mut store, ()).expect("Execution failed");
@@ -76,9 +76,9 @@ fn main() -> Int { identity(42) }
         let instance =
             wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
 
-        // Int compiles to i64 in WASM
+        // Int compiles to i32 in WASM (31-bit signed)
         let main = instance
-            .get_typed_func::<(), i64>(&mut store, "main")
+            .get_typed_func::<(), i32>(&mut store, "main")
             .expect("main function not found");
 
         let result = main.call(&mut store, ()).expect("Execution failed");
@@ -118,7 +118,7 @@ fn main() -> Int {
             wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
 
         let main = instance
-            .get_typed_func::<(), i64>(&mut store, "main")
+            .get_typed_func::<(), i32>(&mut store, "main")
             .expect("main function not found");
 
         let result = main.call(&mut store, ()).expect("Execution failed");
@@ -167,7 +167,7 @@ fn main() -> Int {
             wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
 
         let main = instance
-            .get_typed_func::<(), i64>(&mut store, "main")
+            .get_typed_func::<(), i32>(&mut store, "main")
             .expect("main function not found");
 
         let result = main.call(&mut store, ()).expect("Execution failed");
@@ -261,7 +261,7 @@ fn main() -> Int {
             wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
 
         let main = instance
-            .get_typed_func::<(), i64>(&mut store, "main")
+            .get_typed_func::<(), i32>(&mut store, "main")
             .expect("main function not found");
 
         let result = main.call(&mut store, ()).expect("Execution failed");
@@ -311,7 +311,7 @@ fn main() -> Int {
             wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
 
         let main = instance
-            .get_typed_func::<(), i64>(&mut store, "main")
+            .get_typed_func::<(), i32>(&mut store, "main")
             .expect("main function not found");
 
         let result = main.call(&mut store, ()).expect("Execution failed");
@@ -359,7 +359,7 @@ fn main() -> Int {
             wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
 
         let main = instance
-            .get_typed_func::<(), i64>(&mut store, "main")
+            .get_typed_func::<(), i32>(&mut store, "main")
             .expect("main function not found");
 
         let result = main.call(&mut store, ()).expect("Execution failed");
@@ -406,7 +406,7 @@ fn main() -> Int {
             wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
 
         let main = instance
-            .get_typed_func::<(), i64>(&mut store, "main")
+            .get_typed_func::<(), i32>(&mut store, "main")
             .expect("main function not found");
 
         let result = main.call(&mut store, ()).expect("Execution failed");
@@ -633,7 +633,7 @@ fn test_calc_eval() {
             wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
 
         let main = instance
-            .get_typed_func::<(), i64>(&mut store, "main")
+            .get_typed_func::<(), i32>(&mut store, "main")
             .expect("main function not found");
 
         let result = main.call(&mut store, ()).expect("Execution failed");

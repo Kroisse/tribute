@@ -37,7 +37,7 @@
 use std::collections::BTreeMap;
 
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::tribute;
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::DialectType;
 use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self, Module};
@@ -230,11 +230,13 @@ pub mod resume_gen {
         for (field_idx, live_local) in info.live_locals.iter().enumerate() {
             // Generate struct_get to extract this field
             // Add type and field_count attributes for proper type resolution at emit time
+            // Lower tribute_rt types to ensure consistency with struct_new operand types
+            let lowered_ty = lower_tribute_rt_type(db, live_local.ty);
             let struct_get = wasm::struct_get(
                 db,
                 location,
                 state_param,
-                live_local.ty,
+                lowered_ty,
                 0, // type_idx - Placeholder, resolved at emit time
                 field_idx as u32,
             )
@@ -326,8 +328,9 @@ pub mod resume_gen {
 
                 if let Some(value_ty) = value_ty
                     && (core::I64::from_type(db, value_ty).is_some()
-                        || tribute::Int::from_type(db, value_ty).is_some()
-                        || tribute::Nat::from_type(db, value_ty).is_some())
+                        || core::I32::from_type(db, value_ty).is_some()
+                        || tribute_rt::is_int(db, value_ty)
+                        || tribute_rt::is_nat(db, value_ty))
                 {
                     // Box the primitive value before returning
                     let mut boxing_ops = Vec::new();
@@ -701,6 +704,26 @@ impl<'db> ContinuationAnalyzer<'db> {
             // Get the type of this value
             let ty = self.get_value_type(*value);
             if let Some(ty) = ty {
+                // Get operation info for better debugging
+                let (op_dialect, op_name, op_result_ty) = match value.def(self.db) {
+                    ValueDef::OpResult(op) => {
+                        let result_ty = op.results(self.db).get(value.index(self.db)).copied();
+                        (
+                            op.dialect(self.db).to_string(),
+                            op.name(self.db).to_string(),
+                            result_ty,
+                        )
+                    }
+                    ValueDef::BlockArg(_) => ("block_arg".to_string(), "".to_string(), None),
+                };
+                tracing::debug!(
+                    "compute_live_locals: value from {}.{} type={}.{} result_ty={:?}",
+                    op_dialect,
+                    op_name,
+                    ty.dialect(self.db),
+                    ty.name(self.db),
+                    op_result_ty.map(|t| format!("{}.{}", t.dialect(self.db), t.name(self.db)))
+                );
                 live_locals.push(LiveLocal {
                     value: *value,
                     name: None, // TODO: Could extract from tribute.var if available
@@ -1223,8 +1246,15 @@ fn collect_uses_in_region_recursive<'db>(
 ///
 /// When the resume function receives a value as `anyref`, but the continuation
 /// expects a primitive type (Int/Nat), we need to unbox:
-/// - Int (i64): anyref → i31ref → i32 → i64 (sign-extend)
-/// - Nat (i64): anyref → i31ref → i32 → i64 (zero-extend)
+/// - Int: anyref → intref → int (via tribute_rt.unbox_int)
+/// - Nat: anyref → intref → nat (via tribute_rt.unbox_int)
+///
+/// # Limitations
+///
+/// Currently only Int/Nat are supported. Float and Bool are defined in
+/// `tribute_rt` dialect but not yet implemented for continuation boxing:
+/// - Float (f64): Would require heap allocation in WasmGC (no f64ref exists)
+/// - Bool: Could use i31ref but needs separate box_bool/unbox_bool ops
 ///
 /// Returns the unboxed value (or the original value if no unboxing needed).
 fn unbox_value_if_needed<'db>(
@@ -1234,53 +1264,77 @@ fn unbox_value_if_needed<'db>(
     target_ty: Type<'db>,
     ops: &mut Vec<Operation<'db>>,
 ) -> Value<'db> {
-    let i32_ty = core::I32::new(db).as_type();
-    let i64_ty = core::I64::new(db).as_type();
+    // Use wasm.i31ref for the ref_cast (the lowered type)
     let i31ref_ty = wasm::I31ref::new(db).as_type();
+    // Use lowered target type (tribute_rt.int -> core.i32)
+    let lowered_target_ty = lower_tribute_rt_type(db, target_ty);
 
-    if tribute::Int::from_type(db, target_ty).is_some() {
-        // Unbox Int: anyref → i31ref → i32 → i64 (sign-extend)
-
-        // Step 1: ref.cast anyref to i31ref
-        let ref_cast = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty);
-        ops.push(ref_cast.as_operation());
-
-        // Step 2: i31.get_s to extract signed i32
-        let i31_get_s = wasm::i31_get_s(db, location, ref_cast.result(db), i32_ty);
-        ops.push(i31_get_s.as_operation());
-
-        // Step 3: i64.extend_i32_s to sign-extend to i64
-        let extend = wasm::i64_extend_i32_s(db, location, i31_get_s.result(db), i64_ty);
-        ops.push(extend.as_operation());
-
-        extend.result(db)
-    } else if tribute::Nat::from_type(db, target_ty).is_some() {
-        // Unbox Nat: anyref → i31ref → i32 → i64 (zero-extend)
+    if tribute_rt::is_int(db, target_ty) || tribute_rt::is_nat(db, target_ty) {
+        // Unbox Int/Nat: anyref → i31ref → i32
 
         // Step 1: ref.cast anyref to i31ref
         let ref_cast = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty);
         ops.push(ref_cast.as_operation());
 
-        // Step 2: i31.get_u to extract unsigned i32
-        let i31_get_u = wasm::i31_get_u(db, location, ref_cast.result(db), i32_ty);
-        ops.push(i31_get_u.as_operation());
+        // Step 2: tribute_rt.unbox_int to extract value (will be lowered to wasm.i31_get_s)
+        let unbox = tribute_rt::unbox_int(db, location, ref_cast.result(db), lowered_target_ty);
+        ops.push(unbox.as_operation());
 
-        // Step 3: i64.extend_i32_u to zero-extend to i64
-        let extend = wasm::i64_extend_i32_u(db, location, i31_get_u.result(db), i64_ty);
-        ops.push(extend.as_operation());
-
-        extend.result(db)
+        unbox.result(db)
+    } else if tribute_rt::is_float(db, target_ty) || tribute_rt::is_bool(db, target_ty) {
+        // TODO: Implement float/bool unboxing
+        // Float requires heap-allocated boxing (no f64ref in WasmGC)
+        // Bool could reuse i31ref mechanism
+        panic!("unbox_value_if_needed: float/bool unboxing not yet implemented for continuations");
     } else {
         // No unboxing needed for reference types
         value
     }
 }
 
+/// Lower a `tribute_rt` type to its `wasm` equivalent.
+///
+/// This is needed because struct_get operations created by cont_to_wasm use
+/// tribute_rt types (e.g., `tribute_rt.int`), but after tribute_rt_to_wasm runs,
+/// the actual values have core types (e.g., `core.i32`). To ensure type consistency
+/// in emit.rs, we need to lower the types when creating struct_get operations.
+///
+/// Type mappings:
+/// - `tribute_rt.int` → `core.i32`
+/// - `tribute_rt.nat` → `core.i32`
+/// - `tribute_rt.bool` → `core.i32`
+/// - `tribute_rt.float` → `core.f64`
+/// - `tribute_rt.intref` → `wasm.i31ref`
+/// - `tribute_rt.any` → `wasm.anyref`
+/// - Other types → unchanged
+fn lower_tribute_rt_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
+    if tribute_rt::is_int(db, ty) || tribute_rt::is_nat(db, ty) || tribute_rt::is_bool(db, ty) {
+        core::I32::new(db).as_type()
+    } else if tribute_rt::is_float(db, ty) {
+        core::F64::new(db).as_type()
+    } else if tribute_rt::is_intref(db, ty) {
+        wasm::I31ref::new(db).as_type()
+    } else if tribute_rt::is_any(db, ty) {
+        wasm::Anyref::new(db).as_type()
+    } else {
+        ty
+    }
+}
+
 /// Generate boxing operations if the value type is a primitive.
 ///
 /// When passing a primitive value to a function expecting `anyref`, we need to box:
-/// - Int (i64): i64 → i32 → i31ref (truncate and wrap)
-/// - Nat (i64): i64 → i32 → i31ref (truncate and wrap)
+/// - Int (i32): int → intref (via tribute_rt.box_int -> wasm.ref_i31)
+/// - Nat (i32): nat → intref (via tribute_rt.box_int -> wasm.ref_i31)
+/// - core.i32: same as Int (lowered form)
+/// - I64: i64 → i32 → intref (truncate and box, legacy path)
+///
+/// # Limitations
+///
+/// Currently only Int/Nat (and their lowered form core.i32) are supported.
+/// Float and Bool are defined in `tribute_rt` dialect but not yet implemented:
+/// - Float (f64): Would require heap allocation in WasmGC (no f64ref exists)
+/// - Bool: Could use i31ref but needs separate box_bool/unbox_bool ops
 ///
 /// Returns the boxed value (or the original value if no boxing needed).
 fn box_value_if_needed<'db>(
@@ -1290,24 +1344,34 @@ fn box_value_if_needed<'db>(
     value_ty: Type<'db>,
     ops: &mut Vec<Operation<'db>>,
 ) -> Value<'db> {
-    let i32_ty = core::I32::new(db).as_type();
+    // Use i31ref (the lowered type) instead of tribute_rt.intref
     let i31ref_ty = wasm::I31ref::new(db).as_type();
 
-    if core::I64::from_type(db, value_ty).is_some()
-        || tribute::Int::from_type(db, value_ty).is_some()
-        || tribute::Nat::from_type(db, value_ty).is_some()
+    if tribute_rt::is_int(db, value_ty)
+        || tribute_rt::is_nat(db, value_ty)
+        || core::I32::from_type(db, value_ty).is_some()
     {
-        // Box Int/Nat/I64: i64 → i32 → i31ref
-
-        // Step 1: i32.wrap_i64 to truncate to i32
+        // Box Int/Nat/I32: use tribute_rt.box_int to convert to i31ref
+        // (tribute_rt.box_int will be lowered to wasm.ref_i31)
+        let box_int = tribute_rt::box_int(db, location, value, i31ref_ty);
+        ops.push(box_int.as_operation());
+        box_int.result(db)
+    } else if core::I64::from_type(db, value_ty).is_some() {
+        // Box I64: i64 → i32 → i31ref (truncate and wrap)
+        // Note: This is a legacy path - tribute uses 31-bit Int/Nat now
+        let i32_ty = core::I32::new(db).as_type();
         let wrap = wasm::i32_wrap_i64(db, location, value, i32_ty);
         ops.push(wrap.as_operation());
 
-        // Step 2: ref.i31 to convert to i31ref
-        let ref_i31 = wasm::ref_i31(db, location, wrap.result(db), i31ref_ty);
-        ops.push(ref_i31.as_operation());
+        let box_int = tribute_rt::box_int(db, location, wrap.result(db), i31ref_ty);
+        ops.push(box_int.as_operation());
 
-        ref_i31.result(db)
+        box_int.result(db)
+    } else if tribute_rt::is_float(db, value_ty) || tribute_rt::is_bool(db, value_ty) {
+        // TODO: Implement float/bool boxing
+        // Float requires heap-allocated boxing (no f64ref in WasmGC)
+        // Bool could reuse i31ref mechanism
+        panic!("box_value_if_needed: float/bool boxing not yet implemented for continuations");
     } else {
         // No boxing needed for reference types
         value
@@ -1386,11 +1450,13 @@ fn generate_inline_resume_function<'db>(
     for (field_idx, live_local) in live_locals.iter().enumerate() {
         // Generate struct_get to extract this field
         // Use structref as the type attribute - emit will resolve via placeholder map
+        // Lower tribute_rt types to ensure consistency with struct_new operand types
+        let lowered_ty = lower_tribute_rt_type(db, live_local.ty);
         let struct_get = wasm::struct_get(
             db,
             location,
             state_cast,
-            live_local.ty,
+            lowered_ty,
             0, // type_idx - Will be resolved via placeholder map
             field_idx as u32,
         )
@@ -1488,6 +1554,26 @@ fn expand_shift_operation<'db>(
 
     // Collect the values to capture
     let live_values: IdVec<Value<'db>> = live_locals.iter().map(|ll| ll.value).collect();
+
+    // Debug: log value types with more details
+    for (idx, ll) in live_locals.iter().enumerate() {
+        let (value_ty, op_info) = match ll.value.def(db) {
+            ValueDef::OpResult(op) => {
+                let ty = op.results(db).get(ll.value.index(db)).copied();
+                let info = format!("{}.{}", op.dialect(db), op.name(db));
+                (ty, info)
+            }
+            ValueDef::BlockArg(_) => (None, "block_arg".to_string()),
+        };
+        tracing::debug!(
+            "build_continuation_struct: live_local[{}] from {} recorded_ty={}.{} actual_value_ty={:?}",
+            idx,
+            op_info,
+            ll.ty.dialect(db),
+            ll.ty.name(db),
+            value_ty.map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+        );
+    }
 
     let state_struct = wasm::struct_new(
         db,
@@ -2480,16 +2566,19 @@ mod tests {
         // 2. wasm.global_set (reset yield_state)
         // 3. wasm.struct_get (extract resume_fn)
         // 4. wasm.struct_get (extract state)
-        // 5. wasm.call_indirect (invoke resume_fn)
+        // 5. tribute_rt.box_int (box the i32 value, since resume needs anyref)
 
+        // 6. wasm.call_indirect (invoke resume_fn)
         // First op: i32_const for resetting yield_state
         assert_eq!(op_names.first(), Some(&"wasm.i32_const".to_string()));
         // Last op: call_indirect to invoke resume function
         assert_eq!(op_names.last(), Some(&"wasm.call_indirect".to_string()));
         // Should contain struct_get operations
         assert!(op_names.contains(&"wasm.struct_get".to_string()));
-        // Total: 5 operations
-        assert_eq!(op_names.len(), 5);
+        // Should contain boxing operation for the i32 value
+        assert!(op_names.contains(&"tribute_rt.box_int".to_string()));
+        // Total: 6 operations (added box_int for i32 value)
+        assert_eq!(op_names.len(), 6);
     }
 
     #[salsa::tracked]

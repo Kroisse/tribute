@@ -142,14 +142,14 @@ fn type_var_name(id: u64) -> String {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use tribute_ir::dialect::tribute::{self, Int};
+    use tribute_ir::dialect::{tribute, tribute_rt};
     use trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func, Nil};
     use trunk_ir::{IdVec, Symbol, idvec};
 
     #[salsa_test]
     fn test_print_basic_types(db: &salsa::DatabaseImpl) {
-        // Int (arbitrary precision)
-        let int_ty = *Int::new(db);
+        // Int (31-bit signed)
+        let int_ty = tribute_rt::int_type(db);
         assert_eq!(print_type(db, int_ty), "Int");
 
         // Nil
@@ -159,7 +159,7 @@ mod tests {
 
     #[salsa_test]
     fn test_print_function_type(db: &salsa::DatabaseImpl) {
-        let int_ty = *Int::new(db);
+        let int_ty = tribute_rt::int_type(db);
 
         // fn(Int, Int) -> Int
         let func_ty = *Func::new(db, idvec![int_ty, int_ty], int_ty);

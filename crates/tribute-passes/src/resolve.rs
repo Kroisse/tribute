@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{ability, adt, tribute, tribute_pat};
+use tribute_ir::dialect::{ability, adt, tribute, tribute_pat, tribute_rt};
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core::{self, AbilityRefType, Module};
 use trunk_ir::dialect::func;
@@ -715,11 +715,11 @@ impl<'db> Resolver<'db> {
     fn resolve_type_name(&self, name: Symbol) -> Type<'db> {
         let name_str = name.to_string();
         match &*name_str {
-            // Primitive types
-            "Int" => *tribute::Int::new(self.db),
-            "Bool" => *core::I1::new(self.db),
-            "Float" => *core::F64::new(self.db),
-            "Nat" => *tribute::Nat::new(self.db),
+            // Primitive types (from tribute_rt dialect)
+            "Int" => tribute_rt::int_type(self.db),
+            "Bool" => tribute_rt::bool_type(self.db),
+            "Float" => tribute_rt::float_type(self.db),
+            "Nat" => tribute_rt::nat_type(self.db),
             "String" => *core::String::new(self.db),
             "Bytes" => *core::Bytes::new(self.db),
             "Nil" => *core::Nil::new(self.db),
