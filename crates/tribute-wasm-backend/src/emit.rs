@@ -2022,10 +2022,24 @@ fn assign_locals_in_region<'db>(
                                     module_info.gc_types.get(type_idx as usize)
                                 && let Some(field) = fields.get(field_idx as usize)
                             {
-                                // If field is i64, allocate local as i64 (Int/Nat type)
-                                if matches!(field.element_type, StorageType::Val(ValType::I64)) {
+                                // Map struct field types to tribute_rt types for local allocation.
+                                // - i32: Int/Nat (31-bit, current representation)
+                                // - i64: Int/Nat (legacy 64-bit representation, kept for compatibility)
+                                // - f64: Float
+                                if matches!(field.element_type, StorageType::Val(ValType::I32)) {
                                     debug!(
-                                        "  -> structref placeholder field {} is i64, using Int type",
+                                        "  -> structref placeholder field {} is i32, using Int type",
+                                        field_idx
+                                    );
+                                    effective_ty = tribute_rt::int_type(db);
+                                } else if matches!(
+                                    field.element_type,
+                                    StorageType::Val(ValType::I64)
+                                ) {
+                                    // Legacy path: older code may have used i64 for Int/Nat.
+                                    // Current tribute_rt.int/nat use 31-bit (i32) representation.
+                                    debug!(
+                                        "  -> structref placeholder field {} is i64 (legacy), using Int type",
                                         field_idx
                                     );
                                     effective_ty = tribute_rt::int_type(db);

@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 
 use tracing::debug;
-use tribute_ir::dialect::adt;
+use tribute_ir::dialect::{adt, tribute_rt};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::{DialectType, Symbol, Type};
 use wasm_encoder::{AbstractHeapType, FieldType, HeapType, RefType, StorageType, ValType};
@@ -323,12 +323,16 @@ pub fn type_to_storage_type<'db>(
         return StorageType::Val(ValType::F64);
     }
 
-    // Tribute-rt Int/Nat types (31-bit, lowered to i32)
-    if ty.dialect(db) == Symbol::new("tribute_rt") {
-        let name = ty.name(db);
-        if name == Symbol::new("int") || name == Symbol::new("nat") {
-            return StorageType::Val(ValType::I32);
-        }
+    // Tribute-rt Int/Nat/Bool types (31-bit, lowered to i32)
+    if tribute_rt::is_int(db, ty)
+        || tribute_rt::is_nat(db, ty)
+        || tribute_rt::is_bool(db, ty)
+    {
+        return StorageType::Val(ValType::I32);
+    }
+    // Tribute-rt Float type (f64)
+    if tribute_rt::is_float(db, ty) {
+        return StorageType::Val(ValType::F64);
     }
 
     // Wasm dialect types

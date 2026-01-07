@@ -1302,12 +1302,19 @@ fn unbox_value_if_needed<'db>(
 /// Type mappings:
 /// - `tribute_rt.int` → `core.i32`
 /// - `tribute_rt.nat` → `core.i32`
+/// - `tribute_rt.bool` → `core.i32`
+/// - `tribute_rt.float` → `core.f64`
 /// - `tribute_rt.intref` → `wasm.i31ref`
 /// - `tribute_rt.any` → `wasm.anyref`
 /// - Other types → unchanged
 fn lower_tribute_rt_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
-    if tribute_rt::is_int(db, ty) || tribute_rt::is_nat(db, ty) {
+    if tribute_rt::is_int(db, ty)
+        || tribute_rt::is_nat(db, ty)
+        || tribute_rt::is_bool(db, ty)
+    {
         core::I32::new(db).as_type()
+    } else if tribute_rt::is_float(db, ty) {
+        core::F64::new(db).as_type()
     } else if tribute_rt::is_intref(db, ty) {
         wasm::I31ref::new(db).as_type()
     } else if tribute_rt::is_any(db, ty) {
