@@ -1301,26 +1301,9 @@ fn unbox_value_if_needed<'db>(
 /// the actual values have core types (e.g., `core.i32`). To ensure type consistency
 /// in emit.rs, we need to lower the types when creating struct_get operations.
 ///
-/// Type mappings:
-/// - `tribute_rt.int` → `core.i32`
-/// - `tribute_rt.nat` → `core.i32`
-/// - `tribute_rt.bool` → `core.i32`
-/// - `tribute_rt.float` → `core.f64`
-/// - `tribute_rt.intref` → `wasm.i31ref`
-/// - `tribute_rt.any` → `wasm.anyref`
-/// - Other types → unchanged
+/// Delegates to `wasm_type_converter()` for consistent type conversions across passes.
 fn lower_tribute_rt_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
-    if tribute_rt::is_int(db, ty) || tribute_rt::is_nat(db, ty) || tribute_rt::is_bool(db, ty) {
-        core::I32::new(db).as_type()
-    } else if tribute_rt::is_float(db, ty) {
-        core::F64::new(db).as_type()
-    } else if tribute_rt::is_intref(db, ty) {
-        wasm::I31ref::new(db).as_type()
-    } else if tribute_rt::is_any(db, ty) {
-        wasm::Anyref::new(db).as_type()
-    } else {
-        ty
-    }
+    wasm_type_converter().convert_type(db, ty).unwrap_or(ty)
 }
 
 /// Generate boxing operations if the value type is a primitive.

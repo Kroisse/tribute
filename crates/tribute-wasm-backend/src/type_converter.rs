@@ -9,6 +9,10 @@
 //! |---------------------|-----------------|-------------------------------------|
 //! | `tribute_rt.int`    | `core.i32`      | Arbitrary precision → i32 (Phase 1) |
 //! | `tribute_rt.nat`    | `core.i32`      | Arbitrary precision → i32 (Phase 1) |
+//! | `tribute_rt.bool`   | `core.i32`      | Boolean as i32                      |
+//! | `tribute_rt.float`  | `core.f64`      | Float as f64                        |
+//! | `tribute_rt.intref` | `wasm.i31ref`   | Boxed integer reference             |
+//! | `tribute_rt.any`    | `wasm.anyref`   | Any reference type                  |
 //! | `adt.typeref<T>`    | `wasm.structref`| Generic struct reference            |
 //!
 //! ## Materializations
@@ -50,6 +54,22 @@ pub fn wasm_type_converter() -> TypeConverter {
         // Convert tribute_rt.nat → core.i32 (Phase 1: arbitrary precision as i32)
         .add_conversion(|db, ty| {
             tribute_rt::Nat::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
+        // Convert tribute_rt.bool → core.i32 (boolean as i32)
+        .add_conversion(|db, ty| {
+            tribute_rt::Bool::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
+        // Convert tribute_rt.float → core.f64 (float as f64)
+        .add_conversion(|db, ty| {
+            tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
+        })
+        // Convert tribute_rt.intref → wasm.i31ref (boxed integer reference)
+        .add_conversion(|db, ty| {
+            tribute_rt::Intref::from_type(db, ty).map(|_| wasm::I31ref::new(db).as_type())
+        })
+        // Convert tribute_rt.any → wasm.anyref (any reference type)
+        .add_conversion(|db, ty| {
+            tribute_rt::Any::from_type(db, ty).map(|_| wasm::Anyref::new(db).as_type())
         })
         // Convert adt.typeref → wasm.structref (generic struct reference)
         .add_conversion(|db, ty| {
@@ -179,6 +199,70 @@ mod tests {
         assert!(result.is_some());
         let converted = result.unwrap();
         let expected = core::I32::new(db).as_type();
+        assert_eq!(converted, expected);
+    }
+
+    #[salsa_test]
+    fn test_convert_tribute_rt_bool(db: &salsa::DatabaseImpl) {
+        let converter = wasm_type_converter();
+
+        // Create tribute_rt.bool type
+        let bool_ty = tribute_rt::Bool::new(db).as_type();
+
+        // Convert to core.i32
+        let result = converter.convert_type(db, bool_ty);
+
+        assert!(result.is_some());
+        let converted = result.unwrap();
+        let expected = core::I32::new(db).as_type();
+        assert_eq!(converted, expected);
+    }
+
+    #[salsa_test]
+    fn test_convert_tribute_rt_float(db: &salsa::DatabaseImpl) {
+        let converter = wasm_type_converter();
+
+        // Create tribute_rt.float type
+        let float_ty = tribute_rt::Float::new(db).as_type();
+
+        // Convert to core.f64
+        let result = converter.convert_type(db, float_ty);
+
+        assert!(result.is_some());
+        let converted = result.unwrap();
+        let expected = core::F64::new(db).as_type();
+        assert_eq!(converted, expected);
+    }
+
+    #[salsa_test]
+    fn test_convert_tribute_rt_intref(db: &salsa::DatabaseImpl) {
+        let converter = wasm_type_converter();
+
+        // Create tribute_rt.intref type
+        let intref_ty = tribute_rt::Intref::new(db).as_type();
+
+        // Convert to wasm.i31ref
+        let result = converter.convert_type(db, intref_ty);
+
+        assert!(result.is_some());
+        let converted = result.unwrap();
+        let expected = wasm::I31ref::new(db).as_type();
+        assert_eq!(converted, expected);
+    }
+
+    #[salsa_test]
+    fn test_convert_tribute_rt_any(db: &salsa::DatabaseImpl) {
+        let converter = wasm_type_converter();
+
+        // Create tribute_rt.any type
+        let any_ty = tribute_rt::Any::new(db).as_type();
+
+        // Convert to wasm.anyref
+        let result = converter.convert_type(db, any_ty);
+
+        assert!(result.is_some());
+        let converted = result.unwrap();
+        let expected = wasm::Anyref::new(db).as_type();
         assert_eq!(converted, expected);
     }
 
