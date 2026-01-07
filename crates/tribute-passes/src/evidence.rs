@@ -44,7 +44,9 @@ use std::collections::HashSet;
 
 use tribute_ir::dialect::ability;
 use trunk_ir::dialect::{core, func};
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+};
 use trunk_ir::{
     Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
 };
@@ -71,7 +73,7 @@ pub fn insert_evidence<'db>(
     // Both phases use PatternApplicator
     // Phase 1: Add evidence parameters to function signatures
     // Phase 2: Transform calls inside effectful functions to pass evidence
-    PatternApplicator::new()
+    PatternApplicator::new(TypeConverter::new())
         .add_pattern(AddEvidenceParamPattern::new(effectful_fns.clone()))
         .add_pattern(TransformCallsPattern::new(effectful_fns))
         .apply(db, module)

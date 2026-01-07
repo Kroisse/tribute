@@ -27,7 +27,9 @@ use tribute_ir::dialect::{ability, tribute};
 use trunk_ir::dialect::{cont, core};
 #[cfg(test)]
 use trunk_ir::rewrite::RewriteContext;
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+};
 use trunk_ir::{Attribute, Block, BlockId, DialectOp, IdVec, Operation, Region};
 
 /// Lower handler operations from ability dialect to cont dialect.
@@ -38,7 +40,7 @@ pub fn lower_handlers<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> core::Module<'db> {
-    let applicator = PatternApplicator::new()
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(LowerPromptPattern::new())
         .add_pattern(LowerPerformPattern::new())
         .add_pattern(LowerResumePattern)

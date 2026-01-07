@@ -888,7 +888,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
     let resume_fn_names = resume_gen::generate_resume_fn_names(db, &analysis);
 
     // Apply pattern transformations for non-shift operations
-    let module = PatternApplicator::with_type_converter(wasm_type_converter())
+    let module = PatternApplicator::new(wasm_type_converter())
         .add_pattern(PushPromptPattern)
         .add_pattern(HandlerDispatchPattern)
         .add_pattern(ResumePattern)

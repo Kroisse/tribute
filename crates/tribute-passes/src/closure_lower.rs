@@ -21,7 +21,9 @@
 
 use tribute_ir::dialect::{adt, closure};
 use trunk_ir::dialect::{core, func};
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Type, Value, ValueDef};
 
 /// Lower closure operations in the module.
@@ -36,7 +38,7 @@ pub fn lower_closures<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> core::Module<'db> {
-    let applicator = PatternApplicator::new()
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(LowerClosureCallPattern)
         .add_pattern(LowerClosureNewPattern)
         .add_pattern(LowerClosureFuncPattern)

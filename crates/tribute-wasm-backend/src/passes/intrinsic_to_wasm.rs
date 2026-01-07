@@ -176,7 +176,7 @@ pub fn lower<'db>(
     module: Module<'db>,
     analysis: IntrinsicAnalysis<'db>,
 ) -> Module<'db> {
-    let mut applicator = PatternApplicator::with_type_converter(wasm_type_converter());
+    let mut applicator = PatternApplicator::new(wasm_type_converter());
 
     // Add __print_line pattern if needed
     if analysis.needs_fd_write(db) {
