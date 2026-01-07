@@ -45,7 +45,7 @@ use tracing::warn;
 use tribute_ir::{ModulePathExt as _, dialect::adt};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type, Value};
+use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type};
 
 /// Lower adt dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -284,7 +284,7 @@ impl RewritePattern for VariantIsPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(variant_is) = adt::VariantIs::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -294,10 +294,9 @@ impl RewritePattern for VariantIsPattern {
 
         // Get the enum type - prefer operand type over attribute type
         // (attribute may have unsubstituted type.var, operand has concrete type)
-        let enum_type = op
-            .operands(db)
-            .first()
-            .and_then(|v| operand_type(db, *v))
+        // Using OpAdaptor.operand_type() handles both OpResult and BlockArg cases
+        let enum_type = adaptor
+            .operand_type(db, 0)
             .unwrap_or_else(|| variant_is.r#type(db));
 
         // Create variant-specific type for the ref.test
@@ -326,7 +325,7 @@ impl RewritePattern for VariantCastPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(variant_cast) = adt::VariantCast::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -336,10 +335,9 @@ impl RewritePattern for VariantCastPattern {
 
         // Get the enum type - prefer operand type over attribute type
         // (attribute may have unsubstituted type.var, operand has concrete type)
-        let enum_type = op
-            .operands(db)
-            .first()
-            .and_then(|v| operand_type(db, *v))
+        // Using OpAdaptor.operand_type() handles both OpResult and BlockArg cases
+        let enum_type = adaptor
+            .operand_type(db, 0)
             .unwrap_or_else(|| variant_cast.r#type(db));
 
         // Create variant-specific type for the ref.cast
@@ -372,7 +370,7 @@ impl RewritePattern for VariantGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(variant_get) = adt::VariantGet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -390,6 +388,7 @@ impl RewritePattern for VariantGetPattern {
 
         // Infer type from the operand (the cast result has the variant-specific type)
         // Set as type attribute for emit to use; clear any original attrs via fresh builder
+        // Using OpAdaptor.operand_type() handles both OpResult and BlockArg cases
         let mut builder = op
             .modify(db)
             .dialect_str("wasm")
@@ -397,21 +396,11 @@ impl RewritePattern for VariantGetPattern {
             .attr("field_idx", Attribute::IntBits(field_idx));
 
         // Override type attribute with operand type (original might have base enum type)
-        if let Some(ref_operand) = op.operands(db).first()
-            && let Some(ref_type) = operand_type(db, *ref_operand)
-        {
+        if let Some(ref_type) = adaptor.operand_type(db, 0) {
             builder = builder.attr("type", Attribute::Type(ref_type));
         }
 
         RewriteResult::Replace(builder.build())
-    }
-}
-
-/// Get the type of a value from its defining operation's result type.
-fn operand_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
-    match value.def(db) {
-        trunk_ir::ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
-        trunk_ir::ValueDef::BlockArg(_) => None,
     }
 }
 
