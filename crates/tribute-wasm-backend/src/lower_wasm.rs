@@ -241,6 +241,7 @@ impl<'db> WasmLowerer<'db> {
         }
 
         // Emit yield globals for continuation support
+        // Note: $yield_value is no longer needed - shift_value is stored in continuation struct
         if self.has_continuations {
             // $yield_state: i32 (0 = normal, 1 = yielding)
             builder.op(wasm::global(
@@ -259,14 +260,6 @@ impl<'db> WasmLowerer<'db> {
                 0,
             ));
             // $yield_cont: anyref (captured continuation, GC-managed)
-            builder.op(wasm::global(
-                self.db,
-                module_location,
-                Symbol::new("anyref"),
-                true,
-                0,
-            ));
-            // $yield_value: anyref (value passed with shift)
             builder.op(wasm::global(
                 self.db,
                 module_location,

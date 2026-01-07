@@ -32,7 +32,10 @@
 //! - `$yield_state`: i32 (0 = normal, 1 = yielding)
 //! - `$yield_tag`: i32 (prompt tag being yielded to)
 //! - `$yield_cont`: anyref (captured continuation, GC-managed)
-//! - `$yield_value`: anyref (value passed with shift)
+//! - `$yield_op_idx`: i32 (operation index for multi-op abilities)
+//!
+//! Note: The value passed with shift is stored in the continuation struct's
+//! `shift_value` field instead of a global variable.
 
 use std::collections::BTreeMap;
 
@@ -54,15 +57,25 @@ use crate::type_converter::wasm_type_converter;
 /// - Field 0: resume_fn (funcref) - function to call when resuming
 /// - Field 1: state (anyref) - captured local state
 /// - Field 2: tag (i32) - prompt tag this continuation belongs to
+/// - Field 3: shift_value (anyref) - value yielded by shift (for handler)
 ///
 /// The continuation type is a WasmGC struct with these fixed fields.
 /// Each shift point generates a unique State struct type to capture live locals.
+///
+/// ## Resume Wrapper
+///
+/// When resuming a continuation, a wrapper struct is created:
+/// - Field 0: state (anyref) - the original state from continuation
+/// - Field 1: resume_value (anyref) - value passed by handler to continuation
+///
+/// This allows the resume function to receive both state and value in a single
+/// parameter, eliminating the need for globals.
 pub mod cont_types {
     use super::*;
 
     /// Create a continuation struct type.
     ///
-    /// Layout: (resume_fn: funcref, state: anyref, tag: i32)
+    /// Layout: (resume_fn: funcref, state: anyref, tag: i32, shift_value: anyref)
     ///
     /// The actual GC struct type is inferred from struct_new operands at emit time.
     /// We use `wasm.structref` as a placeholder type that represents any struct.
@@ -89,12 +102,24 @@ pub mod cont_types {
         wasm::Structref::new(db).as_type()
     }
 
+    /// Create the resume wrapper struct type.
+    ///
+    /// Layout: (state: anyref, resume_value: anyref)
+    ///
+    /// This wrapper is created at resume time to pass both state and value
+    /// to the resume function in a single parameter.
+    pub fn resume_wrapper_type(db: &dyn salsa::Database) -> Type<'_> {
+        wasm::Structref::new(db).as_type()
+    }
+
     /// Create the resume function type.
     ///
-    /// Signature: (state: anyref, value: anyref) -> anyref
+    /// Signature: (wrapper: anyref) -> anyref
+    ///
+    /// The wrapper contains both state and resume_value.
     pub fn resume_fn_type(db: &dyn salsa::Database) -> Type<'_> {
         let anyref = wasm::Anyref::new(db).as_type();
-        core::Func::new(db, IdVec::from(vec![anyref, anyref]), anyref).as_type()
+        core::Func::new(db, IdVec::from(vec![anyref]), anyref).as_type()
     }
 }
 
@@ -1316,11 +1341,14 @@ fn box_value_if_needed<'db>(
 /// avoiding stale SSA references that would occur if generated upfront.
 ///
 /// The `shift_result` is the result value of the cont.shift operation. If the
-/// continuation ops use this value, we map it to the `value` parameter of the
-/// resume function (the value passed when the continuation is resumed).
+/// continuation ops use this value, we map it to the resume_value extracted from
+/// the wrapper struct (the value passed when the continuation is resumed).
 ///
 /// The `shift_result_type` is the expected type of the shift result. If it's a
-/// primitive type (Int, Nat), we need to unbox the value parameter (anyref → i64).
+/// primitive type (Int, Nat), we need to unbox the resume_value (anyref → i32).
+///
+/// Resume function signature: (wrapper: anyref) -> anyref
+/// Wrapper layout: (state: anyref, resume_value: anyref)
 fn generate_inline_resume_function<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
@@ -1334,52 +1362,93 @@ fn generate_inline_resume_function<'db>(
     use trunk_ir::{BlockArg, BlockId};
 
     let anyref = wasm::Anyref::new(db).as_type();
+    let structref_ty = wasm::Structref::new(db).as_type();
     let func_ty = cont_types::resume_fn_type(db);
 
-    // Block arguments are typed (state: anyref, value: anyref)
-    let block_args = IdVec::from(vec![
-        BlockArg::of_type(db, anyref),
-        BlockArg::of_type(db, anyref),
-    ]);
+    // Block argument is wrapper: anyref
+    let block_args = IdVec::from(vec![BlockArg::of_type(db, anyref)]);
     let block_id = BlockId::fresh();
 
-    // Get block argument values
-    let state_param = Value::new(db, ValueDef::BlockArg(block_id), 0);
-    let value_param = Value::new(db, ValueDef::BlockArg(block_id), 1);
+    // Get wrapper parameter
+    let wrapper_param = Value::new(db, ValueDef::BlockArg(block_id), 0);
 
     use trunk_ir::rewrite::MaterializeResult;
 
     let mut ops: Vec<Operation<'db>> = Vec::new();
     let mut value_mapping: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
-    // Map the shift's result to the value parameter (possibly after unboxing)
-    // The value parameter is anyref, but the shift result may expect a primitive type
+    // Extract state and resume_value from wrapper struct
+    // Wrapper layout: (state: anyref, resume_value: anyref)
+    const WRAPPER_FIELD_COUNT: u64 = 2;
+
+    // Cast wrapper from anyref to structref
+    let wrapper_cast_op = wasm::ref_cast(db, location, wrapper_param, structref_ty, structref_ty)
+        .as_operation()
+        .modify(db)
+        .attr("field_count", Attribute::IntBits(WRAPPER_FIELD_COUNT))
+        .build();
+    let wrapper_cast = Value::new(db, ValueDef::OpResult(wrapper_cast_op), 0);
+    ops.push(wrapper_cast_op);
+
+    // Extract state from wrapper (field 0)
+    let get_state = wasm::struct_get(
+        db,
+        location,
+        wrapper_cast,
+        anyref,
+        0, // type_idx - Placeholder
+        0, // field_idx for state
+    )
+    .as_operation()
+    .modify(db)
+    .attr("type", Attribute::Type(structref_ty))
+    .attr("field_count", Attribute::IntBits(WRAPPER_FIELD_COUNT))
+    .build();
+    let state_val = Value::new(db, ValueDef::OpResult(get_state), 0);
+    ops.push(get_state);
+
+    // Extract resume_value from wrapper (field 1)
+    let get_resume_value = wasm::struct_get(
+        db,
+        location,
+        wrapper_cast,
+        anyref,
+        0, // type_idx - Placeholder
+        1, // field_idx for resume_value
+    )
+    .as_operation()
+    .modify(db)
+    .attr("type", Attribute::Type(structref_ty))
+    .attr("field_count", Attribute::IntBits(WRAPPER_FIELD_COUNT))
+    .build();
+    let resume_value = Value::new(db, ValueDef::OpResult(get_resume_value), 0);
+    ops.push(get_resume_value);
+
+    // Map the shift's result to the resume_value (possibly after unboxing)
+    // The resume_value is anyref, but the shift result may expect a primitive type
     if let Some(shift_result_value) = shift_result {
         let mapped_value = if let Some(result_ty) = shift_result_type {
             // Use TypeConverter to materialize anyref → target_ty conversion
-            let anyref_ty = wasm::Anyref::new(db).as_type();
-            match wasm_type_converter().materialize(db, location, value_param, anyref_ty, result_ty)
-            {
+            match wasm_type_converter().materialize(db, location, resume_value, anyref, result_ty) {
                 Some(MaterializeResult::Ops(generated_ops)) => {
                     let last_op = *generated_ops.last().unwrap();
                     ops.extend(generated_ops);
                     last_op.result(db, 0)
                 }
-                _ => value_param,
+                _ => resume_value,
             }
         } else {
-            value_param
+            resume_value
         };
         value_mapping.insert(shift_result_value, mapped_value);
     }
 
     // Extract live locals from state struct
-    // Cast state_param from anyref to structref for struct_get operations
-    let structref_ty = wasm::Structref::new(db).as_type();
+    // Cast state from anyref to structref for struct_get operations
     let field_count = live_locals.len();
     let state_cast = if !live_locals.is_empty() {
         // Add field_count attribute so emit can look up concrete type index from placeholder map
-        let ref_cast_op = wasm::ref_cast(db, location, state_param, structref_ty, structref_ty)
+        let ref_cast_op = wasm::ref_cast(db, location, state_val, structref_ty, structref_ty)
             .as_operation()
             .modify(db)
             .attr("field_count", Attribute::IntBits(field_count as u64))
@@ -1388,7 +1457,7 @@ fn generate_inline_resume_function<'db>(
         ops.push(ref_cast_op);
         cast_result
     } else {
-        state_param
+        state_val
     };
 
     for (field_idx, live_local) in live_locals.iter().enumerate() {
@@ -1421,8 +1490,8 @@ fn generate_inline_resume_function<'db>(
         let remapped_ops = resume_gen::remap_operations(db, continuation_ops, &mut value_mapping);
         ops.extend(remapped_ops);
     } else {
-        // No continuation body - just return the value parameter
-        ops.push(wasm::r#return(db, location, Some(value_param)).as_operation());
+        // No continuation body - just return the resume_value
+        ops.push(wasm::r#return(db, location, Some(resume_value)).as_operation());
     }
 
     // Create function body block with typed arguments
@@ -1552,12 +1621,35 @@ fn expand_shift_operation<'db>(
     let tag_val = tag_const.as_operation().result(db, 0);
     ops.push(tag_const.as_operation());
 
-    // Build the continuation struct
+    // Field 3: shift_value (anyref) - the value yielded by shift
+    // Primitives need to be boxed since this field is anyref
+    let shift_operands = op.operands(db);
+    let shift_value_val = if let Some(&first_value) = shift_operands.first() {
+        // Get the type of the value to check if boxing is needed
+        let value_ty = match first_value.def(db) {
+            ValueDef::OpResult(def_op) => def_op.results(db).get(first_value.index(db)).copied(),
+            ValueDef::BlockArg(_) => None,
+        };
+        // Box primitive values before storing in anyref field
+        if let Some(ty) = value_ty {
+            box_value_if_needed(db, location, first_value, ty, &mut ops)
+        } else {
+            first_value
+        }
+    } else {
+        // No value provided - use null
+        let null_value = wasm::ref_null(db, location, anyref_ty, anyref_ty);
+        let val = null_value.as_operation().result(db, 0);
+        ops.push(null_value.as_operation());
+        val
+    };
+
+    // Build the continuation struct with 4 fields: (resume_fn, state, tag, shift_value)
     let cont_ty = cont_types::continuation_type(db);
     let cont_struct = wasm::struct_new(
         db,
         location,
-        IdVec::from(vec![resume_fn_val, state_val, tag_val]),
+        IdVec::from(vec![resume_fn_val, state_val, tag_val, shift_value_val]),
         cont_ty,
         0, // type_idx - Placeholder, resolved at emit time
     );
@@ -1580,30 +1672,6 @@ fn expand_shift_operation<'db>(
 
     // Set $yield_cont = continuation struct
     ops.push(wasm::global_set(db, location, cont_val, YIELD_CONT_IDX).as_operation());
-
-    // Set $yield_value from shift's operand (or null if no value provided)
-    // Primitives need to be boxed since $yield_value is anyref
-    let shift_operands = op.operands(db);
-    let yield_value_val = if let Some(&first_value) = shift_operands.first() {
-        // Get the type of the value to check if boxing is needed
-        let value_ty = match first_value.def(db) {
-            ValueDef::OpResult(def_op) => def_op.results(db).get(first_value.index(db)).copied(),
-            ValueDef::BlockArg(_) => None,
-        };
-        // Box primitive values before storing in anyref global
-        if let Some(ty) = value_ty {
-            box_value_if_needed(db, location, first_value, ty, &mut ops)
-        } else {
-            first_value
-        }
-    } else {
-        // No value provided - use null
-        let null_value = wasm::ref_null(db, location, anyref_ty, anyref_ty);
-        let val = null_value.as_operation().result(db, 0);
-        ops.push(null_value.as_operation());
-        val
-    };
-    ops.push(wasm::global_set(db, location, yield_value_val, YIELD_VALUE_IDX).as_operation());
 
     // Set $yield_op_idx = op_idx (for multi-op ability dispatch)
     let op_idx_const = wasm::i32_const(db, location, i32_ty, op_idx_value as i32);
@@ -1695,8 +1763,8 @@ impl RewritePattern for PushPromptPattern {
         // Handler invocation flow:
         // 1. Reset yield_state to 0 (we're handling this yield)
         // 2. Load the continuation from $yield_cont
-        // 3. Load the yield value from $yield_value
-        // 4. Call the handler with (continuation, value)
+        // 3. Extract shift_value from continuation struct (field 3)
+        // 4. Call the handler with (continuation, shift_value)
         //
         // Currently, step 4 requires upstream changes:
         // - handler_lower.rs needs to populate shift's handler region with actual code
@@ -1710,13 +1778,29 @@ impl RewritePattern for PushPromptPattern {
 
         // Load continuation from $yield_cont for handler invocation
         let cont_ty = cont_types::continuation_type(db);
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let structref_ty = wasm::Structref::new(db).as_type();
         let get_cont = wasm::global_get(db, location, cont_ty, YIELD_CONT_IDX);
         let cont_val = get_cont.as_operation().result(db, 0);
 
-        // Load yield value from $yield_value for handler invocation
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let get_value = wasm::global_get(db, location, anyref_ty, YIELD_VALUE_IDX);
-        let value_val = get_value.as_operation().result(db, 0);
+        // Extract shift_value from continuation struct (field 3)
+        // Continuation layout: (resume_fn, state, tag, shift_value)
+        const SHIFT_VALUE_FIELD_IDX: u32 = 3;
+        const CONT_FIELD_COUNT: u64 = 4;
+        let get_value = wasm::struct_get(
+            db,
+            location,
+            cont_val,
+            anyref_ty,
+            0, // type_idx - Placeholder, resolved at emit time
+            SHIFT_VALUE_FIELD_IDX,
+        )
+        .as_operation()
+        .modify(db)
+        .attr("type", Attribute::Type(structref_ty))
+        .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+        .build();
+        let value_val = Value::new(db, ValueDef::OpResult(get_value), 0);
 
         // Drop the loaded values until handler invocation is implemented
         // TODO(#100): Replace these drops with actual handler call
@@ -1736,7 +1820,7 @@ impl RewritePattern for PushPromptPattern {
                 const_0.as_operation(),
                 reset_yield.as_operation(),
                 get_cont.as_operation(),
-                get_value.as_operation(),
+                get_value,
                 drop_cont.as_operation(),
                 drop_value.as_operation(),
             ]),
@@ -1953,11 +2037,11 @@ fn insert_ops_before_last<'db>(
 }
 
 // Yield global indices (must match order in lower_wasm.rs module_preamble_ops)
+// Note: $yield_value is no longer used - shift_value is stored in continuation struct
 const YIELD_STATE_IDX: u32 = 0;
 const YIELD_TAG_IDX: u32 = 1;
 const YIELD_CONT_IDX: u32 = 2;
-const YIELD_VALUE_IDX: u32 = 3;
-const YIELD_OP_IDX: u32 = 4;
+const YIELD_OP_IDX: u32 = 3;
 
 /// Compute a deterministic hash-based index from an operation name.
 /// This is used by both shift expansion and handler dispatch to ensure
@@ -2174,12 +2258,18 @@ fn build_multi_arm_dispatch<'db>(
 /// - Field 0: resume_fn (funcref)
 /// - Field 1: state (anyref)
 /// - Field 2: tag (i32)
+/// - Field 3: shift_value (anyref)
+///
+/// Resume wrapper struct layout:
+/// - Field 0: state (anyref)
+/// - Field 1: resume_value (anyref)
 ///
 /// Resume operation:
 /// 1. Reset $yield_state = 0
 /// 2. Extract resume_fn from continuation
 /// 3. Extract state from continuation
-/// 4. Call resume_fn(state, value) via call_indirect
+/// 4. Create wrapper struct with (state, boxed_value)
+/// 5. Call resume_fn(wrapper) via call_indirect
 struct ResumePattern;
 
 /// Continuation struct field indices
@@ -2187,6 +2277,14 @@ const CONT_FIELD_RESUME_FN: u32 = 0;
 const CONT_FIELD_STATE: u32 = 1;
 #[allow(dead_code)]
 const CONT_FIELD_TAG: u32 = 2;
+#[allow(dead_code)]
+const CONT_FIELD_SHIFT_VALUE: u32 = 3;
+
+/// Resume wrapper struct field indices
+#[allow(dead_code)]
+const WRAPPER_FIELD_STATE: u32 = 0;
+#[allow(dead_code)]
+const WRAPPER_FIELD_RESUME_VALUE: u32 = 1;
 
 impl RewritePattern for ResumePattern {
     fn match_and_rewrite<'db>(
@@ -2206,6 +2304,7 @@ impl RewritePattern for ResumePattern {
         let i32_ty = core::I32::new(db).as_type();
         let funcref_ty = wasm::Funcref::new(db).as_type();
         let anyref_ty = wasm::Anyref::new(db).as_type();
+        let structref_ty = wasm::Structref::new(db).as_type();
 
         let mut ops = Vec::new();
 
@@ -2216,10 +2315,8 @@ impl RewritePattern for ResumePattern {
         ops.push(wasm::global_set(db, location, const_0_val, YIELD_STATE_IDX).as_operation());
 
         // 2. Extract resume_fn from continuation (field 0)
-        // The continuation is a struct with 3 fields: (resume_fn, state, tag)
-        // We need to add type and field_count attributes for emit to resolve the correct type
-        let structref_ty = wasm::Structref::new(db).as_type();
-        const CONT_FIELD_COUNT: u64 = 3; // (resume_fn, state, tag)
+        // Continuation layout: (resume_fn, state, tag, shift_value)
+        const CONT_FIELD_COUNT: u64 = 4;
 
         let get_resume_fn = wasm::struct_get(
             db,
@@ -2255,7 +2352,7 @@ impl RewritePattern for ResumePattern {
         ops.push(get_state);
 
         // 4. Box the value if it's a primitive type
-        // Resume function expects (state: anyref, value: anyref), so primitives need boxing
+        // Resume wrapper expects (state: anyref, resume_value: anyref), so primitives need boxing
         let value_ty = match value.def(db) {
             ValueDef::OpResult(def_op) => def_op.results(db).get(value.index(db)).copied(),
             ValueDef::BlockArg(_) => None,
@@ -2266,15 +2363,27 @@ impl RewritePattern for ResumePattern {
             value
         };
 
-        // 5. Call resume_fn(state, value) via call_indirect
-        // Resume function signature: (state: anyref, value: anyref) -> result
-        // For now, we use call_indirect with type_idx 0 (placeholder)
+        // 5. Create wrapper struct with (state, boxed_value)
+        // Resume wrapper layout: (state: anyref, resume_value: anyref)
+        let wrapper_ty = cont_types::resume_wrapper_type(db);
+        let wrapper_struct = wasm::struct_new(
+            db,
+            location,
+            IdVec::from(vec![state_val, boxed_value]),
+            wrapper_ty,
+            0, // type_idx - Placeholder, resolved at emit time
+        );
+        let wrapper_val = Value::new(db, ValueDef::OpResult(wrapper_struct.as_operation()), 0);
+        ops.push(wrapper_struct.as_operation());
+
+        // 6. Call resume_fn(wrapper) via call_indirect
+        // Resume function signature: (wrapper: anyref) -> result
         // The actual type will be resolved at emit time
         let result_ty = op.results(db).first().copied().unwrap_or(anyref_ty);
         let call_indirect = wasm::call_indirect(
             db,
             location,
-            IdVec::from(vec![state_val, boxed_value, resume_fn_val]),
+            IdVec::from(vec![wrapper_val, resume_fn_val]),
             IdVec::from(vec![result_ty]),
             0, // type_idx - Placeholder - resolved at emit
             0, // table - Default table
@@ -2429,16 +2538,16 @@ mod tests {
         // 0. wasm.struct_new (empty state struct)
         // 1. wasm.ref_null (null funcref for resume_fn since no resume function)
         // 2. wasm.i32_const (tag value for continuation struct)
-        // 3. wasm.struct_new (continuation struct)
-        // 4. wasm.i32_const (yield_state = 1)
-        // 5. wasm.global_set (yield_state)
-        // 6. wasm.i32_const (yield_tag)
-        // 7. wasm.global_set (yield_tag)
-        // 8. wasm.global_set (yield_cont)
-        // 9. wasm.ref_null (yield_value = null)
-        // 10. wasm.global_set (yield_value)
-        // 11. wasm.i32_const (yield_op_idx = 0)
-        // 12. wasm.global_set (yield_op_idx)
+        // 3. wasm.ref_null (shift_value = null since no value operand)
+        // 4. wasm.struct_new (continuation struct with 4 fields)
+        // 5. wasm.i32_const (yield_state = 1)
+        // 6. wasm.global_set (yield_state)
+        // 7. wasm.i32_const (yield_tag)
+        // 8. wasm.global_set (yield_tag)
+        // 9. wasm.global_set (yield_cont)
+        // 10. wasm.i32_const (yield_op_idx = 0)
+        // 11. wasm.global_set (yield_op_idx)
+        // 12. wasm.ref_null (dummy return value)
         // 13. wasm.return
 
         // First op: struct_new (empty state struct)
@@ -2447,8 +2556,13 @@ mod tests {
         assert_eq!(op_names.last(), Some(&"wasm.return".to_string()));
         // Should NOT contain ref_func (no resume function when no continuation)
         assert!(!op_names.contains(&"wasm.ref_func".to_string()));
-        // Should contain ref_null for resume_fn
-        assert!(op_names.contains(&"wasm.ref_null".to_string()));
+        // Should contain ref_null for resume_fn and shift_value and return value
+        let ref_null_count = op_names.iter().filter(|n| *n == "wasm.ref_null").count();
+        assert!(
+            ref_null_count >= 2,
+            "expected at least 2 ref_null (resume_fn + shift_value), got {}",
+            ref_null_count
+        );
         // Should contain struct_new for continuation (and state)
         let struct_new_count = op_names.iter().filter(|n| *n == "wasm.struct_new").count();
         assert!(
@@ -2456,9 +2570,9 @@ mod tests {
             "expected at least 2 struct_new (state + continuation), got {}",
             struct_new_count
         );
-        // Total: 15 operations (no resume function, just shift expansion)
-        // +1 for ref.null that provides the dummy return value when yielding
-        assert_eq!(op_names.len(), 15);
+        // Total: 14 operations (no resume function, just shift expansion)
+        // shift_value is now in continuation struct, no yield_value global
+        assert_eq!(op_names.len(), 14);
     }
 
     #[salsa::tracked]
@@ -2511,11 +2625,11 @@ mod tests {
         // Resume should expand to:
         // 1. wasm.i32_const (yield_state = 0)
         // 2. wasm.global_set (reset yield_state)
-        // 3. wasm.struct_get (extract resume_fn)
-        // 4. wasm.struct_get (extract state)
-        // 5. tribute_rt.box_int (box the i32 value, since resume needs anyref)
-
-        // 6. wasm.call_indirect (invoke resume_fn)
+        // 3. wasm.struct_get (extract resume_fn from continuation)
+        // 4. wasm.struct_get (extract state from continuation)
+        // 5. tribute_rt.box_int (box the i32 value, since wrapper needs anyref)
+        // 6. wasm.struct_new (create wrapper struct with state + boxed_value)
+        // 7. wasm.call_indirect (invoke resume_fn with wrapper)
         // First op: i32_const for resetting yield_state
         assert_eq!(op_names.first(), Some(&"wasm.i32_const".to_string()));
         // Last op: call_indirect to invoke resume function
@@ -2524,8 +2638,10 @@ mod tests {
         assert!(op_names.contains(&"wasm.struct_get".to_string()));
         // Should contain boxing operation for the i32 value
         assert!(op_names.contains(&"tribute_rt.box_int".to_string()));
-        // Total: 6 operations (added box_int for i32 value)
-        assert_eq!(op_names.len(), 6);
+        // Should contain struct_new for wrapper
+        assert!(op_names.contains(&"wasm.struct_new".to_string()));
+        // Total: 7 operations (added struct_new for wrapper)
+        assert_eq!(op_names.len(), 7);
     }
 
     #[salsa::tracked]
