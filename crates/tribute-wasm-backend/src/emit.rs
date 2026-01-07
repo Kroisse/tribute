@@ -694,6 +694,17 @@ fn collect_module_info<'db>(
     // Collect functions referenced via ref.func for declarative elem segment
     info.ref_funcs = collect_ref_funcs(db, module);
 
+    // Auto-create a funcref table if call_indirect is used but no table is defined.
+    // WebAssembly requires a table for call_indirect to reference.
+    if info.tables.is_empty() && has_call_indirect(db, module) {
+        debug!("Auto-generating funcref table for call_indirect");
+        info.tables.push(TableDef {
+            reftype: RefType::FUNCREF,
+            min: 0,
+            max: None,
+        });
+    }
+
     Ok(info)
 }
 
@@ -1572,6 +1583,32 @@ fn collect_ref_funcs<'db>(
     let mut ref_funcs = HashSet::new();
     collect_from_region(db, &module.body(db), &mut ref_funcs);
     ref_funcs
+}
+
+/// Check if the module contains any call_indirect operations.
+fn has_call_indirect<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) -> bool {
+    fn check_region<'db>(db: &'db dyn salsa::Database, region: &trunk_ir::Region<'db>) -> bool {
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                // Check nested regions first
+                for nested in op.regions(db).iter() {
+                    if check_region(db, nested) {
+                        return true;
+                    }
+                }
+
+                // Check if this is a call_indirect
+                if op.dialect(db) == Symbol::new("wasm")
+                    && op.name(db) == Symbol::new("call_indirect")
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    check_region(db, &module.body(db))
 }
 
 fn extract_function_def<'db>(
