@@ -20,7 +20,7 @@ use crate::type_converter::wasm_type_converter;
 
 /// Lower tribute_rt dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    PatternApplicator::with_type_converter(wasm_type_converter())
+    PatternApplicator::new(wasm_type_converter())
         .add_pattern(BoxIntPattern)
         .add_pattern(UnboxIntPattern)
         .apply(db, module)

@@ -49,7 +49,8 @@
 //! # }
 //! # #[salsa::tracked]
 //! # fn apply_rename(db: &dyn salsa::Database, module: Module<'_>) -> bool {
-//! #     let applicator = PatternApplicator::new()
+//! #     use trunk_ir::rewrite::TypeConverter;
+//! #     let applicator = PatternApplicator::new(TypeConverter::new())
 //! #         .add_pattern(RenamePattern)
 //! #         .with_max_iterations(50);
 //! #     let result = applicator.apply(db, module);

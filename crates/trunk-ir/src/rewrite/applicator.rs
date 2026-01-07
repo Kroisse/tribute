@@ -63,7 +63,8 @@ pub struct ApplyResult<'db> {
 /// # }
 /// # #[salsa::tracked]
 /// # fn apply_rename(db: &dyn salsa::Database, module: Module<'_>) -> bool {
-/// #     let applicator = PatternApplicator::new()
+/// #     use trunk_ir::rewrite::TypeConverter;
+/// #     let applicator = PatternApplicator::new(TypeConverter::new())
 /// #         .add_pattern(RenamePattern)
 /// #         .with_max_iterations(50);
 /// #     let result = applicator.apply(db, module);
@@ -82,24 +83,18 @@ pub struct PatternApplicator {
 }
 
 impl PatternApplicator {
-    /// Create a new pattern applicator with an empty type converter.
-    pub fn new() -> Self {
-        Self {
-            patterns: Vec::new(),
-            max_iterations: 100,
-            type_converter: super::TypeConverter::new(),
-        }
-    }
-
     /// Create a new pattern applicator with a type converter.
     ///
     /// The `OpAdaptor` will convert types using this converter,
     /// providing patterns with already-converted types via `operand_type()`.
-    pub fn with_type_converter(converter: super::TypeConverter) -> Self {
+    ///
+    /// Use `TypeConverter::new()` for an empty converter if no type
+    /// conversions are needed.
+    pub fn new(type_converter: super::TypeConverter) -> Self {
         Self {
             patterns: Vec::new(),
             max_iterations: 100,
-            type_converter: converter,
+            type_converter,
         }
     }
 
@@ -317,7 +312,7 @@ impl PatternApplicator {
 
 impl Default for PatternApplicator {
     fn default() -> Self {
-        Self::new()
+        Self::new(super::TypeConverter::new())
     }
 }
 
@@ -357,6 +352,7 @@ fn collect_from_region<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rewrite::TypeConverter;
     use crate::{Attribute, BlockId, Location, PathId, Span, idvec};
     use salsa_test_macros::salsa_test;
 
@@ -413,7 +409,8 @@ mod tests {
         db: &dyn salsa::Database,
         module: Module<'_>,
     ) -> (bool, usize, usize, String) {
-        let applicator = PatternApplicator::new().add_pattern(TestRenamePattern);
+        let applicator =
+            PatternApplicator::new(TypeConverter::new()).add_pattern(TestRenamePattern);
         let result = applicator.apply(db, module);
         let body = result.module.body(db);
         let op_name = body.blocks(db)[0].operations(db)[0].full_name(db);
