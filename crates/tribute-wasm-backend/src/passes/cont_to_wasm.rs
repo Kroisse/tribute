@@ -232,13 +232,12 @@ pub mod resume_gen {
         for (field_idx, live_local) in info.live_locals.iter().enumerate() {
             // Generate struct_get to extract this field
             // Add type and field_count attributes for proper type resolution at emit time
-            // Lower tribute_rt types to ensure consistency with struct_new operand types
-            let lowered_ty = lower_tribute_rt_type(db, live_local.ty);
+            // live_local.ty is already converted by compute_live_locals
             let struct_get = wasm::struct_get(
                 db,
                 location,
                 state_param,
-                lowered_ty,
+                live_local.ty,
                 0, // type_idx - Placeholder, resolved at emit time
                 field_idx as u32,
             )
@@ -672,6 +671,8 @@ impl<'db> ContinuationAnalyzer<'db> {
     ) -> Vec<LiveLocal<'db>> {
         use std::collections::HashSet;
 
+        let converter = wasm_type_converter();
+
         // Collect values defined before shift (including function args)
         let mut defined_before: HashSet<Value<'db>> = HashSet::new();
 
@@ -703,9 +704,12 @@ impl<'db> ContinuationAnalyzer<'db> {
         // Live locals = defined before ∩ used after
         let mut live_locals = Vec::new();
         for value in defined_before.intersection(&used_after) {
-            // Get the type of this value
+            // Get the type of this value and convert using TypeConverter
             let ty = self.get_value_type(*value);
             if let Some(ty) = ty {
+                // Convert high-level types to WASM types
+                let converted_ty = converter.convert_type(self.db, ty).unwrap_or(ty);
+
                 // Get operation info for better debugging
                 let (op_dialect, op_name, op_result_ty) = match value.def(self.db) {
                     ValueDef::OpResult(op) => {
@@ -722,14 +726,14 @@ impl<'db> ContinuationAnalyzer<'db> {
                     "compute_live_locals: value from {}.{} type={}.{} result_ty={:?}",
                     op_dialect,
                     op_name,
-                    ty.dialect(self.db),
-                    ty.name(self.db),
+                    converted_ty.dialect(self.db),
+                    converted_ty.name(self.db),
                     op_result_ty.map(|t| format!("{}.{}", t.dialect(self.db), t.name(self.db)))
                 );
                 live_locals.push(LiveLocal {
                     value: *value,
                     name: None, // TODO: Could extract from tribute.var if available
-                    ty,
+                    ty: converted_ty,
                 });
             } else {
                 // Warn about values that should be captured but have unknown types
@@ -1170,13 +1174,18 @@ fn compute_current_live_locals<'db>(
 ) -> Vec<LiveLocal<'db>> {
     use std::collections::{HashMap, HashSet};
 
-    // Collect values defined before the shift along with their types
+    let converter = wasm_type_converter();
+
+    // Helper to convert types using the TypeConverter
+    let convert_ty = |ty: Type<'db>| converter.convert_type(db, ty).unwrap_or(ty);
+
+    // Collect values defined before the shift along with their (converted) types
     let mut defined_before: HashMap<Value<'db>, Type<'db>> = HashMap::new();
 
     // Block arguments are defined before any operation
     for (i, &arg) in block_args.iter().enumerate() {
         if let Some(block_arg) = block.args(db).get(i) {
-            defined_before.insert(arg, block_arg.ty(db));
+            defined_before.insert(arg, convert_ty(block_arg.ty(db)));
         }
     }
 
@@ -1185,7 +1194,7 @@ fn compute_current_live_locals<'db>(
     for op in ops.iter().take(shift_op_idx) {
         let result_types = op.results(db);
         for i in 0..result_types.len() {
-            let ty = result_types[i];
+            let ty = convert_ty(result_types[i]);
             defined_before.insert(op.result(db, i), ty);
         }
     }
@@ -1435,13 +1444,12 @@ fn generate_inline_resume_function<'db>(
     for (field_idx, live_local) in live_locals.iter().enumerate() {
         // Generate struct_get to extract this field
         // Use structref as the type attribute - emit will resolve via placeholder map
-        // Lower tribute_rt types to ensure consistency with struct_new operand types
-        let lowered_ty = lower_tribute_rt_type(db, live_local.ty);
+        // live_local.ty is already converted by compute_current_live_locals
         let struct_get = wasm::struct_get(
             db,
             location,
             state_cast,
-            lowered_ty,
+            live_local.ty,
             0, // type_idx - Will be resolved via placeholder map
             field_idx as u32,
         )
