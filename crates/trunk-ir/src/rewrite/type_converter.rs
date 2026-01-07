@@ -42,11 +42,11 @@ impl<'db> MaterializeResult<'db> {
 }
 
 type TypeConversionFn<'db> =
-    Box<dyn Fn(&dyn salsa::Database, Type<'db>) -> Option<Type<'db>> + 'db>;
+    Box<dyn Fn(&'db dyn salsa::Database, Type<'db>) -> Option<Type<'db>> + 'db>;
 
 type MaterializeFn<'db> = Box<
     dyn Fn(
-            &dyn salsa::Database,
+            &'db dyn salsa::Database,
             Location<'db>,
             Value<'db>,
             Type<'db>,
@@ -102,7 +102,7 @@ impl<'db> TypeConverter<'db> {
     /// or `None` to try the next converter.
     pub fn add_conversion<F>(mut self, f: F) -> Self
     where
-        F: Fn(&dyn salsa::Database, Type<'db>) -> Option<Type<'db>> + 'db,
+        F: Fn(&'db dyn salsa::Database, Type<'db>) -> Option<Type<'db>> + 'db,
     {
         self.conversions.push(Box::new(f));
         self
@@ -120,7 +120,7 @@ impl<'db> TypeConverter<'db> {
     pub fn add_materialization<M>(mut self, m: M) -> Self
     where
         M: Fn(
-                &dyn salsa::Database,
+                &'db dyn salsa::Database,
                 Location<'db>,
                 Value<'db>,
                 Type<'db>,

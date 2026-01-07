@@ -7,6 +7,7 @@ pub mod lower_wasm;
 pub mod passes;
 mod plan;
 pub mod translate;
+pub mod type_converter;
 
 pub use emit::emit_wasm;
 pub use errors::{CompilationError, CompilationResult};
