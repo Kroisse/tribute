@@ -15,9 +15,11 @@ use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, idvec,
 };
 
+use crate::type_converter::wasm_type_converter;
+
 /// Lower scf dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    PatternApplicator::new()
+    PatternApplicator::with_type_converter(wasm_type_converter())
         .add_pattern(ScfIfPattern)
         .add_pattern(ScfLoopPattern)
         .add_pattern(ScfYieldPattern)

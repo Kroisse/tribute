@@ -15,9 +15,11 @@ use trunk_ir::dialect::{arith, core, wasm};
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type};
 
+use crate::type_converter::wasm_type_converter;
+
 /// Lower arith dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    PatternApplicator::new()
+    PatternApplicator::with_type_converter(wasm_type_converter())
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
         .add_pattern(ArithCmpPattern)

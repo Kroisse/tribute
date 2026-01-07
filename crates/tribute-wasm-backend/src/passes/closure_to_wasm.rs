@@ -25,13 +25,15 @@ use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation};
 
+use crate::type_converter::wasm_type_converter;
+
 /// Closure struct field count.
 /// Closure structs always have 2 fields: (func_ref: funcref, env: anyref)
 const CLOSURE_FIELD_COUNT: u64 = 2;
 
 /// Lower closure dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    PatternApplicator::new()
+    PatternApplicator::with_type_converter(wasm_type_converter())
         .add_pattern(ClosureNewPattern)
         .add_pattern(ClosureFuncPattern)
         .add_pattern(ClosureEnvPattern)
