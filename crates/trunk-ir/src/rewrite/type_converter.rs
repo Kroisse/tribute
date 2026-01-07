@@ -9,7 +9,8 @@ use smallvec::SmallVec;
 use crate::{Location, Operation, Type, Value};
 
 /// Stack-optimized vector for materialization operations.
-/// Most materializations produce 0-2 operations.
+/// Most materializations produce 0-2 operations; the array is sized
+/// to 4 for headroom to avoid heap allocation in edge cases.
 pub type OpVec<'db> = SmallVec<[Operation<'db>; 4]>;
 
 /// Result of a materialization attempt.
@@ -195,6 +196,101 @@ impl Default for TypeConverter {
 
 #[cfg(test)]
 mod tests {
-    // Basic tests would go here, but they require a database setup
-    // which is complex for unit tests. Integration tests are preferred.
+    use super::*;
+    use crate::DialectType;
+    use crate::dialect::core;
+    use salsa_test_macros::salsa_test;
+
+    #[salsa_test]
+    fn test_empty_converter_returns_none(db: &salsa::DatabaseImpl) {
+        let converter = TypeConverter::new();
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Empty converter should not convert any types
+        assert!(converter.convert_type(db, i32_ty).is_none());
+        assert!(converter.is_legal(db, i32_ty));
+    }
+
+    #[salsa_test]
+    fn test_add_conversion(db: &salsa::DatabaseImpl) {
+        let converter = TypeConverter::new().add_conversion(|db, ty| {
+            // Convert i32 → i64
+            core::I32::from_type(db, ty).map(|_| core::I64::new(db).as_type())
+        });
+
+        let i32_ty = core::I32::new(db).as_type();
+        let i64_ty = core::I64::new(db).as_type();
+
+        // i32 should convert to i64
+        let result = converter.convert_type(db, i32_ty);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), i64_ty);
+
+        // i64 should not be converted (no matching converter)
+        assert!(converter.convert_type(db, i64_ty).is_none());
+    }
+
+    #[salsa_test]
+    fn test_conversion_order(db: &salsa::DatabaseImpl) {
+        // First converter wins
+        let converter = TypeConverter::new()
+            .add_conversion(|db, ty| {
+                core::I32::from_type(db, ty).map(|_| core::I64::new(db).as_type())
+            })
+            .add_conversion(|db, ty| {
+                // This should never be reached for i32
+                core::I32::from_type(db, ty).map(|_| core::F64::new(db).as_type())
+            });
+
+        let i32_ty = core::I32::new(db).as_type();
+        let i64_ty = core::I64::new(db).as_type();
+
+        // First converter should win
+        let result = converter.convert_type(db, i32_ty);
+        assert_eq!(result.unwrap(), i64_ty);
+    }
+
+    #[test]
+    fn test_materialize_result_helpers() {
+        // Test MaterializeResult helper methods without needing a database
+        let result = MaterializeResult::<'static>::NoOp;
+        assert!(matches!(result, MaterializeResult::NoOp));
+
+        let skip = MaterializeResult::<'static>::Skip;
+        assert!(matches!(skip, MaterializeResult::Skip));
+    }
+
+    #[salsa_test]
+    fn test_multiple_conversions(db: &salsa::DatabaseImpl) {
+        // Test chaining multiple conversions
+        let converter = TypeConverter::new()
+            .add_conversion(|db, ty| {
+                // Convert i32 → i64
+                core::I32::from_type(db, ty).map(|_| core::I64::new(db).as_type())
+            })
+            .add_conversion(|db, ty| {
+                // Convert f32 → f64
+                core::F32::from_type(db, ty).map(|_| core::F64::new(db).as_type())
+            });
+
+        let i32_ty = core::I32::new(db).as_type();
+        let f32_ty = core::F32::new(db).as_type();
+        let i64_ty = core::I64::new(db).as_type();
+        let f64_ty = core::F64::new(db).as_type();
+
+        // Both conversions should work
+        assert_eq!(converter.convert_type(db, i32_ty), Some(i64_ty));
+        assert_eq!(converter.convert_type(db, f32_ty), Some(f64_ty));
+
+        // Types not registered should return None
+        assert!(converter.convert_type(db, i64_ty).is_none());
+    }
+
+    #[test]
+    fn test_default_converter() {
+        // Test Default implementation
+        let converter = TypeConverter::default();
+        assert!(converter.conversions.is_empty());
+        assert!(converter.materializations.is_empty());
+    }
 }
