@@ -1249,6 +1249,13 @@ fn collect_uses_in_region_recursive<'db>(
 /// - Int: anyref → intref → int (via tribute_rt.unbox_int)
 /// - Nat: anyref → intref → nat (via tribute_rt.unbox_int)
 ///
+/// # Limitations
+///
+/// Currently only Int/Nat are supported. Float and Bool are defined in
+/// `tribute_rt` dialect but not yet implemented for continuation boxing:
+/// - Float (f64): Would require heap allocation in WasmGC (no f64ref exists)
+/// - Bool: Could use i31ref but needs separate box_bool/unbox_bool ops
+///
 /// Returns the unboxed value (or the original value if no unboxing needed).
 fn unbox_value_if_needed<'db>(
     db: &'db dyn salsa::Database,
@@ -1274,6 +1281,11 @@ fn unbox_value_if_needed<'db>(
         ops.push(unbox.as_operation());
 
         unbox.result(db)
+    } else if tribute_rt::is_float(db, target_ty) || tribute_rt::is_bool(db, target_ty) {
+        // TODO: Implement float/bool unboxing
+        // Float requires heap-allocated boxing (no f64ref in WasmGC)
+        // Bool could reuse i31ref mechanism
+        panic!("unbox_value_if_needed: float/bool unboxing not yet implemented for continuations");
     } else {
         // No unboxing needed for reference types
         value
@@ -1313,6 +1325,13 @@ fn lower_tribute_rt_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Ty
 /// - core.i32: same as Int (lowered form)
 /// - I64: i64 → i32 → intref (truncate and box, legacy path)
 ///
+/// # Limitations
+///
+/// Currently only Int/Nat (and their lowered form core.i32) are supported.
+/// Float and Bool are defined in `tribute_rt` dialect but not yet implemented:
+/// - Float (f64): Would require heap allocation in WasmGC (no f64ref exists)
+/// - Bool: Could use i31ref but needs separate box_bool/unbox_bool ops
+///
 /// Returns the boxed value (or the original value if no boxing needed).
 fn box_value_if_needed<'db>(
     db: &'db dyn salsa::Database,
@@ -1344,6 +1363,11 @@ fn box_value_if_needed<'db>(
         ops.push(box_int.as_operation());
 
         box_int.result(db)
+    } else if tribute_rt::is_float(db, value_ty) || tribute_rt::is_bool(db, value_ty) {
+        // TODO: Implement float/bool boxing
+        // Float requires heap-allocated boxing (no f64ref in WasmGC)
+        // Bool could reuse i31ref mechanism
+        panic!("box_value_if_needed: float/bool boxing not yet implemented for continuations");
     } else {
         // No boxing needed for reference types
         value
