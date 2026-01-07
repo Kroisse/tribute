@@ -1882,15 +1882,24 @@ fn assign_locals_in_region<'db>(
                     &module_info.block_arg_types,
                 );
 
-                // For struct_get on variant types with type.var result, the local type
-                // must match the struct field type, not the IR result type.
-                // The IR may have a generic type.var, but the WASM struct.get returns
-                // the actual field type (e.g., I64 for Num variant's Int field).
-                // We check if the result type is type.var and the struct type is a variant.
-                // Use variant tag to determine field type semantics.
+                // For struct_get operations, the local type must match the actual struct
+                // field type, not the IR result type. This is critical because:
+                // 1. The IR may have a generic type.var that maps to anyref
+                // 2. Handler lambdas may have captured types like tribute.type<Int>
+                //    that convert to anyref but whose actual field is i32
+                // 3. The WASM struct.get instruction returns the actual field type
+                //
+                // We check if the result type would convert to anyref (indicating
+                // potential mismatch) and look up the actual field type from the
+                // struct definition or GC type table.
+                let effective_ty_is_ref =
+                    type_to_valtype(db, effective_ty, &module_info.type_idx_by_type)
+                        .ok()
+                        .map(|vt| matches!(vt, ValType::Ref(_)))
+                        .unwrap_or(false);
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("struct_get")
-                    && tribute::is_type_var(db, effective_ty)
+                    && (tribute::is_type_var(db, effective_ty) || effective_ty_is_ref)
                 {
                     // Try to get struct type from attribute first, fall back to operand type
                     let struct_ty_opt = op
@@ -2004,6 +2013,53 @@ fn assign_locals_in_region<'db>(
                                 effective_ty = tribute_rt::float_type(db);
                             } else if type_name == Symbol::new("Bool") {
                                 effective_ty = tribute_rt::bool_type(db);
+                            }
+                        }
+
+                        // For adt.struct types with generic field types (type_var), fall back to
+                        // the GC type table to determine the actual field type at WASM level.
+                        // This handles handler lambdas where captured types are generic.
+                        if adt::is_struct_type(db, struct_ty)
+                            && let Ok(field_idx) = attr_field_idx(op.attributes(db))
+                            && tribute::is_type_var(db, effective_ty)
+                        {
+                            // Look up the struct in the placeholder map using field count
+                            if let Some(fields) = adt::get_struct_fields(db, struct_ty) {
+                                let field_count = fields.len();
+                                let key = (*wasm::Structref::new(db), field_count);
+                                if let Some(&type_idx) =
+                                    module_info.placeholder_struct_type_idx.get(&key)
+                                    && let Some(GcTypeDef::Struct(gc_fields)) =
+                                        module_info.gc_types.get(type_idx as usize)
+                                    && let Some(field) = gc_fields.get(field_idx as usize)
+                                {
+                                    if matches!(field.element_type, StorageType::Val(ValType::I32))
+                                    {
+                                        debug!(
+                                            "  -> adt.struct GC fallback: field {} is i32",
+                                            field_idx
+                                        );
+                                        effective_ty = tribute_rt::int_type(db);
+                                    } else if matches!(
+                                        field.element_type,
+                                        StorageType::Val(ValType::I64)
+                                    ) {
+                                        debug!(
+                                            "  -> adt.struct GC fallback: field {} is i64",
+                                            field_idx
+                                        );
+                                        effective_ty = tribute_rt::int_type(db);
+                                    } else if matches!(
+                                        field.element_type,
+                                        StorageType::Val(ValType::F64)
+                                    ) {
+                                        debug!(
+                                            "  -> adt.struct GC fallback: field {} is f64",
+                                            field_idx
+                                        );
+                                        effective_ty = tribute_rt::float_type(db);
+                                    }
+                                }
                             }
                         }
 
