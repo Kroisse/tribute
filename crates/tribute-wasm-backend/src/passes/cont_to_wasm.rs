@@ -1223,8 +1223,8 @@ fn collect_uses_in_region_recursive<'db>(
 ///
 /// When the resume function receives a value as `anyref`, but the continuation
 /// expects a primitive type (Int/Nat), we need to unbox:
-/// - Int (i64): anyref → i31ref → i32 → i64 (sign-extend)
-/// - Nat (i64): anyref → i31ref → i32 → i64 (zero-extend)
+/// - Int: anyref → intref → int (via tribute_rt.unbox_int)
+/// - Nat: anyref → intref → nat (via tribute_rt.unbox_int)
 ///
 /// Returns the unboxed value (or the original value if no unboxing needed).
 fn unbox_value_if_needed<'db>(
@@ -1234,33 +1234,20 @@ fn unbox_value_if_needed<'db>(
     target_ty: Type<'db>,
     ops: &mut Vec<Operation<'db>>,
 ) -> Value<'db> {
-    let i32_ty = core::I32::new(db).as_type();
-    let i31ref_ty = wasm::I31ref::new(db).as_type();
+    let intref_ty = tribute_rt::intref_type(db);
 
-    if tribute_rt::is_int(db, target_ty) {
-        // Unbox Int: anyref → i31ref → i32 (signed)
+    if tribute_rt::is_int(db, target_ty) || tribute_rt::is_nat(db, target_ty) {
+        // Unbox Int/Nat: anyref → intref → int
 
-        // Step 1: ref.cast anyref to i31ref
-        let ref_cast = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty);
+        // Step 1: ref.cast anyref to intref (i31ref)
+        let ref_cast = wasm::ref_cast(db, location, value, intref_ty, intref_ty);
         ops.push(ref_cast.as_operation());
 
-        // Step 2: i31.get_s to extract signed i32
-        let i31_get_s = wasm::i31_get_s(db, location, ref_cast.result(db), i32_ty);
-        ops.push(i31_get_s.as_operation());
+        // Step 2: tribute_rt.unbox_int to extract value
+        let unbox = tribute_rt::unbox_int(db, location, ref_cast.result(db), target_ty);
+        ops.push(unbox.as_operation());
 
-        i31_get_s.result(db)
-    } else if tribute_rt::is_nat(db, target_ty) {
-        // Unbox Nat: anyref → i31ref → i32 (unsigned)
-
-        // Step 1: ref.cast anyref to i31ref
-        let ref_cast = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty);
-        ops.push(ref_cast.as_operation());
-
-        // Step 2: i31.get_u to extract unsigned i32
-        let i31_get_u = wasm::i31_get_u(db, location, ref_cast.result(db), i32_ty);
-        ops.push(i31_get_u.as_operation());
-
-        i31_get_u.result(db)
+        unbox.result(db)
     } else {
         // No unboxing needed for reference types
         value
@@ -1270,9 +1257,9 @@ fn unbox_value_if_needed<'db>(
 /// Generate boxing operations if the value type is a primitive.
 ///
 /// When passing a primitive value to a function expecting `anyref`, we need to box:
-/// - Int (i32): i32 → i31ref (direct conversion)
-/// - Nat (i32): i32 → i31ref (direct conversion)
-/// - I64: i64 → i32 → i31ref (truncate and wrap)
+/// - Int (i32): int → intref (via tribute_rt.box_int)
+/// - Nat (i32): nat → intref (via tribute_rt.box_int)
+/// - I64: i64 → i32 → intref (truncate and box, legacy path)
 ///
 /// Returns the boxed value (or the original value if no boxing needed).
 fn box_value_if_needed<'db>(
@@ -1282,23 +1269,24 @@ fn box_value_if_needed<'db>(
     value_ty: Type<'db>,
     ops: &mut Vec<Operation<'db>>,
 ) -> Value<'db> {
-    let i32_ty = core::I32::new(db).as_type();
-    let i31ref_ty = wasm::I31ref::new(db).as_type();
+    let intref_ty = tribute_rt::intref_type(db);
 
     if tribute_rt::is_int(db, value_ty) || tribute_rt::is_nat(db, value_ty) {
-        // Box Int/Nat (i32): direct conversion to i31ref
-        let ref_i31 = wasm::ref_i31(db, location, value, i31ref_ty);
-        ops.push(ref_i31.as_operation());
-        ref_i31.result(db)
+        // Box Int/Nat (i32): use tribute_rt.box_int to convert to intref
+        let box_int = tribute_rt::box_int(db, location, value, intref_ty);
+        ops.push(box_int.as_operation());
+        box_int.result(db)
     } else if core::I64::from_type(db, value_ty).is_some() {
-        // Box I64: i64 → i32 → i31ref (truncate and wrap)
+        // Box I64: i64 → i32 → intref (truncate and wrap)
+        // Note: This is a legacy path - tribute uses 31-bit Int/Nat now
+        let i32_ty = core::I32::new(db).as_type();
         let wrap = wasm::i32_wrap_i64(db, location, value, i32_ty);
         ops.push(wrap.as_operation());
 
-        let ref_i31 = wasm::ref_i31(db, location, wrap.result(db), i31ref_ty);
-        ops.push(ref_i31.as_operation());
+        let box_int = tribute_rt::box_int(db, location, wrap.result(db), intref_ty);
+        ops.push(box_int.as_operation());
 
-        ref_i31.result(db)
+        box_int.result(db)
     } else {
         // No boxing needed for reference types
         value
