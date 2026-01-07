@@ -794,10 +794,15 @@ fn collect_gc_types<'db>(
         if let Some(existing) = builder.fields[idx] {
             if existing != ty {
                 return Err(CompilationError::type_error(format!(
-                    "struct type index {type_idx} field {field_idx} type mismatch",
+                    "struct type index {type_idx} field {field_idx} type mismatch: existing={:?}, new={:?}",
+                    existing, ty
                 )));
             }
         } else {
+            debug!(
+                "GC: record_struct_field type_idx={} setting field {} to {:?}",
+                type_idx, field_idx, ty
+            );
             builder.fields[idx] = Some(ty);
         }
         Ok(())
@@ -953,8 +958,11 @@ fn collect_gc_types<'db>(
                 for (field_idx, value) in op.operands(db).iter().enumerate() {
                     if let Some(ty) = value_type(db, *value, block_arg_types) {
                         debug!(
-                            "GC: struct_new type_idx={} recording field {} with type {:?}",
-                            type_idx, field_idx, ty
+                            "GC: struct_new type_idx={} recording field {} with type {}.{}",
+                            type_idx,
+                            field_idx,
+                            ty.dialect(db),
+                            ty.name(db)
                         );
                         record_struct_field(type_idx, builder, field_idx as u32, ty)?;
                     } else {
@@ -1103,6 +1111,13 @@ fn collect_gc_types<'db>(
                 if let Some(result_ty) = op.results(db).first().copied()
                     && !tribute::is_type_var(db, result_ty)
                 {
+                    debug!(
+                        "GC: struct_get type_idx={} recording field {} with result_ty {}.{}",
+                        type_idx,
+                        field_idx,
+                        result_ty.dialect(db),
+                        result_ty.name(db)
+                    );
                     record_struct_field(type_idx, builder, field_idx, result_ty)?;
                 }
             }
@@ -2932,6 +2947,11 @@ fn emit_op<'db>(
                 }
             } else {
                 // Non-placeholder type - use attr_heap_type
+                debug!(
+                    "ref_cast: non-placeholder target_type {}.{}",
+                    target_ty.dialect(db),
+                    target_ty.name(db)
+                );
                 attr_heap_type(db, attrs, ATTR_TARGET_TYPE())?
             }
         } else {
