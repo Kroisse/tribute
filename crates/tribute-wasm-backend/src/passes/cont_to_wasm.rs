@@ -1268,6 +1268,8 @@ fn collect_uses_in_region_recursive<'db>(
 /// - Bool: Could use i31ref but needs separate box_bool/unbox_bool ops
 ///
 /// Returns the unboxed value (or the original value if no unboxing needed).
+///
+/// Delegates to TypeConverter.materialize() for consistent type bridging.
 fn unbox_value_if_needed<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
@@ -1275,44 +1277,19 @@ fn unbox_value_if_needed<'db>(
     target_ty: Type<'db>,
     ops: &mut Vec<Operation<'db>>,
 ) -> Value<'db> {
-    // Use wasm.i31ref for the ref_cast (the lowered type)
-    let i31ref_ty = wasm::I31ref::new(db).as_type();
-    // Use lowered target type (tribute_rt.int -> core.i32)
-    let lowered_target_ty = lower_tribute_rt_type(db, target_ty);
+    use trunk_ir::rewrite::MaterializeResult;
 
-    if tribute_rt::is_int(db, target_ty) || tribute_rt::is_nat(db, target_ty) {
-        // Unbox Int/Nat: anyref → i31ref → i32
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+    let converter = wasm_type_converter();
 
-        // Step 1: ref.cast anyref to i31ref
-        let ref_cast = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty);
-        ops.push(ref_cast.as_operation());
-
-        // Step 2: tribute_rt.unbox_int to extract value (will be lowered to wasm.i31_get_s)
-        let unbox = tribute_rt::unbox_int(db, location, ref_cast.result(db), lowered_target_ty);
-        ops.push(unbox.as_operation());
-
-        unbox.result(db)
-    } else if tribute_rt::is_float(db, target_ty) || tribute_rt::is_bool(db, target_ty) {
-        // TODO: Implement float/bool unboxing
-        // Float requires heap-allocated boxing (no f64ref in WasmGC)
-        // Bool could reuse i31ref mechanism
-        panic!("unbox_value_if_needed: float/bool unboxing not yet implemented for continuations");
-    } else {
-        // No unboxing needed for reference types
-        value
+    match converter.materialize(db, location, value, anyref_ty, target_ty) {
+        Some(MaterializeResult::Ops(generated_ops)) => {
+            let last_op = *generated_ops.last().unwrap();
+            ops.extend(generated_ops);
+            last_op.result(db, 0)
+        }
+        Some(MaterializeResult::NoOp) | Some(MaterializeResult::Skip) | None => value,
     }
-}
-
-/// Lower a `tribute_rt` type to its `wasm` equivalent.
-///
-/// This is needed because struct_get operations created by cont_to_wasm use
-/// tribute_rt types (e.g., `tribute_rt.int`), but after tribute_rt_to_wasm runs,
-/// the actual values have core types (e.g., `core.i32`). To ensure type consistency
-/// in emit.rs, we need to lower the types when creating struct_get operations.
-///
-/// Delegates to `wasm_type_converter()` for consistent type conversions across passes.
-fn lower_tribute_rt_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
-    wasm_type_converter().convert_type(db, ty).unwrap_or(ty)
 }
 
 /// Generate boxing operations if the value type is a primitive.

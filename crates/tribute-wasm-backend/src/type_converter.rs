@@ -138,6 +138,19 @@ pub fn wasm_type_converter() -> TypeConverter {
 
             if is_int_like {
                 let i32_ty = core::I32::new(db).as_type();
+                let i31ref_ty = wasm::I31ref::new(db).as_type();
+
+                // anyref needs ref_cast to i31ref first
+                if from_anyref {
+                    let ref_cast = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty);
+                    let unbox_op = tribute_rt::unbox_int(db, location, ref_cast.result(db), i32_ty);
+                    return MaterializeResult::ops([
+                        ref_cast.as_operation(),
+                        unbox_op.as_operation(),
+                    ]);
+                }
+
+                // i31ref can be unboxed directly
                 let unbox_op = tribute_rt::unbox_int(db, location, value, i32_ty);
                 return MaterializeResult::single(unbox_op.as_operation());
             }
@@ -394,5 +407,46 @@ mod tests {
         let (dialect, name) = do_materialize_int_to_anyref_test(db);
         assert_eq!(dialect, tribute_rt::DIALECT_NAME());
         assert_eq!(name, tribute_rt::BOX_INT());
+    }
+
+    /// Helper: test unboxing anyref → i32 (should generate ref_cast + unbox_int)
+    #[salsa::tracked]
+    fn do_materialize_unbox_anyref_test(
+        db: &dyn salsa::Database,
+    ) -> (usize, Vec<(Symbol, Symbol)>) {
+        use trunk_ir::{Location, Operation, PathId, Span, Value, ValueDef};
+
+        let converter = wasm_type_converter();
+        let path = PathId::new(db, "test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let dummy_op = Operation::of_name(db, location, "test.value")
+            .result(anyref_ty)
+            .build();
+        let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);
+
+        let i32_ty = core::I32::new(db).as_type();
+        let result = converter.materialize(db, location, value, anyref_ty, i32_ty);
+
+        match result {
+            Some(trunk_ir::rewrite::MaterializeResult::Ops(ops)) => {
+                let op_info: Vec<_> = ops.iter().map(|op| (op.dialect(db), op.name(db))).collect();
+                (ops.len(), op_info)
+            }
+            _ => (0, vec![]),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_unbox_anyref_to_i32(db: &salsa::DatabaseImpl) {
+        let (count, ops) = do_materialize_unbox_anyref_test(db);
+        // Should generate 2 ops: ref_cast + unbox_int
+        assert_eq!(count, 2);
+        assert_eq!(ops[0], (wasm::DIALECT_NAME(), wasm::REF_CAST()));
+        assert_eq!(
+            ops[1],
+            (tribute_rt::DIALECT_NAME(), tribute_rt::UNBOX_INT())
+        );
     }
 }
