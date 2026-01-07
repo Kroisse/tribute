@@ -1253,45 +1253,6 @@ fn collect_uses_in_region_recursive<'db>(
     }
 }
 
-/// Generate unboxing operations if the target type is a primitive.
-///
-/// When the resume function receives a value as `anyref`, but the continuation
-/// expects a primitive type (Int/Nat), we need to unbox:
-/// - Int: anyref → intref → int (via tribute_rt.unbox_int)
-/// - Nat: anyref → intref → nat (via tribute_rt.unbox_int)
-///
-/// # Limitations
-///
-/// Currently only Int/Nat are supported. Float and Bool are defined in
-/// `tribute_rt` dialect but not yet implemented for continuation boxing:
-/// - Float (f64): Would require heap allocation in WasmGC (no f64ref exists)
-/// - Bool: Could use i31ref but needs separate box_bool/unbox_bool ops
-///
-/// Returns the unboxed value (or the original value if no unboxing needed).
-///
-/// Delegates to TypeConverter.materialize() for consistent type bridging.
-fn unbox_value_if_needed<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    value: Value<'db>,
-    target_ty: Type<'db>,
-    ops: &mut Vec<Operation<'db>>,
-) -> Value<'db> {
-    use trunk_ir::rewrite::MaterializeResult;
-
-    let anyref_ty = wasm::Anyref::new(db).as_type();
-    let converter = wasm_type_converter();
-
-    match converter.materialize(db, location, value, anyref_ty, target_ty) {
-        Some(MaterializeResult::Ops(generated_ops)) => {
-            let last_op = *generated_ops.last().unwrap();
-            ops.extend(generated_ops);
-            last_op.result(db, 0)
-        }
-        Some(MaterializeResult::NoOp) | Some(MaterializeResult::Skip) | None => value,
-    }
-}
-
 /// Generate boxing operations if the value type is a primitive.
 ///
 /// When passing a primitive value to a function expecting `anyref`, we need to box:
@@ -1386,6 +1347,8 @@ fn generate_inline_resume_function<'db>(
     let state_param = Value::new(db, ValueDef::BlockArg(block_id), 0);
     let value_param = Value::new(db, ValueDef::BlockArg(block_id), 1);
 
+    use trunk_ir::rewrite::MaterializeResult;
+
     let mut ops: Vec<Operation<'db>> = Vec::new();
     let mut value_mapping: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
@@ -1393,7 +1356,17 @@ fn generate_inline_resume_function<'db>(
     // The value parameter is anyref, but the shift result may expect a primitive type
     if let Some(shift_result_value) = shift_result {
         let mapped_value = if let Some(result_ty) = shift_result_type {
-            unbox_value_if_needed(db, location, value_param, result_ty, &mut ops)
+            // Use TypeConverter to materialize anyref → target_ty conversion
+            let anyref_ty = wasm::Anyref::new(db).as_type();
+            match wasm_type_converter().materialize(db, location, value_param, anyref_ty, result_ty)
+            {
+                Some(MaterializeResult::Ops(generated_ops)) => {
+                    let last_op = *generated_ops.last().unwrap();
+                    ops.extend(generated_ops);
+                    last_op.result(db, 0)
+                }
+                _ => value_param,
+            }
         } else {
             value_param
         };
