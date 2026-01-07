@@ -144,28 +144,6 @@ fn is_struct_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     adt::is_variant_instance_type(db, ty)
 }
 
-/// Convert a function type's parameter and return types.
-///
-/// This is a utility function for converting function signatures.
-/// Each parameter and the return type are converted using the type converter.
-pub fn convert_function_type<'db>(
-    db: &'db dyn salsa::Database,
-    converter: &TypeConverter,
-    param_types: &[Type<'db>],
-    return_type: Type<'db>,
-) -> (Vec<Type<'db>>, Type<'db>) {
-    let converted_params: Vec<Type<'db>> = param_types
-        .iter()
-        .map(|ty| converter.convert_type(db, *ty).unwrap_or(*ty))
-        .collect();
-
-    let converted_return = converter
-        .convert_type(db, return_type)
-        .unwrap_or(return_type);
-
-    (converted_params, converted_return)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
