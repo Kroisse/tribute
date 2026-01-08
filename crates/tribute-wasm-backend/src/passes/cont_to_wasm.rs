@@ -114,13 +114,38 @@ pub mod cont_types {
 
     /// Create the resume function type.
     ///
-    /// Signature: (wrapper: anyref) -> anyref
+    /// Signature: (wrapper: anyref) -> (ref $YieldResult)
     ///
     /// The wrapper contains both state and resume_value.
+    /// Returns YieldResult because resume functions can also yield
+    /// (if the resumed continuation yields again).
     pub fn resume_fn_type(db: &dyn salsa::Database) -> Type<'_> {
         let anyref = wasm::Anyref::new(db).as_type();
-        core::Func::new(db, IdVec::from(vec![anyref]), anyref).as_type()
+        let yield_result_ty = yield_result_type(db);
+        core::Func::new(db, IdVec::from(vec![anyref]), yield_result_ty).as_type()
     }
+
+    /// Create the YieldResult struct type.
+    ///
+    /// Layout: (tag: i32, value: anyref)
+    /// - tag = 0: Done (value is the boxed result)
+    /// - tag = 1: Yielded (value is the continuation struct)
+    ///
+    /// This type unifies all effectful function returns, eliminating the need
+    /// for cascading type changes when functions call other effectful functions.
+    ///
+    /// Uses a unique marker type (wasm.yield_result) to distinguish from other
+    /// 2-field structs like closures.
+    pub fn yield_result_type(db: &dyn salsa::Database) -> Type<'_> {
+        // Use the unique YieldResult marker type from gc_types
+        crate::gc_types::yield_result_marker_type(db)
+    }
+
+    /// Tag value for Done (successful completion).
+    pub const YIELD_RESULT_TAG_DONE: i32 = 0;
+
+    /// Tag value for Yielded (suspended with continuation).
+    pub const YIELD_RESULT_TAG_YIELDED: i32 = 1;
 }
 
 /// Resume function generation.
@@ -888,9 +913,13 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
     let resume_fn_names = resume_gen::generate_resume_fn_names(db, &analysis);
 
     // Apply pattern transformations for non-shift operations
+    // Note: GetContinuationPattern and GetShiftValuePattern must come before ResumePattern
+    // so that the continuation values are properly extracted before resume tries to use them
     let module = PatternApplicator::new(wasm_type_converter())
         .add_pattern(PushPromptPattern)
         .add_pattern(HandlerDispatchPattern)
+        .add_pattern(GetContinuationPattern)
+        .add_pattern(GetShiftValuePattern)
         .add_pattern(ResumePattern)
         .add_pattern(DropPattern)
         .apply(db, module)
@@ -899,7 +928,278 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
     // Transform shift operations with inline resume function generation.
     // This is done in a loop because expanding shifts inside resume functions
     // creates new shifts that need to be processed.
-    transform_shifts(db, module, &analysis, &resume_fn_names)
+    let module = transform_shifts(db, module, &analysis, &resume_fn_names);
+
+    // Post-process: update function return types for functions that can yield.
+    // The shift expansion adds `wasm.return ref.null any` which requires the
+    // function's return type to be anyref instead of its original type.
+    update_yielding_function_types(db, module)
+}
+
+/// Update function return types for functions that can yield (directly or transitively).
+///
+/// This function:
+/// 1. Identifies direct yielders (functions containing `wasm.return ref.null any`)
+/// 2. Builds a call graph and propagates "effectful" mark transitively
+/// 3. Updates all effectful function return types to anyref
+///
+/// When a function contains a shift/yield, the shift expansion adds:
+/// ```text
+/// ref.null any
+/// wasm.return
+/// ```
+/// This requires the function's return type to be anyref. Additionally, any
+/// function that CALLS an effectful function must also return anyref because
+/// it may need to propagate the yield.
+fn update_yielding_function_types<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Module<'db> {
+    use std::collections::{HashMap, HashSet};
+
+    let body = module.body(db);
+
+    // Phase 1: Build call graph and identify direct yielders
+    let mut call_graph: HashMap<Symbol, HashSet<Symbol>> = HashMap::new();
+    let mut direct_yielders: HashSet<Symbol> = HashSet::new();
+    let mut func_ops: HashMap<Symbol, Operation<'db>> = HashMap::new();
+
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == wasm::FUNC() {
+                if let Ok(func_op) = wasm::Func::from_operation(db, *op) {
+                    let func_name = func_op.sym_name(db);
+                    let func_body = func_op.body(db);
+
+                    // Track this function
+                    func_ops.insert(func_name, *op);
+
+                    // Check if direct yielder (contains shift/yield)
+                    if function_body_can_yield(db, &func_body) {
+                        direct_yielders.insert(func_name);
+                        tracing::debug!(
+                            "update_yielding_function_types: {} is a direct yielder",
+                            func_name
+                        );
+                    }
+
+                    // Check if function calls continuation via call_indirect
+                    // Handler arm lambdas do this - they're effectful because
+                    // the continuation may yield
+                    if function_body_has_call_indirect(db, &func_body) {
+                        direct_yielders.insert(func_name);
+                        tracing::debug!(
+                            "update_yielding_function_types: {} is effectful (has call_indirect)",
+                            func_name
+                        );
+                    }
+
+                    // Collect callees for call graph
+                    let callees = collect_callees(db, &func_body);
+                    call_graph.insert(func_name, callees);
+                }
+            }
+        }
+    }
+
+    // Phase 2: Propagate effectful mark transitively (fixed-point iteration)
+    let mut effectful_funcs = direct_yielders.clone();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (caller, callees) in &call_graph {
+            if !effectful_funcs.contains(caller) {
+                // Check if any callee is effectful
+                for callee in callees {
+                    if effectful_funcs.contains(callee) {
+                        tracing::debug!(
+                            "update_yielding_function_types: {} is effectful (calls {})",
+                            caller,
+                            callee
+                        );
+                        effectful_funcs.insert(*caller);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 3: Update effectful function return types to anyref
+    let mut modified = false;
+    let mut new_ops: Vec<Operation<'db>> = Vec::new();
+
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == wasm::FUNC() {
+                if let Ok(func_op) = wasm::Func::from_operation(db, *op) {
+                    let func_name = func_op.sym_name(db);
+
+                    if effectful_funcs.contains(&func_name) {
+                        let func_ty = func_op.r#type(db);
+                        if let Some(core_func) = core::Func::from_type(db, func_ty) {
+                            let current_result = core_func.result(db);
+                            let yield_result_ty = cont_types::yield_result_type(db);
+
+                            // Skip if already YieldResult (structref)
+                            if wasm::Structref::from_type(db, current_result).is_some() {
+                                new_ops.push(*op);
+                                continue;
+                            }
+
+                            let params = core_func.params(db);
+                            let new_func_ty =
+                                core::Func::new(db, params, yield_result_ty).as_type();
+
+                            tracing::debug!(
+                                "update_yielding_function_types: {} return type {} -> structref (YieldResult)",
+                                func_name,
+                                current_result.name(db)
+                            );
+
+                            let new_op = op
+                                .modify(db)
+                                .attr(Symbol::new("type"), Attribute::Type(new_func_ty))
+                                .build();
+                            new_ops.push(new_op);
+                            modified = true;
+                            continue;
+                        }
+                    }
+                }
+            }
+            new_ops.push(*op);
+        }
+    }
+
+    if !modified {
+        return module;
+    }
+
+    // Rebuild module with updated operations
+    let location = body.location(db);
+    let first_block = body.blocks(db).first().cloned().unwrap();
+    let new_block = trunk_ir::Block::new(
+        db,
+        first_block.id(db),
+        first_block.location(db),
+        first_block.args(db).clone(),
+        new_ops.into_iter().collect(),
+    );
+    let new_body = trunk_ir::Region::new(db, location, IdVec::from(vec![new_block]));
+    Module::create(db, module.location(db), module.name(db), new_body)
+}
+
+/// Collect all function callees from a region (for call graph construction).
+fn collect_callees<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+) -> std::collections::HashSet<Symbol> {
+    let mut callees = std::collections::HashSet::new();
+
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Check for wasm.call
+            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("call") {
+                if let Some(Attribute::Symbol(callee)) =
+                    op.attributes(db).get(&Symbol::new("callee"))
+                {
+                    callees.insert(*callee);
+                }
+            }
+
+            // Recursively check nested regions
+            for nested_region in op.regions(db).iter() {
+                callees.extend(collect_callees(db, nested_region));
+            }
+        }
+    }
+
+    callees
+}
+
+/// Check if a function body contains any call_indirect operations.
+///
+/// Functions with call_indirect (like handler arm lambdas calling continuations)
+/// are considered potentially effectful because the target function may yield.
+fn function_body_has_call_indirect<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+) -> bool {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("call_indirect")
+            {
+                return true;
+            }
+            // Check nested regions
+            for nested_region in op.regions(db).iter() {
+                if function_body_has_call_indirect(db, nested_region) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if a function body contains yield code.
+///
+/// Detects the YieldResult pattern from shift expansion:
+/// - wasm.return whose operand is from a wasm.struct_new with 2 fields
+///   where the first field is i32_const with value 1 (YIELDED)
+fn function_body_can_yield<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Check for wasm.return
+            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("return") {
+                // Check if the return's operand is from a struct_new (YieldResult)
+                if let Some(operand) = op.operands(db).first() {
+                    if let ValueDef::OpResult(def_op) = operand.def(db) {
+                        if def_op.dialect(db) == wasm::DIALECT_NAME()
+                            && def_op.name(db) == Symbol::new("struct_new")
+                        {
+                            // Check if it's a 2-field struct (YieldResult pattern)
+                            let operands = def_op.operands(db);
+                            if operands.len() == 2 {
+                                // Check if first operand is i32_const with value 1 (YIELDED)
+                                if let Some(tag_val) = operands.first() {
+                                    if let ValueDef::OpResult(tag_op) = tag_val.def(db) {
+                                        if tag_op.dialect(db) == wasm::DIALECT_NAME()
+                                            && tag_op.name(db) == Symbol::new("i32_const")
+                                        {
+                                            if let Some(Attribute::IntBits(v)) =
+                                                tag_op.attributes(db).get(&Symbol::new("value"))
+                                            {
+                                                if *v as i32 == cont_types::YIELD_RESULT_TAG_YIELDED
+                                                {
+                                                    return true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Also check for legacy pattern (ref.null any) for backwards compatibility
+                        if def_op.dialect(db) == wasm::DIALECT_NAME()
+                            && def_op.name(db) == Symbol::new("ref_null")
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            // Check nested regions
+            for nested_region in op.regions(db).iter() {
+                if function_body_can_yield(db, nested_region) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Prepend operations to the first block of a module's body region.
@@ -1486,12 +1786,87 @@ fn generate_inline_resume_function<'db>(
     }
 
     // Remap continuation operations and add them to the body
+    let i32_ty = core::I32::new(db).as_type();
+    let yield_result_ty = cont_types::yield_result_type(db);
+
     if !continuation_ops.is_empty() {
         let remapped_ops = resume_gen::remap_operations(db, continuation_ops, &mut value_mapping);
-        ops.extend(remapped_ops);
+
+        // Post-process: wrap return values in Done YieldResult
+        // Find return operations and wrap their operands
+        for remapped_op in remapped_ops {
+            if remapped_op.dialect(db) == wasm::DIALECT_NAME()
+                && remapped_op.name(db) == Symbol::new("return")
+            {
+                // This is a wasm.return - wrap its operand in Done YieldResult
+                if let Some(return_val) = remapped_op.operands(db).first().copied() {
+                    // Create Done tag (0)
+                    let done_tag =
+                        wasm::i32_const(db, location, i32_ty, cont_types::YIELD_RESULT_TAG_DONE);
+                    let done_tag_val = done_tag.as_operation().result(db, 0);
+                    ops.push(done_tag.as_operation());
+
+                    // Create YieldResult struct: (tag=0, value=return_val)
+                    let yield_result = wasm::struct_new(
+                        db,
+                        location,
+                        IdVec::from(vec![done_tag_val, return_val]),
+                        yield_result_ty,
+                        crate::gc_types::YIELD_RESULT_IDX,
+                    );
+                    let yield_result_val = yield_result.as_operation().result(db, 0);
+                    ops.push(yield_result.as_operation());
+
+                    ops.push(wasm::r#return(db, location, Some(yield_result_val)).as_operation());
+                } else {
+                    // No operand - create nil YieldResult
+                    let done_tag =
+                        wasm::i32_const(db, location, i32_ty, cont_types::YIELD_RESULT_TAG_DONE);
+                    let done_tag_val = done_tag.as_operation().result(db, 0);
+                    ops.push(done_tag.as_operation());
+
+                    let anyref_ty = wasm::Anyref::new(db).as_type();
+                    let null_ref = wasm::ref_null(db, location, anyref_ty, anyref_ty);
+                    let null_val = null_ref.as_operation().result(db, 0);
+                    ops.push(null_ref.as_operation());
+
+                    let yield_result = wasm::struct_new(
+                        db,
+                        location,
+                        IdVec::from(vec![done_tag_val, null_val]),
+                        yield_result_ty,
+                        crate::gc_types::YIELD_RESULT_IDX,
+                    );
+                    let yield_result_val = yield_result.as_operation().result(db, 0);
+                    ops.push(yield_result.as_operation());
+
+                    ops.push(wasm::r#return(db, location, Some(yield_result_val)).as_operation());
+                }
+            } else {
+                // Not a return - keep as-is
+                ops.push(remapped_op);
+            }
+        }
     } else {
-        // No continuation body - just return the resume_value
-        ops.push(wasm::r#return(db, location, Some(resume_value)).as_operation());
+        // No continuation body - wrap resume_value in Done YieldResult and return
+
+        // Create Done tag (0)
+        let done_tag = wasm::i32_const(db, location, i32_ty, cont_types::YIELD_RESULT_TAG_DONE);
+        let done_tag_val = done_tag.as_operation().result(db, 0);
+        ops.push(done_tag.as_operation());
+
+        // Create YieldResult struct: (tag=0, value=resume_value)
+        let yield_result = wasm::struct_new(
+            db,
+            location,
+            IdVec::from(vec![done_tag_val, resume_value]),
+            yield_result_ty,
+            crate::gc_types::YIELD_RESULT_IDX,
+        );
+        let yield_result_val = yield_result.as_operation().result(db, 0);
+        ops.push(yield_result.as_operation());
+
+        ops.push(wasm::r#return(db, location, Some(yield_result_val)).as_operation());
     }
 
     // Create function body block with typed arguments
@@ -1657,6 +2032,7 @@ fn expand_shift_operation<'db>(
     ops.push(cont_struct.as_operation());
 
     // === 3. Set Yield Globals ===
+    // These are still needed for multi-prompt dispatch (which tag to handle)
 
     // Set $yield_state = 1 (yielding)
     let const_1 = wasm::i32_const(db, location, i32_ty, 1);
@@ -1679,14 +2055,27 @@ fn expand_shift_operation<'db>(
     ops.push(op_idx_const.as_operation());
     ops.push(wasm::global_set(db, location, op_idx_val, YIELD_OP_IDX).as_operation());
 
-    // === 4. Return to unwind stack ===
-    // Return a dummy value (ref.null any) since the caller will check yield_state
-    // and know to ignore this return value.
-    let anyref_ty = wasm::Anyref::new(db).as_type();
-    let null_val = wasm::ref_null(db, location, anyref_ty, anyref_ty);
-    let null_val_result = null_val.as_operation().result(db, 0);
-    ops.push(null_val.as_operation());
-    ops.push(wasm::r#return(db, location, Some(null_val_result)).as_operation());
+    // === 4. Return YieldResult with tag=1 (Yielded) ===
+    // Create YieldResult struct: (tag: i32, value: anyref)
+    // - tag = 1 (YIELD_RESULT_TAG_YIELDED)
+    // - value = continuation struct
+    let yield_result_ty = cont_types::yield_result_type(db);
+    let yield_tag_const =
+        wasm::i32_const(db, location, i32_ty, cont_types::YIELD_RESULT_TAG_YIELDED);
+    let yield_tag_val = yield_tag_const.as_operation().result(db, 0);
+    ops.push(yield_tag_const.as_operation());
+
+    let yield_result = wasm::struct_new(
+        db,
+        location,
+        IdVec::from(vec![yield_tag_val, cont_val]),
+        yield_result_ty,
+        crate::gc_types::YIELD_RESULT_IDX, // Fixed type index for YieldResult
+    );
+    let yield_result_val = yield_result.as_operation().result(db, 0);
+    ops.push(yield_result.as_operation());
+
+    ops.push(wasm::r#return(db, location, Some(yield_result_val)).as_operation());
 
     ops
 }
@@ -1777,16 +2166,25 @@ impl RewritePattern for PushPromptPattern {
         let reset_yield = wasm::global_set(db, location, const_0_val, YIELD_STATE_IDX);
 
         // Load continuation from $yield_cont for handler invocation
-        let cont_ty = cont_types::continuation_type(db);
+        // Global $yield_cont has type anyref, so we need to cast to structref
         let anyref_ty = wasm::Anyref::new(db).as_type();
         let structref_ty = wasm::Structref::new(db).as_type();
-        let get_cont = wasm::global_get(db, location, cont_ty, YIELD_CONT_IDX);
-        let cont_val = get_cont.as_operation().result(db, 0);
+        let get_cont = wasm::global_get(db, location, anyref_ty, YIELD_CONT_IDX);
+        let cont_anyref = get_cont.as_operation().result(db, 0);
 
         // Extract shift_value from continuation struct (field 3)
         // Continuation layout: (resume_fn, state, tag, shift_value)
         const SHIFT_VALUE_FIELD_IDX: u32 = 3;
         const CONT_FIELD_COUNT: u64 = 4;
+
+        // Cast anyref to structref for struct.get
+        // Include field_count so emit.rs can find the correct struct type
+        let cont_cast_op = wasm::ref_cast(db, location, cont_anyref, structref_ty, structref_ty)
+            .as_operation()
+            .modify(db)
+            .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+            .build();
+        let cont_val = Value::new(db, ValueDef::OpResult(cont_cast_op), 0);
         let get_value = wasm::struct_get(
             db,
             location,
@@ -1820,6 +2218,7 @@ impl RewritePattern for PushPromptPattern {
                 const_0.as_operation(),
                 reset_yield.as_operation(),
                 get_cont.as_operation(),
+                cont_cast_op,
                 get_value,
                 drop_cont.as_operation(),
                 drop_value.as_operation(),
@@ -1828,8 +2227,10 @@ impl RewritePattern for PushPromptPattern {
         let then_region = trunk_ir::Region::new(db, location, IdVec::from(vec![then_block]));
 
         // Build the "else" block for tag mismatch (propagate)
-        // Return to continue bubbling up
-        let return_op = wasm::r#return(db, location, None);
+        // Return the body's result (the YieldResult from inner call) to continue bubbling up
+        // We need to find the body's result value - it's the last operation's result in the body
+        let body_result_value = get_body_result_value(db, &original_body);
+        let return_op = wasm::r#return(db, location, body_result_value);
         let else_block = trunk_ir::Block::new(
             db,
             trunk_ir::BlockId::fresh(),
@@ -1919,6 +2320,34 @@ impl RewritePattern for PushPromptPattern {
             .build();
 
         RewriteResult::Replace(new_op)
+    }
+}
+
+/// Get the result value from a body region.
+///
+/// This finds the last operation's result in the last block of the region.
+/// Used for bubbling: when a handler's tag doesn't match, we need to
+/// return the inner call's result (which contains the YieldResult).
+fn get_body_result_value<'db>(
+    db: &'db dyn salsa::Database,
+    body: &trunk_ir::Region<'db>,
+) -> Option<Value<'db>> {
+    let blocks = body.blocks(db);
+    let last_block = blocks.last()?;
+    let ops = last_block.operations(db);
+    let last_op = ops.last().copied()?;
+
+    // Special case: wasm.yield has a value operand but no SSA result.
+    // The value operand is the body's result.
+    if let Ok(yield_op) = wasm::Yield::from_operation(db, last_op) {
+        return Some(yield_op.value(db));
+    }
+
+    let results = last_op.results(db);
+    if results.is_empty() {
+        None
+    } else {
+        Some(Value::new(db, ValueDef::OpResult(last_op), 0))
     }
 }
 
@@ -2314,14 +2743,24 @@ impl RewritePattern for ResumePattern {
         ops.push(const_0.as_operation());
         ops.push(wasm::global_set(db, location, const_0_val, YIELD_STATE_IDX).as_operation());
 
-        // 2. Extract resume_fn from continuation (field 0)
-        // Continuation layout: (resume_fn, state, tag, shift_value)
+        // 2. Cast continuation to structref if it's anyref
+        // This is needed when the continuation was captured by a closure (closures store values as anyref)
         const CONT_FIELD_COUNT: u64 = 4;
 
+        let cast_cont_op = wasm::ref_cast(db, location, continuation, structref_ty, structref_ty)
+            .as_operation()
+            .modify(db)
+            .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+            .build();
+        let cont_structref = Value::new(db, ValueDef::OpResult(cast_cont_op), 0);
+        ops.push(cast_cont_op);
+
+        // 3. Extract resume_fn from continuation (field 0)
+        // Continuation layout: (resume_fn, state, tag, shift_value)
         let get_resume_fn = wasm::struct_get(
             db,
             location,
-            continuation,
+            cont_structref,
             funcref_ty,
             0, // type_idx - Placeholder, resolved at emit time
             CONT_FIELD_RESUME_FN,
@@ -2334,11 +2773,11 @@ impl RewritePattern for ResumePattern {
         let resume_fn_val = Value::new(db, ValueDef::OpResult(get_resume_fn), 0);
         ops.push(get_resume_fn);
 
-        // 3. Extract state from continuation (field 1)
+        // 4. Extract state from continuation (field 1)
         let get_state = wasm::struct_get(
             db,
             location,
-            continuation,
+            cont_structref,
             anyref_ty,
             0, // type_idx - Placeholder, resolved at emit time
             CONT_FIELD_STATE,
@@ -2351,7 +2790,7 @@ impl RewritePattern for ResumePattern {
         let state_val = Value::new(db, ValueDef::OpResult(get_state), 0);
         ops.push(get_state);
 
-        // 4. Box the value if it's a primitive type
+        // 5. Box the value if it's a primitive type
         // Resume wrapper expects (state: anyref, resume_value: anyref), so primitives need boxing
         let value_ty = match value.def(db) {
             ValueDef::OpResult(def_op) => def_op.results(db).get(value.index(db)).copied(),
@@ -2363,7 +2802,7 @@ impl RewritePattern for ResumePattern {
             value
         };
 
-        // 5. Create wrapper struct with (state, boxed_value)
+        // 6. Create wrapper struct with (state, boxed_value)
         // Resume wrapper layout: (state: anyref, resume_value: anyref)
         let wrapper_ty = cont_types::resume_wrapper_type(db);
         let wrapper_struct = wasm::struct_new(
@@ -2376,10 +2815,10 @@ impl RewritePattern for ResumePattern {
         let wrapper_val = Value::new(db, ValueDef::OpResult(wrapper_struct.as_operation()), 0);
         ops.push(wrapper_struct.as_operation());
 
-        // 6. Call resume_fn(wrapper) via call_indirect
-        // Resume function signature: (wrapper: anyref) -> result
-        // The actual type will be resolved at emit time
-        let result_ty = op.results(db).first().copied().unwrap_or(anyref_ty);
+        // 7. Call resume_fn(wrapper) via call_indirect
+        // Resume function signature: (wrapper: anyref) -> YieldResult
+        // Resume functions always return YieldResult for yield bubbling
+        let result_ty = cont_types::yield_result_type(db);
         let call_indirect = wasm::call_indirect(
             db,
             location,
@@ -2416,6 +2855,130 @@ impl RewritePattern for DropPattern {
         let new_op = wasm::drop(db, location, continuation);
 
         RewriteResult::Replace(new_op.as_operation())
+    }
+}
+
+/// Pattern for `cont.get_continuation` -> load continuation from yield global
+///
+/// This operation is used in handler arm bodies to get the captured continuation.
+/// It expands to: global.get $yield_cont -> ref_cast structref
+struct GetContinuationPattern;
+
+impl RewritePattern for GetContinuationPattern {
+    fn match_and_rewrite<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(_get_cont) = cont::GetContinuation::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let location = op.location(db);
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let structref_ty = wasm::Structref::new(db).as_type();
+
+        let mut ops = Vec::new();
+
+        // Load continuation from $yield_cont global
+        let get_cont = wasm::global_get(db, location, anyref_ty, YIELD_CONT_IDX);
+        let cont_anyref = get_cont.as_operation().result(db, 0);
+        ops.push(get_cont.as_operation());
+
+        // Cast anyref to structref for proper typing
+        // Include field_count attribute so emit.rs can find the correct struct type
+        const CONT_FIELD_COUNT: u64 = 4;
+        let cont_cast_op = wasm::ref_cast(db, location, cont_anyref, structref_ty, structref_ty)
+            .as_operation()
+            .modify(db)
+            .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+            .build();
+        ops.push(cont_cast_op);
+
+        RewriteResult::Expand(ops)
+    }
+}
+
+/// Pattern for `cont.get_shift_value` -> extract shift_value from continuation struct
+///
+/// This operation is used in handler arm bodies to get the value passed to the effect.
+/// For example, in `State::set!(n)`, this extracts the value `n`.
+///
+/// It expands to:
+/// 1. global.get $yield_cont
+/// 2. ref_cast structref
+/// 3. struct.get field 3 (shift_value)
+/// 4. ref_cast i31ref
+/// 5. i31_get_s (unbox to i32)
+///
+/// Note: Currently assumes the shift_value is an Int (i31ref). For other types,
+/// we would need additional type information to generate proper unboxing.
+struct GetShiftValuePattern;
+
+impl RewritePattern for GetShiftValuePattern {
+    fn match_and_rewrite<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(_get_value) = cont::GetShiftValue::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let location = op.location(db);
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let structref_ty = wasm::Structref::new(db).as_type();
+        let i31ref_ty = wasm::I31ref::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
+
+        let mut ops = Vec::new();
+
+        // Load continuation from $yield_cont global
+        let get_cont = wasm::global_get(db, location, anyref_ty, YIELD_CONT_IDX);
+        let cont_anyref = get_cont.as_operation().result(db, 0);
+        ops.push(get_cont.as_operation());
+
+        // Cast anyref to structref
+        const CONT_FIELD_COUNT: u64 = 4;
+        let cont_cast_op = wasm::ref_cast(db, location, cont_anyref, structref_ty, structref_ty)
+            .as_operation()
+            .modify(db)
+            .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+            .build();
+        let cont_val = Value::new(db, ValueDef::OpResult(cont_cast_op), 0);
+        ops.push(cont_cast_op);
+
+        // Extract shift_value from continuation struct (field 3)
+        // Continuation layout: (resume_fn, state, tag, shift_value)
+        let get_value = wasm::struct_get(
+            db,
+            location,
+            cont_val,
+            anyref_ty,
+            0, // type_idx - Placeholder, resolved at emit time
+            CONT_FIELD_SHIFT_VALUE,
+        )
+        .as_operation()
+        .modify(db)
+        .attr("type", Attribute::Type(structref_ty))
+        .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+        .build();
+        let shift_anyref = Value::new(db, ValueDef::OpResult(get_value), 0);
+        ops.push(get_value);
+
+        // Unbox the shift_value: assume it's an Int (i31ref)
+        // Cast anyref to i31ref
+        let i31_cast = wasm::ref_cast(db, location, shift_anyref, i31ref_ty, i31ref_ty);
+        let i31_val = i31_cast.as_operation().result(db, 0);
+        ops.push(i31_cast.as_operation());
+
+        // Extract the i32 value from i31ref
+        let i31_get = wasm::i31_get_s(db, location, i31_val, i32_ty);
+        ops.push(i31_get.as_operation());
+
+        RewriteResult::Expand(ops)
     }
 }
 
@@ -2547,8 +3110,9 @@ mod tests {
         // 9. wasm.global_set (yield_cont)
         // 10. wasm.i32_const (yield_op_idx = 0)
         // 11. wasm.global_set (yield_op_idx)
-        // 12. wasm.ref_null (dummy return value)
-        // 13. wasm.return
+        // 12. wasm.i32_const (YieldResult tag = 1, Yielded)
+        // 13. wasm.struct_new (YieldResult struct)
+        // 14. wasm.return
 
         // First op: struct_new (empty state struct)
         assert_eq!(op_names.first(), Some(&"wasm.struct_new".to_string()));
@@ -2556,23 +3120,22 @@ mod tests {
         assert_eq!(op_names.last(), Some(&"wasm.return".to_string()));
         // Should NOT contain ref_func (no resume function when no continuation)
         assert!(!op_names.contains(&"wasm.ref_func".to_string()));
-        // Should contain ref_null for resume_fn and shift_value and return value
+        // Should contain ref_null for resume_fn and shift_value (not return value anymore)
         let ref_null_count = op_names.iter().filter(|n| *n == "wasm.ref_null").count();
         assert!(
             ref_null_count >= 2,
             "expected at least 2 ref_null (resume_fn + shift_value), got {}",
             ref_null_count
         );
-        // Should contain struct_new for continuation (and state)
+        // Should contain struct_new for state, continuation, and YieldResult
         let struct_new_count = op_names.iter().filter(|n| *n == "wasm.struct_new").count();
         assert!(
-            struct_new_count >= 2,
-            "expected at least 2 struct_new (state + continuation), got {}",
+            struct_new_count >= 3,
+            "expected at least 3 struct_new (state + continuation + YieldResult), got {}",
             struct_new_count
         );
-        // Total: 14 operations (no resume function, just shift expansion)
-        // shift_value is now in continuation struct, no yield_value global
-        assert_eq!(op_names.len(), 14);
+        // Total: 15 operations (no resume function, just shift expansion with YieldResult)
+        assert_eq!(op_names.len(), 15);
     }
 
     #[salsa::tracked]
@@ -2625,23 +3188,26 @@ mod tests {
         // Resume should expand to:
         // 1. wasm.i32_const (yield_state = 0)
         // 2. wasm.global_set (reset yield_state)
-        // 3. wasm.struct_get (extract resume_fn from continuation)
-        // 4. wasm.struct_get (extract state from continuation)
-        // 5. tribute_rt.box_int (box the i32 value, since wrapper needs anyref)
-        // 6. wasm.struct_new (create wrapper struct with state + boxed_value)
-        // 7. wasm.call_indirect (invoke resume_fn with wrapper)
+        // 3. wasm.ref_cast (cast continuation to structref for struct_get)
+        // 4. wasm.struct_get (extract resume_fn from continuation)
+        // 5. wasm.struct_get (extract state from continuation)
+        // 6. tribute_rt.box_int (box the i32 value, since wrapper needs anyref)
+        // 7. wasm.struct_new (create wrapper struct with state + boxed_value)
+        // 8. wasm.call_indirect (invoke resume_fn with wrapper)
         // First op: i32_const for resetting yield_state
         assert_eq!(op_names.first(), Some(&"wasm.i32_const".to_string()));
         // Last op: call_indirect to invoke resume function
         assert_eq!(op_names.last(), Some(&"wasm.call_indirect".to_string()));
+        // Should contain ref_cast for continuation (added for closure capture case)
+        assert!(op_names.contains(&"wasm.ref_cast".to_string()));
         // Should contain struct_get operations
         assert!(op_names.contains(&"wasm.struct_get".to_string()));
         // Should contain boxing operation for the i32 value
         assert!(op_names.contains(&"tribute_rt.box_int".to_string()));
         // Should contain struct_new for wrapper
         assert!(op_names.contains(&"wasm.struct_new".to_string()));
-        // Total: 7 operations (added struct_new for wrapper)
-        assert_eq!(op_names.len(), 7);
+        // Total: 8 operations (added ref_cast for continuation casting)
+        assert_eq!(op_names.len(), 8);
     }
 
     #[salsa::tracked]

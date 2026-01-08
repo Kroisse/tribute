@@ -292,9 +292,31 @@ impl<'db> LambdaInfoCollector<'db> {
                     let binding_ty = op.results(self.db).first().copied().unwrap_or(ty);
                     self.add_local(name, binding_ty);
                 }
-                // Recurse into nested regions (for variant fields, handler_suspend.continuation, etc.)
-                for nested_region in op.regions(self.db).iter() {
-                    self.collect_pattern_bindings(nested_region, ty);
+
+                // Handle handler_suspend specially: the continuation region needs a closure type
+                if let Ok(handler_suspend) =
+                    tribute_pat::HandlerSuspend::from_operation(self.db, *op)
+                {
+                    // Process args region with parent type
+                    self.collect_pattern_bindings(&handler_suspend.args(self.db), ty);
+
+                    // Process continuation region with a closure type
+                    // The continuation is a closure that takes the effect result and returns the
+                    // handler's result. We use closure::Closure to ensure proper closure struct
+                    // representation (funcref + anyref fields) rather than raw funcref.
+                    let func_ty = core::Func::new(
+                        self.db,
+                        IdVec::from(vec![ty]), // param: effect result type
+                        ty,                    // return: same as effect result (simplified)
+                    )
+                    .as_type();
+                    let cont_ty = closure::Closure::new(self.db, func_ty).as_type();
+                    self.collect_pattern_bindings(&handler_suspend.continuation(self.db), cont_ty);
+                } else {
+                    // Recurse into nested regions (for variant fields, etc.)
+                    for nested_region in op.regions(self.db).iter() {
+                        self.collect_pattern_bindings(nested_region, ty);
+                    }
                 }
             }
         }

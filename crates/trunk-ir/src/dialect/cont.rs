@@ -50,5 +50,19 @@ dialect! {
             #[region(done_body)] {}
             #[region(suspend_body)] {}
         };
+
+        /// `cont.get_continuation` operation: gets the current continuation from yield state.
+        ///
+        /// This operation can only be used inside handler arm bodies (suspend_body).
+        /// It retrieves the continuation that was captured by the most recent `shift`.
+        /// The WASM backend converts this to global.get + ref_cast to get the continuation struct.
+        fn get_continuation() -> result;
+
+        /// `cont.get_shift_value` operation: gets the shift_value from the current continuation.
+        ///
+        /// This operation can only be used inside handler arm bodies (suspend_body).
+        /// It retrieves the value that was passed to the effect operation (e.g., the `n` in `State::set!(n)`).
+        /// The WASM backend converts this to struct.get on the continuation struct's field 3.
+        fn get_shift_value() -> result;
     }
 }

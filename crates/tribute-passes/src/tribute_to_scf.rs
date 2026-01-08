@@ -18,7 +18,7 @@ use salsa::Accumulator;
 use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::{adt, tribute, tribute_pat};
 use trunk_ir::dialect::core::Module;
-use trunk_ir::dialect::{arith, core, scf};
+use trunk_ir::dialect::{arith, cont, core, scf};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region,
@@ -372,23 +372,81 @@ impl<'db> CaseLowerer<'db> {
             let op_idx: u64 = op_name.with_str(compute_op_idx_hash);
 
             // Set up bindings for continuation and args
+            // Generate extraction operations that will be lowered by WASM backend
+            let mut extraction_ops: Vec<Operation<'db>> = Vec::new();
+
             if let Some(pattern_region) = suspend_arm.pattern_region {
                 let bindings = self.extract_bindings_from_pattern(pattern_region);
                 // The last binding is typically the continuation (k)
-                // Other bindings are operation arguments
-                for name in bindings.iter() {
-                    // For now, bind everything to the scrutinee
-                    // The actual values come from yield globals at runtime
-                    self.current_arm_bindings.insert(*name, scrutinee);
+                // Other bindings are operation arguments (shift_value)
+
+                // Use core::Ptr as a placeholder type for opaque references
+                // The WASM backend will determine the actual types during lowering
+                let ptr_ty = core::Ptr::new(self.db).as_type();
+
+                for (i, name) in bindings.iter().enumerate() {
+                    if i == bindings.len() - 1 {
+                        // Last binding is the continuation (k)
+                        let get_cont_op =
+                            cont::get_continuation(self.db, location, ptr_ty).as_operation();
+                        let cont_val = get_cont_op.result(self.db, 0);
+                        extraction_ops.push(get_cont_op);
+                        self.current_arm_bindings.insert(*name, cont_val);
+                    } else {
+                        // Other bindings are shift_value arguments
+                        let get_shift_op =
+                            cont::get_shift_value(self.db, location, ptr_ty).as_operation();
+                        let shift_val = get_shift_op.result(self.db, 0);
+                        extraction_ops.push(get_shift_op);
+                        self.current_arm_bindings.insert(*name, shift_val);
+                    }
                 }
             }
 
             let lowered_body = self.lower_region(suspend_arm.body);
 
+            // Prepend extraction ops to the lowered body
+            let body_with_extractions = if !extraction_ops.is_empty() {
+                let body_blocks = lowered_body.blocks(self.db);
+                if let Some(first_block) = body_blocks.first().copied() {
+                    // Prepend extraction ops to the first block
+                    let mut new_ops = IdVec::from(extraction_ops);
+                    new_ops.extend(first_block.operations(self.db).iter().copied());
+                    let new_block = Block::new(
+                        self.db,
+                        first_block.id(self.db),
+                        first_block.location(self.db),
+                        first_block.args(self.db).clone(),
+                        new_ops,
+                    );
+
+                    // Rebuild the region with the new first block
+                    let mut new_blocks: Vec<Block<'db>> = vec![new_block];
+                    new_blocks.extend(body_blocks.iter().skip(1).copied());
+                    Region::new(
+                        self.db,
+                        lowered_body.location(self.db),
+                        IdVec::from(new_blocks),
+                    )
+                } else {
+                    // No blocks - create a block with just the extraction ops
+                    let block = Block::new(
+                        self.db,
+                        BlockId::fresh(),
+                        location,
+                        IdVec::new(),
+                        IdVec::from(extraction_ops),
+                    );
+                    Region::new(self.db, location, IdVec::from(vec![block]))
+                }
+            } else {
+                lowered_body
+            };
+
             // Clear bindings after processing
             self.current_arm_bindings.clear();
 
-            suspend_bodies.push((op_idx, lowered_body));
+            suspend_bodies.push((op_idx, body_with_extractions));
         }
 
         // Note: Each suspend body is stored as a separate region in handler_dispatch.
