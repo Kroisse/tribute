@@ -27,7 +27,8 @@ use wasm_encoder::{
 use crate::errors;
 use crate::gc_types::{
     self, ATTR_FIELD_IDX, ATTR_TYPE, ATTR_TYPE_IDX, BOXED_F64_IDX, BYTES_ARRAY_IDX,
-    BYTES_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, GcTypeRegistry,
+    BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, GcTypeRegistry,
+    YIELD_RESULT_IDX,
 };
 use crate::{CompilationError, CompilationResult};
 
@@ -265,6 +266,9 @@ struct ModuleInfo<'db> {
     block_arg_types: HashMap<(BlockId, usize), Type<'db>>,
     /// Functions referenced via ref.func that need declarative elem segment.
     ref_funcs: HashSet<Symbol>,
+    /// Additional function types from call_indirect that need to be added to type section.
+    /// Stored as (type_idx, core::Func) pairs.
+    call_indirect_types: Vec<(u32, core::Func<'db>)>,
 }
 
 /// Context for emitting a single function's code.
@@ -273,6 +277,9 @@ struct FunctionEmitContext<'db> {
     value_locals: HashMap<Value<'db>, u32>,
     /// Effective types for values (after unification).
     effective_types: HashMap<Value<'db>, Type<'db>>,
+    /// The function's expected return type (from function signature).
+    /// Used to determine block types when IR type is type_var.
+    func_return_type: Option<Type<'db>>,
 }
 
 pub fn emit_wasm<'db>(
@@ -365,8 +372,54 @@ pub fn emit_wasm<'db>(
             .iter()
             .map(|ty| type_to_valtype(db, *ty, &module_info.type_idx_by_type))
             .collect::<CompilationResult<Vec<_>>>()?;
-        let results = match result_types(db, func_def.ty.result(db), &module_info.type_idx_by_type)
-        {
+
+        // Check if the function return type needs to be adjusted.
+        //
+        // Handler lambdas may be typed to return funcref but the computation lambda
+        // actually returns i32. Detect this case and adjust the return type.
+        //
+        // Key distinction:
+        // - Handler arm lambdas (k(value)): done path calls call_indirect → returns funcref
+        // - Computation lambda: done path executes body → returns i32
+        //
+        // NOTE: Functions that perform abilities (can yield) also have type issues,
+        // but fixing those at emit time breaks callers. A proper fix is needed in
+        // the lowering pass (cont_to_wasm) to update function types and call sites.
+        let declared_result = func_def.ty.result(db);
+        debug!(
+            "  checking return type adjustment for {}: declared={}.{}",
+            func_def.name,
+            declared_result.dialect(db),
+            declared_result.name(db)
+        );
+
+        let effective_result = if let Some(body_region) = func_def.op.regions(db).first() {
+            // Handler lambdas with funcref return type
+            if core::Func::from_type(db, declared_result).is_some()
+                || wasm::Funcref::from_type(db, declared_result).is_some()
+            {
+                debug!("  checking funcref function for handler dispatch...");
+                if should_adjust_handler_return_to_i32(db, body_region) {
+                    debug!(
+                        "  adjusting return type from funcref to i32 for computation lambda: {}",
+                        func_def.name
+                    );
+                    core::I32::new(db).as_type()
+                } else {
+                    debug!(
+                        "  keeping funcref return type for handler arm lambda: {}",
+                        func_def.name
+                    );
+                    declared_result
+                }
+            } else {
+                declared_result
+            }
+        } else {
+            declared_result
+        };
+
+        let results = match result_types(db, effective_result, &module_info.type_idx_by_type) {
             Ok(r) => {
                 debug!("  results: {:?}", r);
                 r
@@ -381,6 +434,35 @@ pub fn emit_wasm<'db>(
         next_type_index += 1;
         function_section.function(type_index);
         debug!("  type_index: {}", type_index);
+    }
+
+    // Emit call_indirect function types (these were collected during module info gathering)
+    for (type_idx, func_ty) in &module_info.call_indirect_types {
+        debug!(
+            "Emitting call_indirect type idx={}: params={:?}, result={}.{}",
+            type_idx,
+            func_ty
+                .params(db)
+                .iter()
+                .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                .collect::<Vec<_>>(),
+            func_ty.result(db).dialect(db),
+            func_ty.result(db).name(db)
+        );
+        let params = func_ty
+            .params(db)
+            .iter()
+            .map(|ty| type_to_valtype(db, *ty, &module_info.type_idx_by_type))
+            .collect::<CompilationResult<Vec<_>>>()?;
+        let results = result_types(db, func_ty.result(db), &module_info.type_idx_by_type)?;
+        type_section.ty().function(params, results);
+        // Verify the type index matches what we expect
+        assert_eq!(
+            *type_idx, next_type_index,
+            "call_indirect type index mismatch: expected {}, got {}",
+            next_type_index, type_idx
+        );
+        next_type_index += 1;
     }
 
     if let Some(memory) = &module_info.memory {
@@ -667,9 +749,18 @@ fn collect_module_info<'db>(
     info.gc_types = gc_types;
 
     // Collect function types from call_indirect operations
-    collect_call_indirect_types(db, module, &mut type_idx_by_type, &info.block_arg_types)?;
+    // Pass the count of function definitions so call_indirect types get indices after them
+    let func_type_count = info.imports.len() + info.funcs.len();
+    let call_indirect_types = collect_call_indirect_types(
+        db,
+        module,
+        &mut type_idx_by_type,
+        &info.block_arg_types,
+        func_type_count,
+    )?;
 
     info.type_idx_by_type = type_idx_by_type;
+    info.call_indirect_types = call_indirect_types;
     info.placeholder_struct_type_idx = placeholder_struct_type_idx;
 
     // Build function type lookup map for boxing/unboxing.
@@ -693,6 +784,17 @@ fn collect_module_info<'db>(
 
     // Collect functions referenced via ref.func for declarative elem segment
     info.ref_funcs = collect_ref_funcs(db, module);
+
+    // Auto-create a funcref table if call_indirect is used but no table is defined.
+    // WebAssembly requires a table for call_indirect to reference.
+    if info.tables.is_empty() && has_call_indirect(db, module) {
+        debug!("Auto-generating funcref table for call_indirect");
+        info.tables.push(TableDef {
+            reftype: RefType::FUNCREF,
+            min: 0,
+            max: None,
+        });
+    }
 
     Ok(info)
 }
@@ -838,6 +940,10 @@ fn collect_gc_types<'db>(
         }
         // Fall back to type attribute (legacy, will be removed)
         if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
+            // Special case: closure types use builtin CLOSURE_STRUCT_IDX
+            if closure::Closure::from_type(db, *ty).is_some() || is_closure_struct_type(db, *ty) {
+                return Some(CLOSURE_STRUCT_IDX);
+            }
             if let Some(&idx) = type_idx_by_type.get(ty) {
                 return Some(idx);
             }
@@ -849,6 +955,10 @@ fn collect_gc_types<'db>(
         }
         // Fall back to inferred type (from result or operand types)
         if let Some(ty) = inferred_type {
+            // Special case: closure types use builtin CLOSURE_STRUCT_IDX
+            if closure::Closure::from_type(db, ty).is_some() || is_closure_struct_type(db, ty) {
+                return Some(CLOSURE_STRUCT_IDX);
+            }
             if let Some(&idx) = type_idx_by_type.get(&ty) {
                 return Some(idx);
             }
@@ -989,11 +1099,21 @@ fn collect_gc_types<'db>(
                 })
                 .unwrap_or(false);
 
-            // Check if this uses an adt.struct type (which should also use placeholder lookup)
-            let adt_struct_field_count = attrs.get(&ATTR_TYPE()).and_then(|attr| {
+            // Check if this is a _closure struct type (should use CLOSURE_STRUCT_IDX)
+            let is_closure_type = attrs.get(&ATTR_TYPE()).is_some_and(|attr| {
                 if let Attribute::Type(ty) = attr {
-                    if adt::is_struct_type(db, *ty) {
-                        adt::get_struct_fields(db, *ty).map(|fields| fields.len())
+                    is_closure_struct_type(db, *ty)
+                } else {
+                    false
+                }
+            });
+
+            // Check if this uses an adt.struct type (which should also use placeholder lookup)
+            // Returns (adt_struct_type, field_count) if it's an adt.struct type
+            let adt_struct_info = attrs.get(&ATTR_TYPE()).and_then(|attr| {
+                if let Attribute::Type(ty) = attr {
+                    if adt::is_struct_type(db, *ty) && !is_closure_struct_type(db, *ty) {
+                        adt::get_struct_fields(db, *ty).map(|fields| (*ty, fields.len()))
                     } else {
                         None
                     }
@@ -1002,7 +1122,10 @@ fn collect_gc_types<'db>(
                 }
             });
 
-            let type_idx = if is_placeholder_type {
+            let type_idx = if is_closure_type {
+                // Closure struct types use the builtin CLOSURE_STRUCT_IDX
+                CLOSURE_STRUCT_IDX
+            } else if is_placeholder_type {
                 // For placeholder types, use (type, field_count) as key
                 let ty = match attrs.get(&ATTR_TYPE()) {
                     Some(Attribute::Type(ty)) => *ty,
@@ -1028,26 +1151,36 @@ fn collect_gc_types<'db>(
                     );
                     idx
                 }
-            } else if let Some(field_count) = adt_struct_field_count {
-                // For adt.struct types, use structref as placeholder key with field count
-                let structref_ty = wasm::Structref::new(db).as_type();
-                let key = (structref_ty, field_count);
-                if let Some(&idx) = placeholder_struct_type_idx.get(&key) {
+            } else if let Some((adt_struct_ty, field_count)) = adt_struct_info {
+                // For adt.struct types, first check type_idx_by_type (where function
+                // param types are registered), then fall back to placeholder lookup.
+                // This ensures struct_get uses the same type_idx as function params.
+                if let Some(&idx) = type_idx_by_type.get(&adt_struct_ty) {
                     debug!(
-                        "GC: struct_get reusing type_idx={} for adt.struct (field_count={})",
-                        idx, field_count
+                        "GC: struct_get reusing type_idx={} for adt.struct from type_idx_by_type",
+                        idx
                     );
                     idx
                 } else {
-                    // Allocate new type_idx for this placeholder
-                    let idx = next_type_idx;
-                    next_type_idx += 1;
-                    placeholder_struct_type_idx.insert(key, idx);
-                    debug!(
-                        "GC: struct_get allocated type_idx={} for adt.struct placeholder (field_count={})",
-                        idx, field_count
-                    );
-                    idx
+                    // Fall back to placeholder lookup with (type, field_count) key
+                    let key = (adt_struct_ty, field_count);
+                    if let Some(&idx) = placeholder_struct_type_idx.get(&key) {
+                        debug!(
+                            "GC: struct_get reusing type_idx={} for adt.struct (field_count={})",
+                            idx, field_count
+                        );
+                        idx
+                    } else {
+                        // Allocate new type_idx for this adt.struct type
+                        let idx = next_type_idx;
+                        next_type_idx += 1;
+                        placeholder_struct_type_idx.insert(key, idx);
+                        debug!(
+                            "GC: struct_get allocated type_idx={} for adt.struct (field_count={})",
+                            idx, field_count
+                        );
+                        idx
+                    }
                 }
             } else {
                 // For regular types, use standard type_idx lookup
@@ -1083,7 +1216,7 @@ fn collect_gc_types<'db>(
                 }
 
                 // For adt.struct types, set field_count from the type's fields attribute
-                if let Some(fc) = adt_struct_field_count
+                if let Some((_, fc)) = adt_struct_info
                     && builder.field_count.is_none()
                 {
                     builder.field_count = Some(fc);
@@ -1456,21 +1589,70 @@ fn collect_gc_types<'db>(
 ///
 /// This ensures that all function types used in call_indirect are registered
 /// in the type section before emission.
+///
+/// `func_type_count` is the number of function definition types (imports + funcs) that
+/// will be added to the type section. call_indirect types should get indices AFTER these.
 fn collect_call_indirect_types<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
     type_idx_by_type: &mut HashMap<Type<'db>, u32>,
     block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
-) -> CompilationResult<()> {
+    func_type_count: usize,
+) -> CompilationResult<Vec<(u32, core::Func<'db>)>> {
     fn collect_from_region<'db>(
         db: &'db dyn salsa::Database,
         region: &trunk_ir::Region<'db>,
         type_idx_by_type: &mut HashMap<Type<'db>, u32>,
         next_type_idx: &mut u32,
+        new_types: &mut Vec<(u32, core::Func<'db>)>,
         block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
+        enclosing_func_return_ty: Option<Type<'db>>,
     ) -> CompilationResult<()> {
         for block in region.blocks(db).iter() {
             for op in block.operations(db).iter() {
+                debug!(
+                    "collect_call_indirect_types: visiting op {}.{}, enclosing_func_return_ty={:?}",
+                    op.dialect(db),
+                    op.name(db),
+                    enclosing_func_return_ty.map(|t| {
+                        t.dialect(db)
+                            .with_str(|d| t.name(db).with_str(|n| format!("{}.{}", d, n)))
+                    })
+                );
+                // Check if this is a function definition to track return type
+                // NOTE: In lowered wasm IR, functions are wasm.func, not func.func
+                let func_return_ty = if let Ok(wasm_fn) = wasm::Func::from_operation(db, *op) {
+                    // Get the function's return type from wasm.func
+                    let func_type = wasm_fn.r#type(db);
+                    debug!(
+                        "collect_call_indirect_types: found wasm.func, type={}.{}",
+                        func_type.dialect(db),
+                        func_type.name(db)
+                    );
+                    if let Some(func_ty) = core::Func::from_type(db, func_type) {
+                        let ret_ty = func_ty.result(db);
+                        debug!(
+                            "collect_call_indirect_types: wasm.func return type={}.{}",
+                            ret_ty.dialect(db),
+                            ret_ty.name(db)
+                        );
+                        Some(ret_ty)
+                    } else {
+                        debug!("collect_call_indirect_types: wasm.func r#type is not core.func");
+                        None
+                    }
+                } else if let Ok(func) = func::Func::from_operation(db, *op) {
+                    // Also check for func.func (in case IR isn't fully lowered)
+                    let func_type = func.r#type(db);
+                    core::Func::from_type(db, func_type).map(|func_ty| func_ty.result(db))
+                } else {
+                    None
+                };
+
+                // Use the new function return type if we're entering a function,
+                // otherwise keep the enclosing one
+                let current_func_return_ty = func_return_ty.or(enclosing_func_return_ty);
+
                 // Recursively process nested regions
                 for nested in op.regions(db).iter() {
                     collect_from_region(
@@ -1478,7 +1660,9 @@ fn collect_call_indirect_types<'db>(
                         nested,
                         type_idx_by_type,
                         next_type_idx,
+                        new_types,
                         block_arg_types,
+                        current_func_return_ty,
                     )?;
                 }
 
@@ -1493,50 +1677,173 @@ fn collect_call_indirect_types<'db>(
                         continue; // Skip invalid call_indirect
                     }
 
-                    // Parameters: all operands except last (funcref)
-                    let param_types: IdVec<Type<'db>> = operands
-                        .iter()
-                        .take(operands.len() - 1)
-                        .filter_map(|v| value_type(db, *v, block_arg_types))
-                        .collect();
+                    // Check if first operand is a ref type (funcref/anyref/core.func/closure struct).
+                    // If so, the funcref is FIRST and we skip it for params.
+                    // Otherwise, the funcref is LAST (legacy order).
+                    let first_operand = operands.first().copied().unwrap();
+                    let first_operand_ty = value_type(db, first_operand, block_arg_types);
+                    let funcref_is_first = first_operand_ty.is_some_and(|ty| {
+                        wasm::Funcref::from_type(db, ty).is_some()
+                            || wasm::Anyref::from_type(db, ty).is_some()
+                            || core::Func::from_type(db, ty).is_some()
+                            || is_closure_struct_type(db, ty)
+                    });
 
-                    // Result type
-                    let result_ty = match op.results(db).first().copied() {
+                    // Helper to normalize IR types to wasm types for call_indirect.
+                    // Primitive IR types that might be boxed (in polymorphic handlers) should
+                    // use anyref, since that's what's actually on the wasm stack.
+                    let anyref_ty = wasm::Anyref::new(db).as_type();
+                    let normalize_param_type = |ty: Type<'db>| -> Type<'db> {
+                        // Primitive types are boxed to anyref in polymorphic handlers
+                        if tribute_rt::is_int(db, ty)
+                            || tribute_rt::is_nat(db, ty)
+                            || tribute_rt::is_bool(db, ty)
+                            || tribute_rt::is_float(db, ty)
+                            || tribute::is_type_var(db, ty)
+                        {
+                            anyref_ty
+                        } else if core::Nil::from_type(db, ty).is_some() {
+                            // core.nil is represented as (ref null 11) for the nil struct
+                            // but in polymorphic contexts might be anyref
+                            anyref_ty
+                        } else {
+                            ty
+                        }
+                    };
+
+                    let param_types: IdVec<Type<'db>> = if funcref_is_first {
+                        // Funcref is FIRST operand, params are operands[1..]
+                        operands
+                            .iter()
+                            .skip(1)
+                            .filter_map(|v| value_type(db, *v, block_arg_types))
+                            .map(normalize_param_type)
+                            .collect()
+                    } else {
+                        // Funcref is LAST operand (legacy), params are operands[..n-1]
+                        operands
+                            .iter()
+                            .take(operands.len() - 1)
+                            .filter_map(|v| value_type(db, *v, block_arg_types))
+                            .map(normalize_param_type)
+                            .collect()
+                    };
+
+                    // Result type - use enclosing function's return type if it's funcref
+                    // and the call_indirect has anyref result. This is needed because
+                    // WebAssembly GC has separate type hierarchies for anyref and funcref,
+                    // so we can't cast between them.
+                    let mut result_ty = match op.results(db).first().copied() {
                         Some(ty) => ty,
                         None => continue, // Skip if no result
                     };
 
-                    // Create function type
-                    let func_type = core::Func::new(db, param_types, result_ty).as_type();
+                    // If result type is anyref/type_var but enclosing function returns funcref,
+                    // use funcref as the result type. This is needed because WebAssembly GC has
+                    // separate type hierarchies for anyref and funcref - you can't cast between them.
+                    let funcref_ty = wasm::Funcref::new(db).as_type();
+                    debug!(
+                        "collect_call_indirect_types: result_ty={}.{}, enclosing_func_return_ty={:?}",
+                        result_ty.dialect(db),
+                        result_ty.name(db),
+                        enclosing_func_return_ty.map(|t| {
+                            t.dialect(db)
+                                .with_str(|d| t.name(db).with_str(|n| format!("{}.{}", d, n)))
+                        })
+                    );
+                    if let Some(func_ret_ty) = enclosing_func_return_ty {
+                        // Check if result is a polymorphic/unresolved type
+                        let is_anyref_result = wasm::Anyref::from_type(db, result_ty).is_some();
+                        let is_type_var_result = result_ty.dialect(db) == Symbol::new("tribute")
+                            && result_ty.name(db) == Symbol::new("type_var");
+                        let is_polymorphic_result = is_anyref_result || is_type_var_result;
+                        let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty)
+                            .is_some()
+                            || core::Func::from_type(db, func_ret_ty).is_some();
+                        let func_returns_yield_result = func_ret_ty.dialect(db)
+                            == wasm::DIALECT_NAME()
+                            && func_ret_ty.name(db) == Symbol::new("yield_result");
+                        debug!(
+                            "collect_call_indirect_types: is_anyref={}, is_type_var={}, func_returns_funcref={}, func_returns_yield_result={}",
+                            is_anyref_result,
+                            is_type_var_result,
+                            func_returns_funcref,
+                            func_returns_yield_result
+                        );
+                        if is_polymorphic_result && func_returns_funcref {
+                            debug!(
+                                "collect_call_indirect_types: upgrading polymorphic result to funcref \
+                                 for enclosing function that returns funcref"
+                            );
+                            result_ty = funcref_ty;
+                        } else if is_polymorphic_result && func_returns_yield_result {
+                            // When enclosing function returns YieldResult (for yield bubbling),
+                            // upgrade polymorphic call_indirect results to YieldResult too.
+                            // This ensures closure/continuation calls return the right type.
+                            debug!(
+                                "collect_call_indirect_types: upgrading polymorphic result to yield_result \
+                                 for enclosing function that returns YieldResult"
+                            );
+                            result_ty = crate::gc_types::yield_result_marker_type(db);
+                        }
+                    }
 
-                    // Register if not already registered
-                    type_idx_by_type.entry(func_type).or_insert_with(|| {
+                    // Create function type
+                    let func_ty = core::Func::new(db, param_types, result_ty);
+                    let func_type = func_ty.as_type();
+
+                    // Register if not already registered, and collect new types
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        type_idx_by_type.entry(func_type)
+                    {
                         let idx = *next_type_idx;
                         *next_type_idx += 1;
-                        idx
-                    });
+                        e.insert(idx);
+                        new_types.push((idx, func_ty));
+                        debug!(
+                            "collect_call_indirect_types: registered new func type idx={}, params={:?}, result={}.{}",
+                            idx,
+                            func_ty
+                                .params(db)
+                                .iter()
+                                .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                                .collect::<Vec<_>>(),
+                            result_ty.dialect(db),
+                            result_ty.name(db)
+                        );
+                    }
                 }
             }
         }
         Ok(())
     }
 
-    // Start with the next available type index (after GC types)
-    let mut next_type_idx = type_idx_by_type
+    // Start with the next available type index (after GC types AND function definition types)
+    // GC types are indices 0..gc_type_count
+    // Function definition types are indices gc_type_count..gc_type_count+func_type_count
+    // call_indirect types should start after that
+    let gc_type_count = type_idx_by_type
         .values()
         .max()
         .map(|&idx| idx + 1)
         .unwrap_or(0);
+    let mut next_type_idx = gc_type_count + func_type_count as u32;
+    let mut new_types = Vec::new();
 
     collect_from_region(
         db,
         &module.body(db),
         type_idx_by_type,
         &mut next_type_idx,
+        &mut new_types,
         block_arg_types,
+        None, // No enclosing function at module level
     )?;
 
-    Ok(())
+    // Sort by type index to ensure they are emitted in order
+    new_types.sort_by_key(|(idx, _)| *idx);
+
+    Ok(new_types)
 }
 
 /// Collect function names referenced via wasm.ref_func.
@@ -1574,6 +1881,32 @@ fn collect_ref_funcs<'db>(
     ref_funcs
 }
 
+/// Check if the module contains any call_indirect operations.
+fn has_call_indirect<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) -> bool {
+    fn check_region<'db>(db: &'db dyn salsa::Database, region: &trunk_ir::Region<'db>) -> bool {
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                // Check nested regions first
+                for nested in op.regions(db).iter() {
+                    if check_region(db, nested) {
+                        return true;
+                    }
+                }
+
+                // Check if this is a call_indirect
+                if op.dialect(db) == Symbol::new("wasm")
+                    && op.name(db) == Symbol::new("call_indirect")
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    check_region(db, &module.body(db))
+}
+
 fn extract_function_def<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
@@ -1605,6 +1938,19 @@ fn extract_function_def<'db>(
 
     let func_ty = core::Func::from_type(db, ty)
         .ok_or_else(|| CompilationError::type_error("wasm.func requires core.func type"))?;
+
+    let result_ty = func_ty.result(db);
+    debug!(
+        "extract_function_def: {} has return type {}.{} (params: {:?})",
+        name,
+        result_ty.dialect(db),
+        result_ty.name(db),
+        result_ty
+            .params(db)
+            .iter()
+            .map(|p| format!("{}.{}", p.dialect(db), p.name(db)))
+            .collect::<Vec<_>>()
+    );
 
     Ok(FunctionDef {
         name,
@@ -1816,9 +2162,12 @@ fn emit_function<'db>(
         ));
     }
 
+    // Get the function's expected return type for use when IR type is type_var
+    let func_return_type = Some(func_def.ty.result(db));
     let mut ctx = FunctionEmitContext {
         value_locals: HashMap::new(),
         effective_types: HashMap::new(),
+        func_return_type,
     };
     let mut locals: Vec<ValType> = Vec::new();
 
@@ -1867,11 +2216,10 @@ fn assign_locals_in_region<'db>(
             if result_types.len() > 1 {
                 return Err(CompilationError::unsupported_feature("multi-result ops"));
             }
-            if let Some(result_ty) = result_types
-                .first()
-                .copied()
-                .filter(|ty| !is_nil_type(db, *ty))
-            {
+            // Note: We no longer filter out nil types here because they may be
+            // used as arguments (e.g., empty closure environments passed as ref.null none).
+            // The local allocation handles nil types specially below.
+            if let Some(result_ty) = result_types.first().copied() {
                 // For generic function calls, infer the concrete return type from operands.
                 // This ensures the local is typed correctly for unboxed values.
                 let mut effective_ty = infer_call_result_type(
@@ -1880,17 +2228,27 @@ fn assign_locals_in_region<'db>(
                     result_ty,
                     &module_info.func_types,
                     &module_info.block_arg_types,
+                    ctx.func_return_type,
                 );
 
-                // For struct_get on variant types with type.var result, the local type
-                // must match the struct field type, not the IR result type.
-                // The IR may have a generic type.var, but the WASM struct.get returns
-                // the actual field type (e.g., I64 for Num variant's Int field).
-                // We check if the result type is type.var and the struct type is a variant.
-                // Use variant tag to determine field type semantics.
+                // For struct_get operations, the local type must match the actual struct
+                // field type, not the IR result type. This is critical because:
+                // 1. The IR may have a generic type.var that maps to anyref
+                // 2. Handler lambdas may have captured types like tribute.type<Int>
+                //    that convert to anyref but whose actual field is i32
+                // 3. The WASM struct.get instruction returns the actual field type
+                //
+                // We check if the result type would convert to anyref (indicating
+                // potential mismatch) and look up the actual field type from the
+                // struct definition or GC type table.
+                let effective_ty_is_ref =
+                    type_to_valtype(db, effective_ty, &module_info.type_idx_by_type)
+                        .ok()
+                        .map(|vt| matches!(vt, ValType::Ref(_)))
+                        .unwrap_or(false);
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("struct_get")
-                    && tribute::is_type_var(db, effective_ty)
+                    && (tribute::is_type_var(db, effective_ty) || effective_ty_is_ref)
                 {
                     // Try to get struct type from attribute first, fall back to operand type
                     let struct_ty_opt = op
@@ -2007,6 +2365,53 @@ fn assign_locals_in_region<'db>(
                             }
                         }
 
+                        // For adt.struct types with generic field types (type_var), fall back to
+                        // the GC type table to determine the actual field type at WASM level.
+                        // This handles handler lambdas where captured types are generic.
+                        if adt::is_struct_type(db, struct_ty)
+                            && let Ok(field_idx) = attr_field_idx(op.attributes(db))
+                            && tribute::is_type_var(db, effective_ty)
+                        {
+                            // Look up the struct in the placeholder map using field count
+                            if let Some(fields) = adt::get_struct_fields(db, struct_ty) {
+                                let field_count = fields.len();
+                                let key = (*wasm::Structref::new(db), field_count);
+                                if let Some(&type_idx) =
+                                    module_info.placeholder_struct_type_idx.get(&key)
+                                    && let Some(GcTypeDef::Struct(gc_fields)) =
+                                        module_info.gc_types.get(type_idx as usize)
+                                    && let Some(field) = gc_fields.get(field_idx as usize)
+                                {
+                                    if matches!(field.element_type, StorageType::Val(ValType::I32))
+                                    {
+                                        debug!(
+                                            "  -> adt.struct GC fallback: field {} is i32",
+                                            field_idx
+                                        );
+                                        effective_ty = tribute_rt::int_type(db);
+                                    } else if matches!(
+                                        field.element_type,
+                                        StorageType::Val(ValType::I64)
+                                    ) {
+                                        debug!(
+                                            "  -> adt.struct GC fallback: field {} is i64",
+                                            field_idx
+                                        );
+                                        effective_ty = tribute_rt::int_type(db);
+                                    } else if matches!(
+                                        field.element_type,
+                                        StorageType::Val(ValType::F64)
+                                    ) {
+                                        debug!(
+                                            "  -> adt.struct GC fallback: field {} is f64",
+                                            field_idx
+                                        );
+                                        effective_ty = tribute_rt::float_type(db);
+                                    }
+                                }
+                            }
+                        }
+
                         // For placeholder structref types with field_count, look up the GC type
                         // to determine the actual field type. This handles cases where the struct
                         // type is already lowered to a WASM structref placeholder.
@@ -2067,23 +2472,82 @@ fn assign_locals_in_region<'db>(
                 // For wasm.if with type.var result, infer the effective type from the
                 // then branch's result value. This ensures the local type matches the
                 // actual value produced by the branches.
-                // Try to get effective type from the then region's result value
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("if")
                     && tribute::is_type_var(db, effective_ty)
-                    && let Some(then_region) = op.regions(db).first()
-                    && let Some(then_result) = region_result_value(db, then_region)
-                    && let Some(eff_ty) = ctx.effective_types.get(&then_result)
-                    && !tribute::is_type_var(db, *eff_ty)
                 {
-                    debug!(
-                        "wasm.if local: using then branch effective type {}.{} instead of IR type {}.{}",
-                        eff_ty.dialect(db),
-                        eff_ty.name(db),
-                        effective_ty.dialect(db),
-                        effective_ty.name(db)
-                    );
-                    effective_ty = *eff_ty;
+                    if let Some(eff_ty) = infer_region_effective_type(db, op, ctx) {
+                        debug!(
+                            "wasm.if local: using then branch effective type {}.{} instead of IR type {}.{}",
+                            eff_ty.dialect(db),
+                            eff_ty.name(db),
+                            effective_ty.dialect(db),
+                            effective_ty.name(db)
+                        );
+                        effective_ty = eff_ty;
+                    } else if let Some(ret_ty) = ctx.func_return_type
+                        && !is_polymorphic_type(db, ret_ty)
+                    {
+                        debug!(
+                            "wasm.if local: using function return type {}.{} instead of IR type {}.{}",
+                            ret_ty.dialect(db),
+                            ret_ty.name(db),
+                            effective_ty.dialect(db),
+                            effective_ty.name(db)
+                        );
+                        effective_ty = ret_ty;
+                    }
+                }
+
+                // For wasm.block with polymorphic result type, infer the effective type from
+                // the body region's result value or fall back to YieldResult if function returns it.
+                if op.dialect(db) == Symbol::new("wasm")
+                    && op.name(db) == Symbol::new("block")
+                    && is_polymorphic_type(db, effective_ty)
+                {
+                    if let Some(eff_ty) = infer_region_effective_type(db, op, ctx) {
+                        debug!(
+                            "wasm.block local: using body effective type {}.{} instead of IR type {}.{}",
+                            eff_ty.dialect(db),
+                            eff_ty.name(db),
+                            effective_ty.dialect(db),
+                            effective_ty.name(db)
+                        );
+                        effective_ty = eff_ty;
+                    } else {
+                        let upgraded = upgrade_polymorphic_to_yield_result(
+                            db,
+                            effective_ty,
+                            ctx.func_return_type,
+                        );
+                        if upgraded != effective_ty {
+                            debug!(
+                                "wasm.block local: using YieldResult instead of polymorphic type {}.{}",
+                                effective_ty.dialect(db),
+                                effective_ty.name(db)
+                            );
+                            effective_ty = upgraded;
+                        }
+                    }
+                }
+
+                // For wasm.call_indirect with polymorphic result type in functions that return
+                // YieldResult, use YieldResult as the local type. This ensures proper type
+                // matching when storing the result of closure/continuation calls.
+                if op.dialect(db) == Symbol::new("wasm")
+                    && op.name(db) == Symbol::new("call_indirect")
+                    && is_polymorphic_type(db, effective_ty)
+                {
+                    let upgraded =
+                        upgrade_polymorphic_to_yield_result(db, effective_ty, ctx.func_return_type);
+                    if upgraded != effective_ty {
+                        debug!(
+                            "wasm.call_indirect local: using YieldResult instead of polymorphic type {}.{}",
+                            effective_ty.dialect(db),
+                            effective_ty.name(db)
+                        );
+                        effective_ty = upgraded;
+                    }
                 }
 
                 // For wasm.ref_cast and wasm.struct_new with placeholder structref type,
@@ -2233,6 +2697,50 @@ fn emit_region_ops<'db>(
     Ok(())
 }
 
+/// Check if a type is polymorphic (type_var or anyref).
+/// These types need special handling for control flow result types.
+fn is_polymorphic_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    tribute::is_type_var(db, ty) || wasm::Anyref::from_type(db, ty).is_some()
+}
+
+/// Try to infer a concrete effective type from a control flow operation's first region.
+/// Returns the inferred type if it's more concrete than type_var/anyref, None otherwise.
+fn infer_region_effective_type<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    ctx: &FunctionEmitContext<'db>,
+) -> Option<Type<'db>> {
+    op.regions(db)
+        .first()
+        .and_then(|r| region_result_value(db, r))
+        .and_then(|v| ctx.effective_types.get(&v).copied())
+        .filter(|ty| !is_polymorphic_type(db, *ty))
+}
+
+/// Check if a type is the YieldResult marker type.
+fn is_yield_result_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    ty.dialect(db) == wasm::DIALECT_NAME() && ty.name(db) == Symbol::new("yield_result")
+}
+
+/// Upgrade a polymorphic type to YieldResult if the function returns YieldResult.
+/// Used for wasm.block/wasm.loop result types.
+fn upgrade_polymorphic_to_yield_result<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    func_return_type: Option<Type<'db>>,
+) -> Type<'db> {
+    if !is_polymorphic_type(db, ty) {
+        return ty;
+    }
+
+    if let Some(ret_ty) = func_return_type
+        && is_yield_result_type(db, ret_ty)
+    {
+        return crate::gc_types::yield_result_marker_type(db);
+    }
+    ty
+}
+
 fn region_result_value<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
@@ -2294,10 +2802,18 @@ fn emit_op<'db>(
         }
         // Fall back to type attribute (legacy, will be removed)
         if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
+            // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
+            if is_closure_struct_type(db, *ty) {
+                return Some(CLOSURE_STRUCT_IDX);
+            }
             return module_info.type_idx_by_type.get(ty).copied();
         }
         // Fall back to inferred type
         if let Some(ty) = inferred_type {
+            // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
+            if is_closure_struct_type(db, ty) {
+                return Some(CLOSURE_STRUCT_IDX);
+            }
             return module_info.type_idx_by_type.get(&ty).copied();
         }
         None
@@ -2308,9 +2824,50 @@ fn emit_op<'db>(
 
     debug!("emit_op: {}.{}", op.dialect(db), name);
 
-    // Skip wasm.nop - it's a placeholder for nil constants
-    // No WASM instruction is emitted, and nil values have no local mapping
+    // Handle wasm.nop - it's a placeholder for nil constants
+    // For primitive types, no WASM instruction is emitted.
+    // For reference types (func, anyref, etc.), emit ref.null so the value can be used.
     if name == Symbol::new("nop") {
+        // Check if the result type is a reference type
+        if let Some(result_ty) = op.results(db).first() {
+            debug!(
+                "wasm.nop: result_ty={}.{}",
+                result_ty.dialect(db),
+                result_ty.name(db)
+            );
+            if core::Func::from_type(db, *result_ty).is_some()
+                || wasm::Funcref::from_type(db, *result_ty).is_some()
+            {
+                debug!("wasm.nop: emitting ref.null func");
+                // Emit ref.null func for function reference types
+                function.instruction(&Instruction::RefNull(HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Func,
+                }));
+                set_result_local(db, op, ctx, function)?;
+            } else if wasm::Anyref::from_type(db, *result_ty).is_some()
+                || wasm::Structref::from_type(db, *result_ty).is_some()
+            {
+                debug!("wasm.nop: emitting ref.null any");
+                // Emit ref.null any for other reference types
+                function.instruction(&Instruction::RefNull(HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Any,
+                }));
+                set_result_local(db, op, ctx, function)?;
+            } else if core::Nil::from_type(db, *result_ty).is_some() {
+                // Nil type - emit ref.null none for use as empty environment
+                debug!("wasm.nop: emitting ref.null none for nil type");
+                function.instruction(&Instruction::RefNull(HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::None,
+                }));
+                set_result_local(db, op, ctx, function)?;
+            } else {
+                debug!("wasm.nop: skipping (unknown primitive type)");
+            }
+            // For primitive types (nil, i32, etc.), skip - no runtime value
+        }
         return Ok(());
     }
 
@@ -2344,47 +2901,73 @@ fn emit_op<'db>(
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
 
         // For wasm.if with results, we need to determine the actual block type.
-        // If the IR result type is type.var (anyref) but the effective result type
-        // from the then/else branches is concrete (like I64), we must use the
-        // effective type for the block type.
-        let block_type = if has_result {
+        // If the IR result type is polymorphic but the effective result type
+        // from the then/else branches is concrete, we must use the effective type.
+        let effective_ty = if has_result {
             let ir_ty = result_ty.expect("if result type");
-            // Check if the branch result values have an effective type computed
-            // If the IR type is a type variable and we have a different effective type,
-            // use the effective type for the block
-            let effective_ty = if tribute::is_type_var(db, ir_ty) {
-                // Try to get effective type from the then region's result value
-                let regions = op.regions(db);
-                let then_result_ty = regions
-                    .first()
-                    .and_then(|r| region_result_value(db, r))
-                    .and_then(|v| ctx.effective_types.get(&v).copied());
-
-                if let Some(eff_ty) = then_result_ty {
-                    if !tribute::is_type_var(db, eff_ty) {
+            if tribute::is_type_var(db, ir_ty) {
+                // Try to infer from then region's result value
+                if let Some(eff_ty) = infer_region_effective_type(db, op, ctx) {
+                    debug!(
+                        "wasm.if: using then branch effective type {}.{} instead of IR type {}.{}",
+                        eff_ty.dialect(db),
+                        eff_ty.name(db),
+                        ir_ty.dialect(db),
+                        ir_ty.name(db)
+                    );
+                    Some(eff_ty)
+                } else if let Some(ret_ty) = ctx.func_return_type {
+                    if !is_polymorphic_type(db, ret_ty) {
                         debug!(
-                            "wasm.if: using then branch effective type {}.{} instead of IR type {}.{}",
-                            eff_ty.dialect(db),
-                            eff_ty.name(db),
-                            ir_ty.dialect(db),
-                            ir_ty.name(db)
+                            "wasm.if: using function return type {}.{} instead of type_var",
+                            ret_ty.dialect(db),
+                            ret_ty.name(db)
                         );
-                        eff_ty
+                        Some(ret_ty)
                     } else {
-                        ir_ty
+                        Some(ir_ty)
                     }
                 } else {
-                    ir_ty
+                    Some(ir_ty)
                 }
             } else {
-                ir_ty
-            };
+                Some(ir_ty)
+            }
+        } else {
+            None
+        };
 
-            BlockType::Result(type_to_valtype(
-                db,
-                effective_ty,
-                &module_info.type_idx_by_type,
-            )?)
+        let block_type = if has_result {
+            let eff_ty = effective_ty.expect("effective_ty should be Some when has_result is true");
+            // IMPORTANT: Check core.func BEFORE type_idx_by_type lookup.
+            // core.func types should always use funcref block type, not concrete struct types.
+            if core::Func::from_type(db, eff_ty).is_some() {
+                debug!(
+                    "wasm.if block_type: using funcref for core.func type {}.{}",
+                    eff_ty.dialect(db),
+                    eff_ty.name(db)
+                );
+                BlockType::Result(ValType::Ref(RefType::FUNCREF))
+            } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
+                // ADT types - use concrete GC type reference
+                debug!(
+                    "wasm.if block_type: using concrete type_idx={} for {}.{}",
+                    type_idx,
+                    eff_ty.dialect(db),
+                    eff_ty.name(db)
+                );
+                BlockType::Result(ValType::Ref(RefType {
+                    nullable: true,
+                    heap_type: HeapType::Concrete(type_idx),
+                }))
+            } else {
+                debug!(
+                    "wasm.if block_type: no type_idx for {}.{}, using type_to_valtype",
+                    eff_ty.dialect(db),
+                    eff_ty.name(db)
+                );
+                BlockType::Result(type_to_valtype(db, eff_ty, &module_info.type_idx_by_type)?)
+            }
         } else {
             BlockType::Empty
         };
@@ -2409,6 +2992,29 @@ fn emit_op<'db>(
         emit_region_ops(db, then_region, ctx, module_info, function)?;
         if let Some(value) = then_result {
             emit_value_get(value, ctx, function)?;
+            // If the value's effective type is anyref/type_var but the block expects
+            // a specific type, cast the result.
+            if let (Some(eff_ty), Some(value_ty)) = (effective_ty, ctx.effective_types.get(&value))
+                && (tribute::is_type_var(db, *value_ty)
+                    || wasm::Anyref::from_type(db, *value_ty).is_some())
+            {
+                if core::Func::from_type(db, eff_ty).is_some() {
+                    // core.func types need cast to funcref (abstract type)
+                    debug!("wasm.if then: casting anyref branch result to funcref");
+                    function.instruction(&Instruction::RefCastNullable(HeapType::Abstract {
+                        shared: false,
+                        ty: AbstractHeapType::Func,
+                    }));
+                } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
+                    // ADT types need cast to concrete struct type
+                    debug!(
+                        "wasm.if then: casting anyref branch result to (ref null {})",
+                        type_idx
+                    );
+                    function
+                        .instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
+                }
+            }
         }
         if let Some(else_region) = regions.get(1) {
             let else_result = if has_result {
@@ -2422,6 +3028,30 @@ fn emit_op<'db>(
             emit_region_ops(db, else_region, ctx, module_info, function)?;
             if let Some(value) = else_result {
                 emit_value_get(value, ctx, function)?;
+                // Cast else branch result if needed (same logic as then branch)
+                if let (Some(eff_ty), Some(value_ty)) =
+                    (effective_ty, ctx.effective_types.get(&value))
+                    && (tribute::is_type_var(db, *value_ty)
+                        || wasm::Anyref::from_type(db, *value_ty).is_some())
+                {
+                    if core::Func::from_type(db, eff_ty).is_some() {
+                        // core.func types need cast to funcref (abstract type)
+                        debug!("wasm.if else: casting anyref branch result to funcref");
+                        function.instruction(&Instruction::RefCastNullable(HeapType::Abstract {
+                            shared: false,
+                            ty: AbstractHeapType::Func,
+                        }));
+                    } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
+                        // ADT types need cast to concrete struct type
+                        debug!(
+                            "wasm.if else: casting anyref branch result to (ref null {})",
+                            type_idx
+                        );
+                        function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(
+                            type_idx,
+                        )));
+                    }
+                }
             }
         } else if has_result {
             return Err(CompilationError::invalid_module(
@@ -2433,7 +3063,11 @@ fn emit_op<'db>(
             set_result_local(db, op, ctx, function)?;
         }
     } else if name == Symbol::new("block") {
-        let result_ty = op.results(db).first().copied();
+        // Upgrade polymorphic block result type to YieldResult if function returns YieldResult
+        let result_ty = op
+            .results(db)
+            .first()
+            .map(|ty| upgrade_polymorphic_to_yield_result(db, *ty, ctx.func_return_type));
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
         let block_type = if has_result {
             BlockType::Result(type_to_valtype(
@@ -2461,7 +3095,11 @@ fn emit_op<'db>(
             set_result_local(db, op, ctx, function)?;
         }
     } else if name == Symbol::new("loop") {
-        let result_ty = op.results(db).first().copied();
+        // Upgrade polymorphic loop result type to YieldResult if function returns YieldResult
+        let result_ty = op
+            .results(db)
+            .first()
+            .map(|ty| upgrade_polymorphic_to_yield_result(db, *ty, ctx.func_return_type));
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
         let block_type = if has_result {
             BlockType::Result(type_to_valtype(
@@ -2536,62 +3174,233 @@ fn emit_op<'db>(
 
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("call_indirect") {
-        // wasm.call_indirect: indirect function call through a funcref
+        // wasm.call_indirect: indirect function call
         // Operands: [arg1, arg2, ..., argN, funcref]
         // The funcref is the last operand (on top of stack in WebAssembly)
+        //
+        // If the last operand is a reference type (funcref/anyref), we use call_ref.
+        // If it's an i32 (table index), we use the traditional call_indirect.
+
+        if operands.is_empty() {
+            return Err(CompilationError::invalid_module(
+                "wasm.call_indirect requires at least a funcref operand",
+            ));
+        }
+
+        // In func.call_indirect IR, the callee (funcref) is the FIRST operand, followed by args.
+        // But WebAssembly expects: [args..., funcref/table_idx] with the call target last on stack.
+        // Check the first operand to determine if we have a funcref (use call_ref) or i32 (use call_indirect).
+        let first_operand = operands.first().copied().unwrap();
+        let first_operand_ty = value_type(db, first_operand, &module_info.block_arg_types);
+        debug!(
+            "call_indirect: first_operand_ty={:?}",
+            first_operand_ty.map(|ty| {
+                ty.dialect(db)
+                    .with_str(|d| ty.name(db).with_str(|n| format!("{}.{}", d, n)))
+            })
+        );
+        // Debug: trace the value definition
+        match first_operand.def(db) {
+            ValueDef::OpResult(def_op) => {
+                debug!(
+                    "call_indirect: first_operand defined by {}.{}, results={:?}",
+                    def_op.dialect(db),
+                    def_op.name(db),
+                    def_op
+                        .results(db)
+                        .iter()
+                        .map(|t| {
+                            t.dialect(db)
+                                .with_str(|d| t.name(db).with_str(|n| format!("{}.{}", d, n)))
+                        })
+                        .collect::<Vec<_>>()
+                );
+            }
+            ValueDef::BlockArg(block_id) => {
+                debug!(
+                    "call_indirect: first_operand is block arg from block {:?} idx {}",
+                    block_id,
+                    first_operand.index(db)
+                );
+            }
+        }
+        let is_ref_type = first_operand_ty.is_some_and(|ty| {
+            let is_funcref = wasm::Funcref::from_type(db, ty).is_some();
+            let is_anyref = wasm::Anyref::from_type(db, ty).is_some();
+            let is_core_func = core::Func::from_type(db, ty).is_some();
+            // Check if this is a closure struct (adt.struct with name "_closure")
+            // Closure structs contain (funcref, anyref) and are used for call_indirect
+            let is_closure_struct = is_closure_struct_type(db, ty);
+            debug!(
+                "call_indirect: is_funcref={}, is_anyref={}, is_core_func={}, is_closure_struct={}",
+                is_funcref, is_anyref, is_core_func, is_closure_struct
+            );
+            is_funcref || is_anyref || is_core_func || is_closure_struct
+        });
+        debug!("call_indirect: is_ref_type={}", is_ref_type);
+
+        // Build parameter types (all operands except first which is funcref)
+        // Normalize IR types to wasm types - primitive IR types that might be boxed
+        // (in polymorphic handlers) should use anyref.
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let normalize_param_type = |ty: Type<'db>| -> Type<'db> {
+            if tribute_rt::is_int(db, ty)
+                || tribute_rt::is_nat(db, ty)
+                || tribute_rt::is_bool(db, ty)
+                || tribute_rt::is_float(db, ty)
+                || tribute::is_type_var(db, ty)
+                || core::Nil::from_type(db, ty).is_some()
+            {
+                anyref_ty
+            } else {
+                ty
+            }
+        };
+        let param_types: Vec<Type<'db>> = operands
+            .iter()
+            .skip(1)
+            .filter_map(|v| value_type(db, *v, &module_info.block_arg_types))
+            .map(normalize_param_type)
+            .collect();
+
+        // Get result type - use enclosing function's return type if it's funcref
+        // and the call_indirect has anyref result. This is needed because
+        // WebAssembly GC has separate type hierarchies for anyref and funcref,
+        // so we can't cast between them.
+        let mut result_ty = op.results(db).first().copied().ok_or_else(|| {
+            CompilationError::invalid_module("wasm.call_indirect must have a result type")
+        })?;
+
+        // If result type is anyref/type_var but enclosing function returns funcref or YieldResult,
+        // upgrade the result type accordingly. This is needed because WebAssembly GC has separate
+        // type hierarchies, and effectful functions return YieldResult for yield bubbling.
+        let funcref_ty = wasm::Funcref::new(db).as_type();
+        if let Some(func_ret_ty) = ctx.func_return_type {
+            let is_anyref_result = wasm::Anyref::from_type(db, result_ty).is_some();
+            let is_type_var_result = result_ty.dialect(db) == Symbol::new("tribute")
+                && result_ty.name(db) == Symbol::new("type_var");
+            let is_polymorphic_result = is_anyref_result || is_type_var_result;
+            let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty).is_some()
+                || core::Func::from_type(db, func_ret_ty).is_some();
+            let func_returns_yield_result = func_ret_ty.dialect(db) == wasm::DIALECT_NAME()
+                && func_ret_ty.name(db) == Symbol::new("yield_result");
+            if is_polymorphic_result && func_returns_funcref {
+                debug!(
+                    "call_indirect emit: upgrading polymorphic result to funcref for enclosing function"
+                );
+                result_ty = funcref_ty;
+            } else if is_polymorphic_result && func_returns_yield_result {
+                debug!(
+                    "call_indirect emit: upgrading polymorphic result to yield_result for enclosing function"
+                );
+                result_ty = crate::gc_types::yield_result_marker_type(db);
+            }
+        }
+
+        // Construct function type
+        let func_type =
+            core::Func::new(db, param_types.clone().into_iter().collect(), result_ty).as_type();
+
+        debug!(
+            "call_indirect emit: looking up func_type with result={}.{}",
+            result_ty.dialect(db),
+            result_ty.name(db)
+        );
 
         // Get or compute type_idx
         let type_idx = match attr_u32(op.attributes(db), Symbol::new("type_idx")) {
-            Ok(idx) => idx,
+            Ok(idx) => {
+                debug!("call_indirect emit: using type_idx from attribute: {}", idx);
+                idx
+            }
             Err(_) => {
-                // type_idx not provided (from func_to_wasm) - compute from signature
-                // Signature: (param1, param2, ..., paramN) -> result
-                // where params are all operands except the last (funcref)
-
-                if operands.is_empty() {
-                    return Err(CompilationError::invalid_module(
-                        "wasm.call_indirect requires at least a funcref operand",
-                    ));
-                }
-
-                // Build parameter types (all operands except last)
-                let param_types: Vec<Type<'db>> = operands
-                    .iter()
-                    .take(operands.len() - 1)
-                    .filter_map(|v| value_type(db, *v, &module_info.block_arg_types))
-                    .collect();
-
-                // Get result type
-                let result_ty = op.results(db).first().copied().ok_or_else(|| {
-                    CompilationError::invalid_module("wasm.call_indirect must have a result type")
-                })?;
-
-                // Construct function type
-                let func_type =
-                    core::Func::new(db, param_types.into_iter().collect(), result_ty).as_type();
-
                 // Look up type index
-                module_info
+                let idx = module_info
                     .type_idx_by_type
                     .get(&func_type)
                     .copied()
                     .ok_or_else(|| {
+                        debug!(
+                            "call_indirect emit: func_type not found in type_idx_by_type! func_type={:?}",
+                            func_type
+                        );
                         CompilationError::invalid_module(
                             "wasm.call_indirect function type not registered in type section",
                         )
-                    })?
+                    })?;
+                debug!("call_indirect emit: looked up type_idx: {}", idx);
+                idx
             }
         };
-        let table = attr_u32(op.attributes(db), Symbol::new("table")).unwrap_or(0);
 
-        // Emit all operands (arguments first, then funcref)
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+        if is_ref_type {
+            // Use call_ref for typed function references
+            // IR operand order: [funcref, arg1, arg2, ...]
+            // WebAssembly stack order: [arg1, arg2, ..., funcref]
+            // So we emit args first (operands[1..]), then funcref (operands[0])
 
-        // Emit call_indirect instruction
-        function.instruction(&Instruction::CallIndirect {
-            type_index: type_idx,
-            table_index: table,
-        });
+            // Emit arguments (all operands except first funcref)
+            for (i, operand) in operands.iter().skip(1).enumerate() {
+                debug!(
+                    "call_indirect: emitting arg {} of type {:?}",
+                    i,
+                    value_type(db, *operand, &module_info.block_arg_types).map(|t| t
+                        .dialect(db)
+                        .with_str(|d| t.name(db).with_str(|n| format!("{}.{}", d, n))))
+                );
+                match operand.def(db) {
+                    ValueDef::OpResult(def_op) => {
+                        debug!(
+                            "  arg {} defined by {}.{}",
+                            i,
+                            def_op.dialect(db),
+                            def_op.name(db)
+                        );
+                    }
+                    ValueDef::BlockArg(block_id) => {
+                        debug!("  arg {} is block arg from {:?}", i, block_id);
+                    }
+                }
+                emit_value(db, *operand, ctx, function)?;
+            }
+
+            // Emit the funcref (first operand)
+            emit_value(db, first_operand, ctx, function)?;
+
+            // Cast anyref/closure struct to typed function reference if needed
+            // Closure struct (adt.struct with name "_closure") contains funcref in field 0.
+            // When we extract the funcref via struct_get, the IR type may still be adt.struct,
+            // but the actual wasm value is funcref. Cast to the concrete function type.
+            if let Some(ty) = first_operand_ty
+                && (wasm::Anyref::from_type(db, ty).is_some()
+                    || core::Func::from_type(db, ty).is_some()
+                    || is_closure_struct_type(db, ty))
+            {
+                // Cast to (ref null func_type)
+                function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
+            }
+
+            // Emit call_ref with the function type index
+            function.instruction(&Instruction::CallRef(type_idx));
+
+            // The call_ref returns the declared result type of the called function.
+            // But the local where we store the result may have a different (concrete) type.
+            // We need to cast the result to match the local's type.
+            //
+            // Note: This is a workaround for unresolved type variables (tribute.type_var)
+            // in the IR. The proper fix would be to resolve types earlier in the pipeline.
+        } else {
+            // Traditional call_indirect with i32 table index
+            let table = attr_u32(op.attributes(db), Symbol::new("table")).unwrap_or(0);
+
+            // Emit all operands (arguments first, then table index)
+            emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+
+            function.instruction(&Instruction::CallIndirect {
+                type_index: type_idx,
+                table_index: table,
+            });
+        }
 
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("return_call") {
@@ -2631,7 +3440,9 @@ fn emit_op<'db>(
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         function.instruction(&Instruction::GlobalSet(index));
     } else if name == Symbol::new("struct_new") {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+        // struct_new needs all field values on the stack, including nil types.
+        // Unlike emit_operands which skips nil types, we emit ref.null none for them.
+        emit_struct_new_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let attrs = op.attributes(db);
         let field_count = operands.len();
         let result_type = op.results(db).first().copied();
@@ -2646,6 +3457,9 @@ fn emit_op<'db>(
                     .placeholder_struct_type_idx
                     .get(&(*ty, field_count))
                     .copied()
+            } else if is_closure_struct_type(db, *ty) {
+                // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
+                Some(CLOSURE_STRUCT_IDX)
             } else {
                 // Regular type
                 module_info.type_idx_by_type.get(ty).copied()
@@ -2662,8 +3476,13 @@ fn emit_op<'db>(
         } else if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
             Some(*idx as u32)
         } else if let Some(ty) = result_type {
-            // Infer type from result type (non-placeholder)
-            module_info.type_idx_by_type.get(&ty).copied()
+            // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
+            if is_closure_struct_type(db, ty) {
+                Some(CLOSURE_STRUCT_IDX)
+            } else {
+                // Infer type from result type (non-placeholder)
+                module_info.type_idx_by_type.get(&ty).copied()
+            }
         } else {
             None
         }
@@ -2674,70 +3493,174 @@ fn emit_op<'db>(
     } else if name == Symbol::new("struct_get") {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let attrs = op.attributes(db);
-        // Infer type from operand[0] (the struct ref)
-        let inferred_type = operands
-            .first()
-            .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
 
-        // Check if this uses a placeholder type (wasm.structref) with field_count
-        let type_idx = if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-            if wasm::Structref::from_type(db, *ty).is_some() {
-                // Use placeholder map for wasm.structref
-                if let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count")) {
-                    debug!(
-                        "struct_get: placeholder type with field_count={}, looking up in map",
-                        fc
-                    );
-                    let result = module_info
-                        .placeholder_struct_type_idx
-                        .get(&(*ty, *fc as usize))
-                        .copied();
-                    debug!("struct_get: placeholder lookup result={:?}", result);
-                    result
+        // Check if operand is anyref and needs casting to struct type
+        // This happens when a closure is captured (stored as anyref) and later used
+        let operand_is_anyref = operands
+            .first()
+            .and_then(|op_val| {
+                let ty = value_type(db, *op_val, &module_info.block_arg_types)?;
+                if wasm::Anyref::from_type(db, ty).is_some() {
+                    Some(true)
                 } else {
-                    debug!("struct_get: placeholder type but no field_count attribute");
                     None
                 }
-            } else if adt::is_struct_type(db, *ty) {
-                // For adt.struct types, extract field count from fields attribute
-                // and use placeholder lookup with structref key
-                let field_count = adt::get_struct_fields(db, *ty)
-                    .map(|fields| fields.len())
-                    .unwrap_or(0);
+            })
+            .unwrap_or(false);
+
+        // CRITICAL: For struct_get, the type_idx MUST match the operand's actual type.
+        // We need to trace through ref.cast operations to find the actual type,
+        // because the IR type might be different from the wasm type after casting.
+        let operand = operands.first().copied();
+        let type_idx = if let Some(op_val) = operand {
+            // Check if the operand was defined by a ref.cast - if so, use its target type
+            if let ValueDef::OpResult(def_op) = op_val.def(db) {
                 debug!(
-                    "struct_get: adt.struct type with {} fields, using placeholder lookup",
-                    field_count
+                    "struct_get: operand defined by {}.{} at index {}",
+                    def_op.dialect(db),
+                    def_op.name(db),
+                    op_val.index(db)
                 );
-                let structref_ty = wasm::Structref::new(db).as_type();
-                let result = module_info
-                    .placeholder_struct_type_idx
-                    .get(&(structref_ty, field_count))
-                    .copied();
-                debug!(
-                    "struct_get: adt.struct placeholder lookup result={:?}",
-                    result
-                );
-                // If not found in placeholder map, try regular type lookup
-                result.or_else(|| module_info.type_idx_by_type.get(ty).copied())
+                if def_op.dialect(db) == Symbol::new("wasm")
+                    && def_op.name(db) == Symbol::new("ref_cast")
+                {
+                    // Get the ref.cast's target_type and field_count
+                    let def_attrs = def_op.attributes(db);
+                    if let Some(Attribute::Type(target_ty)) = def_attrs.get(&ATTR_TARGET_TYPE()) {
+                        // For placeholder types like wasm.structref, we MUST use field_count
+                        // to distinguish between different concrete types with same abstract type.
+                        let is_placeholder = wasm::Structref::from_type(db, *target_ty).is_some();
+
+                        if is_placeholder {
+                            // Use placeholder lookup with field_count
+                            let field_count = if let Some(Attribute::IntBits(fc)) =
+                                def_attrs.get(&Symbol::new("field_count"))
+                            {
+                                debug!(
+                                    "struct_get: ref_cast (placeholder) has field_count={}",
+                                    *fc
+                                );
+                                *fc as usize
+                            } else {
+                                debug!("struct_get: ref_cast (placeholder) has NO field_count!");
+                                // Last resort - use struct_get's type attr
+                                if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
+                                    adt::get_struct_fields(db, *ty)
+                                        .map(|f| f.len())
+                                        .unwrap_or(0)
+                                } else {
+                                    0
+                                }
+                            };
+                            debug!(
+                                "struct_get: looking up placeholder ({}.{}, field_count={})",
+                                target_ty.dialect(db),
+                                target_ty.name(db),
+                                field_count
+                            );
+                            let result = module_info
+                                .placeholder_struct_type_idx
+                                .get(&(*target_ty, field_count))
+                                .copied();
+                            debug!("struct_get: placeholder lookup result = {:?}", result);
+                            result
+                        } else if let Some(&idx) = module_info.type_idx_by_type.get(target_ty) {
+                            // Non-placeholder concrete type - use direct lookup
+                            debug!(
+                                "struct_get: using ref_cast direct type_idx={} for {}.{}",
+                                idx,
+                                target_ty.dialect(db),
+                                target_ty.name(db)
+                            );
+                            Some(idx)
+                        } else {
+                            // Non-placeholder but not found - try placeholder lookup as fallback
+                            let field_count = if let Some(Attribute::IntBits(fc)) =
+                                def_attrs.get(&Symbol::new("field_count"))
+                            {
+                                *fc as usize
+                            } else if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
+                                adt::get_struct_fields(db, *ty)
+                                    .map(|f| f.len())
+                                    .unwrap_or(0)
+                            } else {
+                                0
+                            };
+                            module_info
+                                .placeholder_struct_type_idx
+                                .get(&(*target_ty, field_count))
+                                .copied()
+                        }
+                    } else {
+                        // No target_type attr on ref_cast, fall back
+                        debug!("struct_get: ref_cast has NO target_type attribute!");
+                        let inferred_type = value_type(db, op_val, &module_info.block_arg_types);
+                        get_type_idx_from_attrs(attrs, inferred_type)
+                    }
+                } else {
+                    // Not a ref_cast, use normal lookup
+                    let inferred_type = value_type(db, op_val, &module_info.block_arg_types);
+                    if let Some(inferred) = inferred_type {
+                        // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
+                        if is_closure_struct_type(db, inferred) {
+                            debug!("struct_get: using CLOSURE_STRUCT_IDX for _closure type");
+                            Some(CLOSURE_STRUCT_IDX)
+                        } else if let Some(&idx) = module_info.type_idx_by_type.get(&inferred) {
+                            debug!(
+                                "struct_get: using operand's type_idx={} for {}.{}",
+                                idx,
+                                inferred.dialect(db),
+                                inferred.name(db)
+                            );
+                            Some(idx)
+                        } else {
+                            get_type_idx_from_attrs(attrs, Some(inferred))
+                        }
+                    } else {
+                        get_type_idx_from_attrs(attrs, inferred_type)
+                    }
+                }
             } else {
-                debug!("struct_get: non-placeholder type attr={:?}", ty);
-                // Regular type
-                module_info.type_idx_by_type.get(ty).copied()
+                // Block arg - use normal lookup
+                let inferred_type = value_type(db, op_val, &module_info.block_arg_types);
+                if let Some(inferred) = inferred_type {
+                    // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
+                    if is_closure_struct_type(db, inferred) {
+                        debug!("struct_get: using CLOSURE_STRUCT_IDX for block arg _closure type");
+                        Some(CLOSURE_STRUCT_IDX)
+                    } else if let Some(&idx) = module_info.type_idx_by_type.get(&inferred) {
+                        debug!(
+                            "struct_get: using block arg type_idx={} for {}.{}",
+                            idx,
+                            inferred.dialect(db),
+                            inferred.name(db)
+                        );
+                        Some(idx)
+                    } else {
+                        get_type_idx_from_attrs(attrs, Some(inferred))
+                    }
+                } else {
+                    get_type_idx_from_attrs(attrs, inferred_type)
+                }
             }
         } else {
-            debug!(
-                "struct_get: no type attr, using fallback. inferred_type={:?}",
-                inferred_type
-            );
-            get_type_idx_from_attrs(attrs, inferred_type)
+            debug!("struct_get: no operand, using fallback");
+            get_type_idx_from_attrs(attrs, None)
         }
         .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
 
         let field_idx = attr_field_idx(attrs)?;
         debug!(
-            "struct_get: emitting StructGet with type_idx={}, field_idx={}",
-            type_idx, field_idx
+            "struct_get: emitting StructGet with type_idx={}, field_idx={}, operand_is_anyref={}",
+            type_idx, field_idx, operand_is_anyref
         );
+
+        // If operand was anyref (from closure capture), cast it to the struct type first
+        if operand_is_anyref {
+            debug!("struct_get: casting anyref to struct type_idx={}", type_idx);
+            function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
+        }
+
         function.instruction(&Instruction::StructGet {
             struct_type_index: type_idx,
             field_index: field_idx,
@@ -2750,30 +3673,17 @@ fn emit_op<'db>(
             let result_value = op.result(db, 0);
 
             // Check if the result local would be anyref by examining the effective type
-            // or IR result type and seeing what WASM type it maps to
-            let result_ty = ctx
+            let local_type = ctx
                 .effective_types
                 .get(&result_value)
                 .copied()
                 .or_else(|| op.results(db).first().copied());
 
-            let expects_anyref = result_ty
-                .and_then(|ty| type_to_valtype(db, ty, &module_info.type_idx_by_type).ok())
-                .map(|vt| {
-                    matches!(
-                        vt,
-                        ValType::Ref(RefType {
-                            heap_type: HeapType::Abstract {
-                                ty: AbstractHeapType::Any,
-                                ..
-                            },
-                            ..
-                        })
-                    )
-                })
+            let expects_anyref = local_type
+                .map(|ty| wasm::Anyref::from_type(db, ty).is_some() || tribute::is_type_var(db, ty))
                 .unwrap_or(false);
 
-            // Check if struct field type is i64
+            // Check if the struct field is i64
             let field_is_i64 = module_info
                 .gc_types
                 .get(type_idx as usize)
@@ -2795,6 +3705,7 @@ fn emit_op<'db>(
                 "struct_get boxing check: expects_anyref={}, field_is_i64={}, type_idx={}, field_idx={}",
                 expects_anyref, field_is_i64, type_idx, field_idx
             );
+
             expects_anyref && field_is_i64
         } else {
             false
@@ -3230,6 +4141,66 @@ fn emit_operands<'db>(
     Ok(())
 }
 
+/// Emit operands for struct_new, handling nil types specially.
+///
+/// Unlike `emit_operands` which skips nil type values, struct_new requires
+/// all field values on the stack. For nil type fields, we emit `ref.null none`.
+fn emit_struct_new_operands<'db>(
+    db: &'db dyn salsa::Database,
+    operands: &IdVec<Value<'db>>,
+    ctx: &FunctionEmitContext<'db>,
+    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    for value in operands.iter() {
+        // Check if value is nil type
+        if let Some(ty) = value_type(db, *value, block_arg_types)
+            && is_nil_type(db, ty)
+        {
+            // Nil type fields need ref.null none on the stack
+            debug!(
+                "  emit_struct_new_operands: emitting ref.null none for nil type value {:?}",
+                value.def(db)
+            );
+            function.instruction(&Instruction::RefNull(HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::None,
+            }));
+            continue;
+        }
+
+        // Regular value handling (same as emit_operands)
+        if let Some(index) = ctx.value_locals.get(value) {
+            function.instruction(&Instruction::LocalGet(*index));
+            continue;
+        }
+
+        // Handle block argument references
+        if let ValueDef::BlockArg(_block_id) = value.def(db) {
+            let index = value.index(db) as u32;
+            function.instruction(&Instruction::LocalGet(index));
+            continue;
+        }
+
+        // If operand not found, this is an error
+        let ValueDef::OpResult(stale_op) = value.def(db) else {
+            return Err(CompilationError::invalid_module(
+                "stale SSA value in wasm backend (missing local mapping)",
+            ));
+        };
+        tracing::error!(
+            "emit_struct_new_operands: stale SSA value: {}.{} index={}",
+            stale_op.dialect(db),
+            stale_op.name(db),
+            value.index(db)
+        );
+        return Err(CompilationError::invalid_module(
+            "stale SSA value in wasm backend (missing local mapping)",
+        ));
+    }
+    Ok(())
+}
+
 /// Emit operands with boxing when calling generic functions.
 /// If a parameter expects anyref (type.var) but the operand is a concrete type (Int, Float),
 /// we need to box the value.
@@ -3401,7 +4372,22 @@ fn infer_call_result_type<'db>(
     result_ty: Type<'db>,
     func_types: &HashMap<Symbol, core::Func<'db>>,
     block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
+    func_return_type: Option<Type<'db>>,
 ) -> Type<'db> {
+    // Handle wasm.call_indirect - if result is polymorphic but function returns funcref, use funcref
+    if op.dialect(db) == Symbol::new("wasm") && op.name(db) == Symbol::new("call_indirect") {
+        let is_polymorphic_result =
+            tribute::is_type_var(db, result_ty) || wasm::Anyref::from_type(db, result_ty).is_some();
+        if let Some(func_ret_ty) = func_return_type {
+            let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty).is_some()
+                || core::Func::from_type(db, func_ret_ty).is_some();
+            if is_polymorphic_result && func_returns_funcref {
+                return wasm::Funcref::new(db).as_type();
+            }
+        }
+        return result_ty;
+    }
+
     // Only handle wasm.call operations
     if op.dialect(db) != Symbol::new("wasm") || op.name(db) != Symbol::new("call") {
         return result_ty;
@@ -3449,10 +4435,9 @@ fn set_result_local<'db>(
     if results.is_empty() {
         return Ok(());
     }
-    // Skip nil types - they don't have local mappings and don't need local.set
-    if is_nil_type(db, results[0]) {
-        return Ok(());
-    }
+    // Note: We no longer skip nil types here because they may be used as
+    // arguments (e.g., empty closure environments). Nil types now have local
+    // mappings and produce ref.null none values.
     let local = ctx
         .value_locals
         .get(&op.result(db, 0))
@@ -3526,12 +4511,41 @@ fn type_to_valtype<'db>(
                     ty: AbstractHeapType::I31,
                 },
             }))
+        } else if name == Symbol::new("yield_result") {
+            // YieldResult is a builtin GC struct type for yield bubbling
+            // Always uses fixed type index YIELD_RESULT_IDX (3)
+            Ok(ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Concrete(YIELD_RESULT_IDX),
+            }))
         } else {
             Err(CompilationError::type_error(format!(
                 "unsupported wasm type: wasm.{}",
                 name
             )))
         }
+    } else if core::Func::from_type(db, ty).is_some() {
+        // Function types map to funcref for call_indirect operations.
+        // The function signature is preserved in the IR and registered
+        // in the type section by collect_call_indirect_types.
+        Ok(ValType::Ref(RefType::FUNCREF))
+    } else if closure::Closure::from_type(db, ty).is_some() {
+        // Closure types map to the builtin CLOSURE_STRUCT_IDX which has
+        // (funcref, anyref) fields for uniform closure representation.
+        // IMPORTANT: Check this BEFORE type_idx_by_type.get() to ensure all
+        // closure::Closure types use the builtin CLOSURE_STRUCT_IDX (4).
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
+        }))
+    } else if is_closure_struct_type(db, ty) {
+        // ADT struct named "_closure" maps to builtin CLOSURE_STRUCT_IDX.
+        // IMPORTANT: Check this BEFORE type_idx_by_type.get() to ensure
+        // _closure structs use the correct builtin type.
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
+        }))
     } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
         // ADT types (structs, variants) - use concrete GC type reference
         // Check this BEFORE tribute::is_type_var to handle struct types with type_idx
@@ -3547,17 +4561,18 @@ fn type_to_valtype<'db>(
         // ADT base types (e.g., adt.Expr) without specific variant type_idx
         // These represent "any variant of this enum" and use anyref
         Ok(ValType::Ref(RefType::ANYREF))
-    } else if core::Func::from_type(db, ty).is_some() {
-        // Function types as values use anyref (closures are passed as structs)
-        // In Tribute, function-typed parameters receive closures at runtime
-        Ok(ValType::Ref(RefType::ANYREF))
-    } else if closure::Closure::from_type(db, ty).is_some() {
-        // Closure types - use anyref for unregistered closures
-        // (registered closures are handled earlier by the generic type_idx_by_type lookup)
-        Ok(ValType::Ref(RefType::ANYREF))
     } else if ability::EvidencePtr::from_type(db, ty).is_some() {
         // Evidence pointer for ability system - use anyref as runtime handle
         Ok(ValType::Ref(RefType::ANYREF))
+    } else if core::Nil::from_type(db, ty).is_some() {
+        // Nil type - use (ref null none) for empty environments
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::None,
+            },
+        }))
     } else {
         Err(CompilationError::type_error(format!(
             "unsupported wasm value type: {}.{}",
@@ -3581,6 +4596,94 @@ fn result_types<'db>(
 
 fn is_nil_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
     ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == Symbol::new("nil")
+}
+
+/// Check if a type is a closure struct (adt.struct with name "_closure").
+/// Closure structs contain (funcref, anyref) and are used for call_indirect.
+fn is_closure_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    // Check if it's an adt.struct type
+    if ty.dialect(db) != adt::DIALECT_NAME() {
+        return false;
+    }
+    if ty.name(db) != Symbol::new("struct") {
+        return false;
+    }
+    // Check if the struct name is "_closure"
+    ty.attrs(db).get(&Symbol::new("name")).is_some_and(|attr| {
+        if let Attribute::Symbol(name) = attr {
+            name.with_str(|s| s == "_closure")
+        } else {
+            false
+        }
+    })
+}
+
+/// Detect if a function body's handler dispatch should return i32 instead of funcref.
+///
+/// Handler dispatch generates wasm.if operations:
+/// - then branch: suspend path (calls continuation, returns funcref)
+/// - else branch: done path (returns actual computation result)
+///
+/// For handler lambdas that call continuations (k(value)), the done path also calls
+/// the continuation via call_indirect, so it legitimately returns funcref.
+/// For the computation lambda, the done path returns the actual result (i32).
+///
+/// Returns true if the function should return i32 (computation lambda case).
+fn should_adjust_handler_return_to_i32<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+) -> bool {
+    // Walk the region looking for wasm.if operations
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Check if this is a wasm.if (handler dispatch generates these)
+            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("if") {
+                // Get the else region (done path) - it's region index 1
+                let regions = op.regions(db);
+                if let Some(else_region) = regions.get(1) {
+                    // Check if the else branch contains call_indirect (continuation call)
+                    // If it does, this lambda legitimately returns funcref
+                    // If it doesn't, this is the computation lambda returning i32
+                    let has_call_indirect = region_contains_call_indirect(db, else_region);
+                    debug!(
+                        "should_adjust_handler_return_to_i32: wasm.if else branch has_call_indirect={}",
+                        has_call_indirect
+                    );
+                    if !has_call_indirect {
+                        // This is the computation lambda - its done path returns i32
+                        return true;
+                    }
+                }
+                return false;
+            }
+            // Also check nested regions (wasm.block, etc.)
+            for nested_region in op.regions(db).iter() {
+                if should_adjust_handler_return_to_i32(db, nested_region) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if a region contains any wasm.call_indirect operations.
+fn region_contains_call_indirect<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("call_indirect")
+            {
+                return true;
+            }
+            // Check nested regions
+            for nested_region in op.regions(db).iter() {
+                if region_contains_call_indirect(db, nested_region) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
@@ -3915,16 +5018,20 @@ mod tests {
         let (gc_types, type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 4 GC types: 3 built-in (BoxedF64, BytesArray, BytesStruct) + 1 user struct
-        assert_eq!(gc_types.len(), 4);
+        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, YieldResult, ClosureStruct) + 1 user struct
+        assert_eq!(gc_types.len(), 6);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is the user struct
+        // Index 3 is YieldResult
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
+        // Index 4 is ClosureStruct
+        assert_eq!(gc_type_kind(&gc_types[4]), "struct");
+        // Index 5 is the user struct
+        assert_eq!(gc_type_kind(&gc_types[5]), "struct");
 
         // Type should be in the map
         let i32_ty = core::I32::new(db).as_type();
@@ -3977,16 +5084,20 @@ mod tests {
         let (gc_types, _type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 4 GC types: 3 built-in (BoxedF64, BytesArray, BytesStruct) + 1 user array
-        assert_eq!(gc_types.len(), 4);
+        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, YieldResult, ClosureStruct) + 1 user array
+        assert_eq!(gc_types.len(), 6);
         // Index 0 is BoxedF64 (struct)
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray (array)
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct (struct)
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is the user array
-        assert_eq!(gc_type_kind(&gc_types[3]), "array");
+        // Index 3 is YieldResult (struct)
+        assert_eq!(gc_type_kind(&gc_types[3]), "struct");
+        // Index 4 is ClosureStruct (struct)
+        assert_eq!(gc_type_kind(&gc_types[4]), "struct");
+        // Index 5 is the user array
+        assert_eq!(gc_type_kind(&gc_types[5]), "array");
     }
 
     // ========================================
@@ -4038,16 +5149,20 @@ mod tests {
         let (gc_types, _type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 4 GC types: 3 built-in + 1 user struct (same type_idx used twice)
-        assert_eq!(gc_types.len(), 4);
+        // Should have 6 GC types: 5 built-in + 1 user struct (same type_idx used twice)
+        assert_eq!(gc_types.len(), 6);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is the deduplicated user struct
+        // Index 3 is YieldResult
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
+        // Index 4 is ClosureStruct
+        assert_eq!(gc_type_kind(&gc_types[4]), "struct");
+        // Index 5 is the deduplicated user struct
+        assert_eq!(gc_type_kind(&gc_types[5]), "struct");
     }
 
     // ========================================
@@ -4181,8 +5296,8 @@ mod tests {
         let (gc_types, _type_map, placeholder_map) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 6 GC types: 3 built-in + 3 user structs (one per field count)
-        assert_eq!(gc_types.len(), 6);
+        // Should have 8 GC types: 5 built-in + 3 user structs (one per field count)
+        assert_eq!(gc_types.len(), 8);
 
         // Verify placeholder_map has entries for each (type, field_count) pair
         let structref_ty = wasm::Structref::new(db).as_type();
@@ -4208,7 +5323,7 @@ mod tests {
         assert_ne!(idx_0, idx_2, "type_idx for 0 and 2 fields should differ");
 
         // Verify GC type definitions have correct field counts
-        // User types start at index FIRST_USER_TYPE_IDX (3)
+        // User types start at index FIRST_USER_TYPE_IDX (5)
         let field_counts: Vec<usize> = gc_types[FIRST_USER_TYPE_IDX as usize..]
             .iter()
             .map(|gc_type| match gc_type {
@@ -4276,16 +5391,20 @@ mod tests {
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
         // Should find the struct type from inside the function body
-        // (4 types: 3 built-in + 1 user struct)
-        assert_eq!(gc_types.len(), 4);
+        // (6 types: 5 built-in + 1 user struct)
+        assert_eq!(gc_types.len(), 6);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is the user struct from inside the function body
+        // Index 3 is YieldResult
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
+        // Index 4 is ClosureStruct
+        assert_eq!(gc_type_kind(&gc_types[4]), "struct");
+        // Index 5 is the user struct from inside the function body
+        assert_eq!(gc_type_kind(&gc_types[5]), "struct");
     }
 
     // ========================================
@@ -4343,11 +5462,13 @@ mod tests {
 
         let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
-        // Should only have the 3 built-in types (no additional user types allocated)
-        assert_eq!(gc_types.len(), 3);
+        // Should only have the 5 built-in types (no additional user types allocated)
+        assert_eq!(gc_types.len(), 5);
         assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
         assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
         assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
+        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // YieldResult
+        assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
     }
 
     /// Test that struct_get with BYTES_STRUCT_IDX (2) doesn't panic.
@@ -4394,11 +5515,13 @@ mod tests {
 
         let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
-        // Should only have the 3 built-in types (no additional user types allocated)
-        assert_eq!(gc_types.len(), 3);
+        // Should only have the 5 built-in types (no additional user types allocated)
+        assert_eq!(gc_types.len(), 5);
         assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
         assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
         assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
+        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // YieldResult
+        assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
     }
 
     /// Test that array_set with BYTES_ARRAY_IDX (1) doesn't panic.
@@ -4459,8 +5582,8 @@ mod tests {
 
         let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
-        // Should only have the 3 built-in types
-        assert_eq!(gc_types.len(), 3);
+        // Should only have the 5 built-in types
+        assert_eq!(gc_types.len(), 5);
     }
 
     // ========================================
@@ -4693,15 +5816,15 @@ mod tests {
             "placeholder map should contain (structref_ty, 1) key"
         );
 
-        // Should have 4 types: 3 built-in + 1 user placeholder struct
-        assert_eq!(gc_types.len(), 4, "gc_types should have 4 types");
+        // Should have 6 types: 5 built-in + 1 user placeholder struct
+        assert_eq!(gc_types.len(), 6, "gc_types should have 6 types");
 
-        // The user struct (index 3) should have 1 field of type I64
-        let user_struct = &gc_types[3];
+        // The user struct (index 5) should have 1 field of type I64
+        let user_struct = &gc_types[5];
         if let GcTypeDef::Struct(fields) = user_struct {
             assert_eq!(fields.len(), 1, "struct should have 1 field");
         } else {
-            panic!("expected struct type at index 3");
+            panic!("expected struct type at index 5");
         }
     }
 }

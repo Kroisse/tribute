@@ -25,11 +25,8 @@ use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation};
 
+use crate::gc_types::CLOSURE_STRUCT_IDX;
 use crate::type_converter::wasm_type_converter;
-
-/// Closure struct field count.
-/// Closure structs always have 2 fields: (func_ref: funcref, env: anyref)
-const CLOSURE_FIELD_COUNT: u64 = 2;
 
 /// Lower closure dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -117,22 +114,13 @@ impl RewritePattern for ClosureFuncPattern {
 
         let location = op.location(db);
 
-        // Use structref as placeholder type with field_count for proper type resolution.
-        // Closure structs always have 2 fields: (func_ref, env).
-        // This ensures the struct_get matches with the struct_new via placeholder lookup.
-        let structref_ty = wasm::Structref::new(db).as_type();
-
         // Create wasm.struct_get for field 0 (function reference)
-        //
-        // Note: Using Operation::of_name here because we need custom attributes:
-        // - "type": structref placeholder type
-        // - "field_count": number of fields for placeholder resolution
-        // - "field_idx": field to extract
+        // Use CLOSURE_STRUCT_IDX directly instead of a placeholder to ensure
+        // the struct_get uses the builtin closure struct type (index 4).
         let struct_get = Operation::of_name(db, location, "wasm.struct_get")
             .operands(op.operands(db).clone())
             .attr("field_idx", Attribute::IntBits(0))
-            .attr("type", Attribute::Type(structref_ty))
-            .attr("field_count", Attribute::IntBits(CLOSURE_FIELD_COUNT))
+            .attr("type_idx", Attribute::IntBits(CLOSURE_STRUCT_IDX as u64))
             .results(op.results(db).clone())
             .build();
 
@@ -158,22 +146,13 @@ impl RewritePattern for ClosureEnvPattern {
 
         let location = op.location(db);
 
-        // Use structref as placeholder type with field_count for proper type resolution.
-        // Closure structs always have 2 fields: (func_ref, env).
-        // This ensures the struct_get matches with the struct_new via placeholder lookup.
-        let structref_ty = wasm::Structref::new(db).as_type();
-
         // Create wasm.struct_get for field 1 (environment)
-        //
-        // Note: Using Operation::of_name here because we need custom attributes:
-        // - "type": structref placeholder type
-        // - "field_count": number of fields for placeholder resolution
-        // - "field_idx": field to extract
+        // Use CLOSURE_STRUCT_IDX directly instead of a placeholder to ensure
+        // the struct_get uses the builtin closure struct type (index 4).
         let struct_get = Operation::of_name(db, location, "wasm.struct_get")
             .operands(op.operands(db).clone())
             .attr("field_idx", Attribute::IntBits(1))
-            .attr("type", Attribute::Type(structref_ty))
-            .attr("field_count", Attribute::IntBits(CLOSURE_FIELD_COUNT))
+            .attr("type_idx", Attribute::IntBits(CLOSURE_STRUCT_IDX as u64))
             .results(op.results(db).clone())
             .build();
 

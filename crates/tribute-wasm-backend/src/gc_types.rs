@@ -10,7 +10,9 @@
 //! Index 0: BoxedF64 - Float wrapper for polymorphic contexts
 //! Index 1: BytesArray - array i8 backing storage for Bytes
 //! Index 2: BytesStruct - struct { data: ref BytesArray, offset: i32, len: i32 }
-//! Index 3+: User-defined types (structs, arrays, variants, closures, etc.)
+//! Index 3: YieldResult - struct { tag: i32, value: anyref } (yield bubbling)
+//! Index 4: ClosureStruct - struct { funcref, anyref } (uniform closure representation)
+//! Index 5+: User-defined types (structs, arrays, variants, closures, etc.)
 //! ```
 //!
 //! ## Usage
@@ -25,7 +27,7 @@
 use std::collections::HashMap;
 
 use tracing::debug;
-use tribute_ir::dialect::{adt, tribute_rt};
+use tribute_ir::dialect::{adt, closure, tribute_rt};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::{DialectType, Symbol, Type};
 use wasm_encoder::{AbstractHeapType, FieldType, HeapType, RefType, StorageType, ValType};
@@ -42,8 +44,18 @@ pub const BYTES_ARRAY_IDX: u32 = 1;
 /// This is always index 2 in the GC type section.
 pub const BYTES_STRUCT_IDX: u32 = 2;
 
+/// Type index for YieldResult (struct { tag: i32, value: anyref }).
+/// This is always index 3 in the GC type section.
+/// Used for yield bubbling in WasmGC backend (without stack switching).
+pub const YIELD_RESULT_IDX: u32 = 3;
+
+/// Type index for ClosureStruct (struct { funcref, anyref }).
+/// This is always index 4 in the GC type section.
+/// All closures share this uniform representation regardless of function/env types.
+pub const CLOSURE_STRUCT_IDX: u32 = 4;
+
 /// First type index available for user-defined types.
-pub const FIRST_USER_TYPE_IDX: u32 = 3;
+pub const FIRST_USER_TYPE_IDX: u32 = 5;
 
 /// Definition of a GC type (struct or array).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +118,7 @@ impl<'db> GcTypeRegistry<'db> {
         }
     }
 
-    /// Returns the builtin type definitions (BoxedF64, BytesArray, BytesStruct).
+    /// Returns the builtin type definitions (BoxedF64, BytesArray, BytesStruct, YieldResult, ClosureStruct).
     ///
     /// These must be prepended to the user-defined types when emitting.
     pub fn builtin_types() -> Vec<GcTypeDef> {
@@ -136,6 +148,32 @@ impl<'db> GcTypeRegistry<'db> {
                 },
                 FieldType {
                     element_type: StorageType::Val(ValType::I32),
+                    mutable: false,
+                },
+            ]),
+            // Index 3: YieldResult - struct { tag: i32, value: anyref }
+            // Used for yield bubbling in WasmGC backend (without stack switching).
+            // Tag: 0 = Done (completed with result), 1 = Yielded (suspended with continuation)
+            GcTypeDef::Struct(vec![
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: false,
+                },
+            ]),
+            // Index 4: ClosureStruct - struct { funcref, anyref }
+            // Uniform representation for all closures: function reference + environment.
+            // All closures share this type regardless of their specific function/env types.
+            GcTypeDef::Struct(vec![
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::FUNCREF)),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
                     mutable: false,
                 },
             ]),
@@ -332,6 +370,12 @@ pub fn type_to_storage_type<'db>(
         return StorageType::Val(ValType::F64);
     }
 
+    // Core function type (core.func) - stored as funcref
+    if core::Func::from_type(db, ty).is_some() {
+        debug!("type_to_storage_type: core.func -> FUNCREF");
+        return StorageType::Val(ValType::Ref(RefType::FUNCREF));
+    }
+
     // Wasm dialect types
     if ty.dialect(db) == wasm::DIALECT_NAME() {
         let name = ty.name(db);
@@ -361,6 +405,15 @@ pub fn type_to_storage_type<'db>(
         }
         // Unknown wasm type -> anyref
         return StorageType::Val(ValType::Ref(RefType::ANYREF));
+    }
+
+    // Closure types map to the builtin CLOSURE_STRUCT_IDX
+    if closure::Closure::from_type(db, ty).is_some() {
+        debug!("type_to_storage_type: closure.closure -> Concrete(CLOSURE_STRUCT_IDX)");
+        return StorageType::Val(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
+        }));
     }
 
     // Variant instance types use anyref for polymorphism
@@ -568,6 +621,91 @@ pub fn is_closure_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool
 }
 
 // ============================================================================
+// YieldResult Type Collection
+// ============================================================================
+
+/// YieldResult struct field count.
+/// YieldResult structs always have 2 fields: (tag: i32, value: anyref)
+pub const YIELD_RESULT_FIELD_COUNT: usize = 2;
+
+/// Tag value for Done (successful completion with result value).
+pub const YIELD_RESULT_TAG_DONE: i32 = 0;
+
+/// Tag value for Yielded (suspended with continuation).
+pub const YIELD_RESULT_TAG_YIELDED: i32 = 1;
+
+/// Create the YieldResult marker type.
+///
+/// This creates a unique type to use as a key in the registry, ensuring
+/// YieldResult doesn't share type indices with other 2-field structs like closures.
+///
+/// This is public so that cont_to_wasm.rs can use it for struct_new operations
+/// that create YieldResult values.
+pub fn yield_result_marker_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
+    // Use a unique marker type: wasm.yield_result
+    // This distinguishes it from structref placeholders used by closure/state types
+    let mut attrs = trunk_ir::Attrs::new();
+    attrs.insert(
+        Symbol::new("marker"),
+        trunk_ir::Attribute::Symbol(Symbol::new("yield_result")),
+    );
+    Type::new(
+        db,
+        wasm::DIALECT_NAME(),
+        Symbol::new("yield_result"),
+        trunk_ir::IdVec::new(),
+        attrs,
+    )
+}
+
+/// Register the YieldResult struct type in the registry.
+///
+/// YieldResult is used for yield bubbling in the WasmGC backend. All effectful
+/// functions return this type to indicate whether they completed normally or
+/// yielded (suspended) due to an ability operation.
+///
+/// Structure:
+/// - Field 0: tag (i32) - 0 = Done, 1 = Yielded
+/// - Field 1: value (anyref) - result value (if Done) or continuation (if Yielded)
+///
+/// Unlike closure types, YieldResult uses a dedicated marker type to ensure it
+/// gets a unique type index (not shared with other 2-field struct types).
+pub fn register_yield_result_type<'db>(
+    db: &'db dyn salsa::Database,
+    registry: &mut GcTypeRegistry<'db>,
+) -> u32 {
+    let marker_ty = yield_result_marker_type(db);
+
+    // Check if already registered
+    if let Some(idx) = registry.get_type_idx(marker_ty) {
+        return idx;
+    }
+
+    // Create YieldResult struct type: (i32, anyref)
+    let def = GcTypeDef::Struct(vec![
+        FieldType {
+            element_type: StorageType::Val(ValType::I32),
+            mutable: false,
+        },
+        FieldType {
+            element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+            mutable: false,
+        },
+    ]);
+
+    registry.register_type(marker_ty, def)
+}
+
+/// Get the YieldResult type index if already registered.
+pub fn get_yield_result_type_idx<'db>(
+    db: &'db dyn salsa::Database,
+    registry: &GcTypeRegistry<'db>,
+) -> Option<u32> {
+    let marker_ty = yield_result_marker_type(db);
+    registry.get_type_idx(marker_ty)
+}
+
+// ============================================================================
 // Continuation Type Collection
 // ============================================================================
 
@@ -656,7 +794,7 @@ mod tests {
     #[test]
     fn test_builtin_types() {
         let builtins = GcTypeRegistry::builtin_types();
-        assert_eq!(builtins.len(), 3);
+        assert_eq!(builtins.len(), 5);
 
         // BoxedF64
         assert!(matches!(&builtins[0], GcTypeDef::Struct(fields) if fields.len() == 1));
@@ -664,6 +802,10 @@ mod tests {
         assert!(matches!(&builtins[1], GcTypeDef::Array(_)));
         // BytesStruct
         assert!(matches!(&builtins[2], GcTypeDef::Struct(fields) if fields.len() == 3));
+        // YieldResult
+        assert!(matches!(&builtins[3], GcTypeDef::Struct(fields) if fields.len() == 2));
+        // ClosureStruct
+        assert!(matches!(&builtins[4], GcTypeDef::Struct(fields) if fields.len() == 2));
     }
 
     #[test]
@@ -743,7 +885,7 @@ mod tests {
         registry.register_type(i32_ty, def);
 
         let all = registry.all_types();
-        assert_eq!(all.len(), 4); // 3 builtins + 1 user type
+        assert_eq!(all.len(), 6); // 5 builtins + 1 user type
     }
 
     #[test]
@@ -974,5 +1116,100 @@ mod tests {
         assert_eq!(state4_idx, FIRST_USER_TYPE_IDX + 2);
 
         assert_eq!(registry.user_types().len(), 3);
+    }
+
+    #[test]
+    fn test_register_yield_result_type() {
+        let db = salsa::DatabaseImpl::default();
+        let mut registry = GcTypeRegistry::new();
+
+        let idx1 = register_yield_result_type(&db, &mut registry);
+        assert_eq!(idx1, FIRST_USER_TYPE_IDX);
+
+        // Calling again should return the same index
+        let idx2 = register_yield_result_type(&db, &mut registry);
+        assert_eq!(idx2, FIRST_USER_TYPE_IDX);
+
+        // Verify YieldResult type structure
+        let types = registry.user_types();
+        assert_eq!(types.len(), 1);
+        match &types[0] {
+            GcTypeDef::Struct(fields) => {
+                assert_eq!(fields.len(), YIELD_RESULT_FIELD_COUNT);
+                // Field 0: i32 (tag)
+                assert!(matches!(
+                    fields[0].element_type,
+                    StorageType::Val(ValType::I32)
+                ));
+                // Field 1: anyref (value or continuation)
+                assert!(matches!(
+                    fields[1].element_type,
+                    StorageType::Val(ValType::Ref(RefType::ANYREF))
+                ));
+            }
+            _ => panic!("Expected struct type for YieldResult"),
+        }
+    }
+
+    #[test]
+    fn test_yield_result_and_closure_different_types() {
+        let db = salsa::DatabaseImpl::default();
+        let mut registry = GcTypeRegistry::new();
+
+        // Both YieldResult and closure have 2 fields, but different structure
+        // YieldResult: (i32, anyref)
+        // Closure: (funcref, anyref)
+        // They should get different type indices because YieldResult uses
+        // a dedicated marker type instead of the structref placeholder.
+
+        // Register YieldResult first
+        let yield_idx = register_yield_result_type(&db, &mut registry);
+        assert_eq!(yield_idx, FIRST_USER_TYPE_IDX);
+
+        // Register closure - should get a different index
+        let closure_idx = register_closure_type(&db, &mut registry);
+        assert_eq!(closure_idx, FIRST_USER_TYPE_IDX + 1);
+
+        // Verify they are different
+        assert_ne!(yield_idx, closure_idx);
+
+        // Verify YieldResult structure
+        let types = registry.user_types();
+        assert_eq!(types.len(), 2);
+
+        // YieldResult: (i32, anyref)
+        match &types[0] {
+            GcTypeDef::Struct(fields) => {
+                assert!(matches!(
+                    fields[0].element_type,
+                    StorageType::Val(ValType::I32)
+                ));
+            }
+            _ => panic!("Expected struct type for YieldResult"),
+        }
+
+        // Closure: (funcref, anyref)
+        match &types[1] {
+            GcTypeDef::Struct(fields) => {
+                assert!(matches!(
+                    fields[0].element_type,
+                    StorageType::Val(ValType::Ref(RefType::FUNCREF))
+                ));
+            }
+            _ => panic!("Expected struct type for closure"),
+        }
+    }
+
+    #[test]
+    fn test_get_yield_result_type_idx() {
+        let db = salsa::DatabaseImpl::default();
+        let mut registry = GcTypeRegistry::new();
+
+        // Not registered yet
+        assert_eq!(get_yield_result_type_idx(&db, &registry), None);
+
+        // Register and verify
+        let idx = register_yield_result_type(&db, &mut registry);
+        assert_eq!(get_yield_result_type_idx(&db, &registry), Some(idx));
     }
 }
