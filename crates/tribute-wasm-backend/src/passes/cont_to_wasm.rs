@@ -1095,6 +1095,16 @@ fn update_yielding_function_types<'db>(
 }
 
 /// Collect all function callees from a region (for call graph construction).
+///
+/// Note: This only collects direct `wasm.call` targets, not `wasm.call_indirect`.
+/// Indirect calls go through funcref values (closures, continuations) whose targets
+/// are resolved at runtime - there is no static callee symbol to extract.
+///
+/// Functions containing `call_indirect` are handled separately by
+/// `function_body_has_call_indirect`, which conservatively marks them as effectful.
+/// This is correct because indirect calls in this codebase are primarily for:
+/// - Closures (which may capture effectful computations)
+/// - Continuations (which always potentially yield)
 fn collect_callees<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
