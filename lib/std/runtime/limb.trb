@@ -1,0 +1,80 @@
+// Limb intrinsics for arbitrary precision arithmetic.
+//
+// These intrinsics operate on 32-bit unsigned limbs (the building blocks
+// for BigNat/BigInt). The I32 type is signless; these operations treat
+// the values as unsigned.
+//
+// Each arithmetic operation returns a tuple of (result, carry/borrow),
+// enabling efficient multi-precision arithmetic.
+
+// =============================================================================
+// Limb arithmetic intrinsics
+// =============================================================================
+
+/// Add two limbs with carry-in, returning (sum, carry-out).
+///
+/// Computes: sum = a + b + carry_in (mod 2^32)
+/// Returns: (sum, 1 if overflow else 0)
+///
+/// carry_in must be 0 or 1.
+extern "intrinsic" fn __limb_add(a: I32, b: I32, carry_in: I32) -> #(I32, I32)
+
+/// Subtract two limbs with borrow-in, returning (difference, borrow-out).
+///
+/// Computes: diff = a - b - borrow_in (mod 2^32)
+/// Returns: (diff, 1 if underflow else 0)
+///
+/// borrow_in must be 0 or 1.
+extern "intrinsic" fn __limb_sub(a: I32, b: I32, borrow_in: I32) -> #(I32, I32)
+
+/// Multiply two limbs, returning full 64-bit result as (low, high).
+///
+/// Computes: result = a * b (unsigned)
+/// Returns: (low 32 bits, high 32 bits)
+extern "intrinsic" fn __limb_mul(a: I32, b: I32) -> #(I32, I32)
+
+/// Divide a 64-bit value by a 32-bit divisor, returning (quotient, remainder).
+///
+/// Computes: (high << 32 | low) / divisor
+/// Returns: (quotient, remainder)
+///
+/// Precondition: high < divisor (ensures quotient fits in 32 bits)
+/// Panics if divisor is 0 or if high >= divisor.
+extern "intrinsic" fn __limb_div(high: I32, low: I32, divisor: I32) -> #(I32, I32)
+
+/// Compare two limbs (unsigned).
+///
+/// Returns: -1 if a < b, 0 if a == b, 1 if a > b
+extern "intrinsic" fn __limb_cmp(a: I32, b: I32) -> I32
+
+// =============================================================================
+// Limb module with wrapper functions
+// =============================================================================
+
+pub mod Limb {
+    /// Add two limbs with carry.
+    pub fn add(a: I32, b: I32, carry: I32) -> #(I32, I32) {
+        __limb_add(a, b, carry)
+    }
+
+    /// Subtract two limbs with borrow.
+    pub fn sub(a: I32, b: I32, borrow: I32) -> #(I32, I32) {
+        __limb_sub(a, b, borrow)
+    }
+
+    /// Multiply two limbs (wide multiplication).
+    pub fn mul(a: I32, b: I32) -> #(I32, I32) {
+        __limb_mul(a, b)
+    }
+
+    /// Divide 64-bit by 32-bit (wide division).
+    pub fn div(high: I32, low: I32, divisor: I32) -> #(I32, I32) {
+        __limb_div(high, low, divisor)
+    }
+
+    /// Compare two limbs (unsigned).
+    /// Returns -1, 0, or 1.
+    pub fn cmp(a: I32, b: I32) -> I32 {
+        __limb_cmp(a, b)
+    }
+}

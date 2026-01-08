@@ -723,6 +723,9 @@ impl<'db> Resolver<'db> {
             "String" => *core::String::new(self.db),
             "Bytes" => *core::Bytes::new(self.db),
             "Nil" => *core::Nil::new(self.db),
+            // Low-level integer types (for runtime implementation)
+            "I32" => *core::I32::new(self.db),
+            "I64" => *core::I64::new(self.db),
             _ => {
                 // Look up user-defined types in the environment
                 if let Some(binding) = self.lookup_binding(name) {
