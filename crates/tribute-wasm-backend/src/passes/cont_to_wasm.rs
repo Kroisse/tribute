@@ -966,38 +966,39 @@ fn update_yielding_function_types<'db>(
 
     for block in body.blocks(db).iter() {
         for op in block.operations(db).iter() {
-            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == wasm::FUNC() {
-                if let Ok(func_op) = wasm::Func::from_operation(db, *op) {
-                    let func_name = func_op.sym_name(db);
-                    let func_body = func_op.body(db);
+            if op.dialect(db) == wasm::DIALECT_NAME()
+                && op.name(db) == wasm::FUNC()
+                && let Ok(func_op) = wasm::Func::from_operation(db, *op)
+            {
+                let func_name = func_op.sym_name(db);
+                let func_body = func_op.body(db);
 
-                    // Track this function
-                    func_ops.insert(func_name, *op);
+                // Track this function
+                func_ops.insert(func_name, *op);
 
-                    // Check if direct yielder (contains shift/yield)
-                    if function_body_can_yield(db, &func_body) {
-                        direct_yielders.insert(func_name);
-                        tracing::debug!(
-                            "update_yielding_function_types: {} is a direct yielder",
-                            func_name
-                        );
-                    }
-
-                    // Check if function calls continuation via call_indirect
-                    // Handler arm lambdas do this - they're effectful because
-                    // the continuation may yield
-                    if function_body_has_call_indirect(db, &func_body) {
-                        direct_yielders.insert(func_name);
-                        tracing::debug!(
-                            "update_yielding_function_types: {} is effectful (has call_indirect)",
-                            func_name
-                        );
-                    }
-
-                    // Collect callees for call graph
-                    let callees = collect_callees(db, &func_body);
-                    call_graph.insert(func_name, callees);
+                // Check if direct yielder (contains shift/yield)
+                if function_body_can_yield(db, &func_body) {
+                    direct_yielders.insert(func_name);
+                    tracing::debug!(
+                        "update_yielding_function_types: {} is a direct yielder",
+                        func_name
+                    );
                 }
+
+                // Check if function calls continuation via call_indirect
+                // Handler arm lambdas do this - they're effectful because
+                // the continuation may yield
+                if function_body_has_call_indirect(db, &func_body) {
+                    direct_yielders.insert(func_name);
+                    tracing::debug!(
+                        "update_yielding_function_types: {} is effectful (has call_indirect)",
+                        func_name
+                    );
+                }
+
+                // Collect callees for call graph
+                let callees = collect_callees(db, &func_body);
+                call_graph.insert(func_name, callees);
             }
         }
     }
@@ -1032,42 +1033,44 @@ fn update_yielding_function_types<'db>(
 
     for block in body.blocks(db).iter() {
         for op in block.operations(db).iter() {
-            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == wasm::FUNC() {
-                if let Ok(func_op) = wasm::Func::from_operation(db, *op) {
-                    let func_name = func_op.sym_name(db);
+            if op.dialect(db) == wasm::DIALECT_NAME()
+                && op.name(db) == wasm::FUNC()
+                && let Ok(func_op) = wasm::Func::from_operation(db, *op)
+            {
+                let func_name = func_op.sym_name(db);
 
-                    if effectful_funcs.contains(&func_name) {
-                        let func_ty = func_op.r#type(db);
-                        if let Some(core_func) = core::Func::from_type(db, func_ty) {
-                            let current_result = core_func.result(db);
-                            let yield_result_ty = cont_types::yield_result_type(db);
+                if effectful_funcs.contains(&func_name) {
+                    let func_ty = func_op.r#type(db);
+                    if let Some(core_func) = core::Func::from_type(db, func_ty) {
+                        let current_result = core_func.result(db);
+                        let yield_result_ty = cont_types::yield_result_type(db);
 
-                            // Skip if already YieldResult (structref)
-                            if wasm::Structref::from_type(db, current_result).is_some() {
-                                new_ops.push(*op);
-                                continue;
-                            }
-
-                            let params = core_func.params(db);
-                            let new_func_ty =
-                                core::Func::new(db, params, yield_result_ty).as_type();
-
-                            tracing::debug!(
-                                "update_yielding_function_types: {} return type {} -> structref (YieldResult)",
-                                func_name,
-                                current_result.name(db)
-                            );
-
-                            let new_op = op
-                                .modify(db)
-                                .attr(Symbol::new("type"), Attribute::Type(new_func_ty))
-                                .build();
-                            new_ops.push(new_op);
-                            modified = true;
+                        // Skip if already YieldResult (structref)
+                        if wasm::Structref::from_type(db, current_result).is_some() {
+                            new_ops.push(*op);
                             continue;
                         }
+
+                        let params = core_func.params(db);
+                        let new_func_ty = core::Func::new(db, params, yield_result_ty).as_type();
+
+                        tracing::debug!(
+                            "update_yielding_function_types: {} return type {} -> structref (YieldResult)",
+                            func_name,
+                            current_result.name(db)
+                        );
+
+                        let new_op = op
+                            .modify(db)
+                            .attr(Symbol::new("type"), Attribute::Type(new_func_ty))
+                            .build();
+                        new_ops.push(new_op);
+                        modified = true;
+                        continue;
                     }
                 }
+                new_ops.push(*op);
+                continue;
             }
             new_ops.push(*op);
         }
@@ -1101,12 +1104,12 @@ fn collect_callees<'db>(
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
             // Check for wasm.call
-            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("call") {
-                if let Some(Attribute::Symbol(callee)) =
+            if op.dialect(db) == wasm::DIALECT_NAME()
+                && op.name(db) == Symbol::new("call")
+                && let Some(Attribute::Symbol(callee)) =
                     op.attributes(db).get(&Symbol::new("callee"))
-                {
-                    callees.insert(*callee);
-                }
+            {
+                callees.insert(*callee);
             }
 
             // Recursively check nested regions
@@ -1153,42 +1156,33 @@ fn function_body_can_yield<'db>(db: &'db dyn salsa::Database, region: &Region<'d
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
             // Check for wasm.return
-            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("return") {
-                // Check if the return's operand is from a struct_new (YieldResult)
-                if let Some(operand) = op.operands(db).first() {
-                    if let ValueDef::OpResult(def_op) = operand.def(db) {
-                        if def_op.dialect(db) == wasm::DIALECT_NAME()
-                            && def_op.name(db) == Symbol::new("struct_new")
-                        {
-                            // Check if it's a 2-field struct (YieldResult pattern)
-                            let operands = def_op.operands(db);
-                            if operands.len() == 2 {
-                                // Check if first operand is i32_const with value 1 (YIELDED)
-                                if let Some(tag_val) = operands.first() {
-                                    if let ValueDef::OpResult(tag_op) = tag_val.def(db) {
-                                        if tag_op.dialect(db) == wasm::DIALECT_NAME()
-                                            && tag_op.name(db) == Symbol::new("i32_const")
-                                        {
-                                            if let Some(Attribute::IntBits(v)) =
-                                                tag_op.attributes(db).get(&Symbol::new("value"))
-                                            {
-                                                if *v as i32 == cont_types::YIELD_RESULT_TAG_YIELDED
-                                                {
-                                                    return true;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // Also check for legacy pattern (ref.null any) for backwards compatibility
-                        if def_op.dialect(db) == wasm::DIALECT_NAME()
-                            && def_op.name(db) == Symbol::new("ref_null")
-                        {
-                            return true;
-                        }
+            if op.dialect(db) == wasm::DIALECT_NAME()
+                && op.name(db) == Symbol::new("return")
+                && let Some(operand) = op.operands(db).first()
+                && let ValueDef::OpResult(def_op) = operand.def(db)
+            {
+                // Check if it's a YieldResult struct_new with YIELDED tag
+                if def_op.dialect(db) == wasm::DIALECT_NAME()
+                    && def_op.name(db) == Symbol::new("struct_new")
+                {
+                    let operands = def_op.operands(db);
+                    if operands.len() == 2
+                        && let Some(tag_val) = operands.first()
+                        && let ValueDef::OpResult(tag_op) = tag_val.def(db)
+                        && tag_op.dialect(db) == wasm::DIALECT_NAME()
+                        && tag_op.name(db) == Symbol::new("i32_const")
+                        && let Some(Attribute::IntBits(v)) =
+                            tag_op.attributes(db).get(&Symbol::new("value"))
+                        && *v as i32 == cont_types::YIELD_RESULT_TAG_YIELDED
+                    {
+                        return true;
                     }
+                }
+                // Also check for legacy pattern (ref.null any) for backwards compatibility
+                if def_op.dialect(db) == wasm::DIALECT_NAME()
+                    && def_op.name(db) == Symbol::new("ref_null")
+                {
+                    return true;
                 }
             }
             // Check nested regions

@@ -1100,7 +1100,7 @@ fn collect_gc_types<'db>(
                 .unwrap_or(false);
 
             // Check if this is a _closure struct type (should use CLOSURE_STRUCT_IDX)
-            let is_closure_type = attrs.get(&ATTR_TYPE()).map_or(false, |attr| {
+            let is_closure_type = attrs.get(&ATTR_TYPE()).is_some_and(|attr| {
                 if let Attribute::Type(ty) = attr {
                     is_closure_struct_type(db, *ty)
                 } else {
@@ -1644,11 +1644,7 @@ fn collect_call_indirect_types<'db>(
                 } else if let Ok(func) = func::Func::from_operation(db, *op) {
                     // Also check for func.func (in case IR isn't fully lowered)
                     let func_type = func.r#type(db);
-                    if let Some(func_ty) = core::Func::from_type(db, func_type) {
-                        Some(func_ty.result(db))
-                    } else {
-                        None
-                    }
+                    core::Func::from_type(db, func_type).map(|func_ty| func_ty.result(db))
                 } else {
                     None
                 };
@@ -1686,7 +1682,7 @@ fn collect_call_indirect_types<'db>(
                     // Otherwise, the funcref is LAST (legacy order).
                     let first_operand = operands.first().copied().unwrap();
                     let first_operand_ty = value_type(db, first_operand, block_arg_types);
-                    let funcref_is_first = first_operand_ty.map_or(false, |ty| {
+                    let funcref_is_first = first_operand_ty.is_some_and(|ty| {
                         wasm::Funcref::from_type(db, ty).is_some()
                             || wasm::Anyref::from_type(db, ty).is_some()
                             || core::Func::from_type(db, ty).is_some()
@@ -2594,19 +2590,16 @@ fn assign_locals_in_region<'db>(
                     let is_type_var_result = tribute::is_type_var(db, effective_ty);
                     let is_polymorphic_result = is_anyref_result || is_type_var_result;
 
-                    if is_polymorphic_result {
-                        if let Some(ret_ty) = ctx.func_return_type {
-                            let func_returns_yield_result = ret_ty.dialect(db)
-                                == wasm::DIALECT_NAME()
-                                && ret_ty.name(db) == Symbol::new("yield_result");
-                            if func_returns_yield_result {
-                                debug!(
-                                    "wasm.call_indirect local: using YieldResult instead of polymorphic type {}.{}",
-                                    effective_ty.dialect(db),
-                                    effective_ty.name(db)
-                                );
-                                effective_ty = crate::gc_types::yield_result_marker_type(db);
-                            }
+                    if is_polymorphic_result && let Some(ret_ty) = ctx.func_return_type {
+                        let func_returns_yield_result = ret_ty.dialect(db) == wasm::DIALECT_NAME()
+                            && ret_ty.name(db) == Symbol::new("yield_result");
+                        if func_returns_yield_result {
+                            debug!(
+                                "wasm.call_indirect local: using YieldResult instead of polymorphic type {}.{}",
+                                effective_ty.dialect(db),
+                                effective_ty.name(db)
+                            );
+                            effective_ty = crate::gc_types::yield_result_marker_type(db);
                         }
                     }
                 }
@@ -3041,27 +3034,24 @@ fn emit_op<'db>(
             // If the value's effective type is anyref/type_var but the block expects
             // a specific type, cast the result.
             if let (Some(eff_ty), Some(value_ty)) = (effective_ty, ctx.effective_types.get(&value))
+                && (tribute::is_type_var(db, *value_ty)
+                    || wasm::Anyref::from_type(db, *value_ty).is_some())
             {
-                if tribute::is_type_var(db, *value_ty)
-                    || wasm::Anyref::from_type(db, *value_ty).is_some()
-                {
-                    if core::Func::from_type(db, eff_ty).is_some() {
-                        // core.func types need cast to funcref (abstract type)
-                        debug!("wasm.if then: casting anyref branch result to funcref");
-                        function.instruction(&Instruction::RefCastNullable(HeapType::Abstract {
-                            shared: false,
-                            ty: AbstractHeapType::Func,
-                        }));
-                    } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
-                        // ADT types need cast to concrete struct type
-                        debug!(
-                            "wasm.if then: casting anyref branch result to (ref null {})",
-                            type_idx
-                        );
-                        function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(
-                            type_idx,
-                        )));
-                    }
+                if core::Func::from_type(db, eff_ty).is_some() {
+                    // core.func types need cast to funcref (abstract type)
+                    debug!("wasm.if then: casting anyref branch result to funcref");
+                    function.instruction(&Instruction::RefCastNullable(HeapType::Abstract {
+                        shared: false,
+                        ty: AbstractHeapType::Func,
+                    }));
+                } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
+                    // ADT types need cast to concrete struct type
+                    debug!(
+                        "wasm.if then: casting anyref branch result to (ref null {})",
+                        type_idx
+                    );
+                    function
+                        .instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
                 }
             }
         }
@@ -3080,29 +3070,25 @@ fn emit_op<'db>(
                 // Cast else branch result if needed (same logic as then branch)
                 if let (Some(eff_ty), Some(value_ty)) =
                     (effective_ty, ctx.effective_types.get(&value))
+                    && (tribute::is_type_var(db, *value_ty)
+                        || wasm::Anyref::from_type(db, *value_ty).is_some())
                 {
-                    if tribute::is_type_var(db, *value_ty)
-                        || wasm::Anyref::from_type(db, *value_ty).is_some()
-                    {
-                        if core::Func::from_type(db, eff_ty).is_some() {
-                            // core.func types need cast to funcref (abstract type)
-                            debug!("wasm.if else: casting anyref branch result to funcref");
-                            function.instruction(&Instruction::RefCastNullable(
-                                HeapType::Abstract {
-                                    shared: false,
-                                    ty: AbstractHeapType::Func,
-                                },
-                            ));
-                        } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
-                            // ADT types need cast to concrete struct type
-                            debug!(
-                                "wasm.if else: casting anyref branch result to (ref null {})",
-                                type_idx
-                            );
-                            function.instruction(&Instruction::RefCastNullable(
-                                HeapType::Concrete(type_idx),
-                            ));
-                        }
+                    if core::Func::from_type(db, eff_ty).is_some() {
+                        // core.func types need cast to funcref (abstract type)
+                        debug!("wasm.if else: casting anyref branch result to funcref");
+                        function.instruction(&Instruction::RefCastNullable(HeapType::Abstract {
+                            shared: false,
+                            ty: AbstractHeapType::Func,
+                        }));
+                    } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
+                        // ADT types need cast to concrete struct type
+                        debug!(
+                            "wasm.if else: casting anyref branch result to (ref null {})",
+                            type_idx
+                        );
+                        function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(
+                            type_idx,
+                        )));
                     }
                 }
             }
@@ -3121,13 +3107,11 @@ fn emit_op<'db>(
         if let Some(ty) = result_ty {
             let is_polymorphic =
                 wasm::Anyref::from_type(db, ty).is_some() || tribute::is_type_var(db, ty);
-            if is_polymorphic {
-                if let Some(ret_ty) = ctx.func_return_type {
-                    let func_returns_yield_result = ret_ty.dialect(db) == wasm::DIALECT_NAME()
-                        && ret_ty.name(db) == Symbol::new("yield_result");
-                    if func_returns_yield_result {
-                        result_ty = Some(crate::gc_types::yield_result_marker_type(db));
-                    }
+            if is_polymorphic && let Some(ret_ty) = ctx.func_return_type {
+                let func_returns_yield_result = ret_ty.dialect(db) == wasm::DIALECT_NAME()
+                    && ret_ty.name(db) == Symbol::new("yield_result");
+                if func_returns_yield_result {
+                    result_ty = Some(crate::gc_types::yield_result_marker_type(db));
                 }
             }
         }
@@ -3163,13 +3147,11 @@ fn emit_op<'db>(
         if let Some(ty) = result_ty {
             let is_polymorphic =
                 wasm::Anyref::from_type(db, ty).is_some() || tribute::is_type_var(db, ty);
-            if is_polymorphic {
-                if let Some(ret_ty) = ctx.func_return_type {
-                    let func_returns_yield_result = ret_ty.dialect(db) == wasm::DIALECT_NAME()
-                        && ret_ty.name(db) == Symbol::new("yield_result");
-                    if func_returns_yield_result {
-                        result_ty = Some(crate::gc_types::yield_result_marker_type(db));
-                    }
+            if is_polymorphic && let Some(ret_ty) = ctx.func_return_type {
+                let func_returns_yield_result = ret_ty.dialect(db) == wasm::DIALECT_NAME()
+                    && ret_ty.name(db) == Symbol::new("yield_result");
+                if func_returns_yield_result {
+                    result_ty = Some(crate::gc_types::yield_result_marker_type(db));
                 }
             }
         }
@@ -3297,7 +3279,7 @@ fn emit_op<'db>(
                 );
             }
         }
-        let is_ref_type = first_operand_ty.map_or(false, |ty| {
+        let is_ref_type = first_operand_ty.is_some_and(|ty| {
             let is_funcref = wasm::Funcref::from_type(db, ty).is_some();
             let is_anyref = wasm::Anyref::from_type(db, ty).is_some();
             let is_core_func = core::Func::from_type(db, ty).is_some();
@@ -3322,9 +3304,8 @@ fn emit_op<'db>(
                 || tribute_rt::is_bool(db, ty)
                 || tribute_rt::is_float(db, ty)
                 || tribute::is_type_var(db, ty)
+                || core::Nil::from_type(db, ty).is_some()
             {
-                anyref_ty
-            } else if core::Nil::from_type(db, ty).is_some() {
                 anyref_ty
             } else {
                 ty
@@ -3442,18 +3423,16 @@ fn emit_op<'db>(
             emit_value(db, first_operand, ctx, function)?;
 
             // Cast anyref/closure struct to typed function reference if needed
-            if let Some(ty) = first_operand_ty {
-                if wasm::Anyref::from_type(db, ty).is_some()
+            // Closure struct (adt.struct with name "_closure") contains funcref in field 0.
+            // When we extract the funcref via struct_get, the IR type may still be adt.struct,
+            // but the actual wasm value is funcref. Cast to the concrete function type.
+            if let Some(ty) = first_operand_ty
+                && (wasm::Anyref::from_type(db, ty).is_some()
                     || core::Func::from_type(db, ty).is_some()
-                    // Closure struct (adt.struct with name "_closure") contains funcref in field 0.
-                    // When we extract the funcref via struct_get, the IR type may still be adt.struct,
-                    // but the actual wasm value is funcref. Cast to the concrete function type.
-                    || is_closure_struct_type(db, ty)
-                {
-                    // Cast to (ref null func_type)
-                    function
-                        .instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
-                }
+                    || is_closure_struct_type(db, ty))
+            {
+                // Cast to (ref null func_type)
+                function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
             }
 
             // Emit call_ref with the function type index
@@ -4685,15 +4664,13 @@ fn is_closure_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> b
         return false;
     }
     // Check if the struct name is "_closure"
-    ty.attrs(db)
-        .get(&Symbol::new("name"))
-        .map_or(false, |attr| {
-            if let Attribute::Symbol(name) = attr {
-                name.with_str(|s| s == "_closure")
-            } else {
-                false
-            }
-        })
+    ty.attrs(db).get(&Symbol::new("name")).is_some_and(|attr| {
+        if let Attribute::Symbol(name) = attr {
+            name.with_str(|s| s == "_closure")
+        } else {
+            false
+        }
+    })
 }
 
 /// Detect if a function body's handler dispatch should return i32 instead of funcref.
