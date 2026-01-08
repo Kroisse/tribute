@@ -2472,110 +2472,61 @@ fn assign_locals_in_region<'db>(
                 // For wasm.if with type.var result, infer the effective type from the
                 // then branch's result value. This ensures the local type matches the
                 // actual value produced by the branches.
-                // Try to get effective type from the then region's result value
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("if")
                     && tribute::is_type_var(db, effective_ty)
                 {
-                    // Try to get effective type from the then region's result value
-                    let then_eff_ty = op
-                        .regions(db)
-                        .first()
-                        .and_then(|r| region_result_value(db, r))
-                        .and_then(|v| ctx.effective_types.get(&v).copied());
-
-                    if let Some(eff_ty) = then_eff_ty {
-                        if !tribute::is_type_var(db, eff_ty)
-                            && wasm::Anyref::from_type(db, eff_ty).is_none()
-                        {
-                            debug!(
-                                "wasm.if local: using then branch effective type {}.{} instead of IR type {}.{}",
-                                eff_ty.dialect(db),
-                                eff_ty.name(db),
-                                effective_ty.dialect(db),
-                                effective_ty.name(db)
-                            );
-                            effective_ty = eff_ty;
-                        } else if let Some(ret_ty) = ctx.func_return_type {
-                            // Fall back to function return type when branch type is type_var/anyref
-                            if !tribute::is_type_var(db, ret_ty) {
-                                debug!(
-                                    "wasm.if local: using function return type {}.{} instead of IR type {}.{}",
-                                    ret_ty.dialect(db),
-                                    ret_ty.name(db),
-                                    effective_ty.dialect(db),
-                                    effective_ty.name(db)
-                                );
-                                effective_ty = ret_ty;
-                            }
-                        }
-                    } else if let Some(ret_ty) = ctx.func_return_type {
-                        // No then result type found, try function return type
-                        if !tribute::is_type_var(db, ret_ty) {
-                            debug!(
-                                "wasm.if local: using function return type {}.{} (no then result) instead of IR type {}.{}",
-                                ret_ty.dialect(db),
-                                ret_ty.name(db),
-                                effective_ty.dialect(db),
-                                effective_ty.name(db)
-                            );
-                            effective_ty = ret_ty;
-                        }
+                    if let Some(eff_ty) = infer_region_effective_type(db, op, ctx) {
+                        debug!(
+                            "wasm.if local: using then branch effective type {}.{} instead of IR type {}.{}",
+                            eff_ty.dialect(db),
+                            eff_ty.name(db),
+                            effective_ty.dialect(db),
+                            effective_ty.name(db)
+                        );
+                        effective_ty = eff_ty;
+                    } else if let Some(ret_ty) = ctx.func_return_type
+                        && !is_polymorphic_type(db, ret_ty)
+                    {
+                        debug!(
+                            "wasm.if local: using function return type {}.{} instead of IR type {}.{}",
+                            ret_ty.dialect(db),
+                            ret_ty.name(db),
+                            effective_ty.dialect(db),
+                            effective_ty.name(db)
+                        );
+                        effective_ty = ret_ty;
                     }
                 }
 
                 // For wasm.block with polymorphic result type, infer the effective type from
-                // the body region's result value or fall back to function return type.
-                // This ensures the local type matches the actual block result.
-                if op.dialect(db) == Symbol::new("wasm") && op.name(db) == Symbol::new("block") {
-                    let is_polymorphic = tribute::is_type_var(db, effective_ty)
-                        || wasm::Anyref::from_type(db, effective_ty).is_some();
-
-                    if is_polymorphic {
-                        // Try to get effective type from body region's result value
-                        let body_eff_ty = op
-                            .regions(db)
-                            .first()
-                            .and_then(|r| region_result_value(db, r))
-                            .and_then(|v| ctx.effective_types.get(&v).copied());
-
-                        if let Some(eff_ty) = body_eff_ty {
-                            if !tribute::is_type_var(db, eff_ty)
-                                && wasm::Anyref::from_type(db, eff_ty).is_none()
-                            {
-                                debug!(
-                                    "wasm.block local: using body effective type {}.{} instead of IR type {}.{}",
-                                    eff_ty.dialect(db),
-                                    eff_ty.name(db),
-                                    effective_ty.dialect(db),
-                                    effective_ty.name(db)
-                                );
-                                effective_ty = eff_ty;
-                            } else if let Some(ret_ty) = ctx.func_return_type {
-                                let func_returns_yield_result = ret_ty.dialect(db)
-                                    == wasm::DIALECT_NAME()
-                                    && ret_ty.name(db) == Symbol::new("yield_result");
-                                if func_returns_yield_result {
-                                    debug!(
-                                        "wasm.block local: using YieldResult instead of polymorphic type {}.{}",
-                                        effective_ty.dialect(db),
-                                        effective_ty.name(db)
-                                    );
-                                    effective_ty = crate::gc_types::yield_result_marker_type(db);
-                                }
-                            }
-                        } else if let Some(ret_ty) = ctx.func_return_type {
-                            let func_returns_yield_result = ret_ty.dialect(db)
-                                == wasm::DIALECT_NAME()
-                                && ret_ty.name(db) == Symbol::new("yield_result");
-                            if func_returns_yield_result {
-                                debug!(
-                                    "wasm.block local: using YieldResult (no body result) instead of polymorphic type {}.{}",
-                                    effective_ty.dialect(db),
-                                    effective_ty.name(db)
-                                );
-                                effective_ty = crate::gc_types::yield_result_marker_type(db);
-                            }
+                // the body region's result value or fall back to YieldResult if function returns it.
+                if op.dialect(db) == Symbol::new("wasm")
+                    && op.name(db) == Symbol::new("block")
+                    && is_polymorphic_type(db, effective_ty)
+                {
+                    if let Some(eff_ty) = infer_region_effective_type(db, op, ctx) {
+                        debug!(
+                            "wasm.block local: using body effective type {}.{} instead of IR type {}.{}",
+                            eff_ty.dialect(db),
+                            eff_ty.name(db),
+                            effective_ty.dialect(db),
+                            effective_ty.name(db)
+                        );
+                        effective_ty = eff_ty;
+                    } else {
+                        let upgraded = upgrade_polymorphic_to_yield_result(
+                            db,
+                            effective_ty,
+                            ctx.func_return_type,
+                        );
+                        if upgraded != effective_ty {
+                            debug!(
+                                "wasm.block local: using YieldResult instead of polymorphic type {}.{}",
+                                effective_ty.dialect(db),
+                                effective_ty.name(db)
+                            );
+                            effective_ty = upgraded;
                         }
                     }
                 }
@@ -2585,22 +2536,17 @@ fn assign_locals_in_region<'db>(
                 // matching when storing the result of closure/continuation calls.
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("call_indirect")
+                    && is_polymorphic_type(db, effective_ty)
                 {
-                    let is_anyref_result = wasm::Anyref::from_type(db, effective_ty).is_some();
-                    let is_type_var_result = tribute::is_type_var(db, effective_ty);
-                    let is_polymorphic_result = is_anyref_result || is_type_var_result;
-
-                    if is_polymorphic_result && let Some(ret_ty) = ctx.func_return_type {
-                        let func_returns_yield_result = ret_ty.dialect(db) == wasm::DIALECT_NAME()
-                            && ret_ty.name(db) == Symbol::new("yield_result");
-                        if func_returns_yield_result {
-                            debug!(
-                                "wasm.call_indirect local: using YieldResult instead of polymorphic type {}.{}",
-                                effective_ty.dialect(db),
-                                effective_ty.name(db)
-                            );
-                            effective_ty = crate::gc_types::yield_result_marker_type(db);
-                        }
+                    let upgraded =
+                        upgrade_polymorphic_to_yield_result(db, effective_ty, ctx.func_return_type);
+                    if upgraded != effective_ty {
+                        debug!(
+                            "wasm.call_indirect local: using YieldResult instead of polymorphic type {}.{}",
+                            effective_ty.dialect(db),
+                            effective_ty.name(db)
+                        );
+                        effective_ty = upgraded;
                     }
                 }
 
@@ -2749,6 +2695,50 @@ fn emit_region_ops<'db>(
         emit_op(db, op, ctx, module_info, function)?;
     }
     Ok(())
+}
+
+/// Check if a type is polymorphic (type_var or anyref).
+/// These types need special handling for control flow result types.
+fn is_polymorphic_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    tribute::is_type_var(db, ty) || wasm::Anyref::from_type(db, ty).is_some()
+}
+
+/// Try to infer a concrete effective type from a control flow operation's first region.
+/// Returns the inferred type if it's more concrete than type_var/anyref, None otherwise.
+fn infer_region_effective_type<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    ctx: &FunctionEmitContext<'db>,
+) -> Option<Type<'db>> {
+    op.regions(db)
+        .first()
+        .and_then(|r| region_result_value(db, r))
+        .and_then(|v| ctx.effective_types.get(&v).copied())
+        .filter(|ty| !is_polymorphic_type(db, *ty))
+}
+
+/// Check if a type is the YieldResult marker type.
+fn is_yield_result_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    ty.dialect(db) == wasm::DIALECT_NAME() && ty.name(db) == Symbol::new("yield_result")
+}
+
+/// Upgrade a polymorphic type to YieldResult if the function returns YieldResult.
+/// Used for wasm.block/wasm.loop result types.
+fn upgrade_polymorphic_to_yield_result<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    func_return_type: Option<Type<'db>>,
+) -> Type<'db> {
+    if !is_polymorphic_type(db, ty) {
+        return ty;
+    }
+
+    if let Some(ret_ty) = func_return_type
+        && is_yield_result_type(db, ret_ty)
+    {
+        return crate::gc_types::yield_result_marker_type(db);
+    }
+    ty
 }
 
 fn region_result_value<'db>(
@@ -2911,54 +2901,25 @@ fn emit_op<'db>(
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
 
         // For wasm.if with results, we need to determine the actual block type.
-        // If the IR result type is type.var (anyref) but the effective result type
-        // from the then/else branches is concrete (like I64), we must use the
-        // effective type for the block type.
-        // Compute effective_ty outside the block_type calculation so it's
-        // accessible for branch result casting below.
+        // If the IR result type is polymorphic but the effective result type
+        // from the then/else branches is concrete, we must use the effective type.
         let effective_ty = if has_result {
             let ir_ty = result_ty.expect("if result type");
-            // Check if the branch result values have an effective type computed
-            // If the IR type is a type variable and we have a different effective type,
-            // use the effective type for the block
             if tribute::is_type_var(db, ir_ty) {
-                // Try to get effective type from the then region's result value
-                let regions = op.regions(db);
-                let then_result_ty = regions
-                    .first()
-                    .and_then(|r| region_result_value(db, r))
-                    .and_then(|v| ctx.effective_types.get(&v).copied());
-
-                if let Some(eff_ty) = then_result_ty {
-                    if !tribute::is_type_var(db, eff_ty) {
-                        debug!(
-                            "wasm.if: using then branch effective type {}.{} instead of IR type {}.{}",
-                            eff_ty.dialect(db),
-                            eff_ty.name(db),
-                            ir_ty.dialect(db),
-                            ir_ty.name(db)
-                        );
-                        Some(eff_ty)
-                    } else if let Some(ret_ty) = ctx.func_return_type {
-                        // Fall back to function return type when branch type is also type_var
-                        if !tribute::is_type_var(db, ret_ty) {
-                            debug!(
-                                "wasm.if: using function return type {}.{} instead of type_var",
-                                ret_ty.dialect(db),
-                                ret_ty.name(db)
-                            );
-                            Some(ret_ty)
-                        } else {
-                            Some(ir_ty)
-                        }
-                    } else {
-                        Some(ir_ty)
-                    }
+                // Try to infer from then region's result value
+                if let Some(eff_ty) = infer_region_effective_type(db, op, ctx) {
+                    debug!(
+                        "wasm.if: using then branch effective type {}.{} instead of IR type {}.{}",
+                        eff_ty.dialect(db),
+                        eff_ty.name(db),
+                        ir_ty.dialect(db),
+                        ir_ty.name(db)
+                    );
+                    Some(eff_ty)
                 } else if let Some(ret_ty) = ctx.func_return_type {
-                    // Try function return type if no then result type found
-                    if !tribute::is_type_var(db, ret_ty) {
+                    if !is_polymorphic_type(db, ret_ty) {
                         debug!(
-                            "wasm.if: using function return type {}.{} instead of type_var (no then result)",
+                            "wasm.if: using function return type {}.{} instead of type_var",
                             ret_ty.dialect(db),
                             ret_ty.name(db)
                         );
@@ -3102,19 +3063,11 @@ fn emit_op<'db>(
             set_result_local(db, op, ctx, function)?;
         }
     } else if name == Symbol::new("block") {
-        let mut result_ty = op.results(db).first().copied();
         // Upgrade polymorphic block result type to YieldResult if function returns YieldResult
-        if let Some(ty) = result_ty {
-            let is_polymorphic =
-                wasm::Anyref::from_type(db, ty).is_some() || tribute::is_type_var(db, ty);
-            if is_polymorphic && let Some(ret_ty) = ctx.func_return_type {
-                let func_returns_yield_result = ret_ty.dialect(db) == wasm::DIALECT_NAME()
-                    && ret_ty.name(db) == Symbol::new("yield_result");
-                if func_returns_yield_result {
-                    result_ty = Some(crate::gc_types::yield_result_marker_type(db));
-                }
-            }
-        }
+        let result_ty = op
+            .results(db)
+            .first()
+            .map(|ty| upgrade_polymorphic_to_yield_result(db, *ty, ctx.func_return_type));
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
         let block_type = if has_result {
             BlockType::Result(type_to_valtype(
@@ -3142,19 +3095,11 @@ fn emit_op<'db>(
             set_result_local(db, op, ctx, function)?;
         }
     } else if name == Symbol::new("loop") {
-        let mut result_ty = op.results(db).first().copied();
         // Upgrade polymorphic loop result type to YieldResult if function returns YieldResult
-        if let Some(ty) = result_ty {
-            let is_polymorphic =
-                wasm::Anyref::from_type(db, ty).is_some() || tribute::is_type_var(db, ty);
-            if is_polymorphic && let Some(ret_ty) = ctx.func_return_type {
-                let func_returns_yield_result = ret_ty.dialect(db) == wasm::DIALECT_NAME()
-                    && ret_ty.name(db) == Symbol::new("yield_result");
-                if func_returns_yield_result {
-                    result_ty = Some(crate::gc_types::yield_result_marker_type(db));
-                }
-            }
-        }
+        let result_ty = op
+            .results(db)
+            .first()
+            .map(|ty| upgrade_polymorphic_to_yield_result(db, *ty, ctx.func_return_type));
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
         let block_type = if has_result {
             BlockType::Result(type_to_valtype(
