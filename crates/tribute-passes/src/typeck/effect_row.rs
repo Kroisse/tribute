@@ -73,6 +73,43 @@ impl<'db> Ord for AbilityRef<'db> {
     }
 }
 
+/// Result of attempting to remove an ability from an effect row.
+///
+/// This enum is used by `EffectRow::remove_with_constraint()` to handle
+/// row variable decomposition during handler typing.
+///
+/// ## Type Theory Background
+///
+/// In row-polymorphic effect systems, effect rows can be either:
+/// - **Closed**: `{A, B, C}` - a fixed set of abilities
+/// - **Open**: `{A, B | e}` - some abilities plus a row variable `e`
+///
+/// When a handler handles ability `A`, we need to "subtract" it from the row:
+/// - From closed `{A, B}` → `{B}` (direct removal)
+/// - From open `{A | e}` → `{| e}` (direct removal from concrete part)
+/// - From open `{B | e}` where `A ∉ {B}` → need constraint `e = {A | e'}`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RemoveResult<'db> {
+    /// Ability was directly present and removed.
+    /// Contains the resulting effect row after removal.
+    Removed(EffectRow<'db>),
+
+    /// Ability was not in the concrete part, but might be in the row variable tail.
+    /// Generates a constraint: `var = {must_contain | remainder}`.
+    NeedsConstraint {
+        /// The row variable that must be decomposed.
+        var: RowVar,
+        /// The ability that must be contained in the row variable.
+        must_contain: AbilityRef<'db>,
+        /// Fresh row variable for the remainder after removing the ability.
+        remainder: RowVar,
+    },
+
+    /// Ability was not found and the row is closed (no tail variable).
+    /// This indicates a type error: trying to handle an ability not in the effect row.
+    NotFound,
+}
+
 impl<'db> AbilityRef<'db> {
     /// Create a new ability reference.
     pub fn new(name: Symbol, params: IdVec<Type<'db>>) -> Self {
@@ -187,6 +224,57 @@ impl<'db> EffectRow<'db> {
     /// Returns `true` if the ability was present and removed.
     pub fn remove_ability(&mut self, ability: &AbilityRef<'db>) -> bool {
         self.abilities.remove(ability)
+    }
+
+    /// Remove an ability with row variable decomposition support.
+    ///
+    /// This method handles the case where the ability might be in a row variable tail.
+    /// Used by handler typing to correctly remove handled abilities from effect rows.
+    ///
+    /// ## Effect Row Algebra
+    ///
+    /// Given an effect row `{A₁, A₂, ..., Aₙ | e}` where `e` is a row variable:
+    ///
+    /// - If ability `A` is directly in the row: remove and return `Removed`
+    /// - If ability `A` is not in the row but `e` exists: return `NeedsConstraint`
+    ///   (generates constraint `e = {A | e'}` where `e'` is fresh)
+    /// - If ability `A` is not in the row and no tail: return `NotFound` (type error)
+    ///
+    /// ## Example
+    ///
+    /// ```text
+    /// // Handler removes State from effect row {State(Int), Console | e}
+    /// row.remove_with_constraint(&State(Int), fresh_var)
+    /// // → Removed({Console | e})
+    ///
+    /// // Handler removes Reader from effect row {State(Int) | e}
+    /// // Reader is not directly present, but e might contain it
+    /// row.remove_with_constraint(&Reader(Int), fresh_var)
+    /// // → NeedsConstraint { var: e, must_contain: Reader(Int), remainder: e' }
+    /// ```
+    pub fn remove_with_constraint(
+        &self,
+        ability: &AbilityRef<'db>,
+        fresh_var: impl FnOnce() -> RowVar,
+    ) -> RemoveResult<'db> {
+        if self.contains(ability) {
+            // Direct removal: ability is in the concrete part of the row
+            let mut result = self.clone();
+            result.remove_ability(ability);
+            RemoveResult::Removed(result)
+        } else if let Some(tail) = self.tail {
+            // Row variable decomposition: ability might be in the tail
+            // Generate constraint: tail = {ability | fresh}
+            let fresh = fresh_var();
+            RemoveResult::NeedsConstraint {
+                var: tail,
+                must_contain: ability.clone(),
+                remainder: fresh,
+            }
+        } else {
+            // Closed row without the ability: type error
+            RemoveResult::NotFound
+        }
     }
 
     /// Find abilities matching a given name (ignoring type parameters).
@@ -530,5 +618,186 @@ mod tests {
         // Should NOT detect a conflict
         let conflict = row.find_conflicting_abilities();
         assert!(conflict.is_none());
+    }
+
+    // =========================================================================
+    // remove_with_constraint tests (Issue #201)
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_remove_with_constraint_direct_removal(db: &salsa::DatabaseImpl) {
+        // When ability is directly in the row, it should be removed directly
+        let state_name = Symbol::new("State");
+        let console_name = Symbol::new("Console");
+        let int_ty = *core::I64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let console = AbilityRef::simple(console_name);
+        let row = EffectRow::concrete([state_int.clone(), console.clone()]);
+
+        let mut counter = 0u64;
+        let result = row.remove_with_constraint(&state_int, || {
+            counter += 1;
+            RowVar(counter)
+        });
+
+        match result {
+            RemoveResult::Removed(new_row) => {
+                // State should be removed, Console should remain
+                assert!(!new_row.contains(&state_int));
+                assert!(new_row.contains(&console));
+                assert_eq!(new_row.abilities().len(), 1);
+            }
+            _ => panic!("Expected Removed, got {:?}", result),
+        }
+
+        // fresh_var should not have been called
+        assert_eq!(counter, 0);
+    }
+
+    #[salsa_test]
+    fn test_remove_with_constraint_from_open_row(db: &salsa::DatabaseImpl) {
+        // When ability is in the concrete part of an open row, direct removal preserves tail
+        let state_name = Symbol::new("State");
+        let int_ty = *core::I64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let tail_var = RowVar(42);
+        let row = EffectRow::with_tail([state_int.clone()], tail_var);
+
+        let mut counter = 0u64;
+        let result = row.remove_with_constraint(&state_int, || {
+            counter += 1;
+            RowVar(100 + counter)
+        });
+
+        match result {
+            RemoveResult::Removed(new_row) => {
+                // State should be removed
+                assert!(!new_row.contains(&state_int));
+                // Tail should be preserved
+                assert_eq!(new_row.tail(), Some(tail_var));
+            }
+            _ => panic!("Expected Removed, got {:?}", result),
+        }
+
+        // fresh_var should not have been called
+        assert_eq!(counter, 0);
+    }
+
+    #[salsa_test]
+    fn test_remove_with_constraint_needs_constraint(db: &salsa::DatabaseImpl) {
+        // When ability is NOT in concrete part but row has tail, generate constraint
+        let state_name = Symbol::new("State");
+        let reader_name = Symbol::new("Reader");
+        let int_ty = *core::I64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let reader_int = AbilityRef::new(reader_name, IdVec::from(vec![int_ty]));
+        let tail_var = RowVar(42);
+        // Row has State(Int) and tail e, but not Reader(Int)
+        let row = EffectRow::with_tail([state_int.clone()], tail_var);
+
+        let mut counter = 0u64;
+        let result = row.remove_with_constraint(&reader_int, || {
+            counter += 1;
+            RowVar(100 + counter)
+        });
+
+        match result {
+            RemoveResult::NeedsConstraint {
+                var,
+                must_contain,
+                remainder,
+            } => {
+                // The tail variable should be decomposed
+                assert_eq!(var, tail_var);
+                // Reader(Int) must be contained in the tail
+                assert_eq!(must_contain, reader_int);
+                // Fresh variable should be generated
+                assert_eq!(remainder, RowVar(101));
+            }
+            _ => panic!("Expected NeedsConstraint, got {:?}", result),
+        }
+
+        // fresh_var should have been called once
+        assert_eq!(counter, 1);
+    }
+
+    #[salsa_test]
+    fn test_remove_with_constraint_not_found(db: &salsa::DatabaseImpl) {
+        // When ability is NOT in row and row is closed (no tail), return NotFound
+        let state_name = Symbol::new("State");
+        let reader_name = Symbol::new("Reader");
+        let int_ty = *core::I64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let reader_int = AbilityRef::new(reader_name, IdVec::from(vec![int_ty]));
+        // Closed row with only State(Int), not Reader(Int)
+        let row = EffectRow::concrete([state_int.clone()]);
+
+        let mut counter = 0u64;
+        let result = row.remove_with_constraint(&reader_int, || {
+            counter += 1;
+            RowVar(counter)
+        });
+
+        match result {
+            RemoveResult::NotFound => {
+                // Expected - Reader is not in the closed row
+            }
+            _ => panic!("Expected NotFound, got {:?}", result),
+        }
+
+        // fresh_var should not have been called
+        assert_eq!(counter, 0);
+    }
+
+    #[salsa_test]
+    fn test_remove_with_constraint_empty_open_row(db: &salsa::DatabaseImpl) {
+        // When row is just a variable {e}, removing any ability generates constraint
+        let state_name = Symbol::new("State");
+        let int_ty = *core::I64::new(db);
+
+        let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
+        let tail_var = RowVar(42);
+        // Row is just {| e} - no concrete abilities
+        let row = EffectRow::var(tail_var);
+
+        let mut counter = 0u64;
+        let result = row.remove_with_constraint(&state_int, || {
+            counter += 1;
+            RowVar(100 + counter)
+        });
+
+        match result {
+            RemoveResult::NeedsConstraint {
+                var,
+                must_contain,
+                remainder,
+            } => {
+                assert_eq!(var, tail_var);
+                assert_eq!(must_contain, state_int);
+                assert_eq!(remainder, RowVar(101));
+            }
+            _ => panic!("Expected NeedsConstraint, got {:?}", result),
+        }
+    }
+
+    #[salsa_test]
+    fn test_remove_with_constraint_empty_closed_row(_db: &salsa::DatabaseImpl) {
+        // When row is empty and closed {}, removing any ability returns NotFound
+        let state_name = Symbol::new("State");
+        let state = AbilityRef::simple(state_name);
+        let row = EffectRow::empty();
+
+        let mut counter = 0u64;
+        let result = row.remove_with_constraint(&state, || {
+            counter += 1;
+            RowVar(counter)
+        });
+
+        assert!(matches!(result, RemoveResult::NotFound));
+        assert_eq!(counter, 0);
     }
 }

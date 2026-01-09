@@ -27,7 +27,7 @@ pub use checker::{
     typecheck_module_per_function,
 };
 pub use constraint::Constraint;
-pub use effect_row::EffectRow;
+pub use effect_row::{AbilityRef, EffectRow, RemoveResult, RowVar};
 pub use solver::TypeSolver;
 pub use subst::{
     apply_subst_to_module, apply_subst_to_region, has_type_vars, module_has_type_vars,
