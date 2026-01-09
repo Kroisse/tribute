@@ -1073,6 +1073,15 @@ impl<'db> Resolver<'db> {
     /// tribute.let has one operand (the bound value) and one pattern region.
     /// Pattern bindings are extracted and added to local scope.
     /// The tribute.let operation is erased from output (bindings are tracked in scope).
+    ///
+    /// ## Effect Propagation (Issue #200)
+    ///
+    /// Effects from the let binding's init expression naturally propagate because:
+    /// 1. The init expression produces a value with associated operations
+    /// 2. Those operations are type-checked, and their effects are merged
+    /// 3. Let bindings map names directly to values, so effects flow through
+    ///
+    /// No special handling is needed for effect propagation in let bindings.
     fn resolve_let(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
         let operands = op.operands(self.db);
         let regions = op.regions(self.db);

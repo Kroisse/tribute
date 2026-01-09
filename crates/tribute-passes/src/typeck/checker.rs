@@ -37,6 +37,26 @@ pub enum Mode<'db> {
     Check(Type<'db>),
 }
 
+/// Signature of an ability operation.
+///
+/// Used for looking up operation signatures when type-checking handler patterns.
+/// The continuation type in a handler arm is derived from this signature:
+/// `k: (return_ty) ->{remaining_effects} handler_result_ty`
+#[derive(Clone, Debug)]
+pub struct AbilityOpSignature<'db> {
+    /// The ability name (e.g., "State").
+    pub ability_name: Symbol,
+    /// The operation name (e.g., "get", "set").
+    pub op_name: Symbol,
+    /// Parameter types of the operation.
+    pub params: IdVec<Type<'db>>,
+    /// Return type of the operation.
+    pub return_ty: Type<'db>,
+}
+
+/// Key for looking up ability operation signatures.
+pub type AbilityOpKey = (Symbol, Symbol); // (ability_name, op_name)
+
 /// Type checking context.
 ///
 /// Tracks the current environment (bindings) and generates constraints.
@@ -60,6 +80,10 @@ pub struct TypeChecker<'db> {
     /// This enables proper type inference for generic function calls.
     /// Wrapped in Arc for cheap cloning across function checks.
     function_types: Arc<HashMap<Symbol, Type<'db>>>,
+    /// Map from (ability_name, op_name) to operation signatures.
+    /// Used for looking up ability operation types when checking handler patterns.
+    /// Wrapped in Arc for cheap cloning across function checks.
+    ability_op_types: Arc<HashMap<AbilityOpKey, AbilityOpSignature<'db>>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -74,6 +98,7 @@ impl<'db> TypeChecker<'db> {
             current_effect: EffectRow::empty(),
             entry_block_arg_types: Vec::new(),
             function_types: Arc::new(HashMap::new()),
+            ability_op_types: Arc::new(HashMap::new()),
         }
     }
 
@@ -91,6 +116,26 @@ impl<'db> TypeChecker<'db> {
             current_effect: EffectRow::empty(),
             entry_block_arg_types: Vec::new(),
             function_types,
+            ability_op_types: Arc::new(HashMap::new()),
+        }
+    }
+
+    /// Create a new type checker with pre-built function and ability operation type maps.
+    pub fn with_type_maps(
+        db: &'db dyn salsa::Database,
+        function_types: Arc<HashMap<Symbol, Type<'db>>>,
+        ability_op_types: Arc<HashMap<AbilityOpKey, AbilityOpSignature<'db>>>,
+    ) -> Self {
+        Self {
+            db,
+            value_types: HashMap::new(),
+            constraints: ConstraintSet::new(),
+            next_type_var: 0,
+            next_row_var: 0,
+            current_effect: EffectRow::empty(),
+            entry_block_arg_types: Vec::new(),
+            function_types,
+            ability_op_types,
         }
     }
 
@@ -223,11 +268,12 @@ impl<'db> TypeChecker<'db> {
     pub fn check_module(&mut self, module: &core::Module<'db>) {
         self.seed_var_counters(module);
 
-        // Collect all function types before checking
-        // This enables proper type inference for generic function calls
+        // Collect all function types and ability operation types before checking
+        // This enables proper type inference for generic function calls and handler patterns
         let body = module.body(self.db);
         if let Some(block) = body.blocks(self.db).first() {
             self.collect_function_types_from_block(block);
+            self.collect_ability_op_types_from_block(block);
         }
 
         self.check_region(&body);
@@ -246,6 +292,63 @@ impl<'db> TypeChecker<'db> {
                 Arc::make_mut(&mut self.function_types).insert(name, func_type);
             }
         }
+    }
+
+    /// Collect ability operation types from a block.
+    ///
+    /// Walks `tribute.ability_def` operations and extracts operation signatures
+    /// from their `operations` regions. This builds a map from (ability_name, op_name)
+    /// to `AbilityOpSignature` for use in handler pattern type checking.
+    fn collect_ability_op_types_from_block(&mut self, block: &Block<'db>) {
+        for op in block.operations(self.db).iter() {
+            // Check for tribute.ability_def
+            if let Ok(ability_def) = tribute::AbilityDef::from_operation(self.db, *op) {
+                let ability_name = ability_def.sym_name(self.db);
+                let operations_region = ability_def.operations(self.db);
+
+                // Walk the operations region to find tribute.op_def
+                for inner_block in operations_region.blocks(self.db).iter() {
+                    for inner_op in inner_block.operations(self.db).iter() {
+                        if let Ok(op_def) = tribute::OpDef::from_operation(self.db, *inner_op) {
+                            let op_name = op_def.sym_name(self.db);
+                            let op_type = op_def.r#type(self.db);
+
+                            // Extract params and return_ty from the function type
+                            if let Some(func_ty) = core::Func::from_type(self.db, op_type) {
+                                let params = func_ty.params(self.db);
+                                let return_ty = func_ty.result(self.db);
+
+                                let signature = AbilityOpSignature {
+                                    ability_name,
+                                    op_name,
+                                    params: params.clone(),
+                                    return_ty,
+                                };
+
+                                trace!(
+                                    "collect_ability_op_types: {:?}::{:?} -> params={:?}, return={:?}",
+                                    ability_name, op_name, params, return_ty
+                                );
+
+                                let key = (ability_name, op_name);
+                                Arc::make_mut(&mut self.ability_op_types).insert(key, signature);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Look up an ability operation's signature.
+    ///
+    /// Returns `None` if the operation is not found or if type information is incomplete.
+    pub fn lookup_ability_op(
+        &self,
+        ability_name: Symbol,
+        op_name: Symbol,
+    ) -> Option<&AbilityOpSignature<'db>> {
+        self.ability_op_types.get(&(ability_name, op_name))
     }
 
     fn seed_var_counters(&mut self, module: &core::Module<'db>) {
@@ -434,6 +537,11 @@ impl<'db> TypeChecker<'db> {
             {
                 // Type declarations don't need type checking - no-op
             } else {
+                // Note: tribute.let is erased during resolution (resolve.rs:resolve_let).
+                // Effect propagation happens naturally because let bindings are directly
+                // mapped to the values they bind. Effects from init expressions are
+                // tracked when those operations are checked, and naturally propagate
+                // through value references. See Issue #200 for verification tests.
                 self.check_unknown_op(op);
             }
         } else if dialect == adt::DIALECT_NAME() {
@@ -977,7 +1085,12 @@ impl<'db> TypeChecker<'db> {
                         // Extract handled abilities from the pattern region
                         let arm_regions = arm_op.regions(self.db);
                         if let Some(pattern_region) = arm_regions.first() {
-                            self.extract_handled_abilities(pattern_region, &mut handled_abilities);
+                            // Check for handler patterns and bind continuation types
+                            self.check_handler_pattern_continuations(
+                                pattern_region,
+                                &mut handled_abilities,
+                                result_type,
+                            );
                         }
 
                         // Check the body region (second region)
@@ -1001,51 +1114,127 @@ impl<'db> TypeChecker<'db> {
         self.record_type(value, result_type);
     }
 
-    /// Extract abilities being handled from a pattern region.
+    /// Check handler patterns and bind continuation types.
     ///
-    /// Handler patterns specify abilities by name only (e.g., `State::get()`), but
-    /// the effect row may contain parameterized abilities (e.g., `State(Int)`).
-    /// This function matches pattern ability names against the current effect row
-    /// to find the fully parameterized abilities that are being handled.
+    /// For each `pat.handler_suspend` pattern:
+    /// 1. Extract the handled ability and add to the list
+    /// 2. Look up the operation's return type from ability definition
+    /// 3. Create continuation type: `fn(return_ty) ->{remaining_effects} handler_result_ty`
+    /// 4. Bind the continuation variable (if present) to this type
     ///
-    /// Note: When the effect row contains multiple parameterizations of the same
-    /// ability (e.g., both `State(Int)` and `State(String)`), a handler pattern
-    /// without explicit type parameters will handle ALL of them. Future work may
-    /// add type inference from handler bodies to disambiguate.
-    fn extract_handled_abilities(
-        &self,
+    /// This ensures that continuation variables like `k` in `{ State::get() -> k }`
+    /// have the correct function type for resuming the computation.
+    fn check_handler_pattern_continuations(
+        &mut self,
         pattern_region: &Region<'db>,
         handled: &mut Vec<AbilityRef<'db>>,
+        handler_result_ty: Type<'db>,
     ) {
         let ability_ref_sym = Symbol::new("ability_ref");
+        let op_sym = Symbol::new("op");
+
         for block in pattern_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
                 // Check for pat.handler_suspend
                 if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
                     && op.name(self.db) == tribute_pat::HANDLER_SUSPEND()
                 {
-                    // Extract ability reference from attributes
-                    // The ability_ref is a Type (core.ability_ref) but may lack type parameters
-                    // because handler patterns don't include them in the syntax.
                     let attrs = op.attributes(self.db);
+
+                    // Extract ability reference
                     if let Some(Attribute::Type(ability_ty)) = attrs.get(&ability_ref_sym)
                         && let Some(pattern_ability) = AbilityRef::from_type(self.db, *ability_ty)
                     {
-                        // If the pattern ability has type parameters, use it directly
-                        // Otherwise, find matching abilities from the effect row by name
-                        if !pattern_ability.params.is_empty() {
-                            // Pattern has explicit type parameters - use as is
-                            if !handled.contains(&pattern_ability) {
-                                handled.push(pattern_ability);
-                            }
+                        // Find the fully parameterized ability from the effect row
+                        let matching_abilities = if !pattern_ability.params.is_empty() {
+                            vec![pattern_ability.clone()]
                         } else {
-                            // Pattern has no type parameters - find by name in effect row
-                            // This allows `State::get()` to match `State(Int)` in the effect row
-                            for ability in self.current_effect.find_by_name(pattern_ability.name) {
-                                if !handled.contains(&ability) {
-                                    handled.push(ability);
+                            self.current_effect.find_by_name(pattern_ability.name)
+                        };
+
+                        // Add to handled list
+                        for ability in &matching_abilities {
+                            if !handled.contains(ability) {
+                                handled.push(ability.clone());
+                            }
+                        }
+
+                        // Get operation name for looking up signature
+                        let op_name = attrs.get(&op_sym).and_then(|a| {
+                            if let Attribute::Symbol(s) = a {
+                                Some(*s)
+                            } else {
+                                None
+                            }
+                        });
+
+                        // Look up operation signature and bind continuation type
+                        if let Some(op_name) = op_name {
+                            // Find the first matching ability to get the operation signature
+                            for ability in &matching_abilities {
+                                if let Some(sig) = self.lookup_ability_op(ability.name, op_name) {
+                                    // Create continuation type:
+                                    // fn(op_return_ty) ->{remaining_effects} handler_result_ty
+                                    let remaining_effect = self.current_effect.to_type(self.db);
+                                    let continuation_ty = core::Func::with_effect(
+                                        self.db,
+                                        IdVec::from(vec![sig.return_ty]),
+                                        handler_result_ty,
+                                        Some(remaining_effect),
+                                    )
+                                    .as_type();
+
+                                    // Find and bind the continuation variable
+                                    self.bind_continuation_in_pattern(op, continuation_ty);
+
+                                    trace!(
+                                        "check_handler_pattern_continuations: {:?}::{:?} -> cont_ty={:?}",
+                                        ability.name, op_name, continuation_ty
+                                    );
+                                    break; // Only need to bind once
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Bind the continuation variable in a handler_suspend pattern to a type.
+    ///
+    /// The continuation is in the second region (continuation region) of handler_suspend.
+    /// It contains either a `pat.bind` (named continuation) or `pat.wildcard` (discarded).
+    fn bind_continuation_in_pattern(
+        &mut self,
+        handler_suspend_op: &Operation<'db>,
+        continuation_ty: Type<'db>,
+    ) {
+        let regions = handler_suspend_op.regions(self.db);
+
+        // The continuation region is the second region (index 1)
+        if let Some(continuation_region) = regions.get(1) {
+            for block in continuation_region.blocks(self.db).iter() {
+                for op in block.operations(self.db).iter() {
+                    // Look for pat.bind - that's where the continuation variable is bound
+                    if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
+                        && op.name(self.db) == tribute_pat::BIND()
+                    {
+                        // The bind operation produces a result value that represents
+                        // the bound variable. Assign the continuation type to it.
+                        if let Some(&result_ty) = op.results(self.db).first() {
+                            // Record the continuation type for this value
+                            let value = op.result(self.db, 0);
+                            self.record_type(value, continuation_ty);
+
+                            // Also add a constraint that the declared type (if any)
+                            // equals the continuation type
+                            self.constrain_eq(result_ty, continuation_ty);
+
+                            trace!(
+                                "bind_continuation_in_pattern: bound continuation to {:?}",
+                                continuation_ty
+                            );
                         }
                     }
                 }
@@ -1314,10 +1503,11 @@ pub fn typecheck_module_per_function<'db>(
 
     let block = &blocks[0];
 
-    // First pass: collect all function types
+    // First pass: collect all function types and ability operation types
     let function_types = collect_function_types(db, block);
+    let ability_op_types = collect_ability_op_types(db, block);
 
-    // Second pass: type check each function with the function types map
+    // Second pass: type check each function with the type maps
     let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
     for op in block.operations(db).iter() {
         if op.dialect(db) == func::DIALECT_NAME() && op.name(db) == func::FUNC() {
@@ -1326,8 +1516,13 @@ pub fn typecheck_module_per_function<'db>(
                 validate_toplevel_function_types(db, &func_op);
             }
 
-            // Type check this function with access to all function types
-            let typed_op = typecheck_function_with_context(db, *op, function_types.clone());
+            // Type check this function with access to all function and ability types
+            let typed_op = typecheck_function_with_context(
+                db,
+                *op,
+                function_types.clone(),
+                ability_op_types.clone(),
+            );
             new_ops.push(typed_op);
         } else {
             // Non-function operations pass through
@@ -1373,16 +1568,70 @@ fn collect_function_types<'db>(
     Arc::new(function_types)
 }
 
-/// Type check a function with access to all function types.
+/// Collect ability operation types from all ability definitions in a block.
 ///
-/// This is similar to `typecheck_function` but accepts a function types map
-/// for proper type inference of generic function calls.
+/// Walks `tribute.ability_def` operations and extracts operation signatures
+/// from their `operations` regions.
+fn collect_ability_op_types<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+) -> Arc<HashMap<AbilityOpKey, AbilityOpSignature<'db>>> {
+    let mut ability_op_types = HashMap::new();
+
+    for op in block.operations(db).iter() {
+        if let Ok(ability_def) = tribute::AbilityDef::from_operation(db, *op) {
+            let ability_name = ability_def.sym_name(db);
+            let operations_region = ability_def.operations(db);
+
+            for inner_block in operations_region.blocks(db).iter() {
+                for inner_op in inner_block.operations(db).iter() {
+                    if let Ok(op_def) = tribute::OpDef::from_operation(db, *inner_op) {
+                        let op_name = op_def.sym_name(db);
+                        let op_type = op_def.r#type(db);
+
+                        if let Some(func_ty) = core::Func::from_type(db, op_type) {
+                            let params = func_ty.params(db);
+                            let return_ty = func_ty.result(db);
+
+                            let signature = AbilityOpSignature {
+                                ability_name,
+                                op_name,
+                                params: params.clone(),
+                                return_ty,
+                            };
+
+                            trace!(
+                                "collect_ability_op_types: {:?}::{:?} -> params={:?}, return={:?}",
+                                ability_name, op_name, params, return_ty
+                            );
+
+                            let key = (ability_name, op_name);
+                            ability_op_types.insert(key, signature);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    trace!(
+        "collect_ability_op_types: collected {} ability operations",
+        ability_op_types.len()
+    );
+    Arc::new(ability_op_types)
+}
+
+/// Type check a function with access to all function and ability types.
+///
+/// This is similar to `typecheck_function` but accepts type maps
+/// for proper type inference of generic function calls and handler patterns.
 fn typecheck_function_with_context<'db>(
     db: &'db dyn salsa::Database,
     func_op: Operation<'db>,
     function_types: Arc<HashMap<Symbol, Type<'db>>>,
+    ability_op_types: Arc<HashMap<AbilityOpKey, AbilityOpSignature<'db>>>,
 ) -> Operation<'db> {
-    let mut checker = TypeChecker::with_function_types(db, function_types);
+    let mut checker = TypeChecker::with_type_maps(db, function_types, ability_op_types);
 
     // Check the function definition
     checker.check_func_def(&func_op);
