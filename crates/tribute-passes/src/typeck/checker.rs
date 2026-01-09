@@ -1085,7 +1085,12 @@ impl<'db> TypeChecker<'db> {
                         // Extract handled abilities from the pattern region
                         let arm_regions = arm_op.regions(self.db);
                         if let Some(pattern_region) = arm_regions.first() {
-                            self.extract_handled_abilities(pattern_region, &mut handled_abilities);
+                            // Check for handler patterns and bind continuation types
+                            self.check_handler_pattern_continuations(
+                                pattern_region,
+                                &mut handled_abilities,
+                                result_type,
+                            );
                         }
 
                         // Check the body region (second region)
@@ -1109,51 +1114,127 @@ impl<'db> TypeChecker<'db> {
         self.record_type(value, result_type);
     }
 
-    /// Extract abilities being handled from a pattern region.
+    /// Check handler patterns and bind continuation types.
     ///
-    /// Handler patterns specify abilities by name only (e.g., `State::get()`), but
-    /// the effect row may contain parameterized abilities (e.g., `State(Int)`).
-    /// This function matches pattern ability names against the current effect row
-    /// to find the fully parameterized abilities that are being handled.
+    /// For each `pat.handler_suspend` pattern:
+    /// 1. Extract the handled ability and add to the list
+    /// 2. Look up the operation's return type from ability definition
+    /// 3. Create continuation type: `fn(return_ty) ->{remaining_effects} handler_result_ty`
+    /// 4. Bind the continuation variable (if present) to this type
     ///
-    /// Note: When the effect row contains multiple parameterizations of the same
-    /// ability (e.g., both `State(Int)` and `State(String)`), a handler pattern
-    /// without explicit type parameters will handle ALL of them. Future work may
-    /// add type inference from handler bodies to disambiguate.
-    fn extract_handled_abilities(
-        &self,
+    /// This ensures that continuation variables like `k` in `{ State::get() -> k }`
+    /// have the correct function type for resuming the computation.
+    fn check_handler_pattern_continuations(
+        &mut self,
         pattern_region: &Region<'db>,
         handled: &mut Vec<AbilityRef<'db>>,
+        handler_result_ty: Type<'db>,
     ) {
         let ability_ref_sym = Symbol::new("ability_ref");
+        let op_sym = Symbol::new("op");
+
         for block in pattern_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
                 // Check for pat.handler_suspend
                 if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
                     && op.name(self.db) == tribute_pat::HANDLER_SUSPEND()
                 {
-                    // Extract ability reference from attributes
-                    // The ability_ref is a Type (core.ability_ref) but may lack type parameters
-                    // because handler patterns don't include them in the syntax.
                     let attrs = op.attributes(self.db);
+
+                    // Extract ability reference
                     if let Some(Attribute::Type(ability_ty)) = attrs.get(&ability_ref_sym)
                         && let Some(pattern_ability) = AbilityRef::from_type(self.db, *ability_ty)
                     {
-                        // If the pattern ability has type parameters, use it directly
-                        // Otherwise, find matching abilities from the effect row by name
-                        if !pattern_ability.params.is_empty() {
-                            // Pattern has explicit type parameters - use as is
-                            if !handled.contains(&pattern_ability) {
-                                handled.push(pattern_ability);
-                            }
+                        // Find the fully parameterized ability from the effect row
+                        let matching_abilities = if !pattern_ability.params.is_empty() {
+                            vec![pattern_ability.clone()]
                         } else {
-                            // Pattern has no type parameters - find by name in effect row
-                            // This allows `State::get()` to match `State(Int)` in the effect row
-                            for ability in self.current_effect.find_by_name(pattern_ability.name) {
-                                if !handled.contains(&ability) {
-                                    handled.push(ability);
+                            self.current_effect.find_by_name(pattern_ability.name)
+                        };
+
+                        // Add to handled list
+                        for ability in &matching_abilities {
+                            if !handled.contains(ability) {
+                                handled.push(ability.clone());
+                            }
+                        }
+
+                        // Get operation name for looking up signature
+                        let op_name = attrs.get(&op_sym).and_then(|a| {
+                            if let Attribute::Symbol(s) = a {
+                                Some(*s)
+                            } else {
+                                None
+                            }
+                        });
+
+                        // Look up operation signature and bind continuation type
+                        if let Some(op_name) = op_name {
+                            // Find the first matching ability to get the operation signature
+                            for ability in &matching_abilities {
+                                if let Some(sig) = self.lookup_ability_op(ability.name, op_name) {
+                                    // Create continuation type:
+                                    // fn(op_return_ty) ->{remaining_effects} handler_result_ty
+                                    let remaining_effect = self.current_effect.to_type(self.db);
+                                    let continuation_ty = core::Func::with_effect(
+                                        self.db,
+                                        IdVec::from(vec![sig.return_ty]),
+                                        handler_result_ty,
+                                        Some(remaining_effect),
+                                    )
+                                    .as_type();
+
+                                    // Find and bind the continuation variable
+                                    self.bind_continuation_in_pattern(op, continuation_ty);
+
+                                    trace!(
+                                        "check_handler_pattern_continuations: {:?}::{:?} -> cont_ty={:?}",
+                                        ability.name, op_name, continuation_ty
+                                    );
+                                    break; // Only need to bind once
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Bind the continuation variable in a handler_suspend pattern to a type.
+    ///
+    /// The continuation is in the second region (continuation region) of handler_suspend.
+    /// It contains either a `pat.bind` (named continuation) or `pat.wildcard` (discarded).
+    fn bind_continuation_in_pattern(
+        &mut self,
+        handler_suspend_op: &Operation<'db>,
+        continuation_ty: Type<'db>,
+    ) {
+        let regions = handler_suspend_op.regions(self.db);
+
+        // The continuation region is the second region (index 1)
+        if let Some(continuation_region) = regions.get(1) {
+            for block in continuation_region.blocks(self.db).iter() {
+                for op in block.operations(self.db).iter() {
+                    // Look for pat.bind - that's where the continuation variable is bound
+                    if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
+                        && op.name(self.db) == tribute_pat::BIND()
+                    {
+                        // The bind operation produces a result value that represents
+                        // the bound variable. Assign the continuation type to it.
+                        if let Some(&result_ty) = op.results(self.db).first() {
+                            // Record the continuation type for this value
+                            let value = op.result(self.db, 0);
+                            self.record_type(value, continuation_ty);
+
+                            // Also add a constraint that the declared type (if any)
+                            // equals the continuation type
+                            self.constrain_eq(result_ty, continuation_ty);
+
+                            trace!(
+                                "bind_continuation_in_pattern: bound continuation to {:?}",
+                                continuation_ty
+                            );
                         }
                     }
                 }
