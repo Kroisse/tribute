@@ -27,8 +27,7 @@ use wasm_encoder::{
 use crate::errors;
 use crate::gc_types::{
     self, ATTR_FIELD_IDX, ATTR_TYPE, ATTR_TYPE_IDX, BOXED_F64_IDX, BYTES_ARRAY_IDX,
-    BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, GcTypeRegistry,
-    YIELD_RESULT_IDX,
+    BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, GcTypeRegistry, STEP_IDX,
 };
 use crate::{CompilationError, CompilationResult};
 
@@ -1784,7 +1783,7 @@ fn collect_call_indirect_types<'db>(
                                 "collect_call_indirect_types: upgrading polymorphic result to yield_result \
                                  for enclosing function that returns YieldResult"
                             );
-                            result_ty = crate::gc_types::yield_result_marker_type(db);
+                            result_ty = crate::gc_types::step_marker_type(db);
                         }
                     }
 
@@ -2515,11 +2514,8 @@ fn assign_locals_in_region<'db>(
                         );
                         effective_ty = eff_ty;
                     } else {
-                        let upgraded = upgrade_polymorphic_to_yield_result(
-                            db,
-                            effective_ty,
-                            ctx.func_return_type,
-                        );
+                        let upgraded =
+                            upgrade_polymorphic_to_step(db, effective_ty, ctx.func_return_type);
                         if upgraded != effective_ty {
                             debug!(
                                 "wasm.block local: using YieldResult instead of polymorphic type {}.{}",
@@ -2539,7 +2535,7 @@ fn assign_locals_in_region<'db>(
                     && is_polymorphic_type(db, effective_ty)
                 {
                     let upgraded =
-                        upgrade_polymorphic_to_yield_result(db, effective_ty, ctx.func_return_type);
+                        upgrade_polymorphic_to_step(db, effective_ty, ctx.func_return_type);
                     if upgraded != effective_ty {
                         debug!(
                             "wasm.call_indirect local: using YieldResult instead of polymorphic type {}.{}",
@@ -2717,14 +2713,17 @@ fn infer_region_effective_type<'db>(
         .filter(|ty| !is_polymorphic_type(db, *ty))
 }
 
-/// Check if a type is the YieldResult marker type.
-fn is_yield_result_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    ty.dialect(db) == wasm::DIALECT_NAME() && ty.name(db) == Symbol::new("yield_result")
+/// Check if a type is the Step marker type.
+/// Also checks "yield_result" for backward compatibility.
+fn is_step_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    let name = ty.name(db);
+    ty.dialect(db) == wasm::DIALECT_NAME()
+        && (name == Symbol::new("step") || name == Symbol::new("yield_result"))
 }
 
-/// Upgrade a polymorphic type to YieldResult if the function returns YieldResult.
+/// Upgrade a polymorphic type to Step if the function returns Step.
 /// Used for wasm.block/wasm.loop result types.
-fn upgrade_polymorphic_to_yield_result<'db>(
+fn upgrade_polymorphic_to_step<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     func_return_type: Option<Type<'db>>,
@@ -2734,9 +2733,9 @@ fn upgrade_polymorphic_to_yield_result<'db>(
     }
 
     if let Some(ret_ty) = func_return_type
-        && is_yield_result_type(db, ret_ty)
+        && is_step_type(db, ret_ty)
     {
-        return crate::gc_types::yield_result_marker_type(db);
+        return crate::gc_types::step_marker_type(db);
     }
     ty
 }
@@ -3067,7 +3066,7 @@ fn emit_op<'db>(
         let result_ty = op
             .results(db)
             .first()
-            .map(|ty| upgrade_polymorphic_to_yield_result(db, *ty, ctx.func_return_type));
+            .map(|ty| upgrade_polymorphic_to_step(db, *ty, ctx.func_return_type));
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
         let block_type = if has_result {
             BlockType::Result(type_to_valtype(
@@ -3099,7 +3098,7 @@ fn emit_op<'db>(
         let result_ty = op
             .results(db)
             .first()
-            .map(|ty| upgrade_polymorphic_to_yield_result(db, *ty, ctx.func_return_type));
+            .map(|ty| upgrade_polymorphic_to_step(db, *ty, ctx.func_return_type));
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
         let block_type = if has_result {
             BlockType::Result(type_to_valtype(
@@ -3293,7 +3292,7 @@ fn emit_op<'db>(
                 debug!(
                     "call_indirect emit: upgrading polymorphic result to yield_result for enclosing function"
                 );
-                result_ty = crate::gc_types::yield_result_marker_type(db);
+                result_ty = crate::gc_types::step_marker_type(db);
             }
         }
 
@@ -4511,12 +4510,13 @@ fn type_to_valtype<'db>(
                     ty: AbstractHeapType::I31,
                 },
             }))
-        } else if name == Symbol::new("yield_result") {
-            // YieldResult is a builtin GC struct type for yield bubbling
-            // Always uses fixed type index YIELD_RESULT_IDX (3)
+        } else if name == Symbol::new("step") || name == Symbol::new("yield_result") {
+            // Step is a builtin GC struct type for trampoline-based effect system
+            // Also handles "yield_result" for backward compatibility
+            // Always uses fixed type index STEP_IDX (3)
             Ok(ValType::Ref(RefType {
                 nullable: true,
-                heap_type: HeapType::Concrete(YIELD_RESULT_IDX),
+                heap_type: HeapType::Concrete(STEP_IDX),
             }))
         } else {
             Err(CompilationError::type_error(format!(
