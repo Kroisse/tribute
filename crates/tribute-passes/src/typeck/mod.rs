@@ -23,8 +23,8 @@ mod solver;
 mod subst;
 
 pub use checker::{
-    FunctionTypeResult, TypeChecker, typecheck_function, typecheck_module,
-    typecheck_module_per_function,
+    AbilityOpKey, AbilityOpSignature, FunctionTypeResult, TypeChecker, typecheck_function,
+    typecheck_module, typecheck_module_per_function,
 };
 pub use constraint::Constraint;
 pub use effect_row::{AbilityRef, EffectRow, RemoveResult, RowVar};
