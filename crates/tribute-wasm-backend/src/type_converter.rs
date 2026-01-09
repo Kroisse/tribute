@@ -10,6 +10,7 @@
 //! | `tribute_rt.int`    | `core.i32`      | Arbitrary precision → i32 (Phase 1) |
 //! | `tribute_rt.nat`    | `core.i32`      | Arbitrary precision → i32 (Phase 1) |
 //! | `tribute_rt.bool`   | `core.i32`      | Boolean as i32                      |
+//! | `core.i1`           | `core.i32`      | WASM doesn't have i1                |
 //! | `tribute_rt.float`  | `core.f64`      | Float as f64                        |
 //! | `tribute_rt.intref` | `wasm.i31ref`   | Boxed integer reference             |
 //! | `tribute_rt.any`    | `wasm.anyref`   | Any reference type                  |
@@ -58,6 +59,10 @@ pub fn wasm_type_converter() -> TypeConverter {
         // Convert tribute_rt.bool → core.i32 (boolean as i32)
         .add_conversion(|db, ty| {
             tribute_rt::Bool::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
+        // Convert core.i1 → core.i32 (WASM doesn't have i1, use i32)
+        .add_conversion(|db, ty| {
+            core::I::<1>::from_type(db, ty).map(|_| core::I32::new(db).as_type())
         })
         // Convert tribute_rt.float → core.f64 (float as f64)
         .add_conversion(|db, ty| {
