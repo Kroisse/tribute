@@ -280,6 +280,148 @@ fn main() -> Int { 0 }
 }
 
 // =============================================================================
+// Let Binding Effect Propagation Tests (Issue #200)
+// =============================================================================
+
+/// Test that effects propagate correctly through let bindings.
+///
+/// When a let binding initializes from an effectful expression,
+/// the effect must propagate to the enclosing function.
+#[test]
+fn test_let_binding_effect_propagation() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+// Effect from State::get() in let binding propagates to function signature
+fn read_state() ->{State(Int)} Int {
+    let x = State::get()
+    x
+}
+
+fn main() -> Int { 0 }
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = parse_source(db, "let_effect_propagation.trb", code);
+        let result = compile_with_diagnostics(db, source);
+
+        for diag in &result.diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "Effect should propagate through let binding, got {} diagnostics",
+            result.diagnostics.len()
+        );
+    });
+}
+
+/// Test that multiple let bindings accumulate effects correctly.
+#[test]
+fn test_multiple_let_bindings_accumulate_effects() {
+    let code = r#"ability Reader(r) {
+    fn ask() -> r
+}
+
+ability Writer(w) {
+    fn tell(value: w) -> Nil
+}
+
+// Both Reader and Writer effects from let bindings propagate
+fn copy_value() ->{Reader(Int), Writer(Int)} Nil {
+    let x = Reader::ask()
+    let _ = Writer::tell(x)
+    Nil
+}
+
+fn main() -> Int { 0 }
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = parse_source(db, "multiple_let_effects.trb", code);
+        let result = compile_with_diagnostics(db, source);
+
+        for diag in &result.diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "Multiple effects should accumulate from let bindings, got {} diagnostics",
+            result.diagnostics.len()
+        );
+    });
+}
+
+/// Test that nested let bindings with effects work correctly.
+#[test]
+fn test_nested_let_bindings_with_effects() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn nested_state() ->{State(Int)} Int {
+    let a = State::get()
+    let b = {
+        let c = State::get()
+        c + 1
+    }
+    a + b
+}
+
+fn main() -> Int { 0 }
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = parse_source(db, "nested_let_effects.trb", code);
+        let result = compile_with_diagnostics(db, source);
+
+        for diag in &result.diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "Nested let bindings should propagate effects, got {} diagnostics",
+            result.diagnostics.len()
+        );
+    });
+}
+
+/// Test that let binding with pure expression doesn't introduce spurious effects.
+#[test]
+fn test_pure_let_binding_no_spurious_effects() {
+    // This function has no effect annotation and uses only pure let bindings
+    let code = r#"fn pure_computation() -> Int {
+    let x = 1
+    let y = 2
+    x + y
+}
+
+fn main() -> Int { pure_computation() }
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = parse_source(db, "pure_let_binding.trb", code);
+        let result = compile_with_diagnostics(db, source);
+
+        for diag in &result.diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "Pure let bindings should not introduce effects, got {} diagnostics",
+            result.diagnostics.len()
+        );
+    });
+}
+
+// =============================================================================
 // Edge Cases and Error Detection
 // =============================================================================
 

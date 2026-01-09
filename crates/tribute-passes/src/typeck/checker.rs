@@ -434,6 +434,11 @@ impl<'db> TypeChecker<'db> {
             {
                 // Type declarations don't need type checking - no-op
             } else {
+                // Note: tribute.let is erased during resolution (resolve.rs:resolve_let).
+                // Effect propagation happens naturally because let bindings are directly
+                // mapped to the values they bind. Effects from init expressions are
+                // tracked when those operations are checked, and naturally propagate
+                // through value references. See Issue #200 for verification tests.
                 self.check_unknown_op(op);
             }
         } else if dialect == adt::DIALECT_NAME() {
