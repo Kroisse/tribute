@@ -42,7 +42,7 @@
 
 use std::collections::HashSet;
 
-use tribute_ir::dialect::ability;
+use tribute_ir::dialect::{ability, tribute_rt};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::{
     OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
@@ -70,10 +70,24 @@ pub fn insert_evidence<'db>(
         return module;
     }
 
+    let converter = TypeConverter::new()
+        .add_conversion(|db, ty| {
+            tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Nat::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Bool::from_type(db, ty).map(|_| core::I::<1>::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
+        });
+
     // Both phases use PatternApplicator
     // Phase 1: Add evidence parameters to function signatures
     // Phase 2: Transform calls inside effectful functions to pass evidence
-    PatternApplicator::new(TypeConverter::new())
+    PatternApplicator::new(converter)
         .add_pattern(AddEvidenceParamPattern::new(effectful_fns.clone()))
         .add_pattern(TransformCallsPattern::new(effectful_fns))
         .apply(db, module)

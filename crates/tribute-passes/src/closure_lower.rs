@@ -19,7 +19,7 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
-use tribute_ir::dialect::{adt, closure};
+use tribute_ir::dialect::{adt, closure, tribute_rt};
 use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::rewrite::{
     OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
@@ -38,7 +38,21 @@ pub fn lower_closures<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> core::Module<'db> {
-    let applicator = PatternApplicator::new(TypeConverter::new())
+    let converter = TypeConverter::new()
+        .add_conversion(|db, ty| {
+            tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Nat::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Bool::from_type(db, ty).map(|_| core::I::<1>::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
+        });
+
+    let applicator = PatternApplicator::new(converter)
         // First, update function signatures: core.func params → closure.closure
         .add_pattern(UpdateFuncSignaturePattern)
         .add_pattern(LowerClosureCallPattern)
@@ -119,7 +133,7 @@ impl RewritePattern for LowerClosureNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: closure.new
         let closure_new = match closure::New::from_operation(db, *op) {
@@ -142,7 +156,10 @@ impl RewritePattern for LowerClosureNewPattern {
             .map(|ct| ct.func_type(db))
             .unwrap_or_else(|| *core::Nil::new(db));
 
-        let env = closure_new.env(db);
+        // Get env from adaptor (remapped value)
+        let env = adaptor
+            .operand(0)
+            .expect("closure.new requires env operand");
 
         // Generate: %funcref = func.constant @func_ref : func_type
         // func_ref is already a Symbol, use it directly
@@ -200,12 +217,14 @@ impl RewritePattern for LowerClosureCallPattern {
         adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: func.call_indirect
-        let call = match func::CallIndirect::from_operation(db, *op) {
-            Ok(c) => c,
-            Err(_) => return RewriteResult::Unchanged,
-        };
+        if func::CallIndirect::from_operation(db, *op).is_err() {
+            return RewriteResult::Unchanged;
+        }
 
-        let callee = call.callee(db);
+        // Get callee from adaptor (remapped value)
+        let callee = adaptor
+            .operand(0)
+            .expect("call_indirect requires callee operand");
 
         // Check if callee is a closure using the adaptor's type information.
         // This is more accurate than the heuristic in is_closure_value because
@@ -262,7 +281,8 @@ impl RewritePattern for LowerClosureCallPattern {
 
         // Get location and other info
         let location = op.location(db);
-        let args = call.args(db);
+        // Get args from adaptor (remapped values), skipping the callee (index 0)
+        let args: Vec<_> = adaptor.operands().iter().skip(1).copied().collect();
         let result_ty = op
             .results(db)
             .first()
@@ -307,16 +327,18 @@ impl RewritePattern for LowerClosureFuncPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: closure.func
-        let closure_func = match closure::Func::from_operation(db, *op) {
-            Ok(f) => f,
-            Err(_) => return RewriteResult::Unchanged,
-        };
+        if closure::Func::from_operation(db, *op).is_err() {
+            return RewriteResult::Unchanged;
+        }
 
         let location = op.location(db);
-        let closure_value = closure_func.closure(db);
+        // Get closure from adaptor (remapped value)
+        let closure_value = adaptor
+            .operand(0)
+            .expect("closure.func requires closure operand");
 
         // Get the result type (function type)
         let result_ty = op
@@ -363,16 +385,18 @@ impl RewritePattern for LowerClosureEnvPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: closure.env
-        let closure_env = match closure::Env::from_operation(db, *op) {
-            Ok(e) => e,
-            Err(_) => return RewriteResult::Unchanged,
-        };
+        if closure::Env::from_operation(db, *op).is_err() {
+            return RewriteResult::Unchanged;
+        }
 
         let location = op.location(db);
-        let closure_value = closure_env.closure(db);
+        // Get closure from adaptor (remapped value)
+        let closure_value = adaptor
+            .operand(0)
+            .expect("closure.env requires closure operand");
 
         // Get the result type (env type)
         let result_ty = op

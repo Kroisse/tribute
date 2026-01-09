@@ -23,7 +23,8 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use tribute_ir::dialect::{ability, tribute};
+use tribute_ir::dialect::{ability, tribute, tribute_rt};
+use trunk_ir::DialectType;
 use trunk_ir::dialect::{cont, core};
 #[cfg(test)]
 use trunk_ir::rewrite::RewriteContext;
@@ -40,7 +41,21 @@ pub fn lower_handlers<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> core::Module<'db> {
-    let applicator = PatternApplicator::new(TypeConverter::new())
+    let converter = TypeConverter::new()
+        .add_conversion(|db, ty| {
+            tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Nat::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Bool::from_type(db, ty).map(|_| core::I::<1>::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
+        });
+
+    let applicator = PatternApplicator::new(converter)
         .add_pattern(LowerPromptPattern::new())
         .add_pattern(LowerPerformPattern::new())
         .add_pattern(LowerResumePattern)
@@ -110,7 +125,7 @@ impl RewritePattern for LowerPromptPattern {
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        // Match: tribute.handle
+        // Match: tribute.handle (no operands, only body region)
         let handle_op = match tribute::Handle::from_operation(db, *op) {
             Ok(h) => h,
             Err(_) => return RewriteResult::Unchanged,
@@ -153,7 +168,7 @@ impl RewritePattern for LowerPerformPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: ability.perform
         let perform_op = match ability::Perform::from_operation(db, *op) {
@@ -162,9 +177,10 @@ impl RewritePattern for LowerPerformPattern {
         };
 
         // Get operation attributes
-        let _ability_ref = perform_op.ability_ref(db);
         let op_name = perform_op.op(db);
-        let _args = perform_op.args(db);
+
+        // Get args from adaptor (remapped values)
+        let args: Vec<_> = adaptor.operands().iter().copied().collect();
 
         // For now, we create a cont.shift with a placeholder tag.
         // In the full implementation, the tag would come from evidence lookup:
@@ -194,10 +210,10 @@ impl RewritePattern for LowerPerformPattern {
         let empty_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
         let handler_region = Region::new(db, location, IdVec::from(vec![empty_block]));
 
-        // Create cont.shift with typed helper function.
+        // Create cont.shift with remapped args
         // The op_idx attribute is set to 0 as a placeholder here; it will be resolved
         // during handler dispatch based on the order of handler arms.
-        let shift_op = cont::shift(db, location, vec![], result_ty, tag, 0, handler_region);
+        let shift_op = cont::shift(db, location, args, result_ty, tag, 0, handler_region);
 
         // Add the op_name attribute for handler dispatch
         // (not part of the dialect definition but needed for current implementation)
@@ -224,16 +240,16 @@ impl RewritePattern for LowerResumePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: ability.resume
-        let resume_op = match ability::Resume::from_operation(db, *op) {
-            Ok(r) => r,
-            Err(_) => return RewriteResult::Unchanged,
-        };
+        if ability::Resume::from_operation(db, *op).is_err() {
+            return RewriteResult::Unchanged;
+        }
 
-        let continuation = resume_op.continuation(db);
-        let value = resume_op.value(db);
+        // Get operands from adaptor (remapped values)
+        let continuation = adaptor.operand(0).expect("resume requires continuation");
+        let value = adaptor.operand(1).expect("resume requires value");
 
         let location = op.location(db);
         let result_ty = op
@@ -242,7 +258,7 @@ impl RewritePattern for LowerResumePattern {
             .copied()
             .unwrap_or_else(|| *core::Nil::new(db));
 
-        // Create cont.resume with the same operands
+        // Create cont.resume with remapped operands
         let new_op = cont::resume(db, location, continuation, value, result_ty);
 
         RewriteResult::Replace(new_op.as_operation())
@@ -258,18 +274,18 @@ impl RewritePattern for LowerAbortPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Match: ability.abort
-        let abort_op = match ability::Abort::from_operation(db, *op) {
-            Ok(a) => a,
-            Err(_) => return RewriteResult::Unchanged,
-        };
+        if ability::Abort::from_operation(db, *op).is_err() {
+            return RewriteResult::Unchanged;
+        }
 
-        let continuation = abort_op.continuation(db);
+        // Get operand from adaptor (remapped value)
+        let continuation = adaptor.operand(0).expect("abort requires continuation");
         let location = op.location(db);
 
-        // Create cont.drop with the continuation
+        // Create cont.drop with remapped continuation
         let new_op = cont::drop(db, location, continuation);
 
         RewriteResult::Replace(new_op.as_operation())
