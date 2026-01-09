@@ -436,13 +436,26 @@ impl<'db> WasmLowerer<'db> {
     /// The trampoline:
     /// 1. Calls the original main function (which returns Step)
     /// 2. Extracts the tag field from Step
-    /// 3. If tag == DONE: extracts and returns the value
+    /// 3. If tag == DONE: extracts and returns the value (with proper unboxing)
     /// 4. If tag != DONE: traps (unhandled effect)
     fn build_trampoline_main(&self, location: Location<'db>) -> Operation<'db> {
+        use tribute_ir::dialect::tribute_rt;
+
         let anyref_ty = wasm::Anyref::new(self.db).as_type();
         let i32_ty = core::I32::new(self.db).as_type();
         let nil_ty = core::Nil::new(self.db).as_type();
         let step_ty = step_marker_type(self.db);
+
+        // Determine the actual return type from the original main signature
+        let original_result_ty = self.main_exports.original_result_type.unwrap_or(anyref_ty);
+
+        // Check if we need to unbox Int/Nat to i32
+        let needs_int_unbox = tribute_rt::is_int(self.db, original_result_ty)
+            || tribute_rt::is_nat(self.db, original_result_ty)
+            || core::I32::from_type(self.db, original_result_ty).is_some();
+
+        // The trampoline's return type
+        let trampoline_result_ty = if needs_int_unbox { i32_ty } else { anyref_ty };
 
         let mut builder = BlockBuilder::new(self.db, location);
 
@@ -489,8 +502,22 @@ impl<'db> WasmLowerer<'db> {
         // Build the if-else construct
         let then_block = {
             let mut then_builder = BlockBuilder::new(self.db, location);
-            // Return the extracted value (anyref)
-            then_builder.op(wasm::r#return(self.db, location, Some(value_val)));
+
+            // Unbox Int/Nat to i32 if needed
+            let return_val = if needs_int_unbox {
+                // Cast anyref to i31ref and extract i32
+                let i31ref_ty = wasm::I31ref::new(self.db).as_type();
+                let cast = then_builder.op(wasm::ref_cast(
+                    self.db, location, value_val, i31ref_ty, i31ref_ty,
+                ));
+                let i31_val = cast.result(self.db);
+                let unbox = then_builder.op(wasm::i31_get_s(self.db, location, i31_val, i32_ty));
+                unbox.result(self.db)
+            } else {
+                value_val
+            };
+
+            then_builder.op(wasm::r#return(self.db, location, Some(return_val)));
             then_builder.build()
         };
 
@@ -521,7 +548,7 @@ impl<'db> WasmLowerer<'db> {
 
         let body_block = builder.build();
         let region = Region::new(self.db, location, idvec![body_block]);
-        let func_ty = core::Func::new(self.db, idvec![], anyref_ty).as_type();
+        let func_ty = core::Func::new(self.db, idvec![], trampoline_result_ty).as_type();
 
         wasm::func(
             self.db,
@@ -613,6 +640,15 @@ impl<'db> WasmLowerer<'db> {
         self.main_exports.saw_main = true;
         if let Some(func_ty) = core::Func::from_type(self.db, op.r#type(self.db)) {
             self.main_exports.main_result_type = Some(func_ty.result(self.db));
+        }
+
+        // Read original_result_type attribute if present (set by cont_to_wasm for effectful functions)
+        if let Some(Attribute::Type(original_ty)) = op
+            .as_operation()
+            .attributes(self.db)
+            .get(&Symbol::new("original_result_type"))
+        {
+            self.main_exports.original_result_type = Some(*original_ty);
         }
     }
 

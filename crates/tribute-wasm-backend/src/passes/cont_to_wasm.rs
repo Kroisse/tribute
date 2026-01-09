@@ -1074,6 +1074,11 @@ fn update_yielding_function_types<'db>(
                         let new_op = op
                             .modify(db)
                             .attr(Symbol::new("type"), Attribute::Type(new_func_ty))
+                            // Store original return type for trampoline unwrapping
+                            .attr(
+                                Symbol::new("original_result_type"),
+                                Attribute::Type(current_result),
+                            )
                             .build();
                         new_ops.push(new_op);
                         modified = true;
@@ -1852,38 +1857,46 @@ fn generate_inline_resume_function<'db>(
         let remapped_ops = resume_gen::remap_operations(db, continuation_ops, &mut value_mapping);
 
         // Post-process: wrap return values in Done Step
-        // Find return operations and wrap their operands
+        // Find return operations and wrap their operands (unless already Step)
         for remapped_op in remapped_ops {
             if remapped_op.dialect(db) == wasm::DIALECT_NAME()
                 && remapped_op.name(db) == Symbol::new("return")
             {
-                // This is a wasm.return - wrap its operand in Done Step
+                // This is a wasm.return - wrap its operand in Done Step if not already Step
                 if let Some(return_val) = remapped_op.operands(db).first().copied() {
-                    // Create Done tag (0)
-                    let done_tag = wasm::i32_const(db, location, i32_ty, cont_types::STEP_TAG_DONE);
-                    let done_tag_val = done_tag.as_operation().result(db, 0);
-                    ops.push(done_tag.as_operation());
+                    // Check if the return value is already a Step to prevent double-wrapping
+                    if is_value_already_step(db, return_val) {
+                        // Already a Step - just return it directly
+                        ops.push(wasm::r#return(db, location, Some(return_val)).as_operation());
+                    } else {
+                        // Not a Step - wrap in Done Step
+                        // Create Done tag (0)
+                        let done_tag =
+                            wasm::i32_const(db, location, i32_ty, cont_types::STEP_TAG_DONE);
+                        let done_tag_val = done_tag.as_operation().result(db, 0);
+                        ops.push(done_tag.as_operation());
 
-                    // Create zero for unused prompt and op_idx fields
-                    let zero_prompt_op = wasm::i32_const(db, location, i32_ty, 0);
-                    let zero_prompt = zero_prompt_op.as_operation().result(db, 0);
-                    ops.push(zero_prompt_op.as_operation());
-                    let zero_op_idx_op = wasm::i32_const(db, location, i32_ty, 0);
-                    let zero_op_idx = zero_op_idx_op.as_operation().result(db, 0);
-                    ops.push(zero_op_idx_op.as_operation());
+                        // Create zero for unused prompt and op_idx fields
+                        let zero_prompt_op = wasm::i32_const(db, location, i32_ty, 0);
+                        let zero_prompt = zero_prompt_op.as_operation().result(db, 0);
+                        ops.push(zero_prompt_op.as_operation());
+                        let zero_op_idx_op = wasm::i32_const(db, location, i32_ty, 0);
+                        let zero_op_idx = zero_op_idx_op.as_operation().result(db, 0);
+                        ops.push(zero_op_idx_op.as_operation());
 
-                    // Create Step struct: (tag=0, value=return_val, prompt=0, op_idx=0)
-                    let step = wasm::struct_new(
-                        db,
-                        location,
-                        IdVec::from(vec![done_tag_val, return_val, zero_prompt, zero_op_idx]),
-                        step_ty,
-                        crate::gc_types::STEP_IDX,
-                    );
-                    let step_val = step.as_operation().result(db, 0);
-                    ops.push(step.as_operation());
+                        // Create Step struct: (tag=0, value=return_val, prompt=0, op_idx=0)
+                        let step = wasm::struct_new(
+                            db,
+                            location,
+                            IdVec::from(vec![done_tag_val, return_val, zero_prompt, zero_op_idx]),
+                            step_ty,
+                            crate::gc_types::STEP_IDX,
+                        );
+                        let step_val = step.as_operation().result(db, 0);
+                        ops.push(step.as_operation());
 
-                    ops.push(wasm::r#return(db, location, Some(step_val)).as_operation());
+                        ops.push(wasm::r#return(db, location, Some(step_val)).as_operation());
+                    }
                 } else {
                     // No operand - create nil Step
                     let done_tag = wasm::i32_const(db, location, i32_ty, cont_types::STEP_TAG_DONE);
@@ -2447,6 +2460,36 @@ fn get_body_result_value<'db>(
 /// Check if a type is nil type
 fn is_nil_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == core::NIL()
+}
+
+/// Check if a value is already a Step struct.
+///
+/// This is used to prevent double-wrapping in resume functions.
+/// When the continuation body already returns a Step (e.g., from another
+/// effectful call or handler dispatch), we should not wrap it again.
+fn is_value_already_step<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> bool {
+    let def = value.def(db);
+    let ValueDef::OpResult(op) = def else {
+        return false;
+    };
+
+    // Check if it's a struct.new operation with STEP_IDX
+    if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("struct_new") {
+        // Check if the type_idx attribute matches STEP_IDX
+        if let Some(Attribute::IntBits(type_idx)) = op.attributes(db).get(&Symbol::new("type_idx"))
+        {
+            return *type_idx == crate::gc_types::STEP_IDX as u64;
+        }
+    }
+
+    // Also check the result type - if it's the Step marker type
+    if let Some(result_ty) = op.results(db).first() {
+        return result_ty.dialect(db) == wasm::DIALECT_NAME()
+            && (result_ty.name(db) == Symbol::new("step")
+                || result_ty.name(db) == Symbol::new("yield_result"));
+    }
+
+    false
 }
 
 /// Append operations to the last block of a region.
