@@ -1759,15 +1759,14 @@ fn collect_call_indirect_types<'db>(
                         let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty)
                             .is_some()
                             || core::Func::from_type(db, func_ret_ty).is_some();
-                        let func_returns_yield_result = func_ret_ty.dialect(db)
-                            == wasm::DIALECT_NAME()
-                            && func_ret_ty.name(db) == Symbol::new("yield_result");
+                        // Check for Step type (new name) or yield_result (legacy name)
+                        let func_returns_step = is_step_type(db, func_ret_ty);
                         debug!(
-                            "collect_call_indirect_types: is_anyref={}, is_type_var={}, func_returns_funcref={}, func_returns_yield_result={}",
+                            "collect_call_indirect_types: is_anyref={}, is_type_var={}, func_returns_funcref={}, func_returns_step={}",
                             is_anyref_result,
                             is_type_var_result,
                             func_returns_funcref,
-                            func_returns_yield_result
+                            func_returns_step
                         );
                         if is_polymorphic_result && func_returns_funcref {
                             debug!(
@@ -1775,13 +1774,13 @@ fn collect_call_indirect_types<'db>(
                                  for enclosing function that returns funcref"
                             );
                             result_ty = funcref_ty;
-                        } else if is_polymorphic_result && func_returns_yield_result {
-                            // When enclosing function returns YieldResult (for yield bubbling),
-                            // upgrade polymorphic call_indirect results to YieldResult too.
+                        } else if is_polymorphic_result && func_returns_step {
+                            // When enclosing function returns Step (for trampoline effect system),
+                            // upgrade polymorphic call_indirect results to Step too.
                             // This ensures closure/continuation calls return the right type.
                             debug!(
-                                "collect_call_indirect_types: upgrading polymorphic result to yield_result \
-                                 for enclosing function that returns YieldResult"
+                                "collect_call_indirect_types: upgrading polymorphic result to Step \
+                                 for enclosing function that returns Step"
                             );
                             result_ty = crate::gc_types::step_marker_type(db);
                         }
@@ -3281,16 +3280,16 @@ fn emit_op<'db>(
             let is_polymorphic_result = is_anyref_result || is_type_var_result;
             let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty).is_some()
                 || core::Func::from_type(db, func_ret_ty).is_some();
-            let func_returns_yield_result = func_ret_ty.dialect(db) == wasm::DIALECT_NAME()
-                && func_ret_ty.name(db) == Symbol::new("yield_result");
+            // Check for Step type (new name) or yield_result (legacy name)
+            let func_returns_step = is_step_type(db, func_ret_ty);
             if is_polymorphic_result && func_returns_funcref {
                 debug!(
                     "call_indirect emit: upgrading polymorphic result to funcref for enclosing function"
                 );
                 result_ty = funcref_ty;
-            } else if is_polymorphic_result && func_returns_yield_result {
+            } else if is_polymorphic_result && func_returns_step {
                 debug!(
-                    "call_indirect emit: upgrading polymorphic result to yield_result for enclosing function"
+                    "call_indirect emit: upgrading polymorphic result to Step for enclosing function"
                 );
                 result_ty = crate::gc_types::step_marker_type(db);
             }

@@ -1182,12 +1182,15 @@ fn function_body_can_yield<'db>(db: &'db dyn salsa::Database, region: &Region<'d
                 && let Some(operand) = op.operands(db).first()
                 && let ValueDef::OpResult(def_op) = operand.def(db)
             {
-                // Check if it's a YieldResult struct_new with YIELDED tag
+                // Check if it's a Step struct_new with Shift tag
+                // Step struct has 4 fields: (tag, value, prompt, op_idx)
                 if def_op.dialect(db) == wasm::DIALECT_NAME()
                     && def_op.name(db) == Symbol::new("struct_new")
                 {
                     let operands = def_op.operands(db);
-                    if operands.len() == 2
+                    // Check for 4-field Step struct (current format)
+                    // or 2-field YieldResult struct (legacy format)
+                    if (operands.len() == 4 || operands.len() == 2)
                         && let Some(tag_val) = operands.first()
                         && let ValueDef::OpResult(tag_op) = tag_val.def(db)
                         && tag_op.dialect(db) == wasm::DIALECT_NAME()
