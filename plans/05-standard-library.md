@@ -81,7 +81,7 @@ ability Abort {
 
 // Handler converts to Option
 fn maybe(f: fn() ->{Abort, e} a) ->{e} Option(a) {
-    case handle f() {
+    handle f() {
         { value } -> Some(value)
         { Abort::abort() -> _ } -> None
     }
@@ -109,7 +109,7 @@ ability Throw(e) {
 
 // Handler converts to Result
 fn catch(f: fn() ->{Throw(e), r} a) ->{r} Result(a, e) {
-    case handle f() {
+    handle f() {
         { value } -> Ok(value)
         { Throw::throw(e) -> _ } -> Error(e)
     }
@@ -128,7 +128,7 @@ ability Stream(a) {
 // Handler collects to List (uses push_back, O(1) amortized for RRB tree)
 fn collect(f: fn() ->{Stream(a), e} Nil) ->{e} List(a) {
     fn go(acc: List(a)) ->{e} List(a) {
-        case handle f() {
+        handle f() {
             { Nil } -> acc
             { Stream::emit(x) -> k } -> go(acc.push_back(x))
         }
