@@ -139,12 +139,6 @@ pub mod cont_types {
         crate::gc_types::step_marker_type(db)
     }
 
-    /// Legacy alias for step_type (for backward compatibility during migration)
-    #[deprecated(note = "Use step_type instead")]
-    pub fn yield_result_type(db: &dyn salsa::Database) -> Type<'_> {
-        step_type(db)
-    }
-
     /// Tag value for Done (successful completion).
     pub const STEP_TAG_DONE: i32 = crate::gc_types::STEP_TAG_DONE;
 
@@ -394,9 +388,10 @@ pub mod resume_gen {
                         || tribute_rt::is_int(db, value_ty)
                         || tribute_rt::is_nat(db, value_ty))
                 {
-                    // Box the primitive value before returning
+                    // Box the primitive value to anyref before returning
+                    // Resume functions return anyref, so we need consistent anyref type
                     let mut boxing_ops = Vec::new();
-                    let boxed = super::box_value_if_needed(
+                    let boxed = super::box_value_to_anyref(
                         db,
                         op.location(db),
                         return_value,
@@ -1601,68 +1596,10 @@ fn collect_uses_in_region_recursive<'db>(
     }
 }
 
-/// Generate boxing operations if the value type is a primitive.
-///
-/// When passing a primitive value to a function expecting `anyref`, we need to box:
-/// - Int (i32): int → intref (via tribute_rt.box_int -> wasm.ref_i31)
-/// - Nat (i32): nat → intref (via tribute_rt.box_int -> wasm.ref_i31)
-/// - core.i32: same as Int (lowered form)
-/// - I64: i64 → i32 → intref (truncate and box, legacy path)
-///
-/// # Limitations
-///
-/// Currently only Int/Nat (and their lowered form core.i32) are supported.
-/// Float and Bool are defined in `tribute_rt` dialect but not yet implemented:
-/// - Float (f64): Would require heap allocation in WasmGC (no f64ref exists)
-/// - Bool: Could use i31ref but needs separate box_bool/unbox_bool ops
-///
-/// Returns the boxed value (or the original value if no boxing needed).
-fn box_value_if_needed<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    value: Value<'db>,
-    value_ty: Type<'db>,
-    ops: &mut Vec<Operation<'db>>,
-) -> Value<'db> {
-    // Use i31ref (the lowered type) instead of tribute_rt.intref
-    let i31ref_ty = wasm::I31ref::new(db).as_type();
-
-    if tribute_rt::is_int(db, value_ty)
-        || tribute_rt::is_nat(db, value_ty)
-        || core::I32::from_type(db, value_ty).is_some()
-    {
-        // Box Int/Nat/I32: use tribute_rt.box_int to convert to i31ref
-        // (tribute_rt.box_int will be lowered to wasm.ref_i31)
-        let box_int = tribute_rt::box_int(db, location, value, i31ref_ty);
-        ops.push(box_int.as_operation());
-        box_int.result(db)
-    } else if core::I64::from_type(db, value_ty).is_some() {
-        // Box I64: i64 → i32 → i31ref (truncate and wrap)
-        // Note: This is a legacy path - tribute uses 31-bit Int/Nat now
-        let i32_ty = core::I32::new(db).as_type();
-        let wrap = wasm::i32_wrap_i64(db, location, value, i32_ty);
-        ops.push(wrap.as_operation());
-
-        let box_int = tribute_rt::box_int(db, location, wrap.result(db), i31ref_ty);
-        ops.push(box_int.as_operation());
-
-        box_int.result(db)
-    } else if tribute_rt::is_float(db, value_ty) || tribute_rt::is_bool(db, value_ty) {
-        // TODO: Implement float/bool boxing
-        // Float requires heap-allocated boxing (no f64ref in WasmGC)
-        // Bool could reuse i31ref mechanism
-        panic!("box_value_if_needed: float/bool boxing not yet implemented for continuations");
-    } else {
-        // No boxing needed for reference types
-        value
-    }
-}
-
 /// Box a primitive value and return it as anyref type.
 ///
-/// Similar to `box_value_if_needed` but always returns anyref type.
-/// This is needed for continuation struct fields where all values must be anyref
-/// to ensure consistent struct types across different shift points.
+/// This is needed for continuation struct fields and Step.value where all values
+/// must be anyref to ensure consistent struct types across different shift points.
 fn box_value_to_anyref<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
@@ -1876,6 +1813,19 @@ fn generate_inline_resume_function<'db>(
                         let done_tag_val = done_tag.as_operation().result(db, 0);
                         ops.push(done_tag.as_operation());
 
+                        // Box the return value to anyref for Step.value field
+                        let return_val_ty = match return_val.def(db) {
+                            ValueDef::OpResult(def_op) => {
+                                def_op.results(db).get(return_val.index(db)).copied()
+                            }
+                            ValueDef::BlockArg(_) => None,
+                        };
+                        let boxed_return_val = if let Some(ty) = return_val_ty {
+                            box_value_to_anyref(db, location, return_val, ty, &mut ops)
+                        } else {
+                            return_val
+                        };
+
                         // Create zero for unused prompt and op_idx fields
                         let zero_prompt_op = wasm::i32_const(db, location, i32_ty, 0);
                         let zero_prompt = zero_prompt_op.as_operation().result(db, 0);
@@ -1884,11 +1834,16 @@ fn generate_inline_resume_function<'db>(
                         let zero_op_idx = zero_op_idx_op.as_operation().result(db, 0);
                         ops.push(zero_op_idx_op.as_operation());
 
-                        // Create Step struct: (tag=0, value=return_val, prompt=0, op_idx=0)
+                        // Create Step struct: (tag=0, value=boxed_return_val, prompt=0, op_idx=0)
                         let step = wasm::struct_new(
                             db,
                             location,
-                            IdVec::from(vec![done_tag_val, return_val, zero_prompt, zero_op_idx]),
+                            IdVec::from(vec![
+                                done_tag_val,
+                                boxed_return_val,
+                                zero_prompt,
+                                zero_op_idx,
+                            ]),
                             step_ty,
                             crate::gc_types::STEP_IDX,
                         );
@@ -2485,8 +2440,7 @@ fn is_value_already_step<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -
     // Also check the result type - if it's the Step marker type
     if let Some(result_ty) = op.results(db).first() {
         return result_ty.dialect(db) == wasm::DIALECT_NAME()
-            && (result_ty.name(db) == Symbol::new("step")
-                || result_ty.name(db) == Symbol::new("yield_result"));
+            && result_ty.name(db) == Symbol::new("step");
     }
 
     false
@@ -2928,12 +2882,13 @@ impl RewritePattern for ResumePattern {
 
         // 5. Box the value if it's a primitive type
         // Resume wrapper expects (state: anyref, resume_value: anyref), so primitives need boxing
+        // Use box_value_to_anyref for consistent anyref type in struct fields
         let value_ty = match value.def(db) {
             ValueDef::OpResult(def_op) => def_op.results(db).get(value.index(db)).copied(),
             ValueDef::BlockArg(_) => None,
         };
         let boxed_value = if let Some(ty) = value_ty {
-            box_value_if_needed(db, location, value, ty, &mut ops)
+            box_value_to_anyref(db, location, value, ty, &mut ops)
         } else {
             value
         };
@@ -3329,7 +3284,7 @@ mod tests {
         // 3. wasm.ref_cast (cast continuation to structref for struct_get)
         // 4. wasm.struct_get (extract resume_fn from continuation)
         // 5. wasm.struct_get (extract state from continuation)
-        // 6. tribute_rt.box_int (box the i32 value, since wrapper needs anyref)
+        // 6. wasm.ref_i31 (box the i32 value to anyref for wrapper)
         // 7. wasm.struct_new (create wrapper struct with state + boxed_value)
         // 8. wasm.call_indirect (invoke resume_fn with wrapper)
         // First op: i32_const for resetting yield_state
@@ -3340,8 +3295,8 @@ mod tests {
         assert!(op_names.contains(&"wasm.ref_cast".to_string()));
         // Should contain struct_get operations
         assert!(op_names.contains(&"wasm.struct_get".to_string()));
-        // Should contain boxing operation for the i32 value
-        assert!(op_names.contains(&"tribute_rt.box_int".to_string()));
+        // Should contain ref_i31 for boxing i32 to anyref
+        assert!(op_names.contains(&"wasm.ref_i31".to_string()));
         // Should contain struct_new for wrapper
         assert!(op_names.contains(&"wasm.struct_new".to_string()));
         // Total: 8 operations (added ref_cast for continuation casting)

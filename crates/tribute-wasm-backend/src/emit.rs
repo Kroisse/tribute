@@ -1759,7 +1759,7 @@ fn collect_call_indirect_types<'db>(
                         let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty)
                             .is_some()
                             || core::Func::from_type(db, func_ret_ty).is_some();
-                        // Check for Step type (new name) or yield_result (legacy name)
+                        // Check for Step type (trampoline-based effect system)
                         let func_returns_step = is_step_type(db, func_ret_ty);
                         debug!(
                             "collect_call_indirect_types: is_anyref={}, is_type_var={}, func_returns_funcref={}, func_returns_step={}",
@@ -2713,11 +2713,8 @@ fn infer_region_effective_type<'db>(
 }
 
 /// Check if a type is the Step marker type.
-/// Also checks "yield_result" for backward compatibility.
 fn is_step_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    let name = ty.name(db);
-    ty.dialect(db) == wasm::DIALECT_NAME()
-        && (name == Symbol::new("step") || name == Symbol::new("yield_result"))
+    ty.dialect(db) == wasm::DIALECT_NAME() && ty.name(db) == Symbol::new("step")
 }
 
 /// Upgrade a polymorphic type to Step if the function returns Step.
@@ -3280,7 +3277,7 @@ fn emit_op<'db>(
             let is_polymorphic_result = is_anyref_result || is_type_var_result;
             let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty).is_some()
                 || core::Func::from_type(db, func_ret_ty).is_some();
-            // Check for Step type (new name) or yield_result (legacy name)
+            // Check for Step type (trampoline-based effect system)
             let func_returns_step = is_step_type(db, func_ret_ty);
             if is_polymorphic_result && func_returns_funcref {
                 debug!(
@@ -4509,9 +4506,8 @@ fn type_to_valtype<'db>(
                     ty: AbstractHeapType::I31,
                 },
             }))
-        } else if name == Symbol::new("step") || name == Symbol::new("yield_result") {
+        } else if name == Symbol::new("step") {
             // Step is a builtin GC struct type for trampoline-based effect system
-            // Also handles "yield_result" for backward compatibility
             // Always uses fixed type index STEP_IDX (3)
             Ok(ValType::Ref(RefType {
                 nullable: true,

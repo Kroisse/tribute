@@ -449,13 +449,21 @@ impl<'db> WasmLowerer<'db> {
         // Determine the actual return type from the original main signature
         let original_result_ty = self.main_exports.original_result_type.unwrap_or(anyref_ty);
 
-        // Check if we need to unbox Int/Nat to i32
-        let needs_int_unbox = tribute_rt::is_int(self.db, original_result_ty)
-            || tribute_rt::is_nat(self.db, original_result_ty)
+        // Check for special return types
+        let returns_nil = core::Nil::from_type(self.db, original_result_ty).is_some();
+        let is_nat = tribute_rt::is_nat(self.db, original_result_ty);
+        let needs_i32_unbox = tribute_rt::is_int(self.db, original_result_ty)
+            || is_nat
             || core::I32::from_type(self.db, original_result_ty).is_some();
 
         // The trampoline's return type
-        let trampoline_result_ty = if needs_int_unbox { i32_ty } else { anyref_ty };
+        let trampoline_result_ty = if returns_nil {
+            nil_ty
+        } else if needs_i32_unbox {
+            i32_ty
+        } else {
+            anyref_ty
+        };
 
         let mut builder = BlockBuilder::new(self.db, location);
 
@@ -503,21 +511,33 @@ impl<'db> WasmLowerer<'db> {
         let then_block = {
             let mut then_builder = BlockBuilder::new(self.db, location);
 
-            // Unbox Int/Nat to i32 if needed
-            let return_val = if needs_int_unbox {
+            if returns_nil {
+                // Nil return - no value to return
+                then_builder.op(wasm::r#return(self.db, location, None));
+            } else if needs_i32_unbox {
+                // Unbox Int/Nat to i32
                 // Cast anyref to i31ref and extract i32
                 let i31ref_ty = wasm::I31ref::new(self.db).as_type();
                 let cast = then_builder.op(wasm::ref_cast(
                     self.db, location, value_val, i31ref_ty, i31ref_ty,
                 ));
                 let i31_val = cast.result(self.db);
-                let unbox = then_builder.op(wasm::i31_get_s(self.db, location, i31_val, i32_ty));
-                unbox.result(self.db)
+                // Use unsigned extraction for Nat, signed for Int
+                let return_val = if is_nat {
+                    let unbox =
+                        then_builder.op(wasm::i31_get_u(self.db, location, i31_val, i32_ty));
+                    unbox.result(self.db)
+                } else {
+                    let unbox =
+                        then_builder.op(wasm::i31_get_s(self.db, location, i31_val, i32_ty));
+                    unbox.result(self.db)
+                };
+                then_builder.op(wasm::r#return(self.db, location, Some(return_val)));
             } else {
-                value_val
-            };
+                // Return anyref directly
+                then_builder.op(wasm::r#return(self.db, location, Some(value_val)));
+            }
 
-            then_builder.op(wasm::r#return(self.db, location, Some(return_val)));
             then_builder.build()
         };
 

@@ -689,63 +689,21 @@ pub fn register_step_type<'db>(
 ) -> u32 {
     let marker_ty = step_marker_type(db);
 
-    // Check if already registered
-    if let Some(idx) = registry.get_type_idx(marker_ty) {
-        return idx;
-    }
-
-    // Create Step struct type: (i32, anyref, i32, i32)
-    let def = GcTypeDef::Struct(vec![
-        FieldType {
-            element_type: StorageType::Val(ValType::I32),
-            mutable: false,
-        },
-        FieldType {
-            element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-            mutable: false,
-        },
-        FieldType {
-            element_type: StorageType::Val(ValType::I32),
-            mutable: false,
-        },
-        FieldType {
-            element_type: StorageType::Val(ValType::I32),
-            mutable: false,
-        },
-    ]);
-
-    registry.register_type(marker_ty, def)
+    // Step is a builtin type at STEP_IDX (defined in builtin_types()).
+    // Just record the marker → builtin index mapping.
+    registry.type_indices.insert(marker_ty, STEP_IDX);
+    STEP_IDX
 }
 
-/// Get the Step type index if already registered.
+/// Get the Step type index.
+///
+/// Step is always a builtin type at STEP_IDX, so this always returns Some(STEP_IDX).
 pub fn get_step_type_idx<'db>(
-    db: &'db dyn salsa::Database,
-    registry: &GcTypeRegistry<'db>,
+    _db: &'db dyn salsa::Database,
+    _registry: &GcTypeRegistry<'db>,
 ) -> Option<u32> {
-    let marker_ty = step_marker_type(db);
-    registry.get_type_idx(marker_ty)
+    Some(STEP_IDX)
 }
-
-// Legacy aliases for backward compatibility during migration
-// TODO: Remove these after all usages are updated
-
-/// Legacy alias for STEP_IDX
-#[deprecated(note = "Use STEP_IDX instead")]
-pub const YIELD_RESULT_IDX: u32 = STEP_IDX;
-
-/// Legacy alias for step_marker_type
-#[deprecated(note = "Use step_marker_type instead")]
-pub fn yield_result_marker_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
-    step_marker_type(db)
-}
-
-/// Legacy alias for STEP_TAG_DONE
-#[deprecated(note = "Use STEP_TAG_DONE instead")]
-pub const YIELD_RESULT_TAG_DONE: i32 = STEP_TAG_DONE;
-
-/// Legacy alias for STEP_TAG_SHIFT
-#[deprecated(note = "Use STEP_TAG_SHIFT instead")]
-pub const YIELD_RESULT_TAG_YIELDED: i32 = STEP_TAG_SHIFT;
 
 // ============================================================================
 // Continuation Type Collection
@@ -1165,42 +1123,20 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let mut registry = GcTypeRegistry::new();
 
+        // Step is a builtin type at STEP_IDX
         let idx1 = register_step_type(&db, &mut registry);
-        assert_eq!(idx1, FIRST_USER_TYPE_IDX);
+        assert_eq!(idx1, STEP_IDX);
 
         // Calling again should return the same index
         let idx2 = register_step_type(&db, &mut registry);
-        assert_eq!(idx2, FIRST_USER_TYPE_IDX);
+        assert_eq!(idx2, STEP_IDX);
 
-        // Verify Step type structure
-        let types = registry.user_types();
-        assert_eq!(types.len(), 1);
-        match &types[0] {
-            GcTypeDef::Struct(fields) => {
-                assert_eq!(fields.len(), STEP_FIELD_COUNT);
-                // Field 0: i32 (tag)
-                assert!(matches!(
-                    fields[0].element_type,
-                    StorageType::Val(ValType::I32)
-                ));
-                // Field 1: anyref (value or continuation)
-                assert!(matches!(
-                    fields[1].element_type,
-                    StorageType::Val(ValType::Ref(RefType::ANYREF))
-                ));
-                // Field 2: i32 (prompt)
-                assert!(matches!(
-                    fields[2].element_type,
-                    StorageType::Val(ValType::I32)
-                ));
-                // Field 3: i32 (op_idx)
-                assert!(matches!(
-                    fields[3].element_type,
-                    StorageType::Val(ValType::I32)
-                ));
-            }
-            _ => panic!("Expected struct type for Step"),
-        }
+        // Step is a builtin, so it shouldn't appear in user_types()
+        assert_eq!(registry.user_types().len(), 0);
+
+        // Verify the marker type is mapped to STEP_IDX
+        let marker_ty = step_marker_type(&db);
+        assert_eq!(registry.get_type_idx(marker_ty), Some(STEP_IDX));
     }
 
     #[test]
@@ -1209,40 +1145,27 @@ mod tests {
         let mut registry = GcTypeRegistry::new();
 
         // Step and closure have different structures
-        // Step: (i32, anyref, i32, i32)
-        // Closure: (funcref, anyref)
-        // They should get different type indices because Step uses
-        // a dedicated marker type instead of the structref placeholder.
+        // Step: (i32, anyref, i32, i32) - builtin at STEP_IDX
+        // Closure: (funcref, anyref) - user type at FIRST_USER_TYPE_IDX
+        // They have different type indices.
 
-        // Register Step first
+        // Register Step first (builtin at STEP_IDX)
         let step_idx = register_step_type(&db, &mut registry);
-        assert_eq!(step_idx, FIRST_USER_TYPE_IDX);
+        assert_eq!(step_idx, STEP_IDX);
 
-        // Register closure - should get a different index
+        // Register closure - first user type
         let closure_idx = register_closure_type(&db, &mut registry);
-        assert_eq!(closure_idx, FIRST_USER_TYPE_IDX + 1);
+        assert_eq!(closure_idx, FIRST_USER_TYPE_IDX);
 
         // Verify they are different
         assert_ne!(step_idx, closure_idx);
 
-        // Verify Step structure
+        // Only closure should be in user_types (Step is builtin)
         let types = registry.user_types();
-        assert_eq!(types.len(), 2);
-
-        // Step: (i32, anyref, i32, i32)
-        match &types[0] {
-            GcTypeDef::Struct(fields) => {
-                assert_eq!(fields.len(), 4);
-                assert!(matches!(
-                    fields[0].element_type,
-                    StorageType::Val(ValType::I32)
-                ));
-            }
-            _ => panic!("Expected struct type for Step"),
-        }
+        assert_eq!(types.len(), 1);
 
         // Closure: (funcref, anyref)
-        match &types[1] {
+        match &types[0] {
             GcTypeDef::Struct(fields) => {
                 assert!(matches!(
                     fields[0].element_type,
@@ -1256,13 +1179,9 @@ mod tests {
     #[test]
     fn test_get_step_type_idx() {
         let db = salsa::DatabaseImpl::default();
-        let mut registry = GcTypeRegistry::new();
+        let registry = GcTypeRegistry::new();
 
-        // Not registered yet
-        assert_eq!(get_step_type_idx(&db, &registry), None);
-
-        // Register and verify
-        let idx = register_step_type(&db, &mut registry);
-        assert_eq!(get_step_type_idx(&db, &registry), Some(idx));
+        // Step is a builtin, so get_step_type_idx always returns Some(STEP_IDX)
+        assert_eq!(get_step_type_idx(&db, &registry), Some(STEP_IDX));
     }
 }
