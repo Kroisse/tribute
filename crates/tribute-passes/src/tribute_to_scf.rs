@@ -298,9 +298,9 @@ impl<'db> CaseLowerer<'db> {
         ops
     }
 
-    /// Lower handler case expressions to `cont.handler_dispatch`.
+    /// Lower handler expressions to `cont.handler_dispatch`.
     ///
-    /// Handler cases come from `case handle expr { ... }` and contain:
+    /// Handler arms come from `handle expr { ... }` and contain:
     /// - `{ result }` (HandlerDone) - matches normal completion
     /// - `{ Op(args) -> k }` (HandlerSuspend) - matches effect operations
     ///

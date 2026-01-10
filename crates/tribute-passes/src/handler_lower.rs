@@ -313,9 +313,14 @@ mod tests {
         let body_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
         let body = Region::new(db, location, idvec![body_block]);
 
+        // Create empty arms region (fused handler syntax)
+        let arms_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
+        let arms = Region::new(db, location, idvec![arms_block]);
+
         let handle_op = Operation::of_name(db, location, "tribute.handle")
             .result(*core::Nil::new(db))
             .region(body)
+            .region(arms)
             .build();
 
         // Apply the pattern

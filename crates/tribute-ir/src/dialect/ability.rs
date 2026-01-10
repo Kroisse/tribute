@@ -11,13 +11,12 @@
 //! - `ability.resume`: resume a captured continuation
 //! - `ability.abort`: discard a continuation
 //!
-//! Handler pattern matching is done via `tribute.case` with `tribute.handle`:
+//! Handler pattern matching uses fused `tribute.handle`:
 //!
 //! ```text
-//! // Source: case handle expr { ... }
+//! // Source: handle expr { ... }
 //! // Lowers to:
-//! %request = tribute.handle { expr }
-//! tribute.case(%request) {
+//! tribute.handle { expr } {
 //!     tribute.arm("{result}") { ... }
 //!     tribute.arm("{State::get() -> k}") { ... }
 //! }

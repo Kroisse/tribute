@@ -144,7 +144,7 @@ fn get_state() ->{State(Int)} Int {
 }
 
 fn run() -> Int {
-    case handle get_state() {
+    handle get_state() {
         { result } -> result
         { State::get() -> k } -> 42
         { State::set(v) -> k } -> 0
@@ -198,7 +198,7 @@ fn counter() ->{State(Int)} Int {
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
-    case handle comp() {
+    handle comp() {
         { result } -> result
         { State::get() -> k } -> run_state(fn() { k(init) }, init)
         { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
@@ -520,7 +520,7 @@ fn get_state() ->{State(Int)} Int {
 }
 
 fn main() -> Int {
-    case handle get_state() {
+    handle get_state() {
         { result } -> result
         { State::get() -> k } -> 42
         { State::set(v) -> k } -> 0
@@ -546,7 +546,7 @@ fn set_then_get() ->{State(Int)} Int {
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
-    case handle comp() {
+    handle comp() {
         { result } -> result
         { State::get() -> k } -> run_state(fn() { k(init) }, init)
         { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
@@ -582,7 +582,7 @@ fn double_increment() ->{State(Int)} Int {
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
-    case handle comp() {
+    handle comp() {
         { result } -> result
         { State::get() -> k } -> run_state(fn() { k(init) }, init)
         { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
@@ -611,7 +611,7 @@ fn no_effects() ->{State(Int)} Int {
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
-    case handle comp() {
+    handle comp() {
         { result } -> result
         { State::get() -> k } -> run_state(fn() { k(init) }, init)
         { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)

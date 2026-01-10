@@ -10,9 +10,9 @@ fn counter() ->{State(Int)} Int {
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
-    case handle comp() {
-        { result } -> result
-        { State::get() -> k } -> run_state(fn() { k(init) }, init)
+    handle comp() {
+        { result } -> result,
+        { State::get() -> k } -> run_state(fn() { k(init) }, init),
         { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
     }
 }
