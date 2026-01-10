@@ -710,15 +710,16 @@ pub fn get_step_type_idx<'db>(
 // ============================================================================
 
 /// Continuation struct field count.
-/// Continuation structs always have 3 fields: (resume_fn: funcref, state: anyref, tag: i32)
-pub const CONT_FIELD_COUNT: usize = 3;
+/// Continuation structs have 4 fields: (resume_fn, state, tag, shift_value)
+pub const CONT_FIELD_COUNT: usize = 4;
 
 /// Register the continuation struct type in the registry.
 ///
-/// Continuations are represented as WasmGC structs with three fields:
+/// Continuations are represented as WasmGC structs with four fields:
 /// - Field 0: resume function (funcref) - function to call when resuming
 /// - Field 1: state (anyref) - captured local state struct
 /// - Field 2: tag (i32) - prompt tag this continuation belongs to
+/// - Field 3: shift_value (anyref) - value yielded by shift (for handler)
 ///
 /// This function uses the structref placeholder with CONT_FIELD_COUNT
 /// to ensure all continuation operations use the same type index.
@@ -733,7 +734,7 @@ pub fn register_continuation_type<'db>(
         return idx;
     }
 
-    // Create continuation struct type: (funcref, anyref, i32)
+    // Create continuation struct type: (funcref, anyref, i32, anyref)
     let def = GcTypeDef::Struct(vec![
         FieldType {
             element_type: StorageType::Val(ValType::Ref(RefType::FUNCREF)),
@@ -745,6 +746,10 @@ pub fn register_continuation_type<'db>(
         },
         FieldType {
             element_type: StorageType::Val(ValType::I32),
+            mutable: false,
+        },
+        FieldType {
+            element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
             mutable: false,
         },
     ]);
@@ -1045,20 +1050,25 @@ mod tests {
         match &types[0] {
             GcTypeDef::Struct(fields) => {
                 assert_eq!(fields.len(), CONT_FIELD_COUNT);
-                // Field 0: funcref
+                // Field 0: funcref (resume function)
                 assert!(matches!(
                     fields[0].element_type,
                     StorageType::Val(ValType::Ref(RefType::FUNCREF))
                 ));
-                // Field 1: anyref
+                // Field 1: anyref (state)
                 assert!(matches!(
                     fields[1].element_type,
                     StorageType::Val(ValType::Ref(RefType::ANYREF))
                 ));
-                // Field 2: i32
+                // Field 2: i32 (tag)
                 assert!(matches!(
                     fields[2].element_type,
                     StorageType::Val(ValType::I32)
+                ));
+                // Field 3: anyref (shift_value)
+                assert!(matches!(
+                    fields[3].element_type,
+                    StorageType::Val(ValType::Ref(RefType::ANYREF))
                 ));
             }
             _ => panic!("Expected struct type for continuation"),
@@ -1098,7 +1108,7 @@ mod tests {
         let closure_idx = register_closure_type(&db, &mut registry);
         assert_eq!(closure_idx, FIRST_USER_TYPE_IDX);
 
-        // Register continuation (3 fields) - different field count, different index
+        // Register continuation (4 fields) - different field count, different index
         let cont_idx = register_continuation_type(&db, &mut registry);
         assert_eq!(cont_idx, FIRST_USER_TYPE_IDX + 1);
 
@@ -1107,13 +1117,13 @@ mod tests {
         let state2_idx = register_cont_state_type(&db, &mut registry, 2);
         assert_eq!(state2_idx, closure_idx); // Reuses closure's type index
 
-        // State with 3 fields - same as continuation, reuses its index
+        // State with 3 fields - new type (no longer matches continuation which has 4 fields)
         let state3_idx = register_cont_state_type(&db, &mut registry, 3);
-        assert_eq!(state3_idx, cont_idx);
+        assert_eq!(state3_idx, FIRST_USER_TYPE_IDX + 2);
 
-        // State with 4 fields - new type
+        // State with 4 fields - same as continuation, reuses its index
         let state4_idx = register_cont_state_type(&db, &mut registry, 4);
-        assert_eq!(state4_idx, FIRST_USER_TYPE_IDX + 2);
+        assert_eq!(state4_idx, cont_idx);
 
         assert_eq!(registry.user_types().len(), 3);
     }
