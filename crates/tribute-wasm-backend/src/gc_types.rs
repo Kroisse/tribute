@@ -10,7 +10,7 @@
 //! Index 0: BoxedF64 - Float wrapper for polymorphic contexts
 //! Index 1: BytesArray - array i8 backing storage for Bytes
 //! Index 2: BytesStruct - struct { data: ref BytesArray, offset: i32, len: i32 }
-//! Index 3: YieldResult - struct { tag: i32, value: anyref } (yield bubbling)
+//! Index 3: Step - struct { tag: i32, value: anyref, prompt: i32, op_idx: i32 } (trampoline)
 //! Index 4: ClosureStruct - struct { funcref, anyref } (uniform closure representation)
 //! Index 5+: User-defined types (structs, arrays, variants, closures, etc.)
 //! ```
@@ -44,10 +44,10 @@ pub const BYTES_ARRAY_IDX: u32 = 1;
 /// This is always index 2 in the GC type section.
 pub const BYTES_STRUCT_IDX: u32 = 2;
 
-/// Type index for YieldResult (struct { tag: i32, value: anyref }).
+/// Type index for Step (struct { tag: i32, value: anyref, prompt: i32, op_idx: i32 }).
 /// This is always index 3 in the GC type section.
-/// Used for yield bubbling in WasmGC backend (without stack switching).
-pub const YIELD_RESULT_IDX: u32 = 3;
+/// Used for trampoline-based effect system in WasmGC backend (without stack switching).
+pub const STEP_IDX: u32 = 3;
 
 /// Type index for ClosureStruct (struct { funcref, anyref }).
 /// This is always index 4 in the GC type section.
@@ -118,7 +118,7 @@ impl<'db> GcTypeRegistry<'db> {
         }
     }
 
-    /// Returns the builtin type definitions (BoxedF64, BytesArray, BytesStruct, YieldResult, ClosureStruct).
+    /// Returns the builtin type definitions (BoxedF64, BytesArray, BytesStruct, Step, ClosureStruct).
     ///
     /// These must be prepended to the user-defined types when emitting.
     pub fn builtin_types() -> Vec<GcTypeDef> {
@@ -151,9 +151,12 @@ impl<'db> GcTypeRegistry<'db> {
                     mutable: false,
                 },
             ]),
-            // Index 3: YieldResult - struct { tag: i32, value: anyref }
-            // Used for yield bubbling in WasmGC backend (without stack switching).
-            // Tag: 0 = Done (completed with result), 1 = Yielded (suspended with continuation)
+            // Index 3: Step - struct { tag: i32, value: anyref, prompt: i32, op_idx: i32 }
+            // Used for trampoline-based effect system in WasmGC backend.
+            // Tag: 0 = Done (completed with result), 1 = Shift (suspended with continuation)
+            // Value: result value (if Done) or continuation struct (if Shift)
+            // Prompt: target handler's prompt tag (only used when Shift)
+            // OpIdx: ability operation index (only used when Shift)
             GcTypeDef::Struct(vec![
                 FieldType {
                     element_type: StorageType::Val(ValType::I32),
@@ -161,6 +164,14 @@ impl<'db> GcTypeRegistry<'db> {
                 },
                 FieldType {
                     element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
                     mutable: false,
                 },
             ]),
@@ -235,7 +246,7 @@ impl<'db> GcTypeRegistry<'db> {
 
     /// Returns all type definitions including builtins.
     ///
-    /// The returned vector has builtins at indices 0-2 and user types starting at index 3.
+    /// The returned vector has builtins at indices 0-4 and user types starting at index 5.
     pub fn all_types(&self) -> Vec<GcTypeDef> {
         let mut all = Self::builtin_types();
         all.extend(self.types.iter().cloned());
@@ -621,88 +632,77 @@ pub fn is_closure_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool
 }
 
 // ============================================================================
-// YieldResult Type Collection
+// Step Type Collection (Trampoline-based Effect System)
 // ============================================================================
 
-/// YieldResult struct field count.
-/// YieldResult structs always have 2 fields: (tag: i32, value: anyref)
-pub const YIELD_RESULT_FIELD_COUNT: usize = 2;
+/// Step struct field count.
+/// Step structs have 4 fields: (tag: i32, value: anyref, prompt: i32, op_idx: i32)
+pub const STEP_FIELD_COUNT: usize = 4;
 
 /// Tag value for Done (successful completion with result value).
-pub const YIELD_RESULT_TAG_DONE: i32 = 0;
+pub const STEP_TAG_DONE: i32 = 0;
 
-/// Tag value for Yielded (suspended with continuation).
-pub const YIELD_RESULT_TAG_YIELDED: i32 = 1;
+/// Tag value for Shift (suspended with continuation, needs handler dispatch).
+pub const STEP_TAG_SHIFT: i32 = 1;
 
-/// Create the YieldResult marker type.
+/// Create the Step marker type.
 ///
 /// This creates a unique type to use as a key in the registry, ensuring
-/// YieldResult doesn't share type indices with other 2-field structs like closures.
+/// Step doesn't share type indices with other struct types.
 ///
 /// This is public so that cont_to_wasm.rs can use it for struct_new operations
-/// that create YieldResult values.
-pub fn yield_result_marker_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
-    // Use a unique marker type: wasm.yield_result
+/// that create Step values.
+pub fn step_marker_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
+    // Use a unique marker type: wasm.step
     // This distinguishes it from structref placeholders used by closure/state types
     let mut attrs = trunk_ir::Attrs::new();
     attrs.insert(
         Symbol::new("marker"),
-        trunk_ir::Attribute::Symbol(Symbol::new("yield_result")),
+        trunk_ir::Attribute::Symbol(Symbol::new("step")),
     );
     Type::new(
         db,
         wasm::DIALECT_NAME(),
-        Symbol::new("yield_result"),
+        Symbol::new("step"),
         trunk_ir::IdVec::new(),
         attrs,
     )
 }
 
-/// Register the YieldResult struct type in the registry.
+/// Register the Step struct type in the registry.
 ///
-/// YieldResult is used for yield bubbling in the WasmGC backend. All effectful
-/// functions return this type to indicate whether they completed normally or
-/// yielded (suspended) due to an ability operation.
+/// Step is used for trampoline-based effect system in the WasmGC backend.
+/// All effectful functions return this type to indicate whether they completed
+/// normally or shifted (suspended) due to an ability operation.
 ///
 /// Structure:
-/// - Field 0: tag (i32) - 0 = Done, 1 = Yielded
-/// - Field 1: value (anyref) - result value (if Done) or continuation (if Yielded)
+/// - Field 0: tag (i32) - 0 = Done, 1 = Shift
+/// - Field 1: value (anyref) - result value (if Done) or continuation (if Shift)
+/// - Field 2: prompt (i32) - target handler's prompt tag (only used when Shift)
+/// - Field 3: op_idx (i32) - ability operation index (only used when Shift)
 ///
-/// Unlike closure types, YieldResult uses a dedicated marker type to ensure it
-/// gets a unique type index (not shared with other 2-field struct types).
-pub fn register_yield_result_type<'db>(
+/// Unlike closure types, Step uses a dedicated marker type to ensure it
+/// gets a unique type index (not shared with other struct types).
+pub fn register_step_type<'db>(
     db: &'db dyn salsa::Database,
     registry: &mut GcTypeRegistry<'db>,
 ) -> u32 {
-    let marker_ty = yield_result_marker_type(db);
+    let marker_ty = step_marker_type(db);
 
-    // Check if already registered
-    if let Some(idx) = registry.get_type_idx(marker_ty) {
-        return idx;
-    }
-
-    // Create YieldResult struct type: (i32, anyref)
-    let def = GcTypeDef::Struct(vec![
-        FieldType {
-            element_type: StorageType::Val(ValType::I32),
-            mutable: false,
-        },
-        FieldType {
-            element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-            mutable: false,
-        },
-    ]);
-
-    registry.register_type(marker_ty, def)
+    // Step is a builtin type at STEP_IDX (defined in builtin_types()).
+    // Just record the marker → builtin index mapping.
+    registry.type_indices.insert(marker_ty, STEP_IDX);
+    STEP_IDX
 }
 
-/// Get the YieldResult type index if already registered.
-pub fn get_yield_result_type_idx<'db>(
-    db: &'db dyn salsa::Database,
-    registry: &GcTypeRegistry<'db>,
+/// Get the Step type index.
+///
+/// Step is always a builtin type at STEP_IDX, so this always returns Some(STEP_IDX).
+pub fn get_step_type_idx<'db>(
+    _db: &'db dyn salsa::Database,
+    _registry: &GcTypeRegistry<'db>,
 ) -> Option<u32> {
-    let marker_ty = yield_result_marker_type(db);
-    registry.get_type_idx(marker_ty)
+    Some(STEP_IDX)
 }
 
 // ============================================================================
@@ -710,15 +710,16 @@ pub fn get_yield_result_type_idx<'db>(
 // ============================================================================
 
 /// Continuation struct field count.
-/// Continuation structs always have 3 fields: (resume_fn: funcref, state: anyref, tag: i32)
-pub const CONT_FIELD_COUNT: usize = 3;
+/// Continuation structs have 4 fields: (resume_fn, state, tag, shift_value)
+pub const CONT_FIELD_COUNT: usize = 4;
 
 /// Register the continuation struct type in the registry.
 ///
-/// Continuations are represented as WasmGC structs with three fields:
+/// Continuations are represented as WasmGC structs with four fields:
 /// - Field 0: resume function (funcref) - function to call when resuming
 /// - Field 1: state (anyref) - captured local state struct
 /// - Field 2: tag (i32) - prompt tag this continuation belongs to
+/// - Field 3: shift_value (anyref) - value yielded by shift (for handler)
 ///
 /// This function uses the structref placeholder with CONT_FIELD_COUNT
 /// to ensure all continuation operations use the same type index.
@@ -733,7 +734,7 @@ pub fn register_continuation_type<'db>(
         return idx;
     }
 
-    // Create continuation struct type: (funcref, anyref, i32)
+    // Create continuation struct type: (funcref, anyref, i32, anyref)
     let def = GcTypeDef::Struct(vec![
         FieldType {
             element_type: StorageType::Val(ValType::Ref(RefType::FUNCREF)),
@@ -745,6 +746,10 @@ pub fn register_continuation_type<'db>(
         },
         FieldType {
             element_type: StorageType::Val(ValType::I32),
+            mutable: false,
+        },
+        FieldType {
+            element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
             mutable: false,
         },
     ]);
@@ -802,8 +807,8 @@ mod tests {
         assert!(matches!(&builtins[1], GcTypeDef::Array(_)));
         // BytesStruct
         assert!(matches!(&builtins[2], GcTypeDef::Struct(fields) if fields.len() == 3));
-        // YieldResult
-        assert!(matches!(&builtins[3], GcTypeDef::Struct(fields) if fields.len() == 2));
+        // Step (4 fields: tag, value, prompt, op_idx)
+        assert!(matches!(&builtins[3], GcTypeDef::Struct(fields) if fields.len() == 4));
         // ClosureStruct
         assert!(matches!(&builtins[4], GcTypeDef::Struct(fields) if fields.len() == 2));
     }
@@ -1045,20 +1050,25 @@ mod tests {
         match &types[0] {
             GcTypeDef::Struct(fields) => {
                 assert_eq!(fields.len(), CONT_FIELD_COUNT);
-                // Field 0: funcref
+                // Field 0: funcref (resume function)
                 assert!(matches!(
                     fields[0].element_type,
                     StorageType::Val(ValType::Ref(RefType::FUNCREF))
                 ));
-                // Field 1: anyref
+                // Field 1: anyref (state)
                 assert!(matches!(
                     fields[1].element_type,
                     StorageType::Val(ValType::Ref(RefType::ANYREF))
                 ));
-                // Field 2: i32
+                // Field 2: i32 (tag)
                 assert!(matches!(
                     fields[2].element_type,
                     StorageType::Val(ValType::I32)
+                ));
+                // Field 3: anyref (shift_value)
+                assert!(matches!(
+                    fields[3].element_type,
+                    StorageType::Val(ValType::Ref(RefType::ANYREF))
                 ));
             }
             _ => panic!("Expected struct type for continuation"),
@@ -1098,7 +1108,7 @@ mod tests {
         let closure_idx = register_closure_type(&db, &mut registry);
         assert_eq!(closure_idx, FIRST_USER_TYPE_IDX);
 
-        // Register continuation (3 fields) - different field count, different index
+        // Register continuation (4 fields) - different field count, different index
         let cont_idx = register_continuation_type(&db, &mut registry);
         assert_eq!(cont_idx, FIRST_USER_TYPE_IDX + 1);
 
@@ -1107,89 +1117,65 @@ mod tests {
         let state2_idx = register_cont_state_type(&db, &mut registry, 2);
         assert_eq!(state2_idx, closure_idx); // Reuses closure's type index
 
-        // State with 3 fields - same as continuation, reuses its index
+        // State with 3 fields - new type (no longer matches continuation which has 4 fields)
         let state3_idx = register_cont_state_type(&db, &mut registry, 3);
-        assert_eq!(state3_idx, cont_idx);
+        assert_eq!(state3_idx, FIRST_USER_TYPE_IDX + 2);
 
-        // State with 4 fields - new type
+        // State with 4 fields - same as continuation, reuses its index
         let state4_idx = register_cont_state_type(&db, &mut registry, 4);
-        assert_eq!(state4_idx, FIRST_USER_TYPE_IDX + 2);
+        assert_eq!(state4_idx, cont_idx);
 
         assert_eq!(registry.user_types().len(), 3);
     }
 
     #[test]
-    fn test_register_yield_result_type() {
+    fn test_register_step_type() {
         let db = salsa::DatabaseImpl::default();
         let mut registry = GcTypeRegistry::new();
 
-        let idx1 = register_yield_result_type(&db, &mut registry);
-        assert_eq!(idx1, FIRST_USER_TYPE_IDX);
+        // Step is a builtin type at STEP_IDX
+        let idx1 = register_step_type(&db, &mut registry);
+        assert_eq!(idx1, STEP_IDX);
 
         // Calling again should return the same index
-        let idx2 = register_yield_result_type(&db, &mut registry);
-        assert_eq!(idx2, FIRST_USER_TYPE_IDX);
+        let idx2 = register_step_type(&db, &mut registry);
+        assert_eq!(idx2, STEP_IDX);
 
-        // Verify YieldResult type structure
-        let types = registry.user_types();
-        assert_eq!(types.len(), 1);
-        match &types[0] {
-            GcTypeDef::Struct(fields) => {
-                assert_eq!(fields.len(), YIELD_RESULT_FIELD_COUNT);
-                // Field 0: i32 (tag)
-                assert!(matches!(
-                    fields[0].element_type,
-                    StorageType::Val(ValType::I32)
-                ));
-                // Field 1: anyref (value or continuation)
-                assert!(matches!(
-                    fields[1].element_type,
-                    StorageType::Val(ValType::Ref(RefType::ANYREF))
-                ));
-            }
-            _ => panic!("Expected struct type for YieldResult"),
-        }
+        // Step is a builtin, so it shouldn't appear in user_types()
+        assert_eq!(registry.user_types().len(), 0);
+
+        // Verify the marker type is mapped to STEP_IDX
+        let marker_ty = step_marker_type(&db);
+        assert_eq!(registry.get_type_idx(marker_ty), Some(STEP_IDX));
     }
 
     #[test]
-    fn test_yield_result_and_closure_different_types() {
+    fn test_step_and_closure_different_types() {
         let db = salsa::DatabaseImpl::default();
         let mut registry = GcTypeRegistry::new();
 
-        // Both YieldResult and closure have 2 fields, but different structure
-        // YieldResult: (i32, anyref)
-        // Closure: (funcref, anyref)
-        // They should get different type indices because YieldResult uses
-        // a dedicated marker type instead of the structref placeholder.
+        // Step and closure have different structures
+        // Step: (i32, anyref, i32, i32) - builtin at STEP_IDX
+        // Closure: (funcref, anyref) - user type at FIRST_USER_TYPE_IDX
+        // They have different type indices.
 
-        // Register YieldResult first
-        let yield_idx = register_yield_result_type(&db, &mut registry);
-        assert_eq!(yield_idx, FIRST_USER_TYPE_IDX);
+        // Register Step first (builtin at STEP_IDX)
+        let step_idx = register_step_type(&db, &mut registry);
+        assert_eq!(step_idx, STEP_IDX);
 
-        // Register closure - should get a different index
+        // Register closure - first user type
         let closure_idx = register_closure_type(&db, &mut registry);
-        assert_eq!(closure_idx, FIRST_USER_TYPE_IDX + 1);
+        assert_eq!(closure_idx, FIRST_USER_TYPE_IDX);
 
         // Verify they are different
-        assert_ne!(yield_idx, closure_idx);
+        assert_ne!(step_idx, closure_idx);
 
-        // Verify YieldResult structure
+        // Only closure should be in user_types (Step is builtin)
         let types = registry.user_types();
-        assert_eq!(types.len(), 2);
-
-        // YieldResult: (i32, anyref)
-        match &types[0] {
-            GcTypeDef::Struct(fields) => {
-                assert!(matches!(
-                    fields[0].element_type,
-                    StorageType::Val(ValType::I32)
-                ));
-            }
-            _ => panic!("Expected struct type for YieldResult"),
-        }
+        assert_eq!(types.len(), 1);
 
         // Closure: (funcref, anyref)
-        match &types[1] {
+        match &types[0] {
             GcTypeDef::Struct(fields) => {
                 assert!(matches!(
                     fields[0].element_type,
@@ -1201,15 +1187,11 @@ mod tests {
     }
 
     #[test]
-    fn test_get_yield_result_type_idx() {
+    fn test_get_step_type_idx() {
         let db = salsa::DatabaseImpl::default();
-        let mut registry = GcTypeRegistry::new();
+        let registry = GcTypeRegistry::new();
 
-        // Not registered yet
-        assert_eq!(get_yield_result_type_idx(&db, &registry), None);
-
-        // Register and verify
-        let idx = register_yield_result_type(&db, &mut registry);
-        assert_eq!(get_yield_result_type_idx(&db, &registry), Some(idx));
+        // Step is a builtin, so get_step_type_idx always returns Some(STEP_IDX)
+        assert_eq!(get_step_type_idx(&db, &registry), Some(STEP_IDX));
     }
 }

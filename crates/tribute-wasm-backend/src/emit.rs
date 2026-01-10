@@ -27,8 +27,7 @@ use wasm_encoder::{
 use crate::errors;
 use crate::gc_types::{
     self, ATTR_FIELD_IDX, ATTR_TYPE, ATTR_TYPE_IDX, BOXED_F64_IDX, BYTES_ARRAY_IDX,
-    BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, GcTypeRegistry,
-    YIELD_RESULT_IDX,
+    BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, GcTypeRegistry, STEP_IDX,
 };
 use crate::{CompilationError, CompilationResult};
 
@@ -1760,15 +1759,14 @@ fn collect_call_indirect_types<'db>(
                         let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty)
                             .is_some()
                             || core::Func::from_type(db, func_ret_ty).is_some();
-                        let func_returns_yield_result = func_ret_ty.dialect(db)
-                            == wasm::DIALECT_NAME()
-                            && func_ret_ty.name(db) == Symbol::new("yield_result");
+                        // Check for Step type (trampoline-based effect system)
+                        let func_returns_step = is_step_type(db, func_ret_ty);
                         debug!(
-                            "collect_call_indirect_types: is_anyref={}, is_type_var={}, func_returns_funcref={}, func_returns_yield_result={}",
+                            "collect_call_indirect_types: is_anyref={}, is_type_var={}, func_returns_funcref={}, func_returns_step={}",
                             is_anyref_result,
                             is_type_var_result,
                             func_returns_funcref,
-                            func_returns_yield_result
+                            func_returns_step
                         );
                         if is_polymorphic_result && func_returns_funcref {
                             debug!(
@@ -1776,15 +1774,15 @@ fn collect_call_indirect_types<'db>(
                                  for enclosing function that returns funcref"
                             );
                             result_ty = funcref_ty;
-                        } else if is_polymorphic_result && func_returns_yield_result {
-                            // When enclosing function returns YieldResult (for yield bubbling),
-                            // upgrade polymorphic call_indirect results to YieldResult too.
+                        } else if is_polymorphic_result && func_returns_step {
+                            // When enclosing function returns Step (for trampoline effect system),
+                            // upgrade polymorphic call_indirect results to Step too.
                             // This ensures closure/continuation calls return the right type.
                             debug!(
-                                "collect_call_indirect_types: upgrading polymorphic result to yield_result \
-                                 for enclosing function that returns YieldResult"
+                                "collect_call_indirect_types: upgrading polymorphic result to Step \
+                                 for enclosing function that returns Step"
                             );
-                            result_ty = crate::gc_types::yield_result_marker_type(db);
+                            result_ty = crate::gc_types::step_marker_type(db);
                         }
                     }
 
@@ -2500,7 +2498,7 @@ fn assign_locals_in_region<'db>(
                 }
 
                 // For wasm.block with polymorphic result type, infer the effective type from
-                // the body region's result value or fall back to YieldResult if function returns it.
+                // the body region's result value or fall back to Step if function returns it.
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("block")
                     && is_polymorphic_type(db, effective_ty)
@@ -2515,14 +2513,11 @@ fn assign_locals_in_region<'db>(
                         );
                         effective_ty = eff_ty;
                     } else {
-                        let upgraded = upgrade_polymorphic_to_yield_result(
-                            db,
-                            effective_ty,
-                            ctx.func_return_type,
-                        );
+                        let upgraded =
+                            upgrade_polymorphic_to_step(db, effective_ty, ctx.func_return_type);
                         if upgraded != effective_ty {
                             debug!(
-                                "wasm.block local: using YieldResult instead of polymorphic type {}.{}",
+                                "wasm.block local: using Step instead of polymorphic type {}.{}",
                                 effective_ty.dialect(db),
                                 effective_ty.name(db)
                             );
@@ -2532,17 +2527,17 @@ fn assign_locals_in_region<'db>(
                 }
 
                 // For wasm.call_indirect with polymorphic result type in functions that return
-                // YieldResult, use YieldResult as the local type. This ensures proper type
+                // Step, use Step as the local type. This ensures proper type
                 // matching when storing the result of closure/continuation calls.
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("call_indirect")
                     && is_polymorphic_type(db, effective_ty)
                 {
                     let upgraded =
-                        upgrade_polymorphic_to_yield_result(db, effective_ty, ctx.func_return_type);
+                        upgrade_polymorphic_to_step(db, effective_ty, ctx.func_return_type);
                     if upgraded != effective_ty {
                         debug!(
-                            "wasm.call_indirect local: using YieldResult instead of polymorphic type {}.{}",
+                            "wasm.call_indirect local: using Step instead of polymorphic type {}.{}",
                             effective_ty.dialect(db),
                             effective_ty.name(db)
                         );
@@ -2717,14 +2712,14 @@ fn infer_region_effective_type<'db>(
         .filter(|ty| !is_polymorphic_type(db, *ty))
 }
 
-/// Check if a type is the YieldResult marker type.
-fn is_yield_result_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    ty.dialect(db) == wasm::DIALECT_NAME() && ty.name(db) == Symbol::new("yield_result")
+/// Check if a type is the Step marker type.
+fn is_step_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    ty.dialect(db) == wasm::DIALECT_NAME() && ty.name(db) == Symbol::new("step")
 }
 
-/// Upgrade a polymorphic type to YieldResult if the function returns YieldResult.
+/// Upgrade a polymorphic type to Step if the function returns Step.
 /// Used for wasm.block/wasm.loop result types.
-fn upgrade_polymorphic_to_yield_result<'db>(
+fn upgrade_polymorphic_to_step<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     func_return_type: Option<Type<'db>>,
@@ -2734,9 +2729,9 @@ fn upgrade_polymorphic_to_yield_result<'db>(
     }
 
     if let Some(ret_ty) = func_return_type
-        && is_yield_result_type(db, ret_ty)
+        && is_step_type(db, ret_ty)
     {
-        return crate::gc_types::yield_result_marker_type(db);
+        return crate::gc_types::step_marker_type(db);
     }
     ty
 }
@@ -3063,11 +3058,11 @@ fn emit_op<'db>(
             set_result_local(db, op, ctx, function)?;
         }
     } else if name == Symbol::new("block") {
-        // Upgrade polymorphic block result type to YieldResult if function returns YieldResult
+        // Upgrade polymorphic block result type to Step if function returns Step
         let result_ty = op
             .results(db)
             .first()
-            .map(|ty| upgrade_polymorphic_to_yield_result(db, *ty, ctx.func_return_type));
+            .map(|ty| upgrade_polymorphic_to_step(db, *ty, ctx.func_return_type));
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
         let block_type = if has_result {
             BlockType::Result(type_to_valtype(
@@ -3095,11 +3090,11 @@ fn emit_op<'db>(
             set_result_local(db, op, ctx, function)?;
         }
     } else if name == Symbol::new("loop") {
-        // Upgrade polymorphic loop result type to YieldResult if function returns YieldResult
+        // Upgrade polymorphic loop result type to Step if function returns Step
         let result_ty = op
             .results(db)
             .first()
-            .map(|ty| upgrade_polymorphic_to_yield_result(db, *ty, ctx.func_return_type));
+            .map(|ty| upgrade_polymorphic_to_step(db, *ty, ctx.func_return_type));
         let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
         let block_type = if has_result {
             BlockType::Result(type_to_valtype(
@@ -3271,9 +3266,9 @@ fn emit_op<'db>(
             CompilationError::invalid_module("wasm.call_indirect must have a result type")
         })?;
 
-        // If result type is anyref/type_var but enclosing function returns funcref or YieldResult,
+        // If result type is anyref/type_var but enclosing function returns funcref or Step,
         // upgrade the result type accordingly. This is needed because WebAssembly GC has separate
-        // type hierarchies, and effectful functions return YieldResult for yield bubbling.
+        // type hierarchies, and effectful functions return Step for yield bubbling.
         let funcref_ty = wasm::Funcref::new(db).as_type();
         if let Some(func_ret_ty) = ctx.func_return_type {
             let is_anyref_result = wasm::Anyref::from_type(db, result_ty).is_some();
@@ -3282,18 +3277,18 @@ fn emit_op<'db>(
             let is_polymorphic_result = is_anyref_result || is_type_var_result;
             let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty).is_some()
                 || core::Func::from_type(db, func_ret_ty).is_some();
-            let func_returns_yield_result = func_ret_ty.dialect(db) == wasm::DIALECT_NAME()
-                && func_ret_ty.name(db) == Symbol::new("yield_result");
+            // Check for Step type (trampoline-based effect system)
+            let func_returns_step = is_step_type(db, func_ret_ty);
             if is_polymorphic_result && func_returns_funcref {
                 debug!(
                     "call_indirect emit: upgrading polymorphic result to funcref for enclosing function"
                 );
                 result_ty = funcref_ty;
-            } else if is_polymorphic_result && func_returns_yield_result {
+            } else if is_polymorphic_result && func_returns_step {
                 debug!(
-                    "call_indirect emit: upgrading polymorphic result to yield_result for enclosing function"
+                    "call_indirect emit: upgrading polymorphic result to Step for enclosing function"
                 );
-                result_ty = crate::gc_types::yield_result_marker_type(db);
+                result_ty = crate::gc_types::step_marker_type(db);
             }
         }
 
@@ -4511,12 +4506,12 @@ fn type_to_valtype<'db>(
                     ty: AbstractHeapType::I31,
                 },
             }))
-        } else if name == Symbol::new("yield_result") {
-            // YieldResult is a builtin GC struct type for yield bubbling
-            // Always uses fixed type index YIELD_RESULT_IDX (3)
+        } else if name == Symbol::new("step") {
+            // Step is a builtin GC struct type for trampoline-based effect system
+            // Always uses fixed type index STEP_IDX (3)
             Ok(ValType::Ref(RefType {
                 nullable: true,
-                heap_type: HeapType::Concrete(YIELD_RESULT_IDX),
+                heap_type: HeapType::Concrete(STEP_IDX),
             }))
         } else {
             Err(CompilationError::type_error(format!(
@@ -5018,7 +5013,7 @@ mod tests {
         let (gc_types, type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, YieldResult, ClosureStruct) + 1 user struct
+        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, Step, ClosureStruct) + 1 user struct
         assert_eq!(gc_types.len(), 6);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
@@ -5026,7 +5021,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is YieldResult
+        // Index 3 is Step
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
@@ -5084,7 +5079,7 @@ mod tests {
         let (gc_types, _type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, YieldResult, ClosureStruct) + 1 user array
+        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, Step, ClosureStruct) + 1 user array
         assert_eq!(gc_types.len(), 6);
         // Index 0 is BoxedF64 (struct)
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
@@ -5092,7 +5087,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct (struct)
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is YieldResult (struct)
+        // Index 3 is Step (struct)
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct (struct)
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
@@ -5157,7 +5152,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is YieldResult
+        // Index 3 is Step
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
@@ -5399,7 +5394,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is YieldResult
+        // Index 3 is Step
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
@@ -5467,7 +5462,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
         assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
         assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
-        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // YieldResult
+        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // Step
         assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
     }
 
@@ -5520,7 +5515,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
         assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
         assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
-        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // YieldResult
+        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // Step
         assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
     }
 

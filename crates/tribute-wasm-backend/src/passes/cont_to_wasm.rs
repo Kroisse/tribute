@@ -114,38 +114,36 @@ pub mod cont_types {
 
     /// Create the resume function type.
     ///
-    /// Signature: (wrapper: anyref) -> (ref $YieldResult)
+    /// Signature: (wrapper: anyref) -> (ref $Step)
     ///
     /// The wrapper contains both state and resume_value.
-    /// Returns YieldResult because resume functions can also yield
-    /// (if the resumed continuation yields again).
+    /// Returns Step because resume functions can also shift
+    /// (if the resumed continuation shifts again).
     pub fn resume_fn_type(db: &dyn salsa::Database) -> Type<'_> {
         let anyref = wasm::Anyref::new(db).as_type();
-        let yield_result_ty = yield_result_type(db);
-        core::Func::new(db, IdVec::from(vec![anyref]), yield_result_ty).as_type()
+        let step_ty = step_type(db);
+        core::Func::new(db, IdVec::from(vec![anyref]), step_ty).as_type()
     }
 
-    /// Create the YieldResult struct type.
+    /// Create the Step struct type.
     ///
-    /// Layout: (tag: i32, value: anyref)
-    /// - tag = 0: Done (value is the boxed result)
-    /// - tag = 1: Yielded (value is the continuation struct)
+    /// Layout: (tag: i32, value: anyref, prompt: i32, op_idx: i32)
+    /// - tag = 0: Done (value is the boxed result, prompt/op_idx ignored)
+    /// - tag = 1: Shift (value is the continuation struct, prompt/op_idx identify handler)
     ///
-    /// This type unifies all effectful function returns, eliminating the need
-    /// for cascading type changes when functions call other effectful functions.
-    ///
-    /// Uses a unique marker type (wasm.yield_result) to distinguish from other
-    /// 2-field structs like closures.
-    pub fn yield_result_type(db: &dyn salsa::Database) -> Type<'_> {
-        // Use the unique YieldResult marker type from gc_types
-        crate::gc_types::yield_result_marker_type(db)
+    /// This type unifies all effectful function returns for the trampoline-based
+    /// effect system, eliminating cascading type changes and enabling centralized
+    /// handler dispatch.
+    pub fn step_type(db: &dyn salsa::Database) -> Type<'_> {
+        // Use the unique Step marker type from gc_types
+        crate::gc_types::step_marker_type(db)
     }
 
     /// Tag value for Done (successful completion).
-    pub const YIELD_RESULT_TAG_DONE: i32 = 0;
+    pub const STEP_TAG_DONE: i32 = crate::gc_types::STEP_TAG_DONE;
 
-    /// Tag value for Yielded (suspended with continuation).
-    pub const YIELD_RESULT_TAG_YIELDED: i32 = 1;
+    /// Tag value for Shift (suspended with continuation, needs handler dispatch).
+    pub const STEP_TAG_SHIFT: i32 = crate::gc_types::STEP_TAG_SHIFT;
 }
 
 /// Resume function generation.
@@ -383,9 +381,10 @@ pub mod resume_gen {
                         || tribute_rt::is_int(db, value_ty)
                         || tribute_rt::is_nat(db, value_ty))
                 {
-                    // Box the primitive value before returning
+                    // Box the primitive value to anyref before returning
+                    // Resume functions return anyref, so we need consistent anyref type
                     let mut boxing_ops = Vec::new();
-                    let boxed = super::box_value_if_needed(
+                    let boxed = super::box_value_to_anyref(
                         db,
                         op.location(db),
                         return_value,
@@ -1043,19 +1042,19 @@ fn update_yielding_function_types<'db>(
                     let func_ty = func_op.r#type(db);
                     if let Some(core_func) = core::Func::from_type(db, func_ty) {
                         let current_result = core_func.result(db);
-                        let yield_result_ty = cont_types::yield_result_type(db);
+                        let step_ty = cont_types::step_type(db);
 
-                        // Skip if already YieldResult (structref)
+                        // Skip if already Step (structref)
                         if wasm::Structref::from_type(db, current_result).is_some() {
                             new_ops.push(*op);
                             continue;
                         }
 
                         let params = core_func.params(db);
-                        let new_func_ty = core::Func::new(db, params, yield_result_ty).as_type();
+                        let new_func_ty = core::Func::new(db, params, step_ty).as_type();
 
                         tracing::debug!(
-                            "update_yielding_function_types: {} return type {} -> structref (YieldResult)",
+                            "update_yielding_function_types: {} return type {} -> structref (Step)",
                             func_name,
                             current_result.name(db)
                         );
@@ -1063,6 +1062,11 @@ fn update_yielding_function_types<'db>(
                         let new_op = op
                             .modify(db)
                             .attr(Symbol::new("type"), Attribute::Type(new_func_ty))
+                            // Store original return type for trampoline unwrapping
+                            .attr(
+                                Symbol::new("original_result_type"),
+                                Attribute::Type(current_result),
+                            )
                             .build();
                         new_ops.push(new_op);
                         modified = true;
@@ -1159,9 +1163,8 @@ fn function_body_has_call_indirect<'db>(
 
 /// Check if a function body contains yield code.
 ///
-/// Detects the YieldResult pattern from shift expansion:
-/// - wasm.return whose operand is from a wasm.struct_new with 2 fields
-///   where the first field is i32_const with value 1 (YIELDED)
+/// Detects the Step pattern from shift expansion:
+/// - wasm.return whose operand is from a wasm.struct_new with Step tag
 fn function_body_can_yield<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
@@ -1171,19 +1174,21 @@ fn function_body_can_yield<'db>(db: &'db dyn salsa::Database, region: &Region<'d
                 && let Some(operand) = op.operands(db).first()
                 && let ValueDef::OpResult(def_op) = operand.def(db)
             {
-                // Check if it's a YieldResult struct_new with YIELDED tag
+                // Check if it's a Step struct_new with Shift tag
+                // Step struct has 4 fields: (tag, value, prompt, op_idx)
                 if def_op.dialect(db) == wasm::DIALECT_NAME()
                     && def_op.name(db) == Symbol::new("struct_new")
                 {
                     let operands = def_op.operands(db);
-                    if operands.len() == 2
+                    // Check for 4-field Step struct
+                    if operands.len() == 4
                         && let Some(tag_val) = operands.first()
                         && let ValueDef::OpResult(tag_op) = tag_val.def(db)
                         && tag_op.dialect(db) == wasm::DIALECT_NAME()
                         && tag_op.name(db) == Symbol::new("i32_const")
                         && let Some(Attribute::IntBits(v)) =
                             tag_op.attributes(db).get(&Symbol::new("value"))
-                        && *v as i32 == cont_types::YIELD_RESULT_TAG_YIELDED
+                        && *v as i32 == cont_types::STEP_TAG_SHIFT
                     {
                         return true;
                     }
@@ -1582,59 +1587,42 @@ fn collect_uses_in_region_recursive<'db>(
     }
 }
 
-/// Generate boxing operations if the value type is a primitive.
+/// Box a primitive value and return it as anyref type.
 ///
-/// When passing a primitive value to a function expecting `anyref`, we need to box:
-/// - Int (i32): int → intref (via tribute_rt.box_int -> wasm.ref_i31)
-/// - Nat (i32): nat → intref (via tribute_rt.box_int -> wasm.ref_i31)
-/// - core.i32: same as Int (lowered form)
-/// - I64: i64 → i32 → intref (truncate and box, legacy path)
-///
-/// # Limitations
-///
-/// Currently only Int/Nat (and their lowered form core.i32) are supported.
-/// Float and Bool are defined in `tribute_rt` dialect but not yet implemented:
-/// - Float (f64): Would require heap allocation in WasmGC (no f64ref exists)
-/// - Bool: Could use i31ref but needs separate box_bool/unbox_bool ops
-///
-/// Returns the boxed value (or the original value if no boxing needed).
-fn box_value_if_needed<'db>(
+/// This is needed for continuation struct fields and Step.value where all values
+/// must be anyref to ensure consistent struct types across different shift points.
+fn box_value_to_anyref<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     value: Value<'db>,
     value_ty: Type<'db>,
     ops: &mut Vec<Operation<'db>>,
 ) -> Value<'db> {
-    // Use i31ref (the lowered type) instead of tribute_rt.intref
-    let i31ref_ty = wasm::I31ref::new(db).as_type();
+    let anyref_ty = wasm::Anyref::new(db).as_type();
 
     if tribute_rt::is_int(db, value_ty)
         || tribute_rt::is_nat(db, value_ty)
         || core::I32::from_type(db, value_ty).is_some()
     {
-        // Box Int/Nat/I32: use tribute_rt.box_int to convert to i31ref
-        // (tribute_rt.box_int will be lowered to wasm.ref_i31)
-        let box_int = tribute_rt::box_int(db, location, value, i31ref_ty);
-        ops.push(box_int.as_operation());
-        box_int.result(db)
+        // Box Int/Nat/I32 to i31ref, then mark as anyref
+        // The actual boxing uses ref.i31, and we annotate the result as anyref
+        // since anyref is a supertype of i31ref
+        let ref_i31 = wasm::ref_i31(db, location, value, anyref_ty);
+        ops.push(ref_i31.as_operation());
+        ref_i31.result(db)
     } else if core::I64::from_type(db, value_ty).is_some() {
-        // Box I64: i64 → i32 → i31ref (truncate and wrap)
-        // Note: This is a legacy path - tribute uses 31-bit Int/Nat now
+        // Box I64: i64 → i32 → anyref (truncate and wrap)
         let i32_ty = core::I32::new(db).as_type();
         let wrap = wasm::i32_wrap_i64(db, location, value, i32_ty);
         ops.push(wrap.as_operation());
 
-        let box_int = tribute_rt::box_int(db, location, wrap.result(db), i31ref_ty);
-        ops.push(box_int.as_operation());
-
-        box_int.result(db)
+        let ref_i31 = wasm::ref_i31(db, location, wrap.result(db), anyref_ty);
+        ops.push(ref_i31.as_operation());
+        ref_i31.result(db)
     } else if tribute_rt::is_float(db, value_ty) || tribute_rt::is_bool(db, value_ty) {
-        // TODO: Implement float/bool boxing
-        // Float requires heap-allocated boxing (no f64ref in WasmGC)
-        // Bool could reuse i31ref mechanism
-        panic!("box_value_if_needed: float/bool boxing not yet implemented for continuations");
+        panic!("box_value_to_anyref: float/bool boxing not yet implemented for continuations");
     } else {
-        // No boxing needed for reference types
+        // Reference types are already compatible with anyref
         value
     }
 }
@@ -1791,41 +1779,73 @@ fn generate_inline_resume_function<'db>(
 
     // Remap continuation operations and add them to the body
     let i32_ty = core::I32::new(db).as_type();
-    let yield_result_ty = cont_types::yield_result_type(db);
+    let step_ty = cont_types::step_type(db);
 
     if !continuation_ops.is_empty() {
         let remapped_ops = resume_gen::remap_operations(db, continuation_ops, &mut value_mapping);
 
-        // Post-process: wrap return values in Done YieldResult
-        // Find return operations and wrap their operands
+        // Post-process: wrap return values in Done Step
+        // Find return operations and wrap their operands (unless already Step)
         for remapped_op in remapped_ops {
             if remapped_op.dialect(db) == wasm::DIALECT_NAME()
                 && remapped_op.name(db) == Symbol::new("return")
             {
-                // This is a wasm.return - wrap its operand in Done YieldResult
+                // This is a wasm.return - wrap its operand in Done Step if not already Step
                 if let Some(return_val) = remapped_op.operands(db).first().copied() {
-                    // Create Done tag (0)
-                    let done_tag =
-                        wasm::i32_const(db, location, i32_ty, cont_types::YIELD_RESULT_TAG_DONE);
-                    let done_tag_val = done_tag.as_operation().result(db, 0);
-                    ops.push(done_tag.as_operation());
+                    // Check if the return value is already a Step to prevent double-wrapping
+                    if is_value_already_step(db, return_val) {
+                        // Already a Step - just return it directly
+                        ops.push(wasm::r#return(db, location, Some(return_val)).as_operation());
+                    } else {
+                        // Not a Step - wrap in Done Step
+                        // Create Done tag (0)
+                        let done_tag =
+                            wasm::i32_const(db, location, i32_ty, cont_types::STEP_TAG_DONE);
+                        let done_tag_val = done_tag.as_operation().result(db, 0);
+                        ops.push(done_tag.as_operation());
 
-                    // Create YieldResult struct: (tag=0, value=return_val)
-                    let yield_result = wasm::struct_new(
-                        db,
-                        location,
-                        IdVec::from(vec![done_tag_val, return_val]),
-                        yield_result_ty,
-                        crate::gc_types::YIELD_RESULT_IDX,
-                    );
-                    let yield_result_val = yield_result.as_operation().result(db, 0);
-                    ops.push(yield_result.as_operation());
+                        // Box the return value to anyref for Step.value field
+                        let return_val_ty = match return_val.def(db) {
+                            ValueDef::OpResult(def_op) => {
+                                def_op.results(db).get(return_val.index(db)).copied()
+                            }
+                            ValueDef::BlockArg(_) => None,
+                        };
+                        let boxed_return_val = if let Some(ty) = return_val_ty {
+                            box_value_to_anyref(db, location, return_val, ty, &mut ops)
+                        } else {
+                            return_val
+                        };
 
-                    ops.push(wasm::r#return(db, location, Some(yield_result_val)).as_operation());
+                        // Create zero for unused prompt and op_idx fields
+                        let zero_prompt_op = wasm::i32_const(db, location, i32_ty, 0);
+                        let zero_prompt = zero_prompt_op.as_operation().result(db, 0);
+                        ops.push(zero_prompt_op.as_operation());
+                        let zero_op_idx_op = wasm::i32_const(db, location, i32_ty, 0);
+                        let zero_op_idx = zero_op_idx_op.as_operation().result(db, 0);
+                        ops.push(zero_op_idx_op.as_operation());
+
+                        // Create Step struct: (tag=0, value=boxed_return_val, prompt=0, op_idx=0)
+                        let step = wasm::struct_new(
+                            db,
+                            location,
+                            IdVec::from(vec![
+                                done_tag_val,
+                                boxed_return_val,
+                                zero_prompt,
+                                zero_op_idx,
+                            ]),
+                            step_ty,
+                            crate::gc_types::STEP_IDX,
+                        );
+                        let step_val = step.as_operation().result(db, 0);
+                        ops.push(step.as_operation());
+
+                        ops.push(wasm::r#return(db, location, Some(step_val)).as_operation());
+                    }
                 } else {
-                    // No operand - create nil YieldResult
-                    let done_tag =
-                        wasm::i32_const(db, location, i32_ty, cont_types::YIELD_RESULT_TAG_DONE);
+                    // No operand - create nil Step
+                    let done_tag = wasm::i32_const(db, location, i32_ty, cont_types::STEP_TAG_DONE);
                     let done_tag_val = done_tag.as_operation().result(db, 0);
                     ops.push(done_tag.as_operation());
 
@@ -1834,17 +1854,25 @@ fn generate_inline_resume_function<'db>(
                     let null_val = null_ref.as_operation().result(db, 0);
                     ops.push(null_ref.as_operation());
 
-                    let yield_result = wasm::struct_new(
+                    // Create zero for unused prompt and op_idx fields
+                    let zero_prompt_op = wasm::i32_const(db, location, i32_ty, 0);
+                    let zero_prompt = zero_prompt_op.as_operation().result(db, 0);
+                    ops.push(zero_prompt_op.as_operation());
+                    let zero_op_idx_op = wasm::i32_const(db, location, i32_ty, 0);
+                    let zero_op_idx = zero_op_idx_op.as_operation().result(db, 0);
+                    ops.push(zero_op_idx_op.as_operation());
+
+                    let step = wasm::struct_new(
                         db,
                         location,
-                        IdVec::from(vec![done_tag_val, null_val]),
-                        yield_result_ty,
-                        crate::gc_types::YIELD_RESULT_IDX,
+                        IdVec::from(vec![done_tag_val, null_val, zero_prompt, zero_op_idx]),
+                        step_ty,
+                        crate::gc_types::STEP_IDX,
                     );
-                    let yield_result_val = yield_result.as_operation().result(db, 0);
-                    ops.push(yield_result.as_operation());
+                    let step_val = step.as_operation().result(db, 0);
+                    ops.push(step.as_operation());
 
-                    ops.push(wasm::r#return(db, location, Some(yield_result_val)).as_operation());
+                    ops.push(wasm::r#return(db, location, Some(step_val)).as_operation());
                 }
             } else {
                 // Not a return - keep as-is
@@ -1852,25 +1880,33 @@ fn generate_inline_resume_function<'db>(
             }
         }
     } else {
-        // No continuation body - wrap resume_value in Done YieldResult and return
+        // No continuation body - wrap resume_value in Done Step and return
 
         // Create Done tag (0)
-        let done_tag = wasm::i32_const(db, location, i32_ty, cont_types::YIELD_RESULT_TAG_DONE);
+        let done_tag = wasm::i32_const(db, location, i32_ty, cont_types::STEP_TAG_DONE);
         let done_tag_val = done_tag.as_operation().result(db, 0);
         ops.push(done_tag.as_operation());
 
-        // Create YieldResult struct: (tag=0, value=resume_value)
-        let yield_result = wasm::struct_new(
+        // Create zero for unused prompt and op_idx fields
+        let zero_prompt_op = wasm::i32_const(db, location, i32_ty, 0);
+        let zero_prompt = zero_prompt_op.as_operation().result(db, 0);
+        ops.push(zero_prompt_op.as_operation());
+        let zero_op_idx_op = wasm::i32_const(db, location, i32_ty, 0);
+        let zero_op_idx = zero_op_idx_op.as_operation().result(db, 0);
+        ops.push(zero_op_idx_op.as_operation());
+
+        // Create Step struct: (tag=0, value=resume_value, prompt=0, op_idx=0)
+        let step = wasm::struct_new(
             db,
             location,
-            IdVec::from(vec![done_tag_val, resume_value]),
-            yield_result_ty,
-            crate::gc_types::YIELD_RESULT_IDX,
+            IdVec::from(vec![done_tag_val, resume_value, zero_prompt, zero_op_idx]),
+            step_ty,
+            crate::gc_types::STEP_IDX,
         );
-        let yield_result_val = yield_result.as_operation().result(db, 0);
-        ops.push(yield_result.as_operation());
+        let step_val = step.as_operation().result(db, 0);
+        ops.push(step.as_operation());
 
-        ops.push(wasm::r#return(db, location, Some(yield_result_val)).as_operation());
+        ops.push(wasm::r#return(db, location, Some(step_val)).as_operation());
     }
 
     // Create function body block with typed arguments
@@ -2010,8 +2046,9 @@ fn expand_shift_operation<'db>(
             ValueDef::BlockArg(_) => None,
         };
         // Box primitive values before storing in anyref field
+        // Use box_value_to_anyref which ensures consistent anyref type
         if let Some(ty) = value_ty {
-            box_value_if_needed(db, location, first_value, ty, &mut ops)
+            box_value_to_anyref(db, location, first_value, ty, &mut ops)
         } else {
             first_value
         }
@@ -2059,27 +2096,38 @@ fn expand_shift_operation<'db>(
     ops.push(op_idx_const.as_operation());
     ops.push(wasm::global_set(db, location, op_idx_val, YIELD_OP_IDX).as_operation());
 
-    // === 4. Return YieldResult with tag=1 (Yielded) ===
-    // Create YieldResult struct: (tag: i32, value: anyref)
-    // - tag = 1 (YIELD_RESULT_TAG_YIELDED)
+    // === 4. Return Step with tag=1 (Shift) ===
+    // Create Step struct: (tag: i32, value: anyref, prompt: i32, op_idx: i32)
+    // - tag = 1 (STEP_TAG_SHIFT)
     // - value = continuation struct
-    let yield_result_ty = cont_types::yield_result_type(db);
-    let yield_tag_const =
-        wasm::i32_const(db, location, i32_ty, cont_types::YIELD_RESULT_TAG_YIELDED);
-    let yield_tag_val = yield_tag_const.as_operation().result(db, 0);
-    ops.push(yield_tag_const.as_operation());
+    // - prompt = tag_value (handler's prompt tag)
+    // - op_idx = op_idx_value (ability operation index)
+    let step_ty = cont_types::step_type(db);
+    let shift_tag_const = wasm::i32_const(db, location, i32_ty, cont_types::STEP_TAG_SHIFT);
+    let shift_tag_val = shift_tag_const.as_operation().result(db, 0);
+    ops.push(shift_tag_const.as_operation());
 
-    let yield_result = wasm::struct_new(
+    // Prompt tag for handler dispatch
+    let prompt_const = wasm::i32_const(db, location, i32_ty, tag_value as i32);
+    let prompt_val = prompt_const.as_operation().result(db, 0);
+    ops.push(prompt_const.as_operation());
+
+    // Op index for multi-op ability dispatch
+    let op_idx_const2 = wasm::i32_const(db, location, i32_ty, op_idx_value as i32);
+    let op_idx_val2 = op_idx_const2.as_operation().result(db, 0);
+    ops.push(op_idx_const2.as_operation());
+
+    let step = wasm::struct_new(
         db,
         location,
-        IdVec::from(vec![yield_tag_val, cont_val]),
-        yield_result_ty,
-        crate::gc_types::YIELD_RESULT_IDX, // Fixed type index for YieldResult
+        IdVec::from(vec![shift_tag_val, cont_val, prompt_val, op_idx_val2]),
+        step_ty,
+        crate::gc_types::STEP_IDX, // Fixed type index for Step
     );
-    let yield_result_val = yield_result.as_operation().result(db, 0);
-    ops.push(yield_result.as_operation());
+    let step_val = step.as_operation().result(db, 0);
+    ops.push(step.as_operation());
 
-    ops.push(wasm::r#return(db, location, Some(yield_result_val)).as_operation());
+    ops.push(wasm::r#return(db, location, Some(step_val)).as_operation());
 
     ops
 }
@@ -2231,7 +2279,7 @@ impl RewritePattern for PushPromptPattern {
         let then_region = trunk_ir::Region::new(db, location, IdVec::from(vec![then_block]));
 
         // Build the "else" block for tag mismatch (propagate)
-        // Return the body's result (the YieldResult from inner call) to continue bubbling up
+        // Return the body's result (the Step from inner call) to continue bubbling up
         // We need to find the body's result value - it's the last operation's result in the body
         let body_result_value = get_body_result_value(db, &original_body);
         let return_op = wasm::r#return(db, location, body_result_value);
@@ -2331,7 +2379,7 @@ impl RewritePattern for PushPromptPattern {
 ///
 /// This finds the last operation's result in the last block of the region.
 /// Used for bubbling: when a handler's tag doesn't match, we need to
-/// return the inner call's result (which contains the YieldResult).
+/// return the inner call's result (which contains the Step).
 fn get_body_result_value<'db>(
     db: &'db dyn salsa::Database,
     body: &trunk_ir::Region<'db>,
@@ -2358,6 +2406,35 @@ fn get_body_result_value<'db>(
 /// Check if a type is nil type
 fn is_nil_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == core::NIL()
+}
+
+/// Check if a value is already a Step struct.
+///
+/// This is used to prevent double-wrapping in resume functions.
+/// When the continuation body already returns a Step (e.g., from another
+/// effectful call or handler dispatch), we should not wrap it again.
+fn is_value_already_step<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> bool {
+    let def = value.def(db);
+    let ValueDef::OpResult(op) = def else {
+        return false;
+    };
+
+    // Check if it's a struct.new operation with STEP_IDX
+    if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("struct_new") {
+        // Check if the type_idx attribute matches STEP_IDX
+        if let Some(Attribute::IntBits(type_idx)) = op.attributes(db).get(&Symbol::new("type_idx"))
+        {
+            return *type_idx == crate::gc_types::STEP_IDX as u64;
+        }
+    }
+
+    // Also check the result type - if it's the Step marker type
+    if let Some(result_ty) = op.results(db).first() {
+        return result_ty.dialect(db) == wasm::DIALECT_NAME()
+            && result_ty.name(db) == Symbol::new("step");
+    }
+
+    false
 }
 
 /// Append operations to the last block of a region.
@@ -2796,12 +2873,13 @@ impl RewritePattern for ResumePattern {
 
         // 5. Box the value if it's a primitive type
         // Resume wrapper expects (state: anyref, resume_value: anyref), so primitives need boxing
+        // Use box_value_to_anyref for consistent anyref type in struct fields
         let value_ty = match value.def(db) {
             ValueDef::OpResult(def_op) => def_op.results(db).get(value.index(db)).copied(),
             ValueDef::BlockArg(_) => None,
         };
         let boxed_value = if let Some(ty) = value_ty {
-            box_value_if_needed(db, location, value, ty, &mut ops)
+            box_value_to_anyref(db, location, value, ty, &mut ops)
         } else {
             value
         };
@@ -2820,9 +2898,9 @@ impl RewritePattern for ResumePattern {
         ops.push(wrapper_struct.as_operation());
 
         // 7. Call resume_fn(wrapper) via call_indirect
-        // Resume function signature: (wrapper: anyref) -> YieldResult
-        // Resume functions always return YieldResult for yield bubbling
-        let result_ty = cont_types::yield_result_type(db);
+        // Resume function signature: (wrapper: anyref) -> Step
+        // Resume functions always return Step for trampoline dispatch
+        let result_ty = cont_types::step_type(db);
         let call_indirect = wasm::call_indirect(
             db,
             location,
@@ -3114,9 +3192,11 @@ mod tests {
         // 9. wasm.global_set (yield_cont)
         // 10. wasm.i32_const (yield_op_idx = 0)
         // 11. wasm.global_set (yield_op_idx)
-        // 12. wasm.i32_const (YieldResult tag = 1, Yielded)
-        // 13. wasm.struct_new (YieldResult struct)
-        // 14. wasm.return
+        // 12. wasm.i32_const (Step tag = 1, Shift)
+        // 13. wasm.i32_const (prompt = 0)
+        // 14. wasm.i32_const (op_idx = 0)
+        // 15. wasm.struct_new (Step struct with 4 fields: tag, value, prompt, op_idx)
+        // 16. wasm.return
 
         // First op: struct_new (empty state struct)
         assert_eq!(op_names.first(), Some(&"wasm.struct_new".to_string()));
@@ -3131,15 +3211,15 @@ mod tests {
             "expected at least 2 ref_null (resume_fn + shift_value), got {}",
             ref_null_count
         );
-        // Should contain struct_new for state, continuation, and YieldResult
+        // Should contain struct_new for state, continuation, and Step
         let struct_new_count = op_names.iter().filter(|n| *n == "wasm.struct_new").count();
         assert!(
             struct_new_count >= 3,
-            "expected at least 3 struct_new (state + continuation + YieldResult), got {}",
+            "expected at least 3 struct_new (state + continuation + Step), got {}",
             struct_new_count
         );
-        // Total: 15 operations (no resume function, just shift expansion with YieldResult)
-        assert_eq!(op_names.len(), 15);
+        // Total: 17 operations (no resume function, shift expansion with Step having 4 fields)
+        assert_eq!(op_names.len(), 17);
     }
 
     #[salsa::tracked]
@@ -3195,7 +3275,7 @@ mod tests {
         // 3. wasm.ref_cast (cast continuation to structref for struct_get)
         // 4. wasm.struct_get (extract resume_fn from continuation)
         // 5. wasm.struct_get (extract state from continuation)
-        // 6. tribute_rt.box_int (box the i32 value, since wrapper needs anyref)
+        // 6. wasm.ref_i31 (box the i32 value to anyref for wrapper)
         // 7. wasm.struct_new (create wrapper struct with state + boxed_value)
         // 8. wasm.call_indirect (invoke resume_fn with wrapper)
         // First op: i32_const for resetting yield_state
@@ -3206,8 +3286,8 @@ mod tests {
         assert!(op_names.contains(&"wasm.ref_cast".to_string()));
         // Should contain struct_get operations
         assert!(op_names.contains(&"wasm.struct_get".to_string()));
-        // Should contain boxing operation for the i32 value
-        assert!(op_names.contains(&"tribute_rt.box_int".to_string()));
+        // Should contain ref_i31 for boxing i32 to anyref
+        assert!(op_names.contains(&"wasm.ref_i31".to_string()));
         // Should contain struct_new for wrapper
         assert!(op_names.contains(&"wasm.struct_new".to_string()));
         // Total: 8 operations (added ref_cast for continuation casting)

@@ -41,7 +41,11 @@ pub(crate) struct MainExports<'db> {
     /// Whether the main function was encountered during lowering.
     pub(crate) saw_main: bool,
     /// The return type of the main function, if any.
+    /// When main is effectful, this will be the Step type.
     pub(crate) main_result_type: Option<Type<'db>>,
+    /// The original return type of main before Step conversion.
+    /// This is used by the trampoline to properly unbox the result.
+    pub(crate) original_result_type: Option<Type<'db>>,
     /// Whether main has been exported.
     pub(crate) main_exported: bool,
 }
