@@ -5418,18 +5418,18 @@ mod tests {
         let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
 
         // Create struct_new inside function body
-        let field = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(42))
-            .results(idvec![i32_ty])
-            .build();
+        let field = wasm::i32_const(db, location, i32_ty, 42).as_operation();
 
-        let struct_new = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
-            .operands(idvec![field.result(db, 0)])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64))
-            .build();
+        let struct_new = wasm::struct_new(
+            db,
+            location,
+            vec![field.result(db, 0)],
+            i32_ty,
+            FIRST_USER_TYPE_IDX,
+        )
+        .as_operation();
 
-        let func_return = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::RETURN()).build();
+        let func_return = wasm::r#return(db, location, vec![]).as_operation();
 
         let body_block = Block::new(
             db,
@@ -5440,12 +5440,9 @@ mod tests {
         );
         let body_region = Region::new(db, location, idvec![body_block]);
 
-        // Create wasm.func
-        let wasm_func = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::FUNC())
-            .attr("sym_name", Attribute::Symbol(Symbol::new("test_fn")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(body_region)
-            .build();
+        // Create wasm.func using typed helper
+        let wasm_func =
+            wasm::func(db, location, Symbol::new("test_fn"), func_ty, body_region).as_operation();
 
         let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
         let region = Region::new(db, location, idvec![block]);

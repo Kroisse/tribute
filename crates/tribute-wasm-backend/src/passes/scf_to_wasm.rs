@@ -88,20 +88,17 @@ impl RewritePattern for ScfLoopPattern {
         let location = op.location(db);
         let body = loop_op.body(db);
 
-        // Create wasm.loop with the body region
-        // PatternApplicator will recursively process the body
-        // Note: wasm::loop typed helper requires label attribute, but we don't set one.
-        // Use Operation::of_name for flexibility.
-        let wasm_loop = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::LOOP())
-            .regions(idvec![body])
-            .build();
-
-        // Wrap in wasm.block for break target
+        // Get result type first
         let result_ty = op
             .results(db)
             .first()
             .copied()
             .unwrap_or_else(|| core::Nil::new(db).as_type());
+
+        // Create wasm.loop with the body region
+        // PatternApplicator will recursively process the body
+        let wasm_loop =
+            wasm::r#loop(db, location, result_ty, trunk_ir::Symbol::new(""), body).as_operation();
 
         let block_body_block = Block::new(
             db,
@@ -112,12 +109,14 @@ impl RewritePattern for ScfLoopPattern {
         );
         let block_body = Region::new(db, location, idvec![block_body_block]);
 
-        // Note: wasm::block typed helper requires label attribute, but we don't set one.
-        // Use Operation::of_name for flexibility.
-        let wasm_block = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::BLOCK())
-            .results(idvec![result_ty])
-            .regions(idvec![block_body])
-            .build();
+        let wasm_block = wasm::block(
+            db,
+            location,
+            result_ty,
+            trunk_ir::Symbol::new(""),
+            block_body,
+        )
+        .as_operation();
 
         RewriteResult::Replace(wasm_block)
     }
