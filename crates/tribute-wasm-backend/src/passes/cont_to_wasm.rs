@@ -2808,8 +2808,8 @@ impl RewritePattern for PushPromptPattern {
         // Push_prompt always returns Step (either from yield or Done Step wrapping).
         let step_ty = cont_types::step_type(db);
         // Note: wasm::block typed helper expects Symbol (label name), but we use integer tags.
-        // Use Operation::of_name for tag-based block labeling.
-        let new_op = Operation::of_name(db, location, "wasm.block")
+        // Use Operation::of for tag-based block labeling.
+        let new_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::BLOCK())
             .results(idvec![step_ty])
             .attr("label", Attribute::IntBits(tag_value))
             .regions(idvec![new_body])
@@ -3945,8 +3945,10 @@ mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
     use trunk_ir::DialectType;
-    use trunk_ir::dialect::core;
-    use trunk_ir::{Block, BlockId, IdVec, Location, PathId, Region, Span, Value, ValueDef, idvec};
+    use trunk_ir::dialect::{arith, core, func};
+    use trunk_ir::{
+        Attribute, Block, BlockId, IdVec, Location, PathId, Region, Span, Value, ValueDef, idvec,
+    };
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -3966,7 +3968,7 @@ mod tests {
         let handlers_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
         let handlers_region = Region::new(db, location, idvec![handlers_block]);
 
-        // Use typed helper instead of Operation::of_name
+        // Use typed helper
         let push_prompt = cont::push_prompt(db, location, i32_ty, 42, body_region, handlers_region);
 
         let block = Block::new(
@@ -4030,7 +4032,7 @@ mod tests {
         let handler_region = Region::new(db, location, idvec![handler_block]);
 
         // cont.shift now has a result (the value passed when continuation is resumed)
-        let shift = Operation::of_name(db, location, "cont.shift")
+        let shift = Operation::of(db, location, cont::DIALECT_NAME(), cont::SHIFT())
             .attr("tag", Attribute::IntBits(42))
             .attr("op_idx", Attribute::IntBits(0)) // Required attribute for multi-op dispatch
             .result(i32_ty)
@@ -4104,18 +4106,14 @@ mod tests {
         let location = test_location(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // Create dummy continuation and value operands
-        let cont_op = Operation::of_name(db, location, "test.dummy_cont")
-            .result(i32_ty)
-            .build();
-        let cont_val = Value::new(db, ValueDef::OpResult(cont_op), 0);
+        // Create dummy continuation and value operands using arith.const
+        let cont_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(0));
+        let cont_val = cont_op.result(db);
 
-        let val_op = Operation::of_name(db, location, "test.dummy_val")
-            .result(i32_ty)
-            .build();
-        let value = Value::new(db, ValueDef::OpResult(val_op), 0);
+        let val_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
+        let value = val_op.result(db);
 
-        let resume = Operation::of_name(db, location, "cont.resume")
+        let resume = Operation::of(db, location, cont::DIALECT_NAME(), cont::RESUME())
             .operand(cont_val)
             .operand(value)
             .result(i32_ty)
@@ -4126,7 +4124,7 @@ mod tests {
             BlockId::fresh(),
             location,
             idvec![],
-            idvec![cont_op, val_op, resume],
+            idvec![cont_op.as_operation(), val_op.as_operation(), resume],
         );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
@@ -4176,13 +4174,11 @@ mod tests {
         let location = test_location(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // Create dummy continuation operand
-        let cont_op = Operation::of_name(db, location, "test.dummy_cont")
-            .result(i32_ty)
-            .build();
-        let cont_val = Value::new(db, ValueDef::OpResult(cont_op), 0);
+        // Create dummy continuation operand using arith.const
+        let cont_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(0));
+        let cont_val = cont_op.result(db);
 
-        let drop_op = Operation::of_name(db, location, "cont.drop")
+        let drop_op = Operation::of(db, location, cont::DIALECT_NAME(), cont::DROP())
             .operand(cont_val)
             .build();
 
@@ -4191,7 +4187,7 @@ mod tests {
             BlockId::fresh(),
             location,
             idvec![],
-            idvec![cont_op, drop_op],
+            idvec![cont_op.as_operation(), drop_op],
         );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
@@ -4231,11 +4227,16 @@ mod tests {
         let handler_region = Region::new(db, shift_loc, idvec![handler_block]);
 
         // cont.shift now has a result (the value passed when continuation is resumed)
-        let shift = Operation::of_name(db, shift_loc, "cont.shift")
-            .attr("tag", Attribute::IntBits(99))
-            .result(i32_ty)
-            .region(handler_region)
-            .build();
+        let shift = cont::shift(
+            db,
+            shift_loc,
+            std::iter::empty::<Value>(),
+            i32_ty,
+            99,
+            0,
+            handler_region,
+        )
+        .as_operation();
 
         // Create function body with shift
         let func_body_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![shift]);
@@ -4243,7 +4244,7 @@ mod tests {
 
         // Create func.func operation
         let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
-        let func_op = Operation::of_name(db, location, "func.func")
+        let func_op = Operation::of(db, location, func::DIALECT_NAME(), func::FUNC())
             .attr("sym_name", Attribute::Symbol(Symbol::new("my_func")))
             .attr("type", Attribute::Type(func_ty))
             .region(func_body)
@@ -4301,7 +4302,7 @@ mod tests {
         // 3. An operation that uses local_val after shift
 
         // Define a value before shift
-        let local_op = Operation::of_name(db, location, "wasm.i32_const")
+        let local_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
             .attr("value", Attribute::IntBits(42))
             .result(i32_ty)
             .build();
@@ -4311,20 +4312,24 @@ mod tests {
         let handler_block = Block::new(db, BlockId::fresh(), shift_loc, IdVec::new(), idvec![]);
         let handler_region = Region::new(db, shift_loc, idvec![handler_block]);
         // cont.shift now has a result (the value passed when continuation is resumed)
-        let shift = Operation::of_name(db, shift_loc, "cont.shift")
-            .attr("tag", Attribute::IntBits(1))
-            .attr("op_idx", Attribute::IntBits(0))
-            .result(i32_ty)
-            .region(handler_region)
-            .build();
+        let shift = cont::shift(
+            db,
+            shift_loc,
+            std::iter::empty::<Value>(),
+            i32_ty,
+            1,
+            0,
+            handler_region,
+        )
+        .as_operation();
 
         // Use local_val after shift
-        let use_after = Operation::of_name(db, location, "wasm.drop")
+        let use_after = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::DROP())
             .operand(local_val)
             .build();
 
         // Return
-        let return_op = Operation::of_name(db, location, "wasm.return").build();
+        let return_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::RETURN()).build();
 
         // Create function body
         let func_body_block = Block::new(
@@ -4338,7 +4343,7 @@ mod tests {
 
         // Create func.func operation
         let func_ty = core::Func::new(db, idvec![], core::Nil::new(db).as_type()).as_type();
-        let func_op = Operation::of_name(db, location, "func.func")
+        let func_op = Operation::of(db, location, func::DIALECT_NAME(), func::FUNC())
             .attr("sym_name", Attribute::Symbol(Symbol::new("fn_with_live")))
             .attr("type", Attribute::Type(func_ty))
             .region(func_body)

@@ -213,20 +213,6 @@ impl<'db> Operation<'db> {
         OperationBuilder::new(db, location, dialect, name)
     }
 
-    /// Create a builder, parsing "dialect.operation" string.
-    pub fn of_name(
-        db: &'db dyn salsa::Database,
-        location: Location<'db>,
-        full_name: &'static str,
-    ) -> OperationBuilder<'db> {
-        let (dialect, name) = full_name
-            .split_once('.')
-            .expect("invalid operation name: expected 'dialect.operation'");
-        let dialect = Symbol::new(dialect);
-        let name = Symbol::new(name);
-        Self::of(db, location, dialect, name)
-    }
-
     /// Format as "dialect.operation".
     pub fn full_name(&self, db: &'db dyn salsa::Database) -> String {
         format!("{}.{}", self.dialect(db), self.name(db))
@@ -670,7 +656,9 @@ mod tests {
     // Test the new define_op! macro
     mod define_op_tests {
         use crate::{
-            BlockId, DialectType, Location, PathId, Region, Span, dialect, dialect::core, idvec,
+            BlockId, DialectType, Location, PathId, Region, Span, dialect,
+            dialect::{arith, core},
+            idvec,
         };
         use salsa_test_macros::salsa_test;
 
@@ -706,13 +694,12 @@ mod tests {
             let path = PathId::new(db, "file:///test.trb".to_owned());
             let location = Location::new(path, Span::new(0, 0));
 
-            // Create dummy values using a helper op
-            let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
-                .result(core::I32::new(db).as_type())
-                .result(core::I32::new(db).as_type())
-                .build();
-            let v0 = dummy_op.result(db, 0);
-            let v1 = dummy_op.result(db, 1);
+            // Create dummy values using arith dialect
+            let i32_ty = core::I32::new(db).as_type();
+            let const_op0 = arith::r#const(db, location, i32_ty, crate::Attribute::IntBits(1));
+            let const_op1 = arith::r#const(db, location, i32_ty, crate::Attribute::IntBits(2));
+            let v0 = const_op0.result(db);
+            let v1 = const_op1.result(db);
 
             binary(db, location, v0, v1, core::I32::new(db).as_type())
         }
@@ -782,17 +769,16 @@ mod tests {
             let path = PathId::new(db, "file:///test.trb".to_owned());
             let location = Location::new(path, Span::new(0, 0));
 
-            // Create dummy values
-            let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
-                .result(core::I32::new(db).as_type())
-                .result(core::I32::new(db).as_type())
-                .result(core::I32::new(db).as_type())
-                .result(core::I32::new(db).as_type())
-                .build();
-            let v0 = dummy_op.result(db, 0);
-            let v1 = dummy_op.result(db, 1);
-            let v2 = dummy_op.result(db, 2);
-            let v3 = dummy_op.result(db, 3);
+            // Create dummy values using arith dialect
+            let i32_ty = core::I32::new(db).as_type();
+            let const_op0 = arith::r#const(db, location, i32_ty, crate::Attribute::IntBits(1));
+            let const_op1 = arith::r#const(db, location, i32_ty, crate::Attribute::IntBits(2));
+            let const_op2 = arith::r#const(db, location, i32_ty, crate::Attribute::IntBits(3));
+            let const_op3 = arith::r#const(db, location, i32_ty, crate::Attribute::IntBits(4));
+            let v0 = const_op0.result(db);
+            let v1 = const_op1.result(db);
+            let v2 = const_op2.result(db);
+            let v3 = const_op3.result(db);
 
             mixed(
                 db,
@@ -824,11 +810,10 @@ mod tests {
             let path = PathId::new(db, "file:///test.trb".to_owned());
             let location = Location::new(path, Span::new(0, 0));
 
-            // Create a dummy input value
-            let dummy_op = crate::Operation::of_name(db, location, "test.dummy")
-                .result(core::I32::new(db).as_type())
-                .build();
-            let input = dummy_op.result(db, 0);
+            // Create a dummy input value using arith dialect
+            let i32_ty = core::I32::new(db).as_type();
+            let const_op = arith::r#const(db, location, i32_ty, crate::Attribute::IntBits(10));
+            let input = const_op.result(db);
 
             multi_result(
                 db,

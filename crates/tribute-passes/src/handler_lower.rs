@@ -364,11 +364,8 @@ mod tests {
         let arms_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
         let arms = Region::new(db, location, idvec![arms_block]);
 
-        let handle_op = Operation::of_name(db, location, "tribute.handle")
-            .result(*core::Nil::new(db))
-            .region(body)
-            .region(arms)
-            .build();
+        let result_ty = *core::Nil::new(db);
+        let handle_op = tribute::handle(db, location, result_ty, body, arms).as_operation();
 
         // Apply the pattern
         let pattern = LowerPromptPattern::new();
@@ -393,10 +390,10 @@ mod tests {
         let val_ty = *core::I32::new(db);
 
         // Create dummy operations to get values from
-        let cont_op = Operation::of_name(db, location, "test.cont")
+        let cont_op = Operation::of(db, location, Symbol::new("test"), Symbol::new("cont"))
             .result(cont_ty)
             .build();
-        let val_op = Operation::of_name(db, location, "test.val")
+        let val_op = Operation::of(db, location, Symbol::new("test"), Symbol::new("val"))
             .result(val_ty)
             .build();
 
@@ -426,7 +423,7 @@ mod tests {
 
         // Create a dummy continuation value
         let cont_ty = *core::Nil::new(db);
-        let cont_op = Operation::of_name(db, location, "test.cont")
+        let cont_op = Operation::of(db, location, Symbol::new("test"), Symbol::new("cont"))
             .result(cont_ty)
             .build();
         let cont_val = Value::new(db, ValueDef::OpResult(cont_op), 0);
@@ -456,11 +453,15 @@ mod tests {
         let ability_ref = *core::AbilityRefType::simple(db, Symbol::new("State"));
         let op_name = Symbol::new("get");
 
-        let perform_op = Operation::of_name(db, location, "ability.perform")
-            .attr("ability_ref", Attribute::Type(ability_ref))
-            .attr("op", Attribute::Symbol(op_name))
-            .result(*core::I32::new(db))
-            .build();
+        let perform_op = ability::perform(
+            db,
+            location,
+            std::iter::empty::<Value>(),
+            *core::I32::new(db),
+            ability_ref,
+            op_name,
+        )
+        .as_operation();
 
         // Apply the pattern
         let pattern = LowerPerformPattern::new();

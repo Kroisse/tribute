@@ -325,7 +325,7 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
 
         let i32_ty = core::I32::new(db).as_type();
-        let dummy_op = Operation::of_name(db, location, "test.value")
+        let dummy_op = Operation::of(db, location, Symbol::new("test"), Symbol::new("value"))
             .result(i32_ty)
             .build();
         let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);
@@ -358,7 +358,7 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
 
         let i31ref_ty = wasm::I31ref::new(db).as_type();
-        let dummy_op = Operation::of_name(db, location, "test.value")
+        let dummy_op = Operation::of(db, location, Symbol::new("test"), Symbol::new("value"))
             .result(i31ref_ty)
             .build();
         let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);
@@ -391,7 +391,7 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
 
         let int_ty = tribute_rt::Int::new(db).as_type();
-        let dummy_op = Operation::of_name(db, location, "test.value")
+        let dummy_op = Operation::of(db, location, Symbol::new("test"), Symbol::new("value"))
             .result(int_ty)
             .build();
         let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);
@@ -426,7 +426,7 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
 
         let anyref_ty = wasm::Anyref::new(db).as_type();
-        let dummy_op = Operation::of_name(db, location, "test.value")
+        let dummy_op = Operation::of(db, location, Symbol::new("test"), Symbol::new("value"))
             .result(anyref_ty)
             .build();
         let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);

@@ -559,12 +559,17 @@ impl<'db> CaseLowerer<'db> {
         // Build the handler_dispatch operation with all suspend arms as regions
         // Region 0: done_body
         // Region 1+: suspend_bodies (one per handler arm)
-        // Note: Using Operation::of_name here because we need to add dynamic regions
+        // Note: Using Operation::of here because we need to add dynamic regions
         // and attributes (op_idx_N, num_suspend_arms) that the typed helper doesn't support
-        let mut builder = Operation::of_name(self.db, location, "cont.handler_dispatch")
-            .operand(scrutinee)
-            .result(result_type)
-            .region(done_body);
+        let mut builder = Operation::of(
+            self.db,
+            location,
+            cont::DIALECT_NAME(),
+            cont::HANDLER_DISPATCH(),
+        )
+        .operand(scrutinee)
+        .result(result_type)
+        .region(done_body);
 
         // Add all suspend body regions
         for (i, (op_idx, body)) in suspend_bodies.iter().enumerate() {
@@ -811,10 +816,15 @@ impl<'db> CaseLowerer<'db> {
         }
 
         // Build cont.handler_dispatch
-        let mut builder = Operation::of_name(self.db, location, "cont.handler_dispatch")
-            .operand(push_prompt_result)
-            .result(result_type)
-            .region(done_body);
+        let mut builder = Operation::of(
+            self.db,
+            location,
+            cont::DIALECT_NAME(),
+            cont::HANDLER_DISPATCH(),
+        )
+        .operand(push_prompt_result)
+        .result(result_type)
+        .region(done_body);
 
         for (i, (op_idx, body)) in suspend_bodies.iter().enumerate() {
             let attr_name = format!("op_idx_{}", i);

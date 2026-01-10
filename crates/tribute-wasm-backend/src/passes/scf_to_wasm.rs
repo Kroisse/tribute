@@ -92,7 +92,7 @@ impl RewritePattern for ScfLoopPattern {
         // PatternApplicator will recursively process the body
         // Note: wasm::loop typed helper requires label attribute, but we don't set one.
         // Use Operation::of_name for flexibility.
-        let wasm_loop = Operation::of_name(db, location, "wasm.loop")
+        let wasm_loop = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::LOOP())
             .regions(idvec![body])
             .build();
 
@@ -114,7 +114,7 @@ impl RewritePattern for ScfLoopPattern {
 
         // Note: wasm::block typed helper requires label attribute, but we don't set one.
         // Use Operation::of_name for flexibility.
-        let wasm_block = Operation::of_name(db, location, "wasm.block")
+        let wasm_block = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::BLOCK())
             .results(idvec![result_ty])
             .regions(idvec![block_body])
             .build();
@@ -178,7 +178,7 @@ impl RewritePattern for ScfContinuePattern {
         // Branch to loop (depth 1: block=0, loop=1)
         // Note: wasm::br typed helper expects Symbol (label name), but we use integer depths.
         // Use Operation::of_name for depth-based branching.
-        let br_op = Operation::of_name(db, op.location(db), "wasm.br")
+        let br_op = Operation::of(db, op.location(db), wasm::DIALECT_NAME(), wasm::BR())
             .attr("target", Attribute::IntBits(1))
             .build();
 
@@ -205,7 +205,7 @@ impl RewritePattern for ScfBreakPattern {
         // Branch to block (depth 0) with result value
         // Note: The wasm.br typed helper doesn't support operands, but we need to
         // pass the break value. Use Operation::of_name for this case.
-        let br_op = Operation::of_name(db, op.location(db), "wasm.br")
+        let br_op = Operation::of(db, op.location(db), wasm::DIALECT_NAME(), wasm::BR())
             .attr("target", Attribute::IntBits(0))
             .operands(op.operands(db).clone())
             .build();
@@ -241,7 +241,7 @@ mod tests {
         // Create a dummy condition value
         let cond_const = wasm::i32_const(db, location, i32_ty, 1);
 
-        let scf_if = Operation::of_name(db, location, "scf.if")
+        let scf_if = Operation::of(db, location, scf::DIALECT_NAME(), scf::IF())
             .operands(idvec![cond_const.result(db)])
             .results(idvec![i32_ty])
             .regions(idvec![then_region, else_region])
