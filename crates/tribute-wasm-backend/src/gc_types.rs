@@ -246,7 +246,7 @@ impl<'db> GcTypeRegistry<'db> {
 
     /// Returns all type definitions including builtins.
     ///
-    /// The returned vector has builtins at indices 0-2 and user types starting at index 3.
+    /// The returned vector has builtins at indices 0-4 and user types starting at index 5.
     pub fn all_types(&self) -> Vec<GcTypeDef> {
         let mut all = Self::builtin_types();
         all.extend(self.types.iter().cloned());
