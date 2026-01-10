@@ -18,11 +18,11 @@ use salsa::Accumulator;
 use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::{adt, tribute, tribute_pat};
 use trunk_ir::dialect::core::Module;
-use trunk_ir::dialect::{arith, cont, core, scf};
+use trunk_ir::dialect::{arith, cont, core, func, scf};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region,
-    SymbolVec, Type,
+    SymbolVec, Type, idvec,
 };
 use trunk_ir::{Symbol, Value, ValueDef};
 
@@ -170,6 +170,77 @@ impl<'db> CaseLowerer<'db> {
         Region::new(self.db, region.location(self.db), IdVec::from(blocks))
     }
 
+    /// Ensure a region ends with a yield operation.
+    ///
+    /// If the region is empty or doesn't end with a yield/return, add an scf.yield
+    /// with the given default value. This is needed when the arm body is just a
+    /// variable reference that gets erased during lowering.
+    fn ensure_region_yields(
+        &self,
+        region: Region<'db>,
+        default_value: Value<'db>,
+        location: Location<'db>,
+    ) -> Region<'db> {
+        let blocks = region.blocks(self.db);
+        let last_block = blocks.last();
+
+        // Check if the region already ends with a yield or return
+        let needs_yield = match last_block {
+            None => true,
+            Some(block) => {
+                let ops = block.operations(self.db);
+                match ops.last() {
+                    None => true,
+                    Some(last_op) => {
+                        let dialect = last_op.dialect(self.db);
+                        let name = last_op.name(self.db);
+                        // Already has yield or return
+                        !(dialect == scf::DIALECT_NAME() && name == scf::YIELD())
+                            && !(dialect == func::DIALECT_NAME() && name == func::RETURN())
+                            && !(dialect == Symbol::new("wasm") && name == Symbol::new("yield"))
+                    }
+                }
+            }
+        };
+
+        if !needs_yield {
+            return region;
+        }
+
+        // Look up the current mapped value (in case it was remapped during lowering)
+        let yield_value = self.ctx.lookup(default_value);
+        let yield_op = scf::r#yield(self.db, location, vec![yield_value]);
+
+        if let Some(block) = last_block {
+            // Add yield to existing last block
+            let mut new_ops: Vec<Operation<'db>> =
+                block.operations(self.db).iter().copied().collect();
+            new_ops.push(yield_op.as_operation());
+            let new_block = Block::new(
+                self.db,
+                block.id(self.db),
+                block.location(self.db),
+                block.args(self.db).clone(),
+                IdVec::from(new_ops),
+            );
+
+            let mut new_blocks: Vec<Block<'db>> =
+                blocks.iter().take(blocks.len() - 1).copied().collect();
+            new_blocks.push(new_block);
+            Region::new(self.db, region.location(self.db), IdVec::from(new_blocks))
+        } else {
+            // Create new block with just the yield
+            let new_block = Block::new(
+                self.db,
+                BlockId::fresh(),
+                location,
+                IdVec::new(),
+                IdVec::from(vec![yield_op.as_operation()]),
+            );
+            Region::new(self.db, location, IdVec::from(vec![new_block]))
+        }
+    }
+
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
         // Register block arg types for value_type lookups
         let arg_types = block.arg_types(self.db);
@@ -195,6 +266,11 @@ impl<'db> CaseLowerer<'db> {
 
         if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::CASE() {
             return self.lower_case(op, remapped_operands);
+        }
+
+        // Lower tribute.handle to cont.push_prompt + cont.handler_dispatch
+        if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::HANDLE() {
+            return self.lower_handle(op);
         }
 
         if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::YIELD() {
@@ -336,22 +412,53 @@ impl<'db> CaseLowerer<'db> {
 
         // Process done_body - lower the body region
         let done_body = if let Some(done_arm) = done_arm {
+            // The scrutinee is a Step value from push_prompt.
+            // We need to extract the actual result value from the Step
+            // before binding it to the done arm's pattern variable.
+
             // Set up bindings for the result value
             // The done arm's pattern region may have a bind pattern for the result
-            if let Some(pattern_region) = done_arm.pattern_region {
+            let unwrapped_value = if let Some(pattern_region) = done_arm.pattern_region {
                 let bindings = self.extract_bindings_from_pattern(pattern_region);
-                for name in bindings.iter() {
-                    // In handler_done, the result is the scrutinee (push_prompt result)
-                    self.current_arm_bindings.insert(*name, scrutinee);
+                if !bindings.is_empty() {
+                    // Create cont.get_done_value to extract the actual value from Step
+                    let get_value_op = Operation::of_name(self.db, location, "cont.get_done_value")
+                        .operands(idvec![scrutinee])
+                        .results(idvec![result_type])
+                        .build();
+                    let unwrapped = get_value_op.result(self.db, 0);
+
+                    // Bind the pattern variables to the unwrapped value
+                    for name in bindings.iter() {
+                        self.current_arm_bindings.insert(*name, unwrapped);
+                    }
+
+                    Some((get_value_op, unwrapped))
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
 
             let lowered_body = self.lower_region(done_arm.body);
+
+            // If we created a get_done_value operation, prepend it to the body
+            let final_body = if let Some((get_value_op, _)) = unwrapped_value {
+                prepend_op_to_region(self.db, lowered_body, get_value_op)
+            } else {
+                lowered_body
+            };
+
+            // Note: The done arm extracts the actual value (i32, etc.) from Step
+            // and returns it. The WASM backend's wrap_yields_in_done_step will
+            // wrap this result in a Done Step to maintain type consistency with
+            // suspend arms.
 
             // Clear bindings after processing
             self.current_arm_bindings.clear();
 
-            lowered_body
+            final_body
         } else {
             // No done arm - create empty region (unreachable case)
             Region::new(self.db, location, IdVec::new())
@@ -485,6 +592,290 @@ impl<'db> CaseLowerer<'db> {
         self.ctx.map_results(self.db, &op, &dispatch_op);
 
         vec![dispatch_op]
+    }
+
+    /// Lower `tribute.handle` to `cont.push_prompt` + `cont.handler_dispatch`.
+    ///
+    /// The fused handler syntax `handle expr { ... }` is converted to:
+    /// 1. `cont.push_prompt` for the body region
+    /// 2. `cont.handler_dispatch` for the handler arms
+    ///
+    /// The push_prompt result is used as the scrutinee for handler_dispatch.
+    fn lower_handle(&mut self, op: Operation<'db>) -> Vec<Operation<'db>> {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use trunk_ir::dialect::cont;
+
+        static PROMPT_TAG_GEN: AtomicU32 = AtomicU32::new(0);
+        let tag = PROMPT_TAG_GEN.fetch_add(1, Ordering::Relaxed);
+
+        let location = op.location(self.db);
+        let result_type = op
+            .results(self.db)
+            .first()
+            .copied()
+            .unwrap_or_else(|| core::Nil::new(self.db).as_type());
+
+        // Get body and arms regions from tribute.handle
+        let Ok(handle_op) = tribute::Handle::from_operation(self.db, op) else {
+            return vec![op];
+        };
+        let body_region = handle_op.body(self.db);
+        let arms_region = handle_op.arms(self.db);
+
+        // Lower the body region
+        let lowered_body = self.lower_region(body_region);
+
+        // Create empty handlers region for push_prompt
+        // (handler logic is in handler_dispatch, not push_prompt)
+        let empty_handlers = Region::new(
+            self.db,
+            location,
+            IdVec::from(vec![Block::new(
+                self.db,
+                BlockId::fresh(),
+                location,
+                IdVec::new(),
+                IdVec::new(),
+            )]),
+        );
+
+        // Create cont.push_prompt with the body
+        let push_prompt = cont::push_prompt(
+            self.db,
+            location,
+            result_type,
+            tag,
+            lowered_body,
+            empty_handlers,
+        );
+        let push_prompt_result = push_prompt.as_operation().result(self.db, 0);
+
+        // Collect arms from the arms region
+        let arms = self.collect_handler_arms(arms_region);
+
+        // Process done arm and suspend arms (similar to lower_handler_case)
+        let mut done_arm: Option<&ArmInfo<'db>> = None;
+        let mut suspend_arms: Vec<&ArmInfo<'db>> = Vec::new();
+
+        for arm in &arms {
+            match &arm.pattern {
+                ArmPattern::HandlerDone => {
+                    done_arm = Some(arm);
+                }
+                ArmPattern::HandlerSuspend { .. } => {
+                    suspend_arms.push(arm);
+                }
+                _ => {
+                    // Other patterns - emit warning
+                    self.emit_error(location, "unexpected pattern in handler expression");
+                }
+            }
+        }
+
+        // Process done_body
+        // The done arm receives the Step struct from push_prompt.
+        // We need to extract the value field (field 1) from the Step.
+        //
+        // For primitive types (Int/Nat), we also need to unbox:
+        // get_done_value returns anyref, which needs ref_cast → i31ref → unbox_int → i32
+        // The unboxing is handled by the WASM backend via GetDoneValuePattern, which
+        // knows the expected result type and can generate appropriate unboxing ops.
+        //
+        // We pass the result_type as an attribute on get_done_value so the WASM backend
+        // can determine whether to unbox.
+        let get_done_value_op =
+            cont::get_done_value(self.db, location, push_prompt_result, result_type);
+        let done_value = get_done_value_op.as_operation().result(self.db, 0);
+
+        let done_body = if let Some(done_arm) = done_arm {
+            // Bind result variable to the extracted done value (unboxed if primitive)
+            if let Some(pattern_region) = done_arm.pattern_region {
+                let bindings = self.extract_bindings_from_pattern(pattern_region);
+                for name in bindings.iter() {
+                    self.current_arm_bindings.insert(*name, done_value);
+                }
+            }
+
+            let lowered_body = self.lower_region(done_arm.body);
+            self.current_arm_bindings.clear();
+
+            // Prepend the get_done_value operation to the body
+            let body_with_extraction =
+                self.prepend_op_to_region(lowered_body, get_done_value_op.as_operation());
+
+            // Ensure the done_body ends with a yield operation.
+            // If the body is just a variable reference (e.g., `{ result } -> result`),
+            // the tribute.var gets erased during lowering and the region becomes empty.
+            // We need to add an scf.yield with the result value.
+            self.ensure_region_yields(body_with_extraction, done_value, location)
+        } else {
+            // No done arm - extract value and return it directly
+            let yield_op = scf::r#yield(self.db, location, vec![done_value]);
+            let block = Block::new(
+                self.db,
+                BlockId::fresh(),
+                location,
+                IdVec::new(),
+                IdVec::from(vec![
+                    get_done_value_op.as_operation(),
+                    yield_op.as_operation(),
+                ]),
+            );
+            Region::new(self.db, location, IdVec::from(vec![block]))
+        };
+
+        // Process suspend arms
+        let mut suspend_bodies: Vec<(u64, Region<'db>)> = Vec::new();
+
+        for suspend_arm in &suspend_arms {
+            let op_name = match &suspend_arm.pattern {
+                ArmPattern::HandlerSuspend { op_name } => *op_name,
+                _ => continue,
+            };
+
+            let op_idx: u64 = op_name.with_str(compute_op_idx_hash);
+
+            // Set up bindings for continuation and args
+            let mut extraction_ops: Vec<Operation<'db>> = Vec::new();
+            // Use core::Ptr as a placeholder type for opaque references
+            // The WASM backend will determine the actual types during lowering.
+            // Note: shift_value is kept as anyref because generic types (like `s` in State(s))
+            // are represented as anyref in WASM. Unboxing happens at use sites where the
+            // concrete type is known.
+            let ptr_ty = core::Ptr::new(self.db).as_type();
+
+            if let Some(pattern_region) = suspend_arm.pattern_region {
+                let bindings = self.extract_bindings_from_pattern(pattern_region);
+
+                for (i, name) in bindings.iter().enumerate() {
+                    if i == bindings.len() - 1 {
+                        // Last binding is continuation (k)
+                        let get_cont_op =
+                            cont::get_continuation(self.db, location, ptr_ty).as_operation();
+                        let cont_val = get_cont_op.result(self.db, 0);
+                        extraction_ops.push(get_cont_op);
+                        self.current_arm_bindings.insert(*name, cont_val);
+                    } else {
+                        // Other bindings are shift_value arguments
+                        // Keep as anyref - unboxing happens at use sites
+                        let get_shift_op =
+                            cont::get_shift_value(self.db, location, ptr_ty).as_operation();
+                        let shift_val = get_shift_op.result(self.db, 0);
+                        extraction_ops.push(get_shift_op);
+                        self.current_arm_bindings.insert(*name, shift_val);
+                    }
+                }
+            }
+
+            let lowered_body = self.lower_region(suspend_arm.body);
+
+            // Prepend extraction ops
+            let body_with_extractions = if !extraction_ops.is_empty() {
+                let body_blocks = lowered_body.blocks(self.db);
+                if let Some(first_block) = body_blocks.first().copied() {
+                    let mut new_ops = IdVec::from(extraction_ops);
+                    new_ops.extend(first_block.operations(self.db).iter().copied());
+                    let new_block = Block::new(
+                        self.db,
+                        first_block.id(self.db),
+                        first_block.location(self.db),
+                        first_block.args(self.db).clone(),
+                        new_ops,
+                    );
+                    let mut new_blocks: Vec<Block<'db>> = vec![new_block];
+                    new_blocks.extend(body_blocks.iter().skip(1).copied());
+                    Region::new(
+                        self.db,
+                        lowered_body.location(self.db),
+                        IdVec::from(new_blocks),
+                    )
+                } else {
+                    let block = Block::new(
+                        self.db,
+                        BlockId::fresh(),
+                        location,
+                        IdVec::new(),
+                        IdVec::from(extraction_ops),
+                    );
+                    Region::new(self.db, location, IdVec::from(vec![block]))
+                }
+            } else {
+                lowered_body
+            };
+
+            self.current_arm_bindings.clear();
+            suspend_bodies.push((op_idx, body_with_extractions));
+        }
+
+        // Build cont.handler_dispatch
+        let mut builder = Operation::of_name(self.db, location, "cont.handler_dispatch")
+            .operand(push_prompt_result)
+            .result(result_type)
+            .region(done_body);
+
+        for (i, (op_idx, body)) in suspend_bodies.iter().enumerate() {
+            let attr_name = format!("op_idx_{}", i);
+            builder = builder.region(*body).attr(
+                Symbol::from_dynamic(&attr_name),
+                Attribute::IntBits(*op_idx),
+            );
+        }
+
+        builder = builder.attr(
+            "num_suspend_arms",
+            Attribute::IntBits(suspend_bodies.len() as u64),
+        );
+
+        let dispatch_op = builder.build();
+
+        // Handler dispatch returns Step. The done arm extracts the actual value
+        // from the Step and returns it, but the overall handler_dispatch still returns Step.
+        // Map original handle result to the dispatch operation result.
+        self.ctx.map_results(self.db, &op, &dispatch_op);
+
+        vec![push_prompt.as_operation(), dispatch_op]
+    }
+
+    /// Collect handler arms from a tribute.handle's arms region.
+    fn collect_handler_arms(&mut self, arms_region: Region<'db>) -> Vec<ArmInfo<'db>> {
+        let mut arms = Vec::new();
+
+        for block in arms_region.blocks(self.db).iter() {
+            for arm_op in block.operations(self.db).iter() {
+                if let Ok(arm) = tribute::Arm::from_operation(self.db, *arm_op) {
+                    let pattern_region = arm.pattern(self.db);
+                    let body = arm.body(self.db);
+                    let pattern = self.analyze_handler_pattern(pattern_region);
+
+                    arms.push(ArmInfo {
+                        pattern,
+                        pattern_region: Some(pattern_region),
+                        body,
+                    });
+                }
+            }
+        }
+
+        arms
+    }
+
+    /// Analyze a handler pattern region to determine if it's done or suspend.
+    fn analyze_handler_pattern(&self, pattern_region: Region<'db>) -> ArmPattern<'db> {
+        // Look for handler_done or handler_suspend patterns
+        for block in pattern_region.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter() {
+                if let Ok(_) = tribute_pat::HandlerDone::from_operation(self.db, *op) {
+                    return ArmPattern::HandlerDone;
+                }
+                if let Ok(suspend) = tribute_pat::HandlerSuspend::from_operation(self.db, *op) {
+                    let op_name = suspend.op(self.db);
+                    return ArmPattern::HandlerSuspend { op_name };
+                }
+            }
+        }
+
+        // Default to bind pattern if no handler-specific pattern found
+        ArmPattern::Bind
     }
 
     /// Lower `tribute.block` to `scf.if` with always-true condition.
@@ -905,6 +1296,36 @@ impl<'db> CaseLowerer<'db> {
 
         let mut new_blocks: Vec<Block<'db>> = vec![new_first_block];
         new_blocks.extend(blocks.iter().skip(1).copied());
+        #[allow(dead_code)]
+        Region::new(self.db, region.location(self.db), IdVec::from(new_blocks))
+    }
+
+    /// Prepend multiple operations to the first block of a region.
+    #[allow(dead_code)]
+    fn prepend_ops_to_region(&self, region: Region<'db>, ops: &[Operation<'db>]) -> Region<'db> {
+        if ops.is_empty() {
+            return region;
+        }
+
+        let blocks = region.blocks(self.db);
+        if blocks.is_empty() {
+            return region;
+        }
+
+        let first_block = blocks[0];
+        let mut new_ops = IdVec::from(ops.to_vec());
+        new_ops.extend(first_block.operations(self.db).iter().copied());
+
+        let new_first_block = Block::new(
+            self.db,
+            first_block.id(self.db),
+            first_block.location(self.db),
+            first_block.args(self.db).clone(),
+            new_ops,
+        );
+
+        let mut new_blocks: Vec<Block<'db>> = vec![new_first_block];
+        new_blocks.extend(blocks.iter().skip(1).copied());
 
         Region::new(self.db, region.location(self.db), IdVec::from(new_blocks))
     }
@@ -1129,4 +1550,45 @@ impl<'db> CaseLowerer<'db> {
         }
         self.enum_variants.insert(type_name, variant_names);
     }
+}
+
+/// Helper function to prepend an operation to the first block of a region.
+fn prepend_op_to_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: Region<'db>,
+    op: Operation<'db>,
+) -> Region<'db> {
+    let location = region.location(db);
+    let blocks = region.blocks(db);
+
+    if blocks.is_empty() {
+        // Empty region - create a new block with just the operation
+        let new_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            IdVec::new(),
+            IdVec::from(vec![op]),
+        );
+        return Region::new(db, location, IdVec::from(vec![new_block]));
+    }
+
+    // Prepend operation to the first block
+    let first_block = &blocks[0];
+    let mut new_ops = vec![op];
+    new_ops.extend(first_block.operations(db).iter().copied());
+
+    let new_first_block = Block::new(
+        db,
+        first_block.id(db),
+        first_block.location(db),
+        first_block.args(db).clone(),
+        IdVec::from(new_ops),
+    );
+
+    // Rebuild region with modified first block
+    let mut new_blocks = vec![new_first_block];
+    new_blocks.extend(blocks.iter().skip(1).copied());
+
+    Region::new(db, location, IdVec::from(new_blocks))
 }

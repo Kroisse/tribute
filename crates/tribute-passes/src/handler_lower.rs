@@ -55,8 +55,9 @@ pub fn lower_handlers<'db>(
             tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
         });
 
+    // Note: tribute.handle → cont.push_prompt is now handled by tribute_to_scf.
+    // This pass only handles ability.* → cont.* transformations.
     let applicator = PatternApplicator::new(converter)
-        .add_pattern(LowerPromptPattern::new())
         .add_pattern(LowerPerformPattern::new())
         .add_pattern(LowerResumePattern)
         .add_pattern(LowerAbortPattern);
@@ -110,8 +111,10 @@ fn fresh_prompt_tag() -> u32 {
 
 // === Pattern: Lower tribute.handle to cont.push_prompt ===
 
+#[allow(dead_code)]
 struct LowerPromptPattern;
 
+#[allow(dead_code)]
 impl LowerPromptPattern {
     fn new() -> Self {
         Self
@@ -125,7 +128,7 @@ impl RewritePattern for LowerPromptPattern {
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        // Match: tribute.handle (no operands, only body region)
+        // Match: tribute.handle (has body and arms regions)
         let handle_op = match tribute::Handle::from_operation(db, *op) {
             Ok(h) => h,
             Err(_) => return RewriteResult::Unchanged,
@@ -137,7 +140,11 @@ impl RewritePattern for LowerPromptPattern {
         // Get the body region
         let body = handle_op.body(db);
 
-        // Create cont.push_prompt with the same body
+        // Get the arms region and convert to handlers region
+        let arms = handle_op.arms(db);
+        let handlers = lower_handler_arms(db, arms);
+
+        // Create cont.push_prompt with body and handlers
         // Note: The body may contain ability.perform ops that will be
         // transformed by LowerPerformPattern in a subsequent pass iteration
         let location = op.location(db);
@@ -147,10 +154,50 @@ impl RewritePattern for LowerPromptPattern {
             .copied()
             .unwrap_or_else(|| *core::Nil::new(db));
 
-        let new_op = cont::push_prompt(db, location, result_ty, tag, body);
+        let new_op = cont::push_prompt(db, location, result_ty, tag, body, handlers);
 
         RewriteResult::Replace(new_op.as_operation())
     }
+}
+
+/// Lower tribute.arm operations from arms region to handlers region.
+///
+/// Each tribute.arm in the arms region becomes a block in the handlers region.
+/// The pattern region determines whether it's a "done" or "suspend" handler:
+/// - handler_done pattern -> first handler (done handler)
+/// - handler_suspend pattern -> subsequent handlers (suspend handlers)
+///
+/// Handler arm bodies may contain references to pattern variables (result, args, k).
+/// These are transformed to use cont.get_continuation and cont.get_shift_value.
+#[allow(dead_code)]
+fn lower_handler_arms<'db>(db: &'db dyn salsa::Database, arms: Region<'db>) -> Region<'db> {
+    let location = arms.location(db);
+
+    // Collect handler blocks from tribute.arm operations
+    let mut handler_blocks = Vec::new();
+
+    for block in arms.blocks(db).iter() {
+        for arm_op in block.operations(db).iter() {
+            if let Ok(arm) = tribute::Arm::from_operation(db, *arm_op) {
+                // Get the arm's body region - this becomes a handler block
+                let arm_body = arm.body(db);
+
+                // Copy the body blocks to handlers
+                // The body contains the handler code with tribute.yield at the end
+                for body_block in arm_body.blocks(db).iter() {
+                    handler_blocks.push(*body_block);
+                }
+            }
+        }
+    }
+
+    // If no handlers found, create empty region
+    if handler_blocks.is_empty() {
+        let empty_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+        return Region::new(db, location, IdVec::from(vec![empty_block]));
+    }
+
+    Region::new(db, location, IdVec::from(handler_blocks))
 }
 
 // === Pattern: Lower ability.perform to cont.shift ===

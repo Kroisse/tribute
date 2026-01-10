@@ -1220,15 +1220,88 @@ fn lower_handler_arm<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<t
     Some(tribute::arm(ctx.db, location, pattern_region, body_region))
 }
 
+/// Extract binding names from a pattern and mark them as local.
+/// This is used for handler pattern arguments where the actual values
+/// are provided later by cont::get_shift_value in tribute_to_scf.
+fn extract_and_mark_pattern_bindings<'db>(ctx: &mut CstLoweringCtx<'db>, pattern: Node) {
+    match pattern.kind() {
+        "identifier" | "identifier_pattern" => {
+            let name: Symbol = node_text(&pattern, &ctx.source).into();
+            ctx.mark_local(name);
+        }
+        "wildcard_pattern" => {
+            // No binding needed
+        }
+        "as_pattern" => {
+            // Mark the binding name
+            if let Some(binding_node) = pattern.child_by_field_name("binding") {
+                let name: Symbol = node_text(&binding_node, &ctx.source).into();
+                ctx.mark_local(name);
+            }
+            // Recurse on inner pattern
+            if let Some(inner_pattern) = pattern.child_by_field_name("pattern") {
+                extract_and_mark_pattern_bindings(ctx, inner_pattern);
+            }
+        }
+        "constructor_pattern" => {
+            // Recurse on positional fields
+            let mut cursor = pattern.walk();
+            for child in pattern.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                match child.kind() {
+                    "pattern_list" => {
+                        let mut list_cursor = child.walk();
+                        for pat_child in child.named_children(&mut list_cursor) {
+                            if !is_comment(pat_child.kind()) {
+                                extract_and_mark_pattern_bindings(ctx, pat_child);
+                            }
+                        }
+                    }
+                    "pattern_fields" => {
+                        let mut fields_cursor = child.walk();
+                        for field_child in child.named_children(&mut fields_cursor) {
+                            if field_child.kind() == "pattern_field" {
+                                let mut field_cursor = field_child.walk();
+                                for pat in field_child.named_children(&mut field_cursor) {
+                                    if !is_comment(pat.kind()) && pat.kind() != "identifier" {
+                                        extract_and_mark_pattern_bindings(ctx, pat);
+                                        break;
+                                    } else if pat.kind() == "identifier" {
+                                        // Shorthand: { name }
+                                        let name: Symbol = node_text(&pat, &ctx.source).into();
+                                        ctx.mark_local(name);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "tuple_pattern" => {
+            // Recurse on tuple elements
+            let mut cursor = pattern.walk();
+            for child in pattern.named_children(&mut cursor) {
+                if !is_comment(child.kind()) {
+                    extract_and_mark_pattern_bindings(ctx, child);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Bind variables from a handler pattern.
 fn bind_handler_pattern<'db>(
     ctx: &mut CstLoweringCtx<'db>,
-    block: &mut BlockBuilder<'db>,
+    _block: &mut BlockBuilder<'db>,
     node: Node,
 ) {
     let mut cursor = node.walk();
-    let location = ctx.location(&node);
-    let infer_ty = ctx.fresh_type_var();
 
     let mut result_name: Option<Symbol> = None;
     let mut has_operation = false;
@@ -1261,19 +1334,16 @@ fn bind_handler_pattern<'db>(
     }
 
     if has_operation {
-        // Suspend pattern: bind args and continuation
+        // Suspend pattern: mark args and continuation as local.
+        // The actual values are bound later in tribute_to_scf via cont::get_shift_value.
         if let Some(args) = args_node {
             let mut args_cursor = args.walk();
-            for (i, arg_child) in args.named_children(&mut args_cursor).enumerate() {
+            for arg_child in args.named_children(&mut args_cursor) {
                 if is_comment(arg_child.kind()) {
                     continue;
                 }
-                // Create a placeholder value for the argument
-                let arg_name = Symbol::from_dynamic(&format!("__handler_arg_{i}"));
-                let arg_var = block
-                    .op(tribute::var(ctx.db, location, infer_ty, arg_name))
-                    .result(ctx.db);
-                bind_pattern(ctx, block, arg_child, arg_var);
+                // Extract binding names from the pattern and mark as local
+                extract_and_mark_pattern_bindings(ctx, arg_child);
             }
         }
         if let Some(k_name) = continuation_name {
