@@ -199,38 +199,29 @@ ability Console {
 
 ## Handler
 
-### `handle` 연산자
+### `handle` 표현식
 
-`handle expr`은 computation을 첫 번째 suspend 지점까지 실행하고, **Request** 값을 반환한다:
-
-```rust
-handle computation()
-// 반환 타입: Request({State(s)}, a)
-```
-
-Request는 두 가지 상태 중 하나:
-- **완료**: computation이 값을 반환함
-- **Suspend**: ability operation에서 멈춤 + continuation 포함
-
-### `case` 패턴 매칭
-
-`case`는 일반적인 패턴 매칭 구문이다:
+`handle expr { arms }`는 computation을 실행하고 handler arm으로 결과를 처리한다:
 
 ```rust
-case <expr> {
-    <pattern> -> <body>
-    ...
+handle computation() {
+    { result } -> result                    // 완료 시
+    { State::get() -> k } -> k(42)          // suspend 시
 }
 ```
 
-### Handler 패턴
+computation의 실행 결과는 두 가지 중 하나:
+- **완료**: computation이 값을 반환함 → `{ value }` 패턴 매칭
+- **Suspend**: ability operation에서 멈춤 → `{ Op(args) -> k }` 패턴 매칭
 
-Request에 대한 패턴은 중괄호로 감싼다:
+### Handler 패턴
 
 | 패턴 | 의미 |
 |------|------|
 | `{ value }` | Computation 완료, 결과값 바인딩 |
 | `{ Operation(args) -> k }` | Suspend, continuation `k` 바인딩 |
+
+Handler 패턴은 `handle` 표현식 내에서만 사용할 수 있다.
 
 ### Continuation
 
@@ -249,14 +240,9 @@ Continuation은 **linear type**이다. 반드시 한 번 사용하거나 명시�
 // 사용: 함수로 호출
 { State::get() -> k } -> k(state)
 
-// 버림: drop 또는 와일드카드
+// 버림: drop 함수 사용
 { Fail::fail(msg) -> k } -> {
-    drop(k)  // 명시적 drop
-    None
-}
-
-{ Fail::fail(msg) -> k } -> {
-    _ = k    // 또는 와일드카드 바인딩
+    drop(k)
     None
 }
 ```
@@ -268,22 +254,11 @@ Continuation은 **linear type**이다. 반드시 한 번 사용하거나 명시�
 { Fail::fail(msg) -> k } -> None
 ```
 
-### 조합
-
-`handle`과 `case`를 조합하여 handler를 구성한다:
-
-```rust
-case handle <expr> {
-    { <value> } -> <body>                       // 완료
-    { <Operation>(<args>) -> <k> } -> <body>    // suspend
-}
-```
-
 ### 기본 예시
 
 ```rust
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
-    case handle comp() {
+    handle comp() {
         { result } -> result
         { State::get() -> k } -> run_state(fn() k(state), state)
         { State::set(v) -> k } -> run_state(fn() k(Nil), v)
@@ -297,7 +272,7 @@ Continuation을 사용하지 않으면 명시적으로 버려야 한다:
 
 ```rust
 fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
-    case handle comp() {
+    handle comp() {
         { result } -> Some(result)
         { Fail::fail(msg) -> k } -> {
             drop(k)
@@ -313,7 +288,7 @@ fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
 
 ```rust
 fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
-    case handle comp() {
+    handle comp() {
         { result } -> result
         { Console::print(msg) -> k } -> {
             IO::write(stdout, msg)
@@ -347,7 +322,7 @@ fn counter() ->{Console, State(Int)} Nil {
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
-    case handle comp() {
+    handle comp() {
         { result } -> result
         { State::get() -> k } -> run_state(fn() k(state), state)
         { State::set(v) -> k } -> run_state(fn() k(Nil), v)
@@ -355,7 +330,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
 }
 
 fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
-    case handle comp() {
+    handle comp() {
         { result } -> result
         { Console::print(msg) -> k } -> {
             IO::write(stdout, msg)
@@ -390,7 +365,6 @@ fn main() ->{IO} Nil {
 | `Nil` | Unit 타입/값 |
 | `{ ... }` | block expression |
 | `fn(x) expr` | 람다 |
-| `handle expr` | 첫 suspend까지 실행, Request 반환 |
-| `case expr { ... }` | 패턴 매칭 |
-| `{ value }` | completion 패턴 |
-| `{ Op(args) -> k }` | suspend + continuation 패턴 |
+| `handle expr { ... }` | effect handling |
+| `{ value }` | completion 패턴 (handle 내) |
+| `{ Op(args) -> k }` | suspend + continuation 패턴 (handle 내) |

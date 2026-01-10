@@ -474,42 +474,55 @@ ability Http {
 ### Handle Expression
 
 ```
-HandleExpr ::= 'handle' Expression
+HandleExpr ::= 'handle' Expression '{' HandlerArm+ '}'
+
+HandlerArm ::= HandlerPattern '->' Expression
+             | HandlerPattern GuardedBranch+
+
+HandlerPattern ::= '{' Identifier '}'                              // completion: { result }
+                 | '{' Path '(' PatternList? ')' '->' Identifier '}'  // suspend: { Op(args) -> k }
 ```
 
-`handle expr`은 `Request` 타입의 값을 반환한다. 이 값은 일반적인 `case` 표현식에서 handler pattern으로 매칭할 수 있다.
+`handle expr { arms }`는 computation을 실행하고 handler arm으로 결과를 처리한다.
 
-`Request(e, a)`는 **builtin 타입**이다 (Unison의 `Request {A} T`와 동일한 역할):
+**Handler pattern 종류:**
 
-- `e`: ability 타입
-- `a`: computation의 결과 타입
+| 패턴 | 의미 |
+|------|------|
+| `{ value }` | Computation이 완료됨, 결과값을 `value`에 바인딩 |
+| `{ Op(args) -> k }` | Ability operation에서 suspend됨, continuation을 `k`에 바인딩 |
 
-개념적으로 다음과 같은 구조이지만, 사용자가 직접 정의하거나 생성할 수 없다:
+**Continuation:**
 
+Continuation `k`는 computation을 재개하는 함수다:
+
+```rust
+{ State::get() -> k } -> k(current_state)  // resume with value
+{ State::set(v) -> k } -> k(Nil)           // resume with unit
 ```
-Request(e, a) ≈
-  | Done(a)                    -- computation 완료
-  | Suspend(op: e, k: ...)     -- effect 발생 + continuation
+
+Continuation은 **linear type**이다. 반드시 한 번 사용하거나 명시적으로 버려야 한다:
+
+```rust
+// 사용: 함수로 호출
+{ State::get() -> k } -> k(state)
+
+// 버림: drop 함수 사용
+{ Fail::fail(msg) -> k } -> {
+    drop(k)
+    None
+}
 ```
 
 **예시:**
 
 ```rust
-// handle은 Request 값을 반환
-let req = handle comp()
-
-// case로 Request를 패턴 매칭
-case req {
-    { result } -> result
-    { State::get() -> k } -> run_state(fn() k(state), state)
-    { State::set(v) -> k } -> run_state(fn() k(Nil), v)
-}
-
-// 보통은 한 번에 작성
-case handle comp() {
-    { result } -> result
-    { State::get() -> k } -> run_state(fn() k(state), state)
-    { State::set(v) -> k } -> run_state(fn() k(Nil), v)
+fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() k(state), state)
+        { State::set(v) -> k } -> run_state(fn() k(Nil), v)
+    }
 }
 ```
 
@@ -798,7 +811,6 @@ Pattern ::= LiteralPattern
           | RecordPattern
           | ListPattern
           | TuplePattern
-          | HandlerPattern
           | AsPattern
 
 AsPattern ::= Pattern 'as' Identifier        // 전체를 바인딩
@@ -811,14 +823,13 @@ RecordPattern ::= TypeId '{' RecordPatternFields '}'
 ListPattern ::= '[' PatternList? ']'
               | '[' PatternList ',' '..' Identifier? ']'    // [head, ..tail] or [head, ..]
 TuplePattern ::= '#(' PatternList? ')'
-HandlerPattern ::= '{' HandlerCase '}'
-HandlerCase ::= Identifier                                  // completion: { result }
-              | Path '(' PatternList? ')' '->' Identifier   // suspend: { Op(args) -> k }
 
 PatternList ::= Pattern (',' Pattern)* ','?
 RecordPatternFields ::= RecordPatternField (',' RecordPatternField)* ','? '..'?
 RecordPatternField ::= Identifier (':' Pattern)?
 ```
+
+**Note:** Handler pattern (`{ result }`, `{ Op(args) -> k }`)은 `handle` 표현식 내에서만 사용된다. 일반 `case` 표현식에서는 사용할 수 없다.
 
 **예시:**
 
@@ -861,11 +872,6 @@ Point { x, y: y_coord }     // 이름 변경
 Some(x) as opt              // x에 내부값, opt에 전체
 [head, ..tail] as list      // head, tail, list 모두 바인딩
 User { name, .. } as user   // name과 전체 user 바인딩
-
-// Handler pattern (Request 타입 매칭)
-{ result }                   // Done(result) 매칭
-{ State::get() -> k }        // Suspend 매칭: effect 연산 + continuation
-{ Logger::log(msg) -> k }    // Suspend 매칭: 인자와 continuation 바인딩
 ```
 
 ---
@@ -993,7 +999,7 @@ fn process(users: List(User)) ->{Logger} List(Text) {
 }
 
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
-    case handle comp() {
+    handle comp() {
         { result } -> result
         { Logger::log(msg) -> k } -> {
             Console::print("[LOG] " <> msg)
@@ -1048,22 +1054,22 @@ fn main() ->{Console} Nil {
 
 ### Expressions
 
-| 구문                  | 의미                   |
-| --------------------- | ---------------------- |
-| `{ stmts; expr }`     | Block / 그룹화         |
-| `fn(x) expr`          | Lambda                 |
-| `case e { pat -> e }` | Pattern matching       |
-| `handle e`            | Effect handling        |
-| `x.f`                 | UFCS (괄호 생략)       |
-| `x.f(y)`              | UFCS                   |
-| `T::f(x)`             | Qualified call         |
-| `T { f: v }`          | Record construction    |
-| `T { ..x, f: v }`     | Record update (spread) |
-| `[a, b, c]`           | List literal           |
-| `#(a, b, c)`          | Tuple literal          |
-| `a <> b`              | Concatenation          |
-| `a T::<> b`           | Qualified operator     |
-| `(+)`, `(T::<>)`      | Operator as function   |
+| 구문                    | 의미                   |
+| ----------------------- | ---------------------- |
+| `{ stmts; expr }`       | Block / 그룹화         |
+| `fn(x) expr`            | Lambda                 |
+| `case e { pat -> e }`   | Pattern matching       |
+| `handle e { arms }`     | Effect handling        |
+| `x.f`                   | UFCS (괄호 생략)       |
+| `x.f(y)`                | UFCS                   |
+| `T::f(x)`               | Qualified call         |
+| `T { f: v }`            | Record construction    |
+| `T { ..x, f: v }`       | Record update (spread) |
+| `[a, b, c]`             | List literal           |
+| `#(a, b, c)`            | Tuple literal          |
+| `a <> b`                | Concatenation          |
+| `a T::<> b`             | Qualified operator     |
+| `(+)`, `(T::<>)`        | Operator as function   |
 
 ### Patterns
 
@@ -1079,5 +1085,10 @@ fn main() ->{Console} Nil {
 | `#(a, b, c)`       | Tuple                          |
 | `[h, ..t]`         | List (head + tail)             |
 | `pat as x`         | As (전체 바인딩)               |
-| `{ result }`       | Handler: Request::Done 매칭    |
-| `{ Op(x) -> k }`   | Handler: Request::Suspend 매칭 |
+
+### Handler Patterns (handle 전용)
+
+| 패턴               | 의미                           |
+| ------------------ | ------------------------------ |
+| `{ result }`       | Computation 완료               |
+| `{ Op(x) -> k }`   | Effect suspend + continuation  |

@@ -53,7 +53,7 @@ Continuation은 자신을 캡처한 handler 스코프 내에서만 resume될 수
 ```rust
 // OK: 같은 handler 스코프 내에서 resume
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
-    case handle comp() {
+    handle comp() {
         { result } -> result
         { State::get() -> k } -> run_state(fn() k(state), state)  // OK
     }
@@ -62,7 +62,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 // 에러: handler 스코프 밖으로 continuation 탈출
 fn escape_continuation() -> fn(Int) -> Int {
     run_state(fn() {
-        case handle some_comp() {
+        handle some_comp() {
             { State::get() -> k } -> k  // 컴파일 에러: k가 스코프 탈출
         }
     }, 0)
