@@ -144,13 +144,6 @@ pub mod cont_types {
 
     /// Tag value for Shift (suspended with continuation, needs handler dispatch).
     pub const STEP_TAG_SHIFT: i32 = crate::gc_types::STEP_TAG_SHIFT;
-
-    /// Legacy aliases for backward compatibility
-    #[deprecated(note = "Use STEP_TAG_DONE instead")]
-    pub const YIELD_RESULT_TAG_DONE: i32 = STEP_TAG_DONE;
-
-    #[deprecated(note = "Use STEP_TAG_SHIFT instead")]
-    pub const YIELD_RESULT_TAG_YIELDED: i32 = STEP_TAG_SHIFT;
 }
 
 /// Resume function generation.
@@ -1170,9 +1163,8 @@ fn function_body_has_call_indirect<'db>(
 
 /// Check if a function body contains yield code.
 ///
-/// Detects the YieldResult pattern from shift expansion:
-/// - wasm.return whose operand is from a wasm.struct_new with 2 fields
-///   where the first field is i32_const with value 1 (YIELDED)
+/// Detects the Step pattern from shift expansion:
+/// - wasm.return whose operand is from a wasm.struct_new with Step tag
 fn function_body_can_yield<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
@@ -1188,9 +1180,8 @@ fn function_body_can_yield<'db>(db: &'db dyn salsa::Database, region: &Region<'d
                     && def_op.name(db) == Symbol::new("struct_new")
                 {
                     let operands = def_op.operands(db);
-                    // Check for 4-field Step struct (current format)
-                    // or 2-field YieldResult struct (legacy format)
-                    if (operands.len() == 4 || operands.len() == 2)
+                    // Check for 4-field Step struct
+                    if operands.len() == 4
                         && let Some(tag_val) = operands.first()
                         && let ValueDef::OpResult(tag_op) = tag_val.def(db)
                         && tag_op.dialect(db) == wasm::DIALECT_NAME()
@@ -2288,7 +2279,7 @@ impl RewritePattern for PushPromptPattern {
         let then_region = trunk_ir::Region::new(db, location, IdVec::from(vec![then_block]));
 
         // Build the "else" block for tag mismatch (propagate)
-        // Return the body's result (the YieldResult from inner call) to continue bubbling up
+        // Return the body's result (the Step from inner call) to continue bubbling up
         // We need to find the body's result value - it's the last operation's result in the body
         let body_result_value = get_body_result_value(db, &original_body);
         let return_op = wasm::r#return(db, location, body_result_value);
@@ -2388,7 +2379,7 @@ impl RewritePattern for PushPromptPattern {
 ///
 /// This finds the last operation's result in the last block of the region.
 /// Used for bubbling: when a handler's tag doesn't match, we need to
-/// return the inner call's result (which contains the YieldResult).
+/// return the inner call's result (which contains the Step).
 fn get_body_result_value<'db>(
     db: &'db dyn salsa::Database,
     body: &trunk_ir::Region<'db>,

@@ -2498,7 +2498,7 @@ fn assign_locals_in_region<'db>(
                 }
 
                 // For wasm.block with polymorphic result type, infer the effective type from
-                // the body region's result value or fall back to YieldResult if function returns it.
+                // the body region's result value or fall back to Step if function returns it.
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("block")
                     && is_polymorphic_type(db, effective_ty)
@@ -2517,7 +2517,7 @@ fn assign_locals_in_region<'db>(
                             upgrade_polymorphic_to_step(db, effective_ty, ctx.func_return_type);
                         if upgraded != effective_ty {
                             debug!(
-                                "wasm.block local: using YieldResult instead of polymorphic type {}.{}",
+                                "wasm.block local: using Step instead of polymorphic type {}.{}",
                                 effective_ty.dialect(db),
                                 effective_ty.name(db)
                             );
@@ -2527,7 +2527,7 @@ fn assign_locals_in_region<'db>(
                 }
 
                 // For wasm.call_indirect with polymorphic result type in functions that return
-                // YieldResult, use YieldResult as the local type. This ensures proper type
+                // Step, use Step as the local type. This ensures proper type
                 // matching when storing the result of closure/continuation calls.
                 if op.dialect(db) == Symbol::new("wasm")
                     && op.name(db) == Symbol::new("call_indirect")
@@ -2537,7 +2537,7 @@ fn assign_locals_in_region<'db>(
                         upgrade_polymorphic_to_step(db, effective_ty, ctx.func_return_type);
                     if upgraded != effective_ty {
                         debug!(
-                            "wasm.call_indirect local: using YieldResult instead of polymorphic type {}.{}",
+                            "wasm.call_indirect local: using Step instead of polymorphic type {}.{}",
                             effective_ty.dialect(db),
                             effective_ty.name(db)
                         );
@@ -3058,7 +3058,7 @@ fn emit_op<'db>(
             set_result_local(db, op, ctx, function)?;
         }
     } else if name == Symbol::new("block") {
-        // Upgrade polymorphic block result type to YieldResult if function returns YieldResult
+        // Upgrade polymorphic block result type to Step if function returns Step
         let result_ty = op
             .results(db)
             .first()
@@ -3090,7 +3090,7 @@ fn emit_op<'db>(
             set_result_local(db, op, ctx, function)?;
         }
     } else if name == Symbol::new("loop") {
-        // Upgrade polymorphic loop result type to YieldResult if function returns YieldResult
+        // Upgrade polymorphic loop result type to Step if function returns Step
         let result_ty = op
             .results(db)
             .first()
@@ -3266,9 +3266,9 @@ fn emit_op<'db>(
             CompilationError::invalid_module("wasm.call_indirect must have a result type")
         })?;
 
-        // If result type is anyref/type_var but enclosing function returns funcref or YieldResult,
+        // If result type is anyref/type_var but enclosing function returns funcref or Step,
         // upgrade the result type accordingly. This is needed because WebAssembly GC has separate
-        // type hierarchies, and effectful functions return YieldResult for yield bubbling.
+        // type hierarchies, and effectful functions return Step for yield bubbling.
         let funcref_ty = wasm::Funcref::new(db).as_type();
         if let Some(func_ret_ty) = ctx.func_return_type {
             let is_anyref_result = wasm::Anyref::from_type(db, result_ty).is_some();
@@ -5013,7 +5013,7 @@ mod tests {
         let (gc_types, type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, YieldResult, ClosureStruct) + 1 user struct
+        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, Step, ClosureStruct) + 1 user struct
         assert_eq!(gc_types.len(), 6);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
@@ -5021,7 +5021,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is YieldResult
+        // Index 3 is Step
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
@@ -5079,7 +5079,7 @@ mod tests {
         let (gc_types, _type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, YieldResult, ClosureStruct) + 1 user array
+        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, Step, ClosureStruct) + 1 user array
         assert_eq!(gc_types.len(), 6);
         // Index 0 is BoxedF64 (struct)
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
@@ -5087,7 +5087,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct (struct)
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is YieldResult (struct)
+        // Index 3 is Step (struct)
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct (struct)
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
@@ -5152,7 +5152,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is YieldResult
+        // Index 3 is Step
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
@@ -5394,7 +5394,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[1]), "array");
         // Index 2 is BytesStruct
         assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is YieldResult
+        // Index 3 is Step
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
@@ -5462,7 +5462,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
         assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
         assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
-        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // YieldResult
+        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // Step
         assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
     }
 
@@ -5515,7 +5515,7 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
         assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
         assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
-        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // YieldResult
+        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // Step
         assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
     }
 

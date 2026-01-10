@@ -118,7 +118,7 @@ impl<'db> GcTypeRegistry<'db> {
         }
     }
 
-    /// Returns the builtin type definitions (BoxedF64, BytesArray, BytesStruct, YieldResult, ClosureStruct).
+    /// Returns the builtin type definitions (BoxedF64, BytesArray, BytesStruct, Step, ClosureStruct).
     ///
     /// These must be prepended to the user-defined types when emitting.
     pub fn builtin_types() -> Vec<GcTypeDef> {
