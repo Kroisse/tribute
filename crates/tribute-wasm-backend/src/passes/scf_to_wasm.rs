@@ -97,8 +97,7 @@ impl RewritePattern for ScfLoopPattern {
 
         // Create wasm.loop with the body region
         // PatternApplicator will recursively process the body
-        let wasm_loop =
-            wasm::r#loop(db, location, result_ty, trunk_ir::Symbol::new(""), body).as_operation();
+        let wasm_loop = wasm::r#loop(db, location, result_ty, body).as_operation();
 
         let block_body_block = Block::new(
             db,
@@ -109,14 +108,7 @@ impl RewritePattern for ScfLoopPattern {
         );
         let block_body = Region::new(db, location, idvec![block_body_block]);
 
-        let wasm_block = wasm::block(
-            db,
-            location,
-            result_ty,
-            trunk_ir::Symbol::new(""),
-            block_body,
-        )
-        .as_operation();
+        let wasm_block = wasm::block(db, location, result_ty, block_body).as_operation();
 
         RewriteResult::Replace(wasm_block)
     }
@@ -175,11 +167,7 @@ impl RewritePattern for ScfContinuePattern {
         };
 
         // Branch to loop (depth 1: block=0, loop=1)
-        // Note: wasm::br typed helper expects Symbol (label name), but we use integer depths.
-        // Use Operation::of_name for depth-based branching.
-        let br_op = Operation::of(db, op.location(db), wasm::DIALECT_NAME(), wasm::BR())
-            .attr("target", Attribute::IntBits(1))
-            .build();
+        let br_op = wasm::br(db, op.location(db), 1).as_operation();
 
         RewriteResult::Replace(br_op)
     }

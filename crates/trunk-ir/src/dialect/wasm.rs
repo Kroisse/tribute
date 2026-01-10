@@ -9,14 +9,14 @@ dialect! {
     mod wasm {
         // === Control Flow ===
 
-        /// `wasm.block` operation: structured block with a label.
-        #[attr(label: Symbol)]
+        /// `wasm.block` operation: structured block.
+        /// Label is for debugging/text format only, stored as empty string in IR.
         fn block() -> result {
             #[region(body)] {}
         };
 
         /// `wasm.loop` operation: loop construct.
-        #[attr(label: Symbol)]
+        /// Label is for debugging/text format only, stored as empty string in IR.
         fn r#loop() -> result {
             #[region(body)] {}
         };
@@ -27,12 +27,14 @@ dialect! {
             #[region(r#else)] {}
         };
 
-        /// `wasm.br` operation: unconditional branch to a label.
-        #[attr(target: Symbol)]
+        /// `wasm.br` operation: unconditional branch.
+        /// Target is relative depth (0 = innermost block/loop).
+        #[attr(target: u32)]
         fn br();
 
-        /// `wasm.br_if` operation: conditional branch to a label.
-        #[attr(target: Symbol)]
+        /// `wasm.br_if` operation: conditional branch.
+        /// Target is relative depth (0 = innermost block/loop).
+        #[attr(target: u32)]
         fn br_if(cond);
 
         /// `wasm.return` operation: return from function.
