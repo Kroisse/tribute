@@ -3934,14 +3934,14 @@ mod tests {
         let handlers_region = Region::new(db, location, idvec![handlers_block]);
 
         // Use typed helper
-        let push_prompt = cont::push_prompt(db, location, i32_ty, 42, body_region, handlers_region);
+        let push_prompt = cont::push_prompt(db, location, i32_ty, 42, body_region, handlers_region).as_operation();
 
         let block = Block::new(
             db,
             BlockId::fresh(),
             location,
             idvec![],
-            idvec![push_prompt.as_operation()],
+            idvec![push_prompt],
         );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
@@ -4087,11 +4087,7 @@ mod tests {
         let val_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
         let value = val_op.result(db);
 
-        let resume = Operation::of(db, location, cont::DIALECT_NAME(), cont::RESUME())
-            .operand(cont_val)
-            .operand(value)
-            .result(i32_ty)
-            .build();
+        let resume = cont::resume(db, location, cont_val, value, i32_ty).as_operation();
 
         let block = Block::new(
             db,
@@ -4152,9 +4148,7 @@ mod tests {
         let cont_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(0));
         let cont_val = cont_op.result(db);
 
-        let drop_op = Operation::of(db, location, cont::DIALECT_NAME(), cont::DROP())
-            .operand(cont_val)
-            .build();
+        let drop_op = cont::drop(db, location, cont_val).as_operation();
 
         let block = Block::new(
             db,
@@ -4223,11 +4217,8 @@ mod tests {
 
         // Create func.func operation
         let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
-        let func_op = Operation::of(db, location, func::DIALECT_NAME(), func::FUNC())
-            .attr("sym_name", Attribute::Symbol(Symbol::new("my_func")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(func_body)
-            .build();
+        let func_op =
+            func::func(db, location, Symbol::new("my_func"), func_ty, func_body).as_operation();
 
         let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_op]);
         let region = Region::new(db, location, idvec![block]);
@@ -4281,10 +4272,7 @@ mod tests {
         // 3. An operation that uses local_val after shift
 
         // Define a value before shift
-        let local_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(42))
-            .result(i32_ty)
-            .build();
+        let local_op = wasm::i32_const(db, location, i32_ty, 42).as_operation();
         let local_val = Value::new(db, ValueDef::OpResult(local_op), 0);
 
         // Create shift
@@ -4309,12 +4297,10 @@ mod tests {
         .as_operation();
 
         // Use local_val after shift
-        let use_after = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::DROP())
-            .operand(local_val)
-            .build();
+        let use_after = wasm::drop(db, location, local_val).as_operation();
 
         // Return
-        let return_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::RETURN()).build();
+        let return_op = wasm::r#return(db, location, None).as_operation();
 
         // Create function body
         let func_body_block = Block::new(
@@ -4328,11 +4314,14 @@ mod tests {
 
         // Create func.func operation
         let func_ty = core::Func::new(db, idvec![], core::Nil::new(db).as_type()).as_type();
-        let func_op = Operation::of(db, location, func::DIALECT_NAME(), func::FUNC())
-            .attr("sym_name", Attribute::Symbol(Symbol::new("fn_with_live")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(func_body)
-            .build();
+        let func_op = func::func(
+            db,
+            location,
+            Symbol::new("fn_with_live"),
+            func_ty,
+            func_body,
+        )
+        .as_operation();
 
         let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_op]);
         let region = Region::new(db, location, idvec![block]);

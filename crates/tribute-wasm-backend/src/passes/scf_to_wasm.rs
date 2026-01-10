@@ -11,9 +11,7 @@ use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{
-    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, idvec,
-};
+use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, idvec};
 
 use crate::type_converter::wasm_type_converter;
 
@@ -173,9 +171,13 @@ impl RewritePattern for ScfContinuePattern {
     }
 }
 
-/// Pattern for `scf.break` -> `wasm.br(target=0)`
+/// Pattern for `scf.break` -> `wasm.yield(value) + wasm.br(target=0)`
 ///
 /// Branches to the enclosing wasm.block (depth 0) with a result value.
+///
+/// According to WASM spec, `br` instruction takes no operands - values are
+/// passed via the stack. We use `wasm.yield` to mark the break value as the
+/// region's result, then branch without operands.
 struct ScfBreakPattern;
 
 impl RewritePattern for ScfBreakPattern {
@@ -185,19 +187,20 @@ impl RewritePattern for ScfBreakPattern {
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let Ok(_break_op) = scf::Break::from_operation(db, *op) else {
+        let Ok(break_op) = scf::Break::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
-        // Branch to block (depth 0) with result value
-        // Note: The wasm.br typed helper doesn't support operands, but we need to
-        // pass the break value. Use Operation::of_name for this case.
-        let br_op = Operation::of(db, op.location(db), wasm::DIALECT_NAME(), wasm::BR())
-            .attr("target", Attribute::IntBits(0))
-            .operands(op.operands(db).clone())
-            .build();
+        let location = op.location(db);
+        let value = break_op.value(db);
 
-        RewriteResult::Replace(br_op)
+        // Emit the break value via wasm.yield (marks it as region result)
+        let yield_op = wasm::r#yield(db, location, value).as_operation();
+
+        // Branch to block (depth 0) without operands (WASM spec compliant)
+        let br_op = wasm::br(db, location, 0).as_operation();
+
+        RewriteResult::Expand(vec![yield_op, br_op])
     }
 }
 
@@ -228,11 +231,15 @@ mod tests {
         // Create a dummy condition value
         let cond_const = wasm::i32_const(db, location, i32_ty, 1);
 
-        let scf_if = Operation::of(db, location, scf::DIALECT_NAME(), scf::IF())
-            .operands(idvec![cond_const.result(db)])
-            .results(idvec![i32_ty])
-            .regions(idvec![then_region, else_region])
-            .build();
+        let scf_if = scf::r#if(
+            db,
+            location,
+            cond_const.result(db),
+            i32_ty,
+            then_region,
+            else_region,
+        )
+        .as_operation();
 
         let block = Block::new(
             db,

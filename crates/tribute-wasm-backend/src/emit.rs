@@ -5051,23 +5051,20 @@ mod tests {
         let i64_ty = core::I64::new(db).as_type();
 
         // Create two field values with i32_const
-        let field0 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(42))
-            .results(idvec![i32_ty])
-            .build();
+        let field0 = wasm::i32_const(db, location, i32_ty, 42).as_operation();
 
-        let field1 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I64_CONST())
-            .attr("value", Attribute::IntBits(100))
-            .results(idvec![i64_ty])
-            .build();
+        let field1 = wasm::i64_const(db, location, i64_ty, 100).as_operation();
 
         // Create struct_new with two fields
         let struct_ty = core::I32::new(db).as_type(); // placeholder type
-        let struct_new = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
-            .operands(idvec![field0.result(db, 0), field1.result(db, 0)])
-            .results(idvec![struct_ty])
-            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64))
-            .build();
+        let struct_new = wasm::struct_new(
+            db,
+            location,
+            vec![field0.result(db, 0), field1.result(db, 0)],
+            struct_ty,
+            FIRST_USER_TYPE_IDX,
+        )
+        .as_operation();
 
         let block = Block::new(
             db,
@@ -5117,23 +5114,21 @@ mod tests {
         let f64_ty = core::F64::new(db).as_type();
 
         // Create size value
-        let size = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(10))
-            .results(idvec![i32_ty])
-            .build();
+        let size = wasm::i32_const(db, location, i32_ty, 10).as_operation();
 
         // Create init value (f64)
-        let init = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::F64_CONST())
-            .attr("value", Attribute::FloatBits(0.0_f64.to_bits()))
-            .results(idvec![f64_ty])
-            .build();
+        let init = wasm::f64_const(db, location, f64_ty, 0.0).as_operation();
 
         // Create array_new
-        let array_new = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::ARRAY_NEW())
-            .operands(idvec![size.result(db, 0), init.result(db, 0)])
-            .results(idvec![i32_ty]) // placeholder result type
-            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64))
-            .build();
+        let array_new = wasm::array_new(
+            db,
+            location,
+            size.result(db, 0),
+            init.result(db, 0),
+            i32_ty, // placeholder result type
+            FIRST_USER_TYPE_IDX,
+        )
+        .as_operation();
 
         let block = Block::new(
             db,
@@ -5178,27 +5173,27 @@ mod tests {
         let i32_ty = core::I32::new(db).as_type();
 
         // Create two struct_new operations with same type_idx
-        let field = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(1))
-            .results(idvec![i32_ty])
-            .build();
+        let field = wasm::i32_const(db, location, i32_ty, 1).as_operation();
 
-        let struct_new1 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
-            .operands(idvec![field.result(db, 0)])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64))
-            .build();
+        let struct_new1 = wasm::struct_new(
+            db,
+            location,
+            vec![field.result(db, 0)],
+            i32_ty,
+            FIRST_USER_TYPE_IDX,
+        )
+        .as_operation();
 
-        let field2 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(2))
-            .results(idvec![i32_ty])
-            .build();
+        let field2 = wasm::i32_const(db, location, i32_ty, 2).as_operation();
 
-        let struct_new2 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
-            .operands(idvec![field2.result(db, 0)])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64)) // same type_idx
-            .build();
+        let struct_new2 = wasm::struct_new(
+            db,
+            location,
+            vec![field2.result(db, 0)],
+            i32_ty,
+            FIRST_USER_TYPE_IDX, // same type_idx
+        )
+        .as_operation();
 
         let block = Block::new(
             db,
@@ -5243,33 +5238,30 @@ mod tests {
         let i32_ty = core::I32::new(db).as_type();
 
         // Create struct_new with 1 field
-        let field = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(1))
-            .results(idvec![i32_ty])
-            .build();
+        let field = wasm::i32_const(db, location, i32_ty, 1).as_operation();
 
-        let struct_new1 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
-            .operands(idvec![field.result(db, 0)])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64))
-            .build();
+        let struct_new1 = wasm::struct_new(
+            db,
+            location,
+            vec![field.result(db, 0)],
+            i32_ty,
+            FIRST_USER_TYPE_IDX,
+        )
+        .as_operation();
 
         // Create another struct_new with 2 fields (same type_idx)
-        let field2a = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(2))
-            .results(idvec![i32_ty])
-            .build();
+        let field2a = wasm::i32_const(db, location, i32_ty, 2).as_operation();
 
-        let field2b = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(3))
-            .results(idvec![i32_ty])
-            .build();
+        let field2b = wasm::i32_const(db, location, i32_ty, 3).as_operation();
 
-        let struct_new2 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
-            .operands(idvec![field2a.result(db, 0), field2b.result(db, 0)])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(FIRST_USER_TYPE_IDX as u64)) // same type_idx, different field count
-            .build();
+        let struct_new2 = wasm::struct_new(
+            db,
+            location,
+            vec![field2a.result(db, 0), field2b.result(db, 0)],
+            i32_ty,
+            FIRST_USER_TYPE_IDX, // same type_idx, different field count
+        )
+        .as_operation();
 
         let block = Block::new(
             db,
@@ -5305,11 +5297,10 @@ mod tests {
         let structref_ty = wasm::Structref::new(db).as_type();
 
         // Create struct_new with 1 field using wasm.structref type attribute
-        let field1 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(1))
-            .results(idvec![i32_ty])
-            .build();
+        let field1 = wasm::i32_const(db, location, i32_ty, 1).as_operation();
 
+        // Note: Using Operation::of here because this test uses "type" attribute (not "type_idx")
+        // which is not supported by the typed helper function
         let struct_new1 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
             .operands(idvec![field1.result(db, 0)])
             .results(idvec![structref_ty])
@@ -5317,15 +5308,9 @@ mod tests {
             .build();
 
         // Create struct_new with 2 fields using same wasm.structref type
-        let field2a = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(2))
-            .results(idvec![i32_ty])
-            .build();
+        let field2a = wasm::i32_const(db, location, i32_ty, 2).as_operation();
 
-        let field2b = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(3))
-            .results(idvec![i32_ty])
-            .build();
+        let field2b = wasm::i32_const(db, location, i32_ty, 3).as_operation();
 
         let struct_new2 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
             .operands(idvec![field2a.result(db, 0), field2b.result(db, 0)])
@@ -5491,17 +5476,18 @@ mod tests {
             .build();
 
         // Create index value
-        let index = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(0))
-            .results(idvec![i32_ty])
-            .build();
+        let index = wasm::i32_const(db, location, i32_ty, 0).as_operation();
 
         // Create array_get_u with BYTES_ARRAY_IDX (builtin type)
-        let array_get = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::ARRAY_GET_U())
-            .operands(idvec![bytes_array_ref.result(db, 0), index.result(db, 0)])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(BYTES_ARRAY_IDX as u64))
-            .build();
+        let array_get = wasm::array_get_u(
+            db,
+            location,
+            bytes_array_ref.result(db, 0),
+            index.result(db, 0),
+            i32_ty,
+            BYTES_ARRAY_IDX,
+        )
+        .as_operation();
 
         let block = Block::new(
             db,
@@ -5549,12 +5535,15 @@ mod tests {
             .build();
 
         // Create struct_get with BYTES_STRUCT_IDX (builtin type)
-        let struct_get = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_GET())
-            .operands(idvec![bytes_struct_ref.result(db, 0)])
-            .results(idvec![i32_ty])
-            .attr("type_idx", Attribute::IntBits(BYTES_STRUCT_IDX as u64))
-            .attr("field_idx", Attribute::IntBits(0))
-            .build();
+        let struct_get = wasm::struct_get(
+            db,
+            location,
+            bytes_struct_ref.result(db, 0),
+            i32_ty,
+            BYTES_STRUCT_IDX,
+            0,
+        )
+        .as_operation();
 
         let block = Block::new(
             db,
@@ -5602,26 +5591,21 @@ mod tests {
             .build();
 
         // Create index value
-        let index = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(0))
-            .results(idvec![i32_ty])
-            .build();
+        let index = wasm::i32_const(db, location, i32_ty, 0).as_operation();
 
         // Create value to set
-        let value = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(42))
-            .results(idvec![i32_ty])
-            .build();
+        let value = wasm::i32_const(db, location, i32_ty, 42).as_operation();
 
         // Create array_set with BYTES_ARRAY_IDX (builtin type)
-        let array_set = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::ARRAY_SET())
-            .operands(idvec![
-                bytes_array_ref.result(db, 0),
-                index.result(db, 0),
-                value.result(db, 0)
-            ])
-            .attr("type_idx", Attribute::IntBits(BYTES_ARRAY_IDX as u64))
-            .build();
+        let array_set = wasm::array_set(
+            db,
+            location,
+            bytes_array_ref.result(db, 0),
+            index.result(db, 0),
+            value.result(db, 0),
+            BYTES_ARRAY_IDX,
+        )
+        .as_operation();
 
         let block = Block::new(
             db,
@@ -5663,38 +5647,29 @@ mod tests {
         let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
 
         // Create address operand (i32)
-        let addr = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(0))
-            .results(idvec![i32_ty])
-            .build();
+        let addr = wasm::i32_const(db, location, i32_ty, 0).as_operation();
 
         // Create value to store (i32)
-        let value = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(42))
-            .results(idvec![i32_ty])
-            .build();
+        let value = wasm::i32_const(db, location, i32_ty, 42).as_operation();
 
         // i32_store with offset and align attributes
-        let store_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_STORE())
-            .operands(idvec![addr.result(db, 0), value.result(db, 0)])
-            .attr("offset", Attribute::IntBits(4))
-            .attr("align", Attribute::IntBits(2))
-            .attr("memory", Attribute::IntBits(0))
-            .build();
+        let store_op = wasm::i32_store(
+            db,
+            location,
+            addr.result(db, 0),
+            value.result(db, 0),
+            4,
+            2,
+            0,
+        )
+        .as_operation();
 
         // i32_load from same address
-        let load_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_LOAD())
-            .operands(idvec![addr.result(db, 0)])
-            .results(idvec![i32_ty])
-            .attr("offset", Attribute::IntBits(4))
-            .attr("align", Attribute::IntBits(2))
-            .attr("memory", Attribute::IntBits(0))
-            .build();
+        let load_op =
+            wasm::i32_load(db, location, addr.result(db, 0), i32_ty, 4, 2, 0).as_operation();
 
         // Return statement
-        let func_return = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::RETURN())
-            .operands(idvec![])
-            .build();
+        let func_return = wasm::r#return(db, location, vec![]).as_operation();
 
         let body_block = Block::new(
             db,
@@ -5706,19 +5681,11 @@ mod tests {
         let body_region = Region::new(db, location, idvec![body_block]);
 
         // Function definition
-        let wasm_func = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::FUNC())
-            .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
-            .attr("type", Attribute::Type(func_ty))
-            .regions(idvec![body_region])
-            .build();
+        let wasm_func =
+            wasm::func(db, location, Symbol::new("test"), func_ty, body_region).as_operation();
 
         // Memory definition (required for load/store)
-        let memory_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::MEMORY())
-            .attr("min", Attribute::IntBits(1))
-            .attr("max", Attribute::IntBits(1))
-            .attr("shared", Attribute::Bool(false))
-            .attr("memory64", Attribute::Bool(false))
-            .build();
+        let memory_op = wasm::memory(db, location, 1, 1, false, false).as_operation();
 
         let module_block = Block::new(
             db,
@@ -5758,28 +5725,17 @@ mod tests {
         let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
 
         // memory_size
-        let size_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::MEMORY_SIZE())
-            .results(idvec![i32_ty])
-            .attr("memory", Attribute::IntBits(0))
-            .build();
+        let size_op = wasm::memory_size(db, location, i32_ty, 0).as_operation();
 
         // delta for memory_grow
-        let delta = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I32_CONST())
-            .attr("value", Attribute::IntBits(1))
-            .results(idvec![i32_ty])
-            .build();
+        let delta = wasm::i32_const(db, location, i32_ty, 1).as_operation();
 
         // memory_grow
-        let grow_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::MEMORY_GROW())
-            .operands(idvec![delta.result(db, 0)])
-            .results(idvec![i32_ty])
-            .attr("memory", Attribute::IntBits(0))
-            .build();
+        let grow_op =
+            wasm::memory_grow(db, location, delta.result(db, 0), i32_ty, 0).as_operation();
 
         // Return statement
-        let func_return = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::RETURN())
-            .operands(idvec![])
-            .build();
+        let func_return = wasm::r#return(db, location, vec![]).as_operation();
 
         let body_block = Block::new(
             db,
@@ -5790,18 +5746,10 @@ mod tests {
         );
         let body_region = Region::new(db, location, idvec![body_block]);
 
-        let wasm_func = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::FUNC())
-            .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
-            .attr("type", Attribute::Type(func_ty))
-            .regions(idvec![body_region])
-            .build();
+        let wasm_func =
+            wasm::func(db, location, Symbol::new("test"), func_ty, body_region).as_operation();
 
-        let memory_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::MEMORY())
-            .attr("min", Attribute::IntBits(1))
-            .attr("max", Attribute::IntBits(2))
-            .attr("shared", Attribute::Bool(false))
-            .attr("memory64", Attribute::Bool(false))
-            .build();
+        let memory_op = wasm::memory(db, location, 1, 2, false, false).as_operation();
 
         let module_block = Block::new(
             db,
@@ -5845,10 +5793,7 @@ mod tests {
 
         // Create struct_new using the dialect helper function (like cont_to_wasm.rs does)
         // This sets type_idx as an attribute but NOT the "type" attribute
-        let field_value = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::I64_CONST())
-            .attr("value", Attribute::IntBits(42))
-            .results(idvec![i64_ty])
-            .build();
+        let field_value = wasm::i64_const(db, location, i64_ty, 42).as_operation();
 
         let field_val = field_value.result(db, 0);
 
