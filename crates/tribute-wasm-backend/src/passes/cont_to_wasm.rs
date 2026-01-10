@@ -48,7 +48,7 @@ use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, IdVec, Location, Operation, Region, Symbol, Type, Value,
-    ValueDef, idvec,
+    ValueDef,
 };
 
 use crate::type_converter::wasm_type_converter;
@@ -2337,38 +2337,18 @@ fn expand_shift_operation<'db>(
     let funcref_ty = wasm::Funcref::new(db).as_type();
     let anyref_ty = wasm::Anyref::new(db).as_type();
 
-    // Get the prompt tag
-    let tag = op
-        .attributes(db)
-        .get(&Symbol::new("tag"))
-        .cloned()
-        .unwrap_or(Attribute::IntBits(0));
+    // Get shift operation attributes using typed helper
+    let shift_op = cont::Shift::from_operation(db, *op)
+        .expect("expand_shift_operation called on non-shift operation");
 
-    let tag_value = match tag {
-        Attribute::IntBits(v) => v,
-        _ => 0,
-    };
+    let tag_value = shift_op.tag(db) as u64;
 
-    // Get the operation index (for multi-op ability dispatch)
-    //
-    // For now, we compute a deterministic index from the operation name.
-    // This allows both shift sites and handler dispatch to agree on indices.
-    // The index is computed as a hash of the operation name modulo a reasonable max.
-    //
-    // TODO: In full implementation, indices would be looked up from ability definitions.
-    let op_idx_value = op
-        .attributes(db)
-        .get(&Symbol::new("op_name"))
-        .and_then(|attr| {
-            if let Attribute::Symbol(name) = attr {
-                // Use a simple hash of the operation name as the index
-                // This ensures consistent indices across shift and handler dispatch
-                Some(name.with_str(compute_op_idx_hash))
-            } else {
-                None
-            }
-        })
-        .unwrap_or(0);
+    // Compute op_idx deterministically from op_name
+    let op_name = shift_op.op_name(db);
+    let op_idx_value = op_name.with_str(compute_op_idx_hash);
+
+    // Also available for debugging/validation:
+    // let ability_ref = shift_op.ability_ref(db);
 
     let mut ops = Vec::new();
 
@@ -2552,17 +2532,8 @@ impl RewritePattern for PushPromptPattern {
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // Get the prompt tag
-        let tag = op
-            .attributes(db)
-            .get(&Symbol::new("tag"))
-            .cloned()
-            .unwrap_or(Attribute::IntBits(0));
-
-        let tag_value = match tag {
-            Attribute::IntBits(v) => v,
-            _ => 0,
-        };
+        // Get the prompt tag using typed helper
+        let tag_value = push_prompt.tag(db) as u64;
 
         // Get the original body region
         let original_body = push_prompt.body(db);
@@ -2807,13 +2778,7 @@ impl RewritePattern for PushPromptPattern {
         // Create the wrapper block with Step result type.
         // Push_prompt always returns Step (either from yield or Done Step wrapping).
         let step_ty = cont_types::step_type(db);
-        // Note: wasm::block typed helper expects Symbol (label name), but we use integer tags.
-        // Use Operation::of for tag-based block labeling.
-        let new_op = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::BLOCK())
-            .results(idvec![step_ty])
-            .attr("label", Attribute::IntBits(tag_value))
-            .regions(idvec![new_body])
-            .build();
+        let new_op = wasm::block(db, location, step_ty, new_body).as_operation();
 
         RewriteResult::Replace(new_op)
     }
@@ -4032,12 +3997,21 @@ mod tests {
         let handler_region = Region::new(db, location, idvec![handler_block]);
 
         // cont.shift now has a result (the value passed when continuation is resumed)
-        let shift = Operation::of(db, location, cont::DIALECT_NAME(), cont::SHIFT())
-            .attr("tag", Attribute::IntBits(42))
-            .attr("op_idx", Attribute::IntBits(0)) // Required attribute for multi-op dispatch
-            .result(i32_ty)
-            .region(handler_region)
-            .build();
+        // For test purposes, use dummy ability_ref and op_name
+        let test_ability_ref = *core::AbilityRefType::simple(db, Symbol::new("TestAbility"));
+        let test_op_name = Symbol::new("test_op");
+
+        let shift = cont::shift(
+            db,
+            location,
+            std::iter::empty::<Value>(),
+            i32_ty,
+            42,
+            test_ability_ref,
+            test_op_name,
+            handler_region,
+        )
+        .as_operation();
 
         let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![shift]);
         let region = Region::new(db, location, idvec![block]);
@@ -4227,13 +4201,18 @@ mod tests {
         let handler_region = Region::new(db, shift_loc, idvec![handler_block]);
 
         // cont.shift now has a result (the value passed when continuation is resumed)
+        // For test purposes, use dummy ability_ref and op_name
+        let test_ability_ref = *core::AbilityRefType::simple(db, Symbol::new("TestAbility"));
+        let test_op_name = Symbol::new("test_op");
+
         let shift = cont::shift(
             db,
             shift_loc,
             std::iter::empty::<Value>(),
             i32_ty,
             99,
-            0,
+            test_ability_ref,
+            test_op_name,
             handler_region,
         )
         .as_operation();
@@ -4311,14 +4290,20 @@ mod tests {
         // Create shift
         let handler_block = Block::new(db, BlockId::fresh(), shift_loc, IdVec::new(), idvec![]);
         let handler_region = Region::new(db, shift_loc, idvec![handler_block]);
+
         // cont.shift now has a result (the value passed when continuation is resumed)
+        // For test purposes, use dummy ability_ref and op_name
+        let test_ability_ref = *core::AbilityRefType::simple(db, Symbol::new("TestAbility"));
+        let test_op_name = Symbol::new("test_op");
+
         let shift = cont::shift(
             db,
             shift_loc,
             std::iter::empty::<Value>(),
             i32_ty,
             1,
-            0,
+            test_ability_ref,
+            test_op_name,
             handler_region,
         )
         .as_operation();

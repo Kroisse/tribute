@@ -24,14 +24,18 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use tribute_ir::dialect::{ability, tribute, tribute_rt};
+#[cfg(test)]
+use trunk_ir::Attribute;
 use trunk_ir::DialectType;
+#[cfg(test)]
+use trunk_ir::dialect::arith;
 use trunk_ir::dialect::{cont, core};
 #[cfg(test)]
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::rewrite::{
     OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
-use trunk_ir::{Attribute, Block, BlockId, DialectOp, IdVec, Operation, Region};
+use trunk_ir::{Block, BlockId, DialectOp, IdVec, Operation, Region};
 
 /// Lower handler operations from ability dialect to cont dialect.
 ///
@@ -224,6 +228,7 @@ impl RewritePattern for LowerPerformPattern {
         };
 
         // Get operation attributes
+        let ability_ref = perform_op.ability_ref(db);
         let op_name = perform_op.op(db);
 
         // Get args from adaptor (remapped values)
@@ -257,24 +262,21 @@ impl RewritePattern for LowerPerformPattern {
         let empty_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
         let handler_region = Region::new(db, location, IdVec::from(vec![empty_block]));
 
-        // Create cont.shift with remapped args
-        // The op_idx attribute is set to 0 as a placeholder here; it will be resolved
-        // during handler dispatch based on the order of handler arms.
-        let shift_op = cont::shift(db, location, args, result_ty, tag, 0, handler_region);
+        // Create cont.shift with all attributes
+        // Note: op_idx is not stored in IR; it will be computed from op_name
+        // during WASM lowering.
+        let shift_op = cont::shift(
+            db,
+            location,
+            args,
+            result_ty,
+            tag,
+            ability_ref,
+            op_name,
+            handler_region,
+        );
 
-        // Add the op_name attribute for handler dispatch
-        // (not part of the dialect definition but needed for current implementation)
-        // TODO: In full implementation, op_idx would be pre-computed from ability definition.
-        let op_with_name = Operation::of(db, location, shift_op.dialect(db), shift_op.name(db))
-            .operands(shift_op.operands(db).clone())
-            .results(shift_op.results(db).clone())
-            .attr("tag", Attribute::IntBits(tag as u64))
-            .attr("op_idx", Attribute::IntBits(0))
-            .attr("op_name", Attribute::Symbol(op_name))
-            .region(handler_region)
-            .build();
-
-        RewriteResult::Replace(op_with_name)
+        RewriteResult::Replace(shift_op.as_operation())
     }
 }
 
@@ -389,16 +391,12 @@ mod tests {
         let cont_ty = *core::Nil::new(db);
         let val_ty = *core::I32::new(db);
 
-        // Create dummy operations to get values from
-        let cont_op = Operation::of(db, location, Symbol::new("test"), Symbol::new("cont"))
-            .result(cont_ty)
-            .build();
-        let val_op = Operation::of(db, location, Symbol::new("test"), Symbol::new("val"))
-            .result(val_ty)
-            .build();
+        // Use arith.const for test values
+        let cont_const = arith::r#const(db, location, cont_ty, Attribute::IntBits(0));
+        let val_const = arith::r#const(db, location, val_ty, Attribute::IntBits(42));
 
-        let cont_val = Value::new(db, ValueDef::OpResult(cont_op), 0);
-        let val_val = Value::new(db, ValueDef::OpResult(val_op), 0);
+        let cont_val = Value::new(db, ValueDef::OpResult(cont_const.as_operation()), 0);
+        let val_val = Value::new(db, ValueDef::OpResult(val_const.as_operation()), 0);
 
         // Create ability.resume
         let resume_op = ability::resume(db, location, cont_val, val_val, val_ty);
@@ -423,10 +421,8 @@ mod tests {
 
         // Create a dummy continuation value
         let cont_ty = *core::Nil::new(db);
-        let cont_op = Operation::of(db, location, Symbol::new("test"), Symbol::new("cont"))
-            .result(cont_ty)
-            .build();
-        let cont_val = Value::new(db, ValueDef::OpResult(cont_op), 0);
+        let cont_const = arith::r#const(db, location, cont_ty, Attribute::IntBits(0));
+        let cont_val = Value::new(db, ValueDef::OpResult(cont_const.as_operation()), 0);
 
         // Create ability.abort
         let abort_op = ability::abort(db, location, cont_val);

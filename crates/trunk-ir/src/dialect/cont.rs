@@ -30,9 +30,13 @@ dialect! {
         /// The result is the value passed when the continuation is resumed.
         /// This corresponds to the value returned by `ability.perform`.
         ///
-        /// - `tag`: prompt tag for matching handler
-        /// - `op_idx`: index of the ability operation (for multi-op abilities)
-        #[attr(tag: u32, op_idx: u32)]
+        /// - `tag`: prompt tag for matching handler instance (runtime identifier)
+        /// - `ability_ref`: ability reference type (semantic information)
+        /// - `op_name`: operation name symbol (semantic information)
+        ///
+        /// Note: Operation index (op_idx) is computed deterministically from op_name
+        /// during WASM lowering and is not stored in the IR.
+        #[attr(tag: u32, ability_ref: Type, op_name: Symbol)]
         fn shift(#[rest] value) -> result {
             #[region(handler)] {}
         };
