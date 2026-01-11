@@ -3825,18 +3825,19 @@ mod tests {
         let body_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
         let body_region = Region::new(db, location, idvec![body_block]);
 
-        let push_prompt = Operation::of_name(db, location, "cont.push_prompt")
-            .attr("tag", Attribute::IntBits(42))
-            .result(i32_ty)
-            .region(body_region)
-            .build();
+        // Create empty handlers region
+        let handlers_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
+        let handlers_region = Region::new(db, location, idvec![handlers_block]);
+
+        // Use typed helper instead of Operation::of_name
+        let push_prompt = cont::push_prompt(db, location, i32_ty, 42, body_region, handlers_region);
 
         let block = Block::new(
             db,
             BlockId::fresh(),
             location,
             idvec![],
-            idvec![push_prompt],
+            idvec![push_prompt.as_operation()],
         );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
