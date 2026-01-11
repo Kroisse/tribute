@@ -8,9 +8,18 @@ use crate::dialect;
 dialect! {
     mod cont {
         /// `cont.push_prompt` operation: installs a prompt and executes body.
+        ///
+        /// The `handlers` region is typically empty in the current implementation.
+        /// Handler dispatch logic is instead implemented using `cont.handler_dispatch`,
+        /// which examines the Step result returned by push_prompt and dispatches to
+        /// appropriate handler arms:
+        /// - "done" handler uses `cont.get_done_value` to extract the result value
+        /// - "suspend" handlers use `cont.get_continuation` and `cont.get_shift_value`
+        ///   to access the captured continuation and effect arguments
         #[attr(tag: u32)]
         fn push_prompt() -> result {
             #[region(body)] {}
+            #[region(handlers)] {}
         };
 
         /// `cont.shift` operation: captures continuation and jumps to handler.
@@ -64,5 +73,13 @@ dialect! {
         /// It retrieves the value that was passed to the effect operation (e.g., the `n` in `State::set!(n)`).
         /// The WASM backend converts this to struct.get on the continuation struct's field 3.
         fn get_shift_value() -> result;
+
+        /// `cont.get_done_value` operation: extracts the value from a Done Step.
+        ///
+        /// This operation is used inside handler "done" arm bodies to extract the
+        /// result value from a Step struct that was returned by push_prompt.
+        /// The Step layout is (tag, value, prompt, op_idx), and this extracts field 1 (value).
+        /// The WASM backend converts this to struct.get on the Step's value field.
+        fn get_done_value(step) -> result;
     }
 }

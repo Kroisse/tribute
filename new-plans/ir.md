@@ -150,8 +150,8 @@ tribute.struct_def : (sym_name, fields) -> TypeDef
 tribute.enum_def : (sym_name, variants) -> TypeDef
     Enum 타입 정의
 
-tribute.prompt : () -> Request { body }
-    Handler expression (ability body 실행)
+tribute.handle : (scrutinee) -> T { handler_arms }
+    Handler expression (ability handling)
 ```
 
 #### 타입
@@ -173,7 +173,6 @@ tribute.nat      // 자연수 타입
 ### ability Dialect
 
 Ability (algebraic effect) 실행 연산.
-Handler expression은 `tribute.prompt`에서 처리되고, 패턴 매칭은 `tribute.case`에서 처리된다.
 
 ```
 ability.perform : (ability: AbilityRef, op: String, args...) -> T
@@ -186,14 +185,19 @@ ability.abort : (continuation: Continuation<T>) -> !
     Continuation 버림 (linear type 만족)
 ```
 
-Handler 구문 `case handle expr { ... }`는 다음과 같이 lowering된다:
+### tribute.handle
+
+Handler 구문 `handle expr { ... }`는 `tribute.handle`로 표현된다:
 ```
-%request = tribute.prompt { expr }
-tribute.case(%request) {
+tribute.handle(expr) {
     { value } -> ...
     { Op(args) -> k } -> ...
 }
 ```
+
+`tribute.case`와 유사한 구조지만, handler pattern (`{ ... }`)만 허용된다.
+
+Handler lowering pass에서 `cont.push_prompt` + handler dispatch로 변환된다.
 
 ### closure Dialect
 
@@ -679,7 +683,7 @@ tribute.var/call 해소   tribute.type_var 해소
 | Type-directed Resolution | tribute.var, tribute.call 없음 (UFCS 포함)       |
 | Type Inference (완료)    | tribute.type_var 없음, 모든 타입 구체화          |
 | Capture Analysis         | tribute.lambda 없음, closure.new로 대체          |
-| Ability Lowering         | ability.\* 없음 (tribute.prompt 포함)            |
+| Ability Lowering         | ability.\* 없음 (tribute.handle 포함)            |
 | Wasm Lowering            | wasm.\* 만 존재 (타겟이 Wasm일 때)               |
 | Cranelift Lowering       | clif.\* 만 존재 (타겟이 native일 때)             |
 

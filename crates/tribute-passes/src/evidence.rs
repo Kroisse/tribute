@@ -212,7 +212,11 @@ fn collect_effectful_functions<'db>(
     effectful
 }
 
-/// Check if a function type has a non-empty effect row.
+/// Check if a function type has concrete abilities in its effect row.
+///
+/// A function is considered effectful if its effect row contains actual abilities.
+/// A row with only a tail variable (polymorphic row) but no concrete abilities
+/// is considered pure, since at this point no effects were inferred for it.
 fn is_effectful_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
     let Some(func_ty) = core::Func::from_type(db, ty) else {
         return false;
@@ -226,7 +230,9 @@ fn is_effectful_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
         return false;
     };
 
-    !row.is_empty(db)
+    // Check if there are actual abilities in the row.
+    // A row with only a tail variable and no concrete abilities is considered pure.
+    !row.abilities(db).is_empty()
 }
 
 /// Pattern: Add evidence parameter to effectful function signatures.

@@ -1128,57 +1128,231 @@ fn lower_record_expr<'db>(
 
 /// Lower a handle expression (ability handling).
 ///
-/// Source: `handle expr`
+/// Fused handler syntax: `handle expr { handler_arms }`.
+///
 /// Lowers to:
 /// ```text
-/// %request = tribute.handle { expr }
+/// %result = tribute.handle { expr } { arms }
 /// ```
 ///
-/// The `handle expr` expression returns a Request value that can be pattern-matched
-/// to handle both normal completion (`{ result }`) and suspended effects
-/// (`{ State::get() -> k }`).
-///
-/// Typically used with case expressions:
-/// ```text
-/// case handle expr {
-///     { result } -> ...
-///     { State::get() -> k } -> ...
-/// }
-/// ```
+/// The handler arms are evaluated when:
+/// - Body completes with a value → matches `{ result }` handler pattern
+/// - Body performs an ability operation → matches `{ Op(args) -> k }` handler pattern
 fn lower_handle_expr<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
     node: Node,
 ) -> Option<Value<'db>> {
-    let mut cursor = node.walk();
     let location = ctx.location(&node);
-    let request_ty = ctx.fresh_type_var(); // Type for Request value
+    let result_ty = ctx.fresh_type_var();
 
-    // Find the expression to handle
-    let mut expr_node = None;
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) || child.kind() == "keyword_handle" {
-            continue;
-        }
-        expr_node = Some(child);
-        break;
-    }
+    // Find the expression to handle (field: "expr")
+    let expr_node = node.child_by_field_name("expr")?;
 
-    let expr_node = expr_node?;
+    // Collect handler arms
+    let mut cursor = node.walk();
+    let handler_arms: Vec<_> = node
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "handler_arm")
+        .collect();
 
     // Build body region with the expression
     let mut body_block = BlockBuilder::new(ctx.db, location);
-    let result_value = ctx.scoped(|ctx| lower_expr(ctx, &mut body_block, expr_node));
+    let body_result = ctx.scoped(|ctx| lower_expr(ctx, &mut body_block, expr_node));
 
-    if let Some(value) = result_value {
-        body_block.op(tribute::r#yield(ctx.db, location, value));
-    }
+    let body_value = body_result?;
+    body_block.op(tribute::r#yield(ctx.db, location, body_value));
 
     let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
-    // Create tribute.handle to run body and get Request
-    let handle_op = block.op(tribute::handle(ctx.db, location, request_ty, body_region));
-    Some(handle_op.request(ctx.db))
+    // Build arms region with handler arms
+    let mut arms_block = BlockBuilder::new(ctx.db, location);
+
+    for arm in handler_arms {
+        if let Some(arm_op) = lower_handler_arm(ctx, arm) {
+            arms_block.op(arm_op);
+        }
+    }
+
+    let arms_region = Region::new(ctx.db, location, idvec![arms_block.build()]);
+
+    // Create tribute.handle with body and arms
+    let handle_op = block.op(tribute::handle(
+        ctx.db,
+        location,
+        result_ty,
+        body_region,
+        arms_region,
+    ));
+    Some(handle_op.result(ctx.db))
+}
+
+/// Lower a single handler arm.
+///
+/// Handler arms have patterns like `{ result }` or `{ State::get() -> k }`.
+fn lower_handler_arm<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<tribute::Arm<'db>> {
+    let location = ctx.location(&node);
+
+    // Get pattern and body from fields
+    let pattern_node = node.child_by_field_name("pattern")?;
+    let body_node = node.child_by_field_name("value")?;
+
+    // Create the pattern region (handler pattern)
+    let pattern_region = handler_pattern_to_region(ctx, pattern_node);
+
+    // Create arm body, binding pattern variables
+    let mut body_block = BlockBuilder::new(ctx.db, location);
+
+    let result_value = ctx.scoped(|ctx| {
+        // Bind handler pattern variables (result for done, args + k for suspend)
+        bind_handler_pattern(ctx, &mut body_block, pattern_node);
+
+        // Lower body expression
+        lower_expr(ctx, &mut body_block, body_node)
+    });
+
+    let result_value = result_value?;
+    body_block.op(tribute::r#yield(ctx.db, location, result_value));
+
+    let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
+
+    Some(tribute::arm(ctx.db, location, pattern_region, body_region))
+}
+
+/// Extract binding names from a pattern and mark them as local.
+/// This is used for handler pattern arguments where the actual values
+/// are provided later by cont::get_shift_value in tribute_to_scf.
+fn extract_and_mark_pattern_bindings<'db>(ctx: &mut CstLoweringCtx<'db>, pattern: Node) {
+    match pattern.kind() {
+        "identifier" | "identifier_pattern" => {
+            let name: Symbol = node_text(&pattern, &ctx.source).into();
+            ctx.mark_local(name);
+        }
+        "wildcard_pattern" => {
+            // No binding needed
+        }
+        "as_pattern" => {
+            // Mark the binding name
+            if let Some(binding_node) = pattern.child_by_field_name("binding") {
+                let name: Symbol = node_text(&binding_node, &ctx.source).into();
+                ctx.mark_local(name);
+            }
+            // Recurse on inner pattern
+            if let Some(inner_pattern) = pattern.child_by_field_name("pattern") {
+                extract_and_mark_pattern_bindings(ctx, inner_pattern);
+            }
+        }
+        "constructor_pattern" => {
+            // Recurse on positional fields
+            let mut cursor = pattern.walk();
+            for child in pattern.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                match child.kind() {
+                    "pattern_list" => {
+                        let mut list_cursor = child.walk();
+                        for pat_child in child.named_children(&mut list_cursor) {
+                            if !is_comment(pat_child.kind()) {
+                                extract_and_mark_pattern_bindings(ctx, pat_child);
+                            }
+                        }
+                    }
+                    "pattern_fields" => {
+                        let mut fields_cursor = child.walk();
+                        for field_child in child.named_children(&mut fields_cursor) {
+                            if field_child.kind() == "pattern_field" {
+                                let mut field_cursor = field_child.walk();
+                                for pat in field_child.named_children(&mut field_cursor) {
+                                    if !is_comment(pat.kind()) && pat.kind() != "identifier" {
+                                        extract_and_mark_pattern_bindings(ctx, pat);
+                                        break;
+                                    } else if pat.kind() == "identifier" {
+                                        // Shorthand: { name }
+                                        let name: Symbol = node_text(&pat, &ctx.source).into();
+                                        ctx.mark_local(name);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "tuple_pattern" => {
+            // Recurse on tuple elements
+            let mut cursor = pattern.walk();
+            for child in pattern.named_children(&mut cursor) {
+                if !is_comment(child.kind()) {
+                    extract_and_mark_pattern_bindings(ctx, child);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Bind variables from a handler pattern.
+fn bind_handler_pattern<'db>(
+    ctx: &mut CstLoweringCtx<'db>,
+    _block: &mut BlockBuilder<'db>,
+    node: Node,
+) {
+    let mut cursor = node.walk();
+
+    let mut result_name: Option<Symbol> = None;
+    let mut has_operation = false;
+    let mut args_node: Option<Node> = None;
+    let mut continuation_name: Option<Symbol> = None;
+
+    // Parse handler pattern children
+    for child in node.named_children(&mut cursor) {
+        if is_comment(child.kind()) {
+            continue;
+        }
+        match child.kind() {
+            "identifier" => {
+                if has_operation {
+                    // After operation, this is the continuation
+                    continuation_name = Some(node_text(&child, &ctx.source).into());
+                } else if result_name.is_none() {
+                    // First identifier without operation is result binding
+                    result_name = Some(node_text(&child, &ctx.source).into());
+                }
+            }
+            "path_expression" => {
+                has_operation = true;
+            }
+            "pattern_list" => {
+                args_node = Some(child);
+            }
+            _ => {}
+        }
+    }
+
+    if has_operation {
+        // Suspend pattern: mark args and continuation as local.
+        // The actual values are bound later in tribute_to_scf via cont::get_shift_value.
+        if let Some(args) = args_node {
+            let mut args_cursor = args.walk();
+            for arg_child in args.named_children(&mut args_cursor) {
+                if is_comment(arg_child.kind()) {
+                    continue;
+                }
+                // Extract binding names from the pattern and mark as local
+                extract_and_mark_pattern_bindings(ctx, arg_child);
+            }
+        }
+        if let Some(k_name) = continuation_name {
+            // Continuation binding - mark as local for indirect call resolution
+            ctx.mark_local(k_name);
+        }
+    } else if let Some(name) = result_name {
+        // Done pattern: mark the result as local binding
+        ctx.mark_local(name);
+    }
 }
 
 /// Convert a handler pattern to a pattern region.

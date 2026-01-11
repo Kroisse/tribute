@@ -24,7 +24,7 @@ use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::rewrite::{
     OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
-use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Type, Value, ValueDef};
+use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type, Value, ValueDef};
 
 /// Lower closure operations in the module.
 ///
@@ -241,11 +241,35 @@ impl RewritePattern for LowerClosureCallPattern {
         //
         // Block args with core.func type ARE treated as closures because in Tribute,
         // function parameters with function types can receive closures at runtime.
-        let (callee_is_closure, func_ty) = if let Some(callee_ty) = adaptor.operand_type(0) {
+        let callee_ty_opt = adaptor.operand_type(0);
+
+        let (callee_is_closure, func_ty) = if let Some(callee_ty) = callee_ty_opt {
             // Type is available - check if it's closure.closure
+            // Check if it's an adt.struct with name "_closure" (already lowered closure.new)
+            let is_closure_struct = adt::is_struct_type(db, callee_ty)
+                && callee_ty.get_attr(db, adt::ATTR_NAME()).is_some_and(
+                    |attr| matches!(attr, Attribute::Symbol(s) if *s == Symbol::new("_closure")),
+                );
+
             if let Some(closure_ty) = closure::Closure::from_type(db, callee_ty) {
                 // closure.closure → extract inner func_type
                 (true, closure_ty.func_type(db))
+            } else if is_closure_struct {
+                // adt.struct with name "_closure" → already lowered closure
+                // The function type needs to be extracted from the func.constant that was
+                // stored in the struct's first field during LowerClosureNewPattern.
+                // Try to extract func_type from the struct_new operation's first operand
+                // which should be a func.constant with the actual function type
+                if let Some(func_ty) = get_func_type_from_closure_struct(db, callee) {
+                    (true, func_ty)
+                } else {
+                    // Failed to extract function type - skip closure handling
+                    // to preserve the original type annotation
+                    tracing::warn!(
+                        "Failed to extract function type from closure struct, skipping closure handling"
+                    );
+                    (false, *core::Nil::new(db))
+                }
             } else if core::Func::from_type(db, callee_ty).is_some() {
                 // core.func type - check if callee is a block arg (function parameter)
                 // Block args with core.func type should be treated as closures since
@@ -521,4 +545,38 @@ fn get_env_type_from_closure<'db>(
 
     // Fallback: return nil type
     *core::Nil::new(db)
+}
+
+/// Get the function type from a closure struct value.
+///
+/// When LowerClosureNewPattern transforms `closure.new` into `adt.struct_new`,
+/// the first operand is a `func.constant` that holds the function type.
+/// This function traces back through the struct_new to extract that type.
+fn get_func_type_from_closure_struct<'db>(
+    db: &'db dyn salsa::Database,
+    closure_value: Value<'db>,
+) -> Option<Type<'db>> {
+    // The closure_value should be the result of adt.struct_new
+    let ValueDef::OpResult(struct_new_op) = closure_value.def(db) else {
+        return None;
+    };
+
+    // Check if it's an adt.struct_new
+    if adt::StructNew::from_operation(db, struct_new_op).is_err() {
+        return None;
+    }
+
+    // First operand should be the funcref (from func.constant)
+    let operands = struct_new_op.operands(db);
+    let funcref_value = operands.first()?;
+
+    // The funcref should be the result of func.constant
+    let ValueDef::OpResult(constant_op) = funcref_value.def(db) else {
+        return None;
+    };
+
+    // Verify it's a func.constant and get the type
+    func::Constant::from_operation(db, constant_op)
+        .ok()
+        .and_then(|_| constant_op.results(db).first().copied())
 }

@@ -535,12 +535,10 @@ pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'
     let module = stage_closure_lower(db, module);
     let module = stage_tdnr(db, module);
 
-    // Ability processing
+    // Ability and case lowering
     let module = stage_evidence(db, module);
-    let module = stage_handler_lower(db, module);
-
-    // Final lowering
-    let module = stage_lower_case(db, module);
+    let module = stage_lower_case(db, module); // tribute.handle → cont.push_prompt + cont.handler_dispatch
+    let module = stage_handler_lower(db, module); // ability.perform → cont.shift, etc.
     let module = stage_dce(db, module);
 
     // Final pass: resolve any remaining unresolved references and emit diagnostics
@@ -574,8 +572,8 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_closure_lower(db, module);
     let module = stage_tdnr(db, module);
     let module = stage_evidence(db, module);
-    let module = stage_handler_lower(db, module);
     let module = stage_lower_case(db, module);
+    let module = stage_handler_lower(db, module);
     let module = stage_dce(db, module);
 
     // Lower to WebAssembly

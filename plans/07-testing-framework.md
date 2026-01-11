@@ -34,15 +34,15 @@ The ability system naturally supports mocking - just provide a test handler:
 ```rust
 test "fetch_user calls the API" {
     let calls = ref([])
-    
-    case handle fetch_user("123") {
+
+    handle fetch_user("123") {
         { value } -> value
         { IO::http_get(url) -> k } -> {
             calls := List::push_back(!calls, url)
             k(mock_response())
         }
     }
-    
+
     Test::assert(!calls == ["/users/123"])
 }
 ```

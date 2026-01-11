@@ -219,16 +219,19 @@ dialect! {
         #[attr(sym_name: Symbol, r#type: Type)]
         fn op_def();
 
-        /// `tribute.handle` operation: runs body in a delimited context with a handler.
+        /// `tribute.handle` operation: runs body in a delimited context with handler arms.
+        ///
+        /// Fused handler syntax: `handle expr { handler_arms }`.
         ///
         /// Executes the body region until it either:
-        /// - Completes with a value → returns `Request::Done(value)`
-        /// - Performs an ability operation → returns `Request::Suspend(op, args, continuation)`
+        /// - Completes with a value → matches `{ result }` handler pattern
+        /// - Performs an ability operation → matches `{ Op(args) -> k }` handler pattern
         ///
-        /// The returned `Request` is typically pattern-matched using `tribute.case`
-        /// with handler patterns.
-        fn handle() -> request {
+        /// The arms region contains `tribute.arm` operations with handler patterns
+        /// (`tribute_pat.handler_done` or `tribute_pat.handler_suspend`).
+        fn handle() -> result {
             #[region(body)] {}
+            #[region(arms)] {}
         };
 
         // === Pattern matching (lowered to scf dialect) ===

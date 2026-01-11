@@ -844,8 +844,12 @@ fn collect_gc_types<'db>(
     // to handle multiple structs with same placeholder type but different field counts
     let mut placeholder_struct_type_idx: HashMap<(Type<'db>, usize), u32> = HashMap::new();
 
-    // Start at FIRST_USER_TYPE_IDX since indices 0-2 are reserved for built-in types:
-    // 0: BoxedF64, 1: BytesArray, 2: BytesStruct
+    // Register builtin types in type_idx_by_type:
+    // 0: BoxedF64, 1: BytesArray, 2: BytesStruct, 3: Step, 4: ClosureStruct
+    // Step marker type needs to be registered so wasm.if can use it
+    type_idx_by_type.insert(crate::gc_types::step_marker_type(db), STEP_IDX);
+
+    // Start at FIRST_USER_TYPE_IDX since indices 0-4 are reserved for built-in types
     let mut next_type_idx: u32 = FIRST_USER_TYPE_IDX;
 
     /// Returns true if this is a built-in type (0-2) that shouldn't use a builder
@@ -2705,11 +2709,29 @@ fn infer_region_effective_type<'db>(
     op: &Operation<'db>,
     ctx: &FunctionEmitContext<'db>,
 ) -> Option<Type<'db>> {
-    op.regions(db)
-        .first()
-        .and_then(|r| region_result_value(db, r))
-        .and_then(|v| ctx.effective_types.get(&v).copied())
-        .filter(|ty| !is_polymorphic_type(db, *ty))
+    let region = op.regions(db).first()?;
+    let result_value = region_result_value(db, region)?;
+
+    // First try effective_types (populated during function setup)
+    #[allow(clippy::collapsible_if)]
+    if let Some(&ty) = ctx.effective_types.get(&result_value) {
+        if !is_polymorphic_type(db, ty) {
+            return Some(ty);
+        }
+    }
+
+    // If not in effective_types, try to get the type from the value's definition
+    // This handles remapped operations in resume functions
+    #[allow(clippy::collapsible_if)]
+    if let ValueDef::OpResult(def_op) = result_value.def(db) {
+        if let Some(result_ty) = def_op.results(db).get(result_value.index(db)).copied() {
+            if !is_polymorphic_type(db, result_ty) {
+                return Some(result_ty);
+            }
+        }
+    }
+
+    None
 }
 
 /// Check if a type is the Step marker type.
@@ -2893,32 +2915,78 @@ fn emit_op<'db>(
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("if") {
         let result_ty = op.results(db).first().copied();
-        let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
+
+        // First try to infer effective type from branches
+        let branch_eff_ty = infer_region_effective_type(db, op, ctx);
+
+        // Check if we can actually get a result value from the then region
+        let then_region_result = op
+            .regions(db)
+            .first()
+            .and_then(|r| region_result_value(db, r));
+        let then_has_result_value = then_region_result.is_some();
+
+        // Check if function returns Step - if so, if blocks should also produce Step
+        let func_returns_step = ctx
+            .func_return_type
+            .map(|ty| is_step_type(db, ty))
+            .unwrap_or(false);
+
+        debug!(
+            "wasm.if: then_has_result_value={}, branch_eff_ty={:?}, func_returns_step={}, result_ty={:?}",
+            then_has_result_value,
+            branch_eff_ty.map(|ty| format!("{}.{}", ty.dialect(db), ty.name(db))),
+            func_returns_step,
+            result_ty.map(|ty| format!("{}.{}", ty.dialect(db), ty.name(db)))
+        );
+
+        // Determine if we should use a result type
+        // Only set has_result if we can actually find a result value
+        let has_result = if !then_has_result_value {
+            false
+        } else if let Some(eff_ty) = branch_eff_ty {
+            !is_nil_type(db, eff_ty)
+        } else if func_returns_step && result_ty.is_some() {
+            // Function returns Step, so if with result should produce Step
+            true
+        } else {
+            matches!(result_ty, Some(ty) if !is_nil_type(db, ty))
+        };
 
         // For wasm.if with results, we need to determine the actual block type.
-        // If the IR result type is polymorphic but the effective result type
+        // If the IR result type is polymorphic or nil but the effective result type
         // from the then/else branches is concrete, we must use the effective type.
         let effective_ty = if has_result {
-            let ir_ty = result_ty.expect("if result type");
-            if tribute::is_type_var(db, ir_ty) {
-                // Try to infer from then region's result value
-                if let Some(eff_ty) = infer_region_effective_type(db, op, ctx) {
+            // Try branch effective type first (handles Step in resume functions)
+            if let Some(eff_ty) = branch_eff_ty {
+                if !is_nil_type(db, eff_ty) {
                     debug!(
-                        "wasm.if: using then branch effective type {}.{} instead of IR type {}.{}",
+                        "wasm.if: using then branch effective type {}.{}",
                         eff_ty.dialect(db),
-                        eff_ty.name(db),
-                        ir_ty.dialect(db),
-                        ir_ty.name(db)
+                        eff_ty.name(db)
                     );
                     Some(eff_ty)
-                } else if let Some(ret_ty) = ctx.func_return_type {
-                    if !is_polymorphic_type(db, ret_ty) {
-                        debug!(
-                            "wasm.if: using function return type {}.{} instead of type_var",
-                            ret_ty.dialect(db),
-                            ret_ty.name(db)
-                        );
-                        Some(ret_ty)
+                } else {
+                    result_ty
+                }
+            } else if func_returns_step {
+                // Function returns Step, use Step as the block type
+                debug!("wasm.if: using Step type because function returns Step");
+                Some(crate::gc_types::step_marker_type(db))
+            } else if let Some(ir_ty) = result_ty {
+                if tribute::is_type_var(db, ir_ty) {
+                    // Fallback to function return type for polymorphic IR types
+                    if let Some(ret_ty) = ctx.func_return_type {
+                        if !is_polymorphic_type(db, ret_ty) {
+                            debug!(
+                                "wasm.if: using function return type {}.{} instead of type_var",
+                                ret_ty.dialect(db),
+                                ret_ty.name(db)
+                            );
+                            Some(ret_ty)
+                        } else {
+                            Some(ir_ty)
+                        }
                     } else {
                         Some(ir_ty)
                     }
@@ -2926,7 +2994,7 @@ fn emit_op<'db>(
                     Some(ir_ty)
                 }
             } else {
-                Some(ir_ty)
+                None
             }
         } else {
             None
@@ -4842,7 +4910,12 @@ fn attr_heap_type<'db>(
         Some(Attribute::Type(ty)) => {
             // Handle wasm abstract heap types like wasm.i31ref, wasm.anyref, etc.
             if ty.dialect(db) == Symbol::new("wasm") {
-                ty.name(db).with_str(symbol_to_abstract_heap_type)
+                let name = ty.name(db);
+                // Handle step as a concrete builtin type (STEP_IDX = 3)
+                if name == Symbol::new("step") {
+                    return Ok(HeapType::Concrete(STEP_IDX));
+                }
+                name.with_str(symbol_to_abstract_heap_type)
             } else {
                 Err(CompilationError::from(
                     errors::CompilationErrorKind::MissingAttribute("non-wasm type for heap_type"),
