@@ -190,7 +190,7 @@ impl<'db> Func<'db> {
         entry.op(unreachable(db, location));
         let region = Region::new(db, location, idvec![entry.build()]);
 
-        let mut builder = Operation::of_name(db, location, "func.func")
+        let mut builder = Operation::of(db, location, DIALECT_NAME(), FUNC())
             .attr("sym_name", Attribute::Symbol(name.into()))
             .attr(
                 "type",

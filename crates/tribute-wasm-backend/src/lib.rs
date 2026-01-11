@@ -1,5 +1,6 @@
 //! Wasm backend that emits WebAssembly binaries from wasm.* TrunkIR operations.
 
+mod data_registry;
 mod emit;
 mod errors;
 pub mod gc_types;
@@ -9,6 +10,7 @@ mod plan;
 pub mod translate;
 pub mod type_converter;
 
+pub use data_registry::{DataEntry, DataRegistry};
 pub use emit::emit_wasm;
 pub use errors::{CompilationError, CompilationResult};
 pub use translate::{WasmBinary, compile_to_wasm};
