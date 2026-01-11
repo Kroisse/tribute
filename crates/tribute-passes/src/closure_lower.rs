@@ -260,14 +260,16 @@ impl RewritePattern for LowerClosureCallPattern {
                 // stored in the struct's first field during LowerClosureNewPattern.
                 // Try to extract func_type from the struct_new operation's first operand
                 // which should be a func.constant with the actual function type
-                let func_ty = get_func_type_from_closure_struct(db, callee)
-                    .unwrap_or_else(|| {
-                        tracing::warn!(
-                            "Failed to extract function type from closure struct, falling back to Funcref"
-                        );
-                        wasm::Funcref::new(db).as_type()
-                    });
-                (true, func_ty)
+                if let Some(func_ty) = get_func_type_from_closure_struct(db, callee) {
+                    (true, func_ty)
+                } else {
+                    // Failed to extract function type - skip closure handling
+                    // to preserve the original type annotation
+                    tracing::warn!(
+                        "Failed to extract function type from closure struct, skipping closure handling"
+                    );
+                    (false, *core::Nil::new(db))
+                }
             } else if core::Func::from_type(db, callee_ty).is_some() {
                 // core.func type - check if callee is a block arg (function parameter)
                 // Block args with core.func type should be treated as closures since

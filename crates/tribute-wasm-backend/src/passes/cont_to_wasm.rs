@@ -2693,43 +2693,49 @@ impl RewritePattern for PushPromptPattern {
             let body_result = get_body_result_value(db, &original_body);
 
             if let Some(result_val) = body_result {
-                // Create Done Step wrapping
-                let (step_ops, step_val) =
-                    create_done_step_ops(db, location, result_val, original_body);
-
-                let blocks = original_body.blocks(db);
-                if let Some(last_block) = blocks.last() {
-                    let ops = last_block.operations(db);
-                    let mut new_ops: Vec<Operation<'db>> = Vec::new();
-
-                    // Keep all ops (including the last result-producing one)
-                    new_ops.extend(ops.iter().copied());
-
-                    // Add Step wrapping
-                    new_ops.extend(step_ops);
-
-                    // Add yield check
-                    new_ops.extend(yield_check_ops.iter().copied());
-
-                    // Add wasm.yield with Step value
-                    let yield_op = wasm::r#yield(db, location, step_val);
-                    new_ops.push(yield_op.as_operation());
-
-                    let new_block = trunk_ir::Block::new(
-                        db,
-                        last_block.id(db),
-                        last_block.location(db),
-                        last_block.args(db).clone(),
-                        IdVec::from(new_ops),
-                    );
-
-                    let mut new_blocks: Vec<trunk_ir::Block<'db>> =
-                        blocks.iter().take(blocks.len() - 1).copied().collect();
-                    new_blocks.push(new_block);
-
-                    trunk_ir::Region::new(db, location, IdVec::from(new_blocks))
+                // Check if result is already a Step - avoid double wrapping (Done(Step))
+                if is_value_already_step(db, result_val) {
+                    // Already a Step - just add yield check without wrapping
+                    insert_ops_before_last(db, location, &original_body, &yield_check_ops)
                 } else {
-                    append_ops_to_region(db, location, &original_body, &yield_check_ops)
+                    // Not a Step - wrap in Done Step
+                    let (step_ops, step_val) =
+                        create_done_step_ops(db, location, result_val, original_body);
+
+                    let blocks = original_body.blocks(db);
+                    if let Some(last_block) = blocks.last() {
+                        let ops = last_block.operations(db);
+                        let mut new_ops: Vec<Operation<'db>> = Vec::new();
+
+                        // Keep all ops (including the last result-producing one)
+                        new_ops.extend(ops.iter().copied());
+
+                        // Add Step wrapping
+                        new_ops.extend(step_ops);
+
+                        // Add yield check
+                        new_ops.extend(yield_check_ops.iter().copied());
+
+                        // Add wasm.yield with Step value
+                        let yield_op = wasm::r#yield(db, location, step_val);
+                        new_ops.push(yield_op.as_operation());
+
+                        let new_block = trunk_ir::Block::new(
+                            db,
+                            last_block.id(db),
+                            last_block.location(db),
+                            last_block.args(db).clone(),
+                            IdVec::from(new_ops),
+                        );
+
+                        let mut new_blocks: Vec<trunk_ir::Block<'db>> =
+                            blocks.iter().take(blocks.len() - 1).copied().collect();
+                        new_blocks.push(new_block);
+
+                        trunk_ir::Region::new(db, location, IdVec::from(new_blocks))
+                    } else {
+                        append_ops_to_region(db, location, &original_body, &yield_check_ops)
+                    }
                 }
             } else {
                 insert_ops_before_last(db, location, &original_body, &yield_check_ops)
