@@ -3934,7 +3934,8 @@ mod tests {
         let handlers_region = Region::new(db, location, idvec![handlers_block]);
 
         // Use typed helper
-        let push_prompt = cont::push_prompt(db, location, i32_ty, 42, body_region, handlers_region).as_operation();
+        let push_prompt = cont::push_prompt(db, location, i32_ty, 42, body_region, handlers_region)
+            .as_operation();
 
         let block = Block::new(
             db,
