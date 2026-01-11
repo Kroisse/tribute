@@ -1125,9 +1125,8 @@ fn wrap_returns_for_step_functions<'db>(
                 .operations(db)
                 .iter()
                 .map(|op| {
-                    // Check if this is a wasm.func
-                    if op.dialect(db) != wasm::DIALECT_NAME() || op.name(db) != Symbol::new("func")
-                    {
+                    // Check if this is a wasm.func (use dialect constant)
+                    if op.dialect(db) != wasm::DIALECT_NAME() || op.name(db) != wasm::FUNC() {
                         return *op;
                     }
 
@@ -1143,9 +1142,9 @@ fn wrap_returns_for_step_functions<'db>(
                     };
                     let return_ty = func_type.result(db);
 
-                    // Check if return type is Step
-                    let is_step_return = return_ty.dialect(db) == wasm::DIALECT_NAME()
-                        && return_ty.name(db) == Symbol::new("step");
+                    // Check if return type is Step (use step_type helper for consistency)
+                    let step_ty = cont_types::step_type(db);
+                    let is_step_return = return_ty == step_ty;
 
                     if !is_step_return {
                         return *op;
@@ -1273,14 +1272,14 @@ fn wrap_returns_in_block_with_map<'db>(
 
         // Check if this is a wasm.return
         #[allow(clippy::collapsible_if)]
-        if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("return") {
+        if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == wasm::RETURN() {
             if let Some(return_val) = op.operands(db).first().copied() {
                 // Check if already a Step
                 if !is_value_already_step(db, return_val) && !is_ref_null_any(db, return_val) {
                     // Wrap in Done Step
                     let location = op.location(db);
                     let (step_ops, step_val) =
-                        create_done_step_ops(db, location, return_val, region);
+                        create_done_step_ops(db, location, return_val, region, None);
                     new_ops.extend(step_ops);
 
                     let new_return = wasm::r#return(db, location, Some(step_val));
@@ -1345,7 +1344,7 @@ fn region_ends_with_return<'db>(db: &'db dyn salsa::Database, region: Region<'db
         return false;
     };
 
-    last_op.dialect(db) == wasm::DIALECT_NAME() && last_op.name(db) == Symbol::new("return")
+    last_op.dialect(db) == wasm::DIALECT_NAME() && last_op.name(db) == wasm::RETURN()
 }
 
 /// Check if a value is ref.null any (used for yield path returns).
@@ -1355,16 +1354,31 @@ fn is_ref_null_any<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> bool
         return false;
     };
 
-    op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("ref_null")
+    // Check operation name using dialect constant pattern
+    if op.dialect(db) != wasm::DIALECT_NAME() || op.name(db) != Symbol::new("ref_null") {
+        return false;
+    }
+
+    // Tighten filtering: verify it's actually anyref type
+    let result_ty = op
+        .results(db)
+        .first()
+        .copied()
+        .unwrap_or_else(|| wasm::Anyref::new(db).as_type());
+    wasm::Anyref::from_type(db, result_ty).is_some()
 }
 
 /// Create operations to wrap a value in Done Step (without return/yield).
 /// Returns (operations, step_value).
+///
+/// The `value_type_hint` parameter can be provided when the caller knows the value's type,
+/// which helps resolve BlockArgs from outer regions that aren't in the immediate `region`.
 fn create_done_step_ops<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     value: Value<'db>,
     region: Region<'db>,
+    value_type_hint: Option<Type<'db>>,
 ) -> (Vec<Operation<'db>>, Value<'db>) {
     let mut ops = Vec::new();
     let i32_ty = core::I32::new(db).as_type();
@@ -1376,7 +1390,8 @@ fn create_done_step_ops<'db>(
     ops.push(done_tag.as_operation());
 
     // Box the value to anyref for Step.value field
-    let value_ty = match value.def(db) {
+    // Try type hint first, then fall back to inference
+    let value_ty = value_type_hint.or_else(|| match value.def(db) {
         ValueDef::OpResult(def_op) => def_op.results(db).get(value.index(db)).copied(),
         ValueDef::BlockArg(block_id) => {
             // Find the block in the region and get the argument type
@@ -1385,10 +1400,9 @@ fn create_done_step_ops<'db>(
             let found_block = region.blocks(db).iter().find(|b| b.id(db) == block_id);
 
             if found_block.is_none() {
-                tracing::warn!(
-                    "create_done_step_ops: BlockArg block not found in region (block_id={:?}). \
-                     This may occur for BlockArgs from outer regions or different control flow contexts. \
-                     Falling back to anyref assumption.",
+                tracing::debug!(
+                    "create_done_step_ops: BlockArg block not found in immediate region (block_id={:?}). \
+                     This may occur for BlockArgs from outer regions. Consider passing value_type_hint.",
                     block_id
                 );
             }
@@ -1397,7 +1411,7 @@ fn create_done_step_ops<'db>(
                 .and_then(|block| block.args(db).get(value.index(db)))
                 .map(|arg| arg.ty(db))
         }
-    };
+    });
     let boxed_val = if let Some(ty) = value_ty {
         box_value_to_anyref(db, location, value, ty, &mut ops)
     } else {
@@ -1438,7 +1452,7 @@ fn create_done_step_return<'db>(
     return_val: Value<'db>,
     region: Region<'db>,
 ) -> Vec<Operation<'db>> {
-    let (mut ops, step_val) = create_done_step_ops(db, location, return_val, region);
+    let (mut ops, step_val) = create_done_step_ops(db, location, return_val, region, None);
 
     // Return the Step
     let return_op = wasm::r#return(db, location, Some(step_val));
@@ -1519,7 +1533,7 @@ fn function_body_can_yield<'db>(db: &'db dyn salsa::Database, region: &Region<'d
         for op in block.operations(db).iter() {
             // Check for wasm.return
             if op.dialect(db) == wasm::DIALECT_NAME()
-                && op.name(db) == Symbol::new("return")
+                && op.name(db) == wasm::RETURN()
                 && let Some(operand) = op.operands(db).first()
                 && let ValueDef::OpResult(def_op) = operand.def(db)
             {
@@ -2137,7 +2151,7 @@ fn generate_inline_resume_function<'db>(
         // Find return operations and wrap their operands (unless already Step)
         for remapped_op in remapped_ops {
             if remapped_op.dialect(db) == wasm::DIALECT_NAME()
-                && remapped_op.name(db) == Symbol::new("return")
+                && remapped_op.name(db) == wasm::RETURN()
             {
                 // This is a wasm.return - wrap its operand in Done Step if not already Step
                 if let Some(return_val) = remapped_op.operands(db).first().copied() {
@@ -2713,7 +2727,7 @@ impl RewritePattern for PushPromptPattern {
                 } else {
                     // Not a Step - wrap in Done Step
                     let (step_ops, step_val) =
-                        create_done_step_ops(db, location, result_val, original_body);
+                        create_done_step_ops(db, location, result_val, original_body, None);
 
                     let blocks = original_body.blocks(db);
                     if let Some(last_block) = blocks.last() {
@@ -3198,7 +3212,7 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
 
                 // Wrap in Done Step and yield that
                 let (step_ops, step_val) =
-                    create_done_step_ops(db, location, remapped_yield_val, region);
+                    create_done_step_ops(db, location, remapped_yield_val, region, None);
                 new_ops.extend(step_ops);
                 let new_yield = wasm::r#yield(db, location, step_val);
                 new_ops.push(new_yield.as_operation());
@@ -3363,7 +3377,7 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
                     // Check if already a Step
                     if !is_value_already_step(db, result_val) {
                         let (step_ops, step_val) =
-                            create_done_step_ops(db, location, result_val, region);
+                            create_done_step_ops(db, location, result_val, region, None);
                         tracing::debug!(
                             "wrap_yields_in_done_step: created {} step_ops for wrapping",
                             step_ops.len()

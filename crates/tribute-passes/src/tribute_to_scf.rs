@@ -1087,10 +1087,9 @@ impl<'db> CaseLowerer<'db> {
             let bindings = self.extract_bindings_from_pattern(pattern_region);
             if !bindings.is_empty() {
                 // Create cont.get_done_value to extract the actual value from Step
-                let get_value_op = Operation::of_name(self.db, location, "cont.get_done_value")
-                    .operands(idvec![scrutinee])
-                    .results(idvec![result_type])
-                    .build();
+                let get_value_typed =
+                    cont::get_done_value(self.db, location, scrutinee, result_type);
+                let get_value_op = get_value_typed.as_operation();
                 let unwrapped = get_value_op.result(self.db, 0);
 
                 // Bind the pattern variables to the unwrapped value
