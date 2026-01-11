@@ -416,30 +416,13 @@ impl<'db> CaseLowerer<'db> {
             // We need to extract the actual result value from the Step
             // before binding it to the done arm's pattern variable.
 
-            // Set up bindings for the result value
-            // The done arm's pattern region may have a bind pattern for the result
-            let unwrapped_value = if let Some(pattern_region) = done_arm.pattern_region {
-                let bindings = self.extract_bindings_from_pattern(pattern_region);
-                if !bindings.is_empty() {
-                    // Create cont.get_done_value to extract the actual value from Step
-                    let get_value_op = Operation::of_name(self.db, location, "cont.get_done_value")
-                        .operands(idvec![scrutinee])
-                        .results(idvec![result_type])
-                        .build();
-                    let unwrapped = get_value_op.result(self.db, 0);
-
-                    // Bind the pattern variables to the unwrapped value
-                    for name in bindings.iter() {
-                        self.current_arm_bindings.insert(*name, unwrapped);
-                    }
-
-                    Some((get_value_op, unwrapped))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            // Use helper to unwrap Step and bind pattern variables
+            let unwrapped_value = self.unwrap_step_and_bind_pattern(
+                scrutinee,
+                done_arm.pattern_region,
+                result_type,
+                location,
+            );
 
             let lowered_body = self.lower_region(done_arm.body);
 
@@ -465,7 +448,8 @@ impl<'db> CaseLowerer<'db> {
             let nil_ty = core::Nil::new(self.db).as_type();
             let nil_const = func::constant(self.db, location, nil_ty, Symbol::new("nil"));
             let nil_val = nil_const.as_operation().result(self.db, 0);
-            let yield_op = tribute::r#yield(self.db, location, nil_val);
+            // Use scf::yield instead of tribute::yield to avoid escaping this lowering pass
+            let yield_op = scf::r#yield(self.db, location, vec![nil_val]);
             let block = Block::new(
                 self.db,
                 BlockId::fresh(),
@@ -1087,6 +1071,37 @@ impl<'db> CaseLowerer<'db> {
             }
         }
         true
+    }
+
+    /// Unwrap a Step value using cont.get_done_value and bind the result to pattern variables.
+    ///
+    /// Returns Some((operation, unwrapped_value)) if bindings were created, None otherwise.
+    fn unwrap_step_and_bind_pattern(
+        &mut self,
+        scrutinee: Value<'db>,
+        pattern_region: Option<Region<'db>>,
+        result_type: Type<'db>,
+        location: Location<'db>,
+    ) -> Option<(Operation<'db>, Value<'db>)> {
+        if let Some(pattern_region) = pattern_region {
+            let bindings = self.extract_bindings_from_pattern(pattern_region);
+            if !bindings.is_empty() {
+                // Create cont.get_done_value to extract the actual value from Step
+                let get_value_op = Operation::of_name(self.db, location, "cont.get_done_value")
+                    .operands(idvec![scrutinee])
+                    .results(idvec![result_type])
+                    .build();
+                let unwrapped = get_value_op.result(self.db, 0);
+
+                // Bind the pattern variables to the unwrapped value
+                for name in bindings.iter() {
+                    self.current_arm_bindings.insert(*name, unwrapped);
+                }
+
+                return Some((get_value_op, unwrapped));
+            }
+        }
+        None
     }
 
     /// Extract binding names from a pattern region.

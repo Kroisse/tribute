@@ -1380,10 +1380,20 @@ fn create_done_step_ops<'db>(
         ValueDef::OpResult(def_op) => def_op.results(db).get(value.index(db)).copied(),
         ValueDef::BlockArg(block_id) => {
             // Find the block in the region and get the argument type
-            region
-                .blocks(db)
-                .iter()
-                .find(|b| b.id(db) == block_id)
+            // Note: This only searches the immediate region. BlockArgs from outer regions
+            // or different control flow contexts won't be found.
+            let found_block = region.blocks(db).iter().find(|b| b.id(db) == block_id);
+
+            if found_block.is_none() {
+                tracing::warn!(
+                    "create_done_step_ops: BlockArg block not found in region (block_id={:?}). \
+                     This may occur for BlockArgs from outer regions or different control flow contexts. \
+                     Falling back to anyref assumption.",
+                    block_id
+                );
+            }
+
+            found_block
                 .and_then(|block| block.args(db).get(value.index(db)))
                 .map(|arg| arg.ty(db))
         }
@@ -1392,6 +1402,9 @@ fn create_done_step_ops<'db>(
         box_value_to_anyref(db, location, value, ty, &mut ops)
     } else {
         // No type info available - assume already boxed as anyref
+        tracing::debug!(
+            "create_done_step_ops: No type info for value, assuming already boxed as anyref"
+        );
         value
     };
 
@@ -3078,12 +3091,17 @@ impl RewritePattern for HandlerDispatchPattern {
 /// control flow (wasm.block, wasm.if, etc.). Nested control flow operations
 /// that produce results must be handled elsewhere.
 fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'db>) -> Region<'db> {
+    use std::collections::HashMap;
+
     let mut new_blocks: Vec<Block<'db>> = Vec::new();
 
     let blocks = region.blocks(db);
     for (block_idx, block) in blocks.iter().enumerate() {
         let mut new_ops: Vec<Operation<'db>> = Vec::new();
         let is_last_block = block_idx == blocks.len() - 1;
+
+        // Track SSA value remapping for cont.get_done_value expansion
+        let mut value_mapping: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
         for op in block.operations(db).iter() {
             // Note: We DON'T recursively process nested regions here to avoid
@@ -3095,7 +3113,7 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
                 op.dialect(db) == cont::DIALECT_NAME() && op.name(db) == cont::GET_DONE_VALUE();
 
             if is_get_done_value {
-                // Expand cont.get_done_value inline (without wrapping yet)
+                // Expand cont.get_done_value inline and track SSA value remapping
                 let get_done_value = cont::GetDoneValue::from_operation(db, *op).unwrap();
                 let location = op.location(db);
                 let anyref_ty = wasm::Anyref::new(db).as_type();
@@ -3132,7 +3150,7 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
                     || core::I32::from_type(db, result_ty).is_some()
                     || tribute::is_type_var(db, result_ty);
 
-                if needs_unbox {
+                let final_value = if needs_unbox {
                     // Cast anyref to i31ref
                     let ref_cast_i31 =
                         wasm::ref_cast(db, location, value_anyref, i31ref_ty, i31ref_ty);
@@ -3141,7 +3159,17 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
 
                     // Unbox i31ref to i32
                     let unbox_op = wasm::i31_get_s(db, location, i31_val, i32_ty);
+                    let unboxed_val = unbox_op.as_operation().result(db, 0);
                     new_ops.push(unbox_op.as_operation());
+                    unboxed_val
+                } else {
+                    value_anyref
+                };
+
+                // Map the original cont.get_done_value result to the final expanded value
+                if !op.results(db).is_empty() {
+                    let original_val = Value::new(db, ValueDef::OpResult(*op), 0);
+                    value_mapping.insert(original_val, final_value);
                 }
 
                 continue;
@@ -3152,21 +3180,45 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
                 let yield_val = yield_op.value(db);
                 let location = op.location(db);
 
+                // Remap yield value if needed
+                let remapped_yield_val =
+                    value_mapping.get(&yield_val).copied().unwrap_or(yield_val);
+
                 // Check if already a Step
-                if is_value_already_step(db, yield_val) {
-                    new_ops.push(*op);
+                if is_value_already_step(db, remapped_yield_val) {
+                    // Update the yield operation with remapped value if needed
+                    if remapped_yield_val != yield_val {
+                        let new_yield = wasm::r#yield(db, location, remapped_yield_val);
+                        new_ops.push(new_yield.as_operation());
+                    } else {
+                        new_ops.push(*op);
+                    }
                     continue;
                 }
 
                 // Wrap in Done Step and yield that
-                let (step_ops, step_val) = create_done_step_ops(db, location, yield_val, region);
+                let (step_ops, step_val) =
+                    create_done_step_ops(db, location, remapped_yield_val, region);
                 new_ops.extend(step_ops);
                 let new_yield = wasm::r#yield(db, location, step_val);
                 new_ops.push(new_yield.as_operation());
                 continue;
             }
 
-            new_ops.push(*op);
+            // Remap operands for all other operations
+            let operands = op.operands(db);
+            let has_remapped = operands.iter().any(|v| value_mapping.contains_key(v));
+
+            if has_remapped {
+                let remapped_operands: IdVec<Value<'db>> = operands
+                    .iter()
+                    .map(|v| value_mapping.get(v).copied().unwrap_or(*v))
+                    .collect();
+                let new_op = op.modify(db).operands(remapped_operands).build();
+                new_ops.push(new_op);
+            } else {
+                new_ops.push(*op);
+            }
         }
 
         // If this is the last block and doesn't end with a yield,

@@ -575,6 +575,8 @@ fn get_func_type_from_closure_struct<'db>(
         return None;
     };
 
-    // Get the type from the funcref value's result
-    constant_op.results(db).first().copied()
+    // Verify it's a func.constant and get the type
+    func::Constant::from_operation(db, constant_op)
+        .ok()
+        .and_then(|_| constant_op.results(db).first().copied())
 }
