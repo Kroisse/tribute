@@ -3107,6 +3107,217 @@ impl RewritePattern for HandlerDispatchPattern {
     }
 }
 
+/// Handles implicit yield for the last block if needed.
+///
+/// If the last block doesn't end with a yield, wraps the last operation's
+/// result in Done Step and yields it.
+fn handle_last_block_implicit_yield<'db>(
+    db: &'db dyn salsa::Database,
+    new_ops: &mut Vec<Operation<'db>>,
+    region: Region<'db>,
+) {
+    let Some(&last_op_ref) = new_ops.last() else {
+        return;
+    };
+
+    let last_op = last_op_ref;
+
+    // Check if last operation is already a yield
+    let is_yield = wasm::Yield::from_operation(db, last_op).is_ok();
+
+    // Check if last operation is cont.get_done_value (not yet expanded)
+    let is_get_done_value =
+        last_op.dialect(db) == cont::DIALECT_NAME() && last_op.name(db) == cont::GET_DONE_VALUE();
+
+    tracing::debug!(
+        "handle_last_block_implicit_yield: last_op={}.{}, is_yield={}, is_get_done_value={}, has_results={}",
+        last_op.dialect(db),
+        last_op.name(db),
+        is_yield,
+        is_get_done_value,
+        !last_op.results(db).is_empty()
+    );
+
+    if is_get_done_value {
+        // Remove the cont.get_done_value operation
+        new_ops.pop();
+
+        // Expand cont.get_done_value and wrap result in Done Step
+        let get_done_value = cont::GetDoneValue::from_operation(db, last_op).unwrap();
+        let location = last_op.location(db);
+
+        let (expansion_ops, final_value, needs_unbox) =
+            expand_get_done_value_inline(db, get_done_value, location);
+        new_ops.extend(expansion_ops);
+
+        // Re-box the value if it was unboxed, then wrap in Done Step
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let boxed_val = if needs_unbox {
+            // final_value is i32, need to box to anyref
+            let box_op = wasm::ref_i31(db, location, final_value, anyref_ty);
+            let boxed = box_op.as_operation().result(db, 0);
+            new_ops.push(box_op.as_operation());
+            tracing::debug!("handle_last_block_implicit_yield: boxed i32 to anyref");
+            boxed
+        } else {
+            final_value
+        };
+
+        // Create Done Step: (tag=0, value=boxed_val, prompt=0, op_idx=0)
+        let i32_ty = core::I32::new(db).as_type();
+        let done_tag_op = wasm::i32_const(db, location, i32_ty, cont_types::STEP_TAG_DONE);
+        let done_tag_val = done_tag_op.as_operation().result(db, 0);
+        new_ops.push(done_tag_op.as_operation());
+
+        let zero_prompt_op = wasm::i32_const(db, location, i32_ty, 0);
+        let zero_prompt = zero_prompt_op.as_operation().result(db, 0);
+        new_ops.push(zero_prompt_op.as_operation());
+
+        let zero_op_idx_op = wasm::i32_const(db, location, i32_ty, 0);
+        let zero_op_idx = zero_op_idx_op.as_operation().result(db, 0);
+        new_ops.push(zero_op_idx_op.as_operation());
+
+        let step_marker_ty = crate::gc_types::step_marker_type(db);
+        let step_op = wasm::struct_new(
+            db,
+            location,
+            IdVec::from(vec![done_tag_val, boxed_val, zero_prompt, zero_op_idx]),
+            step_marker_ty,
+            crate::gc_types::STEP_IDX,
+        );
+        let step_val = step_op.as_operation().result(db, 0);
+        new_ops.push(step_op.as_operation());
+
+        tracing::debug!(
+            "handle_last_block_implicit_yield: wrapped cont.get_done_value result in Done Step"
+        );
+
+        let new_yield = wasm::r#yield(db, location, step_val);
+        new_ops.push(new_yield.as_operation());
+    } else if !is_yield && !last_op.results(db).is_empty() {
+        // Last operation has a result and isn't a yield
+        // Wrap it in Done Step and yield
+        let result_val = Value::new(db, ValueDef::OpResult(last_op), 0);
+        let location = last_op.location(db);
+
+        tracing::debug!(
+            "handle_last_block_implicit_yield: wrapping last_op result, is_already_step={}",
+            is_value_already_step(db, result_val)
+        );
+
+        // Check if already a Step
+        if !is_value_already_step(db, result_val) {
+            let (step_ops, step_val) = create_done_step_ops(db, location, result_val, region, None);
+            tracing::debug!(
+                "handle_last_block_implicit_yield: created {} step_ops for wrapping",
+                step_ops.len()
+            );
+            new_ops.extend(step_ops);
+            let new_yield = wasm::r#yield(db, location, step_val);
+            new_ops.push(new_yield.as_operation());
+        }
+    }
+}
+
+/// Processes a wasm.yield operation, wrapping its value in Done Step if needed.
+///
+/// Returns operations to add (either just the yield with remapped value,
+/// or step creation ops + new yield).
+fn process_yield_operation<'db>(
+    db: &'db dyn salsa::Database,
+    yield_val: Value<'db>,
+    location: Location<'db>,
+    value_mapping: &std::collections::HashMap<Value<'db>, Value<'db>>,
+    region: Region<'db>,
+) -> Vec<Operation<'db>> {
+    // Remap yield value if needed
+    let remapped_yield_val = value_mapping.get(&yield_val).copied().unwrap_or(yield_val);
+
+    // Check if already a Step
+    if is_value_already_step(db, remapped_yield_val) {
+        // Return yield operation with remapped value
+        let new_yield = wasm::r#yield(db, location, remapped_yield_val);
+        return vec![new_yield.as_operation()];
+    }
+
+    // Wrap in Done Step and yield that
+    let (step_ops, step_val) = create_done_step_ops(db, location, remapped_yield_val, region, None);
+    let mut ops = step_ops;
+    let new_yield = wasm::r#yield(db, location, step_val);
+    ops.push(new_yield.as_operation());
+    ops
+}
+
+/// Expands cont.get_done_value inline into WASM operations.
+///
+/// Returns:
+/// - Vec<Operation>: operations to add (ref_cast, struct_get, optional i31 unbox)
+/// - Value: the final extracted value
+/// - bool: whether the value was unboxed (true) or kept as anyref (false)
+fn expand_get_done_value_inline<'db>(
+    db: &'db dyn salsa::Database,
+    get_done_value_op: cont::GetDoneValue<'db>,
+    location: Location<'db>,
+) -> (Vec<Operation<'db>>, Value<'db>, bool) {
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+    let i32_ty = core::I32::new(db).as_type();
+    let i31ref_ty = wasm::I31ref::new(db).as_type();
+
+    let mut ops = Vec::new();
+
+    // Get the Step operand
+    let step_anyref = get_done_value_op.step(db);
+
+    // Cast anyref to Step structref and extract value
+    let step_ty = crate::gc_types::step_marker_type(db);
+    let step_cast_op = wasm::ref_cast(db, location, step_anyref, step_ty, step_ty);
+    let step_val = step_cast_op.as_operation().result(db, 0);
+    ops.push(step_cast_op.as_operation());
+
+    // Extract value from Step struct (field 1)
+    const STEP_VALUE_FIELD: u32 = 1;
+    let get_value = wasm::struct_get(
+        db,
+        location,
+        step_val,
+        anyref_ty,
+        crate::gc_types::STEP_IDX,
+        STEP_VALUE_FIELD,
+    )
+    .as_operation();
+    let value_anyref = Value::new(db, ValueDef::OpResult(get_value), 0);
+    ops.push(get_value);
+
+    // Check if we need to unbox (get result type from original op)
+    let result_ty = get_done_value_op
+        .as_operation()
+        .results(db)
+        .first()
+        .copied()
+        .unwrap_or(anyref_ty);
+    let needs_unbox = tribute_rt::is_int(db, result_ty)
+        || tribute_rt::is_nat(db, result_ty)
+        || core::I32::from_type(db, result_ty).is_some()
+        || tribute::is_type_var(db, result_ty);
+
+    let final_value = if needs_unbox {
+        // Cast anyref to i31ref
+        let ref_cast_i31 = wasm::ref_cast(db, location, value_anyref, i31ref_ty, i31ref_ty);
+        let i31_val = ref_cast_i31.as_operation().result(db, 0);
+        ops.push(ref_cast_i31.as_operation());
+
+        // Unbox i31ref to i32
+        let unbox_op = wasm::i31_get_s(db, location, i31_val, i32_ty);
+        let unboxed_val = unbox_op.as_operation().result(db, 0);
+        ops.push(unbox_op.as_operation());
+        unboxed_val
+    } else {
+        value_anyref
+    };
+
+    (ops, final_value, needs_unbox)
+}
+
 /// Wrap wasm.yield values in Done Step within a region.
 /// This is used for done_body in handler dispatch so that both branches of
 /// wasm.if produce Step values.
@@ -3114,11 +3325,6 @@ impl RewritePattern for HandlerDispatchPattern {
 /// Note: This only processes top-level yields, not yields inside nested
 /// control flow (wasm.block, wasm.if, etc.). Nested control flow operations
 /// that produce results must be handled elsewhere.
-///
-/// TODO(complexity): This function is complex (~300 lines). Consider extracting:
-/// - cont.get_done_value expansion logic into a helper
-/// - wasm.yield wrapping logic into a helper
-/// - Last block implicit yield logic into a helper
 fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'db>) -> Region<'db> {
     use std::collections::HashMap;
 
@@ -3145,55 +3351,11 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
                 // Expand cont.get_done_value inline and track SSA value remapping
                 let get_done_value = cont::GetDoneValue::from_operation(db, *op).unwrap();
                 let location = op.location(db);
-                let anyref_ty = wasm::Anyref::new(db).as_type();
-                let i32_ty = core::I32::new(db).as_type();
-                let i31ref_ty = wasm::I31ref::new(db).as_type();
 
-                // Get the Step operand
-                let step_anyref = get_done_value.step(db);
+                let (expansion_ops, final_value, _needs_unbox) =
+                    expand_get_done_value_inline(db, get_done_value, location);
 
-                // Cast anyref to Step structref and extract value
-                let step_ty = crate::gc_types::step_marker_type(db);
-                let step_cast_op = wasm::ref_cast(db, location, step_anyref, step_ty, step_ty);
-                let step_val = step_cast_op.as_operation().result(db, 0);
-                new_ops.push(step_cast_op.as_operation());
-
-                // Extract value from Step struct (field 1)
-                const STEP_VALUE_FIELD: u32 = 1;
-                let get_value = wasm::struct_get(
-                    db,
-                    location,
-                    step_val,
-                    anyref_ty,
-                    crate::gc_types::STEP_IDX,
-                    STEP_VALUE_FIELD,
-                )
-                .as_operation();
-                let value_anyref = Value::new(db, ValueDef::OpResult(get_value), 0);
-                new_ops.push(get_value);
-
-                // Check if we need to unbox (get result type from original op)
-                let result_ty = op.results(db).first().copied().unwrap_or(anyref_ty);
-                let needs_unbox = tribute_rt::is_int(db, result_ty)
-                    || tribute_rt::is_nat(db, result_ty)
-                    || core::I32::from_type(db, result_ty).is_some()
-                    || tribute::is_type_var(db, result_ty);
-
-                let final_value = if needs_unbox {
-                    // Cast anyref to i31ref
-                    let ref_cast_i31 =
-                        wasm::ref_cast(db, location, value_anyref, i31ref_ty, i31ref_ty);
-                    let i31_val = ref_cast_i31.as_operation().result(db, 0);
-                    new_ops.push(ref_cast_i31.as_operation());
-
-                    // Unbox i31ref to i32
-                    let unbox_op = wasm::i31_get_s(db, location, i31_val, i32_ty);
-                    let unboxed_val = unbox_op.as_operation().result(db, 0);
-                    new_ops.push(unbox_op.as_operation());
-                    unboxed_val
-                } else {
-                    value_anyref
-                };
+                new_ops.extend(expansion_ops);
 
                 // Map the original cont.get_done_value result to the final expanded value
                 if !op.results(db).is_empty() {
@@ -3209,28 +3371,9 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
                 let yield_val = yield_op.value(db);
                 let location = op.location(db);
 
-                // Remap yield value if needed
-                let remapped_yield_val =
-                    value_mapping.get(&yield_val).copied().unwrap_or(yield_val);
-
-                // Check if already a Step
-                if is_value_already_step(db, remapped_yield_val) {
-                    // Update the yield operation with remapped value if needed
-                    if remapped_yield_val != yield_val {
-                        let new_yield = wasm::r#yield(db, location, remapped_yield_val);
-                        new_ops.push(new_yield.as_operation());
-                    } else {
-                        new_ops.push(*op);
-                    }
-                    continue;
-                }
-
-                // Wrap in Done Step and yield that
-                let (step_ops, step_val) =
-                    create_done_step_ops(db, location, remapped_yield_val, region, None);
-                new_ops.extend(step_ops);
-                let new_yield = wasm::r#yield(db, location, step_val);
-                new_ops.push(new_yield.as_operation());
+                let yield_ops =
+                    process_yield_operation(db, yield_val, location, &value_mapping, region);
+                new_ops.extend(yield_ops);
                 continue;
             }
 
@@ -3252,157 +3395,8 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
 
         // If this is the last block and doesn't end with a yield,
         // wrap the last operation's result in Done Step and yield it.
-        #[allow(clippy::collapsible_if)]
-        if is_last_block && !new_ops.is_empty() {
-            if let Some(&last_op_ref) = new_ops.last() {
-                // Copy the operation to avoid borrow checker issues
-                let last_op = last_op_ref;
-
-                // Check if last operation is already a yield
-                let is_yield = wasm::Yield::from_operation(db, last_op).is_ok();
-                // Check if last operation is cont.get_done_value (not yet expanded)
-                let is_get_done_value = last_op.dialect(db) == cont::DIALECT_NAME()
-                    && last_op.name(db) == cont::GET_DONE_VALUE();
-
-                tracing::debug!(
-                    "wrap_yields_in_done_step: last_block, last_op={}.{}, is_yield={}, is_get_done_value={}, has_results={}",
-                    last_op.dialect(db),
-                    last_op.name(db),
-                    is_yield,
-                    is_get_done_value,
-                    !last_op.results(db).is_empty()
-                );
-
-                // If last op is cont.get_done_value, it will be expanded to wasm operations
-                // that extract i32 from Step. We need to wrap that i32 back to Step.
-                // To handle this, we treat cont.get_done_value specially: replace it with
-                // an expanded version and wrap the result.
-                if is_get_done_value {
-                    // Remove the cont.get_done_value operation
-                    new_ops.pop();
-
-                    // Manually expand cont.get_done_value and wrap result
-                    let get_done_value = cont::GetDoneValue::from_operation(db, last_op).unwrap();
-                    let location = last_op.location(db);
-                    let anyref_ty = wasm::Anyref::new(db).as_type();
-                    let i32_ty = core::I32::new(db).as_type();
-                    let i31ref_ty = wasm::I31ref::new(db).as_type();
-
-                    // Get the Step operand
-                    let step_anyref = get_done_value.step(db);
-
-                    // Cast anyref to Step structref and extract value
-                    let step_ty = crate::gc_types::step_marker_type(db);
-                    let step_cast_op = wasm::ref_cast(db, location, step_anyref, step_ty, step_ty);
-                    let step_val = step_cast_op.as_operation().result(db, 0);
-                    new_ops.push(step_cast_op.as_operation());
-
-                    // Extract value from Step struct (field 1)
-                    const STEP_VALUE_FIELD: u32 = 1;
-                    let get_value = wasm::struct_get(
-                        db,
-                        location,
-                        step_val,
-                        anyref_ty,
-                        crate::gc_types::STEP_IDX,
-                        STEP_VALUE_FIELD,
-                    )
-                    .as_operation();
-                    let value_anyref = Value::new(db, ValueDef::OpResult(get_value), 0);
-                    new_ops.push(get_value);
-
-                    // Check if we need to unbox (get result type from original op)
-                    let result_ty = last_op.results(db).first().copied().unwrap_or(anyref_ty);
-                    let needs_unbox = tribute_rt::is_int(db, result_ty)
-                        || tribute_rt::is_nat(db, result_ty)
-                        || core::I32::from_type(db, result_ty).is_some()
-                        || tribute::is_type_var(db, result_ty);
-
-                    let unboxed_val = if needs_unbox {
-                        // Cast anyref to i31ref
-                        let ref_cast_i31 =
-                            wasm::ref_cast(db, location, value_anyref, i31ref_ty, i31ref_ty);
-                        let i31_val = ref_cast_i31.as_operation().result(db, 0);
-                        new_ops.push(ref_cast_i31.as_operation());
-
-                        // Unbox i31ref to i32
-                        let unbox_op = wasm::i31_get_s(db, location, i31_val, i32_ty);
-                        let unboxed = unbox_op.as_operation().result(db, 0);
-                        new_ops.push(unbox_op.as_operation());
-                        unboxed
-                    } else {
-                        value_anyref
-                    };
-
-                    // Now wrap the unboxed value in Done Step
-                    // First, box the value if it's a primitive
-                    let boxed_val = if needs_unbox {
-                        // unboxed_val is i32, need to box to anyref
-                        let box_op = wasm::ref_i31(db, location, unboxed_val, anyref_ty);
-                        let boxed = box_op.as_operation().result(db, 0);
-                        new_ops.push(box_op.as_operation());
-                        tracing::debug!("wrap_yields_in_done_step: boxed i32 to anyref");
-                        boxed
-                    } else {
-                        unboxed_val
-                    };
-
-                    // Create Done Step: (tag=0, value=boxed_val, prompt=0, op_idx=0)
-                    let done_tag_op =
-                        wasm::i32_const(db, location, i32_ty, cont_types::STEP_TAG_DONE);
-                    let done_tag_val = done_tag_op.as_operation().result(db, 0);
-                    new_ops.push(done_tag_op.as_operation());
-
-                    let zero_prompt_op = wasm::i32_const(db, location, i32_ty, 0);
-                    let zero_prompt = zero_prompt_op.as_operation().result(db, 0);
-                    new_ops.push(zero_prompt_op.as_operation());
-
-                    let zero_op_idx_op = wasm::i32_const(db, location, i32_ty, 0);
-                    let zero_op_idx = zero_op_idx_op.as_operation().result(db, 0);
-                    new_ops.push(zero_op_idx_op.as_operation());
-
-                    let step_marker_ty = crate::gc_types::step_marker_type(db);
-                    let step_op = wasm::struct_new(
-                        db,
-                        location,
-                        IdVec::from(vec![done_tag_val, boxed_val, zero_prompt, zero_op_idx]),
-                        step_marker_ty,
-                        crate::gc_types::STEP_IDX,
-                    );
-                    let step_val = step_op.as_operation().result(db, 0);
-                    new_ops.push(step_op.as_operation());
-
-                    tracing::debug!(
-                        "wrap_yields_in_done_step: wrapped cont.get_done_value result in Done Step"
-                    );
-
-                    let new_yield = wasm::r#yield(db, location, step_val);
-                    new_ops.push(new_yield.as_operation());
-                } else if !is_yield && !last_op.results(db).is_empty() {
-                    // Last operation has a result and isn't a yield
-                    // Wrap it in Done Step and yield
-                    let result_val = Value::new(db, ValueDef::OpResult(last_op), 0);
-                    let location = last_op.location(db);
-
-                    tracing::debug!(
-                        "wrap_yields_in_done_step: wrapping last_op result, is_already_step={}",
-                        is_value_already_step(db, result_val)
-                    );
-
-                    // Check if already a Step
-                    if !is_value_already_step(db, result_val) {
-                        let (step_ops, step_val) =
-                            create_done_step_ops(db, location, result_val, region, None);
-                        tracing::debug!(
-                            "wrap_yields_in_done_step: created {} step_ops for wrapping",
-                            step_ops.len()
-                        );
-                        new_ops.extend(step_ops);
-                        let new_yield = wasm::r#yield(db, location, step_val);
-                        new_ops.push(new_yield.as_operation());
-                    }
-                }
-            }
+        if is_last_block {
+            handle_last_block_implicit_yield(db, &mut new_ops, region);
         }
 
         let new_block = Block::new(
