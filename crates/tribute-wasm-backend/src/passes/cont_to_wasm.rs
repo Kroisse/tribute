@@ -1204,7 +1204,7 @@ fn wrap_returns_in_region_with_map<'db>(
 
     let new_blocks: IdVec<Block<'db>> = blocks
         .iter()
-        .map(|block| wrap_returns_in_block_with_map(db, *block, initial_map))
+        .map(|block| wrap_returns_in_block_with_map(db, *block, region, initial_map))
         .collect();
 
     Region::new(db, region.location(db), new_blocks)
@@ -1212,14 +1212,19 @@ fn wrap_returns_in_region_with_map<'db>(
 
 /// Wrap return values in a block.
 #[allow(dead_code)]
-fn wrap_returns_in_block<'db>(db: &'db dyn salsa::Database, block: Block<'db>) -> Block<'db> {
-    wrap_returns_in_block_with_map(db, block, &HashMap::new())
+fn wrap_returns_in_block<'db>(
+    db: &'db dyn salsa::Database,
+    block: Block<'db>,
+    region: Region<'db>,
+) -> Block<'db> {
+    wrap_returns_in_block_with_map(db, block, region, &HashMap::new())
 }
 
 /// Wrap return values in a block, with an initial value map for remapping.
 fn wrap_returns_in_block_with_map<'db>(
     db: &'db dyn salsa::Database,
     block: Block<'db>,
+    region: Region<'db>,
     initial_map: &HashMap<Value<'db>, Value<'db>>,
 ) -> Block<'db> {
     let mut new_ops = Vec::new();
@@ -1274,7 +1279,8 @@ fn wrap_returns_in_block_with_map<'db>(
                 if !is_value_already_step(db, return_val) && !is_ref_null_any(db, return_val) {
                     // Wrap in Done Step
                     let location = op.location(db);
-                    let (step_ops, step_val) = create_done_step_ops(db, location, return_val);
+                    let (step_ops, step_val) =
+                        create_done_step_ops(db, location, return_val, region);
                     new_ops.extend(step_ops);
 
                     let new_return = wasm::r#return(db, location, Some(step_val));
@@ -1358,6 +1364,7 @@ fn create_done_step_ops<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     value: Value<'db>,
+    region: Region<'db>,
 ) -> (Vec<Operation<'db>>, Value<'db>) {
     let mut ops = Vec::new();
     let i32_ty = core::I32::new(db).as_type();
@@ -1371,11 +1378,20 @@ fn create_done_step_ops<'db>(
     // Box the value to anyref for Step.value field
     let value_ty = match value.def(db) {
         ValueDef::OpResult(def_op) => def_op.results(db).get(value.index(db)).copied(),
-        ValueDef::BlockArg(_) => None,
+        ValueDef::BlockArg(block_id) => {
+            // Find the block in the region and get the argument type
+            region
+                .blocks(db)
+                .iter()
+                .find(|b| b.id(db) == block_id)
+                .and_then(|block| block.args(db).get(value.index(db)))
+                .map(|arg| arg.ty(db))
+        }
     };
     let boxed_val = if let Some(ty) = value_ty {
         box_value_to_anyref(db, location, value, ty, &mut ops)
     } else {
+        // No type info available - assume already boxed as anyref
         value
     };
 
@@ -1407,8 +1423,9 @@ fn create_done_step_return<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     return_val: Value<'db>,
+    region: Region<'db>,
 ) -> Vec<Operation<'db>> {
-    let (mut ops, step_val) = create_done_step_ops(db, location, return_val);
+    let (mut ops, step_val) = create_done_step_ops(db, location, return_val, region);
 
     // Return the Step
     let return_op = wasm::r#return(db, location, Some(step_val));
@@ -2677,7 +2694,8 @@ impl RewritePattern for PushPromptPattern {
 
             if let Some(result_val) = body_result {
                 // Create Done Step wrapping
-                let (step_ops, step_val) = create_done_step_ops(db, location, result_val);
+                let (step_ops, step_val) =
+                    create_done_step_ops(db, location, result_val, original_body);
 
                 let blocks = original_body.blocks(db);
                 if let Some(last_block) = blocks.last() {
@@ -3135,7 +3153,7 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
                 }
 
                 // Wrap in Done Step and yield that
-                let (step_ops, step_val) = create_done_step_ops(db, location, yield_val);
+                let (step_ops, step_val) = create_done_step_ops(db, location, yield_val, region);
                 new_ops.extend(step_ops);
                 let new_yield = wasm::r#yield(db, location, step_val);
                 new_ops.push(new_yield.as_operation());
@@ -3286,7 +3304,8 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
 
                     // Check if already a Step
                     if !is_value_already_step(db, result_val) {
-                        let (step_ops, step_val) = create_done_step_ops(db, location, result_val);
+                        let (step_ops, step_val) =
+                            create_done_step_ops(db, location, result_val, region);
                         tracing::debug!(
                             "wrap_yields_in_done_step: created {} step_ops for wrapping",
                             step_ops.len()

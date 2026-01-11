@@ -9,14 +9,13 @@ dialect! {
     mod cont {
         /// `cont.push_prompt` operation: installs a prompt and executes body.
         ///
-        /// The `handlers` region contains handler arms for dispatching effects:
-        /// - First handler is for "done" (normal completion) and uses `cont.get_done_value`
-        ///   to extract the result value from the Step struct
-        /// - Subsequent handlers are for "suspend" (effect operations) and use
-        ///   `cont.get_continuation` and `cont.get_shift_value` to access the
-        ///   captured continuation and effect arguments
-        ///
-        /// Each handler arm is a block with the handler's body code.
+        /// The `handlers` region is typically empty in the current implementation.
+        /// Handler dispatch logic is instead implemented using `cont.handler_dispatch`,
+        /// which examines the Step result returned by push_prompt and dispatches to
+        /// appropriate handler arms:
+        /// - "done" handler uses `cont.get_done_value` to extract the result value
+        /// - "suspend" handlers use `cont.get_continuation` and `cont.get_shift_value`
+        ///   to access the captured continuation and effect arguments
         #[attr(tag: u32)]
         fn push_prompt() -> result {
             #[region(body)] {}

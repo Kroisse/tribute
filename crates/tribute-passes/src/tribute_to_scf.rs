@@ -460,8 +460,20 @@ impl<'db> CaseLowerer<'db> {
 
             final_body
         } else {
-            // No done arm - create empty region (unreachable case)
-            Region::new(self.db, location, IdVec::new())
+            // No done arm - create region with unreachable yield
+            // This ensures all control flow paths end with yield for WASM backend
+            let nil_ty = core::Nil::new(self.db).as_type();
+            let nil_const = func::constant(self.db, location, nil_ty, Symbol::new("nil"));
+            let nil_val = nil_const.as_operation().result(self.db, 0);
+            let yield_op = tribute::r#yield(self.db, location, nil_val);
+            let block = Block::new(
+                self.db,
+                BlockId::fresh(),
+                location,
+                IdVec::new(),
+                idvec![nil_const.as_operation(), yield_op.as_operation()],
+            );
+            Region::new(self.db, location, idvec![block])
         };
 
         // Process suspend arms - build dispatch info for each operation
@@ -602,11 +614,18 @@ impl<'db> CaseLowerer<'db> {
     ///
     /// The push_prompt result is used as the scrutinee for handler_dispatch.
     fn lower_handle(&mut self, op: Operation<'db>) -> Vec<Operation<'db>> {
-        use std::sync::atomic::{AtomicU32, Ordering};
         use trunk_ir::dialect::cont;
 
-        static PROMPT_TAG_GEN: AtomicU32 = AtomicU32::new(0);
-        let tag = PROMPT_TAG_GEN.fetch_add(1, Ordering::Relaxed);
+        // Generate deterministic tag based on operation's location
+        // This ensures consistent compilation across Salsa incremental runs
+        let location = op.location(self.db);
+        let tag = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            location.hash(&mut hasher);
+            (hasher.finish() & 0xFFFFFFFF) as u32
+        };
 
         let location = op.location(self.db);
         let result_type = op
