@@ -212,7 +212,7 @@ fn collect_effectful_functions<'db>(
     effectful
 }
 
-/// Check if a function type has a non-empty effect row.
+/// Check if a function type has concrete abilities in its effect row.
 ///
 /// A function is considered effectful if its effect row contains actual abilities.
 /// A row with only a tail variable (polymorphic row) but no concrete abilities

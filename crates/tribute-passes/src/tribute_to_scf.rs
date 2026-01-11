@@ -1296,7 +1296,6 @@ impl<'db> CaseLowerer<'db> {
 
         let mut new_blocks: Vec<Block<'db>> = vec![new_first_block];
         new_blocks.extend(blocks.iter().skip(1).copied());
-        #[allow(dead_code)]
         Region::new(self.db, region.location(self.db), IdVec::from(new_blocks))
     }
 

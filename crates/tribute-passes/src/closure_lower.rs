@@ -568,12 +568,6 @@ fn get_func_type_from_closure_struct<'db>(
         return None;
     };
 
-    if func::Constant::from_operation(db, constant_op).is_ok() {
-        // Get the type from func.constant's result
-        // The result type is the function type
-        return constant_op.results(db).first().copied();
-    }
-
-    // Fallback: check the type of the funcref value itself
+    // Get the type from the funcref value's result
     constant_op.results(db).first().copied()
 }

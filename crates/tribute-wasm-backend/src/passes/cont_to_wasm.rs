@@ -1137,12 +1137,11 @@ fn wrap_returns_for_step_functions<'db>(
                         return *op;
                     };
 
-                    // Get return type from function type
-                    // core::Func layout: params[0] = return type, params[1..] = param types
-                    let return_ty = func_ty.params(db).first().copied();
-                    let Some(return_ty) = return_ty else {
+                    // Get return type from function type using typed helper
+                    let Some(func_type) = core::Func::from_type(db, *func_ty) else {
                         return *op;
                     };
+                    let return_ty = func_type.result(db);
 
                     // Check if return type is Step
                     let is_step_return = return_ty.dialect(db) == wasm::DIALECT_NAME()
@@ -3739,24 +3738,22 @@ impl RewritePattern for GetDoneValuePattern {
         let is_int = tribute_rt::is_int(db, result_ty);
         let is_nat = tribute_rt::is_nat(db, result_ty);
         let is_i32 = core::I32::from_type(db, result_ty).is_some();
-        let is_tribute_rt = result_ty.dialect(db) == tribute_rt::DIALECT_NAME();
         // IMPORTANT: tribute.type_var appears when type substitution hasn't been applied.
         // In the context of handler dispatch, we know the function returns Int,
         // but the IR still has type_var. Check for it and unbox.
         let is_type_var = tribute::is_type_var(db, result_ty);
 
         tracing::debug!(
-            "GetDoneValuePattern: is_int={}, is_nat={}, is_i32={}, is_tribute_rt={}, is_type_var={}",
+            "GetDoneValuePattern: is_int={}, is_nat={}, is_i32={}, is_type_var={}",
             is_int,
             is_nat,
             is_i32,
-            is_tribute_rt,
             is_type_var
         );
 
         // For type_var, we conservatively unbox since we're in a handler context
         // where primitive return types are common.
-        let needs_unbox = is_int || is_nat || is_i32 || is_tribute_rt || is_type_var;
+        let needs_unbox = is_int || is_nat || is_i32 || is_type_var;
 
         tracing::debug!("GetDoneValuePattern: needs_unbox = {}", needs_unbox);
 
