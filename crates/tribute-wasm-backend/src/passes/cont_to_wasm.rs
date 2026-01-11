@@ -2734,8 +2734,10 @@ impl RewritePattern for PushPromptPattern {
                     insert_ops_before_last(db, location, &original_body, &yield_check_ops)
                 } else {
                     // Not a Step - wrap in Done Step
+                    // Pass type hint from result_types to prevent invalid Step payloads
+                    let type_hint = result_types.first().copied();
                     let (step_ops, step_val) =
-                        create_done_step_ops(db, location, result_val, original_body, None);
+                        create_done_step_ops(db, location, result_val, original_body, type_hint);
 
                     let blocks = original_body.blocks(db);
                     if let Some(last_block) = blocks.last() {
@@ -3112,6 +3114,11 @@ impl RewritePattern for HandlerDispatchPattern {
 /// Note: This only processes top-level yields, not yields inside nested
 /// control flow (wasm.block, wasm.if, etc.). Nested control flow operations
 /// that produce results must be handled elsewhere.
+///
+/// TODO(complexity): This function is complex (~300 lines). Consider extracting:
+/// - cont.get_done_value expansion logic into a helper
+/// - wasm.yield wrapping logic into a helper
+/// - Last block implicit yield logic into a helper
 fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'db>) -> Region<'db> {
     use std::collections::HashMap;
 
