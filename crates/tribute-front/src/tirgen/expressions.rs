@@ -1160,9 +1160,8 @@ fn lower_handle_expr<'db>(
     let mut body_block = BlockBuilder::new(ctx.db, location);
     let body_result = ctx.scoped(|ctx| lower_expr(ctx, &mut body_block, expr_node));
 
-    if let Some(value) = body_result {
-        body_block.op(tribute::r#yield(ctx.db, location, value));
-    }
+    let body_value = body_result?;
+    body_block.op(tribute::r#yield(ctx.db, location, body_value));
 
     let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
