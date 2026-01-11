@@ -1474,7 +1474,18 @@ fn create_done_step_return<'db>(
     return_val: Value<'db>,
     region: Region<'db>,
 ) -> Vec<Operation<'db>> {
-    let (mut ops, step_val) = create_done_step_ops(db, location, return_val, region, None);
+    // Infer type from return_val's definition
+    let type_hint = match return_val.def(db) {
+        ValueDef::OpResult(def_op) => def_op.results(db).get(return_val.index(db)).copied(),
+        ValueDef::BlockArg(block_id) => region
+            .blocks(db)
+            .iter()
+            .find(|b| b.id(db) == block_id)
+            .and_then(|block| block.args(db).get(return_val.index(db)))
+            .map(|arg| arg.ty(db)),
+    };
+
+    let (mut ops, step_val) = create_done_step_ops(db, location, return_val, region, type_hint);
 
     // Return the Step
     let return_op = wasm::r#return(db, location, Some(step_val));
