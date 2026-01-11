@@ -1415,10 +1415,18 @@ fn create_done_step_ops<'db>(
     let boxed_val = if let Some(ty) = value_ty {
         box_value_to_anyref(db, location, value, ty, &mut ops)
     } else {
-        // No type info available - assume already boxed as anyref
-        tracing::debug!(
-            "create_done_step_ops: No type info for value, assuming already boxed as anyref"
+        // CRITICAL: No type info available - this may produce invalid Step payloads
+        // if the value is an unboxed primitive (i32, f64, etc.).
+        // The caller should provide value_type_hint when possible to avoid this.
+        tracing::warn!(
+            "create_done_step_ops: No type info for value (def={:?}, index={}). \
+             Assuming already boxed as anyref, but this may be incorrect if value is primitive. \
+             This can cause invalid Step payloads and runtime failures. \
+             Consider providing value_type_hint parameter.",
+            value.def(db),
+            value.index(db)
         );
+        // Assume anyref - if this is wrong (e.g., unboxed i32), it will fail at runtime
         value
     };
 
