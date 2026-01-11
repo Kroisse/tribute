@@ -1268,6 +1268,7 @@ fn wrap_returns_in_block_with_map<'db>(
         }
 
         // Check if this is a wasm.return
+        #[allow(clippy::collapsible_if)]
         if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("return") {
             if let Some(return_val) = op.operands(db).first().copied() {
                 // Check if already a Step
@@ -1400,8 +1401,8 @@ fn create_done_step_ops<'db>(
 
     (ops, step_val)
 }
-#[allow(dead_code)]
 
+#[allow(dead_code)]
 /// Create operations to wrap a value in Done Step and return it.
 fn create_done_step_return<'db>(
     db: &'db dyn salsa::Database,
@@ -3061,7 +3062,7 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
         let mut new_ops: Vec<Operation<'db>> = Vec::new();
         let is_last_block = block_idx == blocks.len() - 1;
 
-        for (_op_idx, op) in block.operations(db).iter().enumerate() {
+        for op in block.operations(db).iter() {
             // Note: We DON'T recursively process nested regions here to avoid
             // breaking SSA value references. Nested control flow must be handled
             // differently (e.g., the inner operation already produces Step).
@@ -3147,6 +3148,7 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
 
         // If this is the last block and doesn't end with a yield,
         // wrap the last operation's result in Done Step and yield it.
+        #[allow(clippy::collapsible_if)]
         if is_last_block && !new_ops.is_empty() {
             if let Some(&last_op_ref) = new_ops.last() {
                 // Copy the operation to avoid borrow checker issues

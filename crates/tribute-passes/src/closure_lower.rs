@@ -555,7 +555,7 @@ fn get_func_type_from_closure_struct<'db>(
     };
 
     // Check if it's an adt.struct_new
-    if !adt::StructNew::from_operation(db, struct_new_op).is_ok() {
+    if adt::StructNew::from_operation(db, struct_new_op).is_err() {
         return None;
     }
 

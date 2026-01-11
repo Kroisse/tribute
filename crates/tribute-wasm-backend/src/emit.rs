@@ -2713,6 +2713,7 @@ fn infer_region_effective_type<'db>(
     let result_value = region_result_value(db, region)?;
 
     // First try effective_types (populated during function setup)
+    #[allow(clippy::collapsible_if)]
     if let Some(&ty) = ctx.effective_types.get(&result_value) {
         if !is_polymorphic_type(db, ty) {
             return Some(ty);
@@ -2721,6 +2722,7 @@ fn infer_region_effective_type<'db>(
 
     // If not in effective_types, try to get the type from the value's definition
     // This handles remapped operations in resume functions
+    #[allow(clippy::collapsible_if)]
     if let ValueDef::OpResult(def_op) = result_value.def(db) {
         if let Some(result_ty) = def_op.results(db).get(result_value.index(db)).copied() {
             if !is_polymorphic_type(db, result_ty) {
@@ -2964,10 +2966,8 @@ fn emit_op<'db>(
                         eff_ty.name(db)
                     );
                     Some(eff_ty)
-                } else if let Some(ir_ty) = result_ty {
-                    Some(ir_ty)
                 } else {
-                    None
+                    result_ty
                 }
             } else if func_returns_step {
                 // Function returns Step, use Step as the block type

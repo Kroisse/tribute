@@ -195,9 +195,9 @@ impl<'db> CaseLowerer<'db> {
                         let dialect = last_op.dialect(self.db);
                         let name = last_op.name(self.db);
                         // Already has yield or return
-                        !(dialect == scf::DIALECT_NAME() && name == scf::YIELD())
-                            && !(dialect == func::DIALECT_NAME() && name == func::RETURN())
-                            && !(dialect == Symbol::new("wasm") && name == Symbol::new("yield"))
+                        !(dialect == scf::DIALECT_NAME() && name == scf::YIELD()
+                            || dialect == func::DIALECT_NAME() && name == func::RETURN()
+                            || dialect == Symbol::new("wasm") && name == Symbol::new("yield"))
                     }
                 }
             }
@@ -864,7 +864,7 @@ impl<'db> CaseLowerer<'db> {
         // Look for handler_done or handler_suspend patterns
         for block in pattern_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
-                if let Ok(_) = tribute_pat::HandlerDone::from_operation(self.db, *op) {
+                if tribute_pat::HandlerDone::from_operation(self.db, *op).is_ok() {
                     return ArmPattern::HandlerDone;
                 }
                 if let Ok(suspend) = tribute_pat::HandlerSuspend::from_operation(self.db, *op) {
