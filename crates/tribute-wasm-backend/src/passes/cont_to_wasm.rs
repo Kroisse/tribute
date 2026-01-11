@@ -1278,8 +1278,22 @@ fn wrap_returns_in_block_with_map<'db>(
                 if !is_value_already_step(db, return_val) && !is_ref_null_any(db, return_val) {
                     // Wrap in Done Step
                     let location = op.location(db);
+
+                    // Infer type from the return value's definition
+                    let type_hint = match return_val.def(db) {
+                        ValueDef::OpResult(def_op) => {
+                            def_op.results(db).get(return_val.index(db)).copied()
+                        }
+                        ValueDef::BlockArg(block_id) => region
+                            .blocks(db)
+                            .iter()
+                            .find(|b| b.id(db) == block_id)
+                            .and_then(|block| block.args(db).get(return_val.index(db)))
+                            .map(|arg| arg.ty(db)),
+                    };
+
                     let (step_ops, step_val) =
-                        create_done_step_ops(db, location, return_val, region, None);
+                        create_done_step_ops(db, location, return_val, region, type_hint);
                     new_ops.extend(step_ops);
 
                     let new_return = wasm::r#return(db, location, Some(step_val));
@@ -3143,25 +3157,13 @@ fn handle_last_block_implicit_yield<'db>(
         new_ops.pop();
 
         // Expand cont.get_done_value and wrap result in Done Step
+        // Keep as anyref to avoid unbox/rebox cycle (we'll wrap in Step which needs anyref)
         let get_done_value = cont::GetDoneValue::from_operation(db, last_op).unwrap();
         let location = last_op.location(db);
 
-        let (expansion_ops, final_value, needs_unbox) =
-            expand_get_done_value_inline(db, get_done_value, location);
+        let (expansion_ops, boxed_val, _needs_unbox) =
+            expand_get_done_value_inline(db, get_done_value, location, true);
         new_ops.extend(expansion_ops);
-
-        // Re-box the value if it was unboxed, then wrap in Done Step
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let boxed_val = if needs_unbox {
-            // final_value is i32, need to box to anyref
-            let box_op = wasm::ref_i31(db, location, final_value, anyref_ty);
-            let boxed = box_op.as_operation().result(db, 0);
-            new_ops.push(box_op.as_operation());
-            tracing::debug!("handle_last_block_implicit_yield: boxed i32 to anyref");
-            boxed
-        } else {
-            final_value
-        };
 
         // Create Done Step: (tag=0, value=boxed_val, prompt=0, op_idx=0)
         let i32_ty = core::I32::new(db).as_type();
@@ -3207,7 +3209,10 @@ fn handle_last_block_implicit_yield<'db>(
 
         // Check if already a Step
         if !is_value_already_step(db, result_val) {
-            let (step_ops, step_val) = create_done_step_ops(db, location, result_val, region, None);
+            // Get type hint from last_op's result type
+            let type_hint = last_op.results(db).first().copied();
+            let (step_ops, step_val) =
+                create_done_step_ops(db, location, result_val, region, type_hint);
             tracing::debug!(
                 "handle_last_block_implicit_yield: created {} step_ops for wrapping",
                 step_ops.len()
@@ -3241,7 +3246,22 @@ fn process_yield_operation<'db>(
     }
 
     // Wrap in Done Step and yield that
-    let (step_ops, step_val) = create_done_step_ops(db, location, remapped_yield_val, region, None);
+    // Infer type from the value's definition
+    let type_hint = match remapped_yield_val.def(db) {
+        ValueDef::OpResult(def_op) => def_op
+            .results(db)
+            .get(remapped_yield_val.index(db))
+            .copied(),
+        ValueDef::BlockArg(block_id) => region
+            .blocks(db)
+            .iter()
+            .find(|b| b.id(db) == block_id)
+            .and_then(|block| block.args(db).get(remapped_yield_val.index(db)))
+            .map(|arg| arg.ty(db)),
+    };
+
+    let (step_ops, step_val) =
+        create_done_step_ops(db, location, remapped_yield_val, region, type_hint);
     let mut ops = step_ops;
     let new_yield = wasm::r#yield(db, location, step_val);
     ops.push(new_yield.as_operation());
@@ -3254,10 +3274,14 @@ fn process_yield_operation<'db>(
 /// - Vec<Operation>: operations to add (ref_cast, struct_get, optional i31 unbox)
 /// - Value: the final extracted value
 /// - bool: whether the value was unboxed (true) or kept as anyref (false)
+///
+/// If `keep_as_anyref` is true, skips the unboxing step and returns the value as anyref.
+/// This is useful when the caller will immediately re-box the value (e.g., for Step wrapping).
 fn expand_get_done_value_inline<'db>(
     db: &'db dyn salsa::Database,
     get_done_value_op: cont::GetDoneValue<'db>,
     location: Location<'db>,
+    keep_as_anyref: bool,
 ) -> (Vec<Operation<'db>>, Value<'db>, bool) {
     let anyref_ty = wasm::Anyref::new(db).as_type();
     let i32_ty = core::I32::new(db).as_type();
@@ -3287,6 +3311,11 @@ fn expand_get_done_value_inline<'db>(
     .as_operation();
     let value_anyref = Value::new(db, ValueDef::OpResult(get_value), 0);
     ops.push(get_value);
+
+    // If caller wants anyref, skip unboxing
+    if keep_as_anyref {
+        return (ops, value_anyref, false);
+    }
 
     // Check if we need to unbox (get result type from original op)
     let result_ty = get_done_value_op
@@ -3353,7 +3382,7 @@ fn wrap_yields_in_done_step<'db>(db: &'db dyn salsa::Database, region: Region<'d
                 let location = op.location(db);
 
                 let (expansion_ops, final_value, _needs_unbox) =
-                    expand_get_done_value_inline(db, get_done_value, location);
+                    expand_get_done_value_inline(db, get_done_value, location, false);
 
                 new_ops.extend(expansion_ops);
 
