@@ -2897,20 +2897,20 @@ fn emit_op<'db>(
     }
 
     // Special cases: const, control flow, calls, locals, GC ops
-    if name == Symbol::new("i32_const") {
-        let value = attr_i32(db, op, ATTR_VALUE())?;
+    if let Ok(const_op) = wasm::I32Const::from_operation(db, *op) {
+        let value = const_op.value(db);
         function.instruction(&Instruction::I32Const(value));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_const") {
-        let value = attr_i64(db, op, ATTR_VALUE())?;
+    } else if let Ok(const_op) = wasm::I64Const::from_operation(db, *op) {
+        let value = const_op.value(db);
         function.instruction(&Instruction::I64Const(value));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("f32_const") {
-        let value = attr_f32(db, op, ATTR_VALUE())?;
+    } else if let Ok(const_op) = wasm::F32Const::from_operation(db, *op) {
+        let value = const_op.value(db);
         function.instruction(&Instruction::F32Const(value.into()));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("f64_const") {
-        let value = attr_f64(db, op, ATTR_VALUE())?;
+    } else if let Ok(const_op) = wasm::F64Const::from_operation(db, *op) {
+        let value = const_op.value(db);
         function.instruction(&Instruction::F64Const(value.into()));
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("if") {
@@ -3481,25 +3481,25 @@ fn emit_op<'db>(
         // Note: Return unboxing is not needed for tail calls since
         // the caller's return type should match the callee's.
         function.instruction(&Instruction::ReturnCall(target));
-    } else if name == Symbol::new("local_get") {
-        let index = attr_index(db, op)?;
+    } else if let Ok(local_op) = wasm::LocalGet::from_operation(db, *op) {
+        let index = local_op.index(db);
         function.instruction(&Instruction::LocalGet(index));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("local_set") {
-        let index = attr_index(db, op)?;
+    } else if let Ok(local_op) = wasm::LocalSet::from_operation(db, *op) {
+        let index = local_op.index(db);
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         function.instruction(&Instruction::LocalSet(index));
-    } else if name == Symbol::new("local_tee") {
-        let index = attr_index(db, op)?;
+    } else if let Ok(local_op) = wasm::LocalTee::from_operation(db, *op) {
+        let index = local_op.index(db);
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         function.instruction(&Instruction::LocalTee(index));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("global_get") {
-        let index = attr_index(db, op)?;
+    } else if let Ok(global_op) = wasm::GlobalGet::from_operation(db, *op) {
+        let index = global_op.index(db);
         function.instruction(&Instruction::GlobalGet(index));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("global_set") {
-        let index = attr_index(db, op)?;
+    } else if let Ok(global_op) = wasm::GlobalSet::from_operation(db, *op) {
+        let index = global_op.index(db);
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         function.instruction(&Instruction::GlobalSet(index));
     } else if name == Symbol::new("struct_new") {
@@ -4767,70 +4767,6 @@ fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
     }
     compressed.push((count, current));
     compressed
-}
-
-fn attr_i32<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    key: Symbol,
-) -> CompilationResult<i32> {
-    match op.attributes(db).get(&key) {
-        Some(Attribute::IntBits(bits)) => {
-            let value = *bits as u32;
-            Ok(i32::from_ne_bytes(value.to_ne_bytes()))
-        }
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("value"),
-        )),
-    }
-}
-
-fn attr_i64<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    key: Symbol,
-) -> CompilationResult<i64> {
-    match op.attributes(db).get(&key) {
-        Some(Attribute::IntBits(bits)) => Ok(i64::from_ne_bytes(bits.to_ne_bytes())),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("value"),
-        )),
-    }
-}
-
-fn attr_f32<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    key: Symbol,
-) -> CompilationResult<f32> {
-    match op.attributes(db).get(&key) {
-        Some(Attribute::FloatBits(bits)) => Ok(f32::from_bits(*bits as u32)),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("value"),
-        )),
-    }
-}
-
-fn attr_f64<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    key: Symbol,
-) -> CompilationResult<f64> {
-    match op.attributes(db).get(&key) {
-        Some(Attribute::FloatBits(bits)) => Ok(f64::from_bits(*bits)),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("value"),
-        )),
-    }
-}
-
-fn attr_index<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> CompilationResult<u32> {
-    match op.attributes(db).get(&ATTR_INDEX()) {
-        Some(Attribute::IntBits(bits)) => Ok(*bits as u32),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("index"),
-        )),
-    }
 }
 
 fn attr_symbol_ref<'db>(
