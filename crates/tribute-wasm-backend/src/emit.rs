@@ -656,28 +656,28 @@ fn collect_wasm_ops_from_region<'db>(
                 continue;
             }
 
-            // Collect wasm operations
-            if wasm::Func::matches(db, *op) {
-                if let Ok(func_def) = extract_function_def(db, op) {
+            // Collect wasm operations using typed wrappers
+            if let Ok(func_op) = wasm::Func::from_operation(db, *op) {
+                if let Ok(func_def) = extract_function_def(db, func_op) {
                     debug!("Including function: {}", func_def.name);
                     info.funcs.push(func_def);
                 }
-            } else if wasm::ImportFunc::matches(db, *op) {
-                info.imports.push(extract_import_def(db, op)?);
-            } else if wasm::ExportFunc::matches(db, *op) {
-                info.exports.push(extract_export_func(db, op)?);
-            } else if wasm::ExportMemory::matches(db, *op) {
-                info.exports.push(extract_export_memory(db, op)?);
-            } else if wasm::Memory::matches(db, *op) {
-                info.memory = Some(extract_memory_def(db, op)?);
-            } else if wasm::Data::matches(db, *op) {
-                info.data.push(extract_data_def(db, op)?);
-            } else if wasm::Table::matches(db, *op) {
-                info.tables.push(extract_table_def(db, op)?);
-            } else if wasm::Elem::matches(db, *op) {
-                info.elements.push(extract_element_def(db, op)?);
-            } else if wasm::Global::matches(db, *op) {
-                info.globals.push(extract_global_def(db, op)?);
+            } else if let Ok(import_op) = wasm::ImportFunc::from_operation(db, *op) {
+                info.imports.push(extract_import_def(db, import_op)?);
+            } else if let Ok(export_op) = wasm::ExportFunc::from_operation(db, *op) {
+                info.exports.push(extract_export_func(db, export_op)?);
+            } else if let Ok(export_mem_op) = wasm::ExportMemory::from_operation(db, *op) {
+                info.exports.push(extract_export_memory(db, export_mem_op)?);
+            } else if let Ok(memory_op) = wasm::Memory::from_operation(db, *op) {
+                info.memory = Some(extract_memory_def(db, memory_op)?);
+            } else if let Ok(data_op) = wasm::Data::from_operation(db, *op) {
+                info.data.push(extract_data_def(db, data_op)?);
+            } else if let Ok(table_op) = wasm::Table::from_operation(db, *op) {
+                info.tables.push(extract_table_def(db, table_op)?);
+            } else if let Ok(elem_op) = wasm::Elem::from_operation(db, *op) {
+                info.elements.push(extract_element_def(db, elem_op)?);
+            } else if let Ok(global_op) = wasm::Global::from_operation(db, *op) {
+                info.globals.push(extract_global_def(db, global_op)?);
             }
         }
     }
@@ -1891,32 +1891,10 @@ fn has_call_indirect<'db>(db: &'db dyn salsa::Database, module: core::Module<'db
 
 fn extract_function_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    func_op: wasm::Func<'db>,
 ) -> CompilationResult<FunctionDef<'db>> {
-    let attrs = op.attributes(db);
-    let name_attr = attrs.get(&ATTR_SYM_NAME()).ok_or_else(|| {
-        CompilationError::from(errors::CompilationErrorKind::MissingAttribute("sym_name"))
-    })?;
-    let ty_attr = attrs.get(&ATTR_TYPE()).ok_or_else(|| {
-        CompilationError::from(errors::CompilationErrorKind::MissingAttribute("type"))
-    })?;
-
-    let name = match name_attr {
-        Attribute::Symbol(sym) => *sym,
-        _ => {
-            return Err(CompilationError::from(
-                errors::CompilationErrorKind::InvalidAttribute("sym_name"),
-            ));
-        }
-    };
-    let ty = match ty_attr {
-        Attribute::Type(ty) => *ty,
-        _ => {
-            return Err(CompilationError::from(
-                errors::CompilationErrorKind::InvalidAttribute("type"),
-            ));
-        }
-    };
+    let name = func_op.sym_name(db);
+    let ty = func_op.r#type(db);
 
     let func_ty = core::Func::from_type(db, ty)
         .ok_or_else(|| CompilationError::type_error("wasm.func requires core.func type"))?;
@@ -1937,19 +1915,18 @@ fn extract_function_def<'db>(
     Ok(FunctionDef {
         name,
         ty: func_ty,
-        op: *op,
+        op: func_op.as_operation(),
     })
 }
 
 fn extract_import_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    import_op: wasm::ImportFunc<'db>,
 ) -> CompilationResult<ImportFuncDef<'db>> {
-    let attrs = op.attributes(db);
-    let module = attr_symbol(attrs, ATTR_MODULE())?;
-    let name = attr_symbol(attrs, ATTR_NAME())?;
-    let sym = attr_symbol_ref_attr(attrs, ATTR_SYM_NAME())?;
-    let ty = attr_type(attrs, ATTR_TYPE())?;
+    let module = import_op.module(db);
+    let name = import_op.name(db);
+    let sym = import_op.sym_name(db);
+    let ty = import_op.r#type(db);
 
     let func_ty = core::Func::from_type(db, ty)
         .ok_or_else(|| CompilationError::type_error("wasm.import_func requires core.func type"))?;
@@ -1964,11 +1941,10 @@ fn extract_import_def<'db>(
 
 fn extract_export_func<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    export_op: wasm::ExportFunc<'db>,
 ) -> CompilationResult<ExportDef> {
-    let attrs = op.attributes(db);
-    let name = attr_string(attrs, ATTR_NAME())?;
-    let func = attr_symbol_ref_attr(attrs, ATTR_FUNC())?;
+    let name = export_op.name(db);
+    let func = export_op.func(db);
     Ok(ExportDef {
         name,
         kind: ExportKind::Func,
@@ -1978,11 +1954,10 @@ fn extract_export_func<'db>(
 
 fn extract_export_memory<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    export_op: wasm::ExportMemory<'db>,
 ) -> CompilationResult<ExportDef> {
-    let attrs = op.attributes(db);
-    let name = attr_string(attrs, ATTR_NAME())?;
-    let index = attr_u32(attrs, ATTR_INDEX())?;
+    let name = export_op.name(db);
+    let index = export_op.index(db);
     Ok(ExportDef {
         name,
         kind: ExportKind::Memory,
@@ -1991,26 +1966,16 @@ fn extract_export_memory<'db>(
 }
 
 fn extract_memory_def<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    _db: &'db dyn salsa::Database,
+    memory_op: wasm::Memory<'db>,
 ) -> CompilationResult<MemoryDef> {
-    let attrs = op.attributes(db);
-    let min = attr_u32(attrs, ATTR_MIN())?;
-    let max = match attrs.get(&ATTR_MAX()) {
-        Some(Attribute::IntBits(bits)) => Some(*bits as u32),
-        _ => None,
-    };
-    let shared = match attrs.get(&ATTR_SHARED()) {
-        Some(Attribute::Bool(value)) => *value,
-        _ => false,
-    };
-    let memory64 = match attrs.get(&ATTR_MEMORY64()) {
-        Some(Attribute::Bool(value)) => *value,
-        _ => false,
-    };
+    let min = memory_op.min(_db);
+    let max = memory_op.max(_db);
+    let shared = memory_op.shared(_db);
+    let memory64 = memory_op.memory64(_db);
     Ok(MemoryDef {
         min,
-        max,
+        max: if max == 0 { None } else { Some(max) },
         shared,
         memory64,
     })
@@ -2018,15 +1983,16 @@ fn extract_memory_def<'db>(
 
 fn extract_data_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    data_op: wasm::Data<'db>,
 ) -> CompilationResult<DataDef> {
-    let attrs = op.attributes(db);
-    let passive = matches!(attrs.get(&ATTR_PASSIVE()), Some(Attribute::Bool(true)));
+    let passive = data_op.passive(db);
     let offset = if passive {
         0 // Passive segments don't have an offset
     } else {
-        attr_i32_attr(attrs, ATTR_OFFSET())?
+        data_op.offset(db)
     };
+    // bytes is typed as `any` in the dialect, so we access the raw attribute
+    let attrs = data_op.as_operation().attributes(db);
     let bytes = match attrs.get(&ATTR_BYTES()) {
         Some(Attribute::Bytes(value)) => value.clone(),
         _ => {
@@ -2044,10 +2010,8 @@ fn extract_data_def<'db>(
 
 fn extract_table_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    table_op: wasm::Table<'db>,
 ) -> CompilationResult<TableDef> {
-    let table_op = wasm::Table::from_operation(db, *op)
-        .map_err(|_| CompilationError::invalid_operation("wasm.table"))?;
     let reftype_sym = table_op.reftype(db);
     let reftype = reftype_sym.with_str(|s| match s {
         "funcref" => Ok(RefType::FUNCREF),
@@ -2065,10 +2029,8 @@ fn extract_table_def<'db>(
 
 fn extract_element_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    elem_op: wasm::Elem<'db>,
 ) -> CompilationResult<ElementDef> {
-    let elem_op = wasm::Elem::from_operation(db, *op)
-        .map_err(|_| CompilationError::invalid_operation("wasm.elem"))?;
     let table = elem_op.table(db).unwrap_or(0);
     let offset = elem_op.offset(db).unwrap_or(0);
 
@@ -2093,10 +2055,8 @@ fn extract_element_def<'db>(
 
 fn extract_global_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    global_op: wasm::Global<'db>,
 ) -> CompilationResult<GlobalDef> {
-    let global_op = wasm::Global::from_operation(db, *op)
-        .map_err(|_| CompilationError::invalid_operation("wasm.global"))?;
     let valtype_sym = global_op.valtype(db);
     let valtype = valtype_sym.with_str(|s| match s {
         "i32" => Ok(ValType::I32),
@@ -4715,42 +4675,6 @@ fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
     compressed
 }
 
-fn attr_symbol_ref_attr<'db>(attrs: &'db Attrs<'db>, key: Symbol) -> CompilationResult<Symbol> {
-    match attrs.get(&key) {
-        Some(Attribute::Symbol(sym)) => Ok(*sym),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("symbol_ref"),
-        )),
-    }
-}
-
-fn attr_string<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<String> {
-    match attrs.get(&key) {
-        Some(Attribute::String(value)) => Ok(value.clone()),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("string"),
-        )),
-    }
-}
-
-fn attr_symbol<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<Symbol> {
-    match attrs.get(&key) {
-        Some(Attribute::Symbol(value)) => Ok(*value),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("symbol"),
-        )),
-    }
-}
-
-fn attr_type<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<Type<'db>> {
-    match attrs.get(&key) {
-        Some(Attribute::Type(value)) => Ok(*value),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("type"),
-        )),
-    }
-}
-
 fn attr_u32<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<u32> {
     match attrs.get(&key) {
         Some(Attribute::IntBits(bits)) => Ok(*bits as u32),
@@ -4834,18 +4758,6 @@ fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<HeapType> {
         }),
         _ => Err(CompilationError::from(
             errors::CompilationErrorKind::MissingAttribute("unknown abstract heap type"),
-        )),
-    }
-}
-
-fn attr_i32_attr<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<i32> {
-    match attrs.get(&key) {
-        Some(Attribute::IntBits(bits)) => {
-            let value = *bits as u32;
-            Ok(i32::from_ne_bytes(value.to_ne_bytes()))
-        }
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("i32"),
         )),
     }
 }
