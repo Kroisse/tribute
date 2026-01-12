@@ -653,20 +653,8 @@ pub const STEP_TAG_SHIFT: i32 = 1;
 /// This is public so that cont_to_wasm.rs can use it for struct_new operations
 /// that create Step values.
 pub fn step_marker_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
-    // Use a unique marker type: wasm.step
-    // This distinguishes it from structref placeholders used by closure/state types
-    let mut attrs = trunk_ir::Attrs::new();
-    attrs.insert(
-        Symbol::new("marker"),
-        trunk_ir::Attribute::Symbol(Symbol::new("step")),
-    );
-    Type::new(
-        db,
-        wasm::DIALECT_NAME(),
-        Symbol::new("step"),
-        trunk_ir::IdVec::new(),
-        attrs,
-    )
+    // Use wasm.step type via typed wrapper
+    wasm::Step::new(db).as_type()
 }
 
 /// Register the Step struct type in the registry.
