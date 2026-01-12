@@ -266,12 +266,9 @@ mod tests {
         );
         let body_region = Region::new(db, location, idvec![body_block]);
 
-        // Create func.func using Operation::of because we need custom region handling
-        let func_func = Operation::of(db, location, func::DIALECT_NAME(), func::FUNC())
-            .attr("sym_name", Attribute::Symbol(Symbol::new("test_fn")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(body_region)
-            .build();
+        // Create func.func using typed helper
+        let func_func =
+            func::func(db, location, Symbol::new("test_fn"), func_ty, body_region).as_operation();
 
         let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_func]);
         let region = Region::new(db, location, idvec![block]);
