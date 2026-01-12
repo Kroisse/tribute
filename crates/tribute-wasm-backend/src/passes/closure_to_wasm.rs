@@ -23,7 +23,7 @@ use tribute_ir::dialect::closure;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation};
+use trunk_ir::{DialectOp, DialectType, IdVec, Operation};
 
 use crate::gc_types::CLOSURE_STRUCT_IDX;
 use crate::type_converter::wasm_type_converter;
@@ -72,24 +72,21 @@ impl RewritePattern for ClosureNewPattern {
         let ref_func = wasm::ref_func(db, location, funcref_ty, func_ref);
         let func_ref_val = ref_func.as_operation().result(db, 0);
 
-        // Use structref as placeholder type for proper type resolution.
-        // Closure structs always have 2 fields: (func_ref, env).
-        // This ensures the struct_new matches with struct_get via placeholder lookup.
-        let structref_ty = wasm::Structref::new(db).as_type();
-
         // Create wasm.struct_new with both the function reference and environment
         // as operands.
         //
         // Layout: (func_ref: funcref, env: anyref)
         //
-        // Note: Using Operation::of here because we need custom "type" attribute
-        // (structref placeholder for type resolution). The actual closure type
-        // identification is done via is_closure_struct_type() checking the type name.
-        let struct_new = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
-            .operands(IdVec::from(vec![func_ref_val, env]))
-            .attr("type", Attribute::Type(structref_ty))
-            .results(IdVec::from(vec![result_ty]))
-            .build();
+        // Use CLOSURE_STRUCT_IDX directly since closure structs always have 2 fields.
+        // This matches struct_get operations which also use CLOSURE_STRUCT_IDX.
+        let struct_new = wasm::struct_new(
+            db,
+            location,
+            IdVec::from(vec![func_ref_val, env]),
+            result_ty,
+            CLOSURE_STRUCT_IDX,
+        )
+        .as_operation();
 
         RewriteResult::Expand(vec![ref_func.as_operation(), struct_new])
     }
@@ -175,7 +172,8 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::{arith, core};
     use trunk_ir::{
-        Block, BlockId, DialectType, Location, PathId, Region, Span, Symbol, Value, ValueDef, idvec,
+        Attribute, Block, BlockId, DialectType, Location, PathId, Region, Span, Symbol, Value,
+        ValueDef, idvec,
     };
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
