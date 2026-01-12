@@ -3990,120 +3990,164 @@ fn emit_op<'db>(
         set_result_local(db, op, ctx, function)?;
 
     // === Full-Width Loads ===
-    } else if name == Symbol::new("i32_load") {
+    } else if let Ok(load_op) = wasm::I32Load::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2); // natural align: 4 bytes = log2(4) = 2
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
         function.instruction(&Instruction::I32Load(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load") {
+    } else if let Ok(load_op) = wasm::I64Load::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 3); // natural align: 8 bytes = log2(8) = 3
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 3);
         function.instruction(&Instruction::I64Load(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("f32_load") {
+    } else if let Ok(load_op) = wasm::F32Load::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
         function.instruction(&Instruction::F32Load(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("f64_load") {
+    } else if let Ok(load_op) = wasm::F64Load::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 3);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 3);
         function.instruction(&Instruction::F64Load(memarg));
         set_result_local(db, op, ctx, function)?;
 
     // === Partial-Width Loads (i32) ===
-    } else if name == Symbol::new("i32_load8_s") {
+    } else if let Ok(load_op) = wasm::I32Load8S::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0); // natural align: 1 byte = log2(1) = 0
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
         function.instruction(&Instruction::I32Load8S(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i32_load8_u") {
+    } else if let Ok(load_op) = wasm::I32Load8U::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
         function.instruction(&Instruction::I32Load8U(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i32_load16_s") {
+    } else if let Ok(load_op) = wasm::I32Load16S::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1); // natural align: 2 bytes = log2(2) = 1
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
         function.instruction(&Instruction::I32Load16S(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i32_load16_u") {
+    } else if let Ok(load_op) = wasm::I32Load16U::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
         function.instruction(&Instruction::I32Load16U(memarg));
         set_result_local(db, op, ctx, function)?;
 
     // === Partial-Width Loads (i64) ===
-    } else if name == Symbol::new("i64_load8_s") {
+    } else if let Ok(load_op) = wasm::I64Load8S::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
         function.instruction(&Instruction::I64Load8S(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load8_u") {
+    } else if let Ok(load_op) = wasm::I64Load8U::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
         function.instruction(&Instruction::I64Load8U(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load16_s") {
+    } else if let Ok(load_op) = wasm::I64Load16S::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
         function.instruction(&Instruction::I64Load16S(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load16_u") {
+    } else if let Ok(load_op) = wasm::I64Load16U::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
         function.instruction(&Instruction::I64Load16U(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load32_s") {
+    } else if let Ok(load_op) = wasm::I64Load32S::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
         function.instruction(&Instruction::I64Load32S(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load32_u") {
+    } else if let Ok(load_op) = wasm::I64Load32U::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
         function.instruction(&Instruction::I64Load32U(memarg));
         set_result_local(db, op, ctx, function)?;
 
     // === Full-Width Stores ===
-    } else if name == Symbol::new("i32_store") {
+    } else if let Ok(store_op) = wasm::I32Store::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            2,
+        );
         function.instruction(&Instruction::I32Store(memarg));
-        // No set_result_local - stores don't return a value
-    } else if name == Symbol::new("i64_store") {
+    } else if let Ok(store_op) = wasm::I64Store::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 3);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            3,
+        );
         function.instruction(&Instruction::I64Store(memarg));
-    } else if name == Symbol::new("f32_store") {
+    } else if let Ok(store_op) = wasm::F32Store::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            2,
+        );
         function.instruction(&Instruction::F32Store(memarg));
-    } else if name == Symbol::new("f64_store") {
+    } else if let Ok(store_op) = wasm::F64Store::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 3);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            3,
+        );
         function.instruction(&Instruction::F64Store(memarg));
 
     // === Partial-Width Stores ===
-    } else if name == Symbol::new("i32_store8") {
+    } else if let Ok(store_op) = wasm::I32Store8::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            0,
+        );
         function.instruction(&Instruction::I32Store8(memarg));
-    } else if name == Symbol::new("i32_store16") {
+    } else if let Ok(store_op) = wasm::I32Store16::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            1,
+        );
         function.instruction(&Instruction::I32Store16(memarg));
-    } else if name == Symbol::new("i64_store8") {
+    } else if let Ok(store_op) = wasm::I64Store8::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            0,
+        );
         function.instruction(&Instruction::I64Store8(memarg));
-    } else if name == Symbol::new("i64_store16") {
+    } else if let Ok(store_op) = wasm::I64Store16::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            1,
+        );
         function.instruction(&Instruction::I64Store16(memarg));
-    } else if name == Symbol::new("i64_store32") {
+    } else if let Ok(store_op) = wasm::I64Store32::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            2,
+        );
         function.instruction(&Instruction::I64Store32(memarg));
     } else {
         tracing::error!("unsupported wasm op: {}", name);
@@ -4848,34 +4892,13 @@ fn attr_i32_attr<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<i32>
     }
 }
 
-/// Extract MemArg from operation attributes for linear memory load/store operations.
-/// Defaults: offset=0, align=natural alignment (log2), memory=0
-fn extract_memarg<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    natural_align: u32, // log2 of natural alignment (0=1, 1=2, 2=4, 3=8)
-) -> MemArg {
-    let attrs = op.attributes(db);
-
-    let offset = match attrs.get(&ATTR_OFFSET()) {
-        Some(Attribute::IntBits(v)) => *v,
-        _ => 0,
-    };
-
-    let align = match attrs.get(&ATTR_ALIGN()) {
-        Some(Attribute::IntBits(v)) => *v as u32,
-        _ => natural_align, // Use natural alignment if not specified
-    };
-
-    let memory_index = match attrs.get(&ATTR_MEMORY()) {
-        Some(Attribute::IntBits(v)) => *v as u32,
-        _ => 0, // Default to memory 0
-    };
-
+/// Create MemArg from typed wrapper attributes for linear memory load/store operations.
+/// Uses natural_align as fallback if align is 0.
+fn make_memarg(offset: u32, align: u32, memory: u32, natural_align: u32) -> MemArg {
     MemArg {
-        offset,
-        align,
-        memory_index,
+        offset: offset as u64,
+        align: if align == 0 { natural_align } else { align },
+        memory_index: memory,
     }
 }
 
