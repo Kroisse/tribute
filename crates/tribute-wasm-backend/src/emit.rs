@@ -3504,8 +3504,8 @@ fn emit_op<'db>(
         function.instruction(&Instruction::GlobalSet(index));
     } else if name == Symbol::new("struct_new") {
         // struct_new needs all field values on the stack, including nil types.
-        // Unlike emit_operands which skips nil types, we emit ref.null none for them.
-        emit_struct_new_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+        // emit_operands handles nil types by emitting ref.null none.
+        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let attrs = op.attributes(db);
         let field_count = operands.len();
         let result_type = op.results(db).first().copied();
@@ -4205,66 +4205,6 @@ fn emit_operands<'db>(
                 "stale SSA value in wasm backend (missing local mapping)",
             ));
         }
-    }
-    Ok(())
-}
-
-/// Emit operands for struct_new, handling nil types specially.
-///
-/// Unlike some callers that may skip nil values, struct_new requires
-/// all field values on the stack. For nil type fields, we emit `ref.null none`.
-fn emit_struct_new_operands<'db>(
-    db: &'db dyn salsa::Database,
-    operands: &IdVec<Value<'db>>,
-    ctx: &FunctionEmitContext<'db>,
-    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
-    function: &mut Function,
-) -> CompilationResult<()> {
-    for value in operands.iter() {
-        // Try direct lookup first (nil values may be stored in locals)
-        if let Some(index) = ctx.value_locals.get(value) {
-            function.instruction(&Instruction::LocalGet(*index));
-            continue;
-        }
-
-        // Nil type values need ref.null none on the stack
-        // Check AFTER local lookup since nil values may be stored in locals
-        if let Some(ty) = value_type(db, *value, block_arg_types)
-            && is_nil_type(db, ty)
-        {
-            debug!(
-                "emit_struct_new_operands: emitting ref.null none for nil type value {:?}",
-                value.def(db)
-            );
-            function.instruction(&Instruction::RefNull(HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::None,
-            }));
-            continue;
-        }
-
-        // Handle block argument references
-        if let ValueDef::BlockArg(_block_id) = value.def(db) {
-            let index = value.index(db) as u32;
-            function.instruction(&Instruction::LocalGet(index));
-            continue;
-        }
-
-        // If operand not found, this is an error
-        let ValueDef::OpResult(stale_op) = value.def(db) else {
-            return Err(CompilationError::invalid_module(
-                "stale SSA value in wasm backend (missing local mapping)",
-            ));
-        };
-        tracing::error!(
-            "emit_struct_new_operands: stale SSA value: {}.{} index={}",
-            stale_op.dialect(db),
-            stale_op.name(db),
-            value.index(db)
-        );
-        return Err(CompilationError::invalid_module(
-            "stale SSA value in wasm backend (missing local mapping)",
-        ));
     }
     Ok(())
 }
