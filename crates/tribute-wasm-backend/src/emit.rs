@@ -33,9 +33,11 @@ use wasm_encoder::{
 };
 
 use crate::errors;
+#[cfg(test)]
+use crate::gc_types::FIRST_USER_TYPE_IDX;
 use crate::gc_types::{
     ATTR_FIELD_IDX, ATTR_TYPE, ATTR_TYPE_IDX, BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX,
-    CLOSURE_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, STEP_IDX,
+    CLOSURE_STRUCT_IDX, GcTypeDef, STEP_IDX,
 };
 use crate::{CompilationError, CompilationResult};
 

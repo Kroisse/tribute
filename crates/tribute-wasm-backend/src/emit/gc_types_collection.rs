@@ -205,7 +205,10 @@ pub(crate) fn collect_gc_types<'db>(
      -> Option<u32> {
         // First try type_idx attribute
         if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-            return Some(*idx as u32);
+            let idx = *idx as u32;
+            // Advance next_type_idx to avoid collision with explicit indices
+            *next_type_idx = (*next_type_idx).max(idx.saturating_add(1));
+            return Some(idx);
         }
         // Fall back to type attribute (legacy, will be removed)
         if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
@@ -401,8 +404,7 @@ pub(crate) fn collect_gc_types<'db>(
                 };
                 let Some(Attribute::IntBits(field_count)) = attrs.get(&Symbol::new("field_count"))
                 else {
-                    // Missing field_count attribute for placeholder type
-                    return Ok(());
+                    return Err(CompilationError::missing_attribute("field_count"));
                 };
                 let field_count = *field_count as usize;
                 let key = (ty, field_count);
