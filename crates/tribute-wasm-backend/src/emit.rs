@@ -4141,20 +4141,25 @@ fn emit_operands<'db>(
     function: &mut Function,
 ) -> CompilationResult<()> {
     for value in operands.iter() {
-        // Skip nil type values - they have no runtime representation
+        // Try direct lookup first
+        if let Some(index) = ctx.value_locals.get(value) {
+            function.instruction(&Instruction::LocalGet(*index));
+            continue;
+        }
+
+        // Nil type values need ref.null none on the stack (e.g., empty closure environments)
+        // Check this AFTER local lookup since nil values may be stored in locals
         if let Some(ty) = value_type(db, *value, block_arg_types)
             && is_nil_type(db, ty)
         {
             debug!(
-                "  emit_operands: skipping nil type value {:?}",
+                "emit_operands: emitting ref.null none for nil type value {:?}",
                 value.def(db)
             );
-            continue;
-        }
-
-        // Try direct lookup first
-        if let Some(index) = ctx.value_locals.get(value) {
-            function.instruction(&Instruction::LocalGet(*index));
+            function.instruction(&Instruction::RefNull(HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::None,
+            }));
             continue;
         }
 
@@ -4206,7 +4211,7 @@ fn emit_operands<'db>(
 
 /// Emit operands for struct_new, handling nil types specially.
 ///
-/// Unlike `emit_operands` which skips nil type values, struct_new requires
+/// Unlike some callers that may skip nil values, struct_new requires
 /// all field values on the stack. For nil type fields, we emit `ref.null none`.
 fn emit_struct_new_operands<'db>(
     db: &'db dyn salsa::Database,
@@ -4216,25 +4221,25 @@ fn emit_struct_new_operands<'db>(
     function: &mut Function,
 ) -> CompilationResult<()> {
     for value in operands.iter() {
-        // Check if value is nil type
+        // Try direct lookup first (nil values may be stored in locals)
+        if let Some(index) = ctx.value_locals.get(value) {
+            function.instruction(&Instruction::LocalGet(*index));
+            continue;
+        }
+
+        // Nil type values need ref.null none on the stack
+        // Check AFTER local lookup since nil values may be stored in locals
         if let Some(ty) = value_type(db, *value, block_arg_types)
             && is_nil_type(db, ty)
         {
-            // Nil type fields need ref.null none on the stack
             debug!(
-                "  emit_struct_new_operands: emitting ref.null none for nil type value {:?}",
+                "emit_struct_new_operands: emitting ref.null none for nil type value {:?}",
                 value.def(db)
             );
             function.instruction(&Instruction::RefNull(HeapType::Abstract {
                 shared: false,
                 ty: AbstractHeapType::None,
             }));
-            continue;
-        }
-
-        // Regular value handling (same as emit_operands)
-        if let Some(index) = ctx.value_locals.get(value) {
-            function.instruction(&Instruction::LocalGet(*index));
             continue;
         }
 
