@@ -3855,7 +3855,7 @@ fn emit_op<'db>(
             array_type_index_dst: array_copy_op.dst_type_idx(db),
             array_type_index_src: array_copy_op.src_type_idx(db),
         });
-    } else if name == Symbol::new("ref_null") {
+    } else if wasm::RefNull::matches(db, *op) {
         let attrs = op.attributes(db);
         // Infer type from result type
         let inferred_type = op.results(db).first().copied();
@@ -3871,7 +3871,7 @@ fn emit_op<'db>(
         let func_idx = resolve_callee(func_name, module_info)?;
         function.instruction(&Instruction::RefFunc(func_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("ref_cast") {
+    } else if wasm::RefCast::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let attrs = op.attributes(db);
         // Infer type from result type (the target type it casts to)
@@ -3934,7 +3934,7 @@ fn emit_op<'db>(
         );
         function.instruction(&Instruction::RefCastNullable(heap_type));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("ref_test") {
+    } else if wasm::RefTest::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let attrs = op.attributes(db);
         // ref_test result is i32, target type must be in attribute (can't infer)
