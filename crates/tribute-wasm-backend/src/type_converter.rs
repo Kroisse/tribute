@@ -27,6 +27,9 @@ use trunk_ir::dialect::{core, wasm};
 use trunk_ir::rewrite::{MaterializeResult, OpVec, TypeConverter};
 use trunk_ir::{DialectOp, DialectType, Type};
 
+#[cfg(test)]
+use trunk_ir::dialect::arith;
+
 /// Create a TypeConverter configured for WASM backend type conversions.
 ///
 /// This converter handles the IR-level type transformations needed during
@@ -318,17 +321,15 @@ mod tests {
     /// Helper: test boxing materialization (i32 → i31ref)
     #[salsa::tracked]
     fn do_materialize_box_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
-        use trunk_ir::{Location, Operation, PathId, Span, Value, ValueDef};
+        use trunk_ir::{Attribute, Location, PathId, Span, Value, ValueDef};
 
         let converter = wasm_type_converter();
         let path = PathId::new(db, "test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
 
         let i32_ty = core::I32::new(db).as_type();
-        let dummy_op = Operation::of_name(db, location, "test.value")
-            .result(i32_ty)
-            .build();
-        let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);
+        let const_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
+        let value = Value::new(db, ValueDef::OpResult(const_op.as_operation()), 0);
 
         let i31ref_ty = wasm::I31ref::new(db).as_type();
         let result = converter.materialize(db, location, value, i32_ty, i31ref_ty);
@@ -351,17 +352,16 @@ mod tests {
     /// Helper: test unboxing materialization (i31ref → i32)
     #[salsa::tracked]
     fn do_materialize_unbox_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
-        use trunk_ir::{Location, Operation, PathId, Span, Value, ValueDef};
+        use trunk_ir::{Attribute, Location, PathId, Span, Value, ValueDef};
 
         let converter = wasm_type_converter();
         let path = PathId::new(db, "test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
 
         let i31ref_ty = wasm::I31ref::new(db).as_type();
-        let dummy_op = Operation::of_name(db, location, "test.value")
-            .result(i31ref_ty)
-            .build();
-        let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);
+        // Use arith.const with i31ref type (value doesn't matter for materialize test)
+        let const_op = arith::r#const(db, location, i31ref_ty, Attribute::IntBits(42));
+        let value = Value::new(db, ValueDef::OpResult(const_op.as_operation()), 0);
 
         let i32_ty = core::I32::new(db).as_type();
         let result = converter.materialize(db, location, value, i31ref_ty, i32_ty);
@@ -384,17 +384,15 @@ mod tests {
     /// Helper: test boxing tribute_rt.int → anyref
     #[salsa::tracked]
     fn do_materialize_int_to_anyref_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
-        use trunk_ir::{Location, Operation, PathId, Span, Value, ValueDef};
+        use trunk_ir::{Attribute, Location, PathId, Span, Value, ValueDef};
 
         let converter = wasm_type_converter();
         let path = PathId::new(db, "test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
 
         let int_ty = tribute_rt::Int::new(db).as_type();
-        let dummy_op = Operation::of_name(db, location, "test.value")
-            .result(int_ty)
-            .build();
-        let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);
+        let const_op = arith::r#const(db, location, int_ty, Attribute::IntBits(42));
+        let value = Value::new(db, ValueDef::OpResult(const_op.as_operation()), 0);
 
         let anyref_ty = wasm::Anyref::new(db).as_type();
         let result = converter.materialize(db, location, value, int_ty, anyref_ty);
@@ -419,17 +417,15 @@ mod tests {
     fn do_materialize_unbox_anyref_test(
         db: &dyn salsa::Database,
     ) -> (usize, Vec<(Symbol, Symbol)>) {
-        use trunk_ir::{Location, Operation, PathId, Span, Value, ValueDef};
+        use trunk_ir::{Attribute, Location, PathId, Span, Value, ValueDef};
 
         let converter = wasm_type_converter();
         let path = PathId::new(db, "test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
 
         let anyref_ty = wasm::Anyref::new(db).as_type();
-        let dummy_op = Operation::of_name(db, location, "test.value")
-            .result(anyref_ty)
-            .build();
-        let value = Value::new(db, ValueDef::OpResult(dummy_op), 0);
+        let const_op = arith::r#const(db, location, anyref_ty, Attribute::IntBits(42));
+        let value = Value::new(db, ValueDef::OpResult(const_op.as_operation()), 0);
 
         let i32_ty = core::I32::new(db).as_type();
         let result = converter.materialize(db, location, value, anyref_ty, i32_ty);

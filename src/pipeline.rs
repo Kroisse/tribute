@@ -77,6 +77,7 @@ use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverit
 use tribute_passes::evidence::insert_evidence;
 use tribute_passes::handler_lower::lower_handlers;
 use tribute_passes::lambda_lift::lift_lambdas;
+use tribute_passes::lower_tribute_to_cont;
 use tribute_passes::lower_tribute_to_scf;
 use tribute_passes::resolve::{Resolver, build_env};
 use tribute_passes::tdnr::resolve_tdnr;
@@ -387,11 +388,23 @@ pub fn stage_handler_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db
     lower_handlers(db, module)
 }
 
-/// Lower tribute dialect to scf dialect.
+/// Lower tribute.handle to cont dialect operations.
+///
+/// This pass lowers `tribute.handle` expressions to `cont.push_prompt` and
+/// `cont.handler_dispatch` operations.
+#[salsa::tracked]
+pub fn stage_tribute_to_cont<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Module<'db> {
+    lower_tribute_to_cont(db, module)
+}
+
+/// Lower tribute.case to scf dialect operations.
 ///
 /// This pass lowers `tribute.case` expressions to `scf.if` operations.
 #[salsa::tracked]
-pub fn stage_lower_case<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+pub fn stage_tribute_to_scf<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     lower_tribute_to_scf(db, module)
 }
 
@@ -537,7 +550,8 @@ pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'
 
     // Ability and case lowering
     let module = stage_evidence(db, module);
-    let module = stage_lower_case(db, module); // tribute.handle → cont.push_prompt + cont.handler_dispatch
+    let module = stage_tribute_to_cont(db, module); // tribute.handle → cont.push_prompt + cont.handler_dispatch
+    let module = stage_tribute_to_scf(db, module); // tribute.case → scf.if
     let module = stage_handler_lower(db, module); // ability.perform → cont.shift, etc.
     let module = stage_dce(db, module);
 
@@ -572,7 +586,8 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_closure_lower(db, module);
     let module = stage_tdnr(db, module);
     let module = stage_evidence(db, module);
-    let module = stage_lower_case(db, module);
+    let module = stage_tribute_to_cont(db, module);
+    let module = stage_tribute_to_scf(db, module);
     let module = stage_handler_lower(db, module);
     let module = stage_dce(db, module);
 

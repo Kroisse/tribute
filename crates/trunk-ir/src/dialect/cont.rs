@@ -30,9 +30,13 @@ dialect! {
         /// The result is the value passed when the continuation is resumed.
         /// This corresponds to the value returned by `ability.perform`.
         ///
-        /// - `tag`: prompt tag for matching handler
-        /// - `op_idx`: index of the ability operation (for multi-op abilities)
-        #[attr(tag: u32, op_idx: u32)]
+        /// - `tag`: prompt tag for matching handler instance (runtime identifier)
+        /// - `ability_ref`: ability reference type (semantic information)
+        /// - `op_name`: operation name symbol (semantic information)
+        ///
+        /// Note: Operation index (op_idx) is computed deterministically from op_name
+        /// during WASM lowering and is not stored in the IR.
+        #[attr(tag: u32, ability_ref: Type, op_name: Symbol)]
         fn shift(#[rest] value) -> result {
             #[region(handler)] {}
         };
@@ -49,15 +53,19 @@ dialect! {
         /// between the "done" case (normal return) and "suspend" cases
         /// (effect operations).
         ///
-        /// The `done_body` region is executed when the computation completed normally.
-        /// The `suspend_body` region is executed when an effect was performed.
+        /// The `body` region contains multiple blocks:
+        /// - Block 0: "done" case, executed when computation completed normally
+        /// - Block 1+: "suspend" cases, one per handled operation
+        ///
+        /// Suspend blocks have a marker block argument (nil type) with attributes:
+        /// - `ability_ref`: the ability type (for distinguishing same-named ops)
+        /// - `op_name`: the operation name symbol
         ///
         /// In yield bubbling, this checks the global yield state:
-        /// - If not yielding: execute done_body
-        /// - If yielding: execute suspend_body with continuation/value bound
+        /// - If not yielding: execute block 0 (done)
+        /// - If yielding: dispatch to appropriate suspend block based on ability_ref + op_name
         fn handler_dispatch(result) -> output {
-            #[region(done_body)] {}
-            #[region(suspend_body)] {}
+            #[region(body)] {}
         };
 
         /// `cont.get_continuation` operation: gets the current continuation from yield state.

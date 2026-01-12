@@ -23,7 +23,7 @@ use tribute_ir::dialect::closure;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation};
+use trunk_ir::{DialectOp, DialectType, IdVec, Operation};
 
 use crate::gc_types::CLOSURE_STRUCT_IDX;
 use crate::type_converter::wasm_type_converter;
@@ -72,25 +72,21 @@ impl RewritePattern for ClosureNewPattern {
         let ref_func = wasm::ref_func(db, location, funcref_ty, func_ref);
         let func_ref_val = ref_func.as_operation().result(db, 0);
 
-        // Use structref as placeholder type for proper type resolution.
-        // Closure structs always have 2 fields: (func_ref, env).
-        // This ensures the struct_new matches with struct_get via placeholder lookup.
-        let structref_ty = wasm::Structref::new(db).as_type();
-
         // Create wasm.struct_new with both the function reference and environment
         // as operands.
         //
         // Layout: (func_ref: funcref, env: anyref)
         //
-        // Note: Using Operation::of_name here because we need custom attributes:
-        // - "type" (structref placeholder for type resolution)
-        // - "is_closure" (marker attribute for closure struct identification)
-        let struct_new = Operation::of_name(db, location, "wasm.struct_new")
-            .operands(IdVec::from(vec![func_ref_val, env]))
-            .attr("type", Attribute::Type(structref_ty))
-            .attr("is_closure", Attribute::Bool(true))
-            .results(IdVec::from(vec![result_ty]))
-            .build();
+        // Use CLOSURE_STRUCT_IDX directly since closure structs always have 2 fields.
+        // This matches struct_get operations which also use CLOSURE_STRUCT_IDX.
+        let struct_new = wasm::struct_new(
+            db,
+            location,
+            IdVec::from(vec![func_ref_val, env]),
+            result_ty,
+            CLOSURE_STRUCT_IDX,
+        )
+        .as_operation();
 
         RewriteResult::Expand(vec![ref_func.as_operation(), struct_new])
     }
@@ -117,12 +113,17 @@ impl RewritePattern for ClosureFuncPattern {
         // Create wasm.struct_get for field 0 (function reference)
         // Use CLOSURE_STRUCT_IDX directly instead of a placeholder to ensure
         // the struct_get uses the builtin closure struct type (index 4).
-        let struct_get = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(op.operands(db).clone())
-            .attr("field_idx", Attribute::IntBits(0))
-            .attr("type_idx", Attribute::IntBits(CLOSURE_STRUCT_IDX as u64))
-            .results(op.results(db).clone())
-            .build();
+        let ref_operand = op.operands(db)[0];
+        let result_type = op.results(db)[0];
+        let struct_get = wasm::struct_get(
+            db,
+            location,
+            ref_operand,
+            result_type,
+            CLOSURE_STRUCT_IDX,
+            0,
+        )
+        .as_operation();
 
         RewriteResult::Replace(struct_get)
     }
@@ -149,12 +150,17 @@ impl RewritePattern for ClosureEnvPattern {
         // Create wasm.struct_get for field 1 (environment)
         // Use CLOSURE_STRUCT_IDX directly instead of a placeholder to ensure
         // the struct_get uses the builtin closure struct type (index 4).
-        let struct_get = Operation::of_name(db, location, "wasm.struct_get")
-            .operands(op.operands(db).clone())
-            .attr("field_idx", Attribute::IntBits(1))
-            .attr("type_idx", Attribute::IntBits(CLOSURE_STRUCT_IDX as u64))
-            .results(op.results(db).clone())
-            .build();
+        let ref_operand = op.operands(db)[0];
+        let result_type = op.results(db)[0];
+        let struct_get = wasm::struct_get(
+            db,
+            location,
+            ref_operand,
+            result_type,
+            CLOSURE_STRUCT_IDX,
+            1,
+        )
+        .as_operation();
 
         RewriteResult::Replace(struct_get)
     }
@@ -164,9 +170,10 @@ impl RewritePattern for ClosureEnvPattern {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::core;
+    use trunk_ir::dialect::{arith, core};
     use trunk_ir::{
-        Block, BlockId, DialectType, Location, PathId, Region, Span, Symbol, Value, ValueDef, idvec,
+        Attribute, Block, BlockId, DialectType, Location, PathId, Region, Span, Symbol, Value,
+        ValueDef, idvec,
     };
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
@@ -180,11 +187,9 @@ mod tests {
         let i32_ty = core::I32::new(db).as_type();
         let closure_ty = closure::Closure::new(db, i32_ty).as_type();
 
-        // Create a dummy env value
-        let env_op = Operation::of_name(db, location, "test.env")
-            .results(idvec![i32_ty])
-            .build();
-        let env_val = Value::new(db, ValueDef::OpResult(env_op), 0);
+        // Create a dummy env value using arith.const
+        let env_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
+        let env_val = env_op.result(db);
 
         // Create closure.new
         let closure_new = closure::new(db, location, env_val, closure_ty, Symbol::new("test_func"));
@@ -194,7 +199,7 @@ mod tests {
             BlockId::fresh(),
             location,
             idvec![],
-            idvec![env_op, closure_new.as_operation()],
+            idvec![env_op.as_operation(), closure_new.as_operation()],
         );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
@@ -224,11 +229,9 @@ mod tests {
         let i32_ty = core::I32::new(db).as_type();
         let closure_ty = closure::Closure::new(db, i32_ty).as_type();
 
-        // Create a dummy env value
-        let env_op = Operation::of_name(db, location, "test.env")
-            .results(idvec![i32_ty])
-            .build();
-        let env_val = Value::new(db, ValueDef::OpResult(env_op), 0);
+        // Create a dummy env value using arith.const
+        let env_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
+        let env_val = env_op.result(db);
 
         // Create closure.new
         let closure_new = closure::new(db, location, env_val, closure_ty, Symbol::new("test_func"));
@@ -243,7 +246,7 @@ mod tests {
             location,
             idvec![],
             idvec![
-                env_op,
+                env_op.as_operation(),
                 closure_new.as_operation(),
                 closure_func.as_operation()
             ],
@@ -258,11 +261,9 @@ mod tests {
         let i32_ty = core::I32::new(db).as_type();
         let closure_ty = closure::Closure::new(db, i32_ty).as_type();
 
-        // Create a dummy env value
-        let env_op = Operation::of_name(db, location, "test.env")
-            .results(idvec![i32_ty])
-            .build();
-        let env_val = Value::new(db, ValueDef::OpResult(env_op), 0);
+        // Create a dummy env value using arith.const
+        let env_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
+        let env_val = env_op.result(db);
 
         // Create closure.new
         let closure_new = closure::new(db, location, env_val, closure_ty, Symbol::new("test_func"));
@@ -277,7 +278,7 @@ mod tests {
             location,
             idvec![],
             idvec![
-                env_op,
+                env_op.as_operation(),
                 closure_new.as_operation(),
                 closure_env.as_operation()
             ],

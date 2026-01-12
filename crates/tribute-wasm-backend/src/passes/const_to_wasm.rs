@@ -217,20 +217,16 @@ impl RewritePattern for StringConstPattern {
 
         let content = string_const.value(db).clone().into_bytes();
 
-        let Some((offset, len)) = lookup_offset(&self.allocations, &content) else {
+        let Some((offset, _len)) = lookup_offset(&self.allocations, &content) else {
             return RewriteResult::Unchanged;
         };
 
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // Note: Using Operation::of_name here because we need to add a custom
-        // "literal_len" attribute that's not part of the standard wasm.i32_const definition
-        let new_op = Operation::of_name(db, location, "wasm.i32_const")
-            .attr("value", Attribute::IntBits(u64::from(offset)))
-            .attr("literal_len", Attribute::IntBits(u64::from(len)))
-            .results(trunk_ir::idvec![i32_ty])
-            .build();
+        // Use typed helper to create wasm.i32_const with just the offset.
+        // Length information is available in ConstAnalysis and will be used by emit.rs.
+        let new_op = wasm::i32_const(db, location, i32_ty, offset as i32).as_operation();
 
         RewriteResult::Replace(new_op)
     }
@@ -305,10 +301,8 @@ mod tests {
         let location = test_location(db);
         let ptr_ty = core::I32::new(db).as_type();
 
-        let string_const = Operation::of_name(db, location, "adt.string_const")
-            .attr("value", Attribute::String("hello".into()))
-            .results(idvec![ptr_ty])
-            .build();
+        let string_const =
+            adt::string_const(db, location, ptr_ty, "hello".to_string()).as_operation();
 
         let block = Block::new(
             db,

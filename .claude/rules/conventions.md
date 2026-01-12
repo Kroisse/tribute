@@ -81,17 +81,15 @@ Two-phase resolution:
 
 ### Creating Operations
 
-When creating dialect operations, prefer typed helper functions over `Operation::of_name`:
+Always use typed helper functions to create dialect operations:
 
 ```rust
-// ✅ Preferred: Use typed helper functions
+// ✅ Use typed helper functions
 let yield_op = wasm::r#yield(db, location, value);
 let call_op = func::call(db, location, callee, args, result_ty);
 
-// ❌ Avoid: Manual operation construction
-let yield_op = Operation::of_name(db, location, "wasm.yield")
-    .operands(idvec![value])
-    .build();
+// ❌ Never use manual operation construction
+// Operation::of_name has been removed to enforce type safety at compile time
 ```
 
 ### Matching Operations

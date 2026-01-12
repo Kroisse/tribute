@@ -219,8 +219,10 @@ impl RewritePattern for FuncConstantPattern {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::core;
-    use trunk_ir::{Block, BlockId, DialectType, Location, PathId, Region, Span, Symbol, idvec};
+    use trunk_ir::dialect::{arith, core};
+    use trunk_ir::{
+        Attribute, Block, BlockId, DialectType, Location, PathId, Region, Span, Symbol, idvec,
+    };
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -233,12 +235,15 @@ mod tests {
         let i32_ty = core::I32::new(db).as_type();
 
         // Create a simple func.call
-        let func_call = Operation::of_name(db, location, "func.call")
-            .attr("callee", Attribute::Symbol(Symbol::new("foo")))
-            .results(idvec![i32_ty])
-            .build();
+        let func_call = func::call(db, location, vec![], i32_ty, Symbol::new("foo"));
 
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_call]);
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![func_call.as_operation()],
+        );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
     }
@@ -250,23 +255,20 @@ mod tests {
         let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
 
         // Create func.return inside func.func body
-        let func_return = Operation::of_name(db, location, "func.return").build();
+        let func_return = func::r#return(db, location, vec![]);
 
         let body_block = Block::new(
             db,
             BlockId::fresh(),
             location,
             idvec![],
-            idvec![func_return],
+            idvec![func_return.as_operation()],
         );
         let body_region = Region::new(db, location, idvec![body_block]);
 
-        // Create func.func
-        let func_func = Operation::of_name(db, location, "func.func")
-            .attr("sym_name", Attribute::Symbol(Symbol::new("test_fn")))
-            .attr("type", Attribute::Type(func_ty))
-            .region(body_region)
-            .build();
+        // Create func.func using typed helper
+        let func_func =
+            func::func(db, location, Symbol::new("test_fn"), func_ty, body_region).as_operation();
 
         let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_func]);
         let region = Region::new(db, location, idvec![block]);
@@ -317,35 +319,29 @@ mod tests {
 
     #[salsa::tracked]
     fn make_call_indirect_module(db: &dyn salsa::Database) -> Module<'_> {
-        use trunk_ir::{Value, ValueDef};
-
         let location = test_location(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // Create a dummy callee value (function reference)
-        let callee_op = Operation::of_name(db, location, "test.callee")
-            .results(idvec![i32_ty])
-            .build();
-        let callee_val = Value::new(db, ValueDef::OpResult(callee_op), 0);
+        // Create dummy values using arith.const
+        let callee_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(0));
+        let callee_val = callee_op.result(db);
 
-        // Create a dummy argument value
-        let arg_op = Operation::of_name(db, location, "test.arg")
-            .results(idvec![i32_ty])
-            .build();
-        let arg_val = Value::new(db, ValueDef::OpResult(arg_op), 0);
+        let arg_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
+        let arg_val = arg_op.result(db);
 
         // Create func.call_indirect
-        let call_indirect = Operation::of_name(db, location, "func.call_indirect")
-            .operands(idvec![callee_val, arg_val])
-            .results(idvec![i32_ty])
-            .build();
+        let call_indirect = func::call_indirect(db, location, callee_val, vec![arg_val], i32_ty);
 
         let block = Block::new(
             db,
             BlockId::fresh(),
             location,
             idvec![],
-            idvec![callee_op, arg_op, call_indirect],
+            idvec![
+                callee_op.as_operation(),
+                arg_op.as_operation(),
+                call_indirect.as_operation()
+            ],
         );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)
@@ -367,17 +363,14 @@ mod tests {
         let func_ty = core::Func::new(db, idvec![], core::Nil::new(db).as_type()).as_type();
 
         // Create func.constant
-        let func_constant = Operation::of_name(db, location, "func.constant")
-            .attr("func_ref", Attribute::Symbol(Symbol::new("test_func")))
-            .results(idvec![func_ty])
-            .build();
+        let func_constant = func::constant(db, location, func_ty, Symbol::new("test_func"));
 
         let block = Block::new(
             db,
             BlockId::fresh(),
             location,
             idvec![],
-            idvec![func_constant],
+            idvec![func_constant.as_operation()],
         );
         let region = Region::new(db, location, idvec![block]);
         Module::create(db, location, "test".into(), region)

@@ -32,47 +32,55 @@ pub struct ApplyResult<'db> {
 /// ```
 /// # use salsa::Database;
 /// # use salsa::DatabaseImpl;
-/// # use trunk_ir::{Block, BlockId, Location, Operation, PathId, Region, Span, Symbol, idvec};
+/// # use trunk_ir::{Attribute, Block, BlockId, DialectOp, Location, Operation, PathId, Region, Span, Symbol, idvec};
+/// # use trunk_ir::dialect::{arith, core};
 /// # use trunk_ir::dialect::core::Module;
+/// # use trunk_ir::types::DialectType;
 /// use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 ///
-/// struct RenamePattern;
+/// /// Pattern that replaces `arith.const(0)` with `arith.const(1)`.
+/// struct ZeroToOnePattern;
 ///
-/// impl RewritePattern for RenamePattern {
+/// impl RewritePattern for ZeroToOnePattern {
 ///     fn match_and_rewrite<'db>(
 ///         &self,
 ///         db: &'db dyn salsa::Database,
 ///         op: &Operation<'db>,
 ///         _adaptor: &OpAdaptor<'db, '_>,
 ///     ) -> RewriteResult<'db> {
-///         if op.dialect(db) != "test" || op.name(db) != "source" {
+///         let Ok(const_op) = arith::Const::from_operation(db, *op) else {
+///             return RewriteResult::Unchanged;
+///         };
+///         if const_op.value(db) != Attribute::IntBits(0) {
 ///             return RewriteResult::Unchanged;
 ///         }
-///         let new_op = op.modify(db).name_str("target").build();
-///         RewriteResult::Replace(new_op)
+///         let i32_ty = core::I32::new(db).as_type();
+///         let new_op = arith::r#const(db, op.location(db), i32_ty, Attribute::IntBits(1));
+///         RewriteResult::Replace(new_op.as_operation())
 ///     }
 /// }
 /// # #[salsa::tracked]
 /// # fn make_module(db: &dyn salsa::Database) -> Module<'_> {
 /// #     let path = PathId::new(db, "file:///test.trb".to_owned());
 /// #     let location = Location::new(path, Span::new(0, 0));
-/// #     let op = Operation::of_name(db, location, "test.source").build();
+/// #     let i32_ty = core::I32::new(db).as_type();
+/// #     let op = arith::r#const(db, location, i32_ty, Attribute::IntBits(0)).as_operation();
 /// #     let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
 /// #     let region = Region::new(db, location, idvec![block]);
 /// #     Module::create(db, location, Symbol::new("test"), region)
 /// # }
 /// # #[salsa::tracked]
-/// # fn apply_rename(db: &dyn salsa::Database, module: Module<'_>) -> bool {
+/// # fn apply_pattern(db: &dyn salsa::Database, module: Module<'_>) -> bool {
 /// #     use trunk_ir::rewrite::TypeConverter;
 /// #     let applicator = PatternApplicator::new(TypeConverter::new())
-/// #         .add_pattern(RenamePattern)
+/// #         .add_pattern(ZeroToOnePattern)
 /// #         .with_max_iterations(50);
 /// #     let result = applicator.apply(db, module);
 /// #     result.reached_fixpoint
 /// # }
 /// # DatabaseImpl::default().attach(|db| {
 /// #     let module = make_module(db);
-/// let reached = apply_rename(db, module);
+/// let reached = apply_pattern(db, module);
 /// assert!(reached);
 /// # });
 /// ```
@@ -352,95 +360,142 @@ fn collect_from_region<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialect::{arith, core};
     use crate::rewrite::TypeConverter;
-    use crate::{Attribute, BlockId, Location, PathId, Span, idvec};
+    use crate::types::DialectType;
+    use crate::{Attribute, BlockId, DialectOp, Location, PathId, Span, Symbol, idvec};
     use salsa_test_macros::salsa_test;
 
-    /// A simple test pattern that rewrites `test.source` → `test.target`.
-    struct TestRenamePattern;
+    /// A simple test pattern that rewrites `arith.const(42)` → `arith.mul(42, 2)`.
+    /// Uses Replace to avoid infinite loop.
+    struct ConstToMulPattern;
 
-    impl RewritePattern for TestRenamePattern {
+    impl RewritePattern for ConstToMulPattern {
         fn match_and_rewrite<'db>(
             &self,
             db: &'db dyn salsa::Database,
             op: &Operation<'db>,
             _adaptor: &OpAdaptor<'db, '_>,
         ) -> RewriteResult<'db> {
-            if op.dialect(db) != "test" || op.name(db) != "source" {
+            // Match arith.const with value 42 only
+            let Ok(const_op) = arith::Const::from_operation(db, *op) else {
                 return RewriteResult::Unchanged;
-            }
+            };
 
-            // Create replacement operation with same structure but different name
-            let new_op = op.modify(db).name_str("target").build();
+            let value = const_op.value(db);
+            let Attribute::IntBits(42) = value else {
+                return RewriteResult::Unchanged;
+            };
 
-            RewriteResult::Replace(new_op)
+            let location = op.location(db);
+            let i32_ty = core::I32::new(db).as_type();
+
+            // Replace const(42) with mul(7, 6) for simplicity
+            let lhs_const = arith::r#const(db, location, i32_ty, Attribute::IntBits(7));
+            let rhs_const = arith::r#const(db, location, i32_ty, Attribute::IntBits(6));
+            let mul_op = arith::mul(
+                db,
+                location,
+                lhs_const.result(db),
+                rhs_const.result(db),
+                i32_ty,
+            );
+
+            // Expand to include all operations
+            RewriteResult::expand(vec![
+                lhs_const.as_operation(),
+                rhs_const.as_operation(),
+                mul_op.as_operation(),
+            ])
         }
     }
 
-    /// Create a test module with a test.source operation.
+    /// Create a test module with an arith.const operation.
     #[salsa::tracked]
-    fn make_source_module(db: &dyn salsa::Database) -> Module<'_> {
+    fn make_const_module(db: &dyn salsa::Database) -> Module<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
 
-        let op = Operation::of_name(db, location, "test.source")
-            .attr("value", Attribute::IntBits(42))
-            .build();
+        let op = arith::r#const(db, location, i32_ty, Attribute::IntBits(42)).as_operation();
         let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
         let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
+        Module::create(db, location, Symbol::new("test"), region)
     }
 
-    /// Create a test module with an unrelated operation.
+    /// Create a test module with an arith.mul operation (not matched by pattern).
     #[salsa::tracked]
     fn make_other_module(db: &dyn salsa::Database) -> Module<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
 
-        let op = Operation::of_name(db, location, "other.op").build();
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
+        // Create dummy values for mul operands
+        let dummy_const = arith::r#const(db, location, i32_ty, Attribute::IntBits(5));
+        let lhs = dummy_const.result(db);
+        let rhs = dummy_const.result(db);
+
+        let const_op = dummy_const.as_operation();
+        let mul_op = arith::mul(db, location, lhs, rhs, i32_ty).as_operation();
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![const_op, mul_op],
+        );
         let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
+        Module::create(db, location, Symbol::new("test"), region)
     }
 
     /// Apply patterns and return results (tracked to enable IR creation during rewrite).
     #[salsa::tracked]
-    fn apply_rename_pattern(
-        db: &dyn salsa::Database,
-        module: Module<'_>,
-    ) -> (bool, usize, usize, String) {
+    fn apply_const_to_add_pattern<'db>(
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+    ) -> (bool, usize, usize, Module<'db>) {
         let applicator =
-            PatternApplicator::new(TypeConverter::new()).add_pattern(TestRenamePattern);
+            PatternApplicator::new(TypeConverter::new()).add_pattern(ConstToMulPattern);
         let result = applicator.apply(db, module);
-        let body = result.module.body(db);
-        let op_name = body.blocks(db)[0].operations(db)[0].full_name(db);
         (
             result.reached_fixpoint,
             result.total_changes,
             result.iterations,
-            op_name,
+            result.module,
         )
     }
 
     #[salsa_test]
     fn test_pattern_applicator_basic(db: &salsa::DatabaseImpl) {
-        let module = make_source_module(db);
-        let (reached_fixpoint, total_changes, _iterations, op_name) =
-            apply_rename_pattern(db, module);
+        let module = make_const_module(db);
+        let (reached_fixpoint, total_changes, _iterations, result_module) =
+            apply_const_to_add_pattern(db, module);
 
         // Should have made one change and reached fixpoint
         assert!(reached_fixpoint);
         assert_eq!(total_changes, 1);
 
-        // The operation should now be test.target
-        assert_eq!(op_name, "test.target");
+        // Verify we have 3 operations: const(7), const(6), mul
+        let ops = result_module.body(db).blocks(db)[0].operations(db);
+        assert_eq!(ops.len(), 3);
+
+        // Verify operation names
+        assert_eq!(ops[0].name(db), arith::CONST());
+        assert_eq!(ops[1].name(db), arith::CONST());
+        assert_eq!(ops[2].name(db), arith::MUL());
+
+        // Verify const values
+        let const0 = arith::Const::from_operation(db, ops[0]).unwrap();
+        let const1 = arith::Const::from_operation(db, ops[1]).unwrap();
+        assert_eq!(const0.value(db), Attribute::IntBits(7));
+        assert_eq!(const1.value(db), Attribute::IntBits(6));
     }
 
     #[salsa_test]
     fn test_pattern_applicator_no_match(db: &salsa::DatabaseImpl) {
         let module = make_other_module(db);
-        let (reached_fixpoint, total_changes, iterations, _op_name) =
-            apply_rename_pattern(db, module);
+        let (reached_fixpoint, total_changes, iterations, _result_module) =
+            apply_const_to_add_pattern(db, module);
 
         // Should reach fixpoint immediately with no changes
         assert!(reached_fixpoint);
