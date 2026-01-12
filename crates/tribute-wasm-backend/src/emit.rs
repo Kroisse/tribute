@@ -3781,16 +3781,15 @@ fn emit_op<'db>(
         }
 
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("struct_set") {
+    } else if let Ok(struct_set_op) = wasm::StructSet::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
         // Infer type from operand[0] (the struct ref)
         let inferred_type = operands
             .first()
             .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(attrs, inferred_type)
+        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        let field_idx = attr_field_idx(attrs)?;
+        let field_idx = struct_set_op.field_idx(db);
         function.instruction(&Instruction::StructSet {
             struct_type_index: type_idx,
             field_index: field_idx,
@@ -3856,26 +3855,11 @@ fn emit_op<'db>(
         let type_idx = get_type_idx_from_attrs(attrs, inferred_type)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArraySet(type_idx));
-    } else if name == Symbol::new("array_copy") {
+    } else if let Ok(array_copy_op) = wasm::ArrayCopy::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
-        let dst_type_idx = attrs
-            .get(&Symbol::new("dst_type_idx"))
-            .and_then(|a| match a {
-                Attribute::IntBits(v) => Some(*v as u32),
-                _ => None,
-            })
-            .ok_or_else(|| CompilationError::missing_attribute("dst_type_idx"))?;
-        let src_type_idx = attrs
-            .get(&Symbol::new("src_type_idx"))
-            .and_then(|a| match a {
-                Attribute::IntBits(v) => Some(*v as u32),
-                _ => None,
-            })
-            .ok_or_else(|| CompilationError::missing_attribute("src_type_idx"))?;
         function.instruction(&Instruction::ArrayCopy {
-            array_type_index_dst: dst_type_idx,
-            array_type_index_src: src_type_idx,
+            array_type_index_dst: array_copy_op.dst_type_idx(db),
+            array_type_index_src: array_copy_op.src_type_idx(db),
         });
     } else if name == Symbol::new("ref_null") {
         let attrs = op.attributes(db);
@@ -3966,7 +3950,7 @@ fn emit_op<'db>(
             .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
         function.instruction(&Instruction::RefTestNullable(heap_type));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("bytes_from_data") {
+    } else if let Ok(bytes_op) = wasm::BytesFromData::from_operation(db, *op) {
         // Compound operation: create Bytes struct from passive data segment
         // Stack operations:
         //   i32.const <offset>    ; offset within data segment
@@ -3975,10 +3959,9 @@ fn emit_op<'db>(
         //   i32.const 0           ; offset field (we use the whole array)
         //   i32.const <len>       ; len field
         //   struct.new $bytes_struct
-        let attrs = op.attributes(db);
-        let data_idx = attr_u32(attrs, ATTR_DATA_IDX())?;
-        let offset = attr_u32(attrs, ATTR_OFFSET())?;
-        let len = attr_u32(attrs, ATTR_LEN())?;
+        let data_idx = bytes_op.data_idx(db);
+        let offset = bytes_op.offset(db);
+        let len = bytes_op.len(db);
 
         // Push offset and length for array.new_data
         function.instruction(&Instruction::I32Const(offset as i32));
