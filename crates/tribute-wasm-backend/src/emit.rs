@@ -4278,15 +4278,15 @@ fn emit_operands_with_boxing<'db>(
     let mut param_iter = param_types.iter();
 
     for value in operands.iter() {
-        // Get the corresponding parameter type first (must stay synchronized with operands)
-        let param_ty = param_iter.next();
-
         // Skip nil type values - they have no runtime representation
         if let Some(ty) = value_type(db, *value, &module_info.block_arg_types)
             && is_nil_type(db, ty)
         {
             continue;
         }
+
+        // Get the corresponding parameter type (must stay synchronized with emitted operands)
+        let param_ty = param_iter.next();
 
         // Emit the value (local.get)
         emit_value(db, *value, ctx, function)?;
