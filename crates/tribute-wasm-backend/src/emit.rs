@@ -640,7 +640,6 @@ fn collect_wasm_ops_from_region<'db>(
     region: &Region<'db>,
     info: &mut ModuleInfo<'db>,
 ) -> CompilationResult<()> {
-    let wasm_dialect = Symbol::new("wasm");
     let core_dialect = Symbol::new("core");
     let module_name = Symbol::new("module");
 
@@ -658,40 +657,27 @@ fn collect_wasm_ops_from_region<'db>(
             }
 
             // Collect wasm operations
-            if dialect == wasm_dialect {
-                match name {
-                    n if n == Symbol::new("func") => {
-                        if let Ok(func_def) = extract_function_def(db, op) {
-                            debug!("Including function: {}", func_def.name);
-                            info.funcs.push(func_def);
-                        }
-                    }
-                    n if n == Symbol::new("import_func") => {
-                        info.imports.push(extract_import_def(db, op)?);
-                    }
-                    n if n == Symbol::new("export_func") => {
-                        info.exports.push(extract_export_func(db, op)?);
-                    }
-                    n if n == Symbol::new("export_memory") => {
-                        info.exports.push(extract_export_memory(db, op)?);
-                    }
-                    n if n == Symbol::new("memory") => {
-                        info.memory = Some(extract_memory_def(db, op)?);
-                    }
-                    n if n == Symbol::new("data") => {
-                        info.data.push(extract_data_def(db, op)?);
-                    }
-                    n if n == Symbol::new("table") => {
-                        info.tables.push(extract_table_def(db, op)?);
-                    }
-                    n if n == Symbol::new("elem") => {
-                        info.elements.push(extract_element_def(db, op)?);
-                    }
-                    n if n == Symbol::new("global") => {
-                        info.globals.push(extract_global_def(db, op)?);
-                    }
-                    _ => {}
+            if wasm::Func::matches(db, *op) {
+                if let Ok(func_def) = extract_function_def(db, op) {
+                    debug!("Including function: {}", func_def.name);
+                    info.funcs.push(func_def);
                 }
+            } else if wasm::ImportFunc::matches(db, *op) {
+                info.imports.push(extract_import_def(db, op)?);
+            } else if wasm::ExportFunc::matches(db, *op) {
+                info.exports.push(extract_export_func(db, op)?);
+            } else if wasm::ExportMemory::matches(db, *op) {
+                info.exports.push(extract_export_memory(db, op)?);
+            } else if wasm::Memory::matches(db, *op) {
+                info.memory = Some(extract_memory_def(db, op)?);
+            } else if wasm::Data::matches(db, *op) {
+                info.data.push(extract_data_def(db, op)?);
+            } else if wasm::Table::matches(db, *op) {
+                info.tables.push(extract_table_def(db, op)?);
+            } else if wasm::Elem::matches(db, *op) {
+                info.elements.push(extract_element_def(db, op)?);
+            } else if wasm::Global::matches(db, *op) {
+                info.globals.push(extract_global_def(db, op)?);
             }
         }
     }
@@ -978,8 +964,7 @@ fn collect_gc_types<'db>(
         if op.dialect(db) != wasm_dialect {
             return Ok(());
         }
-        let name = op.name(db);
-        if name == Symbol::new("struct_new") {
+        if wasm::StructNew::matches(db, *op) {
             let attrs = op.attributes(db);
             let field_count = op.operands(db).len();
             let result_type = op.results(db).first().copied();
@@ -1086,7 +1071,7 @@ fn collect_gc_types<'db>(
                     }
                 }
             }
-        } else if name == Symbol::new("struct_get") {
+        } else if wasm::StructGet::matches(db, *op) {
             let attrs = op.attributes(db);
 
             // Check if this uses a placeholder type (wasm.structref) that allows
@@ -1257,7 +1242,7 @@ fn collect_gc_types<'db>(
                     record_struct_field(type_idx, builder, field_idx, result_ty)?;
                 }
             }
-        } else if name == Symbol::new("struct_set") {
+        } else if wasm::StructSet::matches(db, *op) {
             let attrs = op.attributes(db);
             // Infer type from operand[0] (the struct ref)
             let inferred_type = op
@@ -1298,7 +1283,7 @@ fn collect_gc_types<'db>(
                     record_struct_field(type_idx, builder, field_idx, ty)?;
                 }
             }
-        } else if name == Symbol::new("array_new") || name == Symbol::new("array_new_default") {
+        } else if wasm::ArrayNew::matches(db, *op) || wasm::ArrayNewDefault::matches(db, *op) {
             let attrs = op.attributes(db);
             // Infer type from result type
             let inferred_type = op.results(db).first().copied();
@@ -1324,9 +1309,9 @@ fn collect_gc_types<'db>(
                     record_array_elem(type_idx, builder, ty)?;
                 }
             }
-        } else if name == Symbol::new("array_get")
-            || name == Symbol::new("array_get_s")
-            || name == Symbol::new("array_get_u")
+        } else if wasm::ArrayGet::matches(db, *op)
+            || wasm::ArrayGetS::matches(db, *op)
+            || wasm::ArrayGetU::matches(db, *op)
         {
             let attrs = op.attributes(db);
             // Infer type from operand[0] (the array ref)
@@ -1359,7 +1344,7 @@ fn collect_gc_types<'db>(
                     record_array_elem(type_idx, builder, result_ty)?;
                 }
             }
-        } else if name == Symbol::new("array_set") {
+        } else if wasm::ArraySet::matches(db, *op) {
             let attrs = op.attributes(db);
             // Infer type from operand[0] (the array ref)
             let inferred_type = op
@@ -1393,7 +1378,7 @@ fn collect_gc_types<'db>(
                     record_array_elem(type_idx, builder, ty)?;
                 }
             }
-        } else if name == Symbol::new("array_copy") {
+        } else if wasm::ArrayCopy::matches(db, *op) {
             // array_copy has dst_type_idx: u32 and src_type_idx: u32 attributes
             let attrs = op.attributes(db);
             if let Some(&Attribute::IntBits(dst_idx)) = attrs.get(&Symbol::new("dst_type_idx")) {
@@ -1408,9 +1393,9 @@ fn collect_gc_types<'db>(
                     builder.kind = GcKind::Array;
                 }
             }
-        } else if name == Symbol::new("ref_null")
-            || name == Symbol::new("ref_cast")
-            || name == Symbol::new("ref_test")
+        } else if wasm::RefNull::matches(db, *op)
+            || wasm::RefCast::matches(db, *op)
+            || wasm::RefTest::matches(db, *op)
         {
             let attrs = op.attributes(db);
             // For ref_null: use result type as fallback
@@ -1418,7 +1403,7 @@ fn collect_gc_types<'db>(
             let inferred_type = op.results(db).first().copied();
 
             // Special handling for ref_cast with placeholder type (wasm.structref + field_count)
-            if name == Symbol::new("ref_cast")
+            if wasm::RefCast::matches(db, *op)
                 && let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE())
                 && wasm::Structref::from_type(db, *target_ty).is_some()
                 && let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
@@ -1449,7 +1434,7 @@ fn collect_gc_types<'db>(
             }
 
             // Try specific attribute names first, then fall back to generic "type" attribute
-            let type_idx = if name == Symbol::new("ref_null") {
+            let type_idx = if wasm::RefNull::matches(db, *op) {
                 attr_u32(attrs, ATTR_HEAP_TYPE()).ok().or_else(|| {
                     get_type_idx(
                         attrs,
@@ -1670,9 +1655,7 @@ fn collect_call_indirect_types<'db>(
                 }
 
                 // Check if this is a call_indirect
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("call_indirect")
-                {
+                if wasm::CallIndirect::matches(db, *op) {
                     // Build function type from operands and results
                     let operands = op.operands(db);
 
@@ -1867,8 +1850,7 @@ fn collect_ref_funcs<'db>(
                 }
 
                 // Check if this is a ref_func
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("ref_func")
+                if wasm::RefFunc::matches(db, *op)
                     && let Some(Attribute::Symbol(func_name)) =
                         op.attributes(db).get(&ATTR_FUNC_NAME())
                 {
@@ -1896,9 +1878,7 @@ fn has_call_indirect<'db>(db: &'db dyn salsa::Database, module: core::Module<'db
                 }
 
                 // Check if this is a call_indirect
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("call_indirect")
-                {
+                if wasm::CallIndirect::matches(db, *op) {
                     return true;
                 }
             }
@@ -2248,8 +2228,7 @@ fn assign_locals_in_region<'db>(
                         .ok()
                         .map(|vt| matches!(vt, ValType::Ref(_)))
                         .unwrap_or(false);
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("struct_get")
+                if wasm::StructGet::matches(db, *op)
                     && (tribute::is_type_var(db, effective_ty) || effective_ty_is_ref)
                 {
                     // Try to get struct type from attribute first, fall back to operand type
@@ -2474,10 +2453,7 @@ fn assign_locals_in_region<'db>(
                 // For wasm.if with type.var result, infer the effective type from the
                 // then branch's result value. This ensures the local type matches the
                 // actual value produced by the branches.
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("if")
-                    && tribute::is_type_var(db, effective_ty)
-                {
+                if wasm::If::matches(db, *op) && tribute::is_type_var(db, effective_ty) {
                     if let Some(eff_ty) = infer_region_effective_type(db, op, ctx) {
                         debug!(
                             "wasm.if local: using then branch effective type {}.{} instead of IR type {}.{}",
@@ -2503,10 +2479,7 @@ fn assign_locals_in_region<'db>(
 
                 // For wasm.block with polymorphic result type, infer the effective type from
                 // the body region's result value or fall back to Step if function returns it.
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("block")
-                    && is_polymorphic_type(db, effective_ty)
-                {
+                if wasm::Block::matches(db, *op) && is_polymorphic_type(db, effective_ty) {
                     if let Some(eff_ty) = infer_region_effective_type(db, op, ctx) {
                         debug!(
                             "wasm.block local: using body effective type {}.{} instead of IR type {}.{}",
@@ -2533,10 +2506,7 @@ fn assign_locals_in_region<'db>(
                 // For wasm.call_indirect with polymorphic result type in functions that return
                 // Step, use Step as the local type. This ensures proper type
                 // matching when storing the result of closure/continuation calls.
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("call_indirect")
-                    && is_polymorphic_type(db, effective_ty)
-                {
+                if wasm::CallIndirect::matches(db, *op) && is_polymorphic_type(db, effective_ty) {
                     let upgraded =
                         upgrade_polymorphic_to_step(db, effective_ty, ctx.func_return_type);
                     if upgraded != effective_ty {
@@ -2552,13 +2522,10 @@ fn assign_locals_in_region<'db>(
                 // For wasm.ref_cast and wasm.struct_new with placeholder structref type,
                 // use the concrete type from the placeholder map for the local variable type.
                 // This ensures struct.get operations can access the correct type.
-                let val_type = if op.dialect(db) == Symbol::new("wasm")
-                    && (op.name(db) == Symbol::new("ref_cast")
-                        || op.name(db) == Symbol::new("struct_new"))
-                {
+                let is_ref_cast = wasm::RefCast::matches(db, *op);
+                let is_struct_new = wasm::StructNew::matches(db, *op);
+                let val_type = if is_ref_cast || is_struct_new {
                     let attrs = op.attributes(db);
-                    let is_ref_cast = op.name(db) == Symbol::new("ref_cast");
-                    let is_struct_new = op.name(db) == Symbol::new("struct_new");
 
                     // For ref_cast: check target_type attr; for struct_new: check type attr or result type
                     let placeholder_ty = if is_ref_cast {
@@ -2844,7 +2811,7 @@ fn emit_op<'db>(
     // Handle wasm.nop - it's a placeholder for nil constants
     // For primitive types, no WASM instruction is emitted.
     // For reference types (func, anyref, etc.), emit ref.null so the value can be used.
-    if name == Symbol::new("nop") {
+    if wasm::Nop::matches(db, *op) {
         // Check if the result type is a reference type
         if let Some(result_ty) = op.results(db).first() {
             debug!(
@@ -2913,7 +2880,7 @@ fn emit_op<'db>(
         let value = const_op.value(db);
         function.instruction(&Instruction::F64Const(value.into()));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("if") {
+    } else if wasm::If::matches(db, *op) {
         let result_ty = op.results(db).first().copied();
 
         // First try to infer effective type from branches
@@ -3125,7 +3092,7 @@ fn emit_op<'db>(
         if has_result {
             set_result_local(db, op, ctx, function)?;
         }
-    } else if name == Symbol::new("block") {
+    } else if wasm::Block::matches(db, *op) {
         // Upgrade polymorphic block result type to Step if function returns Step
         let result_ty = op
             .results(db)
@@ -3157,7 +3124,7 @@ fn emit_op<'db>(
         if has_result {
             set_result_local(db, op, ctx, function)?;
         }
-    } else if name == Symbol::new("loop") {
+    } else if wasm::Loop::matches(db, *op) {
         // Upgrade polymorphic loop result type to Step if function returns Step
         let result_ty = op
             .results(db)
@@ -3236,7 +3203,7 @@ fn emit_op<'db>(
         }
 
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("call_indirect") {
+    } else if wasm::CallIndirect::matches(db, *op) {
         // wasm.call_indirect: indirect function call
         // Operands: [arg1, arg2, ..., argN, funcref]
         // The funcref is the last operand (on top of stack in WebAssembly)
@@ -3502,7 +3469,7 @@ fn emit_op<'db>(
         let index = global_op.index(db);
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         function.instruction(&Instruction::GlobalSet(index));
-    } else if name == Symbol::new("struct_new") {
+    } else if wasm::StructNew::matches(db, *op) {
         // struct_new needs all field values on the stack, including nil types.
         // emit_operands handles nil types by emitting ref.null none.
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
@@ -3553,7 +3520,7 @@ fn emit_op<'db>(
 
         function.instruction(&Instruction::StructNew(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("struct_get") {
+    } else if wasm::StructGet::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let attrs = op.attributes(db);
 
@@ -3584,9 +3551,7 @@ fn emit_op<'db>(
                     def_op.name(db),
                     op_val.index(db)
                 );
-                if def_op.dialect(db) == Symbol::new("wasm")
-                    && def_op.name(db) == Symbol::new("ref_cast")
-                {
+                if wasm::RefCast::matches(db, def_op) {
                     // Get the ref.cast's target_type and field_count
                     let def_attrs = def_op.attributes(db);
                     if let Some(Attribute::Type(target_ty)) = def_attrs.get(&ATTR_TARGET_TYPE()) {
@@ -4422,7 +4387,7 @@ fn infer_call_result_type<'db>(
     func_return_type: Option<Type<'db>>,
 ) -> Type<'db> {
     // Handle wasm.call_indirect - if result is polymorphic but function returns funcref, use funcref
-    if op.dialect(db) == Symbol::new("wasm") && op.name(db) == Symbol::new("call_indirect") {
+    if wasm::CallIndirect::matches(db, *op) {
         let is_polymorphic_result =
             tribute::is_type_var(db, result_ty) || wasm::Anyref::from_type(db, result_ty).is_some();
         if let Some(func_ret_ty) = func_return_type {
@@ -4682,7 +4647,7 @@ fn should_adjust_handler_return_to_i32<'db>(
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
             // Check if this is a wasm.if (handler dispatch generates these)
-            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("if") {
+            if wasm::If::matches(db, *op) {
                 // Get the else region (done path) - it's region index 1
                 let regions = op.regions(db);
                 if let Some(else_region) = regions.get(1) {
@@ -4716,8 +4681,7 @@ fn should_adjust_handler_return_to_i32<'db>(
 fn region_contains_call_indirect<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
-            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("call_indirect")
-            {
+            if wasm::CallIndirect::matches(db, *op) {
                 return true;
             }
             // Check nested regions
