@@ -35,7 +35,7 @@ pub(crate) fn value_type<'db>(
 
 /// Check if a type is the nil type (core.nil).
 pub(crate) fn is_nil_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == Symbol::new("nil")
+    core::Nil::from_type(db, ty).is_some()
 }
 
 /// Check if a type is a closure struct (adt.struct with name "_closure").
