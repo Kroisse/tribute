@@ -17,13 +17,16 @@
 //! ```
 //! # use salsa::Database;
 //! # use salsa::DatabaseImpl;
-//! # use trunk_ir::{Block, BlockId, Location, Operation, PathId, Region, Span, Symbol, idvec};
+//! # use trunk_ir::{Attribute, Block, BlockId, DialectOp, Location, Operation, PathId, Region, Span, Symbol, idvec};
+//! # use trunk_ir::dialect::{arith, core};
 //! # use trunk_ir::dialect::core::Module;
+//! # use trunk_ir::types::DialectType;
 //! use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 //!
-//! struct RenamePattern;
+//! /// Pattern that replaces `arith.const(0)` with `arith.const(1)`.
+//! struct ZeroToOnePattern;
 //!
-//! impl RewritePattern for RenamePattern {
+//! impl RewritePattern for ZeroToOnePattern {
 //!     fn match_and_rewrite<'db>(
 //!         &self,
 //!         db: &'db dyn salsa::Database,
@@ -31,34 +34,39 @@
 //!         _adaptor: &OpAdaptor<'db, '_>,
 //!     ) -> RewriteResult<'db> {
 //!         // Note: op.operands() are already remapped by the applicator
-//!         if op.dialect(db) != "test" || op.name(db) != "source" {
+//!         let Ok(const_op) = arith::Const::from_operation(db, *op) else {
+//!             return RewriteResult::Unchanged;
+//!         };
+//!         if const_op.value(db) != Attribute::IntBits(0) {
 //!             return RewriteResult::Unchanged;
 //!         }
-//!         let new_op = op.modify(db).name_str("target").build();
-//!         RewriteResult::Replace(new_op)
+//!         let i32_ty = core::I32::new(db).as_type();
+//!         let new_op = arith::r#const(db, op.location(db), i32_ty, Attribute::IntBits(1));
+//!         RewriteResult::Replace(new_op.as_operation())
 //!     }
 //! }
 //! # #[salsa::tracked]
 //! # fn make_module(db: &dyn salsa::Database) -> Module<'_> {
 //! #     let path = PathId::new(db, "file:///test.trb".to_owned());
 //! #     let location = Location::new(path, Span::new(0, 0));
-//! #     let op = Operation::of(db, location, Symbol::new("test"), Symbol::new("source")).build();
+//! #     let i32_ty = core::I32::new(db).as_type();
+//! #     let op = arith::r#const(db, location, i32_ty, Attribute::IntBits(0)).as_operation();
 //! #     let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
 //! #     let region = Region::new(db, location, idvec![block]);
 //! #     Module::create(db, location, Symbol::new("test"), region)
 //! # }
 //! # #[salsa::tracked]
-//! # fn apply_rename(db: &dyn salsa::Database, module: Module<'_>) -> bool {
+//! # fn apply_pattern(db: &dyn salsa::Database, module: Module<'_>) -> bool {
 //! #     use trunk_ir::rewrite::TypeConverter;
 //! #     let applicator = PatternApplicator::new(TypeConverter::new())
-//! #         .add_pattern(RenamePattern)
+//! #         .add_pattern(ZeroToOnePattern)
 //! #         .with_max_iterations(50);
 //! #     let result = applicator.apply(db, module);
 //! #     result.reached_fixpoint
 //! # }
 //! # DatabaseImpl::default().attach(|db| {
 //! #     let module = make_module(db);
-//! let reached = apply_rename(db, module);
+//! let reached = apply_pattern(db, module);
 //! assert!(reached);
 //! # });
 //! ```
