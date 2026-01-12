@@ -4286,7 +4286,11 @@ fn emit_operands_with_boxing<'db>(
         }
 
         // Get the corresponding parameter type (must stay synchronized with emitted operands)
-        let param_ty = param_iter.next();
+        let Some(param_ty) = param_iter.next().copied() else {
+            return Err(CompilationError::invalid_module(
+                "wasm.call operand count exceeds callee param count",
+            ));
+        };
 
         // Emit the value (local.get)
         emit_value(db, *value, ctx, function)?;
@@ -4295,9 +4299,9 @@ fn emit_operands_with_boxing<'db>(
         // If parameter expects anyref (type.var) AND doesn't have a concrete type index, box the operand
         // Types with a type index (like struct types) are already reference types and don't need boxing
         // Use effective_types to get the actual computed type, falling back to IR type
-        if param_ty.is_some_and(|ty| {
-            tribute::is_type_var(db, *ty) && !module_info.type_idx_by_type.contains_key(ty)
-        }) {
+        if tribute::is_type_var(db, param_ty)
+            && !module_info.type_idx_by_type.contains_key(&param_ty)
+        {
             // Use effective type if available (computed during local allocation),
             // otherwise fall back to IR result type
             let operand_ty = ctx
@@ -4314,6 +4318,12 @@ fn emit_operands_with_boxing<'db>(
                 emit_boxing(db, operand_ty, function)?;
             }
         }
+    }
+
+    if param_iter.len() != 0 {
+        return Err(CompilationError::invalid_module(
+            "wasm.call operand count is less than callee param count",
+        ));
     }
     Ok(())
 }
