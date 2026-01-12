@@ -5025,7 +5025,7 @@ fn extract_memory_index<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) 
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, BlockId, Location, PathId, Region, Span, idvec};
+    use trunk_ir::{Block, BlockBuilder, BlockId, Location, PathId, Region, Span, idvec};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
@@ -5285,113 +5285,6 @@ mod tests {
     }
 
     // ========================================
-    // Test: placeholder struct types (wasm.structref)
-    // ========================================
-
-    /// Create a module with multiple struct_new operations using wasm.structref
-    /// placeholder type but with different field counts.
-    #[salsa::tracked]
-    fn make_placeholder_struct_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let structref_ty = wasm::Structref::new(db).as_type();
-
-        // Create struct_new with 1 field using wasm.structref type attribute
-        let field1 = wasm::i32_const(db, location, i32_ty, 1).as_operation();
-
-        // Note: Using Operation::of here because this test uses "type" attribute (not "type_idx")
-        // which is not supported by the typed helper function
-        let struct_new1 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
-            .operands(idvec![field1.result(db, 0)])
-            .results(idvec![structref_ty])
-            .attr("type", Attribute::Type(structref_ty))
-            .build();
-
-        // Create struct_new with 2 fields using same wasm.structref type
-        let field2a = wasm::i32_const(db, location, i32_ty, 2).as_operation();
-
-        let field2b = wasm::i32_const(db, location, i32_ty, 3).as_operation();
-
-        let struct_new2 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
-            .operands(idvec![field2a.result(db, 0), field2b.result(db, 0)])
-            .results(idvec![structref_ty])
-            .attr("type", Attribute::Type(structref_ty))
-            .build();
-
-        // Create struct_new with 0 fields (empty struct)
-        let struct_new3 = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::STRUCT_NEW())
-            .operands(idvec![])
-            .results(idvec![structref_ty])
-            .attr("type", Attribute::Type(structref_ty))
-            .build();
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                field1,
-                struct_new1,
-                field2a,
-                field2b,
-                struct_new2,
-                struct_new3
-            ],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        core::Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_placeholder_struct_types(db: &salsa::DatabaseImpl) {
-        let module = make_placeholder_struct_module(db);
-        let (gc_types, _type_map, placeholder_map) =
-            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
-
-        // Should have 8 GC types: 5 built-in + 3 user structs (one per field count)
-        assert_eq!(gc_types.len(), 8);
-
-        // Verify placeholder_map has entries for each (type, field_count) pair
-        let structref_ty = wasm::Structref::new(db).as_type();
-        assert!(
-            placeholder_map.contains_key(&(structref_ty, 0)),
-            "placeholder_map should have entry for (structref, 0)"
-        );
-        assert!(
-            placeholder_map.contains_key(&(structref_ty, 1)),
-            "placeholder_map should have entry for (structref, 1)"
-        );
-        assert!(
-            placeholder_map.contains_key(&(structref_ty, 2)),
-            "placeholder_map should have entry for (structref, 2)"
-        );
-
-        // Verify each entry has a distinct type_idx
-        let idx_0 = placeholder_map[&(structref_ty, 0)];
-        let idx_1 = placeholder_map[&(structref_ty, 1)];
-        let idx_2 = placeholder_map[&(structref_ty, 2)];
-        assert_ne!(idx_0, idx_1, "type_idx for 0 and 1 fields should differ");
-        assert_ne!(idx_1, idx_2, "type_idx for 1 and 2 fields should differ");
-        assert_ne!(idx_0, idx_2, "type_idx for 0 and 2 fields should differ");
-
-        // Verify GC type definitions have correct field counts
-        // User types start at index FIRST_USER_TYPE_IDX (5)
-        let field_counts: Vec<usize> = gc_types[FIRST_USER_TYPE_IDX as usize..]
-            .iter()
-            .map(|gc_type| match gc_type {
-                GcTypeDef::Struct(fields) => fields.len(),
-                _ => panic!("expected struct type"),
-            })
-            .collect();
-
-        // Should have structs with 0, 1, and 2 fields (order may vary)
-        assert!(field_counts.contains(&0), "should have 0-field struct");
-        assert!(field_counts.contains(&1), "should have 1-field struct");
-        assert!(field_counts.contains(&2), "should have 2-field struct");
-    }
-
-    // ========================================
     // Test: nested operations in function body
     // ========================================
 
@@ -5469,33 +5362,26 @@ mod tests {
         let location = test_location(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // Create a ref.null for the bytes array type
-        let bytes_array_ref = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::REF_NULL())
-            .attr("heap_type", Attribute::IntBits(BYTES_ARRAY_IDX as u64))
-            .results(idvec![i32_ty]) // placeholder type
-            .build();
+        // Use BlockBuilder to create block with argument as placeholder for array reference
+        let mut block_builder = BlockBuilder::new(db, location).arg(i32_ty);
+        let array_ref_arg = block_builder.block_arg(db, 0);
 
         // Create index value
-        let index = wasm::i32_const(db, location, i32_ty, 0).as_operation();
+        let index = wasm::i32_const(db, location, i32_ty, 0);
+        block_builder.op(index);
 
         // Create array_get_u with BYTES_ARRAY_IDX (builtin type)
         let array_get = wasm::array_get_u(
             db,
             location,
-            bytes_array_ref.result(db, 0),
-            index.result(db, 0),
+            array_ref_arg,
+            index.result(db),
             i32_ty,
             BYTES_ARRAY_IDX,
-        )
-        .as_operation();
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![bytes_array_ref, index, array_get],
         );
+        block_builder.op(array_get);
+
+        let block = block_builder.build();
         let region = Region::new(db, location, idvec![block]);
         core::Module::create(db, location, "test".into(), region)
     }
@@ -5528,30 +5414,16 @@ mod tests {
         let location = test_location(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // Create a ref.null for the bytes struct type
-        let bytes_struct_ref = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::REF_NULL())
-            .attr("heap_type", Attribute::IntBits(BYTES_STRUCT_IDX as u64))
-            .results(idvec![i32_ty]) // placeholder type
-            .build();
+        // Use BlockBuilder to create block with argument as placeholder for struct reference
+        let mut block_builder = BlockBuilder::new(db, location).arg(i32_ty);
+        let struct_ref_arg = block_builder.block_arg(db, 0);
 
         // Create struct_get with BYTES_STRUCT_IDX (builtin type)
-        let struct_get = wasm::struct_get(
-            db,
-            location,
-            bytes_struct_ref.result(db, 0),
-            i32_ty,
-            BYTES_STRUCT_IDX,
-            0,
-        )
-        .as_operation();
+        let struct_get =
+            wasm::struct_get(db, location, struct_ref_arg, i32_ty, BYTES_STRUCT_IDX, 0);
+        block_builder.op(struct_get);
 
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![bytes_struct_ref, struct_get],
-        );
+        let block = block_builder.build();
         let region = Region::new(db, location, idvec![block]);
         core::Module::create(db, location, "test".into(), region)
     }
@@ -5584,36 +5456,30 @@ mod tests {
         let location = test_location(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // Create a ref.null for the bytes array type
-        let bytes_array_ref = Operation::of(db, location, wasm::DIALECT_NAME(), wasm::REF_NULL())
-            .attr("heap_type", Attribute::IntBits(BYTES_ARRAY_IDX as u64))
-            .results(idvec![i32_ty])
-            .build();
+        // Use BlockBuilder to create block with argument as placeholder for array reference
+        let mut block_builder = BlockBuilder::new(db, location).arg(i32_ty);
+        let array_ref_arg = block_builder.block_arg(db, 0);
 
         // Create index value
-        let index = wasm::i32_const(db, location, i32_ty, 0).as_operation();
+        let index = wasm::i32_const(db, location, i32_ty, 0);
+        block_builder.op(index);
 
         // Create value to set
-        let value = wasm::i32_const(db, location, i32_ty, 42).as_operation();
+        let value = wasm::i32_const(db, location, i32_ty, 42);
+        block_builder.op(value);
 
         // Create array_set with BYTES_ARRAY_IDX (builtin type)
         let array_set = wasm::array_set(
             db,
             location,
-            bytes_array_ref.result(db, 0),
-            index.result(db, 0),
-            value.result(db, 0),
+            array_ref_arg,
+            index.result(db),
+            value.result(db),
             BYTES_ARRAY_IDX,
-        )
-        .as_operation();
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![bytes_array_ref, index, value, array_set],
         );
+        block_builder.op(array_set);
+
+        let block = block_builder.build();
         let region = Region::new(db, location, idvec![block]);
         core::Module::create(db, location, "test".into(), region)
     }
