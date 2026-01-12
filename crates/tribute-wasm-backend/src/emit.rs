@@ -1966,13 +1966,13 @@ fn extract_export_memory<'db>(
 }
 
 fn extract_memory_def<'db>(
-    _db: &'db dyn salsa::Database,
+    db: &'db dyn salsa::Database,
     memory_op: wasm::Memory<'db>,
 ) -> CompilationResult<MemoryDef> {
-    let min = memory_op.min(_db);
-    let max = memory_op.max(_db);
-    let shared = memory_op.shared(_db);
-    let memory64 = memory_op.memory64(_db);
+    let min = memory_op.min(db);
+    let max = memory_op.max(db);
+    let shared = memory_op.shared(db);
+    let memory64 = memory_op.memory64(db);
     Ok(MemoryDef {
         min,
         max: if max == 0 { None } else { Some(max) },
@@ -3719,7 +3719,7 @@ fn emit_op<'db>(
             struct_type_index: type_idx,
             field_index: field_idx,
         });
-    } else if wasm::ArrayNew::from_operation(db, *op).is_ok() {
+    } else if wasm::ArrayNew::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         // Infer type from result type (type_idx attr may not be set during IR generation)
         let inferred_type = op.results(db).first().copied();
@@ -3727,7 +3727,7 @@ fn emit_op<'db>(
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayNew(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayNewDefault::from_operation(db, *op).is_ok() {
+    } else if wasm::ArrayNewDefault::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         // Infer type from result type
         let inferred_type = op.results(db).first().copied();
@@ -3735,7 +3735,7 @@ fn emit_op<'db>(
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayNewDefault(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayGet::from_operation(db, *op).is_ok() {
+    } else if wasm::ArrayGet::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         // Infer type from operand[0] (the array ref)
         let inferred_type = operands
@@ -3745,7 +3745,7 @@ fn emit_op<'db>(
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayGet(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayGetS::from_operation(db, *op).is_ok() {
+    } else if wasm::ArrayGetS::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         // Infer type from operand[0] (the array ref)
         let inferred_type = operands
@@ -3755,7 +3755,7 @@ fn emit_op<'db>(
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayGetS(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayGetU::from_operation(db, *op).is_ok() {
+    } else if wasm::ArrayGetU::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         // Infer type from operand[0] (the array ref)
         let inferred_type = operands
@@ -3765,7 +3765,7 @@ fn emit_op<'db>(
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayGetU(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArraySet::from_operation(db, *op).is_ok() {
+    } else if wasm::ArraySet::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         // Infer type from operand[0] (the array ref)
         let inferred_type = operands
