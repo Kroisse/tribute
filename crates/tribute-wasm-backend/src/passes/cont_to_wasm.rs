@@ -3019,7 +3019,7 @@ impl RewritePattern for HandlerDispatchPattern {
             })
             .unwrap_or(0);
 
-        // Collect suspend bodies with their op_idx values
+        // Collect suspend bodies with their op_idx values (computed from op_name)
         let mut suspend_arms: Vec<(u64, Region<'db>)> = Vec::new();
         for i in 0..num_suspend_arms {
             // Get the suspend body region (offset by 1 for done_body)
@@ -3028,14 +3028,14 @@ impl RewritePattern for HandlerDispatchPattern {
                 .cloned()
                 .unwrap_or_else(|| Region::new(db, location, IdVec::new()));
 
-            // Get the op_idx for this arm
-            let attr_name = format!("op_idx_{}", i);
+            // Get the op_name for this arm and compute hash-based op_idx
+            let attr_name = format!("op_name_{}", i);
             let op_idx = op
                 .attributes(db)
                 .get(&Symbol::from_dynamic(&attr_name))
                 .and_then(|attr| {
-                    if let Attribute::IntBits(v) = attr {
-                        Some(*v)
+                    if let Attribute::Symbol(s) = attr {
+                        Some(s.with_str(compute_op_idx_hash))
                     } else {
                         None
                     }

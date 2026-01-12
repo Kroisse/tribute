@@ -28,14 +28,6 @@ use trunk_ir::{Symbol, Value, ValueDef};
 
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
-/// Compute a deterministic hash-based index from an operation name.
-/// This must match the implementation in cont_to_wasm.rs.
-fn compute_op_idx_hash(name: &str) -> u64 {
-    name.bytes()
-        .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
-        & 0xFFFF // Keep lower 16 bits
-}
-
 #[derive(Debug, Clone)]
 enum ArmPattern<'db> {
     Wildcard,
@@ -461,8 +453,8 @@ impl<'db> CaseLowerer<'db> {
         };
 
         // Process suspend arms - build dispatch info for each operation
-        // Each suspend arm has an op_name, and we compute a hash-based index for dispatch
-        let mut suspend_bodies: Vec<(u64, Region<'db>)> = Vec::new();
+        // Each suspend arm has an op_name for identifying which operation to handle
+        let mut suspend_bodies: Vec<(Symbol, Region<'db>)> = Vec::new();
 
         for suspend_arm in &suspend_arms {
             // Get the operation name from the pattern
@@ -470,9 +462,6 @@ impl<'db> CaseLowerer<'db> {
                 ArmPattern::HandlerSuspend { op_name } => *op_name,
                 _ => continue,
             };
-
-            // Compute hash-based index (same algorithm as in cont_to_wasm.rs)
-            let op_idx: u64 = op_name.with_str(compute_op_idx_hash);
 
             // Set up bindings for continuation and args
             // Generate extraction operations that will be lowered by WASM backend
@@ -549,18 +538,18 @@ impl<'db> CaseLowerer<'db> {
             // Clear bindings after processing
             self.current_arm_bindings.clear();
 
-            suspend_bodies.push((op_idx, body_with_extractions));
+            suspend_bodies.push((op_name, body_with_extractions));
         }
 
         // Note: Each suspend body is stored as a separate region in handler_dispatch.
-        // The WASM backend will read num_suspend_arms and the op_idx_N attributes
+        // The WASM backend will read num_suspend_arms and the op_name_N attributes
         // to generate proper dispatch logic.
 
         // Build the handler_dispatch operation with all suspend arms as regions
         // Region 0: done_body
         // Region 1+: suspend_bodies (one per handler arm)
         // Note: Using Operation::of here because we need to add dynamic regions
-        // and attributes (op_idx_N, num_suspend_arms) that the typed helper doesn't support
+        // and attributes (op_name_N, num_suspend_arms) that the typed helper doesn't support
         let mut builder = Operation::of(
             self.db,
             location,
@@ -572,12 +561,12 @@ impl<'db> CaseLowerer<'db> {
         .region(done_body);
 
         // Add all suspend body regions
-        for (i, (op_idx, body)) in suspend_bodies.iter().enumerate() {
-            // Store each suspend arm as a separate region with its op_idx
-            let attr_name = format!("op_idx_{}", i);
+        for (i, (op_name, body)) in suspend_bodies.iter().enumerate() {
+            // Store each suspend arm as a separate region with its op_name
+            let attr_name = format!("op_name_{}", i);
             builder = builder.region(*body).attr(
                 Symbol::from_dynamic(&attr_name),
-                Attribute::IntBits(*op_idx),
+                Attribute::Symbol(*op_name),
             );
         }
 
@@ -733,15 +722,13 @@ impl<'db> CaseLowerer<'db> {
         };
 
         // Process suspend arms
-        let mut suspend_bodies: Vec<(u64, Region<'db>)> = Vec::new();
+        let mut suspend_bodies: Vec<(Symbol, Region<'db>)> = Vec::new();
 
         for suspend_arm in &suspend_arms {
             let op_name = match &suspend_arm.pattern {
                 ArmPattern::HandlerSuspend { op_name } => *op_name,
                 _ => continue,
             };
-
-            let op_idx: u64 = op_name.with_str(compute_op_idx_hash);
 
             // Set up bindings for continuation and args
             let mut extraction_ops: Vec<Operation<'db>> = Vec::new();
@@ -812,7 +799,7 @@ impl<'db> CaseLowerer<'db> {
             };
 
             self.current_arm_bindings.clear();
-            suspend_bodies.push((op_idx, body_with_extractions));
+            suspend_bodies.push((op_name, body_with_extractions));
         }
 
         // Build cont.handler_dispatch
@@ -826,11 +813,11 @@ impl<'db> CaseLowerer<'db> {
         .result(result_type)
         .region(done_body);
 
-        for (i, (op_idx, body)) in suspend_bodies.iter().enumerate() {
-            let attr_name = format!("op_idx_{}", i);
+        for (i, (op_name, body)) in suspend_bodies.iter().enumerate() {
+            let attr_name = format!("op_name_{}", i);
             builder = builder.region(*body).attr(
                 Symbol::from_dynamic(&attr_name),
-                Attribute::IntBits(*op_idx),
+                Attribute::Symbol(*op_name),
             );
         }
 
