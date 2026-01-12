@@ -684,6 +684,7 @@ fn collect_wasm_ops_from_region<'db>(
 
     Ok(())
 }
+
 /// Collect block argument types from the module.
 /// Returns a map from (BlockId, arg_index) to Type.
 fn collect_block_arg_types<'db>(
