@@ -58,6 +58,11 @@ pub(crate) fn is_closure_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type
     })
 }
 
+/// Check if a type is the Step type (for trampoline-based effect system).
+pub(crate) fn is_step_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    ty.dialect(db) == wasm::DIALECT_NAME() && ty.name(db) == Symbol::new("step")
+}
+
 // ============================================================================
 // Type conversion
 // ============================================================================
