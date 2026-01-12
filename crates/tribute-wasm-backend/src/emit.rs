@@ -741,7 +741,6 @@ fn collect_module_info<'db>(
 }
 
 // GcTypesResult and collect_gc_types moved to gc_types_collection module
-/// Collect function types from wasm.call_indirect operations.
 fn emit_function<'db>(
     db: &'db dyn salsa::Database,
     func_def: &FunctionDef<'db>,
