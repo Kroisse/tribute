@@ -640,7 +640,6 @@ fn collect_wasm_ops_from_region<'db>(
     region: &Region<'db>,
     info: &mut ModuleInfo<'db>,
 ) -> CompilationResult<()> {
-    let wasm_dialect = Symbol::new("wasm");
     let core_dialect = Symbol::new("core");
     let module_name = Symbol::new("module");
 
@@ -657,47 +656,35 @@ fn collect_wasm_ops_from_region<'db>(
                 continue;
             }
 
-            // Collect wasm operations
-            if dialect == wasm_dialect {
-                match name {
-                    n if n == Symbol::new("func") => {
-                        if let Ok(func_def) = extract_function_def(db, op) {
-                            debug!("Including function: {}", func_def.name);
-                            info.funcs.push(func_def);
-                        }
-                    }
-                    n if n == Symbol::new("import_func") => {
-                        info.imports.push(extract_import_def(db, op)?);
-                    }
-                    n if n == Symbol::new("export_func") => {
-                        info.exports.push(extract_export_func(db, op)?);
-                    }
-                    n if n == Symbol::new("export_memory") => {
-                        info.exports.push(extract_export_memory(db, op)?);
-                    }
-                    n if n == Symbol::new("memory") => {
-                        info.memory = Some(extract_memory_def(db, op)?);
-                    }
-                    n if n == Symbol::new("data") => {
-                        info.data.push(extract_data_def(db, op)?);
-                    }
-                    n if n == Symbol::new("table") => {
-                        info.tables.push(extract_table_def(db, op)?);
-                    }
-                    n if n == Symbol::new("elem") => {
-                        info.elements.push(extract_element_def(db, op)?);
-                    }
-                    n if n == Symbol::new("global") => {
-                        info.globals.push(extract_global_def(db, op)?);
-                    }
-                    _ => {}
+            // Collect wasm operations using typed wrappers
+            if let Ok(func_op) = wasm::Func::from_operation(db, *op) {
+                if let Ok(func_def) = extract_function_def(db, func_op) {
+                    debug!("Including function: {}", func_def.name);
+                    info.funcs.push(func_def);
                 }
+            } else if let Ok(import_op) = wasm::ImportFunc::from_operation(db, *op) {
+                info.imports.push(extract_import_def(db, import_op)?);
+            } else if let Ok(export_op) = wasm::ExportFunc::from_operation(db, *op) {
+                info.exports.push(extract_export_func(db, export_op)?);
+            } else if let Ok(export_mem_op) = wasm::ExportMemory::from_operation(db, *op) {
+                info.exports.push(extract_export_memory(db, export_mem_op)?);
+            } else if let Ok(memory_op) = wasm::Memory::from_operation(db, *op) {
+                info.memory = Some(extract_memory_def(db, memory_op)?);
+            } else if let Ok(data_op) = wasm::Data::from_operation(db, *op) {
+                info.data.push(extract_data_def(db, data_op)?);
+            } else if let Ok(table_op) = wasm::Table::from_operation(db, *op) {
+                info.tables.push(extract_table_def(db, table_op)?);
+            } else if let Ok(elem_op) = wasm::Elem::from_operation(db, *op) {
+                info.elements.push(extract_element_def(db, elem_op)?);
+            } else if let Ok(global_op) = wasm::Global::from_operation(db, *op) {
+                info.globals.push(extract_global_def(db, global_op)?);
             }
         }
     }
 
     Ok(())
 }
+
 /// Collect block argument types from the module.
 /// Returns a map from (BlockId, arg_index) to Type.
 fn collect_block_arg_types<'db>(
@@ -978,8 +965,7 @@ fn collect_gc_types<'db>(
         if op.dialect(db) != wasm_dialect {
             return Ok(());
         }
-        let name = op.name(db);
-        if name == Symbol::new("struct_new") {
+        if wasm::StructNew::matches(db, *op) {
             let attrs = op.attributes(db);
             let field_count = op.operands(db).len();
             let result_type = op.results(db).first().copied();
@@ -1086,7 +1072,7 @@ fn collect_gc_types<'db>(
                     }
                 }
             }
-        } else if name == Symbol::new("struct_get") {
+        } else if wasm::StructGet::matches(db, *op) {
             let attrs = op.attributes(db);
 
             // Check if this uses a placeholder type (wasm.structref) that allows
@@ -1257,7 +1243,7 @@ fn collect_gc_types<'db>(
                     record_struct_field(type_idx, builder, field_idx, result_ty)?;
                 }
             }
-        } else if name == Symbol::new("struct_set") {
+        } else if wasm::StructSet::matches(db, *op) {
             let attrs = op.attributes(db);
             // Infer type from operand[0] (the struct ref)
             let inferred_type = op
@@ -1298,7 +1284,7 @@ fn collect_gc_types<'db>(
                     record_struct_field(type_idx, builder, field_idx, ty)?;
                 }
             }
-        } else if name == Symbol::new("array_new") || name == Symbol::new("array_new_default") {
+        } else if wasm::ArrayNew::matches(db, *op) || wasm::ArrayNewDefault::matches(db, *op) {
             let attrs = op.attributes(db);
             // Infer type from result type
             let inferred_type = op.results(db).first().copied();
@@ -1324,9 +1310,9 @@ fn collect_gc_types<'db>(
                     record_array_elem(type_idx, builder, ty)?;
                 }
             }
-        } else if name == Symbol::new("array_get")
-            || name == Symbol::new("array_get_s")
-            || name == Symbol::new("array_get_u")
+        } else if wasm::ArrayGet::matches(db, *op)
+            || wasm::ArrayGetS::matches(db, *op)
+            || wasm::ArrayGetU::matches(db, *op)
         {
             let attrs = op.attributes(db);
             // Infer type from operand[0] (the array ref)
@@ -1359,7 +1345,7 @@ fn collect_gc_types<'db>(
                     record_array_elem(type_idx, builder, result_ty)?;
                 }
             }
-        } else if name == Symbol::new("array_set") {
+        } else if wasm::ArraySet::matches(db, *op) {
             let attrs = op.attributes(db);
             // Infer type from operand[0] (the array ref)
             let inferred_type = op
@@ -1393,7 +1379,7 @@ fn collect_gc_types<'db>(
                     record_array_elem(type_idx, builder, ty)?;
                 }
             }
-        } else if name == Symbol::new("array_copy") {
+        } else if wasm::ArrayCopy::matches(db, *op) {
             // array_copy has dst_type_idx: u32 and src_type_idx: u32 attributes
             let attrs = op.attributes(db);
             if let Some(&Attribute::IntBits(dst_idx)) = attrs.get(&Symbol::new("dst_type_idx")) {
@@ -1408,9 +1394,9 @@ fn collect_gc_types<'db>(
                     builder.kind = GcKind::Array;
                 }
             }
-        } else if name == Symbol::new("ref_null")
-            || name == Symbol::new("ref_cast")
-            || name == Symbol::new("ref_test")
+        } else if wasm::RefNull::matches(db, *op)
+            || wasm::RefCast::matches(db, *op)
+            || wasm::RefTest::matches(db, *op)
         {
             let attrs = op.attributes(db);
             // For ref_null: use result type as fallback
@@ -1418,7 +1404,7 @@ fn collect_gc_types<'db>(
             let inferred_type = op.results(db).first().copied();
 
             // Special handling for ref_cast with placeholder type (wasm.structref + field_count)
-            if name == Symbol::new("ref_cast")
+            if wasm::RefCast::matches(db, *op)
                 && let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE())
                 && wasm::Structref::from_type(db, *target_ty).is_some()
                 && let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
@@ -1449,7 +1435,7 @@ fn collect_gc_types<'db>(
             }
 
             // Try specific attribute names first, then fall back to generic "type" attribute
-            let type_idx = if name == Symbol::new("ref_null") {
+            let type_idx = if wasm::RefNull::matches(db, *op) {
                 attr_u32(attrs, ATTR_HEAP_TYPE()).ok().or_else(|| {
                     get_type_idx(
                         attrs,
@@ -1670,9 +1656,7 @@ fn collect_call_indirect_types<'db>(
                 }
 
                 // Check if this is a call_indirect
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("call_indirect")
-                {
+                if wasm::CallIndirect::matches(db, *op) {
                     // Build function type from operands and results
                     let operands = op.operands(db);
 
@@ -1867,8 +1851,7 @@ fn collect_ref_funcs<'db>(
                 }
 
                 // Check if this is a ref_func
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("ref_func")
+                if wasm::RefFunc::matches(db, *op)
                     && let Some(Attribute::Symbol(func_name)) =
                         op.attributes(db).get(&ATTR_FUNC_NAME())
                 {
@@ -1896,9 +1879,7 @@ fn has_call_indirect<'db>(db: &'db dyn salsa::Database, module: core::Module<'db
                 }
 
                 // Check if this is a call_indirect
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("call_indirect")
-                {
+                if wasm::CallIndirect::matches(db, *op) {
                     return true;
                 }
             }
@@ -1911,32 +1892,10 @@ fn has_call_indirect<'db>(db: &'db dyn salsa::Database, module: core::Module<'db
 
 fn extract_function_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    func_op: wasm::Func<'db>,
 ) -> CompilationResult<FunctionDef<'db>> {
-    let attrs = op.attributes(db);
-    let name_attr = attrs.get(&ATTR_SYM_NAME()).ok_or_else(|| {
-        CompilationError::from(errors::CompilationErrorKind::MissingAttribute("sym_name"))
-    })?;
-    let ty_attr = attrs.get(&ATTR_TYPE()).ok_or_else(|| {
-        CompilationError::from(errors::CompilationErrorKind::MissingAttribute("type"))
-    })?;
-
-    let name = match name_attr {
-        Attribute::Symbol(sym) => *sym,
-        _ => {
-            return Err(CompilationError::from(
-                errors::CompilationErrorKind::InvalidAttribute("sym_name"),
-            ));
-        }
-    };
-    let ty = match ty_attr {
-        Attribute::Type(ty) => *ty,
-        _ => {
-            return Err(CompilationError::from(
-                errors::CompilationErrorKind::InvalidAttribute("type"),
-            ));
-        }
-    };
+    let name = func_op.sym_name(db);
+    let ty = func_op.r#type(db);
 
     let func_ty = core::Func::from_type(db, ty)
         .ok_or_else(|| CompilationError::type_error("wasm.func requires core.func type"))?;
@@ -1957,19 +1916,18 @@ fn extract_function_def<'db>(
     Ok(FunctionDef {
         name,
         ty: func_ty,
-        op: *op,
+        op: func_op.as_operation(),
     })
 }
 
 fn extract_import_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    import_op: wasm::ImportFunc<'db>,
 ) -> CompilationResult<ImportFuncDef<'db>> {
-    let attrs = op.attributes(db);
-    let module = attr_symbol(attrs, ATTR_MODULE())?;
-    let name = attr_symbol(attrs, ATTR_NAME())?;
-    let sym = attr_symbol_ref_attr(attrs, ATTR_SYM_NAME())?;
-    let ty = attr_type(attrs, ATTR_TYPE())?;
+    let module = import_op.module(db);
+    let name = import_op.name(db);
+    let sym = import_op.sym_name(db);
+    let ty = import_op.r#type(db);
 
     let func_ty = core::Func::from_type(db, ty)
         .ok_or_else(|| CompilationError::type_error("wasm.import_func requires core.func type"))?;
@@ -1984,11 +1942,10 @@ fn extract_import_def<'db>(
 
 fn extract_export_func<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    export_op: wasm::ExportFunc<'db>,
 ) -> CompilationResult<ExportDef> {
-    let attrs = op.attributes(db);
-    let name = attr_string(attrs, ATTR_NAME())?;
-    let func = attr_symbol_ref_attr(attrs, ATTR_FUNC())?;
+    let name = export_op.name(db);
+    let func = export_op.func(db);
     Ok(ExportDef {
         name,
         kind: ExportKind::Func,
@@ -1998,11 +1955,10 @@ fn extract_export_func<'db>(
 
 fn extract_export_memory<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    export_op: wasm::ExportMemory<'db>,
 ) -> CompilationResult<ExportDef> {
-    let attrs = op.attributes(db);
-    let name = attr_string(attrs, ATTR_NAME())?;
-    let index = attr_u32(attrs, ATTR_INDEX())?;
+    let name = export_op.name(db);
+    let index = export_op.index(db);
     Ok(ExportDef {
         name,
         kind: ExportKind::Memory,
@@ -2012,25 +1968,15 @@ fn extract_export_memory<'db>(
 
 fn extract_memory_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    memory_op: wasm::Memory<'db>,
 ) -> CompilationResult<MemoryDef> {
-    let attrs = op.attributes(db);
-    let min = attr_u32(attrs, ATTR_MIN())?;
-    let max = match attrs.get(&ATTR_MAX()) {
-        Some(Attribute::IntBits(bits)) => Some(*bits as u32),
-        _ => None,
-    };
-    let shared = match attrs.get(&ATTR_SHARED()) {
-        Some(Attribute::Bool(value)) => *value,
-        _ => false,
-    };
-    let memory64 = match attrs.get(&ATTR_MEMORY64()) {
-        Some(Attribute::Bool(value)) => *value,
-        _ => false,
-    };
+    let min = memory_op.min(db);
+    let max = memory_op.max(db);
+    let shared = memory_op.shared(db);
+    let memory64 = memory_op.memory64(db);
     Ok(MemoryDef {
         min,
-        max,
+        max: if max == 0 { None } else { Some(max) },
         shared,
         memory64,
     })
@@ -2038,15 +1984,16 @@ fn extract_memory_def<'db>(
 
 fn extract_data_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    data_op: wasm::Data<'db>,
 ) -> CompilationResult<DataDef> {
-    let attrs = op.attributes(db);
-    let passive = matches!(attrs.get(&ATTR_PASSIVE()), Some(Attribute::Bool(true)));
+    let passive = data_op.passive(db);
     let offset = if passive {
         0 // Passive segments don't have an offset
     } else {
-        attr_i32_attr(attrs, ATTR_OFFSET())?
+        data_op.offset(db)
     };
+    // bytes is typed as `any` in the dialect, so we access the raw attribute
+    let attrs = data_op.as_operation().attributes(db);
     let bytes = match attrs.get(&ATTR_BYTES()) {
         Some(Attribute::Bytes(value)) => value.clone(),
         _ => {
@@ -2064,10 +2011,8 @@ fn extract_data_def<'db>(
 
 fn extract_table_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    table_op: wasm::Table<'db>,
 ) -> CompilationResult<TableDef> {
-    let table_op = wasm::Table::from_operation(db, *op)
-        .map_err(|_| CompilationError::invalid_operation("wasm.table"))?;
     let reftype_sym = table_op.reftype(db);
     let reftype = reftype_sym.with_str(|s| match s {
         "funcref" => Ok(RefType::FUNCREF),
@@ -2085,10 +2030,8 @@ fn extract_table_def<'db>(
 
 fn extract_element_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    elem_op: wasm::Elem<'db>,
 ) -> CompilationResult<ElementDef> {
-    let elem_op = wasm::Elem::from_operation(db, *op)
-        .map_err(|_| CompilationError::invalid_operation("wasm.elem"))?;
     let table = elem_op.table(db).unwrap_or(0);
     let offset = elem_op.offset(db).unwrap_or(0);
 
@@ -2113,10 +2056,8 @@ fn extract_element_def<'db>(
 
 fn extract_global_def<'db>(
     db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
+    global_op: wasm::Global<'db>,
 ) -> CompilationResult<GlobalDef> {
-    let global_op = wasm::Global::from_operation(db, *op)
-        .map_err(|_| CompilationError::invalid_operation("wasm.global"))?;
     let valtype_sym = global_op.valtype(db);
     let valtype = valtype_sym.with_str(|s| match s {
         "i32" => Ok(ValType::I32),
@@ -2248,8 +2189,7 @@ fn assign_locals_in_region<'db>(
                         .ok()
                         .map(|vt| matches!(vt, ValType::Ref(_)))
                         .unwrap_or(false);
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("struct_get")
+                if wasm::StructGet::matches(db, *op)
                     && (tribute::is_type_var(db, effective_ty) || effective_ty_is_ref)
                 {
                     // Try to get struct type from attribute first, fall back to operand type
@@ -2474,10 +2414,7 @@ fn assign_locals_in_region<'db>(
                 // For wasm.if with type.var result, infer the effective type from the
                 // then branch's result value. This ensures the local type matches the
                 // actual value produced by the branches.
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("if")
-                    && tribute::is_type_var(db, effective_ty)
-                {
+                if wasm::If::matches(db, *op) && tribute::is_type_var(db, effective_ty) {
                     if let Some(eff_ty) = infer_region_effective_type(db, op, ctx) {
                         debug!(
                             "wasm.if local: using then branch effective type {}.{} instead of IR type {}.{}",
@@ -2503,10 +2440,7 @@ fn assign_locals_in_region<'db>(
 
                 // For wasm.block with polymorphic result type, infer the effective type from
                 // the body region's result value or fall back to Step if function returns it.
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("block")
-                    && is_polymorphic_type(db, effective_ty)
-                {
+                if wasm::Block::matches(db, *op) && is_polymorphic_type(db, effective_ty) {
                     if let Some(eff_ty) = infer_region_effective_type(db, op, ctx) {
                         debug!(
                             "wasm.block local: using body effective type {}.{} instead of IR type {}.{}",
@@ -2533,10 +2467,7 @@ fn assign_locals_in_region<'db>(
                 // For wasm.call_indirect with polymorphic result type in functions that return
                 // Step, use Step as the local type. This ensures proper type
                 // matching when storing the result of closure/continuation calls.
-                if op.dialect(db) == Symbol::new("wasm")
-                    && op.name(db) == Symbol::new("call_indirect")
-                    && is_polymorphic_type(db, effective_ty)
-                {
+                if wasm::CallIndirect::matches(db, *op) && is_polymorphic_type(db, effective_ty) {
                     let upgraded =
                         upgrade_polymorphic_to_step(db, effective_ty, ctx.func_return_type);
                     if upgraded != effective_ty {
@@ -2552,13 +2483,10 @@ fn assign_locals_in_region<'db>(
                 // For wasm.ref_cast and wasm.struct_new with placeholder structref type,
                 // use the concrete type from the placeholder map for the local variable type.
                 // This ensures struct.get operations can access the correct type.
-                let val_type = if op.dialect(db) == Symbol::new("wasm")
-                    && (op.name(db) == Symbol::new("ref_cast")
-                        || op.name(db) == Symbol::new("struct_new"))
-                {
+                let is_ref_cast = wasm::RefCast::matches(db, *op);
+                let is_struct_new = wasm::StructNew::matches(db, *op);
+                let val_type = if is_ref_cast || is_struct_new {
                     let attrs = op.attributes(db);
-                    let is_ref_cast = op.name(db) == Symbol::new("ref_cast");
-                    let is_struct_new = op.name(db) == Symbol::new("struct_new");
 
                     // For ref_cast: check target_type attr; for struct_new: check type attr or result type
                     let placeholder_ty = if is_ref_cast {
@@ -2844,7 +2772,7 @@ fn emit_op<'db>(
     // Handle wasm.nop - it's a placeholder for nil constants
     // For primitive types, no WASM instruction is emitted.
     // For reference types (func, anyref, etc.), emit ref.null so the value can be used.
-    if name == Symbol::new("nop") {
+    if wasm::Nop::matches(db, *op) {
         // Check if the result type is a reference type
         if let Some(result_ty) = op.results(db).first() {
             debug!(
@@ -2913,7 +2841,7 @@ fn emit_op<'db>(
         let value = const_op.value(db);
         function.instruction(&Instruction::F64Const(value.into()));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("if") {
+    } else if wasm::If::matches(db, *op) {
         let result_ty = op.results(db).first().copied();
 
         // First try to infer effective type from branches
@@ -3125,7 +3053,7 @@ fn emit_op<'db>(
         if has_result {
             set_result_local(db, op, ctx, function)?;
         }
-    } else if name == Symbol::new("block") {
+    } else if wasm::Block::matches(db, *op) {
         // Upgrade polymorphic block result type to Step if function returns Step
         let result_ty = op
             .results(db)
@@ -3157,7 +3085,7 @@ fn emit_op<'db>(
         if has_result {
             set_result_local(db, op, ctx, function)?;
         }
-    } else if name == Symbol::new("loop") {
+    } else if wasm::Loop::matches(db, *op) {
         // Upgrade polymorphic loop result type to Step if function returns Step
         let result_ty = op
             .results(db)
@@ -3189,17 +3117,17 @@ fn emit_op<'db>(
         if has_result {
             set_result_local(db, op, ctx, function)?;
         }
-    } else if name == Symbol::new("br") {
-        let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
+    } else if let Ok(br_op) = wasm::Br::from_operation(db, *op) {
+        let depth = br_op.target(db);
         function.instruction(&Instruction::Br(depth));
-    } else if name == Symbol::new("br_if") {
+    } else if let Ok(br_if_op) = wasm::BrIf::from_operation(db, *op) {
         if operands.len() != 1 {
             return Err(CompilationError::invalid_module(
                 "wasm.br_if expects a single condition operand",
             ));
         }
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
+        let depth = br_if_op.target(db);
         function.instruction(&Instruction::BrIf(depth));
     } else if let Ok(call_op) = wasm::Call::from_operation(db, *op) {
         let callee = call_op.callee(db);
@@ -3236,7 +3164,7 @@ fn emit_op<'db>(
         }
 
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("call_indirect") {
+    } else if wasm::CallIndirect::matches(db, *op) {
         // wasm.call_indirect: indirect function call
         // Operands: [arg1, arg2, ..., argN, funcref]
         // The funcref is the last operand (on top of stack in WebAssembly)
@@ -3502,7 +3430,7 @@ fn emit_op<'db>(
         let index = global_op.index(db);
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         function.instruction(&Instruction::GlobalSet(index));
-    } else if name == Symbol::new("struct_new") {
+    } else if wasm::StructNew::matches(db, *op) {
         // struct_new needs all field values on the stack, including nil types.
         // emit_operands handles nil types by emitting ref.null none.
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
@@ -3553,7 +3481,7 @@ fn emit_op<'db>(
 
         function.instruction(&Instruction::StructNew(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("struct_get") {
+    } else if wasm::StructGet::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let attrs = op.attributes(db);
 
@@ -3584,9 +3512,7 @@ fn emit_op<'db>(
                     def_op.name(db),
                     op_val.index(db)
                 );
-                if def_op.dialect(db) == Symbol::new("wasm")
-                    && def_op.name(db) == Symbol::new("ref_cast")
-                {
+                if wasm::RefCast::matches(db, def_op) {
                     // Get the ref.cast's target_type and field_count
                     let def_attrs = def_op.attributes(db);
                     if let Some(Attribute::Type(target_ty)) = def_attrs.get(&ATTR_TARGET_TYPE()) {
@@ -3781,103 +3707,81 @@ fn emit_op<'db>(
         }
 
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("struct_set") {
+    } else if let Ok(struct_set_op) = wasm::StructSet::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
         // Infer type from operand[0] (the struct ref)
         let inferred_type = operands
             .first()
             .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(attrs, inferred_type)
+        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        let field_idx = attr_field_idx(attrs)?;
+        let field_idx = struct_set_op.field_idx(db);
         function.instruction(&Instruction::StructSet {
             struct_type_index: type_idx,
             field_index: field_idx,
         });
-    } else if name == Symbol::new("array_new") {
+    } else if wasm::ArrayNew::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
-        // Infer type from result type
+        // Infer type from result type (type_idx attr may not be set during IR generation)
         let inferred_type = op.results(db).first().copied();
-        let type_idx = get_type_idx_from_attrs(attrs, inferred_type)
+        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayNew(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("array_new_default") {
+    } else if wasm::ArrayNewDefault::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
         // Infer type from result type
         let inferred_type = op.results(db).first().copied();
-        let type_idx = get_type_idx_from_attrs(attrs, inferred_type)
+        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayNewDefault(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("array_get") {
+    } else if wasm::ArrayGet::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
         // Infer type from operand[0] (the array ref)
         let inferred_type = operands
             .first()
             .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(attrs, inferred_type)
+        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayGet(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("array_get_s") {
+    } else if wasm::ArrayGetS::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
         // Infer type from operand[0] (the array ref)
         let inferred_type = operands
             .first()
             .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(attrs, inferred_type)
+        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayGetS(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("array_get_u") {
+    } else if wasm::ArrayGetU::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
         // Infer type from operand[0] (the array ref)
         let inferred_type = operands
             .first()
             .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(attrs, inferred_type)
+        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArrayGetU(type_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("array_set") {
+    } else if wasm::ArraySet::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
         // Infer type from operand[0] (the array ref)
         let inferred_type = operands
             .first()
             .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(attrs, inferred_type)
+        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
         function.instruction(&Instruction::ArraySet(type_idx));
-    } else if name == Symbol::new("array_copy") {
+    } else if let Ok(array_copy_op) = wasm::ArrayCopy::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
-        let dst_type_idx = attrs
-            .get(&Symbol::new("dst_type_idx"))
-            .and_then(|a| match a {
-                Attribute::IntBits(v) => Some(*v as u32),
-                _ => None,
-            })
-            .ok_or_else(|| CompilationError::missing_attribute("dst_type_idx"))?;
-        let src_type_idx = attrs
-            .get(&Symbol::new("src_type_idx"))
-            .and_then(|a| match a {
-                Attribute::IntBits(v) => Some(*v as u32),
-                _ => None,
-            })
-            .ok_or_else(|| CompilationError::missing_attribute("src_type_idx"))?;
         function.instruction(&Instruction::ArrayCopy {
-            array_type_index_dst: dst_type_idx,
-            array_type_index_src: src_type_idx,
+            array_type_index_dst: array_copy_op.dst_type_idx(db),
+            array_type_index_src: array_copy_op.src_type_idx(db),
         });
-    } else if name == Symbol::new("ref_null") {
+    } else if wasm::RefNull::matches(db, *op) {
         let attrs = op.attributes(db);
         // Infer type from result type
         let inferred_type = op.results(db).first().copied();
@@ -3893,7 +3797,7 @@ fn emit_op<'db>(
         let func_idx = resolve_callee(func_name, module_info)?;
         function.instruction(&Instruction::RefFunc(func_idx));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("ref_cast") {
+    } else if wasm::RefCast::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let attrs = op.attributes(db);
         // Infer type from result type (the target type it casts to)
@@ -3956,7 +3860,7 @@ fn emit_op<'db>(
         );
         function.instruction(&Instruction::RefCastNullable(heap_type));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("ref_test") {
+    } else if wasm::RefTest::matches(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let attrs = op.attributes(db);
         // ref_test result is i32, target type must be in attribute (can't infer)
@@ -3966,7 +3870,7 @@ fn emit_op<'db>(
             .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
         function.instruction(&Instruction::RefTestNullable(heap_type));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("bytes_from_data") {
+    } else if let Ok(bytes_op) = wasm::BytesFromData::from_operation(db, *op) {
         // Compound operation: create Bytes struct from passive data segment
         // Stack operations:
         //   i32.const <offset>    ; offset within data segment
@@ -3975,10 +3879,9 @@ fn emit_op<'db>(
         //   i32.const 0           ; offset field (we use the whole array)
         //   i32.const <len>       ; len field
         //   struct.new $bytes_struct
-        let attrs = op.attributes(db);
-        let data_idx = attr_u32(attrs, ATTR_DATA_IDX())?;
-        let offset = attr_u32(attrs, ATTR_OFFSET())?;
-        let len = attr_u32(attrs, ATTR_LEN())?;
+        let data_idx = bytes_op.data_idx(db);
+        let offset = bytes_op.offset(db);
+        let len = bytes_op.len(db);
 
         // Push offset and length for array.new_data
         function.instruction(&Instruction::I32Const(offset as i32));
@@ -3996,131 +3899,175 @@ fn emit_op<'db>(
         set_result_local(db, op, ctx, function)?;
 
     // === Linear Memory Management ===
-    } else if name == Symbol::new("memory_size") {
-        let memory = extract_memory_index(db, op);
+    } else if let Ok(mem_size_op) = wasm::MemorySize::from_operation(db, *op) {
+        let memory = mem_size_op.memory(db);
         function.instruction(&Instruction::MemorySize(memory));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("memory_grow") {
+    } else if let Ok(mem_grow_op) = wasm::MemoryGrow::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memory = extract_memory_index(db, op);
+        let memory = mem_grow_op.memory(db);
         function.instruction(&Instruction::MemoryGrow(memory));
         set_result_local(db, op, ctx, function)?;
 
     // === Full-Width Loads ===
-    } else if name == Symbol::new("i32_load") {
+    } else if let Ok(load_op) = wasm::I32Load::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2); // natural align: 4 bytes = log2(4) = 2
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
         function.instruction(&Instruction::I32Load(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load") {
+    } else if let Ok(load_op) = wasm::I64Load::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 3); // natural align: 8 bytes = log2(8) = 3
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 3);
         function.instruction(&Instruction::I64Load(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("f32_load") {
+    } else if let Ok(load_op) = wasm::F32Load::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
         function.instruction(&Instruction::F32Load(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("f64_load") {
+    } else if let Ok(load_op) = wasm::F64Load::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 3);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 3);
         function.instruction(&Instruction::F64Load(memarg));
         set_result_local(db, op, ctx, function)?;
 
     // === Partial-Width Loads (i32) ===
-    } else if name == Symbol::new("i32_load8_s") {
+    } else if let Ok(load_op) = wasm::I32Load8S::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0); // natural align: 1 byte = log2(1) = 0
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
         function.instruction(&Instruction::I32Load8S(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i32_load8_u") {
+    } else if let Ok(load_op) = wasm::I32Load8U::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
         function.instruction(&Instruction::I32Load8U(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i32_load16_s") {
+    } else if let Ok(load_op) = wasm::I32Load16S::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1); // natural align: 2 bytes = log2(2) = 1
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
         function.instruction(&Instruction::I32Load16S(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i32_load16_u") {
+    } else if let Ok(load_op) = wasm::I32Load16U::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
         function.instruction(&Instruction::I32Load16U(memarg));
         set_result_local(db, op, ctx, function)?;
 
     // === Partial-Width Loads (i64) ===
-    } else if name == Symbol::new("i64_load8_s") {
+    } else if let Ok(load_op) = wasm::I64Load8S::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
         function.instruction(&Instruction::I64Load8S(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load8_u") {
+    } else if let Ok(load_op) = wasm::I64Load8U::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
         function.instruction(&Instruction::I64Load8U(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load16_s") {
+    } else if let Ok(load_op) = wasm::I64Load16S::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
         function.instruction(&Instruction::I64Load16S(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load16_u") {
+    } else if let Ok(load_op) = wasm::I64Load16U::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
         function.instruction(&Instruction::I64Load16U(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load32_s") {
+    } else if let Ok(load_op) = wasm::I64Load32S::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
         function.instruction(&Instruction::I64Load32S(memarg));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_load32_u") {
+    } else if let Ok(load_op) = wasm::I64Load32U::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
         function.instruction(&Instruction::I64Load32U(memarg));
         set_result_local(db, op, ctx, function)?;
 
     // === Full-Width Stores ===
-    } else if name == Symbol::new("i32_store") {
+    } else if let Ok(store_op) = wasm::I32Store::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            2,
+        );
         function.instruction(&Instruction::I32Store(memarg));
-        // No set_result_local - stores don't return a value
-    } else if name == Symbol::new("i64_store") {
+    } else if let Ok(store_op) = wasm::I64Store::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 3);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            3,
+        );
         function.instruction(&Instruction::I64Store(memarg));
-    } else if name == Symbol::new("f32_store") {
+    } else if let Ok(store_op) = wasm::F32Store::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            2,
+        );
         function.instruction(&Instruction::F32Store(memarg));
-    } else if name == Symbol::new("f64_store") {
+    } else if let Ok(store_op) = wasm::F64Store::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 3);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            3,
+        );
         function.instruction(&Instruction::F64Store(memarg));
 
     // === Partial-Width Stores ===
-    } else if name == Symbol::new("i32_store8") {
+    } else if let Ok(store_op) = wasm::I32Store8::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            0,
+        );
         function.instruction(&Instruction::I32Store8(memarg));
-    } else if name == Symbol::new("i32_store16") {
+    } else if let Ok(store_op) = wasm::I32Store16::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            1,
+        );
         function.instruction(&Instruction::I32Store16(memarg));
-    } else if name == Symbol::new("i64_store8") {
+    } else if let Ok(store_op) = wasm::I64Store8::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 0);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            0,
+        );
         function.instruction(&Instruction::I64Store8(memarg));
-    } else if name == Symbol::new("i64_store16") {
+    } else if let Ok(store_op) = wasm::I64Store16::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 1);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            1,
+        );
         function.instruction(&Instruction::I64Store16(memarg));
-    } else if name == Symbol::new("i64_store32") {
+    } else if let Ok(store_op) = wasm::I64Store32::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = extract_memarg(db, op, 2);
+        let memarg = make_memarg(
+            store_op.offset(db),
+            store_op.align(db),
+            store_op.memory(db),
+            2,
+        );
         function.instruction(&Instruction::I64Store32(memarg));
     } else {
         tracing::error!("unsupported wasm op: {}", name);
@@ -4401,7 +4348,7 @@ fn infer_call_result_type<'db>(
     func_return_type: Option<Type<'db>>,
 ) -> Type<'db> {
     // Handle wasm.call_indirect - if result is polymorphic but function returns funcref, use funcref
-    if op.dialect(db) == Symbol::new("wasm") && op.name(db) == Symbol::new("call_indirect") {
+    if wasm::CallIndirect::matches(db, *op) {
         let is_polymorphic_result =
             tribute::is_type_var(db, result_ty) || wasm::Anyref::from_type(db, result_ty).is_some();
         if let Some(func_ret_ty) = func_return_type {
@@ -4661,7 +4608,7 @@ fn should_adjust_handler_return_to_i32<'db>(
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
             // Check if this is a wasm.if (handler dispatch generates these)
-            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("if") {
+            if wasm::If::matches(db, *op) {
                 // Get the else region (done path) - it's region index 1
                 let regions = op.regions(db);
                 if let Some(else_region) = regions.get(1) {
@@ -4695,8 +4642,7 @@ fn should_adjust_handler_return_to_i32<'db>(
 fn region_contains_call_indirect<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
-            if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == Symbol::new("call_indirect")
-            {
+            if wasm::CallIndirect::matches(db, *op) {
                 return true;
             }
             // Check nested regions
@@ -4728,42 +4674,6 @@ fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
     }
     compressed.push((count, current));
     compressed
-}
-
-fn attr_symbol_ref_attr<'db>(attrs: &'db Attrs<'db>, key: Symbol) -> CompilationResult<Symbol> {
-    match attrs.get(&key) {
-        Some(Attribute::Symbol(sym)) => Ok(*sym),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("symbol_ref"),
-        )),
-    }
-}
-
-fn attr_string<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<String> {
-    match attrs.get(&key) {
-        Some(Attribute::String(value)) => Ok(value.clone()),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("string"),
-        )),
-    }
-}
-
-fn attr_symbol<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<Symbol> {
-    match attrs.get(&key) {
-        Some(Attribute::Symbol(value)) => Ok(*value),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("symbol"),
-        )),
-    }
-}
-
-fn attr_type<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<Type<'db>> {
-    match attrs.get(&key) {
-        Some(Attribute::Type(value)) => Ok(*value),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("type"),
-        )),
-    }
 }
 
 fn attr_u32<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<u32> {
@@ -4853,55 +4763,13 @@ fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<HeapType> {
     }
 }
 
-fn attr_i32_attr<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<i32> {
-    match attrs.get(&key) {
-        Some(Attribute::IntBits(bits)) => {
-            let value = *bits as u32;
-            Ok(i32::from_ne_bytes(value.to_ne_bytes()))
-        }
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("i32"),
-        )),
-    }
-}
-
-/// Extract MemArg from operation attributes for linear memory load/store operations.
-/// Defaults: offset=0, align=natural alignment (log2), memory=0
-fn extract_memarg<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    natural_align: u32, // log2 of natural alignment (0=1, 1=2, 2=4, 3=8)
-) -> MemArg {
-    let attrs = op.attributes(db);
-
-    let offset = match attrs.get(&ATTR_OFFSET()) {
-        Some(Attribute::IntBits(v)) => *v,
-        _ => 0,
-    };
-
-    let align = match attrs.get(&ATTR_ALIGN()) {
-        Some(Attribute::IntBits(v)) => *v as u32,
-        _ => natural_align, // Use natural alignment if not specified
-    };
-
-    let memory_index = match attrs.get(&ATTR_MEMORY()) {
-        Some(Attribute::IntBits(v)) => *v as u32,
-        _ => 0, // Default to memory 0
-    };
-
+/// Create MemArg from typed wrapper attributes for linear memory load/store operations.
+/// Uses natural_align as fallback if align is 0.
+fn make_memarg(offset: u32, align: u32, memory: u32, natural_align: u32) -> MemArg {
     MemArg {
-        offset,
-        align,
-        memory_index,
-    }
-}
-
-/// Extract memory index from operation attributes for memory management operations.
-/// Defaults to memory index 0.
-fn extract_memory_index<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> u32 {
-    match op.attributes(db).get(&ATTR_MEMORY()) {
-        Some(Attribute::IntBits(v)) => *v as u32,
-        _ => 0,
+        offset: offset as u64,
+        align: if align == 0 { natural_align } else { align },
+        memory_index: memory,
     }
 }
 
