@@ -20,12 +20,14 @@ trunk_ir::symbols! {
 // Definition structs
 // ============================================================================
 
+#[derive(Debug)]
 pub(crate) struct FunctionDef<'db> {
     pub name: Symbol,
     pub ty: core::Func<'db>,
     pub op: Operation<'db>,
 }
 
+#[derive(Debug)]
 pub(crate) struct ImportFuncDef<'db> {
     pub sym: Symbol,
     pub module: Symbol,
@@ -33,6 +35,7 @@ pub(crate) struct ImportFuncDef<'db> {
     pub ty: core::Func<'db>,
 }
 
+#[derive(Debug)]
 pub(crate) struct ExportDef {
     pub name: String,
     pub kind: ExportKind,
@@ -45,6 +48,7 @@ pub(crate) enum ExportTarget {
     Memory(u32),
 }
 
+#[derive(Debug)]
 pub(crate) struct MemoryDef {
     pub min: u32,
     pub max: Option<u32>,
@@ -52,24 +56,28 @@ pub(crate) struct MemoryDef {
     pub memory64: bool,
 }
 
+#[derive(Debug)]
 pub(crate) struct DataDef {
     pub offset: i32,
     pub bytes: Vec<u8>,
     pub passive: bool,
 }
 
+#[derive(Debug)]
 pub(crate) struct TableDef {
     pub reftype: RefType,
     pub min: u32,
     pub max: Option<u32>,
 }
 
+#[derive(Debug)]
 pub(crate) struct ElementDef {
     pub table: u32,
     pub offset: i32,
     pub funcs: Vec<Symbol>,
 }
 
+#[derive(Debug)]
 pub(crate) struct GlobalDef {
     pub valtype: ValType,
     pub mutable: bool,
@@ -187,7 +195,9 @@ pub(crate) fn extract_data_def<'db>(
     let bytes = match attrs.get(&ATTR_BYTES()) {
         Some(Attribute::Bytes(value)) => value.clone(),
         _ => {
-            return Err(CompilationError::invalid_attribute("bytes"));
+            return Err(CompilationError::invalid_attribute(
+                "missing or invalid 'bytes' attribute on wasm.data",
+            ));
         }
     };
     Ok(DataDef {
