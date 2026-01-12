@@ -13,13 +13,14 @@
 use std::collections::HashMap;
 
 use salsa::Accumulator;
+use std::collections::BTreeMap;
 use tribute_ir::dialect::{tribute, tribute_pat};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{cont, core, scf};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
-    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region,
-    SymbolVec,
+    Attribute, Block, BlockArg, BlockId, DialectOp, DialectType, IdVec, Location, Operation,
+    Region, SymbolVec, Type,
 };
 use trunk_ir::{Symbol, Value, ValueDef};
 
@@ -31,17 +32,22 @@ use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 /// Other patterns (bind, wildcard, etc.) should not appear in handler arms
 /// and indicate a frontend bug if encountered.
 #[derive(Debug, Clone)]
-enum HandlerPattern {
+enum HandlerPattern<'db> {
     /// Handler done pattern: `{ result }` - matches normal completion
     Done,
     /// Handler suspend pattern: `{ Op(args) -> k }` - matches effect operations
-    Suspend { op_name: Symbol },
+    Suspend {
+        /// The ability type (for distinguishing same-named operations across abilities)
+        ability_ref: Type<'db>,
+        /// The operation name within the ability
+        op_name: Symbol,
+    },
 }
 
 /// Information about a handler arm.
 #[derive(Debug, Clone)]
 struct HandlerArmInfo<'db> {
-    pattern: HandlerPattern,
+    pattern: HandlerPattern<'db>,
     pattern_region: Option<Region<'db>>,
     body: Region<'db>,
 }
@@ -249,12 +255,15 @@ impl<'db> HandlerLowerer<'db> {
             Region::new(self.db, location, IdVec::from(vec![block]))
         };
 
-        // Process suspend arms
-        let mut suspend_bodies: Vec<(Symbol, Region<'db>)> = Vec::new();
+        // Process suspend arms: (ability_ref, op_name, body)
+        let mut suspend_bodies: Vec<(Type<'db>, Symbol, Region<'db>)> = Vec::new();
 
         for suspend_arm in &suspend_arms {
-            let op_name = match suspend_arm.pattern {
-                HandlerPattern::Suspend { op_name } => op_name,
+            let (ability_ref, op_name) = match &suspend_arm.pattern {
+                HandlerPattern::Suspend {
+                    ability_ref,
+                    op_name,
+                } => (*ability_ref, *op_name),
                 _ => continue,
             };
 
@@ -294,42 +303,29 @@ impl<'db> HandlerLowerer<'db> {
             };
 
             self.current_arm_bindings.clear();
-            suspend_bodies.push((op_name, body_with_extractions));
+            suspend_bodies.push((ability_ref, op_name, body_with_extractions));
         }
 
-        // Build cont.handler_dispatch
-        let mut builder = Operation::of(
+        // Build body region with multiple blocks
+        let body_region = build_handler_body_region(self.db, location, done_body, &suspend_bodies);
+
+        // Build cont.handler_dispatch using typed helper
+        let dispatch_op = cont::handler_dispatch(
             self.db,
             location,
-            cont::DIALECT_NAME(),
-            cont::HANDLER_DISPATCH(),
-        )
-        .operand(push_prompt_result)
-        .result(result_type)
-        .region(done_body);
-
-        for (i, (op_name, body)) in suspend_bodies.iter().enumerate() {
-            let attr_name = format!("op_name_{}", i);
-            builder = builder.region(*body).attr(
-                Symbol::from_dynamic(&attr_name),
-                Attribute::Symbol(*op_name),
-            );
-        }
-
-        builder = builder.attr(
-            "num_suspend_arms",
-            Attribute::IntBits(suspend_bodies.len() as u64),
+            push_prompt_result,
+            result_type,
+            body_region,
         );
 
-        let dispatch_op = builder.build();
+        self.ctx
+            .map_results(self.db, &op, &dispatch_op.as_operation());
 
-        self.ctx.map_results(self.db, &op, &dispatch_op);
-
-        vec![push_prompt.as_operation(), dispatch_op]
+        vec![push_prompt.as_operation(), dispatch_op.as_operation()]
     }
 
     /// Collect handler arms from a tribute.handle's arms region.
-    fn collect_handler_arms(&mut self, arms_region: Region<'db>) -> Vec<HandlerArmInfo<'db>> {
+    fn collect_handler_arms(&self, arms_region: Region<'db>) -> Vec<HandlerArmInfo<'db>> {
         let mut arms = Vec::new();
 
         for block in arms_region.blocks(self.db).iter() {
@@ -362,15 +358,19 @@ impl<'db> HandlerLowerer<'db> {
     ///
     /// Returns `None` if the pattern region does not contain a handler pattern,
     /// which indicates a frontend bug - handler arms must contain handler patterns.
-    fn analyze_handler_pattern(&self, pattern_region: Region<'db>) -> Option<HandlerPattern> {
+    fn analyze_handler_pattern(&self, pattern_region: Region<'db>) -> Option<HandlerPattern<'db>> {
         for block in pattern_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
                 if tribute_pat::HandlerDone::from_operation(self.db, *op).is_ok() {
                     return Some(HandlerPattern::Done);
                 }
                 if let Ok(suspend) = tribute_pat::HandlerSuspend::from_operation(self.db, *op) {
+                    let ability_ref = suspend.ability_ref(self.db);
                     let op_name = suspend.op(self.db);
-                    return Some(HandlerPattern::Suspend { op_name });
+                    return Some(HandlerPattern::Suspend {
+                        ability_ref,
+                        op_name,
+                    });
                 }
             }
         }
@@ -513,4 +513,51 @@ impl<'db> HandlerLowerer<'db> {
         }
         .accumulate(self.db);
     }
+}
+
+/// Build a handler body region with multiple blocks for handler_dispatch.
+///
+/// The resulting region has:
+/// - Block 0: done case (from done_body)
+/// - Block 1+: suspend cases, each with a marker block arg containing ability_ref + op_name
+fn build_handler_body_region<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    done_body: Region<'db>,
+    suspend_arms: &[(Type<'db>, Symbol, Region<'db>)],
+) -> Region<'db> {
+    let mut all_blocks = Vec::new();
+
+    // Block 0: done case (use blocks from done_body)
+    all_blocks.extend(done_body.blocks(db).iter().cloned());
+
+    // Block 1+: suspend cases
+    for (ability_ref, op_name, suspend_body) in suspend_arms {
+        for block in suspend_body.blocks(db).iter() {
+            // Create marker block arg with ability_ref and op_name attributes
+            let nil_ty = core::Nil::new(db).as_type();
+            let marker_arg = BlockArg::new(
+                db,
+                nil_ty,
+                BTreeMap::from([
+                    (Symbol::new("ability_ref"), Attribute::Type(*ability_ref)),
+                    (Symbol::new("op_name"), Attribute::Symbol(*op_name)),
+                ]),
+            );
+
+            // Prepend marker arg to existing block args
+            let mut new_args = IdVec::from(vec![marker_arg]);
+            new_args.extend(block.args(db).iter().cloned());
+
+            all_blocks.push(Block::new(
+                db,
+                block.id(db),
+                block.location(db),
+                new_args,
+                block.operations(db).clone(),
+            ));
+        }
+    }
+
+    Region::new(db, location, IdVec::from(all_blocks))
 }

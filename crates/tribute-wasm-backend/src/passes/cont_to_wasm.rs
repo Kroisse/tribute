@@ -2343,12 +2343,12 @@ fn expand_shift_operation<'db>(
 
     let tag_value = shift_op.tag(db) as u64;
 
-    // Compute op_idx deterministically from op_name
+    // Compute op_idx deterministically from ability_ref + op_name combination
+    // This ensures operations with the same name from different abilities
+    // get different indices (e.g., State::get vs Config::get)
+    let ability_ref = shift_op.ability_ref(db);
     let op_name = shift_op.op_name(db);
-    let op_idx_value = op_name.with_str(compute_op_idx_hash);
-
-    // Also available for debugging/validation:
-    // let ability_ref = shift_op.ability_ref(db);
+    let op_idx_value = compute_op_idx_from_ability(db, Some(ability_ref), Some(op_name));
 
     let mut ops = Vec::new();
 
@@ -2978,11 +2978,9 @@ fn compute_op_idx_hash(name: &str) -> u64 {
 /// - If yield_state == 0 (not yielding): execute done_body
 /// - If yield_state != 0 (yielding): check op_idx and dispatch to correct suspend_body
 ///
-/// Layout of cont.handler_dispatch:
-/// - Region 0: done_body
-/// - Region 1+: suspend_bodies (one per handler arm)
-/// - Attribute `op_idx_N`: hash-based index for suspend arm N
-/// - Attribute `num_suspend_arms`: number of suspend arms
+/// Layout of cont.handler_dispatch (single region with multiple blocks):
+/// - Block 0: done case
+/// - Block 1+: suspend cases (each has a marker block arg with ability_ref + op_name attrs)
 struct HandlerDispatchPattern;
 
 impl RewritePattern for HandlerDispatchPattern {
@@ -2999,49 +2997,56 @@ impl RewritePattern for HandlerDispatchPattern {
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // Get all regions: first is done_body, rest are suspend_bodies
-        let regions = op.regions(db);
-        let done_body = regions
+        // Get the single body region with multiple blocks
+        let body_region = op
+            .regions(db)
             .first()
             .cloned()
             .unwrap_or_else(|| Region::new(db, location, IdVec::new()));
+        let blocks = body_region.blocks(db);
 
-        // Get the number of suspend arms
-        let num_suspend_arms = op
-            .attributes(db)
-            .get(&Symbol::new("num_suspend_arms"))
-            .and_then(|attr| {
-                if let Attribute::IntBits(v) = attr {
-                    Some(*v as usize)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0);
+        // Block 0 = done case
+        let done_body = if let Some(done_block) = blocks.first() {
+            Region::new(db, location, IdVec::from(vec![*done_block]))
+        } else {
+            Region::new(db, location, IdVec::new())
+        };
 
-        // Collect suspend bodies with their op_idx values (computed from op_name)
+        // Block 1+ = suspend cases
+        // Extract ability_ref + op_name from marker block arg attrs and compute op_idx
         let mut suspend_arms: Vec<(u64, Region<'db>)> = Vec::new();
-        for i in 0..num_suspend_arms {
-            // Get the suspend body region (offset by 1 for done_body)
-            let body = regions
-                .get(i + 1)
-                .cloned()
-                .unwrap_or_else(|| Region::new(db, location, IdVec::new()));
+        for block in blocks.iter().skip(1) {
+            let block_args = block.args(db);
 
-            // Get the op_name for this arm and compute hash-based op_idx
-            let attr_name = format!("op_name_{}", i);
-            let op_idx = op
-                .attributes(db)
-                .get(&Symbol::from_dynamic(&attr_name))
-                .and_then(|attr| {
-                    if let Attribute::Symbol(s) = attr {
-                        Some(s.with_str(compute_op_idx_hash))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0);
+            // Get the marker block arg (first arg)
+            let (ability_ref, op_name) = if let Some(marker_arg) = block_args.first() {
+                let ability_ref = marker_arg
+                    .attrs(db)
+                    .get(&Symbol::new("ability_ref"))
+                    .and_then(|attr| match attr {
+                        Attribute::Type(t) => Some(*t),
+                        _ => None,
+                    });
 
+                let op_name = marker_arg
+                    .attrs(db)
+                    .get(&Symbol::new("op_name"))
+                    .and_then(|attr| match attr {
+                        Attribute::Symbol(s) => Some(*s),
+                        _ => None,
+                    });
+
+                (ability_ref, op_name)
+            } else {
+                (None, None)
+            };
+
+            // Compute op_idx from ability_ref + op_name combination
+            let op_idx = compute_op_idx_from_ability(db, ability_ref, op_name);
+
+            // Create body region without the marker arg
+            let body_block = remove_marker_arg(db, *block);
+            let body = Region::new(db, location, IdVec::from(vec![body_block]));
             suspend_arms.push((op_idx, body));
         }
 
@@ -3095,6 +3100,42 @@ impl RewritePattern for HandlerDispatchPattern {
         // Expand to: [global_get, if]
         RewriteResult::Expand(vec![get_yield_state.as_operation(), if_op.as_operation()])
     }
+}
+
+/// Remove the marker block arg (first arg) from a block.
+fn remove_marker_arg<'db>(db: &'db dyn salsa::Database, block: Block<'db>) -> Block<'db> {
+    let args = block.args(db);
+    let new_args: IdVec<_> = args.iter().skip(1).cloned().collect();
+    Block::new(
+        db,
+        block.id(db),
+        block.location(db),
+        new_args,
+        block.operations(db).clone(),
+    )
+}
+
+/// Compute op_idx from ability_ref + op_name combination.
+///
+/// This ensures operations with the same name from different abilities
+/// get different indices (e.g., State::get vs Config::get).
+fn compute_op_idx_from_ability<'db>(
+    db: &'db dyn salsa::Database,
+    ability_ref: Option<Type<'db>>,
+    op_name: Option<Symbol>,
+) -> u64 {
+    // Extract ability name from the type
+    let ability_name = ability_ref
+        .and_then(|t| core::AbilityRefType::from_type(db, t))
+        .and_then(|a| a.name(db))
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
+    let op = op_name.map(|s| s.to_string()).unwrap_or_default();
+
+    // Combine ability name and op name for unique hash
+    let combined = format!("{}::{}", ability_name, op);
+    compute_op_idx_hash(&combined)
 }
 
 /// Handles implicit yield for the last block if needed.
