@@ -450,41 +450,51 @@ mod tests {
 
     /// Apply patterns and return results (tracked to enable IR creation during rewrite).
     #[salsa::tracked]
-    fn apply_const_to_add_pattern(
-        db: &dyn salsa::Database,
-        module: Module<'_>,
-    ) -> (bool, usize, usize, usize) {
+    fn apply_const_to_add_pattern<'db>(
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+    ) -> (bool, usize, usize, Module<'db>) {
         let applicator =
             PatternApplicator::new(TypeConverter::new()).add_pattern(ConstToMulPattern);
         let result = applicator.apply(db, module);
-        let body = result.module.body(db);
-        let op_count = body.blocks(db)[0].operations(db).len();
         (
             result.reached_fixpoint,
             result.total_changes,
             result.iterations,
-            op_count,
+            result.module,
         )
     }
 
     #[salsa_test]
     fn test_pattern_applicator_basic(db: &salsa::DatabaseImpl) {
         let module = make_const_module(db);
-        let (reached_fixpoint, total_changes, _iterations, op_count) =
+        let (reached_fixpoint, total_changes, _iterations, result_module) =
             apply_const_to_add_pattern(db, module);
 
         // Should have made one change and reached fixpoint
         assert!(reached_fixpoint);
         assert_eq!(total_changes, 1);
 
-        // Should have 3 operations: const(42), const(1), add
-        assert_eq!(op_count, 3);
+        // Verify we have 3 operations: const(7), const(6), mul
+        let ops = result_module.body(db).blocks(db)[0].operations(db);
+        assert_eq!(ops.len(), 3);
+
+        // Verify operation names
+        assert_eq!(ops[0].name(db), arith::CONST());
+        assert_eq!(ops[1].name(db), arith::CONST());
+        assert_eq!(ops[2].name(db), arith::MUL());
+
+        // Verify const values
+        let const0 = arith::Const::from_operation(db, ops[0]).unwrap();
+        let const1 = arith::Const::from_operation(db, ops[1]).unwrap();
+        assert_eq!(const0.value(db), Attribute::IntBits(7));
+        assert_eq!(const1.value(db), Attribute::IntBits(6));
     }
 
     #[salsa_test]
     fn test_pattern_applicator_no_match(db: &salsa::DatabaseImpl) {
         let module = make_other_module(db);
-        let (reached_fixpoint, total_changes, iterations, _op_count) =
+        let (reached_fixpoint, total_changes, iterations, _result_module) =
             apply_const_to_add_pattern(db, module);
 
         // Should reach fixpoint immediately with no changes
