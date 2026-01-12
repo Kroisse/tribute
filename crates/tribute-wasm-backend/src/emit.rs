@@ -3201,8 +3201,8 @@ fn emit_op<'db>(
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
         function.instruction(&Instruction::BrIf(depth));
-    } else if name == Symbol::new("call") {
-        let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
+    } else if let Ok(call_op) = wasm::Call::from_operation(db, *op) {
+        let callee = call_op.callee(db);
         let target = resolve_callee(callee, module_info)?;
 
         // Check if we need boxing for generic function calls
@@ -3466,8 +3466,8 @@ fn emit_op<'db>(
         }
 
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("return_call") {
-        let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
+    } else if let Ok(return_call_op) = wasm::ReturnCall::from_operation(db, *op) {
+        let callee = return_call_op.callee(db);
         let target = resolve_callee(callee, module_info)?;
 
         // Check if we need boxing for generic function calls
@@ -3887,9 +3887,9 @@ fn emit_op<'db>(
             .ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
         function.instruction(&Instruction::RefNull(heap_type));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("ref_func") {
+    } else if let Ok(ref_func_op) = wasm::RefFunc::from_operation(db, *op) {
         // wasm.ref_func: create a funcref from function name
-        let func_name = attr_symbol_ref(db, op, ATTR_FUNC_NAME())?;
+        let func_name = ref_func_op.func_name(db);
         let func_idx = resolve_callee(func_name, module_info)?;
         function.instruction(&Instruction::RefFunc(func_idx));
         set_result_local(db, op, ctx, function)?;
@@ -4452,15 +4452,13 @@ fn infer_call_result_type<'db>(
     }
 
     // Only handle wasm.call operations
-    if op.dialect(db) != Symbol::new("wasm") || op.name(db) != Symbol::new("call") {
-        return result_ty;
-    }
-
-    // Get the callee
-    let callee = match attr_symbol_ref(db, op, ATTR_CALLEE()) {
+    let call_op = match wasm::Call::from_operation(db, *op) {
         Ok(c) => c,
         Err(_) => return result_ty,
     };
+
+    // Get the callee
+    let callee = call_op.callee(db);
 
     // Look up the callee's function type
     let callee_ty = match func_types.get(&callee) {
@@ -4767,19 +4765,6 @@ fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
     }
     compressed.push((count, current));
     compressed
-}
-
-fn attr_symbol_ref<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    key: Symbol,
-) -> CompilationResult<Symbol> {
-    match op.attributes(db).get(&key) {
-        Some(Attribute::Symbol(sym)) => Ok(*sym),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("callee"),
-        )),
-    }
 }
 
 fn attr_symbol_ref_attr<'db>(attrs: &'db Attrs<'db>, key: Symbol) -> CompilationResult<Symbol> {
