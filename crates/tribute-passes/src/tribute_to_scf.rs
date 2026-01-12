@@ -684,36 +684,6 @@ impl<'db> CaseLowerer<'db> {
         Region::new(self.db, region.location(self.db), IdVec::from(new_blocks))
     }
 
-    /// Prepend multiple operations to the first block of a region.
-    #[allow(dead_code)]
-    fn prepend_ops_to_region(&self, region: Region<'db>, ops: &[Operation<'db>]) -> Region<'db> {
-        if ops.is_empty() {
-            return region;
-        }
-
-        let blocks = region.blocks(self.db);
-        if blocks.is_empty() {
-            return region;
-        }
-
-        let first_block = blocks[0];
-        let mut new_ops = IdVec::from(ops.to_vec());
-        new_ops.extend(first_block.operations(self.db).iter().copied());
-
-        let new_first_block = Block::new(
-            self.db,
-            first_block.id(self.db),
-            first_block.location(self.db),
-            first_block.args(self.db).clone(),
-            new_ops,
-        );
-
-        let mut new_blocks: Vec<Block<'db>> = vec![new_first_block];
-        new_blocks.extend(blocks.iter().skip(1).copied());
-
-        Region::new(self.db, region.location(self.db), IdVec::from(new_blocks))
-    }
-
     fn build_arm_chain(
         &mut self,
         location: Location<'db>,
