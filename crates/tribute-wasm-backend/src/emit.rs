@@ -2897,20 +2897,20 @@ fn emit_op<'db>(
     }
 
     // Special cases: const, control flow, calls, locals, GC ops
-    if name == Symbol::new("i32_const") {
-        let value = attr_i32(db, op, ATTR_VALUE())?;
+    if let Ok(const_op) = wasm::I32Const::from_operation(db, *op) {
+        let value = const_op.value(db);
         function.instruction(&Instruction::I32Const(value));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("i64_const") {
-        let value = attr_i64(db, op, ATTR_VALUE())?;
+    } else if let Ok(const_op) = wasm::I64Const::from_operation(db, *op) {
+        let value = const_op.value(db);
         function.instruction(&Instruction::I64Const(value));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("f32_const") {
-        let value = attr_f32(db, op, ATTR_VALUE())?;
+    } else if let Ok(const_op) = wasm::F32Const::from_operation(db, *op) {
+        let value = const_op.value(db);
         function.instruction(&Instruction::F32Const(value.into()));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("f64_const") {
-        let value = attr_f64(db, op, ATTR_VALUE())?;
+    } else if let Ok(const_op) = wasm::F64Const::from_operation(db, *op) {
+        let value = const_op.value(db);
         function.instruction(&Instruction::F64Const(value.into()));
         set_result_local(db, op, ctx, function)?;
     } else if name == Symbol::new("if") {
@@ -3201,8 +3201,8 @@ fn emit_op<'db>(
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
         function.instruction(&Instruction::BrIf(depth));
-    } else if name == Symbol::new("call") {
-        let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
+    } else if let Ok(call_op) = wasm::Call::from_operation(db, *op) {
+        let callee = call_op.callee(db);
         let target = resolve_callee(callee, module_info)?;
 
         // Check if we need boxing for generic function calls
@@ -3466,8 +3466,8 @@ fn emit_op<'db>(
         }
 
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("return_call") {
-        let callee = attr_symbol_ref(db, op, ATTR_CALLEE())?;
+    } else if let Ok(return_call_op) = wasm::ReturnCall::from_operation(db, *op) {
+        let callee = return_call_op.callee(db);
         let target = resolve_callee(callee, module_info)?;
 
         // Check if we need boxing for generic function calls
@@ -3481,31 +3481,31 @@ fn emit_op<'db>(
         // Note: Return unboxing is not needed for tail calls since
         // the caller's return type should match the callee's.
         function.instruction(&Instruction::ReturnCall(target));
-    } else if name == Symbol::new("local_get") {
-        let index = attr_index(db, op)?;
+    } else if let Ok(local_op) = wasm::LocalGet::from_operation(db, *op) {
+        let index = local_op.index(db);
         function.instruction(&Instruction::LocalGet(index));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("local_set") {
-        let index = attr_index(db, op)?;
+    } else if let Ok(local_op) = wasm::LocalSet::from_operation(db, *op) {
+        let index = local_op.index(db);
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         function.instruction(&Instruction::LocalSet(index));
-    } else if name == Symbol::new("local_tee") {
-        let index = attr_index(db, op)?;
+    } else if let Ok(local_op) = wasm::LocalTee::from_operation(db, *op) {
+        let index = local_op.index(db);
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         function.instruction(&Instruction::LocalTee(index));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("global_get") {
-        let index = attr_index(db, op)?;
+    } else if let Ok(global_op) = wasm::GlobalGet::from_operation(db, *op) {
+        let index = global_op.index(db);
         function.instruction(&Instruction::GlobalGet(index));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("global_set") {
-        let index = attr_index(db, op)?;
+    } else if let Ok(global_op) = wasm::GlobalSet::from_operation(db, *op) {
+        let index = global_op.index(db);
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         function.instruction(&Instruction::GlobalSet(index));
     } else if name == Symbol::new("struct_new") {
         // struct_new needs all field values on the stack, including nil types.
-        // Unlike emit_operands which skips nil types, we emit ref.null none for them.
-        emit_struct_new_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+        // emit_operands handles nil types by emitting ref.null none.
+        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         let attrs = op.attributes(db);
         let field_count = operands.len();
         let result_type = op.results(db).first().copied();
@@ -3887,9 +3887,9 @@ fn emit_op<'db>(
             .ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
         function.instruction(&Instruction::RefNull(heap_type));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("ref_func") {
+    } else if let Ok(ref_func_op) = wasm::RefFunc::from_operation(db, *op) {
         // wasm.ref_func: create a funcref from function name
-        let func_name = attr_symbol_ref(db, op, ATTR_FUNC_NAME())?;
+        let func_name = ref_func_op.func_name(db);
         let func_idx = resolve_callee(func_name, module_info)?;
         function.instruction(&Instruction::RefFunc(func_idx));
         set_result_local(db, op, ctx, function)?;
@@ -4141,20 +4141,25 @@ fn emit_operands<'db>(
     function: &mut Function,
 ) -> CompilationResult<()> {
     for value in operands.iter() {
-        // Skip nil type values - they have no runtime representation
+        // Try direct lookup first
+        if let Some(index) = ctx.value_locals.get(value) {
+            function.instruction(&Instruction::LocalGet(*index));
+            continue;
+        }
+
+        // Nil type values need ref.null none on the stack (e.g., empty closure environments)
+        // Check this AFTER local lookup since nil values may be stored in locals
         if let Some(ty) = value_type(db, *value, block_arg_types)
             && is_nil_type(db, ty)
         {
             debug!(
-                "  emit_operands: skipping nil type value {:?}",
+                "emit_operands: emitting ref.null none for nil type value {:?}",
                 value.def(db)
             );
-            continue;
-        }
-
-        // Try direct lookup first
-        if let Some(index) = ctx.value_locals.get(value) {
-            function.instruction(&Instruction::LocalGet(*index));
+            function.instruction(&Instruction::RefNull(HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::None,
+            }));
             continue;
         }
 
@@ -4204,66 +4209,6 @@ fn emit_operands<'db>(
     Ok(())
 }
 
-/// Emit operands for struct_new, handling nil types specially.
-///
-/// Unlike `emit_operands` which skips nil type values, struct_new requires
-/// all field values on the stack. For nil type fields, we emit `ref.null none`.
-fn emit_struct_new_operands<'db>(
-    db: &'db dyn salsa::Database,
-    operands: &IdVec<Value<'db>>,
-    ctx: &FunctionEmitContext<'db>,
-    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
-    function: &mut Function,
-) -> CompilationResult<()> {
-    for value in operands.iter() {
-        // Check if value is nil type
-        if let Some(ty) = value_type(db, *value, block_arg_types)
-            && is_nil_type(db, ty)
-        {
-            // Nil type fields need ref.null none on the stack
-            debug!(
-                "  emit_struct_new_operands: emitting ref.null none for nil type value {:?}",
-                value.def(db)
-            );
-            function.instruction(&Instruction::RefNull(HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::None,
-            }));
-            continue;
-        }
-
-        // Regular value handling (same as emit_operands)
-        if let Some(index) = ctx.value_locals.get(value) {
-            function.instruction(&Instruction::LocalGet(*index));
-            continue;
-        }
-
-        // Handle block argument references
-        if let ValueDef::BlockArg(_block_id) = value.def(db) {
-            let index = value.index(db) as u32;
-            function.instruction(&Instruction::LocalGet(index));
-            continue;
-        }
-
-        // If operand not found, this is an error
-        let ValueDef::OpResult(stale_op) = value.def(db) else {
-            return Err(CompilationError::invalid_module(
-                "stale SSA value in wasm backend (missing local mapping)",
-            ));
-        };
-        tracing::error!(
-            "emit_struct_new_operands: stale SSA value: {}.{} index={}",
-            stale_op.dialect(db),
-            stale_op.name(db),
-            value.index(db)
-        );
-        return Err(CompilationError::invalid_module(
-            "stale SSA value in wasm backend (missing local mapping)",
-        ));
-    }
-    Ok(())
-}
-
 /// Emit operands with boxing when calling generic functions.
 /// If a parameter expects anyref (type.var) but the operand is a concrete type (Int, Float),
 /// we need to box the value.
@@ -4278,13 +4223,25 @@ fn emit_operands_with_boxing<'db>(
     let mut param_iter = param_types.iter();
 
     for value in operands.iter() {
-        // Get the corresponding parameter type first (must stay synchronized with operands)
-        let param_ty = param_iter.next();
+        // Get the corresponding parameter type (must stay synchronized with operands)
+        let Some(param_ty) = param_iter.next().copied() else {
+            return Err(CompilationError::invalid_module(
+                "wasm.call operand count exceeds callee param count",
+            ));
+        };
 
-        // Skip nil type values - they have no runtime representation
+        // Nil type values need ref.null none on the stack (e.g., empty closure environments)
         if let Some(ty) = value_type(db, *value, &module_info.block_arg_types)
             && is_nil_type(db, ty)
         {
+            debug!(
+                "emit_operands_with_boxing: emitting ref.null none for nil type value {:?}",
+                value.def(db)
+            );
+            function.instruction(&Instruction::RefNull(HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::None,
+            }));
             continue;
         }
 
@@ -4295,9 +4252,9 @@ fn emit_operands_with_boxing<'db>(
         // If parameter expects anyref (type.var) AND doesn't have a concrete type index, box the operand
         // Types with a type index (like struct types) are already reference types and don't need boxing
         // Use effective_types to get the actual computed type, falling back to IR type
-        if param_ty.is_some_and(|ty| {
-            tribute::is_type_var(db, *ty) && !module_info.type_idx_by_type.contains_key(ty)
-        }) {
+        if tribute::is_type_var(db, param_ty)
+            && !module_info.type_idx_by_type.contains_key(&param_ty)
+        {
             // Use effective type if available (computed during local allocation),
             // otherwise fall back to IR result type
             let operand_ty = ctx
@@ -4314,6 +4271,12 @@ fn emit_operands_with_boxing<'db>(
                 emit_boxing(db, operand_ty, function)?;
             }
         }
+    }
+
+    if param_iter.len() != 0 {
+        return Err(CompilationError::invalid_module(
+            "wasm.call operand count is less than callee param count",
+        ));
     }
     Ok(())
 }
@@ -4452,15 +4415,13 @@ fn infer_call_result_type<'db>(
     }
 
     // Only handle wasm.call operations
-    if op.dialect(db) != Symbol::new("wasm") || op.name(db) != Symbol::new("call") {
-        return result_ty;
-    }
-
-    // Get the callee
-    let callee = match attr_symbol_ref(db, op, ATTR_CALLEE()) {
+    let call_op = match wasm::Call::from_operation(db, *op) {
         Ok(c) => c,
         Err(_) => return result_ty,
     };
+
+    // Get the callee
+    let callee = call_op.callee(db);
 
     // Look up the callee's function type
     let callee_ty = match func_types.get(&callee) {
@@ -4767,83 +4728,6 @@ fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
     }
     compressed.push((count, current));
     compressed
-}
-
-fn attr_i32<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    key: Symbol,
-) -> CompilationResult<i32> {
-    match op.attributes(db).get(&key) {
-        Some(Attribute::IntBits(bits)) => {
-            let value = *bits as u32;
-            Ok(i32::from_ne_bytes(value.to_ne_bytes()))
-        }
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("value"),
-        )),
-    }
-}
-
-fn attr_i64<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    key: Symbol,
-) -> CompilationResult<i64> {
-    match op.attributes(db).get(&key) {
-        Some(Attribute::IntBits(bits)) => Ok(i64::from_ne_bytes(bits.to_ne_bytes())),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("value"),
-        )),
-    }
-}
-
-fn attr_f32<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    key: Symbol,
-) -> CompilationResult<f32> {
-    match op.attributes(db).get(&key) {
-        Some(Attribute::FloatBits(bits)) => Ok(f32::from_bits(*bits as u32)),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("value"),
-        )),
-    }
-}
-
-fn attr_f64<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    key: Symbol,
-) -> CompilationResult<f64> {
-    match op.attributes(db).get(&key) {
-        Some(Attribute::FloatBits(bits)) => Ok(f64::from_bits(*bits)),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("value"),
-        )),
-    }
-}
-
-fn attr_index<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> CompilationResult<u32> {
-    match op.attributes(db).get(&ATTR_INDEX()) {
-        Some(Attribute::IntBits(bits)) => Ok(*bits as u32),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("index"),
-        )),
-    }
-}
-
-fn attr_symbol_ref<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    key: Symbol,
-) -> CompilationResult<Symbol> {
-    match op.attributes(db).get(&key) {
-        Some(Attribute::Symbol(sym)) => Ok(*sym),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute("callee"),
-        )),
-    }
 }
 
 fn attr_symbol_ref_attr<'db>(attrs: &'db Attrs<'db>, key: Symbol) -> CompilationResult<Symbol> {
