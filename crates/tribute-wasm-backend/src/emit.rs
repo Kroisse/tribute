@@ -3189,17 +3189,17 @@ fn emit_op<'db>(
         if has_result {
             set_result_local(db, op, ctx, function)?;
         }
-    } else if name == Symbol::new("br") {
-        let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
+    } else if let Ok(br_op) = wasm::Br::from_operation(db, *op) {
+        let depth = br_op.target(db);
         function.instruction(&Instruction::Br(depth));
-    } else if name == Symbol::new("br_if") {
+    } else if let Ok(br_if_op) = wasm::BrIf::from_operation(db, *op) {
         if operands.len() != 1 {
             return Err(CompilationError::invalid_module(
                 "wasm.br_if expects a single condition operand",
             ));
         }
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let depth = attr_u32(op.attributes(db), ATTR_TARGET())?;
+        let depth = br_if_op.target(db);
         function.instruction(&Instruction::BrIf(depth));
     } else if let Ok(call_op) = wasm::Call::from_operation(db, *op) {
         let callee = call_op.callee(db);
@@ -3996,13 +3996,13 @@ fn emit_op<'db>(
         set_result_local(db, op, ctx, function)?;
 
     // === Linear Memory Management ===
-    } else if name == Symbol::new("memory_size") {
-        let memory = extract_memory_index(db, op);
+    } else if let Ok(mem_size_op) = wasm::MemorySize::from_operation(db, *op) {
+        let memory = mem_size_op.memory(db);
         function.instruction(&Instruction::MemorySize(memory));
         set_result_local(db, op, ctx, function)?;
-    } else if name == Symbol::new("memory_grow") {
+    } else if let Ok(mem_grow_op) = wasm::MemoryGrow::from_operation(db, *op) {
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memory = extract_memory_index(db, op);
+        let memory = mem_grow_op.memory(db);
         function.instruction(&Instruction::MemoryGrow(memory));
         set_result_local(db, op, ctx, function)?;
 
@@ -4893,15 +4893,6 @@ fn extract_memarg<'db>(
         offset,
         align,
         memory_index,
-    }
-}
-
-/// Extract memory index from operation attributes for memory management operations.
-/// Defaults to memory index 0.
-fn extract_memory_index<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> u32 {
-    match op.attributes(db).get(&ATTR_MEMORY()) {
-        Some(Attribute::IntBits(v)) => *v as u32,
-        _ => 0,
     }
 }
 
