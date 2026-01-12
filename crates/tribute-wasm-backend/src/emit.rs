@@ -4278,19 +4278,27 @@ fn emit_operands_with_boxing<'db>(
     let mut param_iter = param_types.iter();
 
     for value in operands.iter() {
-        // Skip nil type values - they have no runtime representation
-        if let Some(ty) = value_type(db, *value, &module_info.block_arg_types)
-            && is_nil_type(db, ty)
-        {
-            continue;
-        }
-
-        // Get the corresponding parameter type (must stay synchronized with emitted operands)
+        // Get the corresponding parameter type (must stay synchronized with operands)
         let Some(param_ty) = param_iter.next().copied() else {
             return Err(CompilationError::invalid_module(
                 "wasm.call operand count exceeds callee param count",
             ));
         };
+
+        // Nil type values need ref.null none on the stack (e.g., empty closure environments)
+        if let Some(ty) = value_type(db, *value, &module_info.block_arg_types)
+            && is_nil_type(db, ty)
+        {
+            debug!(
+                "emit_operands_with_boxing: emitting ref.null none for nil type value {:?}",
+                value.def(db)
+            );
+            function.instruction(&Instruction::RefNull(HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::None,
+            }));
+            continue;
+        }
 
         // Emit the value (local.get)
         emit_value(db, *value, ctx, function)?;
