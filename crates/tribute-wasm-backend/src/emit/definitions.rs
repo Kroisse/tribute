@@ -10,7 +10,6 @@ use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 use wasm_encoder::{ExportKind, RefType, ValType};
 
-use crate::errors;
 use crate::{CompilationError, CompilationResult};
 
 trunk_ir::symbols! {
@@ -188,9 +187,7 @@ pub(crate) fn extract_data_def<'db>(
     let bytes = match attrs.get(&ATTR_BYTES()) {
         Some(Attribute::Bytes(value)) => value.clone(),
         _ => {
-            return Err(CompilationError::from(
-                errors::CompilationErrorKind::InvalidAttribute("bytes"),
-            ));
+            return Err(CompilationError::invalid_attribute("bytes"));
         }
     };
     Ok(DataDef {
@@ -208,11 +205,10 @@ pub(crate) fn extract_table_def<'db>(
     let reftype = reftype_sym.with_str(|s| match s {
         "funcref" => Ok(RefType::FUNCREF),
         "externref" => Ok(RefType::EXTERNREF),
-        other => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute(Box::leak(
-                format!("reftype: {}", other).into_boxed_str(),
-            )),
-        )),
+        other => Err(CompilationError::invalid_attribute(format!(
+            "reftype: {}",
+            other
+        ))),
     })?;
     let min = table_op.min(db);
     let max = table_op.max(db);
@@ -258,11 +254,10 @@ pub(crate) fn extract_global_def<'db>(
         "funcref" => Ok(ValType::Ref(RefType::FUNCREF)),
         "externref" => Ok(ValType::Ref(RefType::EXTERNREF)),
         "anyref" => Ok(ValType::Ref(RefType::ANYREF)),
-        other => Err(CompilationError::from(
-            errors::CompilationErrorKind::InvalidAttribute(Box::leak(
-                format!("valtype: {}", other).into_boxed_str(),
-            )),
-        )),
+        other => Err(CompilationError::invalid_attribute(format!(
+            "valtype: {}",
+            other
+        ))),
     })?;
     let mutable = global_op.mutable(db);
     let init = global_op.init(db);

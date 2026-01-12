@@ -51,6 +51,10 @@ impl CompilationError {
     pub fn invalid_operation(op: &'static str) -> Self {
         CompilationErrorKind::InvalidOperation(op).into()
     }
+
+    pub fn invalid_attribute(msg: impl std::fmt::Display) -> Self {
+        CompilationErrorKind::InvalidAttribute(msg.to_string()).into()
+    }
 }
 
 #[derive(Clone, Display, Debug, PartialEq)]
@@ -68,7 +72,7 @@ pub enum CompilationErrorKind {
     MissingAttribute(&'static str),
 
     #[display("Invalid attribute: {_0}")]
-    InvalidAttribute(&'static str),
+    InvalidAttribute(String),
 
     #[display("Function not found: {_0}")]
     FunctionNotFound(String),
