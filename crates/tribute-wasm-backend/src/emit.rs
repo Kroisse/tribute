@@ -13,7 +13,15 @@ mod value_emission;
 use call_indirect_collection::*;
 use definitions::*;
 use gc_types_collection::*;
-use handlers::{handle_f32_const, handle_f64_const, handle_i32_const, handle_i64_const};
+use handlers::{
+    handle_f32_const, handle_f32_load, handle_f32_store, handle_f64_const, handle_f64_load,
+    handle_f64_store, handle_i32_const, handle_i32_load, handle_i32_load8_s, handle_i32_load8_u,
+    handle_i32_load16_s, handle_i32_load16_u, handle_i32_store, handle_i32_store8,
+    handle_i32_store16, handle_i64_const, handle_i64_load, handle_i64_load8_s, handle_i64_load8_u,
+    handle_i64_load16_s, handle_i64_load16_u, handle_i64_load32_s, handle_i64_load32_u,
+    handle_i64_store, handle_i64_store8, handle_i64_store16, handle_i64_store32,
+    handle_memory_grow, handle_memory_size,
+};
 use helpers::*;
 use value_emission::*;
 
@@ -36,8 +44,8 @@ use wasm_encoder::{
     AbstractHeapType, ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType,
     ConstExpr, DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind,
     ExportSection, Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection,
-    Instruction, MemArg, MemorySection, MemoryType, Module, RefType, StorageType, StructType,
-    SubType, TableSection, TableType, TypeSection, ValType,
+    Instruction, MemorySection, MemoryType, Module, RefType, StorageType, StructType, SubType,
+    TableSection, TableType, TypeSection, ValType,
 };
 
 use crate::errors;
@@ -2553,175 +2561,65 @@ fn emit_op<'db>(
 
     // === Linear Memory Management ===
     } else if let Ok(mem_size_op) = wasm::MemorySize::from_operation(db, *op) {
-        let memory = mem_size_op.memory(db);
-        function.instruction(&Instruction::MemorySize(memory));
-        set_result_local(db, op, ctx, function)?;
+        return handle_memory_size(db, mem_size_op, ctx, function);
     } else if let Ok(mem_grow_op) = wasm::MemoryGrow::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memory = mem_grow_op.memory(db);
-        function.instruction(&Instruction::MemoryGrow(memory));
-        set_result_local(db, op, ctx, function)?;
+        return handle_memory_grow(db, mem_grow_op, ctx, module_info, function);
 
     // === Full-Width Loads ===
     } else if let Ok(load_op) = wasm::I32Load::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
-        function.instruction(&Instruction::I32Load(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i32_load(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 3);
-        function.instruction(&Instruction::I64Load(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::F32Load::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
-        function.instruction(&Instruction::F32Load(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_f32_load(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::F64Load::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 3);
-        function.instruction(&Instruction::F64Load(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_f64_load(db, load_op, ctx, module_info, function);
 
     // === Partial-Width Loads (i32) ===
     } else if let Ok(load_op) = wasm::I32Load8S::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
-        function.instruction(&Instruction::I32Load8S(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i32_load8_s(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I32Load8U::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
-        function.instruction(&Instruction::I32Load8U(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i32_load8_u(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I32Load16S::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
-        function.instruction(&Instruction::I32Load16S(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i32_load16_s(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I32Load16U::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
-        function.instruction(&Instruction::I32Load16U(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i32_load16_u(db, load_op, ctx, module_info, function);
 
     // === Partial-Width Loads (i64) ===
     } else if let Ok(load_op) = wasm::I64Load8S::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
-        function.instruction(&Instruction::I64Load8S(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load8_s(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load8U::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
-        function.instruction(&Instruction::I64Load8U(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load8_u(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load16S::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
-        function.instruction(&Instruction::I64Load16S(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load16_s(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load16U::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
-        function.instruction(&Instruction::I64Load16U(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load16_u(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load32S::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
-        function.instruction(&Instruction::I64Load32S(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load32_s(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load32U::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
-        function.instruction(&Instruction::I64Load32U(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load32_u(db, load_op, ctx, module_info, function);
 
     // === Full-Width Stores ===
     } else if let Ok(store_op) = wasm::I32Store::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            2,
-        );
-        function.instruction(&Instruction::I32Store(memarg));
+        return handle_i32_store(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::I64Store::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            3,
-        );
-        function.instruction(&Instruction::I64Store(memarg));
+        return handle_i64_store(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::F32Store::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            2,
-        );
-        function.instruction(&Instruction::F32Store(memarg));
+        return handle_f32_store(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::F64Store::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            3,
-        );
-        function.instruction(&Instruction::F64Store(memarg));
+        return handle_f64_store(db, store_op, ctx, module_info, function);
 
     // === Partial-Width Stores ===
     } else if let Ok(store_op) = wasm::I32Store8::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            0,
-        );
-        function.instruction(&Instruction::I32Store8(memarg));
+        return handle_i32_store8(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::I32Store16::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            1,
-        );
-        function.instruction(&Instruction::I32Store16(memarg));
+        return handle_i32_store16(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::I64Store8::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            0,
-        );
-        function.instruction(&Instruction::I64Store8(memarg));
+        return handle_i64_store8(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::I64Store16::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            1,
-        );
-        function.instruction(&Instruction::I64Store16(memarg));
+        return handle_i64_store16(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::I64Store32::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            2,
-        );
-        function.instruction(&Instruction::I64Store32(memarg));
+        return handle_i64_store32(db, store_op, ctx, module_info, function);
     } else {
         tracing::error!("unsupported wasm op: {}", name);
         return Err(CompilationError::unsupported_feature_msg(format!(
@@ -2933,16 +2831,6 @@ fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<HeapType> {
         _ => Err(CompilationError::from(
             errors::CompilationErrorKind::MissingAttribute("unknown abstract heap type"),
         )),
-    }
-}
-
-/// Create MemArg from typed wrapper attributes for linear memory load/store operations.
-/// Uses natural_align as fallback if align is 0.
-fn make_memarg(offset: u32, align: u32, memory: u32, natural_align: u32) -> MemArg {
-    MemArg {
-        offset: offset as u64,
-        align: if align == 0 { natural_align } else { align },
-        memory_index: memory,
     }
 }
 
