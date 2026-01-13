@@ -696,5 +696,9 @@ dialect! {
 
         /// `wasm.externref` type: external reference (host objects).
         type externref;
+
+        /// `wasm.step` type: marker type for trampoline-based effect system.
+        /// Used to track Step values in continuation-based effect handlers.
+        type step;
     }
 }
