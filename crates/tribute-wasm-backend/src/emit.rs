@@ -1486,14 +1486,14 @@ fn emit_op<'db>(
     }
 
     // Special cases: const, control flow, calls, locals, GC ops
-    if wasm::I32Const::matches(db, *op) {
-        return handle_i32_const(db, op, ctx, function);
-    } else if wasm::I64Const::matches(db, *op) {
-        return handle_i64_const(db, op, ctx, function);
-    } else if wasm::F32Const::matches(db, *op) {
-        return handle_f32_const(db, op, ctx, function);
-    } else if wasm::F64Const::matches(db, *op) {
-        return handle_f64_const(db, op, ctx, function);
+    if let Ok(const_op) = wasm::I32Const::from_operation(db, *op) {
+        return handle_i32_const(db, const_op, ctx, function);
+    } else if let Ok(const_op) = wasm::I64Const::from_operation(db, *op) {
+        return handle_i64_const(db, const_op, ctx, function);
+    } else if let Ok(const_op) = wasm::F32Const::from_operation(db, *op) {
+        return handle_f32_const(db, const_op, ctx, function);
+    } else if let Ok(const_op) = wasm::F64Const::from_operation(db, *op) {
+        return handle_f64_const(db, const_op, ctx, function);
     } else if wasm::If::matches(db, *op) {
         let result_ty = op.results(db).first().copied();
 
