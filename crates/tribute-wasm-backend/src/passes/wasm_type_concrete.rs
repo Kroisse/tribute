@@ -25,7 +25,7 @@ use tracing::debug;
 use tribute_ir::dialect::tribute;
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{DialectOp, DialectType, IdVec, Operation, Symbol, Type};
+use trunk_ir::{DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value, ValueDef};
 
 use crate::type_converter::wasm_type_converter;
 
@@ -37,7 +37,15 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) -> co
     let func_return_types = collect_func_return_types(db, module);
 
     let applicator = PatternApplicator::new(wasm_type_converter())
-        .add_pattern(CallResultTypePattern { func_return_types });
+        .add_pattern(CallResultTypePattern {
+            func_return_types: func_return_types.clone(),
+        })
+        .add_pattern(CallIndirectResultTypePattern {
+            func_return_types: func_return_types.clone(),
+        })
+        .add_pattern(IfResultTypePattern)
+        .add_pattern(BlockResultTypePattern)
+        .add_pattern(LoopResultTypePattern);
     applicator.apply(db, module).module
 }
 
@@ -129,6 +137,302 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
         let new_op = op.modify(db).results(IdVec::from(vec![return_ty])).build();
 
         RewriteResult::Replace(new_op)
+    }
+}
+
+/// Pattern to concretize result types of wasm.call_indirect operations.
+///
+/// If a call_indirect's result type is `tribute.type_var`, try to infer it from:
+/// 1. The callee's function type (if it's a known funcref)
+/// 2. For `wasm.ref_func` callees, look up the referenced function's return type
+struct CallIndirectResultTypePattern<'db> {
+    /// Map of function name -> return type.
+    func_return_types: HashMap<Symbol, Type<'db>>,
+}
+
+impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Only handle wasm.call_indirect operations
+        if !wasm::CallIndirect::matches(db, *op) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Get the result type
+        let Some(result_ty) = op.results(db).first().copied() else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Only process if result type is a type variable
+        if !tribute::is_type_var(db, result_ty) {
+            return RewriteResult::Unchanged;
+        }
+
+        // The callee is the last operand (funcref)
+        let operands = op.operands(db);
+        let Some(&callee_val) = operands.last() else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Try to infer type from callee
+        if let Some(concrete_ty) = infer_type_from_callee(db, callee_val, &self.func_return_types)
+            && !tribute::is_type_var(db, concrete_ty)
+        {
+            debug!(
+                "wasm_type_concrete: concretizing wasm.call_indirect result from type_var to {}.{}",
+                concrete_ty.dialect(db),
+                concrete_ty.name(db)
+            );
+
+            let new_op = op
+                .modify(db)
+                .results(IdVec::from(vec![concrete_ty]))
+                .build();
+
+            return RewriteResult::Replace(new_op);
+        }
+
+        RewriteResult::Unchanged
+    }
+}
+
+/// Try to infer the return type from a callee value.
+///
+/// Handles cases like:
+/// - wasm.ref_func: look up the referenced function's return type
+/// - Values with core.func type: extract return type from the type
+fn infer_type_from_callee<'db>(
+    db: &'db dyn salsa::Database,
+    callee: Value<'db>,
+    func_return_types: &HashMap<Symbol, Type<'db>>,
+) -> Option<Type<'db>> {
+    match callee.def(db) {
+        ValueDef::OpResult(def_op) => {
+            // Check if it's a wasm.ref_func operation
+            if let Ok(ref_func) = wasm::RefFunc::from_operation(db, def_op) {
+                let func_name = ref_func.func_name(db);
+                if let Some(&return_ty) = func_return_types.get(&func_name) {
+                    return Some(return_ty);
+                }
+            }
+
+            // Try to get type from the operation's result
+            let index = callee.index(db);
+            if let Some(callee_ty) = def_op.results(db).get(index).copied() {
+                // If it's a function type, extract return type
+                if let Some(func_ty) = core::Func::from_type(db, callee_ty) {
+                    return Some(func_ty.result(db));
+                }
+            }
+
+            None
+        }
+        ValueDef::BlockArg(_) => None,
+    }
+}
+
+/// Pattern to concretize result types of wasm.if operations.
+///
+/// If an if's result type is `tribute.type_var`, try to infer it from
+/// the yield operations in its then/else branches.
+struct IfResultTypePattern;
+
+impl<'db> RewritePattern<'db> for IfResultTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Only handle wasm.if operations
+        if !wasm::If::matches(db, *op) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Get the result type
+        let Some(result_ty) = op.results(db).first().copied() else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Only process if result type is a type variable
+        if !tribute::is_type_var(db, result_ty) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Try to infer concrete type from regions
+        let regions = op.regions(db);
+        let inferred = infer_type_from_regions(db, regions);
+
+        let Some(concrete_ty) = inferred else {
+            return RewriteResult::Unchanged;
+        };
+
+        debug!(
+            "wasm_type_concrete: concretizing wasm.if result from type_var to {}.{}",
+            concrete_ty.dialect(db),
+            concrete_ty.name(db)
+        );
+
+        let new_op = op
+            .modify(db)
+            .results(IdVec::from(vec![concrete_ty]))
+            .build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Pattern to concretize result types of wasm.block operations.
+struct BlockResultTypePattern;
+
+impl<'db> RewritePattern<'db> for BlockResultTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Only handle wasm.block operations
+        if !wasm::Block::matches(db, *op) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Get the result type
+        let Some(result_ty) = op.results(db).first().copied() else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Only process if result type is a type variable
+        if !tribute::is_type_var(db, result_ty) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Try to infer concrete type from the body region
+        let regions = op.regions(db);
+        let inferred = infer_type_from_regions(db, regions);
+
+        let Some(concrete_ty) = inferred else {
+            return RewriteResult::Unchanged;
+        };
+
+        debug!(
+            "wasm_type_concrete: concretizing wasm.block result from type_var to {}.{}",
+            concrete_ty.dialect(db),
+            concrete_ty.name(db)
+        );
+
+        let new_op = op
+            .modify(db)
+            .results(IdVec::from(vec![concrete_ty]))
+            .build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Pattern to concretize result types of wasm.loop operations.
+struct LoopResultTypePattern;
+
+impl<'db> RewritePattern<'db> for LoopResultTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Only handle wasm.loop operations
+        if !wasm::Loop::matches(db, *op) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Get the result type
+        let Some(result_ty) = op.results(db).first().copied() else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Only process if result type is a type variable
+        if !tribute::is_type_var(db, result_ty) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Try to infer concrete type from the body region
+        let regions = op.regions(db);
+        let inferred = infer_type_from_regions(db, regions);
+
+        let Some(concrete_ty) = inferred else {
+            return RewriteResult::Unchanged;
+        };
+
+        debug!(
+            "wasm_type_concrete: concretizing wasm.loop result from type_var to {}.{}",
+            concrete_ty.dialect(db),
+            concrete_ty.name(db)
+        );
+
+        let new_op = op
+            .modify(db)
+            .results(IdVec::from(vec![concrete_ty]))
+            .build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+/// Try to infer a concrete type from regions by looking at yield operations.
+fn infer_type_from_regions<'db>(
+    db: &'db dyn salsa::Database,
+    regions: &IdVec<Region<'db>>,
+) -> Option<Type<'db>> {
+    for region in regions.iter() {
+        if let Some(ty) = infer_type_from_region(db, region) {
+            return Some(ty);
+        }
+    }
+    None
+}
+
+/// Try to infer a concrete type from a region's yield operations.
+fn infer_type_from_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+) -> Option<Type<'db>> {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Look for wasm.yield operations
+            if let Ok(yield_op) = wasm::Yield::from_operation(db, *op) {
+                let yielded_value = yield_op.value(db);
+                if let Some(ty) = get_value_type(db, yielded_value)
+                    && !tribute::is_type_var(db, ty)
+                {
+                    return Some(ty);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Get the type of a value from its definition.
+fn get_value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
+    match value.def(db) {
+        ValueDef::OpResult(def_op) => {
+            let index = value.index(db);
+            def_op.results(db).get(index).copied()
+        }
+        ValueDef::BlockArg(_block_id) => {
+            // For block arguments, we'd need the block's argument types
+            // which we don't easily have access to here.
+            // Return None for now - these cases are less common.
+            None
+        }
     }
 }
 
