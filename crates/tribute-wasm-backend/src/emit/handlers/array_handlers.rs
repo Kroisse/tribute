@@ -9,51 +9,25 @@ use wasm_encoder::{Function, Instruction};
 use crate::{CompilationError, CompilationResult};
 
 use super::super::{
-    ModuleInfo, emit_operands, is_closure_struct_type, set_result_local, value_type,
+    ModuleInfo, emit_operands, get_type_idx_from_attrs, set_result_local, value_type,
 };
 
 /// Get type_idx from operation attributes or inferred type.
 ///
-/// Priority: type_idx attr > type attr > inferred_type (from result/operand)
+/// Uses the shared helper to ensure consistent type resolution logic.
 fn get_type_idx<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
     inferred_type: Option<Type<'db>>,
     module_info: &ModuleInfo<'db>,
 ) -> CompilationResult<u32> {
-    use crate::gc_types::{ATTR_TYPE, ATTR_TYPE_IDX, CLOSURE_STRUCT_IDX};
-    use trunk_ir::Attribute;
-
-    let attrs = op.attributes(db);
-
-    // First try type_idx attribute
-    if let Some(trunk_ir::Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-        return Ok(*idx as u32);
-    }
-
-    // Fall back to type attribute (legacy, will be removed)
-    if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-        // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-        if is_closure_struct_type(db, *ty) {
-            return Ok(CLOSURE_STRUCT_IDX);
-        }
-        if let Some(&type_idx) = module_info.type_idx_by_type.get(ty) {
-            return Ok(type_idx);
-        }
-    }
-
-    // Fall back to inferred type
-    if let Some(ty) = inferred_type {
-        // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-        if is_closure_struct_type(db, ty) {
-            return Ok(CLOSURE_STRUCT_IDX);
-        }
-        if let Some(&type_idx) = module_info.type_idx_by_type.get(&ty) {
-            return Ok(type_idx);
-        }
-    }
-
-    Err(CompilationError::missing_attribute("type or type_idx"))
+    get_type_idx_from_attrs(
+        db,
+        op.attributes(db),
+        inferred_type,
+        &module_info.type_idx_by_type,
+    )
+    .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))
 }
 
 /// Handle array.new operation

@@ -11,15 +11,21 @@ use super::super::{ModuleInfo, emit_operands, set_result_local};
 
 /// Create a MemArg for load/store instructions.
 ///
-/// The `default_align` is the log2 of the natural alignment:
+/// The `natural_align` is the log2 of the natural alignment:
 /// - 0 for 8-bit (2^0 = 1 byte)
 /// - 1 for 16-bit (2^1 = 2 bytes)
 /// - 2 for 32-bit (2^2 = 4 bytes)
 /// - 3 for 64-bit (2^3 = 8 bytes)
+///
+/// The align parameter is clamped to not exceed natural_align, per WebAssembly spec.
 fn make_memarg(offset: u32, align: u32, memory_index: u32, natural_align: u32) -> MemArg {
     MemArg {
         offset: offset as u64,
-        align: if align == 0 { natural_align } else { align },
+        align: if align == 0 {
+            natural_align
+        } else {
+            align.min(natural_align)
+        },
         memory_index,
     }
 }

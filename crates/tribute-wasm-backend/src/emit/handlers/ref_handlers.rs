@@ -24,13 +24,17 @@ pub(crate) fn handle_ref_null<'db>(
     let attrs = op.attributes(db);
     // Infer type from result type
     let inferred_type = op.results(db).first().copied();
-    let heap_type = attr_heap_type(db, attrs, ATTR_HEAP_TYPE())
-        .ok()
-        .or_else(|| {
-            get_type_idx_from_attrs(db, attrs, inferred_type, &module_info.type_idx_by_type)
-                .map(HeapType::Concrete)
-        })
-        .ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
+
+    // Try heap_type attribute first. If present but invalid, propagate error.
+    let heap_type = if attrs.get(&ATTR_HEAP_TYPE()).is_some() {
+        attr_heap_type(db, attrs, ATTR_HEAP_TYPE())?
+    } else {
+        // Attribute not present - fall back to type inference
+        get_type_idx_from_attrs(db, attrs, inferred_type, &module_info.type_idx_by_type)
+            .map(HeapType::Concrete)
+            .ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?
+    };
+
     function.instruction(&Instruction::RefNull(heap_type));
     set_result_local(db, op, ctx, function)?;
     Ok(())
@@ -136,13 +140,16 @@ pub(crate) fn handle_ref_test<'db>(
 
     let attrs = op.attributes(db);
     // ref_test result is i32, target type must be in attribute (can't infer)
-    let heap_type = attr_heap_type(db, attrs, ATTR_TARGET_TYPE())
-        .ok()
-        .or_else(|| {
-            get_type_idx_from_attrs(db, attrs, None, &module_info.type_idx_by_type)
-                .map(HeapType::Concrete)
-        })
-        .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
+    // Try target_type attribute first. If present but invalid, propagate error.
+    let heap_type = if attrs.get(&ATTR_TARGET_TYPE()).is_some() {
+        attr_heap_type(db, attrs, ATTR_TARGET_TYPE())?
+    } else {
+        // Attribute not present - fall back to type inference
+        get_type_idx_from_attrs(db, attrs, None, &module_info.type_idx_by_type)
+            .map(HeapType::Concrete)
+            .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?
+    };
+
     function.instruction(&Instruction::RefTestNullable(heap_type));
     set_result_local(db, op, ctx, function)?;
     Ok(())
