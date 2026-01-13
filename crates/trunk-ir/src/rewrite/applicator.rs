@@ -271,10 +271,21 @@ impl<'db> PatternApplicator<'db> {
 
                 RewriteResult::Erase { replacement_values } => {
                     ctx.record_change();
+                    // Validate replacement count matches result count
+                    let result_count = op.results(db).len();
+                    debug_assert_eq!(
+                        replacement_values.len(),
+                        result_count,
+                        "RewriteResult::Erase: replacement_values count ({}) must match operation result count ({})",
+                        replacement_values.len(),
+                        result_count
+                    );
                     // Map ORIGINAL op results to replacement values
                     for (i, val) in replacement_values.into_iter().enumerate() {
-                        let old_val = op.result(db, i);
-                        ctx.map_value(old_val, val);
+                        if i < result_count {
+                            let old_val = op.result(db, i);
+                            ctx.map_value(old_val, val);
+                        }
                     }
                     return vec![];
                 }

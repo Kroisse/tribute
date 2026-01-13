@@ -43,21 +43,22 @@ impl<'db> RewritePattern<'db> for ArithConstPattern {
             return RewriteResult::Unchanged;
         };
 
-        let result_ty = op.results(db).first().copied();
+        let Some(result_ty) = op.results(db).first().copied() else {
+            // Missing result type - cannot lower, leave unchanged
+            return RewriteResult::Unchanged;
+        };
 
         // Handle nil type constants specially
-        let type_name = type_suffix(db, result_ty);
+        let type_name = type_suffix(db, Some(result_ty));
         if type_name == "nil" {
             // Nil constants have no runtime representation, but we need to preserve
             // SSA form for operations that reference them. Use wasm.nop which has
             // no runtime effect but maintains the value reference.
-            let result_ty = result_ty.unwrap();
             let nop = wasm::nop(db, op.location(db), result_ty);
             return RewriteResult::Replace(nop.as_operation());
         }
 
         let location = op.location(db);
-        let result_ty = result_ty.unwrap();
         let value = const_op.value(db).clone();
 
         let new_op = match type_name {
@@ -128,15 +129,17 @@ impl<'db> RewritePattern<'db> for ArithBinOpPattern {
             return RewriteResult::Unchanged;
         }
 
-        let result_ty =
-            op.results(db).first().copied().unwrap_or_else(|| {
-                panic!("arith binop missing result type at {:?}", op.location(db))
-            });
+        let Some(result_ty) = op.results(db).first().copied() else {
+            // Missing result type - cannot lower
+            return RewriteResult::Unchanged;
+        };
+        let operands = op.operands(db);
+        let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
+            // Missing operands - cannot lower
+            return RewriteResult::Unchanged;
+        };
         let suffix = type_suffix(db, Some(result_ty));
         let location = op.location(db);
-        let operands = op.operands(db);
-        let lhs = operands[0];
-        let rhs = operands[1];
 
         let new_op = if name == arith::ADD() {
             match suffix {
@@ -356,17 +359,17 @@ impl<'db> RewritePattern<'db> for ArithBitwisePattern {
             return RewriteResult::Unchanged;
         }
 
-        let result_ty = op.results(db).first().copied().unwrap_or_else(|| {
-            panic!(
-                "arith bitwise op missing result type at {:?}",
-                op.location(db)
-            )
-        });
+        let Some(result_ty) = op.results(db).first().copied() else {
+            // Missing result type - cannot lower
+            return RewriteResult::Unchanged;
+        };
+        let operands = op.operands(db);
+        let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
+            // Missing operands - cannot lower
+            return RewriteResult::Unchanged;
+        };
         let suffix = type_suffix(db, Some(result_ty));
         let location = op.location(db);
-        let operands = op.operands(db);
-        let lhs = operands[0];
-        let rhs = operands[1];
 
         let new_op = if name == arith::AND() {
             match suffix {
