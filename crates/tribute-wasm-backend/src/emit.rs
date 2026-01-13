@@ -22,7 +22,7 @@ use handlers::{
     handle_i64_load, handle_i64_load8_s, handle_i64_load8_u, handle_i64_load16_s,
     handle_i64_load16_u, handle_i64_load32_s, handle_i64_load32_u, handle_i64_store,
     handle_i64_store8, handle_i64_store16, handle_i64_store32, handle_memory_grow,
-    handle_memory_size,
+    handle_memory_size, handle_ref_cast, handle_ref_func, handle_ref_null, handle_ref_test,
 };
 use helpers::*;
 use value_emission::*;
@@ -55,7 +55,7 @@ use crate::errors;
 use crate::gc_types::FIRST_USER_TYPE_IDX;
 use crate::gc_types::{
     ATTR_FIELD_IDX, ATTR_TYPE, ATTR_TYPE_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX,
-    CLOSURE_STRUCT_IDX, GcTypeDef, STEP_IDX,
+    CLOSURE_STRUCT_IDX, GcTypeDef,
 };
 use crate::{CompilationError, CompilationResult};
 
@@ -2398,94 +2398,13 @@ fn emit_op<'db>(
     } else if let Ok(array_copy_op) = wasm::ArrayCopy::from_operation(db, *op) {
         return handle_array_copy(db, array_copy_op, ctx, module_info, function);
     } else if wasm::RefNull::matches(db, *op) {
-        let attrs = op.attributes(db);
-        // Infer type from result type
-        let inferred_type = op.results(db).first().copied();
-        let heap_type = attr_heap_type(db, attrs, ATTR_HEAP_TYPE())
-            .ok()
-            .or_else(|| get_type_idx_from_attrs(attrs, inferred_type).map(HeapType::Concrete))
-            .ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
-        function.instruction(&Instruction::RefNull(heap_type));
-        set_result_local(db, op, ctx, function)?;
+        return handle_ref_null(db, op, ctx, module_info, function);
     } else if let Ok(ref_func_op) = wasm::RefFunc::from_operation(db, *op) {
-        // wasm.ref_func: create a funcref from function name
-        let func_name = ref_func_op.func_name(db);
-        let func_idx = resolve_callee(func_name, module_info)?;
-        function.instruction(&Instruction::RefFunc(func_idx));
-        set_result_local(db, op, ctx, function)?;
+        return handle_ref_func(db, ref_func_op, ctx, module_info, function);
     } else if wasm::RefCast::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
-        // Infer type from result type (the target type it casts to)
-        let inferred_type = op.results(db).first().copied();
-
-        // Check if this is a placeholder struct type (wasm.structref with field_count)
-        // If so, use the concrete type index from the placeholder map
-        let heap_type = if let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE()) {
-            if wasm::Structref::from_type(db, *target_ty).is_some() {
-                // structref placeholder - try to find concrete type via field_count
-                if let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count")) {
-                    if let Some(&type_idx) = module_info
-                        .placeholder_struct_type_idx
-                        .get(&(*target_ty, *fc as usize))
-                    {
-                        debug!(
-                            "ref_cast: found placeholder type_idx={} for field_count={}",
-                            type_idx, fc
-                        );
-                        HeapType::Concrete(type_idx)
-                    } else {
-                        debug!(
-                            "ref_cast: placeholder lookup FAILED for field_count={}, falling back to abstract structref",
-                            fc
-                        );
-                        // Fallback to abstract structref if not found
-                        HeapType::Abstract {
-                            shared: false,
-                            ty: AbstractHeapType::Struct,
-                        }
-                    }
-                } else {
-                    debug!("ref_cast: no field_count attribute, using abstract structref");
-                    // No field_count - use abstract structref
-                    HeapType::Abstract {
-                        shared: false,
-                        ty: AbstractHeapType::Struct,
-                    }
-                }
-            } else {
-                // Non-placeholder type - use attr_heap_type
-                debug!(
-                    "ref_cast: non-placeholder target_type {}.{}",
-                    target_ty.dialect(db),
-                    target_ty.name(db)
-                );
-                attr_heap_type(db, attrs, ATTR_TARGET_TYPE())?
-            }
-        } else {
-            debug!("ref_cast: no target_type attribute");
-            // No target_type attribute - use standard resolution
-            attr_heap_type(db, attrs, ATTR_TARGET_TYPE())
-                .ok()
-                .or_else(|| get_type_idx_from_attrs(attrs, inferred_type).map(HeapType::Concrete))
-                .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?
-        };
-        debug!(
-            "ref_cast: emitting RefCastNullable with heap_type={:?}",
-            heap_type
-        );
-        function.instruction(&Instruction::RefCastNullable(heap_type));
-        set_result_local(db, op, ctx, function)?;
+        return handle_ref_cast(db, op, ctx, module_info, function);
     } else if wasm::RefTest::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
-        // ref_test result is i32, target type must be in attribute (can't infer)
-        let heap_type = attr_heap_type(db, attrs, ATTR_TARGET_TYPE())
-            .ok()
-            .or_else(|| get_type_idx_from_attrs(attrs, None).map(HeapType::Concrete))
-            .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
-        function.instruction(&Instruction::RefTestNullable(heap_type));
-        set_result_local(db, op, ctx, function)?;
+        return handle_ref_test(db, op, ctx, module_info, function);
     } else if let Ok(bytes_op) = wasm::BytesFromData::from_operation(db, *op) {
         // Compound operation: create Bytes struct from passive data segment
         // Stack operations:
@@ -2714,79 +2633,6 @@ fn attr_u32<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<u32> {
 /// Get field index from attributes, trying both `field_idx` and `field` attribute names.
 fn attr_field_idx<'db>(attrs: &Attrs<'db>) -> CompilationResult<u32> {
     attr_u32(attrs, ATTR_FIELD_IDX()).or_else(|_| attr_u32(attrs, ATTR_FIELD()))
-}
-
-fn attr_heap_type<'db>(
-    db: &'db dyn salsa::Database,
-    attrs: &Attrs<'db>,
-    key: Symbol,
-) -> CompilationResult<HeapType> {
-    match attrs.get(&key) {
-        Some(Attribute::IntBits(bits)) => Ok(HeapType::Concrete(*bits as u32)),
-        Some(Attribute::Symbol(sym)) => {
-            // Handle abstract heap types specified by name
-            sym.with_str(symbol_to_abstract_heap_type)
-        }
-        Some(Attribute::Type(ty)) => {
-            // Handle wasm abstract heap types like wasm.i31ref, wasm.anyref, etc.
-            if ty.dialect(db) == Symbol::new("wasm") {
-                let name = ty.name(db);
-                // Handle step as a concrete builtin type (STEP_IDX = 3)
-                if name == Symbol::new("step") {
-                    return Ok(HeapType::Concrete(STEP_IDX));
-                }
-                name.with_str(symbol_to_abstract_heap_type)
-            } else {
-                Err(CompilationError::from(
-                    errors::CompilationErrorKind::MissingAttribute("non-wasm type for heap_type"),
-                ))
-            }
-        }
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("heap_type"),
-        )),
-    }
-}
-
-/// Convert a type name string to an abstract heap type.
-fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<HeapType> {
-    match name {
-        "any" | "anyref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Any,
-        }),
-        "func" | "funcref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Func,
-        }),
-        "extern" | "externref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Extern,
-        }),
-        "none" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::None,
-        }),
-        "struct" | "structref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Struct,
-        }),
-        "array" | "arrayref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Array,
-        }),
-        "i31" | "i31ref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::I31,
-        }),
-        "eq" | "eqref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Eq,
-        }),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("unknown abstract heap type"),
-        )),
-    }
 }
 
 #[cfg(test)]
