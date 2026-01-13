@@ -35,8 +35,9 @@ pub struct WasmBinary<'db> {
 ///
 /// This is a Salsa tracked function that:
 /// 1. Lowers the module from func/scf/arith dialects to wasm dialect operations
-/// 2. Emits the wasm dialect to a WebAssembly binary
-/// 3. Collects metadata (exports, imports) for tooling integration
+/// 2. Validates that all types are resolved (no placeholder types)
+/// 3. Emits the wasm dialect to a WebAssembly binary
+/// 4. Collects metadata (exports, imports) for tooling integration
 ///
 /// Note: Dead code elimination (DCE) is performed earlier in the pipeline
 /// (stage_dce) before this function is called, ensuring unused functions
@@ -50,6 +51,10 @@ pub fn compile_to_wasm<'db>(
 ) -> crate::CompilationResult<WasmBinary<'db>> {
     // Phase 1 - Lower to wasm dialect
     let lowered = crate::lower_wasm::lower_to_wasm(db, module);
+
+    // Phase 2 - Validate IR (check for unresolved types)
+    // Currently logs warnings; will become errors in the future.
+    let _stats = crate::validate_wasm_types(db, lowered);
 
     let bytes = crate::emit_wasm(db, lowered)?;
 
