@@ -32,9 +32,13 @@ pub(crate) fn handle_bytes_from_data<'db>(
     let offset = bytes_op.offset(db);
     let len = bytes_op.len(db);
 
+    // Convert u32 to i32 safely - data segment parameters should always fit in i32
+    let offset_i32 = i32::try_from(offset).expect("data segment offset exceeds i32::MAX");
+    let len_i32 = i32::try_from(len).expect("data segment length exceeds i32::MAX");
+
     // Push offset and length for array.new_data
-    function.instruction(&Instruction::I32Const(offset as i32));
-    function.instruction(&Instruction::I32Const(len as i32));
+    function.instruction(&Instruction::I32Const(offset_i32));
+    function.instruction(&Instruction::I32Const(len_i32));
     function.instruction(&Instruction::ArrayNewData {
         array_type_index: BYTES_ARRAY_IDX,
         array_data_index: data_idx,
@@ -42,7 +46,7 @@ pub(crate) fn handle_bytes_from_data<'db>(
 
     // Push struct fields: offset (0) and len
     function.instruction(&Instruction::I32Const(0));
-    function.instruction(&Instruction::I32Const(len as i32));
+    function.instruction(&Instruction::I32Const(len_i32));
     function.instruction(&Instruction::StructNew(BYTES_STRUCT_IDX));
 
     set_result_local(db, &op, ctx, function)?;

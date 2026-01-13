@@ -7,7 +7,7 @@
 
 use tracing::debug;
 use trunk_ir::dialect::{core, wasm};
-use trunk_ir::{DialectType, Symbol, ValueDef};
+use trunk_ir::{DialectType, IdVec, Symbol, ValueDef};
 use wasm_encoder::{Function, HeapType, Instruction};
 
 use tribute_ir::dialect::{tribute, tribute_rt};
@@ -161,7 +161,7 @@ pub(crate) fn handle_call_indirect<'db>(
             ty
         }
     };
-    let param_types: Vec<trunk_ir::Type<'db>> = operands
+    let param_types: IdVec<trunk_ir::Type<'db>> = operands
         .iter()
         .skip(1)
         .filter_map(|v| value_type(db, *v, &module_info.block_arg_types))
@@ -203,8 +203,7 @@ pub(crate) fn handle_call_indirect<'db>(
     }
 
     // Construct function type
-    let func_type =
-        core::Func::new(db, param_types.clone().into_iter().collect(), result_ty).as_type();
+    let func_type = core::Func::new(db, param_types, result_ty).as_type();
 
     debug!(
         "call_indirect emit: looking up func_type with result={}.{}",
