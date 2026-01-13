@@ -196,6 +196,17 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
             return RewriteResult::Replace(new_op);
         }
 
+        // Log diagnostic info about why we couldn't infer
+        if let ValueDef::OpResult(def_op) = callee_val.def(db) {
+            let callee_ty = def_op.results(db).get(callee_val.index(db)).copied();
+            debug!(
+                "wasm_type_concrete: cannot concretize wasm.call_indirect - callee from {}.{}, type: {:?}",
+                def_op.dialect(db),
+                def_op.name(db),
+                callee_ty.map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+            );
+        }
+
         RewriteResult::Unchanged
     }
 }
