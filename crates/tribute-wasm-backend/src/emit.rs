@@ -6,12 +6,14 @@
 mod call_indirect_collection;
 mod definitions;
 mod gc_types_collection;
+mod handlers;
 mod helpers;
 mod value_emission;
 
 use call_indirect_collection::*;
 use definitions::*;
 use gc_types_collection::*;
+use handlers::{handle_f32_const, handle_f64_const, handle_i32_const, handle_i64_const};
 use helpers::*;
 use value_emission::*;
 
@@ -1484,22 +1486,14 @@ fn emit_op<'db>(
     }
 
     // Special cases: const, control flow, calls, locals, GC ops
-    if let Ok(const_op) = wasm::I32Const::from_operation(db, *op) {
-        let value = const_op.value(db);
-        function.instruction(&Instruction::I32Const(value));
-        set_result_local(db, op, ctx, function)?;
-    } else if let Ok(const_op) = wasm::I64Const::from_operation(db, *op) {
-        let value = const_op.value(db);
-        function.instruction(&Instruction::I64Const(value));
-        set_result_local(db, op, ctx, function)?;
-    } else if let Ok(const_op) = wasm::F32Const::from_operation(db, *op) {
-        let value = const_op.value(db);
-        function.instruction(&Instruction::F32Const(value.into()));
-        set_result_local(db, op, ctx, function)?;
-    } else if let Ok(const_op) = wasm::F64Const::from_operation(db, *op) {
-        let value = const_op.value(db);
-        function.instruction(&Instruction::F64Const(value.into()));
-        set_result_local(db, op, ctx, function)?;
+    if wasm::I32Const::matches(db, *op) {
+        return handle_i32_const(db, op, ctx, function);
+    } else if wasm::I64Const::matches(db, *op) {
+        return handle_i64_const(db, op, ctx, function);
+    } else if wasm::F32Const::matches(db, *op) {
+        return handle_f32_const(db, op, ctx, function);
+    } else if wasm::F64Const::matches(db, *op) {
+        return handle_f64_const(db, op, ctx, function);
     } else if wasm::If::matches(db, *op) {
         let result_ty = op.results(db).first().copied();
 
