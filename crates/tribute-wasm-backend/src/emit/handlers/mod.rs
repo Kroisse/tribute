@@ -4,6 +4,7 @@
 
 mod array_handlers;
 mod const_handlers;
+mod control_flow_handlers;
 mod memory_handlers;
 mod ref_handlers;
 mod struct_handlers;
@@ -14,6 +15,9 @@ pub(super) use array_handlers::{
 };
 pub(super) use const_handlers::{
     handle_f32_const, handle_f64_const, handle_i32_const, handle_i64_const,
+};
+pub(super) use control_flow_handlers::{
+    handle_block, handle_br, handle_br_if, handle_if, handle_loop,
 };
 pub(super) use memory_handlers::{
     handle_f32_load, handle_f32_store, handle_f64_load, handle_f64_store, handle_i32_load,

@@ -15,15 +15,15 @@ use definitions::*;
 use gc_types_collection::*;
 use handlers::{
     handle_array_copy, handle_array_get, handle_array_get_s, handle_array_get_u, handle_array_new,
-    handle_array_new_default, handle_array_set, handle_f32_const, handle_f32_load,
-    handle_f32_store, handle_f64_const, handle_f64_load, handle_f64_store, handle_i32_const,
-    handle_i32_load, handle_i32_load8_s, handle_i32_load8_u, handle_i32_load16_s,
-    handle_i32_load16_u, handle_i32_store, handle_i32_store8, handle_i32_store16, handle_i64_const,
-    handle_i64_load, handle_i64_load8_s, handle_i64_load8_u, handle_i64_load16_s,
-    handle_i64_load16_u, handle_i64_load32_s, handle_i64_load32_u, handle_i64_store,
-    handle_i64_store8, handle_i64_store16, handle_i64_store32, handle_memory_grow,
-    handle_memory_size, handle_ref_cast, handle_ref_func, handle_ref_null, handle_ref_test,
-    handle_struct_get, handle_struct_new, handle_struct_set,
+    handle_array_new_default, handle_array_set, handle_block, handle_br, handle_br_if,
+    handle_f32_const, handle_f32_load, handle_f32_store, handle_f64_const, handle_f64_load,
+    handle_f64_store, handle_i32_const, handle_i32_load, handle_i32_load8_s, handle_i32_load8_u,
+    handle_i32_load16_s, handle_i32_load16_u, handle_i32_store, handle_i32_store8,
+    handle_i32_store16, handle_i64_const, handle_i64_load, handle_i64_load8_s, handle_i64_load8_u,
+    handle_i64_load16_s, handle_i64_load16_u, handle_i64_load32_s, handle_i64_load32_u,
+    handle_i64_store, handle_i64_store8, handle_i64_store16, handle_i64_store32, handle_if,
+    handle_loop, handle_memory_grow, handle_memory_size, handle_ref_cast, handle_ref_func,
+    handle_ref_null, handle_ref_test, handle_struct_get, handle_struct_new, handle_struct_set,
 };
 use helpers::*;
 use value_emission::*;
@@ -44,11 +44,11 @@ use trunk_ir::{
     ValueDef,
 };
 use wasm_encoder::{
-    AbstractHeapType, ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType,
-    ConstExpr, DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind,
-    ExportSection, Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection,
-    Instruction, MemorySection, MemoryType, Module, RefType, StorageType, StructType, SubType,
-    TableSection, TableType, TypeSection, ValType,
+    AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
+    DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
+    Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection, Instruction,
+    MemorySection, MemoryType, Module, RefType, StorageType, StructType, SubType, TableSection,
+    TableType, TypeSection, ValType,
 };
 
 use crate::errors;
@@ -1378,19 +1378,6 @@ fn region_result_value<'db>(
     }
 }
 
-fn emit_value_get<'db>(
-    value: Value<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    function: &mut Function,
-) -> CompilationResult<()> {
-    let index = ctx
-        .value_locals
-        .get(&value)
-        .ok_or_else(|| CompilationError::invalid_module("value missing local mapping"))?;
-    function.instruction(&Instruction::LocalGet(*index));
-    Ok(())
-}
-
 fn emit_op<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
@@ -1475,293 +1462,15 @@ fn emit_op<'db>(
     } else if let Ok(const_op) = wasm::F64Const::from_operation(db, *op) {
         return handle_f64_const(db, const_op, ctx, function);
     } else if wasm::If::matches(db, *op) {
-        let result_ty = op.results(db).first().copied();
-
-        // First try to infer effective type from branches
-        let branch_eff_ty = infer_region_effective_type(db, op, ctx);
-
-        // Check if we can actually get a result value from the then region
-        let then_region_result = op
-            .regions(db)
-            .first()
-            .and_then(|r| region_result_value(db, r));
-        let then_has_result_value = then_region_result.is_some();
-
-        // Check if function returns Step - if so, if blocks should also produce Step
-        let func_returns_step = ctx
-            .func_return_type
-            .map(|ty| is_step_type(db, ty))
-            .unwrap_or(false);
-
-        debug!(
-            "wasm.if: then_has_result_value={}, branch_eff_ty={:?}, func_returns_step={}, result_ty={:?}",
-            then_has_result_value,
-            branch_eff_ty.map(|ty| format!("{}.{}", ty.dialect(db), ty.name(db))),
-            func_returns_step,
-            result_ty.map(|ty| format!("{}.{}", ty.dialect(db), ty.name(db)))
-        );
-
-        // Determine if we should use a result type
-        // Only set has_result if we can actually find a result value
-        let has_result = if !then_has_result_value {
-            false
-        } else if let Some(eff_ty) = branch_eff_ty {
-            !is_nil_type(db, eff_ty)
-        } else if func_returns_step && result_ty.is_some() {
-            // Function returns Step, so if with result should produce Step
-            true
-        } else {
-            matches!(result_ty, Some(ty) if !is_nil_type(db, ty))
-        };
-
-        // For wasm.if with results, we need to determine the actual block type.
-        // If the IR result type is polymorphic or nil but the effective result type
-        // from the then/else branches is concrete, we must use the effective type.
-        let effective_ty = if has_result {
-            // Try branch effective type first (handles Step in resume functions)
-            if let Some(eff_ty) = branch_eff_ty {
-                if !is_nil_type(db, eff_ty) {
-                    debug!(
-                        "wasm.if: using then branch effective type {}.{}",
-                        eff_ty.dialect(db),
-                        eff_ty.name(db)
-                    );
-                    Some(eff_ty)
-                } else {
-                    result_ty
-                }
-            } else if func_returns_step {
-                // Function returns Step, use Step as the block type
-                debug!("wasm.if: using Step type because function returns Step");
-                Some(crate::gc_types::step_marker_type(db))
-            } else if let Some(ir_ty) = result_ty {
-                if tribute::is_type_var(db, ir_ty) {
-                    // Fallback to function return type for polymorphic IR types
-                    if let Some(ret_ty) = ctx.func_return_type {
-                        if !is_polymorphic_type(db, ret_ty) {
-                            debug!(
-                                "wasm.if: using function return type {}.{} instead of type_var",
-                                ret_ty.dialect(db),
-                                ret_ty.name(db)
-                            );
-                            Some(ret_ty)
-                        } else {
-                            Some(ir_ty)
-                        }
-                    } else {
-                        Some(ir_ty)
-                    }
-                } else {
-                    Some(ir_ty)
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let block_type = if has_result {
-            let eff_ty = effective_ty.expect("effective_ty should be Some when has_result is true");
-            // IMPORTANT: Check core.func BEFORE type_idx_by_type lookup.
-            // core.func types should always use funcref block type, not concrete struct types.
-            if core::Func::from_type(db, eff_ty).is_some() {
-                debug!(
-                    "wasm.if block_type: using funcref for core.func type {}.{}",
-                    eff_ty.dialect(db),
-                    eff_ty.name(db)
-                );
-                BlockType::Result(ValType::Ref(RefType::FUNCREF))
-            } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
-                // ADT types - use concrete GC type reference
-                debug!(
-                    "wasm.if block_type: using concrete type_idx={} for {}.{}",
-                    type_idx,
-                    eff_ty.dialect(db),
-                    eff_ty.name(db)
-                );
-                BlockType::Result(ValType::Ref(RefType {
-                    nullable: true,
-                    heap_type: HeapType::Concrete(type_idx),
-                }))
-            } else {
-                debug!(
-                    "wasm.if block_type: no type_idx for {}.{}, using type_to_valtype",
-                    eff_ty.dialect(db),
-                    eff_ty.name(db)
-                );
-                BlockType::Result(type_to_valtype(db, eff_ty, &module_info.type_idx_by_type)?)
-            }
-        } else {
-            BlockType::Empty
-        };
-        if operands.len() != 1 {
-            return Err(CompilationError::invalid_module(
-                "wasm.if expects a single condition operand",
-            ));
-        }
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        function.instruction(&Instruction::If(block_type));
-        let regions = op.regions(db);
-        let then_region = regions
-            .first()
-            .ok_or_else(|| CompilationError::invalid_module("wasm.if missing then region"))?;
-        let then_result = if has_result {
-            Some(region_result_value(db, then_region).ok_or_else(|| {
-                CompilationError::invalid_module("wasm.if then region missing result value")
-            })?)
-        } else {
-            None
-        };
-        emit_region_ops(db, then_region, ctx, module_info, function)?;
-        if let Some(value) = then_result {
-            emit_value_get(value, ctx, function)?;
-            // If the value's effective type is anyref/type_var but the block expects
-            // a specific type, cast the result.
-            if let (Some(eff_ty), Some(value_ty)) = (effective_ty, ctx.effective_types.get(&value))
-                && (tribute::is_type_var(db, *value_ty)
-                    || wasm::Anyref::from_type(db, *value_ty).is_some())
-            {
-                if core::Func::from_type(db, eff_ty).is_some() {
-                    // core.func types need cast to funcref (abstract type)
-                    debug!("wasm.if then: casting anyref branch result to funcref");
-                    function.instruction(&Instruction::RefCastNullable(HeapType::Abstract {
-                        shared: false,
-                        ty: AbstractHeapType::Func,
-                    }));
-                } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
-                    // ADT types need cast to concrete struct type
-                    debug!(
-                        "wasm.if then: casting anyref branch result to (ref null {})",
-                        type_idx
-                    );
-                    function
-                        .instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
-                }
-            }
-        }
-        if let Some(else_region) = regions.get(1) {
-            let else_result = if has_result {
-                Some(region_result_value(db, else_region).ok_or_else(|| {
-                    CompilationError::invalid_module("wasm.if else region missing result value")
-                })?)
-            } else {
-                None
-            };
-            function.instruction(&Instruction::Else);
-            emit_region_ops(db, else_region, ctx, module_info, function)?;
-            if let Some(value) = else_result {
-                emit_value_get(value, ctx, function)?;
-                // Cast else branch result if needed (same logic as then branch)
-                if let (Some(eff_ty), Some(value_ty)) =
-                    (effective_ty, ctx.effective_types.get(&value))
-                    && (tribute::is_type_var(db, *value_ty)
-                        || wasm::Anyref::from_type(db, *value_ty).is_some())
-                {
-                    if core::Func::from_type(db, eff_ty).is_some() {
-                        // core.func types need cast to funcref (abstract type)
-                        debug!("wasm.if else: casting anyref branch result to funcref");
-                        function.instruction(&Instruction::RefCastNullable(HeapType::Abstract {
-                            shared: false,
-                            ty: AbstractHeapType::Func,
-                        }));
-                    } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
-                        // ADT types need cast to concrete struct type
-                        debug!(
-                            "wasm.if else: casting anyref branch result to (ref null {})",
-                            type_idx
-                        );
-                        function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(
-                            type_idx,
-                        )));
-                    }
-                }
-            }
-        } else if has_result {
-            return Err(CompilationError::invalid_module(
-                "wasm.if with result requires else region",
-            ));
-        }
-        function.instruction(&Instruction::End);
-        if has_result {
-            set_result_local(db, op, ctx, function)?;
-        }
+        return handle_if(db, op, ctx, module_info, function);
     } else if wasm::Block::matches(db, *op) {
-        // Upgrade polymorphic block result type to Step if function returns Step
-        let result_ty = op
-            .results(db)
-            .first()
-            .map(|ty| upgrade_polymorphic_to_step(db, *ty, ctx.func_return_type));
-        let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
-        let block_type = if has_result {
-            BlockType::Result(type_to_valtype(
-                db,
-                result_ty.expect("block result type"),
-                &module_info.type_idx_by_type,
-            )?)
-        } else {
-            BlockType::Empty
-        };
-        function.instruction(&Instruction::Block(block_type));
-        let region = op
-            .regions(db)
-            .first()
-            .ok_or_else(|| CompilationError::invalid_module("wasm.block missing body region"))?;
-        emit_region_ops(db, region, ctx, module_info, function)?;
-        if has_result {
-            let value = region_result_value(db, region).ok_or_else(|| {
-                CompilationError::invalid_module("wasm.block body missing result value")
-            })?;
-            emit_value_get(value, ctx, function)?;
-        }
-        function.instruction(&Instruction::End);
-        if has_result {
-            set_result_local(db, op, ctx, function)?;
-        }
+        return handle_block(db, op, ctx, module_info, function);
     } else if wasm::Loop::matches(db, *op) {
-        // Upgrade polymorphic loop result type to Step if function returns Step
-        let result_ty = op
-            .results(db)
-            .first()
-            .map(|ty| upgrade_polymorphic_to_step(db, *ty, ctx.func_return_type));
-        let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
-        let block_type = if has_result {
-            BlockType::Result(type_to_valtype(
-                db,
-                result_ty.expect("loop result type"),
-                &module_info.type_idx_by_type,
-            )?)
-        } else {
-            BlockType::Empty
-        };
-        function.instruction(&Instruction::Loop(block_type));
-        let region = op
-            .regions(db)
-            .first()
-            .ok_or_else(|| CompilationError::invalid_module("wasm.loop missing body region"))?;
-        emit_region_ops(db, region, ctx, module_info, function)?;
-        if has_result {
-            let value = region_result_value(db, region).ok_or_else(|| {
-                CompilationError::invalid_module("wasm.loop body missing result value")
-            })?;
-            emit_value_get(value, ctx, function)?;
-        }
-        function.instruction(&Instruction::End);
-        if has_result {
-            set_result_local(db, op, ctx, function)?;
-        }
+        return handle_loop(db, op, ctx, module_info, function);
     } else if let Ok(br_op) = wasm::Br::from_operation(db, *op) {
-        let depth = br_op.target(db);
-        function.instruction(&Instruction::Br(depth));
+        return handle_br(db, br_op, function);
     } else if let Ok(br_if_op) = wasm::BrIf::from_operation(db, *op) {
-        if operands.len() != 1 {
-            return Err(CompilationError::invalid_module(
-                "wasm.br_if expects a single condition operand",
-            ));
-        }
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let depth = br_if_op.target(db);
-        function.instruction(&Instruction::BrIf(depth));
+        return handle_br_if(db, br_if_op, ctx, module_info, function);
     } else if let Ok(call_op) = wasm::Call::from_operation(db, *op) {
         let callee = call_op.callee(db);
         let target = resolve_callee(callee, module_info)?;
