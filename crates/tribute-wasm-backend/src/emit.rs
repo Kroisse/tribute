@@ -14,13 +14,15 @@ use call_indirect_collection::*;
 use definitions::*;
 use gc_types_collection::*;
 use handlers::{
-    handle_f32_const, handle_f32_load, handle_f32_store, handle_f64_const, handle_f64_load,
-    handle_f64_store, handle_i32_const, handle_i32_load, handle_i32_load8_s, handle_i32_load8_u,
-    handle_i32_load16_s, handle_i32_load16_u, handle_i32_store, handle_i32_store8,
-    handle_i32_store16, handle_i64_const, handle_i64_load, handle_i64_load8_s, handle_i64_load8_u,
-    handle_i64_load16_s, handle_i64_load16_u, handle_i64_load32_s, handle_i64_load32_u,
-    handle_i64_store, handle_i64_store8, handle_i64_store16, handle_i64_store32,
-    handle_memory_grow, handle_memory_size,
+    handle_array_copy, handle_array_get, handle_array_get_s, handle_array_get_u, handle_array_new,
+    handle_array_new_default, handle_array_set, handle_f32_const, handle_f32_load,
+    handle_f32_store, handle_f64_const, handle_f64_load, handle_f64_store, handle_i32_const,
+    handle_i32_load, handle_i32_load8_s, handle_i32_load8_u, handle_i32_load16_s,
+    handle_i32_load16_u, handle_i32_store, handle_i32_store8, handle_i32_store16, handle_i64_const,
+    handle_i64_load, handle_i64_load8_s, handle_i64_load8_u, handle_i64_load16_s,
+    handle_i64_load16_u, handle_i64_load32_s, handle_i64_load32_u, handle_i64_store,
+    handle_i64_store8, handle_i64_store16, handle_i64_store32, handle_memory_grow,
+    handle_memory_size,
 };
 use helpers::*;
 use value_emission::*;
@@ -2381,67 +2383,20 @@ fn emit_op<'db>(
             struct_type_index: type_idx,
             field_index: field_idx,
         });
-    } else if wasm::ArrayNew::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from result type (type_idx attr may not be set during IR generation)
-        let inferred_type = op.results(db).first().copied();
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArrayNew(type_idx));
-        set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayNewDefault::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from result type
-        let inferred_type = op.results(db).first().copied();
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArrayNewDefault(type_idx));
-        set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayGet::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from operand[0] (the array ref)
-        let inferred_type = operands
-            .first()
-            .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArrayGet(type_idx));
-        set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayGetS::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from operand[0] (the array ref)
-        let inferred_type = operands
-            .first()
-            .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArrayGetS(type_idx));
-        set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayGetU::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from operand[0] (the array ref)
-        let inferred_type = operands
-            .first()
-            .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArrayGetU(type_idx));
-        set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArraySet::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from operand[0] (the array ref)
-        let inferred_type = operands
-            .first()
-            .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArraySet(type_idx));
+    } else if let Ok(array_new_op) = wasm::ArrayNew::from_operation(db, *op) {
+        return handle_array_new(db, array_new_op, ctx, module_info, function);
+    } else if let Ok(array_new_default_op) = wasm::ArrayNewDefault::from_operation(db, *op) {
+        return handle_array_new_default(db, array_new_default_op, ctx, module_info, function);
+    } else if let Ok(array_get_op) = wasm::ArrayGet::from_operation(db, *op) {
+        return handle_array_get(db, array_get_op, ctx, module_info, function);
+    } else if let Ok(array_get_s_op) = wasm::ArrayGetS::from_operation(db, *op) {
+        return handle_array_get_s(db, array_get_s_op, ctx, module_info, function);
+    } else if let Ok(array_get_u_op) = wasm::ArrayGetU::from_operation(db, *op) {
+        return handle_array_get_u(db, array_get_u_op, ctx, module_info, function);
+    } else if let Ok(array_set_op) = wasm::ArraySet::from_operation(db, *op) {
+        return handle_array_set(db, array_set_op, ctx, module_info, function);
     } else if let Ok(array_copy_op) = wasm::ArrayCopy::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        function.instruction(&Instruction::ArrayCopy {
-            array_type_index_dst: array_copy_op.dst_type_idx(db),
-            array_type_index_src: array_copy_op.src_type_idx(db),
-        });
+        return handle_array_copy(db, array_copy_op, ctx, module_info, function);
     } else if wasm::RefNull::matches(db, *op) {
         let attrs = op.attributes(db);
         // Infer type from result type

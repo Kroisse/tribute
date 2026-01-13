@@ -2,9 +2,14 @@
 //!
 //! This module contains handlers for different categories of WebAssembly operations.
 
+mod array_handlers;
 mod const_handlers;
 mod memory_handlers;
 
+pub(super) use array_handlers::{
+    handle_array_copy, handle_array_get, handle_array_get_s, handle_array_get_u, handle_array_new,
+    handle_array_new_default, handle_array_set,
+};
 pub(super) use const_handlers::{
     handle_f32_const, handle_f64_const, handle_i32_const, handle_i64_const,
 };
