@@ -29,8 +29,8 @@ use super::result::RewriteResult;
 ///
 /// struct RenamePattern;
 ///
-/// impl RewritePattern for RenamePattern {
-///     fn match_and_rewrite<'db>(
+/// impl<'db> RewritePattern<'db> for RenamePattern {
+///     fn match_and_rewrite(
 ///         &self,
 ///         db: &'db dyn salsa::Database,
 ///         op: &Operation<'db>,
@@ -49,7 +49,7 @@ use super::result::RewriteResult;
 ///     }
 /// }
 /// ```
-pub trait RewritePattern {
+pub trait RewritePattern<'db> {
     /// Attempt to match and rewrite an operation.
     ///
     /// Returns `RewriteResult::Unchanged` if the pattern doesn't apply.
@@ -58,7 +58,7 @@ pub trait RewritePattern {
     /// The `adaptor` provides access to:
     /// - Remapped operands via `adaptor.operands()`
     /// - Value types (including block arguments) via `adaptor.get_value_type()`
-    fn match_and_rewrite<'db>(
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,

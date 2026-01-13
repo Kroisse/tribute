@@ -2518,8 +2518,8 @@ fn expand_shift_operation<'db>(
 /// 5. If not yielding: returns body result normally
 struct PushPromptPattern;
 
-impl RewritePattern for PushPromptPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for PushPromptPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -2983,8 +2983,8 @@ fn compute_op_idx_hash(name: &str) -> u64 {
 /// - Block 1+: suspend cases (each has a marker block arg with ability_ref + op_name attrs)
 struct HandlerDispatchPattern;
 
-impl RewritePattern for HandlerDispatchPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for HandlerDispatchPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -3573,8 +3573,8 @@ const WRAPPER_FIELD_STATE: u32 = 0;
 #[allow(dead_code)]
 const WRAPPER_FIELD_RESUME_VALUE: u32 = 1;
 
-impl RewritePattern for ResumePattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ResumePattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -3695,8 +3695,8 @@ impl RewritePattern for ResumePattern {
 /// Pattern for `cont.drop` -> deallocate continuation
 struct DropPattern;
 
-impl RewritePattern for DropPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for DropPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -3723,8 +3723,8 @@ impl RewritePattern for DropPattern {
 /// It expands to: global.get $yield_cont -> ref_cast structref
 struct GetContinuationPattern;
 
-impl RewritePattern for GetContinuationPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for GetContinuationPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -3774,8 +3774,8 @@ impl RewritePattern for GetContinuationPattern {
 /// is known.
 struct GetShiftValuePattern;
 
-impl RewritePattern for GetShiftValuePattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for GetShiftValuePattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -3844,8 +3844,8 @@ impl RewritePattern for GetShiftValuePattern {
 /// For primitive types, the final result is i32. For reference types, it's anyref.
 struct GetDoneValuePattern;
 
-impl RewritePattern for GetDoneValuePattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for GetDoneValuePattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,

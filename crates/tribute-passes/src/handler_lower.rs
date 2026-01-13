@@ -125,8 +125,8 @@ impl LowerPromptPattern {
     }
 }
 
-impl RewritePattern for LowerPromptPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for LowerPromptPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -214,8 +214,8 @@ impl LowerPerformPattern {
     }
 }
 
-impl RewritePattern for LowerPerformPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for LowerPerformPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -284,8 +284,8 @@ impl RewritePattern for LowerPerformPattern {
 
 struct LowerResumePattern;
 
-impl RewritePattern for LowerResumePattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for LowerResumePattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -318,8 +318,8 @@ impl RewritePattern for LowerResumePattern {
 
 struct LowerAbortPattern;
 
-impl RewritePattern for LowerAbortPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for LowerAbortPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,

@@ -26,8 +26,8 @@
 //! /// Pattern that replaces `arith.const(0)` with `arith.const(1)`.
 //! struct ZeroToOnePattern;
 //!
-//! impl RewritePattern for ZeroToOnePattern {
-//!     fn match_and_rewrite<'db>(
+//! impl<'db> RewritePattern<'db> for ZeroToOnePattern {
+//!     fn match_and_rewrite(
 //!         &self,
 //!         db: &'db dyn salsa::Database,
 //!         op: &Operation<'db>,

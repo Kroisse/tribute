@@ -218,7 +218,7 @@ impl PrintLinePattern {
     }
 }
 
-impl RewritePattern for PrintLinePattern {
+impl<'db> RewritePattern<'db> for PrintLinePattern {
     fn match_and_rewrite<'a>(
         &self,
         db: &'a dyn salsa::Database,
@@ -332,7 +332,7 @@ fn is_bytes_intrinsic_call<'db>(
 /// Pattern for `__bytes_len(bytes)` -> `struct.get $bytes 2` + `i64.extend_i32_u`
 struct BytesLenPattern;
 
-impl RewritePattern for BytesLenPattern {
+impl<'db> RewritePattern<'db> for BytesLenPattern {
     fn match_and_rewrite<'a>(
         &self,
         db: &'a dyn salsa::Database,
@@ -372,7 +372,7 @@ impl RewritePattern for BytesLenPattern {
 /// Pattern for `Bytes::get_or_panic(bytes, index)` -> array access with offset
 struct BytesGetOrPanicPattern;
 
-impl RewritePattern for BytesGetOrPanicPattern {
+impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
     fn match_and_rewrite<'a>(
         &self,
         db: &'a dyn salsa::Database,
@@ -456,7 +456,7 @@ impl RewritePattern for BytesGetOrPanicPattern {
 /// Pattern for `Bytes::slice_or_panic(bytes, start, end)` -> new struct with adjusted offset/len
 struct BytesSliceOrPanicPattern;
 
-impl RewritePattern for BytesSliceOrPanicPattern {
+impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
     fn match_and_rewrite<'a>(
         &self,
         db: &'a dyn salsa::Database,
@@ -553,7 +553,7 @@ impl RewritePattern for BytesSliceOrPanicPattern {
 /// Pattern for `Bytes::concat(left, right)` -> allocate new array and copy both
 struct BytesConcatPattern;
 
-impl RewritePattern for BytesConcatPattern {
+impl<'db> RewritePattern<'db> for BytesConcatPattern {
     fn match_and_rewrite<'a>(
         &self,
         db: &'a dyn salsa::Database,

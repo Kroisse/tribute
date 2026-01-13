@@ -49,8 +49,8 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 /// Since tribute_rt.int is 31-bit, no truncation is needed.
 struct BoxIntPattern;
 
-impl RewritePattern for BoxIntPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for BoxIntPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -78,8 +78,8 @@ impl RewritePattern for BoxIntPattern {
 /// Unboxing extracts the signed i32 from an i31ref.
 struct UnboxIntPattern;
 
-impl RewritePattern for UnboxIntPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for UnboxIntPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -107,8 +107,8 @@ impl RewritePattern for UnboxIntPattern {
 /// Boxing converts an unboxed nat (u32) to an i31ref.
 struct BoxNatPattern;
 
-impl RewritePattern for BoxNatPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for BoxNatPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -132,8 +132,8 @@ impl RewritePattern for BoxNatPattern {
 /// Unboxing extracts the unsigned i32 from an i31ref.
 struct UnboxNatPattern;
 
-impl RewritePattern for UnboxNatPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for UnboxNatPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -158,8 +158,8 @@ impl RewritePattern for UnboxNatPattern {
 /// Boxing converts an f64 to a BoxedF64 struct.
 struct BoxFloatPattern;
 
-impl RewritePattern for BoxFloatPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for BoxFloatPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -184,8 +184,8 @@ impl RewritePattern for BoxFloatPattern {
 /// Unboxing extracts the f64 from a BoxedF64 struct.
 struct UnboxFloatPattern;
 
-impl RewritePattern for UnboxFloatPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for UnboxFloatPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -210,8 +210,8 @@ impl RewritePattern for UnboxFloatPattern {
 /// Boxing converts an i32 boolean to an i31ref.
 struct BoxBoolPattern;
 
-impl RewritePattern for BoxBoolPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for BoxBoolPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -235,8 +235,8 @@ impl RewritePattern for BoxBoolPattern {
 /// Unboxing extracts the boolean (0 or 1) from an i31ref.
 struct UnboxBoolPattern;
 
-impl RewritePattern for UnboxBoolPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for UnboxBoolPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,

@@ -41,8 +41,8 @@ pub struct ApplyResult<'db> {
 /// /// Pattern that replaces `arith.const(0)` with `arith.const(1)`.
 /// struct ZeroToOnePattern;
 ///
-/// impl RewritePattern for ZeroToOnePattern {
-///     fn match_and_rewrite<'db>(
+/// impl<'db> RewritePattern<'db> for ZeroToOnePattern {
+///     fn match_and_rewrite(
 ///         &self,
 ///         db: &'db dyn salsa::Database,
 ///         op: &Operation<'db>,
@@ -84,13 +84,13 @@ pub struct ApplyResult<'db> {
 /// assert!(reached);
 /// # });
 /// ```
-pub struct PatternApplicator {
-    patterns: Vec<Box<dyn RewritePattern>>,
+pub struct PatternApplicator<'db> {
+    patterns: Vec<Box<dyn RewritePattern<'db> + 'db>>,
     max_iterations: usize,
     type_converter: super::TypeConverter,
 }
 
-impl PatternApplicator {
+impl<'db> PatternApplicator<'db> {
     /// Create a new pattern applicator with a type converter.
     ///
     /// The `OpAdaptor` will convert types using this converter,
@@ -115,18 +115,14 @@ impl PatternApplicator {
     /// Add a pattern to the applicator.
     pub fn add_pattern<P>(mut self, pattern: P) -> Self
     where
-        P: RewritePattern + 'static,
+        P: RewritePattern<'db> + 'db,
     {
         self.patterns.push(Box::new(pattern));
         self
     }
 
     /// Apply all patterns to a module until fixpoint.
-    pub fn apply<'db>(
-        &self,
-        db: &'db dyn salsa::Database,
-        module: Module<'db>,
-    ) -> ApplyResult<'db> {
+    pub fn apply(&self, db: &'db dyn salsa::Database, module: Module<'db>) -> ApplyResult<'db> {
         let mut current = module;
         let mut total_changes = 0;
 
@@ -160,7 +156,7 @@ impl PatternApplicator {
     }
 
     /// Rewrite a module (single pass).
-    fn rewrite_module<'db>(
+    fn rewrite_module(
         &self,
         db: &'db dyn salsa::Database,
         module: &Module<'db>,
@@ -174,7 +170,7 @@ impl PatternApplicator {
     }
 
     /// Rewrite a region.
-    fn rewrite_region<'db>(
+    fn rewrite_region(
         &self,
         db: &'db dyn salsa::Database,
         region: &Region<'db>,
@@ -190,7 +186,7 @@ impl PatternApplicator {
     }
 
     /// Rewrite a block.
-    fn rewrite_block<'db>(
+    fn rewrite_block(
         &self,
         db: &'db dyn salsa::Database,
         block: &Block<'db>,
@@ -221,7 +217,7 @@ impl PatternApplicator {
     /// 5. If a pattern matches, apply it and record mappings
     /// 6. Recursively rewrite any nested regions
     /// 7. Map original operation results to final operation results
-    fn rewrite_operation<'db>(
+    fn rewrite_operation(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -298,7 +294,7 @@ impl PatternApplicator {
     }
 
     /// Rewrite nested regions within an operation.
-    fn rewrite_op_regions<'db>(
+    fn rewrite_op_regions(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -318,7 +314,7 @@ impl PatternApplicator {
     }
 }
 
-impl Default for PatternApplicator {
+impl<'db> Default for PatternApplicator<'db> {
     fn default() -> Self {
         Self::new(super::TypeConverter::new())
     }
@@ -370,8 +366,8 @@ mod tests {
     /// Uses Replace to avoid infinite loop.
     struct ConstToMulPattern;
 
-    impl RewritePattern for ConstToMulPattern {
-        fn match_and_rewrite<'db>(
+    impl<'db> RewritePattern<'db> for ConstToMulPattern {
+        fn match_and_rewrite(
             &self,
             db: &'db dyn salsa::Database,
             op: &Operation<'db>,

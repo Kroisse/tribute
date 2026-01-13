@@ -18,23 +18,22 @@ use crate::type_converter::wasm_type_converter;
 
 /// Lower func dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    PatternApplicator::new(wasm_type_converter())
+    let applicator = PatternApplicator::new(wasm_type_converter())
         .add_pattern(FuncFuncPattern)
         .add_pattern(FuncCallPattern)
         .add_pattern(FuncCallIndirectPattern)
         .add_pattern(FuncReturnPattern)
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern)
-        .apply(db, module)
-        .module
+        .add_pattern(FuncConstantPattern);
+    applicator.apply(db, module).module
 }
 
 /// Pattern for `func.func` -> `wasm.func`
 struct FuncFuncPattern;
 
-impl RewritePattern for FuncFuncPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for FuncFuncPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -55,8 +54,8 @@ impl RewritePattern for FuncFuncPattern {
 /// Pattern for `func.call` -> `wasm.call`
 struct FuncCallPattern;
 
-impl RewritePattern for FuncCallPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for FuncCallPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -85,8 +84,8 @@ impl RewritePattern for FuncCallPattern {
 /// The callee (funcref) is the first operand, followed by arguments.
 struct FuncCallIndirectPattern;
 
-impl RewritePattern for FuncCallIndirectPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for FuncCallIndirectPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -111,8 +110,8 @@ impl RewritePattern for FuncCallIndirectPattern {
 /// Pattern for `func.return` -> `wasm.return`
 struct FuncReturnPattern;
 
-impl RewritePattern for FuncReturnPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for FuncReturnPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -131,8 +130,8 @@ impl RewritePattern for FuncReturnPattern {
 /// Pattern for `func.tail_call` -> `wasm.return_call`
 struct FuncTailCallPattern;
 
-impl RewritePattern for FuncTailCallPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for FuncTailCallPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -157,8 +156,8 @@ impl RewritePattern for FuncTailCallPattern {
 /// Pattern for `func.unreachable` -> `wasm.unreachable`
 struct FuncUnreachablePattern;
 
-impl RewritePattern for FuncUnreachablePattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for FuncUnreachablePattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -184,8 +183,8 @@ impl RewritePattern for FuncUnreachablePattern {
 /// Used for closures where lifted functions need to be stored as first-class values.
 struct FuncConstantPattern;
 
-impl RewritePattern for FuncConstantPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for FuncConstantPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
