@@ -182,8 +182,7 @@ pub(crate) fn handle_call_indirect<'db>(
     let funcref_ty = wasm::Funcref::new(db).as_type();
     if let Some(func_ret_ty) = ctx.func_return_type {
         let is_anyref_result = wasm::Anyref::from_type(db, result_ty).is_some();
-        let is_type_var_result = result_ty.dialect(db) == Symbol::new("tribute")
-            && result_ty.name(db) == Symbol::new("type_var");
+        let is_type_var_result = tribute::is_type_var(db, result_ty);
         let is_polymorphic_result = is_anyref_result || is_type_var_result;
         let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty).is_some()
             || core::Func::from_type(db, func_ret_ty).is_some();

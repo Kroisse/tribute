@@ -6,8 +6,8 @@
 use trunk_ir::dialect::wasm;
 use wasm_encoder::{Function, Instruction};
 
-use crate::CompilationResult;
 use crate::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
+use crate::{CompilationError, CompilationResult};
 
 use super::super::{FunctionEmitContext, set_result_local};
 
@@ -33,8 +33,10 @@ pub(crate) fn handle_bytes_from_data<'db>(
     let len = bytes_op.len(db);
 
     // Convert u32 to i32 safely - data segment parameters should always fit in i32
-    let offset_i32 = i32::try_from(offset).expect("data segment offset exceeds i32::MAX");
-    let len_i32 = i32::try_from(len).expect("data segment length exceeds i32::MAX");
+    let offset_i32 = i32::try_from(offset)
+        .map_err(|_| CompilationError::invalid_module("data segment offset exceeds i32::MAX"))?;
+    let len_i32 = i32::try_from(len)
+        .map_err(|_| CompilationError::invalid_module("data segment length exceeds i32::MAX"))?;
 
     // Push offset and length for array.new_data
     function.instruction(&Instruction::I32Const(offset_i32));
