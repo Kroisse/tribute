@@ -6,6 +6,7 @@ mod array_handlers;
 mod const_handlers;
 mod memory_handlers;
 mod ref_handlers;
+mod struct_handlers;
 
 pub(super) use array_handlers::{
     handle_array_copy, handle_array_get, handle_array_get_s, handle_array_get_u, handle_array_new,
@@ -23,3 +24,4 @@ pub(super) use memory_handlers::{
     handle_i64_store32, handle_memory_grow, handle_memory_size,
 };
 pub(super) use ref_handlers::{handle_ref_cast, handle_ref_func, handle_ref_null, handle_ref_test};
+pub(super) use struct_handlers::{handle_struct_get, handle_struct_new, handle_struct_set};
