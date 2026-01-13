@@ -6,18 +6,14 @@
 //!
 //! ## What this pass does
 //!
-//! 1. **Replace `type_var` in operation results** with concrete types:
-//!    - `wasm.call`: Use callee's return type from function signature
-//!    - `wasm.call_indirect`: Use enclosing function's return type as hint
-//!    - `wasm.if`/`wasm.block`/`wasm.loop`: Infer from branch result types
+//! **Replace `type_var` in operation results** with concrete types:
+//! - `wasm.call`: Use callee's return type from function signature
+//! - `wasm.call_indirect`: Use enclosing function's return type as hint
+//! - `wasm.if`/`wasm.block`/`wasm.loop`: Infer from branch result types
 //!
-//! 2. **Insert explicit boxing operations** at polymorphic call sites:
-//!    - When a concrete type (Int, Float) is passed to a generic parameter
-//!    - Replace with: `tribute_rt.box_int(%value)` before the call
-//!
-//! 3. **Insert explicit unboxing operations** for generic return values:
-//!    - When a generic function returns `anyref` but concrete type is expected
-//!    - Replace with: `tribute_rt.unbox_int(%result)` after the call
+//! Note: Boxing/unboxing of values at polymorphic call sites is currently
+//! handled in the emit phase (`value_emission.rs`). Future work may move
+//! this logic here as explicit IR operations.
 
 use std::collections::HashMap;
 
