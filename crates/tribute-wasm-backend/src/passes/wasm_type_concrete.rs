@@ -93,16 +93,6 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         };
 
-        // Get the result type
-        let Some(result_ty) = op.results(db).first().copied() else {
-            return RewriteResult::Unchanged;
-        };
-
-        // Only process if result type is a type variable
-        if !tribute::is_type_var(db, result_ty) {
-            return RewriteResult::Unchanged;
-        }
-
         // Look up the callee's return type
         let callee = call_op.callee(db);
         let Some(&return_ty) = self.func_return_types.get(&callee) else {
@@ -122,16 +112,19 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         }
 
+        // Try to concretize results
+        let Some(new_results) = concretize_results(db, op.results(db), return_ty) else {
+            return RewriteResult::Unchanged;
+        };
+
         debug!(
-            "wasm_type_concrete: concretizing wasm.call {} result from type_var to {}.{}",
+            "wasm_type_concrete: concretizing wasm.call {} result(s) to {}.{}",
             callee,
             return_ty.dialect(db),
             return_ty.name(db)
         );
 
-        // Create a new call operation with the concrete result type
-        let new_op = op.modify(db).results(IdVec::from(vec![return_ty])).build();
-
+        let new_op = op.modify(db).results(new_results).build();
         RewriteResult::Replace(new_op)
     }
 }
@@ -158,16 +151,6 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         }
 
-        // Get the result type
-        let Some(result_ty) = op.results(db).first().copied() else {
-            return RewriteResult::Unchanged;
-        };
-
-        // Only process if result type is a type variable
-        if !tribute::is_type_var(db, result_ty) {
-            return RewriteResult::Unchanged;
-        }
-
         // The callee is the last operand (funcref)
         let operands = op.operands(db);
         let Some(&callee_val) = operands.last() else {
@@ -178,17 +161,18 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
         if let Some(concrete_ty) = infer_type_from_callee(db, callee_val, &self.func_return_types)
             && !tribute::is_type_var(db, concrete_ty)
         {
+            // Try to concretize results
+            let Some(new_results) = concretize_results(db, op.results(db), concrete_ty) else {
+                return RewriteResult::Unchanged;
+            };
+
             debug!(
-                "wasm_type_concrete: concretizing wasm.call_indirect result from type_var to {}.{}",
+                "wasm_type_concrete: concretizing wasm.call_indirect result(s) to {}.{}",
                 concrete_ty.dialect(db),
                 concrete_ty.name(db)
             );
 
-            let new_op = op
-                .modify(db)
-                .results(IdVec::from(vec![concrete_ty]))
-                .build();
-
+            let new_op = op.modify(db).results(new_results).build();
             return RewriteResult::Replace(new_op);
         }
 
@@ -260,35 +244,23 @@ impl<'db> RewritePattern<'db> for IfResultTypePattern {
             return RewriteResult::Unchanged;
         }
 
-        // Get the result type
-        let Some(result_ty) = op.results(db).first().copied() else {
+        // Try to infer concrete type from regions
+        let Some(concrete_ty) = infer_type_from_regions(db, op.regions(db)) else {
             return RewriteResult::Unchanged;
         };
 
-        // Only process if result type is a type variable
-        if !tribute::is_type_var(db, result_ty) {
-            return RewriteResult::Unchanged;
-        }
-
-        // Try to infer concrete type from regions
-        let regions = op.regions(db);
-        let inferred = infer_type_from_regions(db, regions);
-
-        let Some(concrete_ty) = inferred else {
+        // Try to concretize results
+        let Some(new_results) = concretize_results(db, op.results(db), concrete_ty) else {
             return RewriteResult::Unchanged;
         };
 
         debug!(
-            "wasm_type_concrete: concretizing wasm.if result from type_var to {}.{}",
+            "wasm_type_concrete: concretizing wasm.if result(s) to {}.{}",
             concrete_ty.dialect(db),
             concrete_ty.name(db)
         );
 
-        let new_op = op
-            .modify(db)
-            .results(IdVec::from(vec![concrete_ty]))
-            .build();
-
+        let new_op = op.modify(db).results(new_results).build();
         RewriteResult::Replace(new_op)
     }
 }
@@ -308,35 +280,23 @@ impl<'db> RewritePattern<'db> for BlockResultTypePattern {
             return RewriteResult::Unchanged;
         }
 
-        // Get the result type
-        let Some(result_ty) = op.results(db).first().copied() else {
+        // Try to infer concrete type from the body region
+        let Some(concrete_ty) = infer_type_from_regions(db, op.regions(db)) else {
             return RewriteResult::Unchanged;
         };
 
-        // Only process if result type is a type variable
-        if !tribute::is_type_var(db, result_ty) {
-            return RewriteResult::Unchanged;
-        }
-
-        // Try to infer concrete type from the body region
-        let regions = op.regions(db);
-        let inferred = infer_type_from_regions(db, regions);
-
-        let Some(concrete_ty) = inferred else {
+        // Try to concretize results
+        let Some(new_results) = concretize_results(db, op.results(db), concrete_ty) else {
             return RewriteResult::Unchanged;
         };
 
         debug!(
-            "wasm_type_concrete: concretizing wasm.block result from type_var to {}.{}",
+            "wasm_type_concrete: concretizing wasm.block result(s) to {}.{}",
             concrete_ty.dialect(db),
             concrete_ty.name(db)
         );
 
-        let new_op = op
-            .modify(db)
-            .results(IdVec::from(vec![concrete_ty]))
-            .build();
-
+        let new_op = op.modify(db).results(new_results).build();
         RewriteResult::Replace(new_op)
     }
 }
@@ -356,35 +316,23 @@ impl<'db> RewritePattern<'db> for LoopResultTypePattern {
             return RewriteResult::Unchanged;
         }
 
-        // Get the result type
-        let Some(result_ty) = op.results(db).first().copied() else {
+        // Try to infer concrete type from the body region
+        let Some(concrete_ty) = infer_type_from_regions(db, op.regions(db)) else {
             return RewriteResult::Unchanged;
         };
 
-        // Only process if result type is a type variable
-        if !tribute::is_type_var(db, result_ty) {
-            return RewriteResult::Unchanged;
-        }
-
-        // Try to infer concrete type from the body region
-        let regions = op.regions(db);
-        let inferred = infer_type_from_regions(db, regions);
-
-        let Some(concrete_ty) = inferred else {
+        // Try to concretize results
+        let Some(new_results) = concretize_results(db, op.results(db), concrete_ty) else {
             return RewriteResult::Unchanged;
         };
 
         debug!(
-            "wasm_type_concrete: concretizing wasm.loop result from type_var to {}.{}",
+            "wasm_type_concrete: concretizing wasm.loop result(s) to {}.{}",
             concrete_ty.dialect(db),
             concrete_ty.name(db)
         );
 
-        let new_op = op
-            .modify(db)
-            .results(IdVec::from(vec![concrete_ty]))
-            .build();
-
+        let new_op = op.modify(db).results(new_results).build();
         RewriteResult::Replace(new_op)
     }
 }
@@ -393,17 +341,78 @@ impl<'db> RewritePattern<'db> for LoopResultTypePattern {
 // Helper functions
 // ============================================================================
 
+/// Replace all `type_var` results with a concrete type.
+///
+/// Returns the modified results, or None if no changes were needed.
+fn concretize_results<'db>(
+    db: &'db dyn salsa::Database,
+    results: &IdVec<Type<'db>>,
+    concrete_ty: Type<'db>,
+) -> Option<IdVec<Type<'db>>> {
+    // Check if any result is a type_var
+    let has_type_var = results.iter().any(|ty| tribute::is_type_var(db, *ty));
+    if !has_type_var {
+        return None;
+    }
+
+    // Replace all type_var results with the concrete type
+    let new_results: IdVec<Type<'db>> = results
+        .iter()
+        .map(|ty| {
+            if tribute::is_type_var(db, *ty) {
+                concrete_ty
+            } else {
+                *ty
+            }
+        })
+        .collect();
+
+    Some(new_results)
+}
+
 /// Try to infer a concrete type from regions by looking at yield operations.
+///
+/// For control flow operations like `wasm.if`, all branches should yield the same type.
+/// This function validates type agreement across regions and returns None if they disagree.
 fn infer_type_from_regions<'db>(
     db: &'db dyn salsa::Database,
     regions: &IdVec<Region<'db>>,
 ) -> Option<Type<'db>> {
+    let mut found: Option<Type<'db>> = None;
+
     for region in regions.iter() {
-        if let Some(ty) = infer_type_from_region(db, region) {
-            return Some(ty);
+        let Some(ty) = infer_type_from_region(db, region) else {
+            continue;
+        };
+
+        // Skip type variables - we want concrete types
+        if tribute::is_type_var(db, ty) {
+            continue;
+        }
+
+        match found {
+            None => found = Some(ty),
+            Some(prev) if prev == ty => {
+                // Types agree, continue
+            }
+            Some(prev) => {
+                // Type disagreement across regions - this indicates a type error
+                // that should have been caught earlier in the pipeline.
+                debug_assert!(
+                    false,
+                    "infer_type_from_regions: type disagreement between branches: {}.{} vs {}.{}",
+                    prev.dialect(db),
+                    prev.name(db),
+                    ty.dialect(db),
+                    ty.name(db)
+                );
+                // In release builds, return None to avoid making assumptions
+                return None;
+            }
         }
     }
-    None
+
+    found
 }
 
 /// Try to infer a concrete type from a region's yield operations.
