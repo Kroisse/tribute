@@ -6,12 +6,25 @@
 mod call_indirect_collection;
 mod definitions;
 mod gc_types_collection;
+mod handlers;
 mod helpers;
 mod value_emission;
 
 use call_indirect_collection::*;
 use definitions::*;
 use gc_types_collection::*;
+use handlers::{
+    handle_array_copy, handle_array_get, handle_array_get_s, handle_array_get_u, handle_array_new,
+    handle_array_new_default, handle_array_set, handle_block, handle_br, handle_br_if,
+    handle_f32_const, handle_f32_load, handle_f32_store, handle_f64_const, handle_f64_load,
+    handle_f64_store, handle_i32_const, handle_i32_load, handle_i32_load8_s, handle_i32_load8_u,
+    handle_i32_load16_s, handle_i32_load16_u, handle_i32_store, handle_i32_store8,
+    handle_i32_store16, handle_i64_const, handle_i64_load, handle_i64_load8_s, handle_i64_load8_u,
+    handle_i64_load16_s, handle_i64_load16_u, handle_i64_load32_s, handle_i64_load32_u,
+    handle_i64_store, handle_i64_store8, handle_i64_store16, handle_i64_store32, handle_if,
+    handle_loop, handle_memory_grow, handle_memory_size, handle_ref_cast, handle_ref_func,
+    handle_ref_null, handle_ref_test, handle_struct_get, handle_struct_new, handle_struct_set,
+};
 use helpers::*;
 use value_emission::*;
 
@@ -31,20 +44,17 @@ use trunk_ir::{
     ValueDef,
 };
 use wasm_encoder::{
-    AbstractHeapType, ArrayType, BlockType, CodeSection, CompositeInnerType, CompositeType,
-    ConstExpr, DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind,
-    ExportSection, Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection,
-    Instruction, MemArg, MemorySection, MemoryType, Module, RefType, StorageType, StructType,
-    SubType, TableSection, TableType, TypeSection, ValType,
+    AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
+    DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
+    Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection, Instruction,
+    MemorySection, MemoryType, Module, RefType, StorageType, StructType, SubType, TableSection,
+    TableType, TypeSection, ValType,
 };
 
 use crate::errors;
 #[cfg(test)]
 use crate::gc_types::FIRST_USER_TYPE_IDX;
-use crate::gc_types::{
-    ATTR_FIELD_IDX, ATTR_TYPE, ATTR_TYPE_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX,
-    CLOSURE_STRUCT_IDX, GcTypeDef, STEP_IDX,
-};
+use crate::gc_types::{ATTR_FIELD_IDX, ATTR_TYPE, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, GcTypeDef};
 use crate::{CompilationError, CompilationResult};
 
 trunk_ir::symbols! {
@@ -1368,19 +1378,6 @@ fn region_result_value<'db>(
     }
 }
 
-fn emit_value_get<'db>(
-    value: Value<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    function: &mut Function,
-) -> CompilationResult<()> {
-    let index = ctx
-        .value_locals
-        .get(&value)
-        .ok_or_else(|| CompilationError::invalid_module("value missing local mapping"))?;
-    function.instruction(&Instruction::LocalGet(*index));
-    Ok(())
-}
-
 fn emit_op<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
@@ -1394,34 +1391,6 @@ fn emit_op<'db>(
             "non-wasm op in wasm backend",
         ));
     }
-
-    // Helper to get type_idx from attributes or inferred type.
-    // Priority: type_idx attr > type attr > inferred_type (from result/operand)
-    let get_type_idx_from_attrs = |attrs: &std::collections::BTreeMap<Symbol, Attribute<'db>>,
-                                   inferred_type: Option<Type<'db>>|
-     -> Option<u32> {
-        // First try type_idx attribute
-        if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-            return Some(*idx as u32);
-        }
-        // Fall back to type attribute (legacy, will be removed)
-        if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-            // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-            if is_closure_struct_type(db, *ty) {
-                return Some(CLOSURE_STRUCT_IDX);
-            }
-            return module_info.type_idx_by_type.get(ty).copied();
-        }
-        // Fall back to inferred type
-        if let Some(ty) = inferred_type {
-            // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-            if is_closure_struct_type(db, ty) {
-                return Some(CLOSURE_STRUCT_IDX);
-            }
-            return module_info.type_idx_by_type.get(&ty).copied();
-        }
-        None
-    };
 
     let name = op.name(db);
     let operands = op.operands(db);
@@ -1485,309 +1454,23 @@ fn emit_op<'db>(
 
     // Special cases: const, control flow, calls, locals, GC ops
     if let Ok(const_op) = wasm::I32Const::from_operation(db, *op) {
-        let value = const_op.value(db);
-        function.instruction(&Instruction::I32Const(value));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i32_const(db, const_op, ctx, function);
     } else if let Ok(const_op) = wasm::I64Const::from_operation(db, *op) {
-        let value = const_op.value(db);
-        function.instruction(&Instruction::I64Const(value));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_const(db, const_op, ctx, function);
     } else if let Ok(const_op) = wasm::F32Const::from_operation(db, *op) {
-        let value = const_op.value(db);
-        function.instruction(&Instruction::F32Const(value.into()));
-        set_result_local(db, op, ctx, function)?;
+        return handle_f32_const(db, const_op, ctx, function);
     } else if let Ok(const_op) = wasm::F64Const::from_operation(db, *op) {
-        let value = const_op.value(db);
-        function.instruction(&Instruction::F64Const(value.into()));
-        set_result_local(db, op, ctx, function)?;
+        return handle_f64_const(db, const_op, ctx, function);
     } else if wasm::If::matches(db, *op) {
-        let result_ty = op.results(db).first().copied();
-
-        // First try to infer effective type from branches
-        let branch_eff_ty = infer_region_effective_type(db, op, ctx);
-
-        // Check if we can actually get a result value from the then region
-        let then_region_result = op
-            .regions(db)
-            .first()
-            .and_then(|r| region_result_value(db, r));
-        let then_has_result_value = then_region_result.is_some();
-
-        // Check if function returns Step - if so, if blocks should also produce Step
-        let func_returns_step = ctx
-            .func_return_type
-            .map(|ty| is_step_type(db, ty))
-            .unwrap_or(false);
-
-        debug!(
-            "wasm.if: then_has_result_value={}, branch_eff_ty={:?}, func_returns_step={}, result_ty={:?}",
-            then_has_result_value,
-            branch_eff_ty.map(|ty| format!("{}.{}", ty.dialect(db), ty.name(db))),
-            func_returns_step,
-            result_ty.map(|ty| format!("{}.{}", ty.dialect(db), ty.name(db)))
-        );
-
-        // Determine if we should use a result type
-        // Only set has_result if we can actually find a result value
-        let has_result = if !then_has_result_value {
-            false
-        } else if let Some(eff_ty) = branch_eff_ty {
-            !is_nil_type(db, eff_ty)
-        } else if func_returns_step && result_ty.is_some() {
-            // Function returns Step, so if with result should produce Step
-            true
-        } else {
-            matches!(result_ty, Some(ty) if !is_nil_type(db, ty))
-        };
-
-        // For wasm.if with results, we need to determine the actual block type.
-        // If the IR result type is polymorphic or nil but the effective result type
-        // from the then/else branches is concrete, we must use the effective type.
-        let effective_ty = if has_result {
-            // Try branch effective type first (handles Step in resume functions)
-            if let Some(eff_ty) = branch_eff_ty {
-                if !is_nil_type(db, eff_ty) {
-                    debug!(
-                        "wasm.if: using then branch effective type {}.{}",
-                        eff_ty.dialect(db),
-                        eff_ty.name(db)
-                    );
-                    Some(eff_ty)
-                } else {
-                    result_ty
-                }
-            } else if func_returns_step {
-                // Function returns Step, use Step as the block type
-                debug!("wasm.if: using Step type because function returns Step");
-                Some(crate::gc_types::step_marker_type(db))
-            } else if let Some(ir_ty) = result_ty {
-                if tribute::is_type_var(db, ir_ty) {
-                    // Fallback to function return type for polymorphic IR types
-                    if let Some(ret_ty) = ctx.func_return_type {
-                        if !is_polymorphic_type(db, ret_ty) {
-                            debug!(
-                                "wasm.if: using function return type {}.{} instead of type_var",
-                                ret_ty.dialect(db),
-                                ret_ty.name(db)
-                            );
-                            Some(ret_ty)
-                        } else {
-                            Some(ir_ty)
-                        }
-                    } else {
-                        Some(ir_ty)
-                    }
-                } else {
-                    Some(ir_ty)
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let block_type = if has_result {
-            let eff_ty = effective_ty.expect("effective_ty should be Some when has_result is true");
-            // IMPORTANT: Check core.func BEFORE type_idx_by_type lookup.
-            // core.func types should always use funcref block type, not concrete struct types.
-            if core::Func::from_type(db, eff_ty).is_some() {
-                debug!(
-                    "wasm.if block_type: using funcref for core.func type {}.{}",
-                    eff_ty.dialect(db),
-                    eff_ty.name(db)
-                );
-                BlockType::Result(ValType::Ref(RefType::FUNCREF))
-            } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
-                // ADT types - use concrete GC type reference
-                debug!(
-                    "wasm.if block_type: using concrete type_idx={} for {}.{}",
-                    type_idx,
-                    eff_ty.dialect(db),
-                    eff_ty.name(db)
-                );
-                BlockType::Result(ValType::Ref(RefType {
-                    nullable: true,
-                    heap_type: HeapType::Concrete(type_idx),
-                }))
-            } else {
-                debug!(
-                    "wasm.if block_type: no type_idx for {}.{}, using type_to_valtype",
-                    eff_ty.dialect(db),
-                    eff_ty.name(db)
-                );
-                BlockType::Result(type_to_valtype(db, eff_ty, &module_info.type_idx_by_type)?)
-            }
-        } else {
-            BlockType::Empty
-        };
-        if operands.len() != 1 {
-            return Err(CompilationError::invalid_module(
-                "wasm.if expects a single condition operand",
-            ));
-        }
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        function.instruction(&Instruction::If(block_type));
-        let regions = op.regions(db);
-        let then_region = regions
-            .first()
-            .ok_or_else(|| CompilationError::invalid_module("wasm.if missing then region"))?;
-        let then_result = if has_result {
-            Some(region_result_value(db, then_region).ok_or_else(|| {
-                CompilationError::invalid_module("wasm.if then region missing result value")
-            })?)
-        } else {
-            None
-        };
-        emit_region_ops(db, then_region, ctx, module_info, function)?;
-        if let Some(value) = then_result {
-            emit_value_get(value, ctx, function)?;
-            // If the value's effective type is anyref/type_var but the block expects
-            // a specific type, cast the result.
-            if let (Some(eff_ty), Some(value_ty)) = (effective_ty, ctx.effective_types.get(&value))
-                && (tribute::is_type_var(db, *value_ty)
-                    || wasm::Anyref::from_type(db, *value_ty).is_some())
-            {
-                if core::Func::from_type(db, eff_ty).is_some() {
-                    // core.func types need cast to funcref (abstract type)
-                    debug!("wasm.if then: casting anyref branch result to funcref");
-                    function.instruction(&Instruction::RefCastNullable(HeapType::Abstract {
-                        shared: false,
-                        ty: AbstractHeapType::Func,
-                    }));
-                } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
-                    // ADT types need cast to concrete struct type
-                    debug!(
-                        "wasm.if then: casting anyref branch result to (ref null {})",
-                        type_idx
-                    );
-                    function
-                        .instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
-                }
-            }
-        }
-        if let Some(else_region) = regions.get(1) {
-            let else_result = if has_result {
-                Some(region_result_value(db, else_region).ok_or_else(|| {
-                    CompilationError::invalid_module("wasm.if else region missing result value")
-                })?)
-            } else {
-                None
-            };
-            function.instruction(&Instruction::Else);
-            emit_region_ops(db, else_region, ctx, module_info, function)?;
-            if let Some(value) = else_result {
-                emit_value_get(value, ctx, function)?;
-                // Cast else branch result if needed (same logic as then branch)
-                if let (Some(eff_ty), Some(value_ty)) =
-                    (effective_ty, ctx.effective_types.get(&value))
-                    && (tribute::is_type_var(db, *value_ty)
-                        || wasm::Anyref::from_type(db, *value_ty).is_some())
-                {
-                    if core::Func::from_type(db, eff_ty).is_some() {
-                        // core.func types need cast to funcref (abstract type)
-                        debug!("wasm.if else: casting anyref branch result to funcref");
-                        function.instruction(&Instruction::RefCastNullable(HeapType::Abstract {
-                            shared: false,
-                            ty: AbstractHeapType::Func,
-                        }));
-                    } else if let Some(&type_idx) = module_info.type_idx_by_type.get(&eff_ty) {
-                        // ADT types need cast to concrete struct type
-                        debug!(
-                            "wasm.if else: casting anyref branch result to (ref null {})",
-                            type_idx
-                        );
-                        function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(
-                            type_idx,
-                        )));
-                    }
-                }
-            }
-        } else if has_result {
-            return Err(CompilationError::invalid_module(
-                "wasm.if with result requires else region",
-            ));
-        }
-        function.instruction(&Instruction::End);
-        if has_result {
-            set_result_local(db, op, ctx, function)?;
-        }
+        return handle_if(db, op, ctx, module_info, function);
     } else if wasm::Block::matches(db, *op) {
-        // Upgrade polymorphic block result type to Step if function returns Step
-        let result_ty = op
-            .results(db)
-            .first()
-            .map(|ty| upgrade_polymorphic_to_step(db, *ty, ctx.func_return_type));
-        let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
-        let block_type = if has_result {
-            BlockType::Result(type_to_valtype(
-                db,
-                result_ty.expect("block result type"),
-                &module_info.type_idx_by_type,
-            )?)
-        } else {
-            BlockType::Empty
-        };
-        function.instruction(&Instruction::Block(block_type));
-        let region = op
-            .regions(db)
-            .first()
-            .ok_or_else(|| CompilationError::invalid_module("wasm.block missing body region"))?;
-        emit_region_ops(db, region, ctx, module_info, function)?;
-        if has_result {
-            let value = region_result_value(db, region).ok_or_else(|| {
-                CompilationError::invalid_module("wasm.block body missing result value")
-            })?;
-            emit_value_get(value, ctx, function)?;
-        }
-        function.instruction(&Instruction::End);
-        if has_result {
-            set_result_local(db, op, ctx, function)?;
-        }
+        return handle_block(db, op, ctx, module_info, function);
     } else if wasm::Loop::matches(db, *op) {
-        // Upgrade polymorphic loop result type to Step if function returns Step
-        let result_ty = op
-            .results(db)
-            .first()
-            .map(|ty| upgrade_polymorphic_to_step(db, *ty, ctx.func_return_type));
-        let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
-        let block_type = if has_result {
-            BlockType::Result(type_to_valtype(
-                db,
-                result_ty.expect("loop result type"),
-                &module_info.type_idx_by_type,
-            )?)
-        } else {
-            BlockType::Empty
-        };
-        function.instruction(&Instruction::Loop(block_type));
-        let region = op
-            .regions(db)
-            .first()
-            .ok_or_else(|| CompilationError::invalid_module("wasm.loop missing body region"))?;
-        emit_region_ops(db, region, ctx, module_info, function)?;
-        if has_result {
-            let value = region_result_value(db, region).ok_or_else(|| {
-                CompilationError::invalid_module("wasm.loop body missing result value")
-            })?;
-            emit_value_get(value, ctx, function)?;
-        }
-        function.instruction(&Instruction::End);
-        if has_result {
-            set_result_local(db, op, ctx, function)?;
-        }
+        return handle_loop(db, op, ctx, module_info, function);
     } else if let Ok(br_op) = wasm::Br::from_operation(db, *op) {
-        let depth = br_op.target(db);
-        function.instruction(&Instruction::Br(depth));
+        return handle_br(db, br_op, function);
     } else if let Ok(br_if_op) = wasm::BrIf::from_operation(db, *op) {
-        if operands.len() != 1 {
-            return Err(CompilationError::invalid_module(
-                "wasm.br_if expects a single condition operand",
-            ));
-        }
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let depth = br_if_op.target(db);
-        function.instruction(&Instruction::BrIf(depth));
+        return handle_br_if(db, br_if_op, ctx, module_info, function);
     } else if let Ok(call_op) = wasm::Call::from_operation(db, *op) {
         let callee = call_op.callee(db);
         let target = resolve_callee(callee, module_info)?;
@@ -2090,445 +1773,33 @@ fn emit_op<'db>(
         emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
         function.instruction(&Instruction::GlobalSet(index));
     } else if wasm::StructNew::matches(db, *op) {
-        // struct_new needs all field values on the stack, including nil types.
-        // emit_operands handles nil types by emitting ref.null none.
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
-        let field_count = operands.len();
-        let result_type = op.results(db).first().copied();
-
-        // Check if this uses a placeholder type (wasm.structref)
-        // Priority: explicit type attr > placeholder result type > type_idx attr > inferred result type
-        let type_idx = if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-            if wasm::Structref::from_type(db, *ty).is_some() {
-                // Use placeholder map for wasm.structref
-                // All (type, field_count) pairs are registered by collect_gc_types upfront
-                module_info
-                    .placeholder_struct_type_idx
-                    .get(&(*ty, field_count))
-                    .copied()
-            } else if is_closure_struct_type(db, *ty) {
-                // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-                Some(CLOSURE_STRUCT_IDX)
-            } else {
-                // Regular type
-                module_info.type_idx_by_type.get(ty).copied()
-            }
-        } else if let Some(ty) = result_type
-            && wasm::Structref::from_type(db, ty).is_some()
-        {
-            // Result type is a placeholder (wasm.structref) - use placeholder map
-            // This takes precedence over explicit type_idx=0 for placeholder types
-            module_info
-                .placeholder_struct_type_idx
-                .get(&(ty, field_count))
-                .copied()
-        } else if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-            Some(*idx as u32)
-        } else if let Some(ty) = result_type {
-            // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-            if is_closure_struct_type(db, ty) {
-                Some(CLOSURE_STRUCT_IDX)
-            } else {
-                // Infer type from result type (non-placeholder)
-                module_info.type_idx_by_type.get(&ty).copied()
-            }
-        } else {
-            None
-        }
-        .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-
-        function.instruction(&Instruction::StructNew(type_idx));
-        set_result_local(db, op, ctx, function)?;
+        return handle_struct_new(db, op, ctx, module_info, function);
     } else if wasm::StructGet::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
-
-        // Check if operand is anyref and needs casting to struct type
-        // This happens when a closure is captured (stored as anyref) and later used
-        let operand_is_anyref = operands
-            .first()
-            .and_then(|op_val| {
-                let ty = value_type(db, *op_val, &module_info.block_arg_types)?;
-                if wasm::Anyref::from_type(db, ty).is_some() {
-                    Some(true)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(false);
-
-        // CRITICAL: For struct_get, the type_idx MUST match the operand's actual type.
-        // We need to trace through ref.cast operations to find the actual type,
-        // because the IR type might be different from the wasm type after casting.
-        let operand = operands.first().copied();
-        let type_idx = if let Some(op_val) = operand {
-            // Check if the operand was defined by a ref.cast - if so, use its target type
-            if let ValueDef::OpResult(def_op) = op_val.def(db) {
-                debug!(
-                    "struct_get: operand defined by {}.{} at index {}",
-                    def_op.dialect(db),
-                    def_op.name(db),
-                    op_val.index(db)
-                );
-                if wasm::RefCast::matches(db, def_op) {
-                    // Get the ref.cast's target_type and field_count
-                    let def_attrs = def_op.attributes(db);
-                    if let Some(Attribute::Type(target_ty)) = def_attrs.get(&ATTR_TARGET_TYPE()) {
-                        // For placeholder types like wasm.structref, we MUST use field_count
-                        // to distinguish between different concrete types with same abstract type.
-                        let is_placeholder = wasm::Structref::from_type(db, *target_ty).is_some();
-
-                        if is_placeholder {
-                            // Use placeholder lookup with field_count
-                            let field_count = if let Some(Attribute::IntBits(fc)) =
-                                def_attrs.get(&Symbol::new("field_count"))
-                            {
-                                debug!(
-                                    "struct_get: ref_cast (placeholder) has field_count={}",
-                                    *fc
-                                );
-                                *fc as usize
-                            } else {
-                                debug!("struct_get: ref_cast (placeholder) has NO field_count!");
-                                // Last resort - use struct_get's type attr
-                                if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-                                    adt::get_struct_fields(db, *ty)
-                                        .map(|f| f.len())
-                                        .unwrap_or(0)
-                                } else {
-                                    0
-                                }
-                            };
-                            debug!(
-                                "struct_get: looking up placeholder ({}.{}, field_count={})",
-                                target_ty.dialect(db),
-                                target_ty.name(db),
-                                field_count
-                            );
-                            let result = module_info
-                                .placeholder_struct_type_idx
-                                .get(&(*target_ty, field_count))
-                                .copied();
-                            debug!("struct_get: placeholder lookup result = {:?}", result);
-                            result
-                        } else if let Some(&idx) = module_info.type_idx_by_type.get(target_ty) {
-                            // Non-placeholder concrete type - use direct lookup
-                            debug!(
-                                "struct_get: using ref_cast direct type_idx={} for {}.{}",
-                                idx,
-                                target_ty.dialect(db),
-                                target_ty.name(db)
-                            );
-                            Some(idx)
-                        } else {
-                            // Non-placeholder but not found - try placeholder lookup as fallback
-                            let field_count = if let Some(Attribute::IntBits(fc)) =
-                                def_attrs.get(&Symbol::new("field_count"))
-                            {
-                                *fc as usize
-                            } else if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-                                adt::get_struct_fields(db, *ty)
-                                    .map(|f| f.len())
-                                    .unwrap_or(0)
-                            } else {
-                                0
-                            };
-                            module_info
-                                .placeholder_struct_type_idx
-                                .get(&(*target_ty, field_count))
-                                .copied()
-                        }
-                    } else {
-                        // No target_type attr on ref_cast, fall back
-                        debug!("struct_get: ref_cast has NO target_type attribute!");
-                        let inferred_type = value_type(db, op_val, &module_info.block_arg_types);
-                        get_type_idx_from_attrs(attrs, inferred_type)
-                    }
-                } else {
-                    // Not a ref_cast, use normal lookup
-                    let inferred_type = value_type(db, op_val, &module_info.block_arg_types);
-                    if let Some(inferred) = inferred_type {
-                        // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-                        if is_closure_struct_type(db, inferred) {
-                            debug!("struct_get: using CLOSURE_STRUCT_IDX for _closure type");
-                            Some(CLOSURE_STRUCT_IDX)
-                        } else if let Some(&idx) = module_info.type_idx_by_type.get(&inferred) {
-                            debug!(
-                                "struct_get: using operand's type_idx={} for {}.{}",
-                                idx,
-                                inferred.dialect(db),
-                                inferred.name(db)
-                            );
-                            Some(idx)
-                        } else {
-                            get_type_idx_from_attrs(attrs, Some(inferred))
-                        }
-                    } else {
-                        get_type_idx_from_attrs(attrs, inferred_type)
-                    }
-                }
-            } else {
-                // Block arg - use normal lookup
-                let inferred_type = value_type(db, op_val, &module_info.block_arg_types);
-                if let Some(inferred) = inferred_type {
-                    // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-                    if is_closure_struct_type(db, inferred) {
-                        debug!("struct_get: using CLOSURE_STRUCT_IDX for block arg _closure type");
-                        Some(CLOSURE_STRUCT_IDX)
-                    } else if let Some(&idx) = module_info.type_idx_by_type.get(&inferred) {
-                        debug!(
-                            "struct_get: using block arg type_idx={} for {}.{}",
-                            idx,
-                            inferred.dialect(db),
-                            inferred.name(db)
-                        );
-                        Some(idx)
-                    } else {
-                        get_type_idx_from_attrs(attrs, Some(inferred))
-                    }
-                } else {
-                    get_type_idx_from_attrs(attrs, inferred_type)
-                }
-            }
-        } else {
-            debug!("struct_get: no operand, using fallback");
-            get_type_idx_from_attrs(attrs, None)
-        }
-        .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-
-        let field_idx = attr_field_idx(attrs)?;
-        debug!(
-            "struct_get: emitting StructGet with type_idx={}, field_idx={}, operand_is_anyref={}",
-            type_idx, field_idx, operand_is_anyref
-        );
-
-        // If operand was anyref (from closure capture), cast it to the struct type first
-        if operand_is_anyref {
-            debug!("struct_get: casting anyref to struct type_idx={}", type_idx);
-            function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
-        }
-
-        function.instruction(&Instruction::StructGet {
-            struct_type_index: type_idx,
-            field_index: field_idx,
-        });
-
-        // Check if boxing is needed: result local expects anyref but struct field is i64
-        // This happens when extracting values from structs where the IR uses generic/wrapper
-        // types but the actual struct field contains a primitive (i64).
-        let needs_boxing = if !op.results(db).is_empty() {
-            let result_value = op.result(db, 0);
-
-            // Check if the result local would be anyref by examining the effective type
-            let local_type = ctx
-                .effective_types
-                .get(&result_value)
-                .copied()
-                .or_else(|| op.results(db).first().copied());
-
-            let expects_anyref = local_type
-                .map(|ty| wasm::Anyref::from_type(db, ty).is_some() || tribute::is_type_var(db, ty))
-                .unwrap_or(false);
-
-            // Check if the struct field is i64
-            let field_is_i64 = module_info
-                .gc_types
-                .get(type_idx as usize)
-                .map(|gc_type| {
-                    if let GcTypeDef::Struct(fields) = gc_type {
-                        fields
-                            .get(field_idx as usize)
-                            .map(|field| {
-                                matches!(field.element_type, StorageType::Val(ValType::I64))
-                            })
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    }
-                })
-                .unwrap_or(false);
-
-            debug!(
-                "struct_get boxing check: expects_anyref={}, field_is_i64={}, type_idx={}, field_idx={}",
-                expects_anyref, field_is_i64, type_idx, field_idx
-            );
-
-            expects_anyref && field_is_i64
-        } else {
-            false
-        };
-
-        if needs_boxing {
-            debug!("struct_get: boxing i64 to i31ref for anyref local");
-            function.instruction(&Instruction::I32WrapI64);
-            function.instruction(&Instruction::RefI31);
-        }
-
-        set_result_local(db, op, ctx, function)?;
+        return handle_struct_get(db, op, ctx, module_info, function);
     } else if let Ok(struct_set_op) = wasm::StructSet::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from operand[0] (the struct ref)
-        let inferred_type = operands
-            .first()
-            .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        let field_idx = struct_set_op.field_idx(db);
-        function.instruction(&Instruction::StructSet {
-            struct_type_index: type_idx,
-            field_index: field_idx,
-        });
-    } else if wasm::ArrayNew::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from result type (type_idx attr may not be set during IR generation)
-        let inferred_type = op.results(db).first().copied();
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArrayNew(type_idx));
-        set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayNewDefault::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from result type
-        let inferred_type = op.results(db).first().copied();
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArrayNewDefault(type_idx));
-        set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayGet::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from operand[0] (the array ref)
-        let inferred_type = operands
-            .first()
-            .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArrayGet(type_idx));
-        set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayGetS::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from operand[0] (the array ref)
-        let inferred_type = operands
-            .first()
-            .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArrayGetS(type_idx));
-        set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArrayGetU::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from operand[0] (the array ref)
-        let inferred_type = operands
-            .first()
-            .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArrayGetU(type_idx));
-        set_result_local(db, op, ctx, function)?;
-    } else if wasm::ArraySet::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        // Infer type from operand[0] (the array ref)
-        let inferred_type = operands
-            .first()
-            .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
-        let type_idx = get_type_idx_from_attrs(op.attributes(db), inferred_type)
-            .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-        function.instruction(&Instruction::ArraySet(type_idx));
+        return handle_struct_set(db, struct_set_op, ctx, module_info, function);
+    } else if let Ok(array_new_op) = wasm::ArrayNew::from_operation(db, *op) {
+        return handle_array_new(db, array_new_op, ctx, module_info, function);
+    } else if let Ok(array_new_default_op) = wasm::ArrayNewDefault::from_operation(db, *op) {
+        return handle_array_new_default(db, array_new_default_op, ctx, module_info, function);
+    } else if let Ok(array_get_op) = wasm::ArrayGet::from_operation(db, *op) {
+        return handle_array_get(db, array_get_op, ctx, module_info, function);
+    } else if let Ok(array_get_s_op) = wasm::ArrayGetS::from_operation(db, *op) {
+        return handle_array_get_s(db, array_get_s_op, ctx, module_info, function);
+    } else if let Ok(array_get_u_op) = wasm::ArrayGetU::from_operation(db, *op) {
+        return handle_array_get_u(db, array_get_u_op, ctx, module_info, function);
+    } else if let Ok(array_set_op) = wasm::ArraySet::from_operation(db, *op) {
+        return handle_array_set(db, array_set_op, ctx, module_info, function);
     } else if let Ok(array_copy_op) = wasm::ArrayCopy::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        function.instruction(&Instruction::ArrayCopy {
-            array_type_index_dst: array_copy_op.dst_type_idx(db),
-            array_type_index_src: array_copy_op.src_type_idx(db),
-        });
+        return handle_array_copy(db, array_copy_op, ctx, module_info, function);
     } else if wasm::RefNull::matches(db, *op) {
-        let attrs = op.attributes(db);
-        // Infer type from result type
-        let inferred_type = op.results(db).first().copied();
-        let heap_type = attr_heap_type(db, attrs, ATTR_HEAP_TYPE())
-            .ok()
-            .or_else(|| get_type_idx_from_attrs(attrs, inferred_type).map(HeapType::Concrete))
-            .ok_or_else(|| CompilationError::missing_attribute("heap_type or type"))?;
-        function.instruction(&Instruction::RefNull(heap_type));
-        set_result_local(db, op, ctx, function)?;
+        return handle_ref_null(db, op, ctx, module_info, function);
     } else if let Ok(ref_func_op) = wasm::RefFunc::from_operation(db, *op) {
-        // wasm.ref_func: create a funcref from function name
-        let func_name = ref_func_op.func_name(db);
-        let func_idx = resolve_callee(func_name, module_info)?;
-        function.instruction(&Instruction::RefFunc(func_idx));
-        set_result_local(db, op, ctx, function)?;
+        return handle_ref_func(db, ref_func_op, ctx, module_info, function);
     } else if wasm::RefCast::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
-        // Infer type from result type (the target type it casts to)
-        let inferred_type = op.results(db).first().copied();
-
-        // Check if this is a placeholder struct type (wasm.structref with field_count)
-        // If so, use the concrete type index from the placeholder map
-        let heap_type = if let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE()) {
-            if wasm::Structref::from_type(db, *target_ty).is_some() {
-                // structref placeholder - try to find concrete type via field_count
-                if let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count")) {
-                    if let Some(&type_idx) = module_info
-                        .placeholder_struct_type_idx
-                        .get(&(*target_ty, *fc as usize))
-                    {
-                        debug!(
-                            "ref_cast: found placeholder type_idx={} for field_count={}",
-                            type_idx, fc
-                        );
-                        HeapType::Concrete(type_idx)
-                    } else {
-                        debug!(
-                            "ref_cast: placeholder lookup FAILED for field_count={}, falling back to abstract structref",
-                            fc
-                        );
-                        // Fallback to abstract structref if not found
-                        HeapType::Abstract {
-                            shared: false,
-                            ty: AbstractHeapType::Struct,
-                        }
-                    }
-                } else {
-                    debug!("ref_cast: no field_count attribute, using abstract structref");
-                    // No field_count - use abstract structref
-                    HeapType::Abstract {
-                        shared: false,
-                        ty: AbstractHeapType::Struct,
-                    }
-                }
-            } else {
-                // Non-placeholder type - use attr_heap_type
-                debug!(
-                    "ref_cast: non-placeholder target_type {}.{}",
-                    target_ty.dialect(db),
-                    target_ty.name(db)
-                );
-                attr_heap_type(db, attrs, ATTR_TARGET_TYPE())?
-            }
-        } else {
-            debug!("ref_cast: no target_type attribute");
-            // No target_type attribute - use standard resolution
-            attr_heap_type(db, attrs, ATTR_TARGET_TYPE())
-                .ok()
-                .or_else(|| get_type_idx_from_attrs(attrs, inferred_type).map(HeapType::Concrete))
-                .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?
-        };
-        debug!(
-            "ref_cast: emitting RefCastNullable with heap_type={:?}",
-            heap_type
-        );
-        function.instruction(&Instruction::RefCastNullable(heap_type));
-        set_result_local(db, op, ctx, function)?;
+        return handle_ref_cast(db, op, ctx, module_info, function);
     } else if wasm::RefTest::matches(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let attrs = op.attributes(db);
-        // ref_test result is i32, target type must be in attribute (can't infer)
-        let heap_type = attr_heap_type(db, attrs, ATTR_TARGET_TYPE())
-            .ok()
-            .or_else(|| get_type_idx_from_attrs(attrs, None).map(HeapType::Concrete))
-            .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
-        function.instruction(&Instruction::RefTestNullable(heap_type));
-        set_result_local(db, op, ctx, function)?;
+        return handle_ref_test(db, op, ctx, module_info, function);
     } else if let Ok(bytes_op) = wasm::BytesFromData::from_operation(db, *op) {
         // Compound operation: create Bytes struct from passive data segment
         // Stack operations:
@@ -2559,175 +1830,65 @@ fn emit_op<'db>(
 
     // === Linear Memory Management ===
     } else if let Ok(mem_size_op) = wasm::MemorySize::from_operation(db, *op) {
-        let memory = mem_size_op.memory(db);
-        function.instruction(&Instruction::MemorySize(memory));
-        set_result_local(db, op, ctx, function)?;
+        return handle_memory_size(db, mem_size_op, ctx, function);
     } else if let Ok(mem_grow_op) = wasm::MemoryGrow::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memory = mem_grow_op.memory(db);
-        function.instruction(&Instruction::MemoryGrow(memory));
-        set_result_local(db, op, ctx, function)?;
+        return handle_memory_grow(db, mem_grow_op, ctx, module_info, function);
 
     // === Full-Width Loads ===
     } else if let Ok(load_op) = wasm::I32Load::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
-        function.instruction(&Instruction::I32Load(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i32_load(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 3);
-        function.instruction(&Instruction::I64Load(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::F32Load::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
-        function.instruction(&Instruction::F32Load(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_f32_load(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::F64Load::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 3);
-        function.instruction(&Instruction::F64Load(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_f64_load(db, load_op, ctx, module_info, function);
 
     // === Partial-Width Loads (i32) ===
     } else if let Ok(load_op) = wasm::I32Load8S::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
-        function.instruction(&Instruction::I32Load8S(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i32_load8_s(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I32Load8U::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
-        function.instruction(&Instruction::I32Load8U(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i32_load8_u(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I32Load16S::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
-        function.instruction(&Instruction::I32Load16S(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i32_load16_s(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I32Load16U::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
-        function.instruction(&Instruction::I32Load16U(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i32_load16_u(db, load_op, ctx, module_info, function);
 
     // === Partial-Width Loads (i64) ===
     } else if let Ok(load_op) = wasm::I64Load8S::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
-        function.instruction(&Instruction::I64Load8S(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load8_s(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load8U::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 0);
-        function.instruction(&Instruction::I64Load8U(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load8_u(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load16S::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
-        function.instruction(&Instruction::I64Load16S(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load16_s(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load16U::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 1);
-        function.instruction(&Instruction::I64Load16U(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load16_u(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load32S::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
-        function.instruction(&Instruction::I64Load32S(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load32_s(db, load_op, ctx, module_info, function);
     } else if let Ok(load_op) = wasm::I64Load32U::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(load_op.offset(db), load_op.align(db), load_op.memory(db), 2);
-        function.instruction(&Instruction::I64Load32U(memarg));
-        set_result_local(db, op, ctx, function)?;
+        return handle_i64_load32_u(db, load_op, ctx, module_info, function);
 
     // === Full-Width Stores ===
     } else if let Ok(store_op) = wasm::I32Store::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            2,
-        );
-        function.instruction(&Instruction::I32Store(memarg));
+        return handle_i32_store(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::I64Store::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            3,
-        );
-        function.instruction(&Instruction::I64Store(memarg));
+        return handle_i64_store(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::F32Store::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            2,
-        );
-        function.instruction(&Instruction::F32Store(memarg));
+        return handle_f32_store(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::F64Store::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            3,
-        );
-        function.instruction(&Instruction::F64Store(memarg));
+        return handle_f64_store(db, store_op, ctx, module_info, function);
 
     // === Partial-Width Stores ===
     } else if let Ok(store_op) = wasm::I32Store8::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            0,
-        );
-        function.instruction(&Instruction::I32Store8(memarg));
+        return handle_i32_store8(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::I32Store16::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            1,
-        );
-        function.instruction(&Instruction::I32Store16(memarg));
+        return handle_i32_store16(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::I64Store8::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            0,
-        );
-        function.instruction(&Instruction::I64Store8(memarg));
+        return handle_i64_store8(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::I64Store16::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            1,
-        );
-        function.instruction(&Instruction::I64Store16(memarg));
+        return handle_i64_store16(db, store_op, ctx, module_info, function);
     } else if let Ok(store_op) = wasm::I64Store32::from_operation(db, *op) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-        let memarg = make_memarg(
-            store_op.offset(db),
-            store_op.align(db),
-            store_op.memory(db),
-            2,
-        );
-        function.instruction(&Instruction::I64Store32(memarg));
+        return handle_i64_store32(db, store_op, ctx, module_info, function);
     } else {
         tracing::error!("unsupported wasm op: {}", name);
         return Err(CompilationError::unsupported_feature_msg(format!(
@@ -2867,89 +2028,6 @@ fn attr_u32<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<u32> {
 /// Get field index from attributes, trying both `field_idx` and `field` attribute names.
 fn attr_field_idx<'db>(attrs: &Attrs<'db>) -> CompilationResult<u32> {
     attr_u32(attrs, ATTR_FIELD_IDX()).or_else(|_| attr_u32(attrs, ATTR_FIELD()))
-}
-
-fn attr_heap_type<'db>(
-    db: &'db dyn salsa::Database,
-    attrs: &Attrs<'db>,
-    key: Symbol,
-) -> CompilationResult<HeapType> {
-    match attrs.get(&key) {
-        Some(Attribute::IntBits(bits)) => Ok(HeapType::Concrete(*bits as u32)),
-        Some(Attribute::Symbol(sym)) => {
-            // Handle abstract heap types specified by name
-            sym.with_str(symbol_to_abstract_heap_type)
-        }
-        Some(Attribute::Type(ty)) => {
-            // Handle wasm abstract heap types like wasm.i31ref, wasm.anyref, etc.
-            if ty.dialect(db) == Symbol::new("wasm") {
-                let name = ty.name(db);
-                // Handle step as a concrete builtin type (STEP_IDX = 3)
-                if name == Symbol::new("step") {
-                    return Ok(HeapType::Concrete(STEP_IDX));
-                }
-                name.with_str(symbol_to_abstract_heap_type)
-            } else {
-                Err(CompilationError::from(
-                    errors::CompilationErrorKind::MissingAttribute("non-wasm type for heap_type"),
-                ))
-            }
-        }
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("heap_type"),
-        )),
-    }
-}
-
-/// Convert a type name string to an abstract heap type.
-fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<HeapType> {
-    match name {
-        "any" | "anyref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Any,
-        }),
-        "func" | "funcref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Func,
-        }),
-        "extern" | "externref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Extern,
-        }),
-        "none" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::None,
-        }),
-        "struct" | "structref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Struct,
-        }),
-        "array" | "arrayref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Array,
-        }),
-        "i31" | "i31ref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::I31,
-        }),
-        "eq" | "eqref" => Ok(HeapType::Abstract {
-            shared: false,
-            ty: AbstractHeapType::Eq,
-        }),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("unknown abstract heap type"),
-        )),
-    }
-}
-
-/// Create MemArg from typed wrapper attributes for linear memory load/store operations.
-/// Uses natural_align as fallback if align is 0.
-fn make_memarg(offset: u32, align: u32, memory: u32, natural_align: u32) -> MemArg {
-    MemArg {
-        offset: offset as u64,
-        align: if align == 0 { natural_align } else { align },
-        memory_index: memory,
-    }
 }
 
 #[cfg(test)]

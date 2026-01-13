@@ -7,10 +7,11 @@ use std::collections::HashMap;
 
 use tribute_ir::dialect::{ability, adt, closure, tribute, tribute_rt};
 use trunk_ir::dialect::{core, wasm};
-use trunk_ir::{Attribute, BlockId, DialectType, Symbol, Type, Value, ValueDef};
+use trunk_ir::{Attribute, Attrs, BlockId, DialectType, Symbol, Type, Value, ValueDef};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
-use crate::gc_types::{BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, STEP_IDX};
+use crate::errors::CompilationErrorKind;
+use crate::gc_types::{ATTR_TYPE, ATTR_TYPE_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, STEP_IDX};
 use crate::{CompilationError, CompilationResult};
 
 // ============================================================================
@@ -208,4 +209,123 @@ pub(crate) fn result_types<'db>(
     } else {
         Ok(vec![type_to_valtype(db, ty, type_idx_by_type)?])
     }
+}
+
+// ============================================================================
+// Heap type helpers
+// ============================================================================
+
+/// Extract a heap type from operation attributes.
+///
+/// This function handles three formats:
+/// - IntBits: concrete type index
+/// - Symbol: abstract heap type name (e.g., "any", "func", "struct")
+/// - Type: wasm dialect type (e.g., wasm.i31ref, wasm.step)
+pub(crate) fn attr_heap_type<'db>(
+    db: &'db dyn salsa::Database,
+    attrs: &Attrs<'db>,
+    key: Symbol,
+) -> CompilationResult<HeapType> {
+    match attrs.get(&key) {
+        Some(Attribute::IntBits(bits)) => Ok(HeapType::Concrete(*bits as u32)),
+        Some(Attribute::Symbol(sym)) => {
+            // Handle abstract heap types specified by name
+            sym.with_str(symbol_to_abstract_heap_type)
+        }
+        Some(Attribute::Type(ty)) => {
+            // Handle wasm abstract heap types like wasm.i31ref, wasm.anyref, etc.
+            if ty.dialect(db) == Symbol::new("wasm") {
+                let name = ty.name(db);
+                // Handle step as a concrete builtin type (STEP_IDX = 3)
+                if name == Symbol::new("step") {
+                    return Ok(HeapType::Concrete(STEP_IDX));
+                }
+                name.with_str(symbol_to_abstract_heap_type)
+            } else {
+                Err(CompilationError::from(
+                    CompilationErrorKind::MissingAttribute("non-wasm type for heap_type"),
+                ))
+            }
+        }
+        _ => Err(CompilationError::from(
+            CompilationErrorKind::MissingAttribute("heap_type"),
+        )),
+    }
+}
+
+/// Convert a type name string to an abstract heap type.
+pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<HeapType> {
+    match name {
+        "any" | "anyref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Any,
+        }),
+        "func" | "funcref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Func,
+        }),
+        "extern" | "externref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Extern,
+        }),
+        "none" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::None,
+        }),
+        "struct" | "structref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Struct,
+        }),
+        "array" | "arrayref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Array,
+        }),
+        "i31" | "i31ref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::I31,
+        }),
+        "eq" | "eqref" => Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Eq,
+        }),
+        _ => Err(CompilationError::from(
+            CompilationErrorKind::MissingAttribute("unknown abstract heap type"),
+        )),
+    }
+}
+
+// ============================================================================
+// Type index helpers
+// ============================================================================
+
+/// Get type_idx from attributes or inferred type.
+///
+/// Priority: type_idx attr > type attr > inferred_type (from result/operand)
+pub(crate) fn get_type_idx_from_attrs<'db>(
+    db: &'db dyn salsa::Database,
+    attrs: &Attrs<'db>,
+    inferred_type: Option<Type<'db>>,
+    type_idx_by_type: &HashMap<Type<'db>, u32>,
+) -> Option<u32> {
+    // First try type_idx attribute
+    if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+        return Some(*idx as u32);
+    }
+    // Fall back to type attribute (legacy, will be removed)
+    if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
+        // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
+        if is_closure_struct_type(db, *ty) {
+            return Some(CLOSURE_STRUCT_IDX);
+        }
+        return type_idx_by_type.get(ty).copied();
+    }
+    // Fall back to inferred type
+    if let Some(ty) = inferred_type {
+        // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
+        if is_closure_struct_type(db, ty) {
+            return Some(CLOSURE_STRUCT_IDX);
+        }
+        return type_idx_by_type.get(&ty).copied();
+    }
+    None
 }
