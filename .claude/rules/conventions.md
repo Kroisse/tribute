@@ -144,3 +144,37 @@ pub enum Binding<'db> {
 - Use `insta` for snapshot testing
 - Run `cargo insta review` when snapshots fail
 - Package-specific tests: `cargo test -p <crate-name>`
+
+## Development Workflow
+
+### Starting a New Task
+
+1. **Always start from latest origin/main**:
+   ```bash
+   git fetch origin
+   git checkout -b <branch-name> origin/main
+   ```
+
+2. **Branch naming**: Use conventional prefixes
+   - `feature/` - New features
+   - `fix/` - Bug fixes
+   - `refactor/` - Code restructuring
+   - `docs/` - Documentation only
+
+### During Development
+
+- Make atomic commits with clear messages (Conventional Commits format)
+- Run tests frequently: `cargo test --all`
+- Use `cargo clippy` and `cargo fmt` before committing
+
+### Completing Work
+
+1. **Create a Pull Request** when work is ready for review
+2. **Address review comments** before merging
+3. **Squash or rebase** if commit history is messy
+
+### Issue Workflow
+
+- Reference issues in commits: `fix: resolve type inference (#123)`
+- Create follow-up issues for out-of-scope discoveries
+- Close issues via PR merge, not manually
