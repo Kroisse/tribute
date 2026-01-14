@@ -889,6 +889,10 @@ impl<'db> Resolver<'db> {
                 self.apply_use(&remapped_op);
                 Vec::new()
             }
+            (d, n) if d == tribute::DIALECT_NAME() && n == tribute::ABILITY_DEF() => {
+                // ability_def is metadata - already processed in build_env, filter out
+                Vec::new()
+            }
             (d, n) if d == tribute::DIALECT_NAME() && n == tribute::VAR() => {
                 if let Some(resolved) = self.try_resolve_var(&remapped_op) {
                     resolved
