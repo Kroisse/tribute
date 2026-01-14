@@ -2632,7 +2632,7 @@ dependencies = [
 name = "tribute-cranelift"
 version = "0.1.0"
 dependencies = [
- "cranelift-codegen 0.120.2",
+ "cranelift-codegen 0.127.0",
  "cranelift-module",
  "derive_more",
  "object",
