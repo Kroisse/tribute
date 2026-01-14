@@ -29,7 +29,7 @@ use trunk_ir::Attribute;
 use trunk_ir::DialectType;
 #[cfg(test)]
 use trunk_ir::dialect::arith;
-use trunk_ir::dialect::{cont, core};
+use trunk_ir::dialect::{cont, core, func};
 #[cfg(test)]
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::rewrite::{
@@ -63,6 +63,7 @@ pub fn lower_handlers<'db>(
     // This pass only handles ability.* → cont.* transformations.
     let applicator = PatternApplicator::new(converter)
         .add_pattern(LowerPerformPattern::new())
+        .add_pattern(LowerContinuationCallPattern) // Must come before LowerResumePattern
         .add_pattern(LowerResumePattern)
         .add_pattern(LowerAbortPattern);
 
@@ -336,6 +337,53 @@ impl<'db> RewritePattern<'db> for LowerAbortPattern {
 
         // Create cont.drop with remapped continuation
         let new_op = cont::drop(db, location, continuation);
+
+        RewriteResult::Replace(new_op.as_operation())
+    }
+}
+
+// === Pattern: Lower func.call_indirect with continuation callee to ability.resume ===
+
+struct LowerContinuationCallPattern;
+
+impl<'db> RewritePattern<'db> for LowerContinuationCallPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Match: func.call_indirect
+        if func::CallIndirect::from_operation(db, *op).is_err() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Check if the callee (operand 0) has a continuation type
+        let callee_ty = match adaptor.operand_type(0) {
+            Some(ty) => ty,
+            None => return RewriteResult::Unchanged,
+        };
+
+        // Try to match cont.continuation type
+        if cont::Continuation::from_type(db, callee_ty).is_none() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Get the continuation (callee) and value (first argument) from adaptor
+        let continuation = adaptor.operand(0).expect("call_indirect requires callee");
+        let value = adaptor
+            .operand(1)
+            .unwrap_or_else(|| panic!("continuation call requires value argument"));
+
+        let location = op.location(db);
+        let result_ty = op
+            .results(db)
+            .first()
+            .copied()
+            .unwrap_or_else(|| *core::Nil::new(db));
+
+        // Create ability.resume which will be further lowered to cont.resume
+        let new_op = ability::resume(db, location, continuation, value, result_ty);
 
         RewriteResult::Replace(new_op.as_operation())
     }

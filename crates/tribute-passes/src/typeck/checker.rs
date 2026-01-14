@@ -19,7 +19,7 @@ use tracing::trace;
 use tribute_ir::dialect::{ability, adt, list, tribute, tribute_pat};
 use trunk_ir::{
     Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
-    dialect::{arith, core, func},
+    dialect::{arith, cont, core, func},
 };
 
 use super::constraint::ConstraintSet;
@@ -1174,13 +1174,13 @@ impl<'db> TypeChecker<'db> {
                             for ability in &matching_abilities {
                                 if let Some(sig) = self.lookup_ability_op(ability.name, op_name) {
                                     // Create continuation type:
-                                    // fn(op_return_ty) ->{remaining_effects} handler_result_ty
+                                    // cont.continuation<arg=op_return_ty, result=handler_result_ty, effect=remaining>
                                     let remaining_effect = self.current_effect.to_type(self.db);
-                                    let continuation_ty = core::Func::with_effect(
+                                    let continuation_ty = cont::Continuation::new(
                                         self.db,
-                                        IdVec::from(vec![sig.return_ty]),
-                                        handler_result_ty,
-                                        Some(remaining_effect),
+                                        sig.return_ty, // arg_ty: value passed to resume
+                                        handler_result_ty, // result_ty: what resume returns
+                                        remaining_effect,
                                     )
                                     .as_type();
 

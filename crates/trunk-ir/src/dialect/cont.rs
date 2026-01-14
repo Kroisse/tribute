@@ -1,9 +1,9 @@
-//! Delimited continuation dialect operations.
+//! Delimited continuation dialect operations and types.
 //!
 //! The `ability` dialect lowers to these operations.
 //! These represent the core continuation primitives.
 
-use crate::dialect;
+use crate::{Symbol, dialect};
 
 dialect! {
     mod cont {
@@ -89,5 +89,15 @@ dialect! {
         /// The Step layout is (tag, value, prompt, op_idx), and this extracts field 1 (value).
         /// The WASM backend converts this to struct.get on the Step's value field.
         fn get_done_value(step) -> result;
+
+        // === Types ===
+
+        /// `cont.continuation` type: delimited continuation.
+        ///
+        /// Represents a captured continuation that can be resumed with a value.
+        /// - First param: argument type (value passed when resuming)
+        /// - Second param: result type (what resuming returns)
+        #[attr(effect: Type)]
+        type continuation(arg, result);
     }
 }
