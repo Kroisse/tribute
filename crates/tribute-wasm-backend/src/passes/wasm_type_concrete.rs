@@ -130,25 +130,56 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         };
 
-        // If callee also returns type_var, we can't concretize further
-        if tribute::is_type_var(db, return_ty) {
-            debug!(
-                "wasm_type_concrete: callee {} returns type_var, cannot concretize",
-                callee
-            );
-            return RewriteResult::Unchanged;
-        }
+        // If callee returns type_var (generic function), try to infer concrete type from operands
+        let concrete_return_ty = if tribute::is_type_var(db, return_ty) {
+            // Try to infer from first operand (works for identity-like functions)
+            if let Some(&operand) = op.operands(db).first() {
+                if let Some(operand_ty) = infer_operand_type(db, operand) {
+                    if !tribute::is_type_var(db, operand_ty)
+                        && !tribute::is_placeholder_type(db, operand_ty)
+                    {
+                        debug!(
+                            "wasm_type_concrete: callee {} returns type_var, inferring from operand: {}.{}",
+                            callee,
+                            operand_ty.dialect(db),
+                            operand_ty.name(db)
+                        );
+                        operand_ty
+                    } else {
+                        debug!(
+                            "wasm_type_concrete: callee {} returns type_var, operand also placeholder",
+                            callee
+                        );
+                        return RewriteResult::Unchanged;
+                    }
+                } else {
+                    debug!(
+                        "wasm_type_concrete: callee {} returns type_var, cannot infer operand type",
+                        callee
+                    );
+                    return RewriteResult::Unchanged;
+                }
+            } else {
+                debug!(
+                    "wasm_type_concrete: callee {} returns type_var, no operands to infer from",
+                    callee
+                );
+                return RewriteResult::Unchanged;
+            }
+        } else {
+            return_ty
+        };
 
         // Try to concretize results
-        let Some(new_results) = concretize_results(db, op.results(db), return_ty) else {
+        let Some(new_results) = concretize_results(db, op.results(db), concrete_return_ty) else {
             return RewriteResult::Unchanged;
         };
 
         debug!(
             "wasm_type_concrete: concretizing wasm.call {} result(s) to {}.{}",
             callee,
-            return_ty.dialect(db),
-            return_ty.name(db)
+            concrete_return_ty.dialect(db),
+            concrete_return_ty.name(db)
         );
 
         let new_op = op.modify(db).results(new_results).build();
@@ -215,6 +246,26 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
         }
 
         RewriteResult::Unchanged
+    }
+}
+
+/// Try to infer the type of an operand value.
+///
+/// Handles cases like:
+/// - Operation results: get the type from the operation's result
+/// - Block arguments: get the type from the block argument type
+fn infer_operand_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
+    match value.def(db) {
+        ValueDef::OpResult(def_op) => {
+            let index = value.index(db);
+            def_op.results(db).get(index).copied()
+        }
+        ValueDef::BlockArg(block_id) => {
+            // Block arguments don't store their types directly in this context,
+            // so we return None and let the caller handle it
+            let _ = block_id;
+            None
+        }
     }
 }
 
