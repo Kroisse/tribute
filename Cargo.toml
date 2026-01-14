@@ -46,7 +46,7 @@ tribute-wasm-backend = { path = "crates/tribute-wasm-backend" }
 trunk-ir = { path = "crates/trunk-ir" }
 unsynn = "0.3.0"
 quote = "1.0"
-wasm-encoder = "0.243.0"
+wasm-encoder = "0.244.0"
 wasmtime = "40.0"
 wasmtime-wasi = "40.0"
 
