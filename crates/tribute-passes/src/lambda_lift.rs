@@ -19,8 +19,8 @@ use tribute_ir::dialect::{adt, closure, tribute, tribute_pat};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
-    Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol, Type,
-    Value, ValueDef,
+    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol,
+    Type, Value, ValueDef,
 };
 
 // ============================================================================
@@ -284,6 +284,46 @@ impl<'db> LambdaInfoCollector<'db> {
         tribute::new_type_var(self.db, std::collections::BTreeMap::new())
     }
 
+    /// Get the continuation type from a handler_suspend operation's attribute.
+    ///
+    /// The continuation type is stored by tirgen as a type variable in the
+    /// `continuation_type` attribute, then constrained by typeck and resolved
+    /// by TypeSubst before lambda_lift runs.
+    fn get_continuation_type_from_handler_suspend(&self, op: &Operation<'db>) -> Option<Type<'db>> {
+        use tribute_pat::handler_suspend_attrs::CONTINUATION_TYPE;
+
+        if let Some(Attribute::Type(cont_ty)) = op.attributes(self.db).get(&CONTINUATION_TYPE()) {
+            // Only return if it's not a type variable (meaning it was resolved by TypeSubst)
+            if !tribute::is_type_var(self.db, *cont_ty) {
+                tracing::trace!(
+                    "get_continuation_type_from_handler_suspend: found {}.{}",
+                    cont_ty.dialect(self.db),
+                    cont_ty.name(self.db)
+                );
+                return Some(*cont_ty);
+            }
+        }
+        None
+    }
+
+    /// Get the continuation type from a continuation region if it has a pat.bind with a typed result.
+    fn get_continuation_type_from_region(&self, region: &Region<'db>) -> Option<Type<'db>> {
+        for block in region.blocks(self.db) {
+            for op in block.operations(self.db) {
+                if tribute_pat::Bind::from_operation(self.db, *op).is_ok() {
+                    // Get the result type of the bind operation
+                    if let Some(&ty) = op.results(self.db).first() {
+                        // Only return if it's not a type variable
+                        if !tribute::is_type_var(self.db, ty) {
+                            return Some(ty);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn collect_pattern_bindings(&mut self, region: &Region<'db>, ty: Type<'db>) {
         for block in region.blocks(self.db) {
             for op in block.operations(self.db) {
@@ -293,25 +333,33 @@ impl<'db> LambdaInfoCollector<'db> {
                     self.add_local(name, binding_ty);
                 }
 
-                // Handle handler_suspend specially: the continuation region needs a closure type
+                // Handle handler_suspend specially: the continuation region needs a continuation type
                 if let Ok(handler_suspend) =
                     tribute_pat::HandlerSuspend::from_operation(self.db, *op)
                 {
                     // Process args region with parent type
                     self.collect_pattern_bindings(&handler_suspend.args(self.db), ty);
 
-                    // Process continuation region with a closure type
-                    // The continuation is a closure that takes the effect result and returns the
-                    // handler's result. We use closure::Closure to ensure proper closure struct
-                    // representation (funcref + anyref fields) rather than raw funcref.
-                    let func_ty = core::Func::new(
-                        self.db,
-                        IdVec::from(vec![ty]), // param: effect result type
-                        ty,                    // return: same as effect result (simplified)
-                    )
-                    .as_type();
-                    let cont_ty = closure::Closure::new(self.db, func_ty).as_type();
-                    self.collect_pattern_bindings(&handler_suspend.continuation(self.db), cont_ty);
+                    // Process continuation region.
+                    // The continuation type is stored as an attribute on handler_suspend,
+                    // set by tirgen as a type variable and resolved by TypeSubst.
+                    let cont_region = handler_suspend.continuation(self.db);
+
+                    // First, try to get continuation type from handler_suspend attribute
+                    let cont_ty = self
+                        .get_continuation_type_from_handler_suspend(op)
+                        .or_else(|| self.get_continuation_type_from_region(&cont_region))
+                        .unwrap_or_else(|| {
+                            // Fallback: create a closure type if typeck didn't set the type
+                            let func_ty = core::Func::new(
+                                self.db,
+                                IdVec::from(vec![ty]), // param: effect result type
+                                ty,                    // return: same as effect result (simplified)
+                            )
+                            .as_type();
+                            closure::Closure::new(self.db, func_ty).as_type()
+                        });
+                    self.collect_pattern_bindings(&cont_region, cont_ty);
                 } else {
                     // Recurse into nested regions (for variant fields, etc.)
                     for nested_region in op.regions(self.db).iter() {

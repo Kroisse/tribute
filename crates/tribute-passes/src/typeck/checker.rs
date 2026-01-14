@@ -19,7 +19,7 @@ use tracing::trace;
 use tribute_ir::dialect::{ability, adt, list, tribute, tribute_pat};
 use trunk_ir::{
     Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
-    dialect::{arith, core, func},
+    dialect::{arith, cont, core, func},
 };
 
 use super::constraint::ConstraintSet;
@@ -1135,6 +1135,11 @@ impl<'db> TypeChecker<'db> {
 
         for block in pattern_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
+                tracing::debug!(
+                    "check_handler_pattern_continuations: op = {}.{}",
+                    op.dialect(self.db),
+                    op.name(self.db)
+                );
                 // Check for pat.handler_suspend
                 if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
                     && op.name(self.db) == tribute_pat::HANDLER_SUSPEND()
@@ -1168,19 +1173,33 @@ impl<'db> TypeChecker<'db> {
                             }
                         });
 
+                        tracing::debug!(
+                            "check_handler_pattern_continuations: matching_abilities = {:?}, op_name = {:?}",
+                            matching_abilities
+                                .iter()
+                                .map(|a| a.name)
+                                .collect::<Vec<_>>(),
+                            op_name
+                        );
+
                         // Look up operation signature and bind continuation type
                         if let Some(op_name) = op_name {
                             // Find the first matching ability to get the operation signature
                             for ability in &matching_abilities {
+                                tracing::debug!(
+                                    "check_handler_pattern_continuations: looking up {}.{}",
+                                    ability.name,
+                                    op_name
+                                );
                                 if let Some(sig) = self.lookup_ability_op(ability.name, op_name) {
                                     // Create continuation type:
-                                    // fn(op_return_ty) ->{remaining_effects} handler_result_ty
+                                    // cont.continuation<arg=op_return_ty, result=handler_result_ty, effect=remaining>
                                     let remaining_effect = self.current_effect.to_type(self.db);
-                                    let continuation_ty = core::Func::with_effect(
+                                    let continuation_ty = cont::Continuation::new(
                                         self.db,
-                                        IdVec::from(vec![sig.return_ty]),
-                                        handler_result_ty,
-                                        Some(remaining_effect),
+                                        sig.return_ty, // arg_ty: value passed to resume
+                                        handler_result_ty, // result_ty: what resume returns
+                                        remaining_effect,
                                     )
                                     .as_type();
 
@@ -1203,42 +1222,33 @@ impl<'db> TypeChecker<'db> {
 
     /// Bind the continuation variable in a handler_suspend pattern to a type.
     ///
-    /// The continuation is in the second region (continuation region) of handler_suspend.
-    /// It contains either a `pat.bind` (named continuation) or `pat.wildcard` (discarded).
+    /// This reads the `continuation_type` attribute from handler_suspend (a type variable
+    /// created by tirgen) and constrains it to the computed continuation type.
+    /// The TypeSubst will later resolve this type variable in the attribute.
     fn bind_continuation_in_pattern(
         &mut self,
         handler_suspend_op: &Operation<'db>,
         continuation_ty: Type<'db>,
     ) {
-        let regions = handler_suspend_op.regions(self.db);
+        use tribute_pat::handler_suspend_attrs::CONTINUATION_TYPE;
 
-        // The continuation region is the second region (index 1)
-        if let Some(continuation_region) = regions.get(1) {
-            for block in continuation_region.blocks(self.db).iter() {
-                for op in block.operations(self.db).iter() {
-                    // Look for pat.bind - that's where the continuation variable is bound
-                    if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
-                        && op.name(self.db) == tribute_pat::BIND()
-                    {
-                        // The bind operation produces a result value that represents
-                        // the bound variable. Assign the continuation type to it.
-                        if let Some(&result_ty) = op.results(self.db).first() {
-                            // Record the continuation type for this value
-                            let value = op.result(self.db, 0);
-                            self.record_type(value, continuation_ty);
+        // Check if handler_suspend has a continuation_type attribute with a type variable
+        if let Some(Attribute::Type(attr_type_var)) = handler_suspend_op
+            .attributes(self.db)
+            .get(&CONTINUATION_TYPE())
+        {
+            // Constrain the type variable to the computed continuation type
+            // TypeSubst will resolve this during type substitution
+            self.constrain_eq(*attr_type_var, continuation_ty);
 
-                            // Also add a constraint that the declared type (if any)
-                            // equals the continuation type
-                            self.constrain_eq(result_ty, continuation_ty);
-
-                            trace!(
-                                "bind_continuation_in_pattern: bound continuation to {:?}",
-                                continuation_ty
-                            );
-                        }
-                    }
-                }
-            }
+            trace!(
+                "bind_continuation_in_pattern: constrained {:?} = {:?}",
+                attr_type_var, continuation_ty
+            );
+        } else {
+            // Fallback for IR without the continuation_type attribute
+            // (e.g., from older code or tests)
+            trace!("bind_continuation_in_pattern: no continuation_type attribute found, skipping");
         }
     }
 
@@ -1284,10 +1294,11 @@ impl<'db> TypeChecker<'db> {
     }
 
     fn check_ability_prompt(&mut self, op: &Operation<'db>) {
-        // tribute.handle: runs body in a delimited context, returns Request
+        // tribute.handle: runs body in a delimited context with handler arms
         //
-        // The body's effects are captured by the prompt. The resulting Request
-        // will be pattern-matched by tribute.case, which handles effect elimination.
+        // The body's effects are captured by the prompt. Handler arms
+        // (tribute.arm with tribute_pat.handler_suspend patterns) bind continuation
+        // variables that need proper typing.
 
         let results = op.results(self.db);
         let result_type = results
@@ -1305,14 +1316,50 @@ impl<'db> TypeChecker<'db> {
         }
 
         // The body's effects are "captured" by the prompt.
-        // We propagate body's effects to outer context first, then tribute.case
-        // will eliminate handled abilities based on handler patterns
-        // (tribute_pat.handler_suspend in pattern regions).
+        // We propagate body's effects to outer context first.
         let body_effect = std::mem::replace(&mut self.current_effect, outer_effect);
         self.merge_effect(body_effect);
 
         // Check for conflicting abilities after merging body effects
         self.check_ability_conflicts(op.location(self.db).span);
+
+        // Process handler arms (second region) to bind continuation types
+        let mut handled_abilities = Vec::new();
+        if let Some(arms) = regions.get(1) {
+            tracing::debug!("check_ability_prompt: processing arms region");
+            for block in arms.blocks(self.db).iter() {
+                for arm_op in block.operations(self.db).iter() {
+                    tracing::debug!(
+                        "check_ability_prompt: arm op = {}.{}",
+                        arm_op.dialect(self.db),
+                        arm_op.name(self.db)
+                    );
+                    if arm_op.dialect(self.db) == tribute::DIALECT_NAME()
+                        && arm_op.name(self.db) == tribute::ARM()
+                    {
+                        // Extract pattern region and check for handler patterns
+                        let arm_regions = arm_op.regions(self.db);
+                        if let Some(pattern_region) = arm_regions.first() {
+                            self.check_handler_pattern_continuations(
+                                pattern_region,
+                                &mut handled_abilities,
+                                result_type,
+                            );
+                        }
+
+                        // Check the body region
+                        if let Some(body_region) = arm_regions.get(1) {
+                            self.check_region(body_region);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove handled abilities from the current effect row
+        for ability in handled_abilities {
+            self.current_effect.remove_ability(&ability);
+        }
 
         let value = op.result(self.db, 0);
         self.record_type(value, result_type);

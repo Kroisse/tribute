@@ -18,8 +18,8 @@
 use std::collections::HashMap;
 
 use tracing::debug;
-use tribute_ir::dialect::tribute;
-use trunk_ir::dialect::{core, wasm};
+use tribute_ir::dialect::{closure, tribute};
+use trunk_ir::dialect::{cont, core, wasm};
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value, ValueDef};
 
@@ -217,6 +217,17 @@ fn infer_type_from_callee<'db>(
                 // If it's a function type, extract return type
                 if let Some(func_ty) = core::Func::from_type(db, callee_ty) {
                     return Some(func_ty.result(db));
+                }
+                // If it's a continuation type, extract result type
+                if let Some(cont_ty) = cont::Continuation::from_type(db, callee_ty) {
+                    return Some(cont_ty.result(db));
+                }
+                // If it's a closure type, extract return type from the wrapped function type
+                if let Some(closure_ty) = closure::Closure::from_type(db, callee_ty) {
+                    let func_type = closure_ty.func_type(db);
+                    if let Some(func_ty) = core::Func::from_type(db, func_type) {
+                        return Some(func_ty.result(db));
+                    }
                 }
             }
 

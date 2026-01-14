@@ -890,8 +890,9 @@ impl<'db> Resolver<'db> {
                 Vec::new()
             }
             (d, n) if d == tribute::DIALECT_NAME() && n == tribute::ABILITY_DEF() => {
-                // ability_def is metadata - already processed in build_env, filter out
-                Vec::new()
+                // ability_def is kept for typeck to collect ability operation types
+                // It will be filtered out in wasm lowering phase
+                vec![self.resolve_op_regions(&remapped_op)]
             }
             (d, n) if d == tribute::DIALECT_NAME() && n == tribute::VAR() => {
                 if let Some(resolved) = self.try_resolve_var(&remapped_op) {
