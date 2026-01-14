@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use tribute_ir::dialect::{ability, adt, closure, tribute, tribute_rt};
-use trunk_ir::dialect::{core, wasm};
+use trunk_ir::dialect::{cont, core, wasm};
 use trunk_ir::{Attribute, Attrs, BlockId, DialectType, Symbol, Type, Value, ValueDef};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
@@ -160,6 +160,15 @@ pub(crate) fn type_to_valtype<'db>(
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
+        }))
+    } else if cont::Continuation::from_type(db, ty).is_some() {
+        // Continuation types are represented as GC structs at runtime
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Struct,
+            },
         }))
     } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
         // ADT types (structs, variants) - use concrete GC type reference

@@ -67,7 +67,8 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
         check_all_wasm_dialect(db, &lowered);
     }
 
-    lowered
+    // Phase 3: Assign unique type_idx to GC struct operations before emit
+    crate::passes::wasm_gc_type_assign::assign_gc_type_indices(db, lowered)
 }
 
 /// Debug helper to check if all operations in function bodies are in wasm dialect

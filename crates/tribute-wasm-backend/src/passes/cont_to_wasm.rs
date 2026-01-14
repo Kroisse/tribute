@@ -3616,7 +3616,6 @@ impl<'db> RewritePattern<'db> for ResumePattern {
 
         let i32_ty = core::I32::new(db).as_type();
         let funcref_ty = wasm::Funcref::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
         let structref_ty = wasm::Structref::new(db).as_type();
 
         let mut ops = Vec::new();
@@ -3658,11 +3657,12 @@ impl<'db> RewritePattern<'db> for ResumePattern {
         ops.push(get_resume_fn);
 
         // 4. Extract state from continuation (field 1)
+        // State is a structref since state_type() returns structref
         let get_state = wasm::struct_get(
             db,
             location,
             cont_structref,
-            anyref_ty,
+            structref_ty,
             0, // type_idx - Placeholder, resolved at emit time
             CONT_FIELD_STATE,
         )

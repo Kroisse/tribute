@@ -33,9 +33,11 @@ pub(crate) fn handle_struct_new<'db>(
     let field_count = operands.len();
     let result_type = op.results(db).first().copied();
 
-    // Check if this uses a placeholder type (wasm.structref)
-    // Priority: explicit type attr > placeholder result type > type_idx attr > inferred result type
-    let type_idx = if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
+    // Priority: explicit type_idx attr > type attr > placeholder result type > inferred result type
+    // type_idx attribute takes highest precedence (set by wasm_gc_type_assign pass)
+    let type_idx = if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+        Some(*idx as u32)
+    } else if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
         if wasm::Structref::from_type(db, *ty).is_some() {
             // Use placeholder map for wasm.structref
             // All (type, field_count) pairs are registered by collect_gc_types upfront
@@ -54,13 +56,10 @@ pub(crate) fn handle_struct_new<'db>(
         && wasm::Structref::from_type(db, ty).is_some()
     {
         // Result type is a placeholder (wasm.structref) - use placeholder map
-        // This takes precedence over explicit type_idx=0 for placeholder types
         module_info
             .placeholder_struct_type_idx
             .get(&(ty, field_count))
             .copied()
-    } else if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-        Some(*idx as u32)
     } else if let Some(ty) = result_type {
         // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
         if is_closure_struct_type(db, ty) {
