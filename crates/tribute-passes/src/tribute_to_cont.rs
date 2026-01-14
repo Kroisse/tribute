@@ -274,11 +274,18 @@ impl<'db> HandlerLowerer<'db> {
             if let Some(pattern_region) = suspend_arm.pattern_region {
                 let bindings = self.extract_bindings_from_pattern(pattern_region);
 
+                // Extract continuation type from handler_suspend operation
+                // (set by tirgen, constrained by typeck, resolved by TypeSubst)
+                let continuation_ty = self
+                    .extract_continuation_type(pattern_region)
+                    .unwrap_or(ptr_ty);
+
                 for (i, name) in bindings.iter().enumerate() {
                     if i == bindings.len() - 1 {
-                        // Last binding is continuation (k)
+                        // Last binding is continuation (k) - use the resolved continuation type
                         let get_cont_op =
-                            cont::get_continuation(self.db, location, ptr_ty).as_operation();
+                            cont::get_continuation(self.db, location, continuation_ty)
+                                .as_operation();
                         let cont_val = get_cont_op.result(self.db, 0);
                         extraction_ops.push(get_cont_op);
                         self.current_arm_bindings.insert(*name, cont_val);
@@ -413,6 +420,28 @@ impl<'db> HandlerLowerer<'db> {
                 }
             }
         }
+    }
+
+    /// Extract the continuation type from a handler_suspend pattern region.
+    ///
+    /// The continuation type is stored as an attribute on the handler_suspend operation,
+    /// set by tirgen as a type variable and resolved by TypeSubst.
+    fn extract_continuation_type(&self, pattern_region: Region<'db>) -> Option<Type<'db>> {
+        use tribute_pat::handler_suspend_attrs::CONTINUATION_TYPE;
+
+        for block in pattern_region.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter() {
+                if let Ok(_suspend) = tribute_pat::HandlerSuspend::from_operation(self.db, *op) {
+                    // Check for continuation_type attribute
+                    if let Some(Attribute::Type(cont_ty)) =
+                        op.attributes(self.db).get(&CONTINUATION_TYPE())
+                    {
+                        return Some(*cont_ty);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Ensure a region ends with a yield operation.

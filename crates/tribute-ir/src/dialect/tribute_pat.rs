@@ -178,6 +178,31 @@ pub mod block_arg_attrs {
     }
 }
 
+// === Handler Suspend Attributes ===
+
+/// Attribute keys for `tribute_pat.handler_suspend` operations.
+///
+/// These attributes store type information computed during type checking
+/// that is needed for lowering handler patterns.
+pub mod handler_suspend_attrs {
+    use trunk_ir::Symbol;
+
+    /// The continuation type for this handler suspend arm.
+    ///
+    /// Set by tirgen as a type variable, then constrained by typeck to the
+    /// concrete `cont.continuation` type. After type substitution, this
+    /// contains the fully resolved continuation type.
+    ///
+    /// Used by:
+    /// - tribute_to_cont: to create typed `cont.get_continuation` operations
+    /// - wasm_type_concrete: to infer call result types
+    #[allow(non_snake_case)]
+    #[inline]
+    pub fn CONTINUATION_TYPE() -> Symbol {
+        Symbol::new("continuation_type")
+    }
+}
+
 // === Pattern Region Builders ===
 
 /// Helper functions for building pattern regions.

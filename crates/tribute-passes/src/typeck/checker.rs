@@ -1222,39 +1222,33 @@ impl<'db> TypeChecker<'db> {
 
     /// Bind the continuation variable in a handler_suspend pattern to a type.
     ///
-    /// The continuation is in the second region (continuation region) of handler_suspend.
-    /// It contains either a `pat.bind` (named continuation) or `pat.wildcard` (discarded).
+    /// This reads the `continuation_type` attribute from handler_suspend (a type variable
+    /// created by tirgen) and constrains it to the computed continuation type.
+    /// The TypeSubst will later resolve this type variable in the attribute.
     fn bind_continuation_in_pattern(
         &mut self,
         handler_suspend_op: &Operation<'db>,
         continuation_ty: Type<'db>,
     ) {
-        let regions = handler_suspend_op.regions(self.db);
+        use tribute_pat::handler_suspend_attrs::CONTINUATION_TYPE;
 
-        // The continuation region is the second region (index 1)
-        if let Some(continuation_region) = regions.get(1) {
-            for block in continuation_region.blocks(self.db).iter() {
-                for op in block.operations(self.db).iter() {
-                    // Look for pat.bind - that's where the continuation variable is bound
-                    if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
-                        && op.name(self.db) == tribute_pat::BIND()
-                    {
-                        // NOTE: pat.bind currently has no results, so this code path
-                        // is not reached. When pat.bind is updated to produce a result,
-                        // this will bind the continuation type to the pattern variable.
-                        if let Some(&result_ty) = op.results(self.db).first() {
-                            let value = op.result(self.db, 0);
-                            self.record_type(value, continuation_ty);
-                            self.constrain_eq(result_ty, continuation_ty);
+        // Check if handler_suspend has a continuation_type attribute with a type variable
+        if let Some(Attribute::Type(attr_type_var)) = handler_suspend_op
+            .attributes(self.db)
+            .get(&CONTINUATION_TYPE())
+        {
+            // Constrain the type variable to the computed continuation type
+            // TypeSubst will resolve this during type substitution
+            self.constrain_eq(*attr_type_var, continuation_ty);
 
-                            trace!(
-                                "bind_continuation_in_pattern: bound continuation to {:?}",
-                                continuation_ty
-                            );
-                        }
-                    }
-                }
-            }
+            trace!(
+                "bind_continuation_in_pattern: constrained {:?} = {:?}",
+                attr_type_var, continuation_ty
+            );
+        } else {
+            // Fallback for IR without the continuation_type attribute
+            // (e.g., from older code or tests)
+            trace!("bind_continuation_in_pattern: no continuation_type attribute found, skipping");
         }
     }
 
