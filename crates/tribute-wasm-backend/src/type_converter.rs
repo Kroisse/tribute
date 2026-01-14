@@ -22,9 +22,10 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
-use tribute_ir::dialect::{adt, tribute_rt};
+use tribute_ir::dialect::{adt, tribute, tribute_rt};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::rewrite::{MaterializeResult, OpVec, TypeConverter};
+use trunk_ir::{Attribute, Symbol};
 use trunk_ir::{DialectOp, DialectType, Type};
 
 #[cfg(test)]
@@ -51,6 +52,27 @@ use trunk_ir::dialect::arith;
 /// ```
 pub fn wasm_type_converter() -> TypeConverter {
     TypeConverter::new()
+        // Convert unresolved tribute.type → concrete types
+        // This handles cases where typeck didn't fully resolve type names
+        .add_conversion(|db, ty| {
+            if !tribute::is_unresolved_type(db, ty) {
+                return None;
+            }
+            // Get the type name from the name attribute
+            let name = ty.get_attr(db, Symbol::new("name"))?;
+            let Attribute::Symbol(name_sym) = name else {
+                return None;
+            };
+            // Convert known type names to concrete types
+            name_sym.with_str(|name_str| match name_str {
+                "Int" => Some(core::I32::new(db).as_type()),
+                "Nat" => Some(core::I32::new(db).as_type()),
+                "Bool" => Some(core::I32::new(db).as_type()),
+                "Float" => Some(core::F64::new(db).as_type()),
+                "String" => Some(core::String::new(db).as_type()),
+                _ => None, // Unknown type - leave as is
+            })
+        })
         // Convert tribute_rt.int → core.i32 (Phase 1: arbitrary precision as i32)
         .add_conversion(|db, ty| {
             tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())

@@ -11,7 +11,7 @@ pub mod translate;
 pub mod type_converter;
 mod validation;
 
-pub use validation::{ValidationStats, validate_wasm_types};
+pub use validation::{ValidationError, validate_wasm_ir};
 
 pub use data_registry::{DataEntry, DataRegistry};
 pub use emit::emit_wasm;

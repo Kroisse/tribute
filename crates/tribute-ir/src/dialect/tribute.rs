@@ -314,6 +314,20 @@ pub fn is_error_type(db: &dyn salsa::Database, ty: trunk_ir::Type<'_>) -> bool {
     ty.is_dialect(db, DIALECT_NAME(), ERROR_TYPE())
 }
 
+/// Check if a type is an unresolved type reference (`tribute.type`).
+///
+/// These are type names that haven't been resolved to concrete types yet.
+pub fn is_unresolved_type(db: &dyn salsa::Database, ty: trunk_ir::Type<'_>) -> bool {
+    ty.dialect(db) == DIALECT_NAME() && ty.name(db) == Symbol::new("type")
+}
+
+/// Check if a type is a placeholder that should be resolved before emit.
+///
+/// This includes `tribute.type_var`, `tribute.type`, and `tribute.error_type`.
+pub fn is_placeholder_type(db: &dyn salsa::Database, ty: trunk_ir::Type<'_>) -> bool {
+    is_type_var(db, ty) || is_unresolved_type(db, ty) || is_error_type(db, ty)
+}
+
 // === Convenience function for creating unresolved types ===
 
 /// Create an unresolved type reference (`tribute.type`).

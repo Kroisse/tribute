@@ -93,10 +93,6 @@ fn check_function_body<'db>(db: &'db dyn salsa::Database, func_op: &Operation<'d
         for block in body_region.blocks(db).iter() {
             for op in block.operations(db).iter() {
                 let dialect = op.dialect(db);
-                // Skip src.var - kept for LSP hover support, no runtime effect
-                if dialect == tribute::DIALECT_NAME() && op.name(db) == tribute::VAR() {
-                    continue;
-                }
                 if dialect != Symbol::new("wasm") {
                     error!(
                         "Found non-wasm operation in function body: {}.{}",
@@ -588,15 +584,12 @@ impl<'db> WasmLowerer<'db> {
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
 
-        // Skip src.var operations - they're kept for LSP hover support but have no runtime effect.
-        // The resolver marks them as resolved_local and maps their results to actual values.
-        if dialect == tribute::DIALECT_NAME() && name == tribute::VAR() {
-            return;
-        }
-
-        // Skip ability_def operations - they're metadata used by typeck for handler pattern type checking.
-        // They have no runtime representation in WebAssembly.
-        if dialect == tribute::DIALECT_NAME() && name == tribute::ABILITY_DEF() {
+        // Skip tribute dialect metadata operations - they have no runtime representation.
+        if dialect == tribute::DIALECT_NAME() {
+            // These are all metadata/definition ops that don't produce wasm code:
+            // - var: variable references (resolved during name resolution)
+            // - ability_def: ability type definitions
+            // - enum_def, variant_def, field_def, struct_def: type definitions
             return;
         }
 
