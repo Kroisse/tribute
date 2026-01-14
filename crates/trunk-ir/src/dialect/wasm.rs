@@ -446,7 +446,9 @@ dialect! {
         // === WasmGC: References ===
 
         /// `wasm.ref_null` operation: create null reference.
-        #[attr(heap_type: Type)]
+        /// - `heap_type`: The heap type for abstract types (i31ref, structref, etc.)
+        /// - `type_idx`: Optional concrete type index for struct/array types
+        #[attr(heap_type: Type, type_idx?: u32)]
         fn ref_null() -> result;
 
         /// `wasm.ref_func` operation: create funcref from function name.
@@ -458,11 +460,15 @@ dialect! {
         fn ref_is_null(r#ref) -> result;
 
         /// `wasm.ref_cast` operation: cast reference type.
-        #[attr(target_type: Type)]
+        /// - `target_type`: The target heap type for abstract types (i31ref, structref, etc.)
+        /// - `type_idx`: Optional concrete type index for struct/array types
+        #[attr(target_type: Type, type_idx?: u32)]
         fn ref_cast(r#ref) -> result;
 
         /// `wasm.ref_test` operation: test reference type.
-        #[attr(target_type: Type)]
+        /// - `target_type`: The target heap type for abstract types (i31ref, structref, etc.)
+        /// - `type_idx`: Optional concrete type index for struct/array types
+        #[attr(target_type: Type, type_idx?: u32)]
         fn ref_test(r#ref) -> result;
 
         // === WasmGC: i31ref (Fixnum) ===

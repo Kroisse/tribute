@@ -516,10 +516,10 @@ impl<'db> WasmLowerer<'db> {
                 then_builder.op(wasm::r#return(self.db, location, None));
             } else if needs_i32_unbox {
                 // Unbox Int/Nat to i32
-                // Cast anyref to i31ref and extract i32
+                // Cast anyref to i31ref and extract i32 (abstract type, no type_idx)
                 let i31ref_ty = wasm::I31ref::new(self.db).as_type();
                 let cast = then_builder.op(wasm::ref_cast(
-                    self.db, location, value_val, i31ref_ty, i31ref_ty,
+                    self.db, location, value_val, i31ref_ty, i31ref_ty, None,
                 ));
                 let i31_val = cast.result(self.db);
                 // Use unsigned extraction for Nat, signed for Int

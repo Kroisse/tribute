@@ -32,6 +32,9 @@
 //!     ▼ typecheck
 //! Typed Module
 //!     │
+//!     ▼ boxing
+//! Module (boxing explicit)
+//!     │
 //!     ├─────────────── Closure Processing ────────────┤
 //!     ▼ lambda_lift
 //! Module (lambdas lifted)
@@ -71,6 +74,7 @@ use salsa::Accumulator;
 use tree_sitter::Parser;
 use tribute_front::source_file::parse_with_rope;
 use tribute_front::{lower_cst, parse_cst};
+use tribute_passes::boxing::insert_boxing;
 use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::const_inline::inline_module;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -329,6 +333,16 @@ pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -
     }
 }
 
+/// Insert explicit boxing/unboxing operations.
+///
+/// This pass inserts `tribute_rt.box_*` and `tribute_rt.unbox_*` operations
+/// at call sites where polymorphic parameters or results need boxing/unboxing.
+/// This makes boxing explicit in the IR, removing the need for emit-time type inference.
+#[salsa::tracked]
+pub fn stage_boxing<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    insert_boxing(db, module)
+}
+
 /// Lambda Lifting.
 ///
 /// This pass transforms lambda expressions into:
@@ -525,14 +539,15 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 /// 2. Resolve - Name resolution
 /// 3. Const Inline - Inline constant values
 /// 4. Typecheck - Type inference and checking
-/// 5. Lambda Lift - Lift lambdas to top-level
-/// 6. Closure Lower - Lower closure operations
-/// 7. TDNR - Type-directed name resolution
-/// 8. Evidence - Insert evidence parameters
-/// 9. Handler Lower - Lower ability ops to cont ops
-/// 10. Lower Case - Lower case to scf.if
-/// 11. DCE - Dead code elimination
-/// 12. Final resolve - Report unresolved references
+/// 5. Boxing - Insert explicit boxing/unboxing for polymorphic calls
+/// 6. Lambda Lift - Lift lambdas to top-level
+/// 7. Closure Lower - Lower closure operations
+/// 8. TDNR - Type-directed name resolution
+/// 9. Evidence - Insert evidence parameters
+/// 10. Handler Lower - Lower ability ops to cont ops
+/// 11. Lower Case - Lower case to scf.if
+/// 12. DCE - Dead code elimination
+/// 13. Final resolve - Report unresolved references
 #[salsa::tracked]
 pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     // Parse and lower to initial IR
@@ -542,6 +557,7 @@ pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'
     let module = stage_resolve(db, module);
     let module = stage_const_inline(db, module);
     let module = stage_typecheck(db, module);
+    let module = stage_boxing(db, module);
 
     // Closure processing
     let module = stage_lambda_lift(db, module);
@@ -582,6 +598,7 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_resolve(db, module);
     let module = stage_const_inline(db, module);
     let module = stage_typecheck(db, module);
+    let module = stage_boxing(db, module);
     let module = stage_lambda_lift(db, module);
     let module = stage_closure_lower(db, module);
     let module = stage_tdnr(db, module);

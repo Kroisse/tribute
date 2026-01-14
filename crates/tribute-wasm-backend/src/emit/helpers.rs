@@ -99,6 +99,18 @@ pub(crate) fn type_to_valtype<'db>(
     {
         // String and ptr still use linear memory (i32 pointer)
         Ok(ValType::I32)
+    } else if tribute_rt::is_any(db, ty) {
+        // tribute_rt.any is the type-erased reference (maps to anyref)
+        Ok(ValType::Ref(RefType::ANYREF))
+    } else if tribute_rt::is_intref(db, ty) {
+        // tribute_rt.intref is the boxed integer reference (maps to i31ref)
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::I31,
+            },
+        }))
     } else if ty.dialect(db) == wasm::DIALECT_NAME() {
         // WASM dialect types (e.g., wasm.structref for continuation frames)
         // IMPORTANT: Must check BEFORE type_idx_by_type.get() to avoid returning

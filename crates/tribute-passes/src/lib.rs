@@ -11,6 +11,7 @@
 pub mod diagnostic;
 
 // === TrunkIR passes ===
+pub mod boxing;
 pub mod closure_lower;
 pub mod const_inline;
 pub mod evidence;
@@ -23,6 +24,7 @@ pub mod tribute_to_scf;
 pub mod typeck;
 
 // Re-exports
+pub use boxing::insert_boxing;
 pub use closure_lower::lower_closures;
 pub use const_inline::{ConstInliner, inline_module};
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
