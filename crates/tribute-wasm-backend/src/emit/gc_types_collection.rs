@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use tracing::debug;
 
-use tribute_ir::dialect::{adt, closure, tribute};
+use tribute_ir::dialect::{adt, closure, tribute, tribute_rt};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::{Attribute, BlockId, DialectOp, DialectType, Operation, Region, Symbol, Type};
 use wasm_encoder::{FieldType, StorageType, ValType};
@@ -97,13 +97,117 @@ fn register_type<'db>(type_idx_by_type: &mut HashMap<Type<'db>, u32>, idx: u32, 
     type_idx_by_type.entry(ty).or_insert(idx);
 }
 
+/// Get the canonical type name for comparison.
+///
+/// For unresolved tribute.type, returns the name attribute.
+/// For variant instance types, returns the base enum's name.
+/// For adt.enum/struct types, returns the name attribute.
+fn get_canonical_type_name<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Symbol> {
+    // Check if this is an unresolved tribute.type
+    if tribute::is_unresolved_type(db, ty)
+        && let Some(Attribute::Symbol(name_sym)) = ty.get_attr(db, Symbol::new("name"))
+    {
+        return Some(*name_sym);
+    }
+    // Check if this is a variant instance type
+    if adt::is_variant_instance_type(db, ty)
+        && let Some(base_enum) = adt::get_base_enum(db, ty)
+        && let Some(Attribute::Symbol(name_sym)) = base_enum.get_attr(db, Symbol::new("name"))
+    {
+        return Some(*name_sym);
+    }
+    // Check if this is an adt.enum type
+    if adt::is_enum_type(db, ty)
+        && let Some(Attribute::Symbol(name_sym)) = ty.get_attr(db, Symbol::new("name"))
+    {
+        return Some(*name_sym);
+    }
+    // Check if this is an adt.struct type
+    if adt::is_struct_type(db, ty)
+        && let Some(Attribute::Symbol(name_sym)) = ty.get_attr(db, Symbol::new("name"))
+    {
+        return Some(*name_sym);
+    }
+    None
+}
+
+/// Normalize a type for GC struct field comparison.
+///
+/// Converts `tribute.type(name=X)` to the corresponding concrete type,
+/// handling cases where typeck didn't fully resolve type names.
+fn normalize_type_for_gc<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
+    // Check if this is an unresolved tribute.type
+    if tribute::is_unresolved_type(db, ty)
+        && let Some(Attribute::Symbol(name_sym)) = ty.get_attr(db, Symbol::new("name"))
+    {
+        return name_sym.with_str(|name_str| match name_str {
+            "Int" => core::I32::new(db).as_type(),
+            "Nat" => core::I32::new(db).as_type(),
+            "Bool" => core::I32::new(db).as_type(),
+            "Float" => core::F64::new(db).as_type(),
+            "String" => core::String::new(db).as_type(),
+            _ => ty, // User-defined type - leave as is for now
+        });
+    }
+    // Normalize variant instance types to their base enum
+    if adt::is_variant_instance_type(db, ty)
+        && let Some(base_enum) = adt::get_base_enum(db, ty)
+    {
+        return base_enum;
+    }
+    // Also normalize tribute_rt types
+    if tribute_rt::Int::from_type(db, ty).is_some() || tribute_rt::Nat::from_type(db, ty).is_some()
+    {
+        return core::I32::new(db).as_type();
+    }
+    if tribute_rt::Bool::from_type(db, ty).is_some() {
+        return core::I32::new(db).as_type();
+    }
+    if tribute_rt::Float::from_type(db, ty).is_some() {
+        return core::F64::new(db).as_type();
+    }
+    ty
+}
+
+/// Check if two types are semantically equivalent for GC struct fields.
+fn types_equivalent_for_gc<'db>(
+    db: &'db dyn salsa::Database,
+    ty1: Type<'db>,
+    ty2: Type<'db>,
+) -> bool {
+    // First try direct comparison
+    if ty1 == ty2 {
+        return true;
+    }
+    // Normalize both types
+    let ty1_norm = normalize_type_for_gc(db, ty1);
+    let ty2_norm = normalize_type_for_gc(db, ty2);
+    if ty1_norm == ty2_norm {
+        return true;
+    }
+    // Compare canonical names for user-defined types
+    // (e.g., tribute.type(name=Expr) vs adt.enum$Num with base_enum Expr)
+    if let (Some(name1), Some(name2)) = (
+        get_canonical_type_name(db, ty1),
+        get_canonical_type_name(db, ty2),
+    ) && name1 == name2
+    {
+        return true;
+    }
+    false
+}
+
 /// Record a struct field type
 fn record_struct_field<'db>(
+    db: &'db dyn salsa::Database,
     type_idx: u32,
     builder: &mut GcTypeBuilder<'db>,
     field_idx: u32,
     ty: Type<'db>,
 ) -> CompilationResult<()> {
+    // Normalize type before storing/comparing
+    let ty = normalize_type_for_gc(db, ty);
+
     if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
         let count = builder.field_count.expect("count checked by matches");
         return Err(CompilationError::type_error(format!(
@@ -115,7 +219,8 @@ fn record_struct_field<'db>(
         builder.fields.resize_with(idx + 1, || None);
     }
     if let Some(existing) = builder.fields[idx] {
-        if existing != ty {
+        // Check if types are semantically equivalent
+        if !types_equivalent_for_gc(db, existing, ty) {
             return Err(CompilationError::type_error(format!(
                 "struct type index {type_idx} field {field_idx} type mismatch: existing={:?}, new={:?}",
                 existing, ty
@@ -394,7 +499,7 @@ pub(crate) fn collect_gc_types<'db>(
                             ty.dialect(db),
                             ty.name(db)
                         );
-                        record_struct_field(type_idx, builder, field_idx as u32, ty)?;
+                        record_struct_field(db, type_idx, builder, field_idx as u32, ty)?;
                     } else {
                         debug!(
                             "GC: struct_new type_idx={} field {} has no type (value_type returned None)",
@@ -568,7 +673,7 @@ pub(crate) fn collect_gc_types<'db>(
                         result_ty.dialect(db),
                         result_ty.name(db)
                     );
-                    record_struct_field(type_idx, builder, field_idx, result_ty)?;
+                    record_struct_field(db, type_idx, builder, field_idx, result_ty)?;
                 }
             }
         } else if wasm::StructSet::matches(db, *op) {
@@ -609,7 +714,7 @@ pub(crate) fn collect_gc_types<'db>(
                     .copied()
                     .and_then(|value| value_type(db, value, block_arg_types))
                 {
-                    record_struct_field(type_idx, builder, field_idx, ty)?;
+                    record_struct_field(db, type_idx, builder, field_idx, ty)?;
                 }
             }
         } else if wasm::ArrayNew::matches(db, *op) || wasm::ArrayNewDefault::matches(db, *op) {

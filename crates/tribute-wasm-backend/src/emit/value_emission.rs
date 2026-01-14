@@ -7,10 +7,8 @@ use std::collections::HashMap;
 
 use tracing::debug;
 use tribute_ir::dialect::{tribute, tribute_rt};
-use trunk_ir::dialect::{core, wasm};
-use trunk_ir::{
-    Attribute, BlockId, DialectOp, DialectType, IdVec, Operation, Symbol, Type, Value, ValueDef,
-};
+use trunk_ir::dialect::core;
+use trunk_ir::{Attribute, BlockId, DialectType, IdVec, Symbol, Type, Value, ValueDef};
 use wasm_encoder::{AbstractHeapType, HeapType, Instruction};
 
 use crate::gc_types::BOXED_F64_IDX;
@@ -271,65 +269,4 @@ pub(super) fn emit_unboxing<'db>(
         // For reference types, assume no unboxing needed
         Ok(())
     }
-}
-
-/// Infer the actual result type for a call operation.
-///
-/// For generic function calls where the IR result type is `type.var`,
-/// we infer the concrete type from the operand types.
-pub(super) fn infer_call_result_type<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    result_ty: Type<'db>,
-    func_types: &HashMap<Symbol, core::Func<'db>>,
-    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
-    func_return_type: Option<Type<'db>>,
-) -> Type<'db> {
-    // Handle wasm.call_indirect - if result is polymorphic but function returns funcref, use funcref
-    if wasm::CallIndirect::matches(db, *op) {
-        let is_polymorphic_result =
-            tribute::is_type_var(db, result_ty) || wasm::Anyref::from_type(db, result_ty).is_some();
-        if let Some(func_ret_ty) = func_return_type {
-            let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty).is_some()
-                || core::Func::from_type(db, func_ret_ty).is_some();
-            if is_polymorphic_result && func_returns_funcref {
-                return wasm::Funcref::new(db).as_type();
-            }
-        }
-        return result_ty;
-    }
-
-    // Only handle wasm.call operations
-    let call_op = match wasm::Call::from_operation(db, *op) {
-        Ok(c) => c,
-        Err(_) => return result_ty,
-    };
-
-    // Get the callee
-    let callee = call_op.callee(db);
-
-    // Look up the callee's function type
-    let callee_ty = match func_types.get(&callee) {
-        Some(ty) => ty,
-        None => return result_ty,
-    };
-
-    // Check if the callee returns type.var (generic)
-    let return_ty = callee_ty.result(db);
-    if !tribute::is_type_var(db, return_ty) {
-        // Callee returns a concrete type, use it
-        return return_ty;
-    }
-
-    // Infer concrete type from first operand (works for identity-like functions)
-    if let Some(operand_ty) = op
-        .operands(db)
-        .first()
-        .and_then(|v| value_type(db, *v, block_arg_types))
-        .filter(|ty| !tribute::is_type_var(db, *ty))
-    {
-        return operand_ty;
-    }
-
-    result_ty
 }

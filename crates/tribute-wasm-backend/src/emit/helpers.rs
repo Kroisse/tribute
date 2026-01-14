@@ -181,6 +181,24 @@ pub(crate) fn type_to_valtype<'db>(
         // Generic type variables use anyref (uniform representation)
         // Values must be boxed when passed to generic functions
         Ok(ValType::Ref(RefType::ANYREF))
+    } else if tribute::is_unresolved_type(db, ty) {
+        // Unresolved type references (tribute.type) - map known primitives
+        if let Some(Attribute::Symbol(name_sym)) = ty.get_attr(db, Symbol::new("name")) {
+            let result = name_sym.with_str(|name_str| match name_str {
+                "Int" | "Nat" | "Bool" => Some(ValType::I32),
+                "Float" => Some(ValType::F64),
+                // Note: Unresolved "String" uses anyref, not i32 like core::String.
+                // This is intentional - unresolved types may appear in polymorphic contexts
+                // where anyref representation is expected.
+                "String" => Some(ValType::Ref(RefType::ANYREF)),
+                _ => None, // User-defined type
+            });
+            if let Some(val_type) = result {
+                return Ok(val_type);
+            }
+        }
+        // User-defined types use anyref
+        Ok(ValType::Ref(RefType::ANYREF))
     } else if ty.dialect(db) == adt::DIALECT_NAME() {
         // ADT base types (e.g., adt.Expr) without specific variant type_idx
         // These represent "any variant of this enum" and use anyref

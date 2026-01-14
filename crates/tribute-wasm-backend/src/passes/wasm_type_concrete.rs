@@ -18,7 +18,9 @@
 use std::collections::HashMap;
 
 use tracing::debug;
-use tribute_ir::dialect::{closure, tribute};
+use tribute_ir::ModulePathExt;
+use tribute_ir::dialect::{adt, closure, tribute};
+use trunk_ir::Attribute;
 use trunk_ir::dialect::{cont, core, wasm};
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value, ValueDef};
@@ -39,6 +41,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) -> co
         .add_pattern(CallIndirectResultTypePattern {
             func_return_types: func_return_types.clone(),
         })
+        .add_pattern(StructGetResultTypePattern)
         .add_pattern(IfResultTypePattern)
         .add_pattern(BlockResultTypePattern)
         .add_pattern(LoopResultTypePattern);
@@ -51,9 +54,17 @@ fn collect_func_return_types<'db>(
     module: core::Module<'db>,
 ) -> HashMap<Symbol, Type<'db>> {
     let mut func_return_types = HashMap::new();
+    collect_func_return_types_from_region(db, module.body(db), &mut func_return_types);
+    func_return_types
+}
 
-    let body = module.body(db);
-    for block in body.blocks(db).iter() {
+/// Recursively collect function return types from a region, including nested modules.
+fn collect_func_return_types_from_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: Region<'db>,
+    func_return_types: &mut HashMap<Symbol, Type<'db>>,
+) {
+    for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
             // Check for wasm.func operations
             if let Ok(func_op) = wasm::Func::from_operation(db, *op) {
@@ -63,13 +74,24 @@ fn collect_func_return_types<'db>(
                 // Extract return type from function type
                 if let Some(func) = core::Func::from_type(db, func_ty) {
                     let return_ty = func.result(db);
+                    debug!(
+                        "wasm_type_concrete: registered function {} -> {}.{}",
+                        sym_name,
+                        return_ty.dialect(db),
+                        return_ty.name(db)
+                    );
                     func_return_types.insert(sym_name, return_ty);
+                }
+            }
+
+            // Recursively collect from nested modules
+            if core::Module::matches(db, *op) {
+                for nested_region in op.regions(db).iter() {
+                    collect_func_return_types_from_region(db, *nested_region, func_return_types);
                 }
             }
         }
     }
-
-    func_return_types
 }
 
 /// Pattern to concretize result types of wasm.call operations.
@@ -94,8 +116,13 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
         };
 
         // Look up the callee's return type
+        // First try qualified name (e.g., "Point::x"), then fall back to last segment (e.g., "x")
         let callee = call_op.callee(db);
-        let Some(&return_ty) = self.func_return_types.get(&callee) else {
+        let return_ty = if let Some(&ty) = self.func_return_types.get(&callee) {
+            ty
+        } else if let Some(&ty) = self.func_return_types.get(&callee.last_segment()) {
+            ty
+        } else {
             debug!(
                 "wasm_type_concrete: callee {} not found in func_return_types",
                 callee
@@ -103,25 +130,56 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         };
 
-        // If callee also returns type_var, we can't concretize further
-        if tribute::is_type_var(db, return_ty) {
-            debug!(
-                "wasm_type_concrete: callee {} returns type_var, cannot concretize",
-                callee
-            );
-            return RewriteResult::Unchanged;
-        }
+        // If callee returns type_var (generic function), try to infer concrete type from operands
+        let concrete_return_ty = if tribute::is_type_var(db, return_ty) {
+            // Try to infer from first operand (works for identity-like functions)
+            if let Some(&operand) = op.operands(db).first() {
+                if let Some(operand_ty) = infer_operand_type(db, operand) {
+                    if !tribute::is_type_var(db, operand_ty)
+                        && !tribute::is_placeholder_type(db, operand_ty)
+                    {
+                        debug!(
+                            "wasm_type_concrete: callee {} returns type_var, inferring from operand: {}.{}",
+                            callee,
+                            operand_ty.dialect(db),
+                            operand_ty.name(db)
+                        );
+                        operand_ty
+                    } else {
+                        debug!(
+                            "wasm_type_concrete: callee {} returns type_var, operand also placeholder",
+                            callee
+                        );
+                        return RewriteResult::Unchanged;
+                    }
+                } else {
+                    debug!(
+                        "wasm_type_concrete: callee {} returns type_var, cannot infer operand type",
+                        callee
+                    );
+                    return RewriteResult::Unchanged;
+                }
+            } else {
+                debug!(
+                    "wasm_type_concrete: callee {} returns type_var, no operands to infer from",
+                    callee
+                );
+                return RewriteResult::Unchanged;
+            }
+        } else {
+            return_ty
+        };
 
         // Try to concretize results
-        let Some(new_results) = concretize_results(db, op.results(db), return_ty) else {
+        let Some(new_results) = concretize_results(db, op.results(db), concrete_return_ty) else {
             return RewriteResult::Unchanged;
         };
 
         debug!(
             "wasm_type_concrete: concretizing wasm.call {} result(s) to {}.{}",
             callee,
-            return_ty.dialect(db),
-            return_ty.name(db)
+            concrete_return_ty.dialect(db),
+            concrete_return_ty.name(db)
         );
 
         let new_op = op.modify(db).results(new_results).build();
@@ -159,7 +217,7 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
 
         // Try to infer type from callee
         if let Some(concrete_ty) = infer_type_from_callee(db, callee_val, &self.func_return_types)
-            && !tribute::is_type_var(db, concrete_ty)
+            && !tribute::is_placeholder_type(db, concrete_ty)
         {
             // Try to concretize results
             let Some(new_results) = concretize_results(db, op.results(db), concrete_ty) else {
@@ -188,6 +246,26 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
         }
 
         RewriteResult::Unchanged
+    }
+}
+
+/// Try to infer the type of an operand value.
+///
+/// Handles cases like:
+/// - Operation results: get the type from the operation's result
+/// - Block arguments: get the type from the block argument type
+fn infer_operand_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
+    match value.def(db) {
+        ValueDef::OpResult(def_op) => {
+            let index = value.index(db);
+            def_op.results(db).get(index).copied()
+        }
+        ValueDef::BlockArg(block_id) => {
+            // Block arguments don't store their types directly in this context,
+            // so we return None and let the caller handle it
+            let _ = block_id;
+            None
+        }
     }
 }
 
@@ -348,6 +426,146 @@ impl<'db> RewritePattern<'db> for LoopResultTypePattern {
     }
 }
 
+/// Pattern to concretize result types of wasm.struct_get operations.
+///
+/// If a struct_get's result type is `tribute.type_var`, try to infer it from
+/// the operand's struct type and field index.
+struct StructGetResultTypePattern;
+
+impl<'db> RewritePattern<'db> for StructGetResultTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Only handle wasm.struct_get operations
+        if !wasm::StructGet::matches(db, *op) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Check if result is already concrete
+        let results = op.results(db);
+        let has_type_var = results.iter().any(|ty| tribute::is_type_var(db, *ty));
+        if !has_type_var {
+            return RewriteResult::Unchanged;
+        }
+
+        // Get field index from field_idx attribute
+        let attrs = op.attributes(db);
+        let field_idx = match attrs.get(&Symbol::new("field_idx")) {
+            Some(Attribute::IntBits(idx)) => *idx as usize,
+            // Fallback to field attribute (from adt.struct_get/variant_get)
+            _ => match attrs.get(&Symbol::new("field")) {
+                Some(Attribute::IntBits(idx)) => *idx as usize,
+                _ => return RewriteResult::Unchanged,
+            },
+        };
+
+        // Get operand type (the struct reference)
+        let Some(ref_type) = adaptor.operand_type(0) else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Try to get field type from the struct type
+        let field_type = get_field_type_from_struct(db, ref_type, field_idx)
+            // Try type attribute as fallback
+            .or_else(|| {
+                if let Some(Attribute::Type(struct_ty)) = attrs.get(&Symbol::new("type")) {
+                    get_field_type_from_struct(db, *struct_ty, field_idx)
+                } else {
+                    None
+                }
+            });
+
+        let Some(concrete_ty) = field_type else {
+            debug!(
+                "wasm_type_concrete: cannot infer struct_get field type for field_idx {}, ref_type={}.{}",
+                field_idx,
+                ref_type.dialect(db),
+                ref_type.name(db)
+            );
+            return RewriteResult::Unchanged;
+        };
+
+        // Skip if inferred type is also a type_var.
+        // Note: We intentionally use is_type_var here, NOT is_placeholder_type.
+        // Struct fields may have unresolved types (e.g., tribute.type{name: "String"})
+        // which are valid concrete types for struct_get results.
+        if tribute::is_type_var(db, concrete_ty) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Concretize results
+        let Some(new_results) = concretize_results(db, results, concrete_ty) else {
+            return RewriteResult::Unchanged;
+        };
+
+        debug!(
+            "wasm_type_concrete: concretizing wasm.struct_get result to {}.{}",
+            concrete_ty.dialect(db),
+            concrete_ty.name(db)
+        );
+
+        let new_op = op.modify(db).results(new_results).build();
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Get field type from a struct or variant instance type by field index.
+fn get_field_type_from_struct<'db>(
+    db: &'db dyn salsa::Database,
+    struct_ty: Type<'db>,
+    field_idx: usize,
+) -> Option<Type<'db>> {
+    // 1. Check if it's a variant instance type (from adt.variant_cast)
+    if adt::is_variant_instance_type(db, struct_ty) {
+        // Get base enum type and tag
+        let base_enum = adt::get_base_enum(db, struct_ty)?;
+        let tag = adt::get_variant_tag(db, struct_ty)?;
+
+        // Get variants from base enum
+        let variants = adt::get_enum_variants(db, base_enum)?;
+
+        // Find the variant with matching tag
+        for (variant_name, field_types) in variants {
+            if variant_name == tag {
+                return field_types.get(field_idx).copied();
+            }
+        }
+        return None;
+    }
+
+    // 2. Check if it's a direct adt.struct type
+    if adt::is_struct_type(db, struct_ty) {
+        let fields_attr = struct_ty.get_attr(db, adt::ATTR_FIELDS())?;
+        let Attribute::List(fields) = fields_attr else {
+            return None;
+        };
+
+        // Each field is [name, type]
+        let field = fields.get(field_idx)?;
+        let Attribute::List(field_parts) = field else {
+            return None;
+        };
+
+        // Get type from [name, type] pair
+        if field_parts.len() >= 2
+            && let Attribute::Type(ty) = &field_parts[1]
+        {
+            return Some(*ty);
+        }
+        return None;
+    }
+
+    // 3. Check variant_fields attribute (legacy path)
+    if let Some(field_types) = adt::get_variant_field_types(db, struct_ty) {
+        return field_types.get(field_idx).copied();
+    }
+
+    None
+}
+
 // ============================================================================
 // Helper functions
 // ============================================================================
@@ -396,8 +614,8 @@ fn infer_type_from_regions<'db>(
             continue;
         };
 
-        // Skip type variables - we want concrete types
-        if tribute::is_type_var(db, ty) {
+        // Skip placeholder types (type_var, unresolved type, error_type) - we want concrete types
+        if tribute::is_placeholder_type(db, ty) {
             continue;
         }
 
@@ -437,7 +655,7 @@ fn infer_type_from_region<'db>(
             if let Ok(yield_op) = wasm::Yield::from_operation(db, *op) {
                 let yielded_value = yield_op.value(db);
                 if let Some(ty) = get_value_type(db, yielded_value)
-                    && !tribute::is_type_var(db, ty)
+                    && !tribute::is_placeholder_type(db, ty)
                 {
                     return Some(ty);
                 }

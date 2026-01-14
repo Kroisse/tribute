@@ -55,6 +55,10 @@ impl CompilationError {
     pub fn invalid_attribute(msg: impl std::fmt::Display) -> Self {
         CompilationErrorKind::InvalidAttribute(msg.to_string()).into()
     }
+
+    pub fn ir_validation(msg: impl std::fmt::Display) -> Self {
+        CompilationErrorKind::IrValidation(msg.to_string()).into()
+    }
 }
 
 #[derive(Clone, Display, Debug, PartialEq)]
@@ -79,6 +83,9 @@ pub enum CompilationErrorKind {
 
     #[display("Invalid operation: {_0}")]
     InvalidOperation(&'static str),
+
+    #[display("IR validation failed: {_0}")]
+    IrValidation(String),
 }
 
 impl std::error::Error for CompilationError {}

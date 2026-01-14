@@ -20,8 +20,14 @@ static INTERNER: LazyLock<RwLock<Rodeo>> = LazyLock::new(|| RwLock::new(Rodeo::d
 ///
 /// Uses lasso for string interning with 4-byte Spur keys.
 /// Significantly smaller than Salsa's interned types.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
 pub struct Symbol(Spur);
+
+impl std::fmt::Debug for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.with_str(|s| write!(f, "Symbol({:?})", s))
+    }
+}
 
 impl Symbol {
     /// Intern a static string and return its symbol. Prefer this over `from_dynamic` when possible.
