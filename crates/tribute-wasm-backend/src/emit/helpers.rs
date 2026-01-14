@@ -187,6 +187,9 @@ pub(crate) fn type_to_valtype<'db>(
             let result = name_sym.with_str(|name_str| match name_str {
                 "Int" | "Nat" | "Bool" => Some(ValType::I32),
                 "Float" => Some(ValType::F64),
+                // Note: Unresolved "String" uses anyref, not i32 like core::String.
+                // This is intentional - unresolved types may appear in polymorphic contexts
+                // where anyref representation is expected.
                 "String" => Some(ValType::Ref(RefType::ANYREF)),
                 _ => None, // User-defined type
             });

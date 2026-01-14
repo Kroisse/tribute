@@ -488,7 +488,10 @@ impl<'db> RewritePattern<'db> for StructGetResultTypePattern {
             return RewriteResult::Unchanged;
         };
 
-        // Skip if inferred type is also a type_var
+        // Skip if inferred type is also a type_var.
+        // Note: We intentionally use is_type_var here, NOT is_placeholder_type.
+        // Struct fields may have unresolved types (e.g., tribute.type{name: "String"})
+        // which are valid concrete types for struct_get results.
         if tribute::is_type_var(db, concrete_ty) {
             return RewriteResult::Unchanged;
         }
