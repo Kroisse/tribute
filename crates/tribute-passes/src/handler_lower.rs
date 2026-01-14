@@ -358,6 +358,13 @@ impl<'db> RewritePattern<'db> for LowerContinuationCallPattern {
             return RewriteResult::Unchanged;
         }
 
+        tracing::debug!(
+            "LowerContinuationCallPattern: found func.call_indirect, operand_type(0) = {:?}",
+            adaptor
+                .operand_type(0)
+                .map(|ty| format!("{}.{}", ty.dialect(db), ty.name(db)))
+        );
+
         // Check if the callee (operand 0) has a continuation type
         let callee_ty = match adaptor.operand_type(0) {
             Some(ty) => ty,
@@ -366,6 +373,11 @@ impl<'db> RewritePattern<'db> for LowerContinuationCallPattern {
 
         // Try to match cont.continuation type
         if cont::Continuation::from_type(db, callee_ty).is_none() {
+            tracing::debug!(
+                "LowerContinuationCallPattern: callee type is not continuation: {}.{}",
+                callee_ty.dialect(db),
+                callee_ty.name(db)
+            );
             return RewriteResult::Unchanged;
         }
 

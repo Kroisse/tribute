@@ -593,6 +593,12 @@ impl<'db> WasmLowerer<'db> {
             return;
         }
 
+        // Skip ability_def operations - they're metadata used by typeck for handler pattern type checking.
+        // They have no runtime representation in WebAssembly.
+        if dialect == tribute::DIALECT_NAME() && name == tribute::ABILITY_DEF() {
+            return;
+        }
+
         // Handle wasm dialect metadata collection
         if dialect == wasm::DIALECT_NAME() {
             self.observe_wasm_module_op(&op, name);
