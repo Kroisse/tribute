@@ -181,12 +181,44 @@ pub(crate) fn collect_gc_types<'db>(
     module: core::Module<'db>,
     block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
 ) -> CompilationResult<GcTypesResult<'db>> {
+    use std::collections::HashSet;
+
     let wasm_dialect = Symbol::new("wasm");
     let mut builders: Vec<GcTypeBuilder<'db>> = Vec::new();
     let mut type_idx_by_type: HashMap<Type<'db>, u32> = HashMap::new();
     // For placeholder types like wasm.structref, use (type, field_count) as key
     // to handle multiple structs with same placeholder type but different field counts
     let mut placeholder_struct_type_idx: HashMap<(Type<'db>, usize), u32> = HashMap::new();
+
+    // Phase 1: Collect explicit type_idx values from struct_new operations
+    // This ensures placeholder allocation doesn't conflict with explicit indices
+    let mut reserved_indices: HashSet<u32> = HashSet::new();
+    fn collect_reserved_indices<'db>(
+        db: &'db dyn salsa::Database,
+        region: &Region<'db>,
+        reserved: &mut HashSet<u32>,
+    ) {
+        let wasm_dialect = Symbol::new("wasm");
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                if op.dialect(db) == wasm_dialect
+                    && wasm::StructNew::matches(db, *op)
+                    && let Some(Attribute::IntBits(idx)) = op.attributes(db).get(&ATTR_TYPE_IDX())
+                {
+                    reserved.insert(*idx as u32);
+                }
+                for nested_region in op.regions(db).iter() {
+                    collect_reserved_indices(db, nested_region, reserved);
+                }
+            }
+        }
+    }
+    collect_reserved_indices(db, &module.body(db), &mut reserved_indices);
+    debug!(
+        "GC: collected {} reserved type indices from explicit struct_new: {:?}",
+        reserved_indices.len(),
+        reserved_indices
+    );
 
     // Register builtin types in type_idx_by_type:
     // 0: BoxedF64, 1: BytesArray, 2: BytesStruct, 3: Step, 4: ClosureStruct
@@ -196,8 +228,19 @@ pub(crate) fn collect_gc_types<'db>(
     // Start at FIRST_USER_TYPE_IDX since indices 0-4 are reserved for built-in types
     let mut next_type_idx: u32 = FIRST_USER_TYPE_IDX;
 
+    // Helper to get next available type_idx, skipping reserved indices
+    let next_available_idx = |next_type_idx: &mut u32, reserved: &HashSet<u32>| -> u32 {
+        while reserved.contains(next_type_idx) {
+            *next_type_idx += 1;
+        }
+        let idx = *next_type_idx;
+        *next_type_idx += 1;
+        idx
+    };
+
     // Helper to get type_idx from attributes or inferred type.
     // Priority: type_idx attr > type attr > inferred_type (from result/operand)
+    // Note: This closure captures reserved_indices to skip reserved indices when allocating new ones.
     let get_type_idx = |attrs: &std::collections::BTreeMap<Symbol, Attribute<'db>>,
                         type_idx_by_type: &mut HashMap<Type<'db>, u32>,
                         next_type_idx: &mut u32,
@@ -219,9 +262,8 @@ pub(crate) fn collect_gc_types<'db>(
             if let Some(&idx) = type_idx_by_type.get(ty) {
                 return Some(idx);
             }
-            // Allocate new type_idx
-            let idx = *next_type_idx;
-            *next_type_idx += 1;
+            // Allocate new type_idx, skipping reserved indices
+            let idx = next_available_idx(next_type_idx, &reserved_indices);
             type_idx_by_type.insert(*ty, idx);
             return Some(idx);
         }
@@ -234,9 +276,8 @@ pub(crate) fn collect_gc_types<'db>(
             if let Some(&idx) = type_idx_by_type.get(&ty) {
                 return Some(idx);
             }
-            // Allocate new type_idx
-            let idx = *next_type_idx;
-            *next_type_idx += 1;
+            // Allocate new type_idx, skipping reserved indices
+            let idx = next_available_idx(next_type_idx, &reserved_indices);
             type_idx_by_type.insert(ty, idx);
             return Some(idx);
         }
@@ -277,9 +318,18 @@ pub(crate) fn collect_gc_types<'db>(
 
             let placeholder_type = placeholder_type_from_attr.or(placeholder_type_from_result);
 
-            let type_idx = if let Some(ty) = placeholder_type {
-                // For placeholder types, use (type, field_count) as key to allow
-                // different field counts with same placeholder type
+            // First check for explicit type_idx attribute (set by wasm_gc_type_assign pass)
+            let type_idx = if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+                let idx = *idx as u32;
+                // Advance next_type_idx to avoid collision with explicit indices
+                next_type_idx = next_type_idx.max(idx.saturating_add(1));
+                debug!(
+                    "GC: struct_new using explicit type_idx={} from attribute (field_count={})",
+                    idx, field_count
+                );
+                idx
+            } else if let Some(ty) = placeholder_type {
+                // For placeholder types without explicit type_idx, use (type, field_count) as key
                 let key = (ty, field_count);
                 if let Some(&idx) = placeholder_struct_type_idx.get(&key) {
                     debug!(
@@ -288,8 +338,7 @@ pub(crate) fn collect_gc_types<'db>(
                     );
                     idx
                 } else {
-                    let idx = next_type_idx;
-                    next_type_idx += 1;
+                    let idx = next_available_idx(&mut next_type_idx, &reserved_indices);
                     placeholder_struct_type_idx.insert(key, idx);
                     // Note: Placeholder types are NOT inserted into type_idx_by_type
                     // They are only stored in placeholder_struct_type_idx to avoid
@@ -411,9 +460,8 @@ pub(crate) fn collect_gc_types<'db>(
                 if let Some(&idx) = placeholder_struct_type_idx.get(&key) {
                     idx
                 } else {
-                    // Allocate new type_idx for this placeholder
-                    let idx = next_type_idx;
-                    next_type_idx += 1;
+                    // Allocate new type_idx for this placeholder, skipping reserved indices
+                    let idx = next_available_idx(&mut next_type_idx, &reserved_indices);
                     placeholder_struct_type_idx.insert(key, idx);
                     debug!(
                         "GC: struct_get allocated type_idx={} for placeholder (field_count={})",
@@ -441,9 +489,8 @@ pub(crate) fn collect_gc_types<'db>(
                         );
                         idx
                     } else {
-                        // Allocate new type_idx for this adt.struct type
-                        let idx = next_type_idx;
-                        next_type_idx += 1;
+                        // Allocate new type_idx for this adt.struct type, skipping reserved indices
+                        let idx = next_available_idx(&mut next_type_idx, &reserved_indices);
                         placeholder_struct_type_idx.insert(key, idx);
                         debug!(
                             "GC: struct_get allocated type_idx={} for adt.struct (field_count={})",
@@ -685,16 +732,38 @@ pub(crate) fn collect_gc_types<'db>(
             let inferred_type = op.results(db).first().copied();
 
             // Special handling for ref_cast with placeholder type (wasm.structref + field_count)
+            // First check for explicit type_idx attribute (set by wasm_gc_type_assign pass)
             if wasm::RefCast::matches(db, *op)
                 && let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE())
                 && wasm::Structref::from_type(db, *target_ty).is_some()
                 && let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
             {
                 let field_count = *fc as usize;
+
+                // Check for explicit type_idx attribute first
+                if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+                    let idx = *idx as u32;
+                    next_type_idx = next_type_idx.max(idx.saturating_add(1));
+                    if let Some(builder) = try_get_builder(&mut builders, idx) {
+                        builder.kind = GcKind::Struct;
+                        if builder.field_count.is_none() {
+                            builder.field_count = Some(field_count);
+                        }
+                        if builder.fields.len() < field_count {
+                            builder.fields.resize_with(field_count, || None);
+                        }
+                    }
+                    debug!(
+                        "GC: ref_cast using explicit type_idx={} from attribute (field_count={})",
+                        idx, field_count
+                    );
+                    return Ok(());
+                }
+
+                // Fall back to placeholder type handling, skipping reserved indices
                 let key = (*target_ty, field_count);
                 placeholder_struct_type_idx.entry(key).or_insert_with(|| {
-                    let idx = next_type_idx;
-                    next_type_idx += 1;
+                    let idx = next_available_idx(&mut next_type_idx, &reserved_indices);
                     // Use try_get_builder to create/get the builder at the right index
                     // Initialize fields vec so struct_new can populate field types later
                     if let Some(builder) = try_get_builder(&mut builders, idx) {

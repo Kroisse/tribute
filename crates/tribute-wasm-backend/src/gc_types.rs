@@ -28,6 +28,7 @@ use std::collections::HashMap;
 
 use tracing::debug;
 use tribute_ir::dialect::{adt, closure, tribute_rt};
+use trunk_ir::dialect::cont;
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::{DialectType, Symbol, Type};
 use wasm_encoder::{AbstractHeapType, FieldType, HeapType, RefType, StorageType, ValType};
@@ -424,6 +425,18 @@ pub fn type_to_storage_type<'db>(
         return StorageType::Val(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
+        }));
+    }
+
+    // Continuation types are represented as GC structs at runtime
+    if cont::Continuation::from_type(db, ty).is_some() {
+        debug!("type_to_storage_type: cont.continuation -> STRUCTREF");
+        return StorageType::Val(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Struct,
+            },
         }));
     }
 

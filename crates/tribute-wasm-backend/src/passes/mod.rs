@@ -11,4 +11,5 @@ pub mod func_to_wasm;
 pub mod intrinsic_to_wasm;
 pub mod scf_to_wasm;
 pub mod tribute_rt_to_wasm;
+pub mod wasm_gc_type_assign;
 pub mod wasm_type_concrete;

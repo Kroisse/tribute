@@ -38,8 +38,6 @@ use tracing::debug;
 
 use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::{adt, tribute, tribute_rt};
-#[cfg(test)]
-use trunk_ir::IdVec;
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::{
     Attribute, Attrs, BlockId, DialectOp, DialectType, Operation, Region, Symbol, Type, Value,
@@ -2339,67 +2337,5 @@ mod tests {
 
         let bytes = result.unwrap();
         assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
-    }
-
-    // ========================================
-    // Test: struct_new with result type placeholder (no type attr)
-    // ========================================
-
-    /// Test that struct_new with result type wasm.structref (but without explicit type attr)
-    /// is detected as a placeholder type and gets a unique type index.
-    /// This simulates what happens in cont_to_wasm.rs when creating state structs.
-    #[salsa::tracked]
-    fn make_struct_new_result_type_placeholder_module(
-        db: &dyn salsa::Database,
-    ) -> core::Module<'_> {
-        let location = test_location(db);
-        let i64_ty = core::I64::new(db).as_type();
-        let structref_ty = wasm::Structref::new(db).as_type();
-
-        // Create struct_new using the dialect helper function (like cont_to_wasm.rs does)
-        // This sets type_idx as an attribute but NOT the "type" attribute
-        let field_value = wasm::i64_const(db, location, i64_ty, 42).as_operation();
-
-        let field_val = field_value.result(db, 0);
-
-        // Use wasm::struct_new helper function - this sets type_idx=0 but result type is structref
-        let fields: IdVec<Value> = idvec![field_val];
-        let struct_new_op = wasm::struct_new(db, location, fields, structref_ty, 0);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![field_value, struct_new_op.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        core::Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_struct_new_result_type_placeholder(db: &salsa::DatabaseImpl) {
-        let module = make_struct_new_result_type_placeholder_module(db);
-        let (gc_types, _type_map, placeholder_map) =
-            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
-
-        // The structref_ty placeholder with 1 field should be registered
-        let structref_ty = wasm::Structref::new(db).as_type();
-        let key = (structref_ty, 1usize);
-        assert!(
-            placeholder_map.contains_key(&key),
-            "placeholder map should contain (structref_ty, 1) key"
-        );
-
-        // Should have 6 types: 5 built-in + 1 user placeholder struct
-        assert_eq!(gc_types.len(), 6, "gc_types should have 6 types");
-
-        // The user struct (index 5) should have 1 field of type I64
-        let user_struct = &gc_types[5];
-        if let GcTypeDef::Struct(fields) = user_struct {
-            assert_eq!(fields.len(), 1, "struct should have 1 field");
-        } else {
-            panic!("expected struct type at index 5");
-        }
     }
 }
