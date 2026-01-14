@@ -217,7 +217,7 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
 
         // Try to infer type from callee
         if let Some(concrete_ty) = infer_type_from_callee(db, callee_val, &self.func_return_types)
-            && !tribute::is_type_var(db, concrete_ty)
+            && !tribute::is_placeholder_type(db, concrete_ty)
         {
             // Try to concretize results
             let Some(new_results) = concretize_results(db, op.results(db), concrete_ty) else {
