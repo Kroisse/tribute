@@ -71,13 +71,37 @@ dialect! {
 
         // === Boxing Operations ===
 
-        /// `tribute_rt.box_int` operation: box an integer.
-        /// Converts an unboxed int to a boxed intref.
+        /// `tribute_rt.box_int` operation: box a signed integer.
+        /// Converts an unboxed int to a boxed intref (i31ref).
         fn box_int(value) -> result;
 
-        /// `tribute_rt.unbox_int` operation: unbox an integer.
-        /// Converts a boxed intref back to an unboxed int.
+        /// `tribute_rt.unbox_int` operation: unbox a signed integer.
+        /// Converts a boxed intref back to an unboxed int (signed).
         fn unbox_int(value) -> result;
+
+        /// `tribute_rt.box_nat` operation: box an unsigned natural number.
+        /// Converts an unboxed nat to a boxed intref (i31ref).
+        fn box_nat(value) -> result;
+
+        /// `tribute_rt.unbox_nat` operation: unbox an unsigned natural number.
+        /// Converts a boxed intref back to an unboxed nat (unsigned).
+        fn unbox_nat(value) -> result;
+
+        /// `tribute_rt.box_float` operation: box a float.
+        /// Converts an unboxed f64 to a boxed struct (BoxedF64).
+        fn box_float(value) -> result;
+
+        /// `tribute_rt.unbox_float` operation: unbox a float.
+        /// Converts a boxed struct back to an unboxed f64.
+        fn unbox_float(value) -> result;
+
+        /// `tribute_rt.box_bool` operation: box a boolean.
+        /// Converts an unboxed bool (i32) to a boxed intref (i31ref).
+        fn box_bool(value) -> result;
+
+        /// `tribute_rt.unbox_bool` operation: unbox a boolean.
+        /// Converts a boxed intref back to an unboxed bool (i32).
+        fn unbox_bool(value) -> result;
     }
 }
 
@@ -86,6 +110,12 @@ dialect! {
 
 trunk_ir::register_pure_op!(BoxInt<'_>);
 trunk_ir::register_pure_op!(UnboxInt<'_>);
+trunk_ir::register_pure_op!(BoxNat<'_>);
+trunk_ir::register_pure_op!(UnboxNat<'_>);
+trunk_ir::register_pure_op!(BoxFloat<'_>);
+trunk_ir::register_pure_op!(UnboxFloat<'_>);
+trunk_ir::register_pure_op!(BoxBool<'_>);
+trunk_ir::register_pure_op!(UnboxBool<'_>);
 
 // === Type constructor helpers ===
 

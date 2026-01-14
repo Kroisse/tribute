@@ -45,12 +45,14 @@ use trunk_ir::DialectType;
 use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
+use trunk_ir::ir::OperationBuilder;
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, IdVec, Location, Operation, Region, Symbol, Type, Value,
     ValueDef,
 };
 
+use crate::gc_types::BOXED_F64_IDX;
 use crate::type_converter::wasm_type_converter;
 
 /// Continuation struct layout:
@@ -2008,6 +2010,12 @@ fn box_value_to_anyref<'db>(
         ref_i31.result(db)
     } else if core::I64::from_type(db, value_ty).is_some() {
         // Box I64: i64 → i32 → anyref (truncate and wrap)
+        // WARNING: This truncates 64-bit values to 32-bit, causing data loss.
+        // TODO: Implement proper BoxedI64 struct for lossless i64 boxing.
+        tracing::warn!(
+            "box_value_to_anyref: i64 truncation to i32 may cause data loss at {:?}",
+            location
+        );
         let i32_ty = core::I32::new(db).as_type();
         let wrap = wasm::i32_wrap_i64(db, location, value, i32_ty);
         ops.push(wrap.as_operation());
@@ -2015,8 +2023,26 @@ fn box_value_to_anyref<'db>(
         let ref_i31 = wasm::ref_i31(db, location, wrap.result(db), anyref_ty);
         ops.push(ref_i31.as_operation());
         ref_i31.result(db)
-    } else if tribute_rt::is_float(db, value_ty) || tribute_rt::is_bool(db, value_ty) {
-        panic!("box_value_to_anyref: float/bool boxing not yet implemented for continuations");
+    } else if tribute_rt::is_float(db, value_ty) || core::F64::from_type(db, value_ty).is_some() {
+        // Box Float/F64 to BoxedF64 struct
+        // Create wasm.struct_new with the value as operand and type_idx attribute
+        let boxed_op = OperationBuilder::new(
+            db,
+            location,
+            wasm::DIALECT_NAME(),
+            Symbol::new("struct_new"),
+        )
+        .operands(trunk_ir::idvec![value])
+        .result(anyref_ty)
+        .attr("type_idx", Attribute::IntBits(BOXED_F64_IDX as u64))
+        .build();
+        ops.push(boxed_op);
+        boxed_op.result(db, 0)
+    } else if tribute_rt::is_bool(db, value_ty) {
+        // Box Bool to i31ref (bool is 0 or 1, fits in i31)
+        let ref_i31 = wasm::ref_i31(db, location, value, anyref_ty);
+        ops.push(ref_i31.as_operation());
+        ref_i31.result(db)
     } else {
         // Reference types are already compatible with anyref
         value
@@ -2518,8 +2544,8 @@ fn expand_shift_operation<'db>(
 /// 5. If not yielding: returns body result normally
 struct PushPromptPattern;
 
-impl RewritePattern for PushPromptPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for PushPromptPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -2983,8 +3009,8 @@ fn compute_op_idx_hash(name: &str) -> u64 {
 /// - Block 1+: suspend cases (each has a marker block arg with ability_ref + op_name attrs)
 struct HandlerDispatchPattern;
 
-impl RewritePattern for HandlerDispatchPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for HandlerDispatchPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -3573,8 +3599,8 @@ const WRAPPER_FIELD_STATE: u32 = 0;
 #[allow(dead_code)]
 const WRAPPER_FIELD_RESUME_VALUE: u32 = 1;
 
-impl RewritePattern for ResumePattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ResumePattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -3695,8 +3721,8 @@ impl RewritePattern for ResumePattern {
 /// Pattern for `cont.drop` -> deallocate continuation
 struct DropPattern;
 
-impl RewritePattern for DropPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for DropPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -3723,8 +3749,8 @@ impl RewritePattern for DropPattern {
 /// It expands to: global.get $yield_cont -> ref_cast structref
 struct GetContinuationPattern;
 
-impl RewritePattern for GetContinuationPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for GetContinuationPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -3774,8 +3800,8 @@ impl RewritePattern for GetContinuationPattern {
 /// is known.
 struct GetShiftValuePattern;
 
-impl RewritePattern for GetShiftValuePattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for GetShiftValuePattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -3844,8 +3870,8 @@ impl RewritePattern for GetShiftValuePattern {
 /// For primitive types, the final result is i32. For reference types, it's anyref.
 struct GetDoneValuePattern;
 
-impl RewritePattern for GetDoneValuePattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for GetDoneValuePattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,

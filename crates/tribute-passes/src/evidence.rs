@@ -246,8 +246,8 @@ impl AddEvidenceParamPattern {
     }
 }
 
-impl RewritePattern for AddEvidenceParamPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for AddEvidenceParamPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -346,8 +346,8 @@ impl TransformCallsPattern {
     }
 }
 
-impl RewritePattern for TransformCallsPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for TransformCallsPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,

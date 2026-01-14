@@ -74,8 +74,8 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 /// Pattern for `adt.struct_new` -> `wasm.struct_new`
 struct StructNewPattern;
 
-impl RewritePattern for StructNewPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for StructNewPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -102,8 +102,8 @@ impl RewritePattern for StructNewPattern {
 /// Pattern for `adt.struct_get` -> `wasm.struct_get`
 struct StructGetPattern;
 
-impl RewritePattern for StructGetPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for StructGetPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -113,11 +113,12 @@ impl RewritePattern for StructGetPattern {
             return RewriteResult::Unchanged;
         };
 
-        // Get field index (can be IntBits or String name)
+        // Get field index - must be IntBits (name-to-index resolution should happen upstream)
+        // TODO: Add a prior pass to resolve field names to indices if needed
         let Attribute::IntBits(field_idx) = struct_get.field(db) else {
-            #[cfg(debug_assertions)]
             warn!(
-                "StructGetPattern expects IntBits field index, got {:?}",
+                "adt.struct_get field must be IntBits index, got {:?}. \
+                 Field name resolution should happen in an earlier pass.",
                 struct_get.field(db)
             );
             return RewriteResult::Unchanged;
@@ -140,8 +141,8 @@ impl RewritePattern for StructGetPattern {
 /// Pattern for `adt.struct_set` -> `wasm.struct_set`
 struct StructSetPattern;
 
-impl RewritePattern for StructSetPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for StructSetPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -151,11 +152,11 @@ impl RewritePattern for StructSetPattern {
             return RewriteResult::Unchanged;
         };
 
-        // Get field index
+        // Get field index - must be IntBits (name-to-index resolution should happen upstream)
         let Attribute::IntBits(field_idx) = struct_set.field(db) else {
-            #[cfg(debug_assertions)]
             warn!(
-                "StructSetPattern expects IntBits field index, got {:?}",
+                "adt.struct_set field must be IntBits index, got {:?}. \
+                 Field name resolution should happen in an earlier pass.",
                 struct_set.field(db)
             );
             return RewriteResult::Unchanged;
@@ -180,8 +181,8 @@ impl RewritePattern for StructSetPattern {
 /// without an explicit tag field. The type itself serves as the discriminant.
 struct VariantNewPattern;
 
-impl RewritePattern for VariantNewPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for VariantNewPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -254,8 +255,8 @@ fn make_variant_type<'db>(
 /// with the new WasmGC subtyping approach. Use `adt.variant_is` instead.
 struct VariantTagPattern;
 
-impl RewritePattern for VariantTagPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for VariantTagPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -285,8 +286,8 @@ impl RewritePattern for VariantTagPattern {
 /// Tests if a variant reference is of a specific variant type.
 struct VariantIsPattern;
 
-impl RewritePattern for VariantIsPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for VariantIsPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -326,8 +327,8 @@ impl RewritePattern for VariantIsPattern {
 /// Casts a variant reference to a specific variant type after pattern matching.
 struct VariantCastPattern;
 
-impl RewritePattern for VariantCastPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for VariantCastPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -371,8 +372,8 @@ impl RewritePattern for VariantCastPattern {
 /// The type for struct.get comes from the operand (the variant_cast result).
 struct VariantGetPattern;
 
-impl RewritePattern for VariantGetPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for VariantGetPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -383,10 +384,11 @@ impl RewritePattern for VariantGetPattern {
         };
 
         // Get field index directly (no offset - tag field removed in WasmGC subtyping)
+        // Must be IntBits - name-to-index resolution should happen upstream
         let Attribute::IntBits(field_idx) = variant_get.field(db) else {
-            #[cfg(debug_assertions)]
             warn!(
-                "VariantGetPattern expects IntBits field index, got {:?}",
+                "adt.variant_get field must be IntBits index, got {:?}. \
+                 Field name resolution should happen in an earlier pass.",
                 variant_get.field(db)
             );
             return RewriteResult::Unchanged;
@@ -413,8 +415,8 @@ impl RewritePattern for VariantGetPattern {
 /// Pattern for `adt.array_new` -> `wasm.array_new` or `wasm.array_new_default`
 struct ArrayNewPattern;
 
-impl RewritePattern for ArrayNewPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ArrayNewPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -446,8 +448,8 @@ impl RewritePattern for ArrayNewPattern {
 /// Pattern for `adt.array_get` -> `wasm.array_get`
 struct ArrayGetPattern;
 
-impl RewritePattern for ArrayGetPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ArrayGetPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -470,8 +472,8 @@ impl RewritePattern for ArrayGetPattern {
 /// Pattern for `adt.array_set` -> `wasm.array_set`
 struct ArraySetPattern;
 
-impl RewritePattern for ArraySetPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ArraySetPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -494,8 +496,8 @@ impl RewritePattern for ArraySetPattern {
 /// Pattern for `adt.array_len` -> `wasm.array_len`
 struct ArrayLenPattern;
 
-impl RewritePattern for ArrayLenPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ArrayLenPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -518,8 +520,8 @@ impl RewritePattern for ArrayLenPattern {
 /// Pattern for `adt.ref_null` -> `wasm.ref_null`
 struct RefNullPattern;
 
-impl RewritePattern for RefNullPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for RefNullPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -542,8 +544,8 @@ impl RewritePattern for RefNullPattern {
 /// Pattern for `adt.ref_is_null` -> `wasm.ref_is_null`
 struct RefIsNullPattern;
 
-impl RewritePattern for RefIsNullPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for RefIsNullPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -566,8 +568,8 @@ impl RewritePattern for RefIsNullPattern {
 /// Pattern for `adt.ref_cast` -> `wasm.ref_cast`
 struct RefCastPattern;
 
-impl RewritePattern for RefCastPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for RefCastPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,

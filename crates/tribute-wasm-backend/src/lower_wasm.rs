@@ -43,6 +43,9 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     // Lower tribute_rt operations (box_int, unbox_int) to wasm operations
     let module = crate::passes::tribute_rt_to_wasm::lower(db, module);
 
+    // Concretize type variables in wasm operations (resolve tribute.type_var)
+    let module = crate::passes::wasm_type_concrete::lower(db, module);
+
     // Const analysis and lowering (string/bytes constants to data segments)
     let const_analysis = crate::passes::const_to_wasm::analyze_consts(db, module);
     let module = crate::passes::const_to_wasm::lower(db, module, const_analysis);

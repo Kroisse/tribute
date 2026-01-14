@@ -204,7 +204,7 @@ impl StringConstPattern {
     }
 }
 
-impl RewritePattern for StringConstPattern {
+impl<'db> RewritePattern<'db> for StringConstPattern {
     fn match_and_rewrite<'a>(
         &self,
         db: &'a dyn salsa::Database,
@@ -254,7 +254,7 @@ impl BytesConstPattern {
     }
 }
 
-impl RewritePattern for BytesConstPattern {
+impl<'db> RewritePattern<'db> for BytesConstPattern {
     fn match_and_rewrite<'a>(
         &self,
         db: &'a dyn salsa::Database,

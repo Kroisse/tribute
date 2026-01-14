@@ -19,22 +19,21 @@ use crate::type_converter::wasm_type_converter;
 
 /// Lower arith dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    PatternApplicator::new(wasm_type_converter())
+    let applicator = PatternApplicator::new(wasm_type_converter())
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
         .add_pattern(ArithCmpPattern)
         .add_pattern(ArithNegPattern)
         .add_pattern(ArithBitwisePattern)
-        .add_pattern(ArithConversionPattern)
-        .apply(db, module)
-        .module
+        .add_pattern(ArithConversionPattern);
+    applicator.apply(db, module).module
 }
 
 /// Pattern for `arith.const` -> `wasm.{type}_const`
 struct ArithConstPattern;
 
-impl RewritePattern for ArithConstPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ArithConstPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -44,21 +43,22 @@ impl RewritePattern for ArithConstPattern {
             return RewriteResult::Unchanged;
         };
 
-        let result_ty = op.results(db).first().copied();
+        let Some(result_ty) = op.results(db).first().copied() else {
+            // Missing result type - cannot lower, leave unchanged
+            return RewriteResult::Unchanged;
+        };
 
         // Handle nil type constants specially
-        let type_name = type_suffix(db, result_ty);
+        let type_name = type_suffix(db, Some(result_ty));
         if type_name == "nil" {
             // Nil constants have no runtime representation, but we need to preserve
             // SSA form for operations that reference them. Use wasm.nop which has
             // no runtime effect but maintains the value reference.
-            let result_ty = result_ty.unwrap();
             let nop = wasm::nop(db, op.location(db), result_ty);
             return RewriteResult::Replace(nop.as_operation());
         }
 
         let location = op.location(db);
-        let result_ty = result_ty.unwrap();
         let value = const_op.value(db).clone();
 
         let new_op = match type_name {
@@ -107,8 +107,8 @@ impl RewritePattern for ArithConstPattern {
 /// Pattern for `arith.{add,sub,mul,div,rem}` -> `wasm.{type}_{op}`
 struct ArithBinOpPattern;
 
-impl RewritePattern for ArithBinOpPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ArithBinOpPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -129,15 +129,17 @@ impl RewritePattern for ArithBinOpPattern {
             return RewriteResult::Unchanged;
         }
 
-        let result_ty =
-            op.results(db).first().copied().unwrap_or_else(|| {
-                panic!("arith binop missing result type at {:?}", op.location(db))
-            });
+        let Some(result_ty) = op.results(db).first().copied() else {
+            // Missing result type - cannot lower
+            return RewriteResult::Unchanged;
+        };
+        let operands = op.operands(db);
+        let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
+            // Missing operands - cannot lower
+            return RewriteResult::Unchanged;
+        };
         let suffix = type_suffix(db, Some(result_ty));
         let location = op.location(db);
-        let operands = op.operands(db);
-        let lhs = operands[0];
-        let rhs = operands[1];
 
         let new_op = if name == arith::ADD() {
             match suffix {
@@ -188,8 +190,8 @@ impl RewritePattern for ArithBinOpPattern {
 /// Pattern for `arith.cmp_*` -> `wasm.{type}_{cmp}`
 struct ArithCmpPattern;
 
-impl RewritePattern for ArithCmpPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ArithCmpPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -284,8 +286,8 @@ impl RewritePattern for ArithCmpPattern {
 /// Pattern for `arith.neg` -> `wasm.{f32,f64}_neg` or 0 - x for integers
 struct ArithNegPattern;
 
-impl RewritePattern for ArithNegPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ArithNegPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -334,8 +336,8 @@ impl RewritePattern for ArithNegPattern {
 /// Pattern for `arith.{and,or,xor,shl,shr,shru}` -> `wasm.i{32,64}_{op}`
 struct ArithBitwisePattern;
 
-impl RewritePattern for ArithBitwisePattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ArithBitwisePattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -357,17 +359,17 @@ impl RewritePattern for ArithBitwisePattern {
             return RewriteResult::Unchanged;
         }
 
-        let result_ty = op.results(db).first().copied().unwrap_or_else(|| {
-            panic!(
-                "arith bitwise op missing result type at {:?}",
-                op.location(db)
-            )
-        });
+        let Some(result_ty) = op.results(db).first().copied() else {
+            // Missing result type - cannot lower
+            return RewriteResult::Unchanged;
+        };
+        let operands = op.operands(db);
+        let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
+            // Missing operands - cannot lower
+            return RewriteResult::Unchanged;
+        };
         let suffix = type_suffix(db, Some(result_ty));
         let location = op.location(db);
-        let operands = op.operands(db);
-        let lhs = operands[0];
-        let rhs = operands[1];
 
         let new_op = if name == arith::AND() {
             match suffix {
@@ -412,8 +414,8 @@ impl RewritePattern for ArithBitwisePattern {
 /// Pattern for `arith.{cast,trunc,extend,convert}` -> wasm conversion ops
 struct ArithConversionPattern;
 
-impl RewritePattern for ArithConversionPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ArithConversionPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,

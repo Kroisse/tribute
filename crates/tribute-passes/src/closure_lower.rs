@@ -68,8 +68,8 @@ pub fn lower_closures<'db>(
 /// since in Tribute all function values are represented as closures.
 struct UpdateFuncSignaturePattern;
 
-impl RewritePattern for UpdateFuncSignaturePattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for UpdateFuncSignaturePattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -128,8 +128,8 @@ impl RewritePattern for UpdateFuncSignaturePattern {
 /// Pattern: Lower `closure.new` to `func.constant` + `adt.struct_new`.
 struct LowerClosureNewPattern;
 
-impl RewritePattern for LowerClosureNewPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for LowerClosureNewPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -209,8 +209,8 @@ impl RewritePattern for LowerClosureNewPattern {
 /// - It's a block arg with a function-like type (heuristic for parameters)
 struct LowerClosureCallPattern;
 
-impl RewritePattern for LowerClosureCallPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for LowerClosureCallPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -346,8 +346,8 @@ impl RewritePattern for LowerClosureCallPattern {
 /// closure.func extracts the funcref (first field).
 struct LowerClosureFuncPattern;
 
-impl RewritePattern for LowerClosureFuncPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for LowerClosureFuncPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -404,8 +404,8 @@ impl RewritePattern for LowerClosureFuncPattern {
 /// closure.env extracts the env (second field).
 struct LowerClosureEnvPattern;
 
-impl RewritePattern for LowerClosureEnvPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for LowerClosureEnvPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,

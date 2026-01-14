@@ -45,8 +45,8 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 /// - Field 1: environment struct
 struct ClosureNewPattern;
 
-impl RewritePattern for ClosureNewPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ClosureNewPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -97,8 +97,8 @@ impl RewritePattern for ClosureNewPattern {
 /// Extracts the function reference from a closure struct.
 struct ClosureFuncPattern;
 
-impl RewritePattern for ClosureFuncPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ClosureFuncPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -134,8 +134,8 @@ impl RewritePattern for ClosureFuncPattern {
 /// Extracts the environment struct from a closure.
 struct ClosureEnvPattern;
 
-impl RewritePattern for ClosureEnvPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ClosureEnvPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,

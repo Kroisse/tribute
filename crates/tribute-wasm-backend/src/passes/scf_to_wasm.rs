@@ -17,21 +17,20 @@ use crate::type_converter::wasm_type_converter;
 
 /// Lower scf dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    PatternApplicator::new(wasm_type_converter())
+    let applicator = PatternApplicator::new(wasm_type_converter())
         .add_pattern(ScfIfPattern)
         .add_pattern(ScfLoopPattern)
         .add_pattern(ScfYieldPattern)
         .add_pattern(ScfContinuePattern)
-        .add_pattern(ScfBreakPattern)
-        .apply(db, module)
-        .module
+        .add_pattern(ScfBreakPattern);
+    applicator.apply(db, module).module
 }
 
 /// Pattern for `scf.if` -> `wasm.if`
 struct ScfIfPattern;
 
-impl RewritePattern for ScfIfPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ScfIfPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -72,8 +71,8 @@ impl RewritePattern for ScfIfPattern {
 /// - `wasm.br(target=1)` branches to the loop (continue)
 struct ScfLoopPattern;
 
-impl RewritePattern for ScfLoopPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ScfLoopPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -123,8 +122,8 @@ impl RewritePattern for ScfLoopPattern {
 /// local.get, and the wasm.yield itself produces no Wasm instruction.
 struct ScfYieldPattern;
 
-impl RewritePattern for ScfYieldPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ScfYieldPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -153,8 +152,8 @@ impl RewritePattern for ScfYieldPattern {
 /// Branches to the enclosing wasm.loop (depth 1, since loop is inside block).
 struct ScfContinuePattern;
 
-impl RewritePattern for ScfContinuePattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ScfContinuePattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -180,8 +179,8 @@ impl RewritePattern for ScfContinuePattern {
 /// region's result, then branch without operands.
 struct ScfBreakPattern;
 
-impl RewritePattern for ScfBreakPattern {
-    fn match_and_rewrite<'db>(
+impl<'db> RewritePattern<'db> for ScfBreakPattern {
+    fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
