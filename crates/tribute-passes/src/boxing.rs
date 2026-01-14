@@ -67,17 +67,6 @@ fn collect_func_types<'db>(
     func_types
 }
 
-/// Get the type of a value from its definition.
-fn get_value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
-    match value.def(db) {
-        trunk_ir::ValueDef::OpResult(def_op) => def_op.results(db).get(value.index(db)).copied(),
-        trunk_ir::ValueDef::BlockArg(_block_id) => {
-            // Block argument types need context - handled by OpAdaptor
-            None
-        }
-    }
-}
-
 /// Get the ID of a type_var (if it is one).
 fn get_type_var_id<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<u64> {
     if !tribute::is_type_var(db, ty) {
@@ -91,36 +80,71 @@ fn get_type_var_id<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<u
     }
 }
 
-/// Create a boxing operation for a value.
+/// Categorize value type for boxing/unboxing purposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValueCategory {
+    /// Signed integer (tribute_rt.int or core.i32)
+    Int,
+    /// Unsigned natural number (tribute_rt.nat)
+    Nat,
+    /// Boolean (tribute_rt.bool)
+    Bool,
+    /// Float (tribute_rt.float or core.f64)
+    Float,
+    /// Reference type (no boxing needed)
+    Reference,
+}
+
+/// Categorize a type for boxing/unboxing.
+fn categorize_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> ValueCategory {
+    if tribute_rt::is_int(db, ty) || CoreI32::from_type(db, ty).is_some() {
+        ValueCategory::Int
+    } else if tribute_rt::is_nat(db, ty) {
+        ValueCategory::Nat
+    } else if tribute_rt::is_bool(db, ty) {
+        ValueCategory::Bool
+    } else if tribute_rt::is_float(db, ty) || CoreF64::from_type(db, ty).is_some() {
+        ValueCategory::Float
+    } else {
+        ValueCategory::Reference
+    }
+}
+
+/// Create a boxing operation for a value with known type.
 /// Returns (box_op, boxed_value) or None if boxing not applicable.
 fn create_box_op<'db>(
     db: &'db dyn salsa::Database,
     value: Value<'db>,
+    value_ty: Type<'db>,
     location: Location<'db>,
 ) -> Option<(Operation<'db>, Value<'db>)> {
-    let value_ty = get_value_type(db, value)?;
-
     let any_ty = *tribute_rt::Any::new(db);
 
-    // Check for tribute_rt types AND core types
-    let is_int_like = tribute_rt::is_int(db, value_ty)
-        || tribute_rt::is_nat(db, value_ty)
-        || tribute_rt::is_bool(db, value_ty)
-        || CoreI32::from_type(db, value_ty).is_some();
-    let is_float_like =
-        tribute_rt::is_float(db, value_ty) || CoreF64::from_type(db, value_ty).is_some();
-
-    if is_int_like {
-        let box_op = tribute_rt::box_int(db, location, value, any_ty);
-        let boxed = box_op.as_operation().result(db, 0);
-        Some((box_op.as_operation(), boxed))
-    } else if is_float_like {
-        let box_op = tribute_rt::box_float(db, location, value, any_ty);
-        let boxed = box_op.as_operation().result(db, 0);
-        Some((box_op.as_operation(), boxed))
-    } else {
-        // Reference types don't need boxing (already subtypes of anyref)
-        None
+    match categorize_type(db, value_ty) {
+        ValueCategory::Int => {
+            let box_op = tribute_rt::box_int(db, location, value, any_ty);
+            let boxed = box_op.as_operation().result(db, 0);
+            Some((box_op.as_operation(), boxed))
+        }
+        ValueCategory::Nat => {
+            let box_op = tribute_rt::box_nat(db, location, value, any_ty);
+            let boxed = box_op.as_operation().result(db, 0);
+            Some((box_op.as_operation(), boxed))
+        }
+        ValueCategory::Bool => {
+            let box_op = tribute_rt::box_bool(db, location, value, any_ty);
+            let boxed = box_op.as_operation().result(db, 0);
+            Some((box_op.as_operation(), boxed))
+        }
+        ValueCategory::Float => {
+            let box_op = tribute_rt::box_float(db, location, value, any_ty);
+            let boxed = box_op.as_operation().result(db, 0);
+            Some((box_op.as_operation(), boxed))
+        }
+        ValueCategory::Reference => {
+            // Reference types don't need boxing (already subtypes of anyref)
+            None
+        }
     }
 }
 
@@ -135,27 +159,35 @@ fn create_unbox_op<'db>(
     target_ty: Type<'db>,
     location: Location<'db>,
 ) -> Option<(Vec<Operation<'db>>, Value<'db>)> {
-    // Check for tribute_rt types AND core types
-    let is_int_like = tribute_rt::is_int(db, target_ty)
-        || tribute_rt::is_nat(db, target_ty)
-        || tribute_rt::is_bool(db, target_ty)
-        || CoreI32::from_type(db, target_ty).is_some();
-    let is_float_like =
-        tribute_rt::is_float(db, target_ty) || CoreF64::from_type(db, target_ty).is_some();
-
-    if is_int_like {
-        // Emit unbox_int - tribute_rt_to_wasm will add ref_cast to i31ref
-        let unbox_op = tribute_rt::unbox_int(db, location, value, target_ty);
-        let unboxed = unbox_op.as_operation().result(db, 0);
-        Some((vec![unbox_op.as_operation()], unboxed))
-    } else if is_float_like {
-        // Emit unbox_float - tribute_rt_to_wasm will add ref_cast to BoxedF64
-        let unbox_op = tribute_rt::unbox_float(db, location, value, target_ty);
-        let unboxed = unbox_op.as_operation().result(db, 0);
-        Some((vec![unbox_op.as_operation()], unboxed))
-    } else {
-        // Reference types don't need unboxing
-        None
+    match categorize_type(db, target_ty) {
+        ValueCategory::Int => {
+            // Emit unbox_int (signed) - tribute_rt_to_wasm will add ref_cast to i31ref
+            let unbox_op = tribute_rt::unbox_int(db, location, value, target_ty);
+            let unboxed = unbox_op.as_operation().result(db, 0);
+            Some((vec![unbox_op.as_operation()], unboxed))
+        }
+        ValueCategory::Nat => {
+            // Emit unbox_nat (unsigned) - tribute_rt_to_wasm will add ref_cast to i31ref
+            let unbox_op = tribute_rt::unbox_nat(db, location, value, target_ty);
+            let unboxed = unbox_op.as_operation().result(db, 0);
+            Some((vec![unbox_op.as_operation()], unboxed))
+        }
+        ValueCategory::Bool => {
+            // Emit unbox_bool - tribute_rt_to_wasm will add ref_cast to i31ref
+            let unbox_op = tribute_rt::unbox_bool(db, location, value, target_ty);
+            let unboxed = unbox_op.as_operation().result(db, 0);
+            Some((vec![unbox_op.as_operation()], unboxed))
+        }
+        ValueCategory::Float => {
+            // Emit unbox_float - tribute_rt_to_wasm will add ref_cast to BoxedF64
+            let unbox_op = tribute_rt::unbox_float(db, location, value, target_ty);
+            let unboxed = unbox_op.as_operation().result(db, 0);
+            Some((vec![unbox_op.as_operation()], unboxed))
+        }
+        ValueCategory::Reference => {
+            // Reference types don't need unboxing
+            None
+        }
     }
 }
 
@@ -210,22 +242,36 @@ impl<'db> RewritePattern<'db> for BoxCallPattern<'db> {
         // This will be used to infer the unbox type when return is type_var
         let mut type_var_to_concrete: HashMap<u64, Type<'db>> = HashMap::new();
 
+        // Verify operand count matches parameter count
+        if operands.len() != param_types.len() {
+            debug!(
+                "boxing: operand count mismatch for call to {}: {} operands, {} params",
+                callee,
+                operands.len(),
+                param_types.len()
+            );
+            return RewriteResult::Unchanged;
+        }
+
         // Insert boxing for each operand that needs it
         for (i, param_ty) in param_types.iter().enumerate() {
-            let Some(operand) = operands.get(i).copied() else {
-                continue;
-            };
+            let operand = operands[i];
 
             if tribute::is_type_var(db, *param_ty) {
-                // Get the concrete type of this operand for later unboxing inference
-                if let Some(operand_ty) = adaptor.get_value_type(db, operand)
+                // Get the concrete type of this operand (works for both OpResults and BlockArgs)
+                let operand_ty = adaptor.get_value_type(db, operand);
+
+                // Track for later unboxing inference
+                if let Some(ty) = operand_ty
                     && let Some(type_var_id) = get_type_var_id(db, *param_ty)
                 {
-                    type_var_to_concrete.insert(type_var_id, operand_ty);
+                    type_var_to_concrete.insert(type_var_id, ty);
                 }
 
                 // Need to box this operand
-                if let Some((box_op, boxed_val)) = create_box_op(db, operand, location) {
+                if let Some(ty) = operand_ty
+                    && let Some((box_op, boxed_val)) = create_box_op(db, operand, ty, location)
+                {
                     result_ops.push(box_op);
                     new_operands.push(boxed_val);
                 } else {
