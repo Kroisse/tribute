@@ -1273,10 +1273,71 @@ impl<'db> Resolver<'db> {
                     self.collect_pattern_bindings(region);
                 }
             }
+            (d, n) if d == tribute_pat::DIALECT_NAME() && n == tribute_pat::HANDLER_SUSPEND() => {
+                // tribute_pat.handler_suspend has args and continuation regions
+                // The continuation region contains a tribute_pat.bind for the continuation variable
+                // We need to use the continuation_type attribute as the binding's type
+                let continuation_type = op
+                    .attributes(self.db)
+                    .get(&tribute_pat::handler_suspend_attrs::CONTINUATION_TYPE())
+                    .and_then(|attr| match attr {
+                        Attribute::Type(ty) => Some(*ty),
+                        _ => None,
+                    });
+
+                // Process args region normally (they get fresh type vars)
+                if let Ok(handler_suspend) =
+                    tribute_pat::HandlerSuspend::from_operation(self.db, *op)
+                {
+                    self.collect_pattern_bindings(&handler_suspend.args(self.db));
+
+                    // Process continuation region with special handling for bind
+                    let cont_region = handler_suspend.continuation(self.db);
+                    self.collect_handler_continuation_bindings(&cont_region, continuation_type);
+                }
+            }
             _ => {
                 // Other pattern ops may have nested regions with bindings
                 for region in op.regions(self.db).iter() {
                     self.collect_pattern_bindings(region);
+                }
+            }
+        }
+    }
+
+    /// Collect bindings from a handler's continuation region.
+    ///
+    /// The continuation region contains a single tribute_pat.bind for the continuation variable.
+    /// Instead of creating a fresh type variable, we use the continuation_type attribute
+    /// from the handler_suspend operation to ensure proper type propagation.
+    fn collect_handler_continuation_bindings(
+        &mut self,
+        region: &Region<'db>,
+        continuation_type: Option<Type<'db>>,
+    ) {
+        for block in region.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter() {
+                let dialect = op.dialect(self.db);
+                let op_name = op.name(self.db);
+
+                if dialect == tribute_pat::DIALECT_NAME() && op_name == tribute_pat::BIND() {
+                    // pat.bind has a "name" attribute
+                    let attrs = op.attributes(self.db);
+                    if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_NAME()) {
+                        // Use the continuation type if available, otherwise fall back to fresh type var
+                        let ty = continuation_type.unwrap_or_else(|| {
+                            tribute::new_type_var(self.db, std::collections::BTreeMap::new())
+                        });
+                        self.add_local(*sym, LocalBinding::PatternBinding { ty });
+                    }
+                } else {
+                    // Recurse into nested regions
+                    for nested_region in op.regions(self.db).iter() {
+                        self.collect_handler_continuation_bindings(
+                            nested_region,
+                            continuation_type,
+                        );
+                    }
                 }
             }
         }
