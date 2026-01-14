@@ -402,6 +402,60 @@ fn collect_definition<'db>(
     }
 }
 
+/// Resolve a primitive type name to its concrete type.
+///
+/// This function resolves `tribute.type(name=X)` for well-known primitive types
+/// without requiring access to the full module environment. User-defined types
+/// are left unresolved and will be handled during the full resolve pass.
+///
+/// This is used during environment building (e.g., collecting enum constructors)
+/// where the environment is not yet complete.
+fn resolve_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
+    // Check if this is an unresolved type (tribute.type)
+    if ty.dialect(db) != tribute::DIALECT_NAME() || ty.name(db) != tribute::TYPE() {
+        // Not an unresolved type - recursively resolve type parameters
+        let params = ty.params(db);
+        if params.is_empty() {
+            return ty;
+        }
+
+        let new_params: IdVec<Type<'db>> = params
+            .iter()
+            .map(|&t| resolve_primitive_type(db, t))
+            .collect();
+        if new_params.as_slice() == params {
+            return ty;
+        }
+
+        return Type::new(
+            db,
+            ty.dialect(db),
+            ty.name(db),
+            new_params,
+            ty.attrs(db).clone(),
+        );
+    }
+
+    // Get the type name from the name attribute
+    let Some(Attribute::Symbol(name_sym)) = ty.get_attr(db, tribute::Type::name_sym()) else {
+        return ty;
+    };
+
+    // Resolve well-known primitive types
+    let name_str = name_sym.to_string();
+    match &*name_str {
+        "Int" => tribute_rt::int_type(db),
+        "Bool" => tribute_rt::bool_type(db),
+        "Float" => tribute_rt::float_type(db),
+        "Nat" => tribute_rt::nat_type(db),
+        "String" => *core::String::new(db),
+        "Bytes" => *core::Bytes::new(db),
+        "Nil" => *core::Nil::new(db),
+        // User-defined types are left unresolved - will be handled during full resolve pass
+        _ => ty,
+    }
+}
+
 /// Collect struct field names and types from a struct definition.
 fn collect_struct_fields<'db>(
     db: &'db dyn salsa::Database,
@@ -415,7 +469,8 @@ fn collect_struct_fields<'db>(
         for field_op in block.operations(db).iter().copied() {
             if let Ok(field_def) = tribute::FieldDef::from_operation(db, field_op) {
                 field_names.push(field_def.sym_name(db));
-                field_types.push(field_def.r#type(db));
+                // Resolve primitive types in field definitions
+                field_types.push(resolve_primitive_type(db, field_def.r#type(db)));
             }
         }
     }
@@ -448,12 +503,13 @@ fn collect_enum_constructors<'db>(
             let variant_sym = variant_def.sym_name(db);
 
             // Collect variant field types from the fields region
+            // Resolve primitive types (Int, Bool, etc.) during collection
             let fields_region = variant_def.fields(db);
             let mut field_types = Vec::new();
             for field_block in fields_region.blocks(db).iter() {
                 for field_op in field_block.operations(db).iter().copied() {
                     if let Ok(field_def) = tribute::FieldDef::from_operation(db, field_op) {
-                        field_types.push(field_def.r#type(db));
+                        field_types.push(resolve_primitive_type(db, field_def.r#type(db)));
                     }
                 }
             }
@@ -1612,7 +1668,6 @@ impl<'db> Resolver<'db> {
         let binding = if path.is_simple() {
             let name = *path;
             if let Some(local) = self.lookup_local(name) {
-                dbg!(local);
                 let callee = match local {
                     LocalBinding::Parameter { value, .. }
                     | LocalBinding::LetBinding { value, .. } => *value,
