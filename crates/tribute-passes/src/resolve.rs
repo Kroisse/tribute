@@ -1668,7 +1668,6 @@ impl<'db> Resolver<'db> {
         let binding = if path.is_simple() {
             let name = *path;
             if let Some(local) = self.lookup_local(name) {
-                dbg!(local);
                 let callee = match local {
                     LocalBinding::Parameter { value, .. }
                     | LocalBinding::LetBinding { value, .. } => *value,
