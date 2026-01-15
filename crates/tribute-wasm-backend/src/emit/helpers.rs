@@ -60,8 +60,9 @@ pub(crate) fn is_closure_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type
 }
 
 /// Check if a type is the Step type (for trampoline-based effect system).
+/// Step is an ADT struct with name "_Step".
 pub(crate) fn is_step_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    wasm::Step::from_type(db, ty).is_some()
+    ty == crate::gc_types::step_marker_type(db)
 }
 
 // ============================================================================

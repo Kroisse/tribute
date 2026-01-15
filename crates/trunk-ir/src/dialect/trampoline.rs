@@ -151,5 +151,12 @@ dialect! {
         /// - `field`: field name ("state", "resume_value")
         #[attr(field: Symbol)]
         fn resume_wrapper_get(wrapper) -> result;
+
+        /// `trampoline.state_get` operation: extracts a field from state struct.
+        ///
+        /// Used in resume functions to restore captured local variables.
+        /// - `field`: field name (e.g., "field0", "field1", ...)
+        #[attr(field: Symbol)]
+        fn state_get(state) -> result;
     }
 }

@@ -365,10 +365,18 @@ pub(crate) fn collect_gc_types<'db>(
                 return Some(CLOSURE_STRUCT_IDX);
             }
             if let Some(&idx) = type_idx_by_type.get(ty) {
+                debug!(
+                    "GC: get_type_idx reusing type_idx={} for type {:?}",
+                    idx, ty
+                );
                 return Some(idx);
             }
             // Allocate new type_idx, skipping reserved indices
             let idx = next_available_idx(next_type_idx, &reserved_indices);
+            debug!(
+                "GC: get_type_idx allocated type_idx={} for type {:?}",
+                idx, ty
+            );
             type_idx_by_type.insert(*ty, idx);
             return Some(idx);
         }
@@ -379,10 +387,18 @@ pub(crate) fn collect_gc_types<'db>(
                 return Some(CLOSURE_STRUCT_IDX);
             }
             if let Some(&idx) = type_idx_by_type.get(&ty) {
+                debug!(
+                    "GC: get_type_idx reusing type_idx={} for inferred type {:?}",
+                    idx, ty
+                );
                 return Some(idx);
             }
             // Allocate new type_idx, skipping reserved indices
             let idx = next_available_idx(next_type_idx, &reserved_indices);
+            debug!(
+                "GC: get_type_idx allocated type_idx={} for inferred type {:?}",
+                idx, ty
+            );
             type_idx_by_type.insert(ty, idx);
             return Some(idx);
         }
@@ -580,8 +596,8 @@ pub(crate) fn collect_gc_types<'db>(
                 // This ensures struct_get uses the same type_idx as function params.
                 if let Some(&idx) = type_idx_by_type.get(&adt_struct_ty) {
                     debug!(
-                        "GC: struct_get reusing type_idx={} for adt.struct from type_idx_by_type",
-                        idx
+                        "GC: struct_get reusing type_idx={} for adt.struct {:?} from type_idx_by_type",
+                        idx, adt_struct_ty
                     );
                     idx
                 } else {

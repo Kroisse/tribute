@@ -24,7 +24,7 @@ use std::collections::HashMap;
 
 use tracing::debug;
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{adt, closure, tribute};
+use tribute_ir::dialect::{adt, closure, tribute, tribute_rt};
 use trunk_ir::Attribute;
 use trunk_ir::dialect::{cont, core, wasm};
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
@@ -582,6 +582,38 @@ fn concretize_results<'db>(
     Some(new_results)
 }
 
+/// Check if two types are both reference-like and will be lowered to the same WASM type.
+///
+/// This handles cases where different dialects represent the same underlying type:
+/// - `core.ptr`, `tribute_rt.any`, `wasm.anyref` all map to `anyref` in WASM
+fn are_reference_compatible<'db>(
+    db: &'db dyn salsa::Database,
+    ty1: Type<'db>,
+    ty2: Type<'db>,
+) -> bool {
+    fn is_anyref_like<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+        // core.ptr maps to anyref
+        if core::Ptr::from_type(db, ty).is_some() {
+            return true;
+        }
+        // tribute_rt.any maps to anyref
+        if tribute_rt::is_any(db, ty) {
+            return true;
+        }
+        // wasm.anyref
+        if wasm::Anyref::from_type(db, ty).is_some() {
+            return true;
+        }
+        // wasm.structref is a subtype of anyref
+        if wasm::Structref::from_type(db, ty).is_some() {
+            return true;
+        }
+        false
+    }
+
+    is_anyref_like(db, ty1) && is_anyref_like(db, ty2)
+}
+
 /// Try to infer a concrete type from regions by looking at yield operations.
 ///
 /// For control flow operations like `wasm.if`, all branches should yield the same type.
@@ -606,6 +638,10 @@ fn infer_type_from_regions<'db>(
             None => found = Some(ty),
             Some(prev) if prev == ty => {
                 // Types agree, continue
+            }
+            Some(prev) if are_reference_compatible(db, prev, ty) => {
+                // Both types are reference-like and will be lowered to anyref
+                // Keep the first one
             }
             Some(prev) => {
                 // Type disagreement across regions - this indicates a type error

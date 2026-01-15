@@ -1238,6 +1238,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "tribute-ir",
+ "tribute-passes",
  "trunk-ir",
  "wasm-encoder",
 ]

@@ -12,8 +12,8 @@
 //!
 //! This pass should run after `cont_to_trampoline` and before backend-specific lowering.
 
-use tribute_ir::dialect::adt;
-use trunk_ir::dialect::arith::Const;
+use tribute_ir::dialect::{adt, tribute_rt};
+use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::trampoline::{self, STEP_TAG_DONE, STEP_TAG_SHIFT};
 use trunk_ir::rewrite::RewriteContext;
@@ -47,37 +47,44 @@ impl<'db> TrampolineToAdtLowerer<'db> {
         let ptr_ty = core::Ptr::new(db).as_type();
         let i32_ty = core::I32::new(db).as_type();
 
-        // Step type: (tag: i32, value: ptr, prompt: i32, op_idx: i32)
+        // Step type: ADT struct with layout (tag: i32, value: any, prompt: i32, op_idx: i32)
+        // This is lowered to a GC struct by adt_to_wasm
+        // Using tribute_rt.any for value field (type-erased reference)
+        let any_ty = tribute_rt::Any::new(db).as_type();
         let step_type = adt::struct_type(
             db,
             "_Step",
             vec![
                 (Symbol::new("tag"), i32_ty),
-                (Symbol::new("value"), ptr_ty),
+                (Symbol::new("value"), any_ty),
                 (Symbol::new("prompt"), i32_ty),
                 (Symbol::new("op_idx"), i32_ty),
             ],
         );
 
-        // Continuation type: (resume_fn: ptr, state: ptr, tag: i32, shift_value: ptr)
+        // Continuation type: (resume_fn: ptr, state: any, tag: i32, shift_value: any)
+        // state is type-erased because each shift point captures different locals
+        // shift_value is type-erased value passed to effect operation
         let continuation_type = adt::struct_type(
             db,
             "_Continuation",
             vec![
                 (Symbol::new("resume_fn"), ptr_ty),
-                (Symbol::new("state"), ptr_ty),
+                (Symbol::new("state"), any_ty),
                 (Symbol::new("tag"), i32_ty),
-                (Symbol::new("shift_value"), ptr_ty),
+                (Symbol::new("shift_value"), any_ty),
             ],
         );
 
-        // ResumeWrapper type: (state: ptr, resume_value: ptr)
+        // ResumeWrapper type: (state: any, resume_value: any)
+        // state is type-erased because each shift point captures different locals
+        // resume_value is type-erased value passed when resuming
         let resume_wrapper_type = adt::struct_type(
             db,
             "_ResumeWrapper",
             vec![
-                (Symbol::new("state"), ptr_ty),
-                (Symbol::new("resume_value"), ptr_ty),
+                (Symbol::new("state"), any_ty),
+                (Symbol::new("resume_value"), any_ty),
             ],
         );
 
@@ -162,6 +169,9 @@ impl<'db> TrampolineToAdtLowerer<'db> {
             if name == trampoline::RESUME_WRAPPER_GET() {
                 return self.lower_resume_wrapper_get(op, &remapped_operands);
             }
+            if name == trampoline::STATE_GET() {
+                return self.lower_state_get(op, &remapped_operands);
+            }
             // Pass through other trampoline operations (check_yield, set_yield_state, etc.)
             // These will be handled by backend-specific lowering
         }
@@ -191,6 +201,7 @@ impl<'db> TrampolineToAdtLowerer<'db> {
         operands: &IdVec<Value<'db>>,
     ) -> Vec<Operation<'db>> {
         let location = op.location(self.db);
+        let any_ty = tribute_rt::Any::new(self.db).as_type();
 
         // Get tag from attribute
         let tag = op
@@ -211,18 +222,47 @@ impl<'db> TrampolineToAdtLowerer<'db> {
         let tag_const = self.create_i32_const(location, tag);
         let tag_value = tag_const.result(self.db, 0);
 
+        let mut ops = vec![tag_const];
+
         // Build struct fields: (resume_fn, state, tag, shift_value)
-        let mut fields: Vec<Value<'db>> = Vec::new();
-        if let Some(v) = resume_fn {
-            fields.push(v);
-        }
-        if let Some(v) = state {
-            fields.push(v);
-        }
-        fields.push(tag_value);
-        if let Some(v) = shift_value {
-            fields.push(v);
-        }
+        // All fields must be present - use ref.null for missing values
+        let resume_fn_field = if let Some(v) = resume_fn {
+            v
+        } else {
+            let null_op = adt::ref_null(self.db, location, any_ty, any_ty);
+            let null_val = null_op.as_operation().result(self.db, 0);
+            ops.push(null_op.as_operation());
+            null_val
+        };
+
+        // State is type-erased (any) - different shift points capture different locals
+        // Cast state to any type to ensure uniform field type in Continuation struct
+        let state_field = if let Some(v) = state {
+            let cast_op = adt::ref_cast(self.db, location, v, any_ty, any_ty);
+            let cast_val = cast_op.as_operation().result(self.db, 0);
+            ops.push(cast_op.as_operation());
+            cast_val
+        } else {
+            let null_op = adt::ref_null(self.db, location, any_ty, any_ty);
+            let null_val = null_op.as_operation().result(self.db, 0);
+            ops.push(null_op.as_operation());
+            null_val
+        };
+
+        // Shift value is also type-erased - cast to any
+        let shift_value_field = if let Some(v) = shift_value {
+            let cast_op = adt::ref_cast(self.db, location, v, any_ty, any_ty);
+            let cast_val = cast_op.as_operation().result(self.db, 0);
+            ops.push(cast_op.as_operation());
+            cast_val
+        } else {
+            let null_op = adt::ref_null(self.db, location, any_ty, any_ty);
+            let null_val = null_op.as_operation().result(self.db, 0);
+            ops.push(null_op.as_operation());
+            null_val
+        };
+
+        let fields = vec![resume_fn_field, state_field, tag_value, shift_value_field];
 
         let struct_new = adt::struct_new(
             self.db,
@@ -234,7 +274,8 @@ impl<'db> TrampolineToAdtLowerer<'db> {
         let struct_new = struct_new.as_operation();
 
         self.ctx.map_results(self.db, &op, &struct_new);
-        vec![tag_const, struct_new]
+        ops.push(struct_new);
+        ops
     }
 
     /// Lower `trampoline.step_done` → `adt.struct_new` with tag=0
@@ -257,19 +298,30 @@ impl<'db> TrampolineToAdtLowerer<'db> {
         let prompt_value = prompt_const.result(self.db, 0);
         let op_idx_value = op_idx_const.result(self.db, 0);
 
-        // Build struct fields: (tag, value, prompt, op_idx)
-        let mut fields = vec![tag_value];
-        if let Some(v) = value {
-            fields.push(v);
-        }
-        fields.push(prompt_value);
-        fields.push(op_idx_value);
+        let mut ops = vec![tag_const, prompt_const, op_idx_const];
 
+        // Build struct fields: (tag, value, prompt, op_idx)
+        // Value field is type-erased (any) - cast value to any
+        let any_ty = tribute_rt::Any::new(self.db).as_type();
+        let value_field = if let Some(v) = value {
+            let cast_op = adt::ref_cast(self.db, location, v, any_ty, any_ty);
+            let cast_val = cast_op.as_operation().result(self.db, 0);
+            ops.push(cast_op.as_operation());
+            cast_val
+        } else {
+            let null_op = adt::ref_null(self.db, location, any_ty, any_ty);
+            let null_val = null_op.as_operation().result(self.db, 0);
+            ops.push(null_op.as_operation());
+            null_val
+        };
+
+        let fields = vec![tag_value, value_field, prompt_value, op_idx_value];
         let struct_new = adt::struct_new(self.db, location, fields, self.step_type, self.step_type);
         let struct_new = struct_new.as_operation();
 
         self.ctx.map_results(self.db, &op, &struct_new);
-        vec![tag_const, prompt_const, op_idx_const, struct_new]
+        ops.push(struct_new);
+        ops
     }
 
     /// Lower `trampoline.step_shift` → `adt.struct_new` with tag=1
@@ -311,28 +363,42 @@ impl<'db> TrampolineToAdtLowerer<'db> {
         let prompt_value = prompt_const.result(self.db, 0);
         let op_idx_value = op_idx_const.result(self.db, 0);
 
-        // Build struct fields: (tag, value (continuation as anyref), prompt, op_idx)
-        let mut fields = vec![tag_value];
-        if let Some(v) = continuation {
-            fields.push(v);
-        }
-        fields.push(prompt_value);
-        fields.push(op_idx_value);
+        let mut ops = vec![tag_const, prompt_const, op_idx_const];
 
+        // Build struct fields: (tag, value (continuation as any), prompt, op_idx)
+        // Value field is type-erased (any) - cast continuation to any
+        let any_ty = tribute_rt::Any::new(self.db).as_type();
+        let value_field = if let Some(v) = continuation {
+            let cast_op = adt::ref_cast(self.db, location, v, any_ty, any_ty);
+            let cast_val = cast_op.as_operation().result(self.db, 0);
+            ops.push(cast_op.as_operation());
+            cast_val
+        } else {
+            let null_op = adt::ref_null(self.db, location, any_ty, any_ty);
+            let null_val = null_op.as_operation().result(self.db, 0);
+            ops.push(null_op.as_operation());
+            null_val
+        };
+
+        let fields = vec![tag_value, value_field, prompt_value, op_idx_value];
         let struct_new = adt::struct_new(self.db, location, fields, self.step_type, self.step_type);
         let struct_new = struct_new.as_operation();
 
         self.ctx.map_results(self.db, &op, &struct_new);
-        vec![tag_const, prompt_const, op_idx_const, struct_new]
+        ops.push(struct_new);
+        ops
     }
 
-    /// Lower `trampoline.step_get` → `adt.struct_get`
+    /// Lower `trampoline.step_get` → `adt.struct_get` (+ cast for any fields)
+    ///
+    /// Step fields: tag=0 (i32), value=1 (any), prompt=2 (i32), op_idx=3 (i32)
     fn lower_step_get(
         &mut self,
         op: Operation<'db>,
         operands: &IdVec<Value<'db>>,
     ) -> Vec<Operation<'db>> {
         let location = op.location(self.db);
+        let any_ty = tribute_rt::Any::new(self.db).as_type();
 
         let field_name = op
             .attributes(self.db)
@@ -343,38 +409,77 @@ impl<'db> TrampolineToAdtLowerer<'db> {
             })
             .unwrap_or_else(|| Symbol::new("value"));
 
-        let result_type = op
-            .results(self.db)
-            .first()
-            .copied()
-            .unwrap_or_else(|| core::Ptr::new(self.db).as_type());
+        // Convert field name to index
+        // Step fields: tag=0, value=1, prompt=2, op_idx=3
+        let field_idx = self.step_field_index(field_name);
+
+        let expected_result_type = op.results(self.db).first().copied().unwrap_or(any_ty);
 
         let step_value = operands
             .first()
             .copied()
             .expect("step_get requires operand");
 
-        let struct_get = adt::struct_get(
-            self.db,
-            location,
-            step_value,
-            result_type,
-            self.step_type,
-            Attribute::Symbol(field_name),
-        );
-        let struct_get = struct_get.as_operation();
+        // Check if this field is type-erased (any)
+        // field 1 (value) is any type
+        let is_any_field = field_idx == 1;
 
-        self.ctx.map_results(self.db, &op, &struct_get);
-        vec![struct_get]
+        if is_any_field {
+            let mut ops = Vec::new();
+
+            // Extract field as any type
+            let struct_get = adt::struct_get(
+                self.db,
+                location,
+                step_value,
+                any_ty,
+                self.step_type,
+                Attribute::IntBits(field_idx),
+            );
+            let struct_get = struct_get.as_operation();
+            let any_value = struct_get.result(self.db, 0);
+            ops.push(struct_get);
+
+            // Cast from any to expected result type
+            let cast_op = adt::ref_cast(
+                self.db,
+                location,
+                any_value,
+                expected_result_type,
+                expected_result_type,
+            );
+            let cast_op = cast_op.as_operation();
+            ops.push(cast_op);
+
+            self.ctx.map_results(self.db, &op, &cast_op);
+            ops
+        } else {
+            // Non-any field: extract directly with expected type
+            let struct_get = adt::struct_get(
+                self.db,
+                location,
+                step_value,
+                expected_result_type,
+                self.step_type,
+                Attribute::IntBits(field_idx),
+            );
+            let struct_get = struct_get.as_operation();
+
+            self.ctx.map_results(self.db, &op, &struct_get);
+            vec![struct_get]
+        }
     }
 
-    /// Lower `trampoline.continuation_get` → `adt.struct_get`
+    /// Lower `trampoline.continuation_get` → `adt.struct_get` (+ cast for any fields)
+    ///
+    /// Continuation fields: resume_fn=0 (ptr), state=1 (any), tag=2 (i32), shift_value=3 (any)
     fn lower_continuation_get(
         &mut self,
         op: Operation<'db>,
         operands: &IdVec<Value<'db>>,
     ) -> Vec<Operation<'db>> {
         let location = op.location(self.db);
+        let any_ty = tribute_rt::Any::new(self.db).as_type();
 
         let field_name = op
             .attributes(self.db)
@@ -385,29 +490,65 @@ impl<'db> TrampolineToAdtLowerer<'db> {
             })
             .unwrap_or_else(|| Symbol::new("value"));
 
-        let result_type = op
-            .results(self.db)
-            .first()
-            .copied()
-            .unwrap_or_else(|| core::Ptr::new(self.db).as_type());
+        // Convert field name to index
+        // Continuation fields: resume_fn=0, state=1, tag=2, shift_value=3
+        let field_idx = self.continuation_field_index(field_name);
+
+        let expected_result_type = op.results(self.db).first().copied().unwrap_or(any_ty);
 
         let cont_value = operands
             .first()
             .copied()
             .expect("continuation_get requires operand");
 
-        let struct_get = adt::struct_get(
-            self.db,
-            location,
-            cont_value,
-            result_type,
-            self.continuation_type,
-            Attribute::Symbol(field_name),
-        );
-        let struct_get = struct_get.as_operation();
+        // Check if this field is type-erased (any)
+        // field 1 (state) and field 3 (shift_value) are any type
+        let is_any_field = field_idx == 1 || field_idx == 3;
 
-        self.ctx.map_results(self.db, &op, &struct_get);
-        vec![struct_get]
+        if is_any_field {
+            let mut ops = Vec::new();
+
+            // Extract field as any type
+            let struct_get = adt::struct_get(
+                self.db,
+                location,
+                cont_value,
+                any_ty,
+                self.continuation_type,
+                Attribute::IntBits(field_idx),
+            );
+            let struct_get = struct_get.as_operation();
+            let any_value = struct_get.result(self.db, 0);
+            ops.push(struct_get);
+
+            // Cast from any to expected result type
+            let cast_op = adt::ref_cast(
+                self.db,
+                location,
+                any_value,
+                expected_result_type,
+                expected_result_type,
+            );
+            let cast_op = cast_op.as_operation();
+            ops.push(cast_op);
+
+            self.ctx.map_results(self.db, &op, &cast_op);
+            ops
+        } else {
+            // Non-any field: extract directly with expected type
+            let struct_get = adt::struct_get(
+                self.db,
+                location,
+                cont_value,
+                expected_result_type,
+                self.continuation_type,
+                Attribute::IntBits(field_idx),
+            );
+            let struct_get = struct_get.as_operation();
+
+            self.ctx.map_results(self.db, &op, &struct_get);
+            vec![struct_get]
+        }
     }
 
     /// Lower `trampoline.build_state` → `adt.struct_new`
@@ -452,9 +593,42 @@ impl<'db> TrampolineToAdtLowerer<'db> {
         operands: &IdVec<Value<'db>>,
     ) -> Vec<Operation<'db>> {
         let location = op.location(self.db);
+        let any_ty = tribute_rt::Any::new(self.db).as_type();
+
+        let mut ops = Vec::new();
 
         // operands: (state, resume_value)
-        let fields: Vec<Value<'db>> = operands.iter().copied().collect();
+        // Both fields are type-erased (any) - cast to ensure uniform field types
+        let state = operands.first().copied();
+        let resume_value = operands.get(1).copied();
+
+        // Cast state to any type
+        let state_field = if let Some(v) = state {
+            let cast_op = adt::ref_cast(self.db, location, v, any_ty, any_ty);
+            let cast_val = cast_op.as_operation().result(self.db, 0);
+            ops.push(cast_op.as_operation());
+            cast_val
+        } else {
+            let null_op = adt::ref_null(self.db, location, any_ty, any_ty);
+            let null_val = null_op.as_operation().result(self.db, 0);
+            ops.push(null_op.as_operation());
+            null_val
+        };
+
+        // Cast resume_value to any type
+        let resume_value_field = if let Some(v) = resume_value {
+            let cast_op = adt::ref_cast(self.db, location, v, any_ty, any_ty);
+            let cast_val = cast_op.as_operation().result(self.db, 0);
+            ops.push(cast_op.as_operation());
+            cast_val
+        } else {
+            let null_op = adt::ref_null(self.db, location, any_ty, any_ty);
+            let null_val = null_op.as_operation().result(self.db, 0);
+            ops.push(null_op.as_operation());
+            null_val
+        };
+
+        let fields = vec![state_field, resume_value_field];
         let struct_new = adt::struct_new(
             self.db,
             location,
@@ -465,11 +639,76 @@ impl<'db> TrampolineToAdtLowerer<'db> {
         let struct_new = struct_new.as_operation();
 
         self.ctx.map_results(self.db, &op, &struct_new);
-        vec![struct_new]
+        ops.push(struct_new);
+        ops
     }
 
-    /// Lower `trampoline.resume_wrapper_get` → `adt.struct_get`
+    /// Lower `trampoline.resume_wrapper_get` → `adt.struct_get` + `adt.ref_cast`
+    ///
+    /// ResumeWrapper fields are type-erased (any), so we extract as any then cast
+    /// to the expected result type.
     fn lower_resume_wrapper_get(
+        &mut self,
+        op: Operation<'db>,
+        operands: &IdVec<Value<'db>>,
+    ) -> Vec<Operation<'db>> {
+        let location = op.location(self.db);
+        let any_ty = tribute_rt::Any::new(self.db).as_type();
+
+        let field_name = op
+            .attributes(self.db)
+            .get(&Symbol::new("field"))
+            .and_then(|a| match a {
+                Attribute::Symbol(s) => Some(*s),
+                _ => None,
+            })
+            .unwrap_or_else(|| Symbol::new("state"));
+
+        // Convert field name to index
+        // ResumeWrapper fields: state=0, resume_value=1
+        let field_idx = self.resume_wrapper_field_index(field_name);
+
+        let expected_result_type = op.results(self.db).first().copied().unwrap_or(any_ty);
+
+        let wrapper_value = operands
+            .first()
+            .copied()
+            .expect("resume_wrapper_get requires operand");
+
+        let mut ops = Vec::new();
+
+        // Extract field as any type (actual storage type)
+        let struct_get = adt::struct_get(
+            self.db,
+            location,
+            wrapper_value,
+            any_ty, // Field type in ResumeWrapper is any
+            self.resume_wrapper_type,
+            Attribute::IntBits(field_idx),
+        );
+        let struct_get = struct_get.as_operation();
+        let any_value = struct_get.result(self.db, 0);
+        ops.push(struct_get);
+
+        // Cast from any to expected result type
+        let cast_op = adt::ref_cast(
+            self.db,
+            location,
+            any_value,
+            expected_result_type,
+            expected_result_type,
+        );
+        let cast_op = cast_op.as_operation();
+        ops.push(cast_op);
+
+        self.ctx.map_results(self.db, &op, &cast_op);
+        ops
+    }
+
+    /// Lower `trampoline.state_get` → `adt.struct_get`
+    ///
+    /// State struct fields are dynamically named: field0, field1, ...
+    fn lower_state_get(
         &mut self,
         op: Operation<'db>,
         operands: &IdVec<Value<'db>>,
@@ -483,7 +722,10 @@ impl<'db> TrampolineToAdtLowerer<'db> {
                 Attribute::Symbol(s) => Some(*s),
                 _ => None,
             })
-            .unwrap_or_else(|| Symbol::new("state"));
+            .unwrap_or_else(|| Symbol::new("field0"));
+
+        // Parse field index from "fieldN" pattern
+        let field_idx = self.state_field_index(field_name);
 
         let result_type = op
             .results(self.db)
@@ -491,18 +733,22 @@ impl<'db> TrampolineToAdtLowerer<'db> {
             .copied()
             .unwrap_or_else(|| core::Ptr::new(self.db).as_type());
 
-        let wrapper_value = operands
+        let state_value = operands
             .first()
             .copied()
-            .expect("resume_wrapper_get requires operand");
+            .expect("state_get requires operand");
+
+        // Use tribute_rt.any as placeholder type since state structs vary per shift point.
+        // The actual type_idx will be inferred from the operand at emit time.
+        let any_ty = tribute_rt::Any::new(self.db).as_type();
 
         let struct_get = adt::struct_get(
             self.db,
             location,
-            wrapper_value,
+            state_value,
             result_type,
-            self.resume_wrapper_type,
-            Attribute::Symbol(field_name),
+            any_ty,
+            Attribute::IntBits(field_idx),
         );
         let struct_get = struct_get.as_operation();
 
@@ -512,6 +758,61 @@ impl<'db> TrampolineToAdtLowerer<'db> {
 
     /// Helper: Create an i32 constant operation using arith.const
     fn create_i32_const(&self, location: Location<'db>, value: i32) -> Operation<'db> {
-        Const::i32(self.db, location, value).as_operation()
+        arith::Const::i32(self.db, location, value).as_operation()
+    }
+
+    /// Helper: Convert Step field name to index
+    /// Step fields: tag=0, value=1, prompt=2, op_idx=3
+    fn step_field_index(&self, field_name: Symbol) -> u64 {
+        if field_name == "tag" {
+            0
+        } else if field_name == "value" {
+            1
+        } else if field_name == "prompt" {
+            2
+        } else if field_name == "op_idx" {
+            3
+        } else {
+            1 // default to value
+        }
+    }
+
+    /// Helper: Convert Continuation field name to index
+    /// Continuation fields: resume_fn=0, state=1, tag=2, shift_value=3
+    fn continuation_field_index(&self, field_name: Symbol) -> u64 {
+        if field_name == "resume_fn" {
+            0
+        } else if field_name == "state" {
+            1
+        } else if field_name == "tag" {
+            2
+        } else if field_name == "shift_value" {
+            3
+        } else {
+            0 // default to resume_fn
+        }
+    }
+
+    /// Helper: Convert ResumeWrapper field name to index
+    /// ResumeWrapper fields: state=0, resume_value=1
+    fn resume_wrapper_field_index(&self, field_name: Symbol) -> u64 {
+        if field_name == "state" {
+            0
+        } else if field_name == "resume_value" {
+            1
+        } else {
+            0 // default to state
+        }
+    }
+
+    /// Helper: Convert State field name to index
+    /// State fields: field0=0, field1=1, field2=2, ...
+    fn state_field_index(&self, field_name: Symbol) -> u64 {
+        let name_str = field_name.to_string();
+        if let Some(suffix) = name_str.strip_prefix("field") {
+            suffix.parse::<u64>().unwrap_or(0)
+        } else {
+            0 // default to field0
+        }
     }
 }
