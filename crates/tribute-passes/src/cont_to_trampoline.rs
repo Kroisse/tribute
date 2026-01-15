@@ -257,9 +257,9 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         op: &Operation<'db>,
         adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != cont::DIALECT_NAME() || op.name(db) != cont::RESUME() {
+        let Ok(_) = cont::Resume::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let location = op.location(db);
         let funcref_ty = wasm::Funcref::new(db).as_type();
@@ -336,9 +336,9 @@ impl<'db> RewritePattern<'db> for LowerGetContinuationPattern {
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != cont::DIALECT_NAME() || op.name(db) != cont::GET_CONTINUATION() {
+        let Ok(_) = cont::GetContinuation::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let location = op.location(db);
         let result_type = op
@@ -365,9 +365,9 @@ impl<'db> RewritePattern<'db> for LowerGetShiftValuePattern {
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != cont::DIALECT_NAME() || op.name(db) != cont::GET_SHIFT_VALUE() {
+        let Ok(_) = cont::GetShiftValue::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let location = op.location(db);
         let result_type = op
@@ -394,9 +394,9 @@ impl<'db> RewritePattern<'db> for LowerGetDoneValuePattern {
         op: &Operation<'db>,
         adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != cont::DIALECT_NAME() || op.name(db) != cont::GET_DONE_VALUE() {
+        let Ok(_) = cont::GetDoneValue::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let location = op.location(db);
         let result_type = op
@@ -534,9 +534,9 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != cont::DIALECT_NAME() || op.name(db) != cont::HANDLER_DISPATCH() {
+        let Ok(_) = cont::HandlerDispatch::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
