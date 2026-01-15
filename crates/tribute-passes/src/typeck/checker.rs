@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
 use tracing::trace;
-use tribute_ir::dialect::{ability, adt, list, tribute, tribute_pat};
+use tribute_ir::dialect::{ability, adt, closure, list, tribute, tribute_pat};
 use trunk_ir::{
     Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
     dialect::{arith, cont, core, func},
@@ -823,13 +823,51 @@ impl<'db> TypeChecker<'db> {
             .unwrap_or_else(|| self.fresh_type_var());
 
         // Get the callee type and extract its effect
-        if let Some(&callee) = operands.first()
-            && let Some(callee_type) = self.get_type(callee)
-            && let Some(func_type) = core::Func::from_type(self.db, callee_type)
-        {
-            // Arguments start after the callee (index 0)
-            let args: Vec<_> = operands.iter().skip(1).copied().collect();
-            effect_handled = self.constrain_call_types(&func_type, &args, result_type);
+        if let Some(&callee) = operands.first() {
+            let callee_type = self.get_type(callee);
+            trace!(
+                "check_func_call_indirect: callee={:?}, callee_type={:?}",
+                callee,
+                callee_type.map(|t| format!("{}.{}", t.dialect(self.db), t.name(self.db)))
+            );
+
+            if let Some(callee_type) = callee_type {
+                // Try to extract function type from various callee types:
+                // 1. Direct function type (core.func)
+                // 2. Closure type (closure.closure<func_type>)
+                // 3. Continuation type (cont.continuation<arg, result, effect>)
+                let func_type_opt = if let Some(func_type) =
+                    core::Func::from_type(self.db, callee_type)
+                {
+                    Some(func_type)
+                } else if let Some(closure_type) = closure::Closure::from_type(self.db, callee_type)
+                {
+                    // Extract the wrapped function type from the closure
+                    core::Func::from_type(self.db, closure_type.func_type(self.db))
+                } else if let Some(cont_type) = cont::Continuation::from_type(self.db, callee_type)
+                {
+                    // For continuations, create a synthetic function type:
+                    // (arg_ty) -> result_ty
+                    // arg_ty is what we pass to resume, result_ty is what resume returns
+                    let arg_ty = cont_type.arg(self.db);
+                    let return_ty = cont_type.result(self.db);
+                    let effect_ty = cont_type.effect(self.db);
+                    Some(core::Func::with_effect(
+                        self.db,
+                        IdVec::from(vec![arg_ty]),
+                        return_ty,
+                        Some(effect_ty),
+                    ))
+                } else {
+                    None
+                };
+
+                if let Some(func_type) = func_type_opt {
+                    // Arguments start after the callee (index 0)
+                    let args: Vec<_> = operands.iter().skip(1).copied().collect();
+                    effect_handled = self.constrain_call_types(&func_type, &args, result_type);
+                }
+            }
         }
 
         let value = op.result(self.db, 0);

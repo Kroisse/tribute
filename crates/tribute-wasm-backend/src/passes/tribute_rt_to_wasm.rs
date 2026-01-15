@@ -73,9 +73,10 @@ impl<'db> RewritePattern<'db> for BoxIntPattern {
     }
 }
 
-/// Pattern for `tribute_rt.unbox_int` -> `wasm.i31_get_s`
+/// Pattern for `tribute_rt.unbox_int` -> `wasm.ref_cast` + `wasm.i31_get_s`
 ///
 /// Unboxing extracts the signed i32 from an i31ref.
+/// The input may be anyref (from generic functions), so we add a ref_cast first.
 struct UnboxIntPattern;
 
 impl<'db> RewritePattern<'db> for UnboxIntPattern {
@@ -92,13 +93,18 @@ impl<'db> RewritePattern<'db> for UnboxIntPattern {
         let location = op.location(db);
         let value = unbox_op.value(db);
 
+        // Cast anyref to i31ref first (abstract type, no type_idx needed)
+        let i31ref_ty = wasm::I31ref::new(db).as_type();
+        let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
+        let cast_result = cast_op.as_operation().result(db, 0);
+
         // Result type is i32
         let i32_ty = core::I32::new(db).as_type();
 
         // wasm.i31_get_s: i31ref -> i32 (signed)
-        let new_op = wasm::i31_get_s(db, location, value, i32_ty);
+        let get_op = wasm::i31_get_s(db, location, cast_result, i32_ty);
 
-        RewriteResult::Replace(new_op.as_operation())
+        RewriteResult::Expand(vec![cast_op.as_operation(), get_op.as_operation()])
     }
 }
 
@@ -127,9 +133,10 @@ impl<'db> RewritePattern<'db> for BoxNatPattern {
     }
 }
 
-/// Pattern for `tribute_rt.unbox_nat` -> `wasm.i31_get_u`
+/// Pattern for `tribute_rt.unbox_nat` -> `wasm.ref_cast` + `wasm.i31_get_u`
 ///
 /// Unboxing extracts the unsigned i32 from an i31ref.
+/// The input may be anyref (from generic functions), so we add a ref_cast first.
 struct UnboxNatPattern;
 
 impl<'db> RewritePattern<'db> for UnboxNatPattern {
@@ -145,11 +152,17 @@ impl<'db> RewritePattern<'db> for UnboxNatPattern {
 
         let location = op.location(db);
         let value = unbox_op.value(db);
+
+        // Cast anyref to i31ref first (abstract type, no type_idx needed)
+        let i31ref_ty = wasm::I31ref::new(db).as_type();
+        let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
+        let cast_result = cast_op.as_operation().result(db, 0);
+
         let i32_ty = core::I32::new(db).as_type();
 
         // wasm.i31_get_u: i31ref -> i32 (unsigned)
-        let new_op = wasm::i31_get_u(db, location, value, i32_ty);
-        RewriteResult::Replace(new_op.as_operation())
+        let get_op = wasm::i31_get_u(db, location, cast_result, i32_ty);
+        RewriteResult::Expand(vec![cast_op.as_operation(), get_op.as_operation()])
     }
 }
 
@@ -179,9 +192,10 @@ impl<'db> RewritePattern<'db> for BoxFloatPattern {
     }
 }
 
-/// Pattern for `tribute_rt.unbox_float` -> `wasm.struct_get`
+/// Pattern for `tribute_rt.unbox_float` -> `wasm.ref_cast` + `wasm.struct_get`
 ///
 /// Unboxing extracts the f64 from a BoxedF64 struct.
+/// The input may be anyref (from generic functions), so we add a ref_cast first.
 struct UnboxFloatPattern;
 
 impl<'db> RewritePattern<'db> for UnboxFloatPattern {
@@ -197,11 +211,26 @@ impl<'db> RewritePattern<'db> for UnboxFloatPattern {
 
         let location = op.location(db);
         let value = unbox_op.value(db);
+
+        // Cast anyref to BoxedF64 struct first
+        // Use anyref as the result type since struct types are represented as anyref
+        // BoxedF64 is a concrete struct type, so we pass its type_idx
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let cast_op = wasm::ref_cast(
+            db,
+            location,
+            value,
+            anyref_ty,
+            anyref_ty,
+            Some(BOXED_F64_IDX),
+        );
+        let cast_result = cast_op.as_operation().result(db, 0);
+
         let f64_ty = core::F64::new(db).as_type();
 
         // wasm.struct_get extracts field 0 (the f64 value) from BoxedF64
-        let new_op = wasm::struct_get(db, location, value, f64_ty, BOXED_F64_IDX, 0);
-        RewriteResult::Replace(new_op.as_operation())
+        let get_op = wasm::struct_get(db, location, cast_result, f64_ty, BOXED_F64_IDX, 0);
+        RewriteResult::Expand(vec![cast_op.as_operation(), get_op.as_operation()])
     }
 }
 
@@ -230,9 +259,10 @@ impl<'db> RewritePattern<'db> for BoxBoolPattern {
     }
 }
 
-/// Pattern for `tribute_rt.unbox_bool` -> `wasm.i31_get_u`
+/// Pattern for `tribute_rt.unbox_bool` -> `wasm.ref_cast` + `wasm.i31_get_u`
 ///
 /// Unboxing extracts the boolean (0 or 1) from an i31ref.
+/// The input may be anyref (from generic functions), so we add a ref_cast first.
 struct UnboxBoolPattern;
 
 impl<'db> RewritePattern<'db> for UnboxBoolPattern {
@@ -248,11 +278,17 @@ impl<'db> RewritePattern<'db> for UnboxBoolPattern {
 
         let location = op.location(db);
         let value = unbox_op.value(db);
+
+        // Cast anyref to i31ref first (abstract type, no type_idx needed)
+        let i31ref_ty = wasm::I31ref::new(db).as_type();
+        let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
+        let cast_result = cast_op.as_operation().result(db, 0);
+
         let i32_ty = core::I32::new(db).as_type();
 
         // Use unsigned extraction since bool is 0 or 1
-        let new_op = wasm::i31_get_u(db, location, value, i32_ty);
-        RewriteResult::Replace(new_op.as_operation())
+        let get_op = wasm::i31_get_u(db, location, cast_result, i32_ty);
+        RewriteResult::Expand(vec![cast_op.as_operation(), get_op.as_operation()])
     }
 }
 
@@ -352,7 +388,7 @@ mod tests {
     fn test_unbox_int_lowering(db: &salsa::DatabaseImpl) {
         let lowered = make_and_lower_unbox_int_module(db);
 
-        // Check result: should have wasm.i31_get_s instead of tribute_rt.unbox_int
+        // Check result: should have wasm.ref_cast + wasm.i31_get_s instead of tribute_rt.unbox_int
         let ops: Vec<_> = lowered
             .body(db)
             .blocks(db)
@@ -363,8 +399,11 @@ mod tests {
             .copied()
             .collect();
 
-        assert_eq!(ops.len(), 2);
+        // Now expands to: placeholder + ref_cast + i31_get_s
+        assert_eq!(ops.len(), 3);
         assert_eq!(ops[1].dialect(db), wasm::DIALECT_NAME());
-        assert_eq!(ops[1].name(db), wasm::I31_GET_S());
+        assert_eq!(ops[1].name(db), wasm::REF_CAST());
+        assert_eq!(ops[2].dialect(db), wasm::DIALECT_NAME());
+        assert_eq!(ops[2].name(db), wasm::I31_GET_S());
     }
 }

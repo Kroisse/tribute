@@ -2095,12 +2095,19 @@ fn generate_inline_resume_function<'db>(
     // Wrapper layout: (state: anyref, resume_value: anyref)
     const WRAPPER_FIELD_COUNT: u64 = 2;
 
-    // Cast wrapper from anyref to structref
-    let wrapper_cast_op = wasm::ref_cast(db, location, wrapper_param, structref_ty, structref_ty)
-        .as_operation()
-        .modify(db)
-        .attr("field_count", Attribute::IntBits(WRAPPER_FIELD_COUNT))
-        .build();
+    // Cast wrapper from anyref to structref (abstract type, no type_idx)
+    let wrapper_cast_op = wasm::ref_cast(
+        db,
+        location,
+        wrapper_param,
+        structref_ty,
+        structref_ty,
+        None,
+    )
+    .as_operation()
+    .modify(db)
+    .attr("field_count", Attribute::IntBits(WRAPPER_FIELD_COUNT))
+    .build();
     let wrapper_cast = Value::new(db, ValueDef::OpResult(wrapper_cast_op), 0);
     ops.push(wrapper_cast_op);
 
@@ -2162,7 +2169,7 @@ fn generate_inline_resume_function<'db>(
     let field_count = live_locals.len();
     let state_cast = if !live_locals.is_empty() {
         // Add field_count attribute so emit can look up concrete type index from placeholder map
-        let ref_cast_op = wasm::ref_cast(db, location, state_val, structref_ty, structref_ty)
+        let ref_cast_op = wasm::ref_cast(db, location, state_val, structref_ty, structref_ty, None)
             .as_operation()
             .modify(db)
             .attr("field_count", Attribute::IntBits(field_count as u64))
@@ -2272,7 +2279,7 @@ fn generate_inline_resume_function<'db>(
                     ops.push(done_tag.as_operation());
 
                     let anyref_ty = wasm::Anyref::new(db).as_type();
-                    let null_ref = wasm::ref_null(db, location, anyref_ty, anyref_ty);
+                    let null_ref = wasm::ref_null(db, location, anyref_ty, anyref_ty, None);
                     let null_val = null_ref.as_operation().result(db, 0);
                     ops.push(null_ref.as_operation());
 
@@ -2424,7 +2431,7 @@ fn expand_shift_operation<'db>(
         val
     } else {
         // Fallback: use null funcref if no resume function was generated
-        let null_resume_fn = wasm::ref_null(db, location, funcref_ty, funcref_ty);
+        let null_resume_fn = wasm::ref_null(db, location, funcref_ty, funcref_ty, None);
         let val = null_resume_fn.as_operation().result(db, 0);
         ops.push(null_resume_fn.as_operation());
         val
@@ -2456,7 +2463,7 @@ fn expand_shift_operation<'db>(
         }
     } else {
         // No value provided - use null
-        let null_value = wasm::ref_null(db, location, anyref_ty, anyref_ty);
+        let null_value = wasm::ref_null(db, location, anyref_ty, anyref_ty, None);
         let val = null_value.as_operation().result(db, 0);
         ops.push(null_value.as_operation());
         val
@@ -2622,13 +2629,14 @@ impl<'db> RewritePattern<'db> for PushPromptPattern {
         const SHIFT_VALUE_FIELD_IDX: u32 = 3;
         const CONT_FIELD_COUNT: u64 = 4;
 
-        // Cast anyref to structref for struct.get
+        // Cast anyref to structref for struct.get (abstract type, no type_idx)
         // Include field_count so emit.rs can find the correct struct type
-        let cont_cast_op = wasm::ref_cast(db, location, cont_anyref, structref_ty, structref_ty)
-            .as_operation()
-            .modify(db)
-            .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
-            .build();
+        let cont_cast_op =
+            wasm::ref_cast(db, location, cont_anyref, structref_ty, structref_ty, None)
+                .as_operation()
+                .modify(db)
+                .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+                .build();
         let cont_val = Value::new(db, ValueDef::OpResult(cont_cast_op), 0);
         let get_value = wasm::struct_get(
             db,
@@ -3337,7 +3345,7 @@ fn expand_get_done_value_inline<'db>(
 
     // Cast anyref to Step structref and extract value
     let step_ty = crate::gc_types::step_marker_type(db);
-    let step_cast_op = wasm::ref_cast(db, location, step_anyref, step_ty, step_ty);
+    let step_cast_op = wasm::ref_cast(db, location, step_anyref, step_ty, step_ty, None);
     let step_val = step_cast_op.as_operation().result(db, 0);
     ops.push(step_cast_op.as_operation());
 
@@ -3373,8 +3381,8 @@ fn expand_get_done_value_inline<'db>(
         || tribute::is_type_var(db, result_ty);
 
     let final_value = if needs_unbox {
-        // Cast anyref to i31ref
-        let ref_cast_i31 = wasm::ref_cast(db, location, value_anyref, i31ref_ty, i31ref_ty);
+        // Cast anyref to i31ref (abstract type, no type_idx)
+        let ref_cast_i31 = wasm::ref_cast(db, location, value_anyref, i31ref_ty, i31ref_ty, None);
         let i31_val = ref_cast_i31.as_operation().result(db, 0);
         ops.push(ref_cast_i31.as_operation());
 
@@ -3626,15 +3634,16 @@ impl<'db> RewritePattern<'db> for ResumePattern {
         ops.push(const_0.as_operation());
         ops.push(wasm::global_set(db, location, const_0_val, YIELD_STATE_IDX).as_operation());
 
-        // 2. Cast continuation to structref if it's anyref
+        // 2. Cast continuation to structref if it's anyref (abstract type, no type_idx)
         // This is needed when the continuation was captured by a closure (closures store values as anyref)
         const CONT_FIELD_COUNT: u64 = 4;
 
-        let cast_cont_op = wasm::ref_cast(db, location, continuation, structref_ty, structref_ty)
-            .as_operation()
-            .modify(db)
-            .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
-            .build();
+        let cast_cont_op =
+            wasm::ref_cast(db, location, continuation, structref_ty, structref_ty, None)
+                .as_operation()
+                .modify(db)
+                .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+                .build();
         let cont_structref = Value::new(db, ValueDef::OpResult(cast_cont_op), 0);
         ops.push(cast_cont_op);
 
@@ -3771,14 +3780,15 @@ impl<'db> RewritePattern<'db> for GetContinuationPattern {
         let cont_anyref = get_cont.as_operation().result(db, 0);
         ops.push(get_cont.as_operation());
 
-        // Cast anyref to structref for proper typing
+        // Cast anyref to structref for proper typing (abstract type, no type_idx)
         // Include field_count attribute so emit.rs can find the correct struct type
         const CONT_FIELD_COUNT: u64 = 4;
-        let cont_cast_op = wasm::ref_cast(db, location, cont_anyref, structref_ty, structref_ty)
-            .as_operation()
-            .modify(db)
-            .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
-            .build();
+        let cont_cast_op =
+            wasm::ref_cast(db, location, cont_anyref, structref_ty, structref_ty, None)
+                .as_operation()
+                .modify(db)
+                .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+                .build();
         ops.push(cont_cast_op);
 
         RewriteResult::Expand(ops)
@@ -3822,13 +3832,14 @@ impl<'db> RewritePattern<'db> for GetShiftValuePattern {
         let cont_anyref = get_cont.as_operation().result(db, 0);
         ops.push(get_cont.as_operation());
 
-        // Cast anyref to structref
+        // Cast anyref to structref (abstract type, no type_idx)
         const CONT_FIELD_COUNT: u64 = 4;
-        let cont_cast_op = wasm::ref_cast(db, location, cont_anyref, structref_ty, structref_ty)
-            .as_operation()
-            .modify(db)
-            .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
-            .build();
+        let cont_cast_op =
+            wasm::ref_cast(db, location, cont_anyref, structref_ty, structref_ty, None)
+                .as_operation()
+                .modify(db)
+                .attr("field_count", Attribute::IntBits(CONT_FIELD_COUNT))
+                .build();
         let cont_val = Value::new(db, ValueDef::OpResult(cont_cast_op), 0);
         ops.push(cont_cast_op);
 
@@ -3938,7 +3949,7 @@ impl<'db> RewritePattern<'db> for GetDoneValuePattern {
         // Step layout: (tag: i32, value: anyref, prompt: i32, op_idx: i32)
         // Use step_marker_type so emit.rs resolves to builtin STEP_IDX (3)
         let step_ty = crate::gc_types::step_marker_type(db);
-        let step_cast_op = wasm::ref_cast(db, location, step_anyref, step_ty, step_ty);
+        let step_cast_op = wasm::ref_cast(db, location, step_anyref, step_ty, step_ty, None);
         let step_val = step_cast_op.as_operation().result(db, 0);
         ops.push(step_cast_op.as_operation());
 
@@ -3958,8 +3969,9 @@ impl<'db> RewritePattern<'db> for GetDoneValuePattern {
 
         // If primitive type, add unboxing: anyref -> i31ref -> i32
         if needs_unbox {
-            // Cast anyref to i31ref
-            let ref_cast_i31 = wasm::ref_cast(db, location, value_anyref, i31ref_ty, i31ref_ty);
+            // Cast anyref to i31ref (abstract type, no type_idx)
+            let ref_cast_i31 =
+                wasm::ref_cast(db, location, value_anyref, i31ref_ty, i31ref_ty, None);
             let i31_val = ref_cast_i31.as_operation().result(db, 0);
             ops.push(ref_cast_i31.as_operation());
 

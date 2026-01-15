@@ -116,12 +116,12 @@ pub fn wasm_type_converter() -> TypeConverter {
                 return MaterializeResult::NoOp;
             }
 
-            // Both are structref types - generate ref_cast
+            // Both are structref types - generate ref_cast (abstract type, no type_idx)
             let from_is_structref = is_struct_like(db, from_ty);
             let to_is_structref = is_struct_like(db, to_ty);
 
             if from_is_structref && to_is_structref {
-                let cast_op = wasm::ref_cast(db, location, value, to_ty, to_ty);
+                let cast_op = wasm::ref_cast(db, location, value, to_ty, to_ty, None);
                 let mut ops = OpVec::new();
                 ops.push(cast_op.as_operation());
                 return MaterializeResult::Ops(ops);
@@ -170,9 +170,9 @@ pub fn wasm_type_converter() -> TypeConverter {
                 let i32_ty = core::I32::new(db).as_type();
                 let i31ref_ty = wasm::I31ref::new(db).as_type();
 
-                // anyref needs ref_cast to i31ref first
+                // anyref needs ref_cast to i31ref first (abstract type, no type_idx)
                 if from_anyref {
-                    let ref_cast = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty);
+                    let ref_cast = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
                     let unbox_op = tribute_rt::unbox_int(db, location, ref_cast.result(db), i32_ty);
                     return MaterializeResult::ops([
                         ref_cast.as_operation(),
