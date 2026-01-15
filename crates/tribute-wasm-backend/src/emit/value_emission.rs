@@ -82,16 +82,13 @@ pub(super) fn emit_operands<'db>(
                     );
                 }
             } else {
-                tracing::error!(
+                panic!(
                     "emit_operands: stale SSA value: {}.{} index={}",
                     stale_op.dialect(db),
                     stale_op.name(db),
                     value.index(db)
                 );
             }
-            return Err(CompilationError::invalid_module(
-                "stale SSA value in wasm backend (missing local mapping)",
-            ));
         }
     }
     Ok(())
@@ -119,8 +116,8 @@ pub(super) fn emit_value<'db>(
 
     // If operand not found and not a block arg, this is an error
     if let ValueDef::OpResult(stale_op) = value.def(db) {
-        tracing::error!(
-            "stale SSA value: {}.{} index={}",
+        panic!(
+            "emit_value: stale SSA value: {}.{} index={}",
             stale_op.dialect(db),
             stale_op.name(db),
             value.index(db)

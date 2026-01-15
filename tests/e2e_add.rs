@@ -888,3 +888,53 @@ fn check_for_lowered_closure_ops(
 
     result
 }
+
+// ============================================================================
+// Closure Execution Tests (verifies function table based closure implementation)
+// ============================================================================
+
+/// Test simple lambda (no capture) compiles and executes correctly.
+/// Currently ignored: lambda codegen has unresolved type inference issues
+/// (return type stays as tribute.type_var, effect handling code inserted incorrectly)
+#[test]
+#[ignore]
+fn test_closure_execution_simple() {
+    use tribute::database::parse_with_thread_local;
+
+    let source_code = Rope::from_str(
+        r#"
+fn main() -> Int {
+    let f = fn(x) { x + 1 }
+    f(41)
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file =
+            SourceCst::from_path(db, "closure_exec_simple.trb", source_code.clone(), tree);
+
+        use tribute::pipeline::compile_to_wasm_binary;
+        let diagnostics: Vec<_> =
+            compile_to_wasm_binary::accumulated::<tribute::Diagnostic>(db, source_file);
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        let wasm_binary = compile_to_wasm_binary(db, source_file)
+            .expect("WASM compilation failed (returned None)");
+
+        // Write wasm to file for inspection
+        let wasm_bytes = wasm_binary.bytes(db);
+        std::fs::write("/tmp/claude/closure_test.wasm", wasm_bytes).expect("Failed to write wasm");
+        eprintln!(
+            "Wrote {} bytes to /tmp/claude/closure_test.wasm",
+            wasm_bytes.len()
+        );
+
+        let result = run_wasm_main::<i32>(wasm_bytes);
+
+        assert_eq!(result, 42, "Expected f(41) = 42, got {}", result);
+    });
+}

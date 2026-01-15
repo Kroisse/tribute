@@ -119,7 +119,7 @@ pub(crate) fn handle_call_indirect<'db>(
     });
     debug!("call_indirect: is_ref_type={}", is_ref_type);
 
-    // Build parameter types (all operands except first which is funcref)
+    // Build parameter types (all operands except first which is funcref/table_idx)
     // Normalize IR types to wasm types - primitive IR types that might be boxed
     // (in polymorphic handlers) should use anyref.
     let anyref_ty = wasm::Anyref::new(db).as_type();
@@ -128,6 +128,7 @@ pub(crate) fn handle_call_indirect<'db>(
             || tribute_rt::is_nat(db, ty)
             || tribute_rt::is_bool(db, ty)
             || tribute_rt::is_float(db, ty)
+            || tribute_rt::Any::from_type(db, ty).is_some() // tribute_rt.any → wasm.anyref
             || tribute::is_type_var(db, ty)
             || core::Nil::from_type(db, ty).is_some()
         {
@@ -267,10 +268,17 @@ pub(crate) fn handle_call_indirect<'db>(
         // in the IR. The proper fix would be to resolve types earlier in the pipeline.
     } else {
         // Traditional call_indirect with i32 table index
+        // IR operand order: [table_idx, arg1, arg2, ...]
+        // WebAssembly stack order: [arg1, arg2, ..., table_idx]
         let table = attr_u32(op.attributes(db), Symbol::new("table")).unwrap_or(0);
 
-        // Emit all operands (arguments first, then table index)
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+        // Emit arguments first (operands[1..])
+        for operand in operands.iter().skip(1) {
+            emit_value(db, *operand, ctx, function)?;
+        }
+
+        // Emit the table index (operands[0])
+        emit_value(db, operands[0], ctx, function)?;
 
         function.instruction(&Instruction::CallIndirect {
             type_index: type_idx,

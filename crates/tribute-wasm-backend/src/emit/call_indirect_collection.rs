@@ -110,15 +110,17 @@ pub(crate) fn collect_call_indirect_types<'db>(
                         continue; // Skip invalid call_indirect
                     }
 
-                    // Check if first operand is a ref type (funcref/anyref/core.func/closure struct).
-                    // If so, the funcref is FIRST and we skip it for params.
-                    // Otherwise, the funcref is LAST (legacy order).
+                    // Check if first operand is a ref type (funcref/anyref/core.func/closure struct)
+                    // or i32 (function table index for closure calls).
+                    // If so, the callee identifier is FIRST and we skip it for params.
+                    // Otherwise, the callee is LAST (legacy order).
                     let first_operand = operands.first().copied().unwrap();
                     let first_operand_ty = value_type(db, first_operand, block_arg_types);
                     let funcref_is_first = first_operand_ty.is_some_and(|ty| {
                         wasm::Funcref::from_type(db, ty).is_some()
                             || wasm::Anyref::from_type(db, ty).is_some()
                             || core::Func::from_type(db, ty).is_some()
+                            || core::I32::from_type(db, ty).is_some() // i32 table index for closures
                             || is_closure_struct_type(db, ty)
                     });
 
@@ -132,6 +134,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
                             || tribute_rt::is_nat(db, ty)
                             || tribute_rt::is_bool(db, ty)
                             || tribute_rt::is_float(db, ty)
+                            || tribute_rt::Any::from_type(db, ty).is_some() // tribute_rt.any → anyref
                             || tribute::is_type_var(db, ty)
                         {
                             anyref_ty

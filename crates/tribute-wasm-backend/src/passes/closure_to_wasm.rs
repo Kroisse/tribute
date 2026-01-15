@@ -23,11 +23,9 @@ use std::collections::HashMap;
 
 use tribute_ir::dialect::closure;
 use trunk_ir::dialect::func;
-use trunk_ir::dialect::{arith, core::Module, wasm};
+use trunk_ir::dialect::{core::Module, wasm};
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{
-    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol,
-};
+use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol};
 
 use crate::gc_types::CLOSURE_STRUCT_IDX;
 use crate::type_converter::wasm_type_converter;
@@ -188,6 +186,10 @@ impl<'db> RewritePattern<'db> for ClosureNewPattern {
         let Ok(closure_new) = closure::New::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
+        eprintln!(
+            "[ClosureNewPattern] Matched closure.new with func_ref: {:?}",
+            closure_new.func_ref(db)
+        );
 
         let location = op.location(db);
         let func_ref = closure_new.func_ref(db);
@@ -207,9 +209,9 @@ impl<'db> RewritePattern<'db> for ClosureNewPattern {
             .copied()
             .unwrap_or_else(|| panic!("Function {:?} not found in table_indices", func_ref));
 
-        // Create arith.const with the table index
+        // Create wasm.i32_const with the table index
         let i32_ty = trunk_ir::dialect::core::I32::new(db).as_type();
-        let idx_const = arith::r#const(db, location, i32_ty, Attribute::IntBits(table_idx as u64));
+        let idx_const = wasm::i32_const(db, location, i32_ty, table_idx as i32);
         let idx_val = idx_const.result(db);
 
         // Create wasm.struct_new with function table index and environment.
@@ -308,8 +310,8 @@ impl<'db> RewritePattern<'db> for ClosureEnvPattern {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::core;
-    use trunk_ir::{DialectType, Location, PathId, Span, Value, ValueDef, idvec};
+    use trunk_ir::dialect::{arith, core};
+    use trunk_ir::{Attribute, DialectType, Location, PathId, Span, Value, ValueDef, idvec};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());

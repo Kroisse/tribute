@@ -20,7 +20,7 @@
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
 use tribute_ir::dialect::{adt, closure, tribute_rt};
-use trunk_ir::dialect::{core, func, wasm};
+use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::{
     OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
@@ -31,7 +31,7 @@ use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type, Value
 /// Pattern ordering is important:
 /// 1. LowerClosureCallPattern - expands call_indirect to use closure.func/closure.env
 /// 2. LowerClosureNewPattern - expands closure.new to func.constant + adt.struct_new
-/// 3. LowerClosureFuncPattern - extracts funcref from struct (field 0)
+/// 3. LowerClosureFuncPattern - extracts i32 table index from struct (field 0)
 /// 4. LowerClosureEnvPattern - extracts env from struct (field 1)
 #[salsa::tracked]
 pub fn lower_closures<'db>(
@@ -166,16 +166,16 @@ impl<'db> RewritePattern<'db> for LowerClosureNewPattern {
         let constant_op = func::constant(db, location, func_ty, func_ref);
         let funcref = constant_op.as_operation().result(db, 0);
 
-        // Create closure struct type: adt.struct with (funcref, anyref) fields
-        // Use abstract funcref and anyref types for uniformity - all closures share
-        // the same struct type regardless of their specific function/env types.
-        let funcref_ty = wasm::Funcref::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
+        // Create closure struct type: adt.struct with (i32 table_idx, anyref env) fields
+        // Use i32 for function table index (not funcref) for call_indirect approach.
+        // All closures share the same struct type regardless of their specific function/env types.
+        let i32_ty = core::I32::new(db).as_type();
+        let anyref_ty = tribute_rt::Any::new(db).as_type();
         let closure_struct_ty = adt::struct_type(
             db,
             trunk_ir::Symbol::new("_closure"),
             vec![
-                (trunk_ir::Symbol::new("funcref"), funcref_ty),
+                (trunk_ir::Symbol::new("table_idx"), i32_ty),
                 (trunk_ir::Symbol::new("env"), anyref_ty),
             ],
         );
@@ -243,7 +243,7 @@ impl<'db> RewritePattern<'db> for LowerClosureCallPattern {
         // function parameters with function types can receive closures at runtime.
         let callee_ty_opt = adaptor.operand_type(0);
 
-        let (callee_is_closure, func_ty) = if let Some(callee_ty) = callee_ty_opt {
+        let (callee_is_closure, _func_ty) = if let Some(callee_ty) = callee_ty_opt {
             // Type is available - check if it's closure.closure
             // Check if it's an adt.struct with name "_closure" (already lowered closure.new)
             let is_closure_struct = adt::is_struct_type(db, callee_ty)
@@ -315,25 +315,27 @@ impl<'db> RewritePattern<'db> for LowerClosureCallPattern {
 
         // Get env type from the closure.new operation if available.
         // Use anyref for env since closure struct stores env as anyref.
-        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let anyref_ty = tribute_rt::Any::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
 
-        // Generate: %funcref = closure.func %closure
-        // Keep func_ty (core.func) to preserve function signature for call_indirect.
-        let funcref_op = closure::func(db, location, callee, func_ty);
-        let funcref = funcref_op.as_operation().result(db, 0);
+        // Generate: %table_idx = closure.func %closure
+        // Result type is i32 (function table index) for call_indirect via function table.
+        let table_idx_op = closure::func(db, location, callee, i32_ty);
+        let table_idx = table_idx_op.as_operation().result(db, 0);
 
         // Generate: %env = closure.env %closure
         let env_op = closure::env(db, location, callee, anyref_ty);
         let env = env_op.as_operation().result(db, 0);
 
-        // Generate: %result = func.call_indirect %funcref, %env, %args...
+        // Generate: %result = func.call_indirect %table_idx, %env, %args...
+        // First operand is i32 table index, followed by env and other arguments.
         let mut new_args: Vec<Value<'db>> = vec![env];
         new_args.extend(args.iter().copied());
 
-        let new_call = func::call_indirect(db, location, funcref, new_args, result_ty);
+        let new_call = func::call_indirect(db, location, table_idx, new_args, result_ty);
 
         RewriteResult::Expand(vec![
-            funcref_op.as_operation(),
+            table_idx_op.as_operation(),
             env_op.as_operation(),
             new_call.as_operation(),
         ])
@@ -344,6 +346,9 @@ impl<'db> RewritePattern<'db> for LowerClosureCallPattern {
 ///
 /// After closure.new is lowered to an adt.struct with (funcref, env),
 /// closure.func extracts the funcref (first field).
+/// Pattern: Lower `closure.func` to extract function table index from closure struct.
+///
+/// Returns i32 (function table index) instead of funcref.
 struct LowerClosureFuncPattern;
 
 impl<'db> RewritePattern<'db> for LowerClosureFuncPattern {
@@ -364,32 +369,27 @@ impl<'db> RewritePattern<'db> for LowerClosureFuncPattern {
             .operand(0)
             .expect("closure.func requires closure operand");
 
-        // Get the result type (function type)
-        let result_ty = op
-            .results(db)
-            .first()
-            .copied()
-            .expect("closure.func should have a result");
+        // The result type is now i32 (function table index), not funcref
+        let i32_ty = core::I32::new(db).as_type();
+        let anyref_ty = tribute_rt::Any::new(db).as_type();
 
-        // Use the unified _closure struct type (funcref, anyref)
-        let funcref_ty = wasm::Funcref::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
+        // Use the unified _closure struct type (i32 table_idx, anyref env)
         let struct_ty = adt::struct_type(
             db,
             trunk_ir::Symbol::new("_closure"),
             vec![
-                (trunk_ir::Symbol::new("funcref"), funcref_ty),
+                (trunk_ir::Symbol::new("table_idx"), i32_ty),
                 (trunk_ir::Symbol::new("env"), anyref_ty),
             ],
         );
 
-        // Generate: %funcref = adt.struct_get %closure, 0
+        // Generate: %table_idx = adt.struct_get %closure, 0
         // Parameter order: (db, location, operand, result_type, struct_type, field_idx)
         let get_op = adt::struct_get(
             db,
             location,
             closure_value,
-            result_ty,
+            i32_ty, // Result is i32 (table index), not funcref
             struct_ty,
             Attribute::IntBits(0),
         );
@@ -402,6 +402,7 @@ impl<'db> RewritePattern<'db> for LowerClosureFuncPattern {
 ///
 /// After closure.new is lowered to an adt.struct with (funcref, env),
 /// closure.env extracts the env (second field).
+/// Pattern: Lower `closure.env` to extract environment from closure struct.
 struct LowerClosureEnvPattern;
 
 impl<'db> RewritePattern<'db> for LowerClosureEnvPattern {
@@ -429,14 +430,14 @@ impl<'db> RewritePattern<'db> for LowerClosureEnvPattern {
             .copied()
             .expect("closure.env should have a result");
 
-        // Use the unified _closure struct type (funcref, anyref)
-        let funcref_ty = wasm::Funcref::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
+        // Use the unified _closure struct type (i32 table_idx, anyref env)
+        let i32_ty = core::I32::new(db).as_type();
+        let anyref_ty = tribute_rt::Any::new(db).as_type();
         let struct_ty = adt::struct_type(
             db,
             trunk_ir::Symbol::new("_closure"),
             vec![
-                (trunk_ir::Symbol::new("funcref"), funcref_ty),
+                (trunk_ir::Symbol::new("table_idx"), i32_ty),
                 (trunk_ir::Symbol::new("env"), anyref_ty),
             ],
         );

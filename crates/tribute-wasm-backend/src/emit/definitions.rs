@@ -237,9 +237,11 @@ pub(crate) fn extract_element_def<'db>(
     let mut funcs = Vec::new();
     for block in funcs_region.blocks(db).iter() {
         for inner_op in block.operations(db).iter() {
-            // Look for func.constant operations
+            // Look for func.constant or wasm.ref_func operations
             if let Ok(const_op) = func::Constant::from_operation(db, *inner_op) {
                 funcs.push(const_op.func_ref(db));
+            } else if let Ok(ref_func_op) = wasm::RefFunc::from_operation(db, *inner_op) {
+                funcs.push(ref_func_op.func_name(db));
             }
         }
     }
