@@ -344,11 +344,9 @@ impl<'db> RewritePattern<'db> for LowerClosureCallPattern {
 
 /// Pattern: Lower `closure.func` to `adt.struct_get` field 0.
 ///
-/// After closure.new is lowered to an adt.struct with (funcref, env),
-/// closure.func extracts the funcref (first field).
-/// Pattern: Lower `closure.func` to extract function table index from closure struct.
-///
-/// Returns i32 (function table index) instead of funcref.
+/// After closure.new is lowered to an adt.struct with (i32, anyref),
+/// closure.func extracts the function table index (first field).
+/// Returns i32 (function table index).
 struct LowerClosureFuncPattern;
 
 impl<'db> RewritePattern<'db> for LowerClosureFuncPattern {
@@ -400,9 +398,8 @@ impl<'db> RewritePattern<'db> for LowerClosureFuncPattern {
 
 /// Pattern: Lower `closure.env` to `adt.struct_get` field 1.
 ///
-/// After closure.new is lowered to an adt.struct with (funcref, env),
-/// closure.env extracts the env (second field).
-/// Pattern: Lower `closure.env` to extract environment from closure struct.
+/// After closure.new is lowered to an adt.struct with (i32, anyref),
+/// closure.env extracts the environment (second field).
 struct LowerClosureEnvPattern;
 
 impl<'db> RewritePattern<'db> for LowerClosureEnvPattern {

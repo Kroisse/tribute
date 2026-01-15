@@ -11,7 +11,7 @@
 //! Index 1: BytesArray - array i8 backing storage for Bytes
 //! Index 2: BytesStruct - struct { data: ref BytesArray, offset: i32, len: i32 }
 //! Index 3: Step - struct { tag: i32, value: anyref, prompt: i32, op_idx: i32 } (trampoline)
-//! Index 4: ClosureStruct - struct { funcref, anyref } (uniform closure representation)
+//! Index 4: ClosureStruct - struct { i32, anyref } (table index + env)
 //! Index 5+: User-defined types (structs, arrays, variants, closures, etc.)
 //! ```
 //!
@@ -50,9 +50,9 @@ pub const BYTES_STRUCT_IDX: u32 = 2;
 /// Used for trampoline-based effect system in WasmGC backend (without stack switching).
 pub const STEP_IDX: u32 = 3;
 
-/// Type index for ClosureStruct (struct { funcref, anyref }).
+/// Type index for ClosureStruct (struct { i32, anyref }).
 /// This is always index 4 in the GC type section.
-/// All closures share this uniform representation regardless of function/env types.
+/// All closures share this uniform representation: (table_idx: i32, env: anyref).
 pub const CLOSURE_STRUCT_IDX: u32 = 4;
 
 /// First type index available for user-defined types.
@@ -591,13 +591,13 @@ pub fn collect_adt_enum_type<'db>(
 // ============================================================================
 
 /// Closure struct field count.
-/// Closure structs always have 2 fields: (func_ref: funcref, env: anyref)
+/// Closure structs always have 2 fields: (table_idx: i32, env: anyref)
 pub const CLOSURE_FIELD_COUNT: usize = 2;
 
 /// Register the closure struct type in the registry.
 ///
 /// Closures are represented as WasmGC structs with two fields:
-/// - Field 0: function reference (funcref) - index into function table
+/// - Field 0: function table index (i32) - index into function table
 /// - Field 1: environment (anyref) - captured variables as struct
 ///
 /// This function uses the structref placeholder with CLOSURE_FIELD_COUNT
@@ -1055,7 +1055,7 @@ mod tests {
 
         // Step and closure have different structures
         // Step: (i32, anyref, i32, i32) - builtin at STEP_IDX
-        // Closure: (funcref, anyref) - user type at FIRST_USER_TYPE_IDX
+        // Closure: (i32, anyref) - user type at FIRST_USER_TYPE_IDX
         // They have different type indices.
 
         // Register Step first (builtin at STEP_IDX)
