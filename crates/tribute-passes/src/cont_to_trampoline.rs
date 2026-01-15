@@ -18,7 +18,7 @@ use std::sync::{LazyLock, Mutex};
 use tribute_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func::{self, Func};
-use trunk_ir::dialect::{arith, cont, scf, trampoline};
+use trunk_ir::dialect::{arith, cont, scf, trampoline, wasm};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::rewrite::{
     OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
@@ -161,13 +161,13 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern {
         ops.push(state_op.as_operation());
 
         // === 2. Get resume function reference ===
-        let ptr_ty = core::Ptr::new(db).as_type();
+        let funcref_ty = wasm::Funcref::new(db).as_type();
         let resume_name = fresh_resume_name();
 
         // Generate resume function
         generate_resume_function(db, resume_name, location);
 
-        let const_op = func::constant(db, location, ptr_ty, resume_name);
+        let const_op = func::constant(db, location, funcref_ty, resume_name);
         let resume_fn_val = const_op.as_operation().result(db, 0);
         ops.push(const_op.as_operation());
 
@@ -211,7 +211,7 @@ fn generate_resume_function<'db>(
 ) {
     let wrapper_ty = trampoline::ResumeWrapper::new(db).as_type();
     let step_ty = trampoline::Step::new(db).as_type();
-    let ptr_ty = core::Ptr::new(db).as_type();
+    let anyref_ty = wasm::Anyref::new(db).as_type();
 
     let func_op = Func::build(
         db,
@@ -222,12 +222,12 @@ fn generate_resume_function<'db>(
         |builder| {
             let wrapper_arg = builder.block_arg(db, 0);
 
-            // Extract resume_value from wrapper
+            // Extract resume_value from wrapper (anyref type)
             let get_resume_value = builder.op(trampoline::resume_wrapper_get(
                 db,
                 location,
                 wrapper_arg,
-                ptr_ty,
+                anyref_ty,
                 Symbol::new("resume_value"),
             ));
             let resume_value = get_resume_value.result(db);
@@ -262,7 +262,8 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         }
 
         let location = op.location(db);
-        let ptr_ty = core::Ptr::new(db).as_type();
+        let funcref_ty = wasm::Funcref::new(db).as_type();
+        let anyref_ty = wasm::Anyref::new(db).as_type();
 
         let operands = adaptor.operands();
         let continuation = operands
@@ -281,15 +282,20 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
             db,
             location,
             continuation,
-            ptr_ty,
+            funcref_ty,
             Symbol::new("resume_fn"),
         );
         let resume_fn_val = get_resume_fn.as_operation().result(db, 0);
         ops.push(get_resume_fn.as_operation());
 
         // === 3. Get state from continuation ===
-        let get_state =
-            trampoline::continuation_get(db, location, continuation, ptr_ty, Symbol::new("state"));
+        let get_state = trampoline::continuation_get(
+            db,
+            location,
+            continuation,
+            anyref_ty,
+            Symbol::new("state"),
+        );
         let state_val = get_state.as_operation().result(db, 0);
         ops.push(get_state.as_operation());
 

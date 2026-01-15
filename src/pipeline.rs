@@ -82,7 +82,6 @@ use tribute_passes::evidence::insert_evidence;
 use tribute_passes::handler_lower::lower_handlers;
 use tribute_passes::lambda_lift::lift_lambdas;
 use tribute_passes::lower_cont_to_trampoline;
-use tribute_passes::lower_trampoline_to_adt;
 use tribute_passes::lower_tribute_to_cont;
 use tribute_passes::lower_tribute_to_scf;
 use tribute_passes::resolve::{Resolver, build_env};
@@ -423,28 +422,6 @@ pub fn stage_cont_to_trampoline<'db>(
     lower_cont_to_trampoline(db, module)
 }
 
-/// Trampoline to ADT Lowering.
-///
-/// This pass transforms trampoline struct operations to ADT operations:
-/// - `trampoline.build_state` → `adt.struct_new`
-/// - `trampoline.build_continuation` → `adt.struct_new`
-/// - `trampoline.build_resume_wrapper` → `adt.struct_new`
-/// - `trampoline.step_done` → `adt.struct_new`
-/// - `trampoline.step_shift` → `adt.struct_new`
-/// - `trampoline.step_get` → `adt.struct_get`
-/// - `trampoline.continuation_get` → `adt.struct_get`
-/// - `trampoline.resume_wrapper_get` → `adt.struct_get`
-///
-/// This is a backend-agnostic pass that converts trampoline abstractions
-/// to concrete ADT struct operations.
-#[salsa::tracked]
-pub fn stage_trampoline_to_adt<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Module<'db> {
-    lower_trampoline_to_adt(db, module)
-}
-
 /// Lower tribute.handle to cont dialect operations.
 ///
 /// This pass lowers `tribute.handle` expressions to `cont.push_prompt` and
@@ -615,7 +592,6 @@ pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'
 
     // Continuation lowering (backend-agnostic trampoline implementation)
     let module = stage_cont_to_trampoline(db, module); // cont.shift → trampoline ops
-    let module = stage_trampoline_to_adt(db, module); // trampoline ops → adt ops
 
     let module = stage_dce(db, module);
 
@@ -657,7 +633,6 @@ pub fn compile_to_wasm_binary<'db>(
 
     // Continuation lowering (backend-agnostic trampoline implementation)
     let module = stage_cont_to_trampoline(db, module);
-    let module = stage_trampoline_to_adt(db, module);
 
     let module = stage_dce(db, module);
 
