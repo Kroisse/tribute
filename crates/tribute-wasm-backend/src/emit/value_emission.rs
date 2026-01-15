@@ -1,17 +1,15 @@
 //! Value emission helpers for wasm backend.
 //!
-//! This module provides functions for emitting values, operands, and type conversions
-//! (boxing/unboxing) in WebAssembly code generation.
+//! This module provides functions for emitting values and operands
+//! in WebAssembly code generation.
 
 use std::collections::HashMap;
 
 use tracing::debug;
-use tribute_ir::dialect::{tribute, tribute_rt};
-use trunk_ir::dialect::core;
-use trunk_ir::{Attribute, BlockId, DialectType, IdVec, Symbol, Type, Value, ValueDef};
+use tribute_ir::dialect::tribute;
+use trunk_ir::{Attribute, BlockId, IdVec, Symbol, Type, Value, ValueDef};
 use wasm_encoder::{AbstractHeapType, HeapType, Instruction};
 
-use crate::gc_types::BOXED_F64_IDX;
 use crate::{CompilationError, CompilationResult};
 
 use super::helpers::{is_nil_type, value_type};
@@ -99,79 +97,6 @@ pub(super) fn emit_operands<'db>(
     Ok(())
 }
 
-/// Emit operands with boxing when calling generic functions.
-///
-/// If a parameter expects anyref (type.var) but the operand is a concrete type (Int, Float),
-/// we need to box the value.
-pub(super) fn emit_operands_with_boxing<'db>(
-    db: &'db dyn salsa::Database,
-    operands: &IdVec<Value<'db>>,
-    param_types: &IdVec<Type<'db>>,
-    ctx: &super::FunctionEmitContext<'db>,
-    module_info: &super::ModuleInfo<'db>,
-    function: &mut wasm_encoder::Function,
-) -> CompilationResult<()> {
-    let mut param_iter = param_types.iter();
-
-    for value in operands.iter() {
-        // Get the corresponding parameter type (must stay synchronized with operands)
-        let Some(param_ty) = param_iter.next().copied() else {
-            return Err(CompilationError::invalid_module(
-                "wasm.call operand count exceeds callee param count",
-            ));
-        };
-
-        // Nil type values need ref.null none on the stack (e.g., empty closure environments)
-        if let Some(ty) = value_type(db, *value, &module_info.block_arg_types)
-            && is_nil_type(db, ty)
-        {
-            debug!(
-                "emit_operands_with_boxing: emitting ref.null none for nil type value {:?}",
-                value.def(db)
-            );
-            function.instruction(&Instruction::RefNull(HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::None,
-            }));
-            continue;
-        }
-
-        // Emit the value (local.get)
-        emit_value(db, *value, ctx, function)?;
-
-        // Check if boxing is needed
-        // If parameter expects anyref (type.var) AND doesn't have a concrete type index, box the operand
-        // Types with a type index (like struct types) are already reference types and don't need boxing
-        // Use effective_types to get the actual computed type, falling back to IR type
-        if tribute::is_type_var(db, param_ty)
-            && !module_info.type_idx_by_type.contains_key(&param_ty)
-        {
-            // Use effective type if available (computed during local allocation),
-            // otherwise fall back to IR result type
-            let operand_ty = ctx
-                .effective_types
-                .get(value)
-                .copied()
-                .or_else(|| value_type(db, *value, &module_info.block_arg_types));
-            if let Some(operand_ty) = operand_ty {
-                debug!(
-                    "emit_operands_with_boxing: param expects anyref, operand effective_ty={}.{}",
-                    operand_ty.dialect(db),
-                    operand_ty.name(db)
-                );
-                emit_boxing(db, operand_ty, function)?;
-            }
-        }
-    }
-
-    if param_iter.len() != 0 {
-        return Err(CompilationError::invalid_module(
-            "wasm.call operand count is less than callee param count",
-        ));
-    }
-    Ok(())
-}
-
 /// Emit a single value (local.get or block arg fallback).
 pub(super) fn emit_value<'db>(
     db: &'db dyn salsa::Database,
@@ -204,69 +129,4 @@ pub(super) fn emit_value<'db>(
     Err(CompilationError::invalid_module(
         "stale SSA value in wasm backend (missing local mapping)",
     ))
-}
-
-/// Emit boxing instructions to convert a concrete type to anyref.
-///
-/// - Int (i32) → i31ref: use ref.i31 directly
-/// - Float (f64) → BoxedF64 struct: wrap in a struct with single f64 field
-pub(super) fn emit_boxing<'db>(
-    db: &'db dyn salsa::Database,
-    ty: Type<'db>,
-    function: &mut wasm_encoder::Function,
-) -> CompilationResult<()> {
-    debug!("emit_boxing: type={}.{}", ty.dialect(db), ty.name(db));
-    if tribute_rt::is_int(db, ty) || tribute_rt::is_nat(db, ty) {
-        debug!("  -> boxing Int/Nat to i31ref");
-        // Int/Nat (i32) → i31ref (direct, 31-bit values)
-        function.instruction(&Instruction::RefI31);
-        Ok(())
-    } else if tribute_rt::is_float(db, ty) || core::F64::from_type(db, ty).is_some() {
-        // Float (f64) → BoxedF64 struct
-        // Create a struct with the f64 value
-        function.instruction(&Instruction::StructNew(BOXED_F64_IDX));
-        Ok(())
-    } else {
-        // For reference types (structs, etc.), no boxing needed - they're already subtypes of anyref
-        // Just leave the value as-is on the stack
-        Ok(())
-    }
-}
-
-/// Emit unboxing instructions to convert anyref to a concrete type.
-///
-/// - i31ref → Int (i32): extract i32 directly
-/// - BoxedF64 → Float (f64): cast and extract f64 field
-pub(super) fn emit_unboxing<'db>(
-    db: &'db dyn salsa::Database,
-    ty: Type<'db>,
-    function: &mut wasm_encoder::Function,
-) -> CompilationResult<()> {
-    if tribute_rt::is_int(db, ty) {
-        // anyref → i31ref → Int (i32)
-        // Cast anyref to i31ref, extract i32 (signed)
-        function.instruction(&Instruction::RefCastNullable(HeapType::I31));
-        function.instruction(&Instruction::I31GetS);
-        Ok(())
-    } else if tribute_rt::is_nat(db, ty) {
-        // anyref → i31ref → Nat (i32)
-        // Cast anyref to i31ref, extract u32 (unsigned)
-        function.instruction(&Instruction::RefCastNullable(HeapType::I31));
-        function.instruction(&Instruction::I31GetU);
-        Ok(())
-    } else if tribute_rt::is_float(db, ty) || core::F64::from_type(db, ty).is_some() {
-        // anyref → BoxedF64 → Float (f64)
-        // Cast to BoxedF64 struct, then extract f64 field
-        function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(
-            BOXED_F64_IDX,
-        )));
-        function.instruction(&Instruction::StructGet {
-            struct_type_index: BOXED_F64_IDX,
-            field_index: 0,
-        });
-        Ok(())
-    } else {
-        // For reference types, assume no unboxing needed
-        Ok(())
-    }
 }

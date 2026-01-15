@@ -15,9 +15,8 @@ use tribute_ir::dialect::{tribute, tribute_rt};
 use crate::{CompilationError, CompilationResult};
 
 use super::super::{
-    FunctionEmitContext, ModuleInfo, attr_u32, emit_operands, emit_operands_with_boxing,
-    emit_unboxing, emit_value, is_closure_struct_type, is_step_type, resolve_callee,
-    set_result_local, value_type,
+    FunctionEmitContext, ModuleInfo, attr_u32, emit_operands, emit_value, is_closure_struct_type,
+    is_step_type, resolve_callee, set_result_local, value_type,
 };
 
 /// Handle wasm.call operation
@@ -33,35 +32,12 @@ pub(crate) fn handle_call<'db>(
     let callee = call_op.callee(db);
     let target = resolve_callee(callee, module_info)?;
 
-    // Check if we need boxing for generic function calls
-    if let Some(callee_ty) = module_info.func_types.get(&callee) {
-        let param_types = callee_ty.params(db);
-        emit_operands_with_boxing(db, operands, &param_types, ctx, module_info, function)?;
-    } else {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-    }
+    // Boxing/unboxing for generic calls is now handled by the boxing pass
+    // (tribute-passes/src/boxing.rs) which inserts explicit tribute_rt.box_*/unbox_* ops.
+    // These are lowered to wasm instructions by tribute_rt_to_wasm.rs.
+    emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
 
     function.instruction(&Instruction::Call(target));
-
-    // Check if we need unboxing for the return value
-    if let Some(callee_ty) = module_info.func_types.get(&callee) {
-        let return_ty = callee_ty.result(db);
-        // If callee returns anyref (type.var), we need to unbox to the expected concrete type.
-        // Since type inference doesn't propagate instantiated types to the IR,
-        // we infer the result type from the first operand's type (works for identity-like functions).
-        if tribute::is_type_var(db, return_ty)
-            && !module_info.type_idx_by_type.contains_key(&return_ty)
-        {
-            // Try to infer concrete type from first operand
-            if let Some(operand_ty) = operands
-                .first()
-                .and_then(|v| value_type(db, *v, &module_info.block_arg_types))
-                .filter(|ty| !tribute::is_type_var(db, *ty))
-            {
-                emit_unboxing(db, operand_ty, function)?;
-            }
-        }
-    }
 
     set_result_local(db, &op, ctx, function)?;
     Ok(())
@@ -322,16 +298,9 @@ pub(crate) fn handle_return_call<'db>(
     let callee = return_call_op.callee(db);
     let target = resolve_callee(callee, module_info)?;
 
-    // Check if we need boxing for generic function calls
-    if let Some(callee_ty) = module_info.func_types.get(&callee) {
-        let param_types = callee_ty.params(db);
-        emit_operands_with_boxing(db, operands, &param_types, ctx, module_info, function)?;
-    } else {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-    }
+    // Boxing for generic calls is now handled by the boxing pass
+    emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
 
-    // Note: Return unboxing is not needed for tail calls since
-    // the caller's return type should match the callee's.
     function.instruction(&Instruction::ReturnCall(target));
     Ok(())
 }
