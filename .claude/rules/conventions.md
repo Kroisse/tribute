@@ -141,9 +141,10 @@ pub enum Binding<'db> {
 
 ## Testing
 
+- Use `cargo nextest run` for running tests (preferred over `cargo test`)
 - Use `insta` for snapshot testing
 - Run `cargo insta review` when snapshots fail
-- Package-specific tests: `cargo test -p <crate-name>`
+- Package-specific tests: `cargo nextest run -p <crate-name>`
 
 ## Development Workflow
 
@@ -164,7 +165,7 @@ pub enum Binding<'db> {
 ### During Development
 
 - Make atomic commits with clear messages (Conventional Commits format)
-- Run tests frequently: `cargo test --all`
+- Run tests frequently: `cargo nextest run --workspace`
 - Use `cargo clippy` and `cargo fmt` before committing
 
 ### Completing Work
