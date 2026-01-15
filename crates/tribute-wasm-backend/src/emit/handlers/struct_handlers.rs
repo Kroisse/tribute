@@ -4,7 +4,7 @@
 
 use tracing::debug;
 use tribute_ir::dialect::{adt, tribute};
-use trunk_ir::dialect::wasm;
+use trunk_ir::dialect::{cont, wasm};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, ValueDef};
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 
@@ -90,19 +90,25 @@ pub(crate) fn handle_struct_get<'db>(
     emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
     let attrs = op.attributes(db);
 
-    // Check if operand is anyref and needs casting to struct type
-    // This happens when a closure is captured (stored as anyref) and later used
-    let operand_is_anyref = operands
-        .first()
-        .and_then(|op_val| {
-            let ty = value_type(db, *op_val, &module_info.block_arg_types)?;
-            if wasm::Anyref::from_type(db, ty).is_some() {
-                Some(true)
-            } else {
-                None
-            }
-        })
-        .unwrap_or(false);
+    // Check if operand is abstract type (anyref/structref/continuation) and needs casting to concrete struct type
+    // This happens when:
+    // - A closure is captured (stored as anyref) and later used
+    // - A continuation field is typed as structref but needs access to concrete struct fields
+    // - cont::Continuation type is stored as structref in wasm but accessed with concrete struct ops
+    let operand_abstract_type = operands.first().and_then(|op_val| {
+        let ty = value_type(db, *op_val, &module_info.block_arg_types)?;
+        if wasm::Anyref::from_type(db, ty).is_some() {
+            Some("anyref")
+        } else if wasm::Structref::from_type(db, ty).is_some() {
+            Some("structref")
+        } else if cont::Continuation::from_type(db, ty).is_some() {
+            // cont::Continuation is stored as structref in wasm
+            Some("cont.continuation")
+        } else {
+            None
+        }
+    });
+    let needs_cast_from_abstract = operand_abstract_type.is_some();
 
     // CRITICAL: For struct_get, the type_idx MUST match the operand's actual type.
     // We need to trace through ref.cast operations to find the actual type,
@@ -112,13 +118,17 @@ pub(crate) fn handle_struct_get<'db>(
 
     let field_idx = attr_field_idx(attrs)?;
     debug!(
-        "struct_get: emitting StructGet with type_idx={}, field_idx={}, operand_is_anyref={}",
-        type_idx, field_idx, operand_is_anyref
+        "struct_get: emitting StructGet with type_idx={}, field_idx={}, operand_abstract_type={:?}",
+        type_idx, field_idx, operand_abstract_type
     );
 
-    // If operand was anyref (from closure capture), cast it to the struct type first
-    if operand_is_anyref {
-        debug!("struct_get: casting anyref to struct type_idx={}", type_idx);
+    // If operand was abstract type (anyref/structref), cast it to the concrete struct type first
+    if needs_cast_from_abstract {
+        debug!(
+            "struct_get: casting {:?} to struct type_idx={}",
+            operand_abstract_type.unwrap_or("unknown"),
+            type_idx
+        );
         function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
     }
 

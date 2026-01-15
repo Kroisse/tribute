@@ -5,7 +5,6 @@
 
 use tracing::{error, warn};
 
-use crate::passes::cont_to_wasm::ContAnalysis;
 use crate::plan::{MainExports, MemoryPlan};
 
 use tribute_ir::ModulePathExt;
@@ -31,20 +30,30 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = crate::passes::arith_to_wasm::lower(db, module);
     tracing::debug!("=== AFTER arith_to_wasm ===\n{:?}", module);
     let module = crate::passes::scf_to_wasm::lower(db, module);
+
+    // Convert trampoline types/ops BEFORE func_to_wasm so function signatures
+    // have ADT types (not trampoline.Step) when converted to wasm.func
+    let module = crate::passes::trampoline_to_wasm::lower(db, module);
+    tracing::debug!("=== AFTER trampoline_to_wasm ===\n{:?}", module);
+
     let module = crate::passes::func_to_wasm::lower(db, module);
     tracing::debug!("=== AFTER func_to_wasm ===\n{:?}", module);
-    let module = crate::passes::adt_to_wasm::lower(db, module);
-    let module = crate::passes::closure_to_wasm::lower(db, module);
+    debug_func_params(db, &module, "after func_to_wasm");
 
-    // Analyze continuations BEFORE lowering (to detect cont.* operations)
-    let cont_analysis = crate::passes::cont_to_wasm::analyze_continuations(db, module);
-    let module = crate::passes::cont_to_wasm::lower(db, module);
+    let module = crate::passes::closure_to_wasm::lower(db, module);
+    debug_func_params(db, &module, "after closure_to_wasm");
+
+    // Convert ALL adt ops to wasm (including those from trampoline_to_adt)
+    let module = crate::passes::adt_to_wasm::lower(db, module);
+    debug_func_params(db, &module, "after adt_to_wasm");
 
     // Lower tribute_rt operations (box_int, unbox_int) to wasm operations
     let module = crate::passes::tribute_rt_to_wasm::lower(db, module);
+    debug_func_params(db, &module, "after tribute_rt_to_wasm");
 
     // Concretize type variables in wasm operations (resolve tribute.type_var)
     let module = crate::passes::wasm_type_concrete::lower(db, module);
+    debug_func_params(db, &module, "after wasm_type_concrete");
 
     // Const analysis and lowering (string/bytes constants to data segments)
     let const_analysis = crate::passes::const_to_wasm::analyze_consts(db, module);
@@ -59,7 +68,7 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = crate::passes::intrinsic_to_wasm::lower(db, module, intrinsic_analysis);
 
     // Phase 2: Remaining lowering via WasmLowerer
-    let mut lowerer = WasmLowerer::new(db, const_analysis, intrinsic_analysis, cont_analysis);
+    let mut lowerer = WasmLowerer::new(db, const_analysis, intrinsic_analysis);
     let lowered = lowerer.lower_module(module);
 
     // Debug: Verify all operations are now in wasm dialect
@@ -82,6 +91,51 @@ fn check_all_wasm_dialect<'db>(db: &'db dyn salsa::Database, module: &Module<'db
             // Check wasm.func operations and their bodies
             if dialect == wasm::DIALECT_NAME() && name == wasm::FUNC() {
                 check_function_body(db, op);
+            }
+        }
+    }
+}
+
+/// Debug helper to trace function parameter types through the pipeline.
+fn debug_func_params<'db>(db: &'db dyn salsa::Database, module: &Module<'db>, phase: &str) {
+    let body = module.body(db);
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Check for func.func or wasm.func operations
+            if let Ok(func_op) = trunk_ir::dialect::func::Func::from_operation(db, *op) {
+                let fn_ty = func_op.r#type(db);
+                if let Some(core_fn) = core::Func::from_type(db, fn_ty) {
+                    let params: Vec<_> = core_fn
+                        .params(db)
+                        .iter()
+                        .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                        .collect();
+                    tracing::debug!(
+                        "[{}] func.func {}: params={:?}, result={}.{}",
+                        phase,
+                        func_op.sym_name(db),
+                        params,
+                        core_fn.result(db).dialect(db),
+                        core_fn.result(db).name(db)
+                    );
+                }
+            } else if let Ok(wasm_func) = wasm::Func::from_operation(db, *op) {
+                let fn_ty = wasm_func.r#type(db);
+                if let Some(core_fn) = core::Func::from_type(db, fn_ty) {
+                    let params: Vec<_> = core_fn
+                        .params(db)
+                        .iter()
+                        .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                        .collect();
+                    tracing::debug!(
+                        "[{}] wasm.func {}: params={:?}, result={}.{}",
+                        phase,
+                        wasm_func.sym_name(db),
+                        params,
+                        core_fn.result(db).dialect(db),
+                        core_fn.result(db).name(db)
+                    );
+                }
             }
         }
     }
@@ -112,11 +166,10 @@ struct WasmLowerer<'db> {
     module_location: Option<Location<'db>>,
     const_analysis: ConstAnalysis<'db>,
     intrinsic_analysis: IntrinsicAnalysis<'db>,
-    #[allow(dead_code)] // Used in constructor to set up has_continuations
-    cont_analysis: ContAnalysis<'db>,
     memory_plan: MemoryPlan,
     main_exports: MainExports<'db>,
     /// Whether the module uses continuations and needs yield globals.
+    /// Currently always true since cont_to_trampoline runs in the main pipeline.
     has_continuations: bool,
 }
 
@@ -125,10 +178,10 @@ impl<'db> WasmLowerer<'db> {
         db: &'db dyn salsa::Database,
         const_analysis: ConstAnalysis<'db>,
         intrinsic_analysis: IntrinsicAnalysis<'db>,
-        cont_analysis: ContAnalysis<'db>,
     ) -> Self {
-        // Check if module uses continuations (yield globals will be emitted if true)
-        let has_continuations = cont_analysis.has_continuations(db);
+        // Always emit yield globals - they have negligible overhead
+        // and cont_to_trampoline runs in the main pipeline
+        let has_continuations = true;
 
         Self {
             db,
@@ -136,7 +189,6 @@ impl<'db> WasmLowerer<'db> {
             module_location: None,
             const_analysis,
             intrinsic_analysis,
-            cont_analysis,
             memory_plan: MemoryPlan::new(),
             main_exports: MainExports::new(),
             has_continuations,
@@ -241,10 +293,11 @@ impl<'db> WasmLowerer<'db> {
             self.memory_plan.has_memory = true;
         }
 
-        // Emit yield globals for continuation support
-        // Note: $yield_value is no longer needed - shift_value is stored in continuation struct
+        // Emit yield globals for continuation support.
+        // IMPORTANT: The order of these globals must match constants::yield_globals indices.
+        // See crate::constants::yield_globals for index definitions.
         if self.has_continuations {
-            // $yield_state: i32 (0 = normal, 1 = yielding)
+            // Index 0 ($yield_state): i32 (0 = normal, 1 = yielding)
             builder.op(wasm::global(
                 self.db,
                 module_location,
@@ -252,7 +305,7 @@ impl<'db> WasmLowerer<'db> {
                 true,
                 0,
             ));
-            // $yield_tag: i32 (prompt tag being yielded to)
+            // Index 1 ($yield_tag): i32 (prompt tag being yielded to)
             builder.op(wasm::global(
                 self.db,
                 module_location,
@@ -260,7 +313,7 @@ impl<'db> WasmLowerer<'db> {
                 true,
                 0,
             ));
-            // $yield_cont: anyref (captured continuation, GC-managed)
+            // Index 2 ($yield_cont): anyref (captured continuation, GC-managed)
             builder.op(wasm::global(
                 self.db,
                 module_location,
@@ -268,7 +321,7 @@ impl<'db> WasmLowerer<'db> {
                 true,
                 0,
             ));
-            // $yield_op_idx: i32 (operation index within ability for multi-op dispatch)
+            // Index 3 ($yield_op_idx): i32 (operation index within ability for multi-op dispatch)
             builder.op(wasm::global(
                 self.db,
                 module_location,

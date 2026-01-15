@@ -110,7 +110,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
                         continue; // Skip invalid call_indirect
                     }
 
-                    // Check if first operand is a ref type (funcref/anyref/core.func/closure struct).
+                    // Check if first operand is a ref type (funcref/anyref/core.func/core.ptr/closure struct).
                     // If so, the funcref is FIRST and we skip it for params.
                     // Otherwise, the funcref is LAST (legacy order).
                     let first_operand = operands.first().copied().unwrap();
@@ -119,6 +119,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
                         wasm::Funcref::from_type(db, ty).is_some()
                             || wasm::Anyref::from_type(db, ty).is_some()
                             || core::Func::from_type(db, ty).is_some()
+                            || core::Ptr::from_type(db, ty).is_some()
                             || is_closure_struct_type(db, ty)
                     });
 

@@ -69,7 +69,7 @@ gh issue list --label wasm           # Wasm backend work
 ```bash
 # Build / Test
 cargo build
-cargo test --all  # Test all workspace members
+cargo nextest run --workspace  # Test all workspace members (preferred)
 
 # Enable debug logging (use --log instead of RUST_LOG)
 cargo run -- --log=debug compile file.trb
@@ -79,10 +79,10 @@ cargo run -- --log=tribute_passes::typeck=trace compile file.trb
 cargo insta review
 
 # Package-specific tests
-cargo test -p tribute
-cargo test -p tree-sitter-tribute
-cargo test -p tribute-passes
-cargo test -p tribute-trunk-ir
+cargo nextest run -p tribute
+cargo nextest run -p tree-sitter-tribute
+cargo nextest run -p tribute-passes
+cargo nextest run -p trunk-ir
 
 # Legacy drivers (example inputs may still be .trb today)
 cargo run --bin trbi -- <file.trb>

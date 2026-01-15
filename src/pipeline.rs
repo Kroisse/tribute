@@ -81,6 +81,7 @@ use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverit
 use tribute_passes::evidence::insert_evidence;
 use tribute_passes::handler_lower::lower_handlers;
 use tribute_passes::lambda_lift::lift_lambdas;
+use tribute_passes::lower_cont_to_trampoline;
 use tribute_passes::lower_tribute_to_cont;
 use tribute_passes::lower_tribute_to_scf;
 use tribute_passes::resolve::{Resolver, build_env};
@@ -402,6 +403,25 @@ pub fn stage_handler_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db
     lower_handlers(db, module)
 }
 
+/// Continuation to Trampoline Lowering.
+///
+/// This pass transforms continuation operations to trampoline operations:
+/// - `cont.shift` → `trampoline.build_state` + `trampoline.build_continuation` + etc.
+/// - `cont.resume` → `trampoline.reset_yield_state` + `trampoline.continuation_get` + call
+/// - `cont.get_continuation` → `trampoline.get_yield_continuation`
+/// - `cont.get_shift_value` → `trampoline.get_yield_shift_value`
+/// - `cont.get_done_value` → `trampoline.step_get`
+///
+/// This is a backend-agnostic pass that prepares continuation operations for
+/// the trampoline (yield-bubbling) implementation strategy.
+#[salsa::tracked]
+pub fn stage_cont_to_trampoline<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Module<'db> {
+    lower_cont_to_trampoline(db, module)
+}
+
 /// Lower tribute.handle to cont dialect operations.
 ///
 /// This pass lowers `tribute.handle` expressions to `cont.push_prompt` and
@@ -569,6 +589,10 @@ pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'
     let module = stage_tribute_to_cont(db, module); // tribute.handle → cont.push_prompt + cont.handler_dispatch
     let module = stage_tribute_to_scf(db, module); // tribute.case → scf.if
     let module = stage_handler_lower(db, module); // ability.perform → cont.shift, etc.
+
+    // Continuation lowering (backend-agnostic trampoline implementation)
+    let module = stage_cont_to_trampoline(db, module); // cont.shift → trampoline ops
+
     let module = stage_dce(db, module);
 
     // Final pass: resolve any remaining unresolved references and emit diagnostics
@@ -606,6 +630,10 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_tribute_to_cont(db, module);
     let module = stage_tribute_to_scf(db, module);
     let module = stage_handler_lower(db, module);
+
+    // Continuation lowering (backend-agnostic trampoline implementation)
+    let module = stage_cont_to_trampoline(db, module);
+
     let module = stage_dce(db, module);
 
     // Lower to WebAssembly

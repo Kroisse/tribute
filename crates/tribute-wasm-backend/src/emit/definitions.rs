@@ -100,15 +100,15 @@ pub(crate) fn extract_function_def<'db>(
 
     let result_ty = func_ty.result(db);
     debug!(
-        "extract_function_def: {} has return type {}.{} (params: {:?})",
+        "extract_function_def: {} fn_params={:?}, result={}.{}",
         name,
-        result_ty.dialect(db),
-        result_ty.name(db),
-        result_ty
+        func_ty
             .params(db)
             .iter()
             .map(|p| format!("{}.{}", p.dialect(db), p.name(db)))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
+        result_ty.dialect(db),
+        result_ty.name(db),
     );
 
     Ok(FunctionDef {
