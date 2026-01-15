@@ -381,6 +381,11 @@ pub fn type_to_storage_type<'db>(
     if tribute_rt::is_float(db, ty) {
         return StorageType::Val(ValType::F64);
     }
+    // Tribute-rt Any type (type-erased reference, always anyref)
+    if tribute_rt::Any::from_type(db, ty).is_some() {
+        debug!("type_to_storage_type: tribute_rt.any -> ANYREF");
+        return StorageType::Val(ValType::Ref(RefType::ANYREF));
+    }
 
     // Core function type (core.func) - stored as funcref
     if core::Func::from_type(db, ty).is_some() {

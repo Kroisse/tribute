@@ -248,12 +248,14 @@ pub(crate) fn handle_call_indirect<'db>(
         // Emit the funcref (first operand)
         emit_value(db, first_operand, ctx, function)?;
 
-        // Cast anyref/closure struct to typed function reference if needed
+        // Cast funcref/anyref/closure struct to typed function reference if needed
         // Closure struct (adt.struct with name "_closure") contains funcref in field 0.
         // When we extract the funcref via struct_get, the IR type may still be adt.struct,
         // but the actual wasm value is funcref. Cast to the concrete function type.
+        // Also, wasm.funcref needs to be cast since call_ref requires typed function reference.
         if let Some(ty) = first_operand_ty
-            && (wasm::Anyref::from_type(db, ty).is_some()
+            && (wasm::Funcref::from_type(db, ty).is_some()
+                || wasm::Anyref::from_type(db, ty).is_some()
                 || core::Func::from_type(db, ty).is_some()
                 || is_closure_struct_type(db, ty))
         {
