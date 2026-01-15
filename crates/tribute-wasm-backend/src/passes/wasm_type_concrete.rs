@@ -8,12 +8,17 @@
 //!
 //! **Replace `type_var` in operation results** with concrete types:
 //! - `wasm.call`: Use callee's return type from function signature
-//! - `wasm.call_indirect`: Use enclosing function's return type as hint
+//! - `wasm.call_indirect`: Infer from callee's function type
 //! - `wasm.if`/`wasm.block`/`wasm.loop`: Infer from branch result types
+//! - `wasm.struct_get`: Infer from struct field type
 //!
-//! Note: Boxing/unboxing of values at polymorphic call sites is currently
-//! handled in the emit phase (`value_emission.rs`). Future work may move
-//! this logic here as explicit IR operations.
+//! ## Boxing Pass Integration
+//!
+//! Most polymorphic call sites are handled upstream by the boxing pass
+//! (`tribute-passes/src/boxing.rs`) which inserts explicit `tribute_rt.box_*`
+//! and `tribute_rt.unbox_*` operations. After boxing, call result types are
+//! `tribute_rt.any` (not `type_var`), so the patterns here primarily serve
+//! as a fallback for edge cases.
 
 use std::collections::HashMap;
 
@@ -98,6 +103,11 @@ fn collect_func_return_types_from_region<'db>(
 ///
 /// If a call's result type is `tribute.type_var`, replace it with
 /// the callee's declared return type.
+///
+/// Note: Most polymorphic call sites are handled by the boxing pass
+/// (`tribute-passes/src/boxing.rs`) which changes type_var results to
+/// `tribute_rt.any` and inserts explicit unboxing. This pattern serves
+/// as a fallback for any remaining cases.
 struct CallResultTypePattern<'db> {
     /// Map of function name -> return type.
     func_return_types: HashMap<Symbol, Type<'db>>,
@@ -115,6 +125,12 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         };
 
+        // Check if result type needs concretization
+        let results = op.results(db);
+        if !results.iter().any(|ty| tribute::is_type_var(db, *ty)) {
+            return RewriteResult::Unchanged;
+        }
+
         // Look up the callee's return type
         // First try qualified name (e.g., "Point::x"), then fall back to last segment (e.g., "x")
         let callee = call_op.callee(db);
@@ -130,56 +146,26 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         };
 
-        // If callee returns type_var (generic function), try to infer concrete type from operands
-        let concrete_return_ty = if tribute::is_type_var(db, return_ty) {
-            // Try to infer from first operand (works for identity-like functions)
-            if let Some(&operand) = op.operands(db).first() {
-                if let Some(operand_ty) = infer_operand_type(db, operand) {
-                    if !tribute::is_type_var(db, operand_ty)
-                        && !tribute::is_placeholder_type(db, operand_ty)
-                    {
-                        debug!(
-                            "wasm_type_concrete: callee {} returns type_var, inferring from operand: {}.{}",
-                            callee,
-                            operand_ty.dialect(db),
-                            operand_ty.name(db)
-                        );
-                        operand_ty
-                    } else {
-                        debug!(
-                            "wasm_type_concrete: callee {} returns type_var, operand also placeholder",
-                            callee
-                        );
-                        return RewriteResult::Unchanged;
-                    }
-                } else {
-                    debug!(
-                        "wasm_type_concrete: callee {} returns type_var, cannot infer operand type",
-                        callee
-                    );
-                    return RewriteResult::Unchanged;
-                }
-            } else {
-                debug!(
-                    "wasm_type_concrete: callee {} returns type_var, no operands to infer from",
-                    callee
-                );
-                return RewriteResult::Unchanged;
-            }
-        } else {
-            return_ty
-        };
+        // Skip if the return type is also a placeholder (generic function not yet resolved)
+        // Boxing pass should have handled these cases by inserting explicit boxing/unboxing
+        if tribute::is_placeholder_type(db, return_ty) {
+            debug!(
+                "wasm_type_concrete: callee {} returns placeholder type, boxing pass should have handled this",
+                callee
+            );
+            return RewriteResult::Unchanged;
+        }
 
         // Try to concretize results
-        let Some(new_results) = concretize_results(db, op.results(db), concrete_return_ty) else {
+        let Some(new_results) = concretize_results(db, results, return_ty) else {
             return RewriteResult::Unchanged;
         };
 
         debug!(
             "wasm_type_concrete: concretizing wasm.call {} result(s) to {}.{}",
             callee,
-            concrete_return_ty.dialect(db),
-            concrete_return_ty.name(db)
+            return_ty.dialect(db),
+            return_ty.name(db)
         );
 
         let new_op = op.modify(db).results(new_results).build();
@@ -189,9 +175,13 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
 
 /// Pattern to concretize result types of wasm.call_indirect operations.
 ///
-/// If a call_indirect's result type is `tribute.type_var`, try to infer it from:
-/// 1. The callee's function type (if it's a known funcref)
-/// 2. For `wasm.ref_func` callees, look up the referenced function's return type
+/// If a call_indirect's result type is `tribute.type_var`, try to infer it from
+/// the callee's function type (wasm.ref_func, core.func, continuation, closure).
+///
+/// Note: Most polymorphic indirect call sites are handled by the boxing pass
+/// (`tribute-passes/src/boxing.rs`) which changes type_var results to
+/// `tribute_rt.any` and inserts explicit unboxing. This pattern serves
+/// as a fallback for any remaining cases.
 struct CallIndirectResultTypePattern<'db> {
     /// Map of function name -> return type.
     func_return_types: HashMap<Symbol, Type<'db>>,
@@ -209,63 +199,56 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         }
 
-        // The callee is the last operand (funcref)
+        // Check if result type needs concretization
+        let results = op.results(db);
+        if !results.iter().any(|ty| tribute::is_type_var(db, *ty)) {
+            return RewriteResult::Unchanged;
+        }
+
+        // The callee is the first operand (funcref) in our IR convention
+        // Note: WebAssembly stack order differs from IR operand order
         let operands = op.operands(db);
-        let Some(&callee_val) = operands.last() else {
+        let Some(&callee_val) = operands.first() else {
             return RewriteResult::Unchanged;
         };
 
         // Try to infer type from callee
-        if let Some(concrete_ty) = infer_type_from_callee(db, callee_val, &self.func_return_types)
-            && !tribute::is_placeholder_type(db, concrete_ty)
-        {
-            // Try to concretize results
-            let Some(new_results) = concretize_results(db, op.results(db), concrete_ty) else {
-                return RewriteResult::Unchanged;
-            };
+        let Some(concrete_ty) = infer_type_from_callee(db, callee_val, &self.func_return_types)
+        else {
+            // Log diagnostic info about why we couldn't infer
+            if let ValueDef::OpResult(def_op) = callee_val.def(db) {
+                let callee_ty = def_op.results(db).get(callee_val.index(db)).copied();
+                debug!(
+                    "wasm_type_concrete: cannot concretize wasm.call_indirect - callee from {}.{}, type: {:?}",
+                    def_op.dialect(db),
+                    def_op.name(db),
+                    callee_ty.map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                );
+            }
+            return RewriteResult::Unchanged;
+        };
 
+        // Skip if inferred type is also a placeholder
+        if tribute::is_placeholder_type(db, concrete_ty) {
             debug!(
-                "wasm_type_concrete: concretizing wasm.call_indirect result(s) to {}.{}",
-                concrete_ty.dialect(db),
-                concrete_ty.name(db)
+                "wasm_type_concrete: wasm.call_indirect callee returns placeholder type, boxing pass should have handled this"
             );
-
-            let new_op = op.modify(db).results(new_results).build();
-            return RewriteResult::Replace(new_op);
+            return RewriteResult::Unchanged;
         }
 
-        // Log diagnostic info about why we couldn't infer
-        if let ValueDef::OpResult(def_op) = callee_val.def(db) {
-            let callee_ty = def_op.results(db).get(callee_val.index(db)).copied();
-            debug!(
-                "wasm_type_concrete: cannot concretize wasm.call_indirect - callee from {}.{}, type: {:?}",
-                def_op.dialect(db),
-                def_op.name(db),
-                callee_ty.map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
-            );
-        }
+        // Try to concretize results
+        let Some(new_results) = concretize_results(db, results, concrete_ty) else {
+            return RewriteResult::Unchanged;
+        };
 
-        RewriteResult::Unchanged
-    }
-}
+        debug!(
+            "wasm_type_concrete: concretizing wasm.call_indirect result(s) to {}.{}",
+            concrete_ty.dialect(db),
+            concrete_ty.name(db)
+        );
 
-/// Try to infer the type of an operand value.
-///
-/// Handles cases like:
-/// - Operation results: get the type from the operation's result
-/// - Block arguments: get the type from the block argument type
-fn infer_operand_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
-    match value.def(db) {
-        ValueDef::OpResult(def_op) => {
-            let index = value.index(db);
-            def_op.results(db).get(index).copied()
-        }
-        ValueDef::BlockArg(block_id) => {
-            // Block arguments don't store their types directly in this context,
-            // so we return None and let the caller handle it
-            let _ = block_id;
-            None
-        }
+        let new_op = op.modify(db).results(new_results).build();
+        RewriteResult::Replace(new_op)
     }
 }
 

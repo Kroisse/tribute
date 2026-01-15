@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 
 use tracing::debug;
-use tribute_ir::dialect::{tribute, tribute_rt};
+use tribute_ir::dialect::{closure, tribute, tribute_rt};
 use trunk_ir::dialect::core::{self, F64 as CoreF64, I32 as CoreI32, Module};
 use trunk_ir::dialect::func;
 use trunk_ir::rewrite::{
@@ -349,6 +349,182 @@ impl<'db> RewritePattern<'db> for BoxCallPattern<'db> {
     }
 }
 
+/// Pattern for boxing/unboxing at `func.call_indirect` sites.
+///
+/// Transforms polymorphic indirect function calls by:
+/// 1. Getting the function type from the callee (core.func or closure.closure)
+/// 2. Boxing concrete arguments passed to type_var parameters
+/// 3. Changing result type to tribute_rt.any if return is type_var
+/// 4. Unboxing the result to the expected concrete type
+struct BoxCallIndirectPattern;
+
+impl<'db> RewritePattern<'db> for BoxCallIndirectPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Match func.call_indirect
+        if func::CallIndirect::from_operation(db, *op).is_err() {
+            return RewriteResult::Unchanged;
+        }
+
+        let operands = adaptor.operands();
+        if operands.is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Get callee (first operand) and its type
+        let callee = operands[0];
+        let Some(callee_ty) = adaptor.operand_type(0) else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Extract function type from callee
+        // - If core.func, use directly
+        // - If closure.closure, extract inner func_type
+        let func_type = if let Some(func_ty) = core::Func::from_type(db, callee_ty) {
+            func_ty
+        } else if let Some(closure_ty) = closure::Closure::from_type(db, callee_ty) {
+            let inner_ty = closure_ty.func_type(db);
+            let Some(func_ty) = core::Func::from_type(db, inner_ty) else {
+                return RewriteResult::Unchanged;
+            };
+            func_ty
+        } else {
+            // Callee type is neither core.func nor closure.closure
+            debug!(
+                "boxing: call_indirect callee has unexpected type {}.{}",
+                callee_ty.dialect(db),
+                callee_ty.name(db)
+            );
+            return RewriteResult::Unchanged;
+        };
+
+        let param_types = func_type.params(db);
+        let return_ty = func_type.result(db);
+
+        // Check if any boxing is needed
+        let needs_boxing = param_types.iter().any(|ty| tribute::is_type_var(db, *ty));
+        let needs_unboxing = tribute::is_type_var(db, return_ty);
+
+        if !needs_boxing && !needs_unboxing {
+            return RewriteResult::Unchanged;
+        }
+
+        let location = op.location(db);
+        let args = &operands[1..]; // Arguments (excluding callee)
+
+        // Verify argument count matches parameter count
+        if args.len() != param_types.len() {
+            debug!(
+                "boxing: call_indirect operand count mismatch: {} args, {} params",
+                args.len(),
+                param_types.len()
+            );
+            return RewriteResult::Unchanged;
+        }
+
+        let mut result_ops: Vec<Operation<'db>> = Vec::new();
+        let mut new_args: Vec<Value<'db>> = Vec::new();
+
+        // Track the concrete types of arguments for type_var positions
+        let mut type_var_to_concrete: HashMap<u64, Type<'db>> = HashMap::new();
+
+        // Insert boxing for each argument that needs it
+        for (i, param_ty) in param_types.iter().enumerate() {
+            let arg = args[i];
+
+            if tribute::is_type_var(db, *param_ty) {
+                // Get the concrete type of this argument
+                // Note: adaptor.operand_type uses 0-based index including callee,
+                // so arg at index i corresponds to operand index i+1
+                let arg_ty = adaptor.operand_type(i + 1);
+
+                // Track for later unboxing inference
+                if let Some(ty) = arg_ty
+                    && let Some(type_var_id) = get_type_var_id(db, *param_ty)
+                {
+                    type_var_to_concrete.insert(type_var_id, ty);
+                }
+
+                // Need to box this argument
+                if let Some(ty) = arg_ty
+                    && let Some((box_op, boxed_val)) = create_box_op(db, arg, ty, location)
+                {
+                    result_ops.push(box_op);
+                    new_args.push(boxed_val);
+                } else {
+                    // Can't determine type to box, pass through
+                    new_args.push(arg);
+                }
+            } else {
+                new_args.push(arg);
+            }
+        }
+
+        // Determine call result type
+        let call_result_ty = if needs_unboxing {
+            *tribute_rt::Any::new(db)
+        } else {
+            op.results(db).first().copied().unwrap_or(return_ty)
+        };
+
+        // Create new call_indirect with boxed arguments
+        let new_call = func::call_indirect(db, location, callee, new_args, call_result_ty);
+        let new_call_op = new_call.as_operation();
+        result_ops.push(new_call_op);
+
+        // Insert unboxing if needed
+        if needs_unboxing {
+            let call_result = new_call_op.result(db, 0);
+
+            // Get the expected concrete type
+            let original_result_ty = op.results(db).first().copied();
+
+            debug!(
+                "boxing: call_indirect needs_unboxing, original_result_ty: {:?}",
+                original_result_ty
+            );
+
+            let unbox_ty = if let Some(orig_ty) = original_result_ty {
+                if !tribute::is_type_var(db, orig_ty) {
+                    // typeck resolved it to a concrete type
+                    Some(orig_ty)
+                } else if let Some(type_var_id) = get_type_var_id(db, return_ty) {
+                    // Return type is a type_var, look up concrete type from arguments
+                    type_var_to_concrete.get(&type_var_id).copied()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            debug!("boxing: call_indirect inferred unbox_ty: {:?}", unbox_ty);
+
+            if let Some(target_ty) = unbox_ty
+                && let Some((unbox_ops, _unboxed_val)) =
+                    create_unbox_op(db, call_result, target_ty, location)
+            {
+                debug!(
+                    "boxing: call_indirect inserted {} unbox ops for type {:?}",
+                    unbox_ops.len(),
+                    target_ty
+                );
+                result_ops.extend(unbox_ops);
+            }
+        }
+
+        RewriteResult::Expand(result_ops)
+    }
+
+    fn name(&self) -> &'static str {
+        "BoxCallIndirectPattern"
+    }
+}
+
 // =============================================================================
 // Public API
 // =============================================================================
@@ -361,6 +537,7 @@ pub fn insert_boxing<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     // Second pass: apply boxing patterns
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(BoxCallPattern { func_types })
+        .add_pattern(BoxCallIndirectPattern)
         .apply(db, module)
         .module
 }
