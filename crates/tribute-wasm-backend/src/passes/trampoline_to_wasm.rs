@@ -226,6 +226,19 @@ fn null_any<'db>(
     null_val
 }
 
+/// Create a null reference of `wasm::Funcref` type.
+fn null_funcref<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    ops: &mut Vec<Operation<'db>>,
+) -> Value<'db> {
+    let funcref_ty = wasm::Funcref::new(db).as_type();
+    let null_op = adt::ref_null(db, location, funcref_ty, funcref_ty);
+    let null_val = null_op.as_operation().result(db, 0);
+    ops.push(null_op.as_operation());
+    null_val
+}
+
 // ============================================================================
 // Patterns: Struct Operations → ADT
 // ============================================================================
@@ -266,7 +279,7 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
         let resume_fn_field = if let Some(v) = resume_fn {
             v
         } else {
-            null_any(db, location, &mut ops)
+            null_funcref(db, location, &mut ops)
         };
 
         // state field - cast to any
