@@ -336,7 +336,7 @@ impl<'db> RewritePattern<'db> for FuncUnreachablePattern {
     }
 }
 
-/// Pattern for `func.constant` -> `arith.const` (i32 table index)
+/// Pattern for `func.constant` -> `wasm.i32_const` (i32 table index)
 ///
 /// Transforms function constant references to i32 table indices.
 /// Used for closures where lifted functions are stored via function table.
