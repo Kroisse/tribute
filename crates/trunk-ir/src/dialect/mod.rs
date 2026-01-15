@@ -15,6 +15,7 @@ pub mod cont;
 pub mod func;
 pub mod mem;
 pub mod scf;
+pub mod trampoline;
 
 // === Low-level (target specific) ===
 pub mod wasm;
