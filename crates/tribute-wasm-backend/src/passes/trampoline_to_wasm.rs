@@ -23,9 +23,9 @@
 //! This pass uses TypeConverter to consistently convert trampoline types to ADT types.
 
 use tribute_ir::dialect::adt;
+use tribute_ir::dialect::trampoline::{self, STEP_TAG_DONE, STEP_TAG_SHIFT};
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func::{self, Func};
-use trunk_ir::dialect::trampoline::{self, STEP_TAG_DONE, STEP_TAG_SHIFT};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{
     MaterializeResult, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,

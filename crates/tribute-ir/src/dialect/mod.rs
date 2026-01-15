@@ -10,6 +10,9 @@ pub mod tribute_rt;
 // === Effect system (runtime ops, lowered to cont) ===
 pub mod ability;
 
+// === Continuation implementation ===
+pub mod trampoline;
+
 // === Type system ===
 pub mod adt;
 

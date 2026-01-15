@@ -17,10 +17,10 @@ use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::{LazyLock, Mutex};
 
-use tribute_ir::dialect::adt;
+use tribute_ir::dialect::{adt, trampoline};
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func::{self, Func};
-use trunk_ir::dialect::{arith, cont, scf, trampoline, wasm};
+use trunk_ir::dialect::{arith, cont, scf, wasm};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::rewrite::{
     OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
