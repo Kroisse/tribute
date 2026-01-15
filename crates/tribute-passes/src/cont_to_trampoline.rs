@@ -13,9 +13,9 @@
 //! This pass is backend-agnostic and should run after `tribute_to_cont`/`handler_lower`
 //! and before `trampoline_to_adt`.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
-use std::sync::{LazyLock, Mutex};
 
 use tribute_ir::dialect::{adt, trampoline};
 use trunk_ir::dialect::core::{self, Module};
@@ -34,14 +34,25 @@ use trunk_ir::{
 // Public API
 // ============================================================================
 
+/// Metadata for generating resume functions (lifetime-free).
+struct ResumeFuncSpec {
+    name: String,
+}
+
+/// Shared storage for resume function specs during pattern matching.
+type ResumeSpecs = Rc<RefCell<Vec<ResumeFuncSpec>>>;
+
+/// Shared counter for generating unique resume function names.
+type ResumeCounter = Rc<RefCell<u32>>;
+
 /// Lower cont dialect operations to trampoline dialect.
 pub fn lower_cont_to_trampoline<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> Module<'db> {
-    // Clear any previous state from prior compilations
-    RESUME_FUNCTIONS.lock().unwrap().clear();
-    *RESUME_COUNTER.lock().unwrap() = 0;
+    // Shared state for resume function generation (no global state!)
+    let resume_specs: ResumeSpecs = Rc::new(RefCell::new(Vec::new()));
+    let resume_counter: ResumeCounter = Rc::new(RefCell::new(0));
 
     // Step 1: Identify effectful functions (before transformation)
     let effectful_funcs = identify_effectful_functions(db, &module);
@@ -61,7 +72,10 @@ pub fn lower_cont_to_trampoline<'db>(
 
     // Step 3: Transform cont.* operations to trampoline.* operations
     let applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern(LowerShiftPattern)
+        .add_pattern(LowerShiftPattern {
+            resume_specs: Rc::clone(&resume_specs),
+            resume_counter: Rc::clone(&resume_counter),
+        })
         .add_pattern(LowerResumePattern)
         .add_pattern(LowerGetContinuationPattern)
         .add_pattern(LowerGetShiftValuePattern)
@@ -80,11 +94,17 @@ pub fn lower_cont_to_trampoline<'db>(
     let result = applicator.apply(db, result.module);
     let module = result.module;
 
-    // Add generated resume functions to module
-    let resume_funcs: Vec<Operation<'db>> = RESUME_FUNCTIONS.lock().unwrap().drain(..).collect();
-    if resume_funcs.is_empty() {
+    // Generate resume functions from collected specs
+    let specs = resume_specs.borrow();
+    if specs.is_empty() {
         return module;
     }
+
+    let location = module.location(db);
+    let resume_funcs: Vec<Operation<'db>> = specs
+        .iter()
+        .map(|spec| create_resume_function(db, Symbol::from_dynamic(&spec.name), location))
+        .collect();
 
     // Add resume functions to module body
     let body = module.body(db);
@@ -229,22 +249,15 @@ fn contains_effectful_ops<'db>(db: &'db dyn salsa::Database, region: &Region<'db
 }
 
 // ============================================================================
-// Resume Function Storage
+// Resume Function Helpers
 // ============================================================================
 
-/// Global storage for generated resume functions.
-/// This is needed because RewritePattern doesn't have a way to add new top-level ops.
-static RESUME_FUNCTIONS: LazyLock<Mutex<Vec<Operation<'static>>>> =
-    LazyLock::new(|| Mutex::new(Vec::new()));
-
-/// Counter for generating unique resume function names.
-static RESUME_COUNTER: LazyLock<Mutex<u32>> = LazyLock::new(|| Mutex::new(0));
-
-fn fresh_resume_name() -> Symbol {
-    let mut counter = RESUME_COUNTER.lock().unwrap();
+/// Generate a unique resume function name using the shared counter.
+fn fresh_resume_name(counter: &ResumeCounter) -> String {
+    let mut counter = counter.borrow_mut();
     let id = *counter;
     *counter += 1;
-    Symbol::from_dynamic(&format!("__resume_{}", id))
+    format!("__resume_{}", id)
 }
 
 /// Generate a unique state type name based on ability and operation info.
@@ -269,7 +282,10 @@ fn state_type_name(ability_name: Option<Symbol>, op_name: Option<Symbol>, tag: u
 // Pattern: Lower cont.shift
 // ============================================================================
 
-struct LowerShiftPattern;
+struct LowerShiftPattern {
+    resume_specs: ResumeSpecs,
+    resume_counter: ResumeCounter,
+}
 
 impl<'db> RewritePattern<'db> for LowerShiftPattern {
     fn match_and_rewrite(
@@ -307,12 +323,15 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern {
 
         // === 2. Get resume function reference ===
         let funcref_ty = wasm::Funcref::new(db).as_type();
-        let resume_name = fresh_resume_name();
+        let resume_name = fresh_resume_name(&self.resume_counter);
 
-        // Generate resume function
-        generate_resume_function(db, resume_name, location);
+        // Record resume function spec (to be generated later)
+        self.resume_specs.borrow_mut().push(ResumeFuncSpec {
+            name: resume_name.clone(),
+        });
 
-        let const_op = func::constant(db, location, funcref_ty, resume_name);
+        let resume_name_sym = Symbol::from_dynamic(&resume_name);
+        let const_op = func::constant(db, location, funcref_ty, resume_name_sym);
         let resume_fn_val = const_op.as_operation().result(db, 0);
         ops.push(const_op.as_operation());
 
@@ -347,13 +366,13 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern {
     }
 }
 
-/// Generate a resume function that just returns the resume value.
+/// Create a resume function that just returns the resume value.
 /// This is a simplified implementation - full implementation would capture/restore state.
-fn generate_resume_function<'db>(
+fn create_resume_function<'db>(
     db: &'db dyn salsa::Database,
     name: Symbol,
     location: Location<'db>,
-) {
+) -> Operation<'db> {
     let wrapper_ty = trampoline::ResumeWrapper::new(db).as_type();
     let step_ty = trampoline::Step::new(db).as_type();
     let anyref_ty = wasm::Anyref::new(db).as_type();
@@ -383,10 +402,7 @@ fn generate_resume_function<'db>(
         },
     );
 
-    // SAFETY: We're storing Operation<'db> as Operation<'static>, but this is safe
-    // because we only access it within the same compilation unit where 'db is still valid.
-    let func_static: Operation<'static> = unsafe { std::mem::transmute(func_op.as_operation()) };
-    RESUME_FUNCTIONS.lock().unwrap().push(func_static);
+    func_op.as_operation()
 }
 
 // ============================================================================
@@ -702,9 +718,10 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
             Region::new(db, location, IdVec::new())
         };
 
-        // Block 1+ = suspend cases
+        // Block 1+ = suspend cases (include all suspend blocks, not just the first one)
         let suspend_region = if blocks.len() > 1 {
-            Region::new(db, location, IdVec::from(vec![blocks[1]]))
+            let suspend_blocks: Vec<_> = blocks.iter().skip(1).copied().collect();
+            Region::new(db, location, IdVec::from(suspend_blocks))
         } else {
             let mut builder = BlockBuilder::new(db, location);
             let zero = builder.op(arith::Const::i32(db, location, 0));
@@ -1091,7 +1108,12 @@ fn is_step_value<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> bool {
             // Check if the defining operation produces Step
             trampoline::StepShift::from_operation(db, def_op).is_ok()
                 || trampoline::StepDone::from_operation(db, def_op).is_ok()
-                || scf::If::from_operation(db, def_op).is_ok() // scf.if might yield Step
+                // Check if scf.if returns Step type (not all scf.if return Step)
+                || (scf::If::from_operation(db, def_op).is_ok()
+                    && def_op
+                        .results(db)
+                        .first()
+                        .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some()))
         }
         ValueDef::BlockArg(_) => {
             // Block args could be Step, but we can't easily tell from here

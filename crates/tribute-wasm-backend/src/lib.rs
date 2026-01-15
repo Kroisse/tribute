@@ -1,5 +1,6 @@
 //! Wasm backend that emits WebAssembly binaries from wasm.* TrunkIR operations.
 
+pub mod constants;
 mod data_registry;
 mod emit;
 mod errors;

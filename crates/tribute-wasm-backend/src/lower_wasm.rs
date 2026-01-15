@@ -293,10 +293,11 @@ impl<'db> WasmLowerer<'db> {
             self.memory_plan.has_memory = true;
         }
 
-        // Emit yield globals for continuation support
-        // Note: $yield_value is no longer needed - shift_value is stored in continuation struct
+        // Emit yield globals for continuation support.
+        // IMPORTANT: The order of these globals must match constants::yield_globals indices.
+        // See crate::constants::yield_globals for index definitions.
         if self.has_continuations {
-            // $yield_state: i32 (0 = normal, 1 = yielding)
+            // Index 0 ($yield_state): i32 (0 = normal, 1 = yielding)
             builder.op(wasm::global(
                 self.db,
                 module_location,
@@ -304,7 +305,7 @@ impl<'db> WasmLowerer<'db> {
                 true,
                 0,
             ));
-            // $yield_tag: i32 (prompt tag being yielded to)
+            // Index 1 ($yield_tag): i32 (prompt tag being yielded to)
             builder.op(wasm::global(
                 self.db,
                 module_location,
@@ -312,7 +313,7 @@ impl<'db> WasmLowerer<'db> {
                 true,
                 0,
             ));
-            // $yield_cont: anyref (captured continuation, GC-managed)
+            // Index 2 ($yield_cont): anyref (captured continuation, GC-managed)
             builder.op(wasm::global(
                 self.db,
                 module_location,
@@ -320,7 +321,7 @@ impl<'db> WasmLowerer<'db> {
                 true,
                 0,
             ));
-            // $yield_op_idx: i32 (operation index within ability for multi-op dispatch)
+            // Index 3 ($yield_op_idx): i32 (operation index within ability for multi-op dispatch)
             builder.op(wasm::global(
                 self.db,
                 module_location,

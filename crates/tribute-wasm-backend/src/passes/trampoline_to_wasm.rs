@@ -34,11 +34,7 @@ use trunk_ir::{
     Attribute, DialectOp, DialectType, IdVec, Location, Operation, Symbol, Type, Value, ValueDef,
 };
 
-/// Global variable indices for yield state
-const YIELD_STATE_IDX: u32 = 0;
-const YIELD_TAG_IDX: u32 = 1;
-const YIELD_CONT_IDX: u32 = 2;
-const YIELD_OP_IDX: u32 = 3;
+use crate::constants::yield_globals;
 
 /// Lower all trampoline operations to WASM/ADT using RewritePattern infrastructure.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -697,14 +693,16 @@ impl<'db> RewritePattern<'db> for LowerStateGetPattern {
         let location = op.location(db);
         let any_ty = wasm::Anyref::new(db).as_type();
 
-        let field_idx = op
-            .attributes(db)
-            .get(&Symbol::new("field_idx"))
-            .and_then(|a| match a {
-                Attribute::IntBits(n) => Some(*n),
-                _ => None,
-            })
-            .unwrap_or(0u64);
+        // Extract field index from "field" attribute (Symbol type, e.g., "field0", "field1")
+        let field_idx =
+            op.attributes(db)
+                .get(&Symbol::new("field"))
+                .and_then(|a| match a {
+                    Attribute::Symbol(sym) => sym
+                        .with_str(|s| s.strip_prefix("field").and_then(|n| n.parse::<u64>().ok())),
+                    _ => None,
+                })
+                .unwrap_or(0u64);
 
         let state_type = op
             .attributes(db)
@@ -786,22 +784,24 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
         let const_1 = wasm::i32_const(db, location, i32_ty, 1);
         let const_1_val = const_1.as_operation().result(db, 0);
         ops.push(const_1.as_operation());
-        ops.push(wasm::global_set(db, location, const_1_val, YIELD_STATE_IDX).as_operation());
+        ops.push(
+            wasm::global_set(db, location, const_1_val, yield_globals::STATE_IDX).as_operation(),
+        );
 
         // Set $yield_tag = tag
         let tag_const = wasm::i32_const(db, location, i32_ty, tag as i32);
         let tag_val = tag_const.as_operation().result(db, 0);
         ops.push(tag_const.as_operation());
-        ops.push(wasm::global_set(db, location, tag_val, YIELD_TAG_IDX).as_operation());
+        ops.push(wasm::global_set(db, location, tag_val, yield_globals::TAG_IDX).as_operation());
 
         // Set $yield_cont = continuation
-        ops.push(wasm::global_set(db, location, cont_val, YIELD_CONT_IDX).as_operation());
+        ops.push(wasm::global_set(db, location, cont_val, yield_globals::CONT_IDX).as_operation());
 
         // Set $yield_op_idx = op_idx
         let op_idx_const = wasm::i32_const(db, location, i32_ty, op_idx as i32);
         let op_idx_val = op_idx_const.as_operation().result(db, 0);
         ops.push(op_idx_const.as_operation());
-        ops.push(wasm::global_set(db, location, op_idx_val, YIELD_OP_IDX).as_operation());
+        ops.push(wasm::global_set(db, location, op_idx_val, yield_globals::OP_IDX).as_operation());
 
         RewriteResult::expand(ops)
     }
@@ -832,7 +832,9 @@ impl<'db> RewritePattern<'db> for LowerResetYieldStatePattern {
         let const_0 = wasm::i32_const(db, location, i32_ty, 0);
         let const_0_val = const_0.as_operation().result(db, 0);
         ops.push(const_0.as_operation());
-        ops.push(wasm::global_set(db, location, const_0_val, YIELD_STATE_IDX).as_operation());
+        ops.push(
+            wasm::global_set(db, location, const_0_val, yield_globals::STATE_IDX).as_operation(),
+        );
 
         RewriteResult::expand(ops)
     }
@@ -861,7 +863,7 @@ impl<'db> RewritePattern<'db> for LowerGetYieldContinuationPattern {
         let mut ops = Vec::new();
 
         // Load continuation from $yield_cont global
-        let get_cont = wasm::global_get(db, location, anyref_ty, YIELD_CONT_IDX);
+        let get_cont = wasm::global_get(db, location, anyref_ty, yield_globals::CONT_IDX);
         let cont_anyref = get_cont.as_operation().result(db, 0);
         ops.push(get_cont.as_operation());
 
@@ -900,7 +902,7 @@ impl<'db> RewritePattern<'db> for LowerGetYieldShiftValuePattern {
         let mut ops = Vec::new();
 
         // Load continuation from $yield_cont global
-        let get_cont = wasm::global_get(db, location, anyref_ty, YIELD_CONT_IDX);
+        let get_cont = wasm::global_get(db, location, anyref_ty, yield_globals::CONT_IDX);
         let cont_anyref = get_cont.as_operation().result(db, 0);
         ops.push(get_cont.as_operation());
 
@@ -947,7 +949,7 @@ impl<'db> RewritePattern<'db> for LowerCheckYieldPattern {
         let i32_ty = core::I32::new(db).as_type();
 
         // Get yield state from global
-        let get_yield = wasm::global_get(db, location, i32_ty, YIELD_STATE_IDX);
+        let get_yield = wasm::global_get(db, location, i32_ty, yield_globals::STATE_IDX);
 
         RewriteResult::Replace(get_yield.as_operation())
     }
