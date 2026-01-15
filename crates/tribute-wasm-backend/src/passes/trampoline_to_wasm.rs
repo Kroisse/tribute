@@ -31,7 +31,7 @@ use trunk_ir::rewrite::{
     MaterializeResult, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{
-    Attribute, DialectOp, DialectType, IdVec, Location, Operation, Symbol, Type, Value, ValueDef,
+    Attribute, DialectOp, DialectType, IdVec, Location, Operation, Symbol, Type, Value,
 };
 
 use crate::constants::yield_globals;
@@ -881,12 +881,8 @@ impl<'db> RewritePattern<'db> for LowerGetYieldContinuationPattern {
         ops.push(get_cont.as_operation());
 
         // Cast anyref to continuation type
-        let cont_cast_op = wasm::ref_cast(db, location, cont_anyref, cont_type, cont_type, None)
-            .as_operation()
-            .modify(db)
-            .attr("type", Attribute::Type(cont_type))
-            .build();
-        ops.push(cont_cast_op);
+        let cont_cast_op = wasm::ref_cast(db, location, cont_anyref, cont_type, cont_type, None);
+        ops.push(cont_cast_op.as_operation());
 
         RewriteResult::expand(ops)
     }
@@ -920,13 +916,9 @@ impl<'db> RewritePattern<'db> for LowerGetYieldShiftValuePattern {
         ops.push(get_cont.as_operation());
 
         // Cast anyref to continuation type
-        let cont_cast = wasm::ref_cast(db, location, cont_anyref, cont_type, cont_type, None)
-            .as_operation()
-            .modify(db)
-            .attr("type", Attribute::Type(cont_type))
-            .build();
-        let cont_ref = Value::new(db, ValueDef::OpResult(cont_cast), 0);
-        ops.push(cont_cast);
+        let cont_cast = wasm::ref_cast(db, location, cont_anyref, cont_type, cont_type, None);
+        let cont_ref = cont_cast.as_operation().result(db, 0);
+        ops.push(cont_cast.as_operation());
 
         // Extract shift_value from continuation (field 3)
         let get_shift_value = adt::struct_get(

@@ -336,6 +336,8 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern {
         ops.push(const_op.as_operation());
 
         // === 3. Get shift value (the value passed to the effect operation) ===
+        // Note: shift value may be absent if the ability operation has no arguments.
+        // In that case, we use state_val as a placeholder (will be ignored by resume).
         let shift_value_val = adaptor.operands().first().copied().unwrap_or(state_val);
 
         // === 4. Build Continuation ===
