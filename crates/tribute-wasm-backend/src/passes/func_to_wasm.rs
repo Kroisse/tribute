@@ -49,20 +49,19 @@ impl<'db> RewritePattern<'db> for FuncFuncPattern {
 
         // Debug: verify type attribute is preserved
         if let Some(Attribute::Type(ty)) = new_op.attributes(db).get(&trunk_ir::Symbol::new("type"))
+            && let Some(fn_ty) = trunk_ir::dialect::core::Func::from_type(db, *ty)
         {
-            if let Some(fn_ty) = trunk_ir::dialect::core::Func::from_type(db, *ty) {
-                tracing::debug!(
-                    "FuncFuncPattern: {} -> wasm.func with params={:?}, result={}.{}",
-                    _func_op.sym_name(db),
-                    fn_ty
-                        .params(db)
-                        .iter()
-                        .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
-                        .collect::<Vec<_>>(),
-                    fn_ty.result(db).dialect(db),
-                    fn_ty.result(db).name(db)
-                );
-            }
+            tracing::debug!(
+                "FuncFuncPattern: {} -> wasm.func with params={:?}, result={}.{}",
+                _func_op.sym_name(db),
+                fn_ty
+                    .params(db)
+                    .iter()
+                    .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                    .collect::<Vec<_>>(),
+                fn_ty.result(db).dialect(db),
+                fn_ty.result(db).name(db)
+            );
         }
 
         RewriteResult::Replace(new_op)
