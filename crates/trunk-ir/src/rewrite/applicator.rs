@@ -127,8 +127,9 @@ impl<'db> PatternApplicator<'db> {
         let mut total_changes = 0;
 
         for iteration in 0..self.max_iterations {
-            // Collect block argument types for this iteration (with type conversion)
-            let block_arg_types = collect_block_arg_types(db, &current, &self.type_converter);
+            // Collect raw block argument types for this iteration.
+            // Type conversion is applied at access sites (OpAdaptor::get_value_type).
+            let block_arg_types = collect_block_arg_types(db, &current);
             let mut ctx = RewriteContext::with_block_arg_types(block_arg_types);
             let new_module = self.rewrite_module(db, &current, &mut ctx);
 
@@ -337,18 +338,20 @@ impl<'db> Default for PatternApplicator<'db> {
     }
 }
 
-/// Collect block argument types from a module with type conversion applied.
+/// Collect block argument types from a module.
 ///
-/// Traverses all blocks in the module and collects the types of their arguments,
-/// applying type conversion via the `TypeConverter`. This is needed because
-/// `ValueDef::BlockArg` only stores the `BlockId`, not the type information.
+/// Traverses all blocks in the module and collects the raw (unconverted) types
+/// of their arguments. This is needed because `ValueDef::BlockArg` only stores
+/// the `BlockId`, not the type information.
+///
+/// Type conversion is applied at access sites (e.g., `OpAdaptor::get_value_type`)
+/// rather than during collection to avoid double conversion.
 fn collect_block_arg_types<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<'db>,
-    type_converter: &super::TypeConverter,
 ) -> HashMap<(BlockId, usize), Type<'db>> {
     let mut map = HashMap::new();
-    collect_from_region(db, &module.body(db), &mut map, type_converter);
+    collect_from_region(db, &module.body(db), &mut map);
     map
 }
 
@@ -356,19 +359,16 @@ fn collect_from_region<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
     map: &mut HashMap<(BlockId, usize), Type<'db>>,
-    type_converter: &super::TypeConverter,
 ) {
     for block in region.blocks(db).iter() {
         let block_id = block.id(db);
         for (idx, arg) in block.args(db).iter().enumerate() {
-            let raw_ty = arg.ty(db);
-            let converted_ty = type_converter.convert_type(db, raw_ty).unwrap_or(raw_ty);
-            map.insert((block_id, idx), converted_ty);
+            map.insert((block_id, idx), arg.ty(db));
         }
         // Recursively collect from nested regions in operations
         for op in block.operations(db).iter() {
             for nested_region in op.regions(db).iter() {
-                collect_from_region(db, nested_region, map, type_converter);
+                collect_from_region(db, nested_region, map);
             }
         }
     }
