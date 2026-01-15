@@ -1,7 +1,7 @@
 //! End-to-end tests for Ability System (Core) milestone.
 //!
 //! These tests verify the target code from issue #100 passes the full compilation
-//! pipeline and executes correctly with wasmtime.
+//! pipeline and executes correctly with wasmtime CLI.
 //!
 //! ## Milestone Target
 //!
@@ -15,8 +15,11 @@
 //!
 //! Tests are organized in two categories:
 //! 1. **Frontend tests**: Verify parsing, name resolution, and type checking
-//! 2. **Execution tests**: Compile to WASM and run with wasmtime
+//! 2. **Execution tests**: Compile to WASM and run with wasmtime CLI
 
+mod common;
+
+use common::run_wasm_main;
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
@@ -31,14 +34,6 @@ fn parse_source(db: &dyn salsa::Database, name: &str, code: &str) -> SourceCst {
     SourceCst::from_path(db, name, source_code, tree)
 }
 
-/// Helper to create a wasmtime engine with GC and function references support
-fn create_gc_engine() -> wasmtime::Engine {
-    let mut config = wasmtime::Config::new();
-    config.wasm_gc(true);
-    config.wasm_function_references(true);
-    wasmtime::Engine::new(&config).expect("Failed to create engine")
-}
-
 /// Helper to compile and run code, returning the i32 result from main()
 fn compile_and_run(code: &str, name: &str) -> i32 {
     let source_code = Rope::from_str(code);
@@ -49,17 +44,7 @@ fn compile_and_run(code: &str, name: &str) -> i32 {
 
         let wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
-        let engine = create_gc_engine();
-        let module = wasmtime::Module::new(&engine, wasm_binary.bytes(db)).unwrap();
-        let mut store = wasmtime::Store::new(&engine, ());
-        let instance =
-            wasmtime::Instance::new(&mut store, &module, &[]).expect("Failed to instantiate");
-
-        let main = instance
-            .get_typed_func::<(), i32>(&mut store, "main")
-            .expect("main function not found");
-
-        main.call(&mut store, ()).expect("Execution failed")
+        run_wasm_main::<i32>(wasm_binary.bytes(db))
     })
 }
 

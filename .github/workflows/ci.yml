@@ -58,8 +58,10 @@ jobs:
         with:
           cache: false
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+      - name: Install cargo-nextest and wasmtime
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,wasmtime
 
       - name: Run tests
         run: cargo nextest run --workspace
@@ -78,10 +80,10 @@ jobs:
           components: llvm-tools-preview
           cache: true
 
-      - name: Install cargo-llvm-cov and cargo-nextest
+      - name: Install cargo-llvm-cov, cargo-nextest, and wasmtime
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-llvm-cov,nextest
+          tool: cargo-llvm-cov,nextest,wasmtime
 
       - name: Generate coverage report
         run: cargo llvm-cov nextest --workspace --lcov --output-path lcov.info
@@ -89,5 +91,6 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           fail_ci_if_error: false
