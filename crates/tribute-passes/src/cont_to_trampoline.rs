@@ -1153,3 +1153,212 @@ fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u32 {
 
     (hasher.finish() % 0x7FFFFFFF) as u32
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::ir::BlockBuilder;
+    use trunk_ir::rewrite::RewriteContext;
+    use trunk_ir::{BlockId, PathId, Span};
+
+    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
+        let path = PathId::new(db, "test.trb".to_owned());
+        Location::new(path, Span::new(0, 0))
+    }
+
+    // ========================================================================
+    // Test: Multi-suspend block handling
+    // ========================================================================
+
+    /// Test helper: builds handler_dispatch with multiple suspend blocks and applies pattern.
+    /// Returns the number of blocks in the suspend region.
+    #[salsa::tracked]
+    fn handler_dispatch_suspend_block_count(db: &dyn salsa::Database) -> usize {
+        let location = test_location(db);
+        let step_ty = trampoline::Step::new(db).as_type();
+
+        // Create 3 blocks: done block + 2 suspend blocks
+        let done_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+
+        let mut builder1 = BlockBuilder::new(db, location);
+        let zero1 = builder1.op(arith::Const::i32(db, location, 1));
+        let step1 = builder1.op(trampoline::step_done(
+            db,
+            location,
+            zero1.result(db),
+            step_ty,
+        ));
+        builder1.op(scf::r#yield(db, location, vec![step1.result(db)]));
+        let suspend_block1 = builder1.build();
+
+        let mut builder2 = BlockBuilder::new(db, location);
+        let zero2 = builder2.op(arith::Const::i32(db, location, 2));
+        let step2 = builder2.op(trampoline::step_done(
+            db,
+            location,
+            zero2.result(db),
+            step_ty,
+        ));
+        builder2.op(scf::r#yield(db, location, vec![step2.result(db)]));
+        let suspend_block2 = builder2.build();
+
+        let body_region = Region::new(
+            db,
+            location,
+            IdVec::from(vec![done_block, suspend_block1, suspend_block2]),
+        );
+
+        // Create a dummy result value for handler_dispatch
+        let dummy_const = arith::Const::i32(db, location, 0);
+        let result_val = dummy_const.as_operation().result(db, 0);
+
+        // Create handler_dispatch with 3 blocks
+        let dispatch_op =
+            cont::handler_dispatch(db, location, result_val, step_ty, body_region).as_operation();
+
+        // Apply pattern
+        let pattern = LowerHandlerDispatchPattern;
+        let ctx = RewriteContext::new();
+        let adaptor = OpAdaptor::new(dispatch_op, dispatch_op.operands(db).clone(), vec![], &ctx);
+        let result = pattern.match_and_rewrite(db, &dispatch_op, &adaptor);
+
+        // Extract suspend region block count
+        match result {
+            RewriteResult::Expand(ops) if ops.len() == 2 => {
+                let if_op = &ops[1];
+                let regions = if_op.regions(db);
+                if !regions.is_empty() {
+                    regions[0].blocks(db).len()
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    #[salsa_test]
+    fn test_handler_dispatch_collects_all_suspend_blocks(db: &salsa::DatabaseImpl) {
+        let count = handler_dispatch_suspend_block_count(db);
+        assert_eq!(count, 2, "Suspend region should have all 2 suspend blocks");
+    }
+
+    // ========================================================================
+    // Test: is_step_value with scf.if type verification
+    // ========================================================================
+
+    /// Test helper: creates scf.if returning Step type and checks is_step_value.
+    #[salsa::tracked]
+    fn is_step_value_for_step_if(db: &dyn salsa::Database) -> bool {
+        let location = test_location(db);
+        let step_ty = trampoline::Step::new(db).as_type();
+
+        // Create scf.if returning Step type
+        let cond_op = arith::Const::i32(db, location, 1);
+        let cond_val = cond_op.as_operation().result(db, 0);
+
+        let mut then_builder = BlockBuilder::new(db, location);
+        let zero = then_builder.op(arith::Const::i32(db, location, 0));
+        let step = then_builder.op(trampoline::step_done(
+            db,
+            location,
+            zero.result(db),
+            step_ty,
+        ));
+        then_builder.op(scf::r#yield(db, location, vec![step.result(db)]));
+        let then_region = Region::new(db, location, IdVec::from(vec![then_builder.build()]));
+
+        let mut else_builder = BlockBuilder::new(db, location);
+        let one = else_builder.op(arith::Const::i32(db, location, 1));
+        let step2 = else_builder.op(trampoline::step_done(db, location, one.result(db), step_ty));
+        else_builder.op(scf::r#yield(db, location, vec![step2.result(db)]));
+        let else_region = Region::new(db, location, IdVec::from(vec![else_builder.build()]));
+
+        let if_op = scf::r#if(db, location, cond_val, step_ty, then_region, else_region);
+        let if_result = if_op.as_operation().result(db, 0);
+
+        is_step_value(db, if_result)
+    }
+
+    /// Test helper: creates scf.if returning i32 (non-Step) and checks is_step_value.
+    #[salsa::tracked]
+    fn is_step_value_for_i32_if(db: &dyn salsa::Database) -> bool {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create scf.if returning i32 (not Step)
+        let cond_op = arith::Const::i32(db, location, 1);
+        let cond_val = cond_op.as_operation().result(db, 0);
+
+        let mut then_builder = BlockBuilder::new(db, location);
+        let val1 = then_builder.op(arith::Const::i32(db, location, 42));
+        then_builder.op(scf::r#yield(db, location, vec![val1.result(db)]));
+        let then_region = Region::new(db, location, IdVec::from(vec![then_builder.build()]));
+
+        let mut else_builder = BlockBuilder::new(db, location);
+        let val2 = else_builder.op(arith::Const::i32(db, location, 0));
+        else_builder.op(scf::r#yield(db, location, vec![val2.result(db)]));
+        let else_region = Region::new(db, location, IdVec::from(vec![else_builder.build()]));
+
+        let if_op = scf::r#if(db, location, cond_val, i32_ty, then_region, else_region);
+        let if_result = if_op.as_operation().result(db, 0);
+
+        is_step_value(db, if_result)
+    }
+
+    #[salsa_test]
+    fn test_is_step_value_scf_if_with_step_type(db: &salsa::DatabaseImpl) {
+        assert!(
+            is_step_value_for_step_if(db),
+            "scf.if returning Step should be detected as Step value"
+        );
+    }
+
+    #[salsa_test]
+    fn test_is_step_value_scf_if_with_non_step_type(db: &salsa::DatabaseImpl) {
+        assert!(
+            !is_step_value_for_i32_if(db),
+            "scf.if returning i32 should NOT be detected as Step value"
+        );
+    }
+
+    // ========================================================================
+    // Test: Resume function generation (no global state)
+    // ========================================================================
+
+    #[test]
+    fn test_fresh_resume_name_generates_unique_names() {
+        let counter = Rc::new(RefCell::new(0u32));
+
+        let name1 = fresh_resume_name(&counter);
+        let name2 = fresh_resume_name(&counter);
+        let name3 = fresh_resume_name(&counter);
+
+        assert_eq!(name1, "__resume_0");
+        assert_eq!(name2, "__resume_1");
+        assert_eq!(name3, "__resume_2");
+        assert_eq!(*counter.borrow(), 3);
+    }
+
+    #[test]
+    fn test_resume_specs_isolation() {
+        // Each call should have independent state
+        let specs1: ResumeSpecs = Rc::new(RefCell::new(Vec::new()));
+        let specs2: ResumeSpecs = Rc::new(RefCell::new(Vec::new()));
+
+        specs1.borrow_mut().push(ResumeFuncSpec {
+            name: "test1".to_string(),
+        });
+        specs1.borrow_mut().push(ResumeFuncSpec {
+            name: "test2".to_string(),
+        });
+
+        assert_eq!(specs1.borrow().len(), 2);
+        assert_eq!(specs2.borrow().len(), 0, "specs2 should be independent");
+    }
+}

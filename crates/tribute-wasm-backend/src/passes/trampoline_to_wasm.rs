@@ -1218,3 +1218,44 @@ fn convert_trampoline_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> 
         ty
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================================================
+    // Test: yield_globals constants
+    // ========================================================================
+
+    #[test]
+    fn test_yield_globals_indices_are_sequential() {
+        // Verify indices are sequential starting from 0
+        assert_eq!(yield_globals::STATE_IDX, 0);
+        assert_eq!(yield_globals::TAG_IDX, 1);
+        assert_eq!(yield_globals::CONT_IDX, 2);
+        assert_eq!(yield_globals::OP_IDX, 3);
+    }
+
+    #[test]
+    fn test_yield_globals_indices_are_unique() {
+        let indices = [
+            yield_globals::STATE_IDX,
+            yield_globals::TAG_IDX,
+            yield_globals::CONT_IDX,
+            yield_globals::OP_IDX,
+        ];
+
+        // Check all indices are unique
+        for (i, &idx1) in indices.iter().enumerate() {
+            for (j, &idx2) in indices.iter().enumerate() {
+                if i != j {
+                    assert_ne!(idx1, idx2, "Indices {} and {} should be unique", i, j);
+                }
+            }
+        }
+    }
+}
