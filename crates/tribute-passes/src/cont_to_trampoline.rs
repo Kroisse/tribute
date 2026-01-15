@@ -1226,7 +1226,14 @@ mod tests {
         // Apply pattern
         let pattern = LowerHandlerDispatchPattern;
         let ctx = RewriteContext::new();
-        let adaptor = OpAdaptor::new(dispatch_op, dispatch_op.operands(db).clone(), vec![], &ctx);
+        let type_converter = TypeConverter::new();
+        let adaptor = OpAdaptor::new(
+            dispatch_op,
+            dispatch_op.operands(db).clone(),
+            vec![],
+            &ctx,
+            &type_converter,
+        );
         let result = pattern.match_and_rewrite(db, &dispatch_op, &adaptor);
 
         // Extract suspend region block count

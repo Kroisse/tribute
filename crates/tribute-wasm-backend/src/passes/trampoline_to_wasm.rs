@@ -1296,8 +1296,9 @@ mod tests {
         // Apply the pattern
         let pattern = LowerBuildContinuationPattern;
         let ctx = RewriteContext::new();
+        let type_converter = TypeConverter::new();
         let op = build_cont_op.as_operation();
-        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx);
+        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx, &type_converter);
         let result = pattern.match_and_rewrite(db, &op, &adaptor);
 
         // Extract the final operation (should be adt.struct_new)
@@ -1352,7 +1353,8 @@ mod tests {
         // Apply the pattern
         let pattern = LowerStateGetPattern;
         let ctx = RewriteContext::new();
-        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx);
+        let type_converter = TypeConverter::new();
+        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx, &type_converter);
         let result = pattern.match_and_rewrite(db, &op, &adaptor);
 
         // Extract field_idx from the resulting adt.struct_get
@@ -1400,8 +1402,9 @@ mod tests {
         // Apply the pattern
         let pattern = LowerSetYieldStatePattern;
         let ctx = RewriteContext::new();
+        let type_converter = TypeConverter::new();
         let op = set_yield_op.as_operation();
-        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx);
+        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx, &type_converter);
         let result = pattern.match_and_rewrite(db, &op, &adaptor);
 
         // Extract global indices from global_set operations
