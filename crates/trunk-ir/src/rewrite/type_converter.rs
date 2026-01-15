@@ -85,7 +85,7 @@ impl<F> MaterializeFn for F where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// let converter = TypeConverter::new()
 ///     .add_conversion(|db, ty| {
 ///         if is_high_level_type(db, ty) {

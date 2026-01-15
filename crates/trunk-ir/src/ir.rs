@@ -57,10 +57,12 @@ impl Symbol {
     /// This is useful for optimization: when you need to work with the symbol's text
     /// without allocating a String, use this method. For example:
     ///
-    /// ```ignore
+    /// ```
+    /// use trunk_ir::Symbol;
+    /// let symbol = Symbol::new("something");
     /// // Avoid: symbol.to_string() == "something"
     /// // Prefer:
-    /// symbol.with_str(|s| s == "something")
+    /// assert!(symbol.with_str(|s| s == "something"));
     /// ```
     pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
         let interner = INTERNER.read_recursive();
@@ -436,7 +438,7 @@ impl<'db> OperationBuilder<'db> {
 /// Builder for constructing Block instances.
 ///
 /// Supports fluent API for adding block arguments with attributes:
-/// ```ignore
+/// ```text
 /// BlockBuilder::new(db, location)
 ///     .arg(ty1).attr(BIND_NAME(), name_sym)  // arg with attribute
 ///     .arg(ty2)                               // arg without attributes
@@ -516,7 +518,7 @@ impl<'db> BlockBuilder<'db> {
     /// Must be called after `.arg()`. Panics if no argument is pending.
     ///
     /// # Example
-    /// ```ignore
+    /// ```text
     /// builder
     ///     .arg(ty).attr("bind_name", Symbol::new("x"))
     ///     .arg(ty).attr("flag", true)

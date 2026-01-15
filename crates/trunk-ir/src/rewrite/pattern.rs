@@ -24,7 +24,7 @@ use super::result::RewriteResult;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// use trunk_ir::rewrite::{OpAdaptor, RewritePattern, RewriteResult};
 ///
 /// struct RenamePattern;

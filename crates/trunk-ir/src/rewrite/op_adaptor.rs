@@ -21,7 +21,7 @@ use super::RewriteContext;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// fn match_and_rewrite<'db>(
 ///     &self,
 ///     db: &'db dyn Database,

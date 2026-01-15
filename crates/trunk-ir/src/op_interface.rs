@@ -63,7 +63,7 @@ impl PureOps {
     /// Register a pure operation (internal use by macro).
     ///
     /// Use the `register_pure_op!` macro instead:
-    /// ```ignore
+    /// ```text
     /// register_pure_op!(arith.add);
     /// ```
     #[doc(hidden)]
@@ -95,7 +95,7 @@ impl PureOps {
 /// Register a pure operation with simplified syntax.
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// // New syntax: just provide the operation type
 /// register_pure_op!(arith::Add);
 /// register_pure_op!(adt::StructNew);
@@ -106,7 +106,7 @@ impl PureOps {
 /// ```
 ///
 /// This expands to both the trait implementation and inventory registration:
-/// ```ignore
+/// ```text
 /// impl op_interface::Pure for dialect::arith::Add<'_> {}
 /// inventory::submit! {
 ///     op_interface::PureOps::register("arith", "add")
@@ -215,7 +215,7 @@ impl IsolatedFromAboveOps {
     /// Register an isolated operation (internal use by macro).
     ///
     /// Use the `register_isolated_op!` macro instead:
-    /// ```ignore
+    /// ```text
     /// register_isolated_op!(func::Func);
     /// ```
     #[doc(hidden)]
@@ -327,7 +327,7 @@ pub struct IsolationViolation<'db> {
 /// Register an isolated operation with simplified syntax.
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// // Provide the operation type directly
 /// register_isolated_op!(func::Func);
 ///
@@ -336,7 +336,7 @@ pub struct IsolationViolation<'db> {
 /// ```
 ///
 /// This expands to both the trait implementation and inventory registration:
-/// ```ignore
+/// ```text
 /// impl op_interface::IsolatedFromAbove for dialect::func::Func<'_> {}
 /// inventory::submit! {
 ///     op_interface::IsolatedFromAboveOps::register("func", "func")
