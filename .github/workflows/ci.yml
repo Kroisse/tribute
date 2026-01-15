@@ -66,5 +66,8 @@ jobs:
         with:
           cache: ${{ matrix.cache }}
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Run tests
-        run: cargo test --all --quiet
+        run: cargo nextest run --workspace

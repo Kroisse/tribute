@@ -22,11 +22,11 @@ if ! cargo fmt --all --check; then
 fi
 
 echo "Running tests..."
-# Limit test output and stop on first failure
-if ! cargo test --workspace --quiet; then
+# Use nextest for faster test execution
+if ! cargo nextest run --workspace; then
     echo ""
     echo "❌ Tests failed."
-    echo "   Run 'cargo test --workspace' to see detailed test output."
+    echo "   Run 'cargo nextest run --workspace' to see detailed test output."
     exit 1
 fi
 
