@@ -15,8 +15,8 @@ use tribute_ir::dialect::{tribute, tribute_rt};
 use crate::{CompilationError, CompilationResult};
 
 use super::super::{
-    FunctionEmitContext, ModuleInfo, attr_u32, emit_operands, emit_value, is_closure_struct_type,
-    is_step_type, resolve_callee, set_result_local, value_type,
+    FunctionEmitContext, ModuleInfo, attr_u32, emit_operands, emit_value, is_step_type,
+    resolve_callee, set_result_local, value_type,
 };
 
 /// Handle wasm.call operation
@@ -111,18 +111,17 @@ pub(crate) fn handle_call_indirect<'db>(
         let is_core_func = core::Func::from_type(db, ty).is_some();
         // core.ptr is used for function pointers in the IR, lowered to funcref in wasm
         let is_core_ptr = core::Ptr::from_type(db, ty).is_some();
-        // Check if this is a closure struct (adt.struct with name "_closure")
-        // Closure structs contain (funcref, anyref) and are used for call_indirect
-        let is_closure_struct = is_closure_struct_type(db, ty);
+        // Note: i32 (function table index) is NOT included here - it should use
+        // call_indirect, not call_ref. Closure calls go through the call_indirect path.
         debug!(
-            "call_indirect: is_funcref={}, is_anyref={}, is_core_func={}, is_core_ptr={}, is_closure_struct={}",
-            is_funcref, is_anyref, is_core_func, is_core_ptr, is_closure_struct
+            "call_indirect: is_funcref={}, is_anyref={}, is_core_func={}, is_core_ptr={}",
+            is_funcref, is_anyref, is_core_func, is_core_ptr
         );
-        is_funcref || is_anyref || is_core_func || is_core_ptr || is_closure_struct
+        is_funcref || is_anyref || is_core_func || is_core_ptr
     });
     debug!("call_indirect: is_ref_type={}", is_ref_type);
 
-    // Build parameter types (all operands except first which is funcref)
+    // Build parameter types (all operands except first which is funcref/table_idx)
     // Normalize IR types to wasm types - primitive IR types that might be boxed
     // (in polymorphic handlers) should use anyref.
     let anyref_ty = wasm::Anyref::new(db).as_type();
@@ -131,6 +130,7 @@ pub(crate) fn handle_call_indirect<'db>(
             || tribute_rt::is_nat(db, ty)
             || tribute_rt::is_bool(db, ty)
             || tribute_rt::is_float(db, ty)
+            || tribute_rt::Any::from_type(db, ty).is_some() // tribute_rt.any → wasm.anyref
             || tribute::is_type_var(db, ty)
             || core::Nil::from_type(db, ty).is_some()
         {
@@ -248,16 +248,16 @@ pub(crate) fn handle_call_indirect<'db>(
         // Emit the funcref (first operand)
         emit_value(db, first_operand, ctx, function)?;
 
-        // Cast funcref/anyref/closure struct to typed function reference if needed
-        // Closure struct (adt.struct with name "_closure") contains funcref in field 0.
-        // When we extract the funcref via struct_get, the IR type may still be adt.struct,
-        // but the actual wasm value is funcref. Cast to the concrete function type.
-        // Also, wasm.funcref needs to be cast since call_ref requires typed function reference.
+        // Cast funcref/anyref or generic func type to typed function reference if needed.
+        // wasm.funcref needs to be cast since call_ref requires typed function reference.
+        // When the IR type is anyref or core.func, we need to cast to the concrete
+        // function type before call_ref.
+        // Note: closure structs are NOT handled here anymore - they use i32 table index
+        // and go through the call_indirect path instead of call_ref.
         if let Some(ty) = first_operand_ty
             && (wasm::Funcref::from_type(db, ty).is_some()
                 || wasm::Anyref::from_type(db, ty).is_some()
-                || core::Func::from_type(db, ty).is_some()
-                || is_closure_struct_type(db, ty))
+                || core::Func::from_type(db, ty).is_some())
         {
             // Cast to (ref null func_type)
             function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
@@ -274,10 +274,17 @@ pub(crate) fn handle_call_indirect<'db>(
         // in the IR. The proper fix would be to resolve types earlier in the pipeline.
     } else {
         // Traditional call_indirect with i32 table index
+        // IR operand order: [table_idx, arg1, arg2, ...]
+        // WebAssembly stack order: [arg1, arg2, ..., table_idx]
         let table = attr_u32(op.attributes(db), Symbol::new("table")).unwrap_or(0);
 
-        // Emit all operands (arguments first, then table index)
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+        // Emit arguments first (operands[1..])
+        for operand in operands.iter().skip(1) {
+            emit_value(db, *operand, ctx, function)?;
+        }
+
+        // Emit the table index (operands[0])
+        emit_value(db, operands[0], ctx, function)?;
 
         function.instruction(&Instruction::CallIndirect {
             type_index: type_idx,

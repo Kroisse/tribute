@@ -40,9 +40,6 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     tracing::debug!("=== AFTER func_to_wasm ===\n{:?}", module);
     debug_func_params(db, &module, "after func_to_wasm");
 
-    let module = crate::passes::closure_to_wasm::lower(db, module);
-    debug_func_params(db, &module, "after closure_to_wasm");
-
     // Convert ALL adt ops to wasm (including those from trampoline_to_adt)
     let module = crate::passes::adt_to_wasm::lower(db, module);
     debug_func_params(db, &module, "after adt_to_wasm");

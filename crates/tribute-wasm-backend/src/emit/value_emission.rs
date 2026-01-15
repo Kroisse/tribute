@@ -10,7 +10,7 @@ use tribute_ir::dialect::tribute;
 use trunk_ir::{Attribute, BlockId, IdVec, Symbol, Type, Value, ValueDef};
 use wasm_encoder::{AbstractHeapType, HeapType, Instruction};
 
-use crate::{CompilationError, CompilationResult};
+use crate::CompilationResult;
 
 use super::helpers::{is_nil_type, value_type};
 
@@ -67,31 +67,27 @@ pub(super) fn emit_operands<'db>(
             if stale_op.dialect(db) == tribute::DIALECT_NAME()
                 && stale_op.name(db) == tribute::VAR()
             {
-                if let Some(Attribute::Symbol(var_name)) =
-                    stale_op.attributes(db).get(&Symbol::new("name"))
-                {
-                    tracing::error!(
-                        "emit_operands: stale SSA value: tribute.var '{}' index={} (var references should have been resolved)",
-                        var_name,
-                        value.index(db)
-                    );
-                } else {
-                    tracing::error!(
-                        "emit_operands: stale SSA value: tribute.var (no name) index={}",
-                        value.index(db)
-                    );
-                }
+                let var_name = stale_op
+                    .attributes(db)
+                    .get(&Symbol::new("name"))
+                    .and_then(|a| match a {
+                        Attribute::Symbol(s) => Some(s.with_str(|s| s.to_owned())),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "<unknown>".to_owned());
+                panic!(
+                    "emit_operands: stale SSA value: tribute.var '{}' index={} (var references should have been resolved)",
+                    var_name,
+                    value.index(db)
+                );
             } else {
-                tracing::error!(
+                panic!(
                     "emit_operands: stale SSA value: {}.{} index={}",
                     stale_op.dialect(db),
                     stale_op.name(db),
                     value.index(db)
                 );
             }
-            return Err(CompilationError::invalid_module(
-                "stale SSA value in wasm backend (missing local mapping)",
-            ));
         }
     }
     Ok(())
@@ -117,16 +113,15 @@ pub(super) fn emit_value<'db>(
         return Ok(());
     }
 
-    // If operand not found and not a block arg, this is an error
-    if let ValueDef::OpResult(stale_op) = value.def(db) {
-        tracing::error!(
-            "stale SSA value: {}.{} index={}",
-            stale_op.dialect(db),
-            stale_op.name(db),
-            value.index(db)
-        );
-    }
-    Err(CompilationError::invalid_module(
-        "stale SSA value in wasm backend (missing local mapping)",
-    ))
+    // If operand not found and not a block arg, this is an error.
+    // ValueDef only has two variants: BlockArg (handled above) and OpResult.
+    let ValueDef::OpResult(stale_op) = value.def(db) else {
+        unreachable!("ValueDef only has BlockArg and OpResult variants");
+    };
+    panic!(
+        "emit_value: stale SSA value: {}.{} index={}",
+        stale_op.dialect(db),
+        stale_op.name(db),
+        value.index(db)
+    )
 }

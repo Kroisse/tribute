@@ -7,26 +7,173 @@
 //! - `func.return` -> `wasm.return`
 //! - `func.tail_call` -> `wasm.return_call`
 //! - `func.unreachable` -> `wasm.unreachable`
-//! - `func.constant` -> `wasm.ref_func`
+//! - `func.constant` -> `wasm.i32_const` (function table index)
+//!
+//! For closures, this pass also:
+//! - Collects all functions referenced by `func.constant`
+//! - Creates a function table with those functions
+//! - Generates `wasm.table` and `wasm.elem` operations
 
-use trunk_ir::dialect::core::Module;
+use std::collections::HashMap;
+
+use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{func, wasm};
 use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
-use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation};
+use trunk_ir::{
+    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol,
+};
 
 use crate::type_converter::wasm_type_converter;
 
 /// Lower func dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    let applicator = PatternApplicator::new(wasm_type_converter())
+    // 1. Collect all functions referenced by func.constant operations
+    let func_refs = collect_func_constant_refs(db, &module);
+
+    if func_refs.is_empty() {
+        // No func.constant operations - just apply patterns without table generation
+        return PatternApplicator::new(wasm_type_converter())
+            .add_pattern(FuncFuncPattern)
+            .add_pattern(FuncCallPattern)
+            .add_pattern(FuncCallIndirectPattern)
+            .add_pattern(FuncReturnPattern)
+            .add_pattern(FuncTailCallPattern)
+            .add_pattern(FuncUnreachablePattern)
+            .add_pattern(FuncConstantPattern {
+                table_indices: HashMap::new(),
+            })
+            .apply(db, module)
+            .module;
+    }
+
+    // 2. Assign table indices (sorted for deterministic ordering)
+    let mut sorted_funcs: Vec<_> = func_refs.into_iter().collect();
+    sorted_funcs.sort_by(|a, b| a.with_str(|a_str| b.with_str(|b_str| a_str.cmp(b_str))));
+
+    let table_indices: HashMap<Symbol, u32> = sorted_funcs
+        .iter()
+        .enumerate()
+        .map(|(idx, sym)| (*sym, idx as u32))
+        .collect();
+
+    let table_size = sorted_funcs.len() as u32;
+
+    // 3. Apply patterns to transform operations
+    let result = PatternApplicator::new(wasm_type_converter())
         .add_pattern(FuncFuncPattern)
         .add_pattern(FuncCallPattern)
         .add_pattern(FuncCallIndirectPattern)
         .add_pattern(FuncReturnPattern)
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern);
-    applicator.apply(db, module).module
+        .add_pattern(FuncConstantPattern {
+            table_indices: table_indices.clone(),
+        })
+        .apply(db, module);
+
+    // 4. Add wasm.table and wasm.elem to the module
+    add_function_table(db, result.module, &sorted_funcs, table_size)
+}
+
+/// Collect all function symbols referenced by func.constant operations.
+fn collect_func_constant_refs<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<'db>,
+) -> Vec<Symbol> {
+    let mut funcs = Vec::new();
+    collect_from_region(db, &module.body(db), &mut funcs);
+
+    // Deduplicate while preserving order
+    let mut seen = std::collections::HashSet::new();
+    funcs.retain(|sym| seen.insert(*sym));
+
+    funcs
+}
+
+fn collect_from_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    funcs: &mut Vec<Symbol>,
+) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Check for func.constant
+            if let Ok(const_op) = func::Constant::from_operation(db, *op) {
+                funcs.push(const_op.func_ref(db));
+            }
+
+            // Recurse into nested regions
+            for nested in op.regions(db).iter() {
+                collect_from_region(db, nested, funcs);
+            }
+        }
+    }
+}
+
+/// Add wasm.table and wasm.elem operations to the module for the function table.
+fn add_function_table<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+    funcs: &[Symbol],
+    table_size: u32,
+) -> Module<'db> {
+    let location = module.location(db);
+
+    // Create wasm.table for closure functions
+    let table_op = wasm::table(
+        db,
+        location,
+        Symbol::new("funcref"),
+        table_size,
+        Some(table_size),
+    );
+
+    // Create wasm.ref_func operations for each function in the element segment
+    let func_refs: IdVec<Operation<'db>> = funcs
+        .iter()
+        .map(|func_sym| {
+            let funcref_ty = wasm::Funcref::new(db).as_type();
+            wasm::ref_func(db, location, funcref_ty, *func_sym).as_operation()
+        })
+        .collect();
+
+    // Create the funcs region for wasm.elem
+    let funcs_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), func_refs);
+    let funcs_region = Region::new(db, location, IdVec::from(vec![funcs_block]));
+
+    // Create wasm.elem with table 0 and offset 0
+    let elem_op = wasm::elem(db, location, Some(0), Some(0), funcs_region);
+
+    // Prepend table and elem operations to the module body.
+    // Note: Empty modules are considered malformed IR - we fail fast here.
+    let body = module.body(db);
+    assert!(
+        !body.blocks(db).is_empty(),
+        "module body must have at least one block"
+    );
+    let first_block = &body.blocks(db)[0];
+    let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
+    new_ops.push(table_op.as_operation());
+    new_ops.push(elem_op.as_operation());
+    new_ops.extend(first_block.operations(db).iter().copied());
+
+    let new_block = Block::new(
+        db,
+        first_block.id(db),
+        first_block.location(db),
+        first_block.args(db).clone(),
+        new_ops,
+    );
+
+    // Reconstruct module with other blocks unchanged
+    let mut new_blocks: IdVec<Block<'db>> = IdVec::new();
+    new_blocks.push(new_block);
+    for block in body.blocks(db).iter().skip(1) {
+        new_blocks.push(*block);
+    }
+
+    let new_body = Region::new(db, body.location(db), new_blocks);
+    Module::create(db, location, module.sym_name(db), new_body)
 }
 
 /// Pattern for `func.func` -> `wasm.func`
@@ -98,7 +245,7 @@ impl<'db> RewritePattern<'db> for FuncCallPattern {
 /// Pattern for `func.call_indirect` -> `wasm.call_indirect`
 ///
 /// Transforms indirect function calls for closures.
-/// The callee (funcref) is the first operand, followed by arguments.
+/// The callee (i32 table index) is the first operand, followed by arguments.
 struct FuncCallIndirectPattern;
 
 impl<'db> RewritePattern<'db> for FuncCallIndirectPattern {
@@ -194,11 +341,13 @@ impl<'db> RewritePattern<'db> for FuncUnreachablePattern {
     }
 }
 
-/// Pattern for `func.constant` -> `wasm.ref_func`
+/// Pattern for `func.constant` -> `wasm.i32_const` (i32 table index)
 ///
-/// Transforms function constant references to WASM function references.
-/// Used for closures where lifted functions need to be stored as first-class values.
-struct FuncConstantPattern;
+/// Transforms function constant references to i32 table indices.
+/// Used for closures where lifted functions are stored via function table.
+struct FuncConstantPattern {
+    table_indices: HashMap<Symbol, u32>,
+}
 
 impl<'db> RewritePattern<'db> for FuncConstantPattern {
     fn match_and_rewrite(
@@ -213,21 +362,27 @@ impl<'db> RewritePattern<'db> for FuncConstantPattern {
 
         let func_ref = const_op.func_ref(db);
 
-        // Transform to wasm.ref_func with the same function reference
-        // The result type becomes wasm.funcref
-        // NOTE: Use .results() not .result() since .result() appends while
-        // .results() replaces the result list (important since .modify() clones
-        // the original operation's results).
-        let funcref_ty = wasm::Funcref::new(db).as_type();
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("ref_func")
-            .attr("func_name", Attribute::Symbol(func_ref))
-            .results(IdVec::from(vec![funcref_ty]))
-            .build();
+        // Look up the table index for this function
+        let Some(&table_idx) = self.table_indices.get(&func_ref) else {
+            // If not in table_indices, this is a func.constant not used in closures
+            // (e.g., in element segment generation). Keep as-is or convert to ref_func.
+            // For element segments we still need ref_func.
+            let funcref_ty = wasm::Funcref::new(db).as_type();
+            let new_op = op
+                .modify(db)
+                .dialect_str("wasm")
+                .name_str("ref_func")
+                .attr("func_name", Attribute::Symbol(func_ref))
+                .results(IdVec::from(vec![funcref_ty]))
+                .build();
+            return RewriteResult::Replace(new_op);
+        };
 
-        RewriteResult::Replace(new_op)
+        // Transform to wasm.i32_const with table index
+        let i32_ty = core::I32::new(db).as_type();
+        let new_op = wasm::i32_const(db, op.location(db), i32_ty, table_idx as i32);
+
+        RewriteResult::Replace(new_op.as_operation())
     }
 }
 
@@ -397,8 +552,23 @@ mod tests {
         let module = make_func_constant_module(db);
         let op_names = lower_and_check_names(db, module);
 
-        // func.constant should become wasm.ref_func
-        assert!(op_names.iter().any(|n| n == "wasm.ref_func"));
-        assert!(!op_names.iter().any(|n| n == "func.constant"));
+        // func.constant should become wasm.i32_const (table index)
+        // wasm.table and wasm.elem should be added for function table
+        assert!(
+            op_names.iter().any(|n| n == "wasm.table"),
+            "expected wasm.table"
+        );
+        assert!(
+            op_names.iter().any(|n| n == "wasm.elem"),
+            "expected wasm.elem"
+        );
+        assert!(
+            op_names.iter().any(|n| n == "wasm.i32_const"),
+            "expected wasm.i32_const"
+        );
+        assert!(
+            !op_names.iter().any(|n| n == "func.constant"),
+            "func.constant should be lowered"
+        );
     }
 }
