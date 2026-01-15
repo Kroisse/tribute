@@ -165,7 +165,7 @@ impl<'db> CstLoweringCtx<'db> {
     /// - `None` -> fresh effect row variable (implicit polymorphism)
     /// - `Some` with empty `{}` -> empty effect row (pure)
     /// - `Some` with abilities -> concrete effect row
-    fn resolve_ability_row(&mut self, node: Option<Node>) -> Option<Type<'db>> {
+    pub fn resolve_ability_row(&mut self, node: Option<Node>) -> Option<Type<'db>> {
         let Some(ability_row) = node else {
             // No ability annotation -> implicit effect polymorphism
             return Some(self.fresh_effect_row_type());

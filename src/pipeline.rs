@@ -648,29 +648,9 @@ pub fn compile_with_diagnostics<'db>(
     source: SourceCst,
 ) -> CompilationResult<'db> {
     // Run the full compilation pipeline (which checks for unresolved references)
+    // Type checking is performed inside the tracked `compile` function,
+    // so diagnostics are properly accumulated via Salsa.
     let module = compile(db, source);
-
-    // Re-run type checking to capture the solver for the result
-    // (compile already checked types, but we need the solver for diagnostics)
-    let parsed_module = parse_and_lower(db, source);
-    let resolved_module = stage_resolve(db, parsed_module);
-    let mut checker = TypeChecker::new(db);
-    checker.check_module(&resolved_module);
-
-    let solver = match checker.solve() {
-        Ok(solver) => solver,
-        Err(err) => {
-            // Emit type error diagnostic via accumulator
-            Diagnostic {
-                message: format!("Type error: {err}"),
-                span: Span::new(0, 0), // TODO: Extract span from error
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::TypeChecking,
-            }
-            .accumulate(db);
-            TypeSolver::new(db)
-        }
-    };
 
     // Collect all accumulated diagnostics from the compilation
     let diagnostics = compile::accumulated::<Diagnostic>(db, source)
@@ -680,7 +660,7 @@ pub fn compile_with_diagnostics<'db>(
 
     CompilationResult {
         module,
-        solver,
+        solver: TypeSolver::new(db),
         diagnostics,
     }
 }

@@ -200,7 +200,13 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
         .collect();
     let param_names_clone = param_names.clone();
 
-    let effect_type = ctx.fresh_effect_row_type();
+    // Resolve effect annotation: ->{Ability} or implicit polymorphism
+    // abilities are inside return_type_annotation node (e.g., "->{State(Int)} Int")
+    let return_type_node = func_node.child_by_field_name("return_type");
+    let abilities_node = return_type_node.and_then(|rt| rt.child_by_field_name("abilities"));
+    let effect_type = ctx
+        .resolve_ability_row(abilities_node)
+        .unwrap_or_else(|| ctx.fresh_effect_row_type());
     ctx.scoped(|ctx| {
         Some(func::Func::build_with_named_params(
             ctx.db,
@@ -288,7 +294,13 @@ fn lower_extern_function<'db>(
     // Resolve return type or create fresh type var
     let result = return_type.unwrap_or_else(|| ctx.fresh_type_var());
 
-    let effect_type = ctx.fresh_effect_row_type();
+    // Resolve effect annotation: ->{Ability} or implicit polymorphism
+    // abilities are inside return_type_annotation node (e.g., "->{Ability} Int")
+    let return_type_node = node.child_by_field_name("return_type");
+    let abilities_node = return_type_node.and_then(|rt| rt.child_by_field_name("abilities"));
+    let effect_type = ctx
+        .resolve_ability_row(abilities_node)
+        .unwrap_or_else(|| ctx.fresh_effect_row_type());
 
     // Zip parameter types with names for bind_name attributes on block args
     let named_params: Vec<_> = param_types
@@ -999,11 +1011,7 @@ pub fn lower_mod_body<'db>(
 ) {
     let mut cursor = node.walk();
 
-    #[cfg(test)]
-    eprintln!("mod_body node kind: {}, children:", node.kind());
     for child in node.named_children(&mut cursor) {
-        #[cfg(test)]
-        eprintln!("  child kind: {}", child.kind());
         if is_comment(child.kind()) {
             continue;
         }
