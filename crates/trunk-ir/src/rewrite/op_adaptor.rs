@@ -82,6 +82,12 @@ impl<'db, 'ctx> OpAdaptor<'db, 'ctx> {
     }
 
     /// Get the original operation.
+    ///
+    /// Use this for dialect/name matching or accessing attributes.
+    ///
+    /// **Warning**: Do NOT use `op.results(db)` to get result types.
+    /// Use [`result_type()`](Self::result_type) or [`result_types()`](Self::result_types)
+    /// instead, which apply automatic type conversion.
     pub fn operation(&self) -> Operation<'db> {
         self.op
     }
