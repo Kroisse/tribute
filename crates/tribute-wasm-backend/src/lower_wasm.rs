@@ -30,21 +30,30 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = crate::passes::arith_to_wasm::lower(db, module);
     tracing::debug!("=== AFTER arith_to_wasm ===\n{:?}", module);
     let module = crate::passes::scf_to_wasm::lower(db, module);
+
+    // Convert trampoline types/ops BEFORE func_to_wasm so function signatures
+    // have ADT types (not trampoline.Step) when converted to wasm.func
+    let module = crate::passes::trampoline_to_wasm::lower(db, module);
+    tracing::debug!("=== AFTER trampoline_to_wasm ===\n{:?}", module);
+
     let module = crate::passes::func_to_wasm::lower(db, module);
     tracing::debug!("=== AFTER func_to_wasm ===\n{:?}", module);
-    let module = crate::passes::closure_to_wasm::lower(db, module);
+    debug_func_params(db, &module, "after func_to_wasm");
 
-    // Convert trampoline global state ops to wasm ops
-    let module = crate::passes::trampoline_to_wasm::lower(db, module);
+    let module = crate::passes::closure_to_wasm::lower(db, module);
+    debug_func_params(db, &module, "after closure_to_wasm");
 
     // Convert ALL adt ops to wasm (including those from trampoline_to_adt)
     let module = crate::passes::adt_to_wasm::lower(db, module);
+    debug_func_params(db, &module, "after adt_to_wasm");
 
     // Lower tribute_rt operations (box_int, unbox_int) to wasm operations
     let module = crate::passes::tribute_rt_to_wasm::lower(db, module);
+    debug_func_params(db, &module, "after tribute_rt_to_wasm");
 
     // Concretize type variables in wasm operations (resolve tribute.type_var)
     let module = crate::passes::wasm_type_concrete::lower(db, module);
+    debug_func_params(db, &module, "after wasm_type_concrete");
 
     // Const analysis and lowering (string/bytes constants to data segments)
     let const_analysis = crate::passes::const_to_wasm::analyze_consts(db, module);
@@ -82,6 +91,51 @@ fn check_all_wasm_dialect<'db>(db: &'db dyn salsa::Database, module: &Module<'db
             // Check wasm.func operations and their bodies
             if dialect == wasm::DIALECT_NAME() && name == wasm::FUNC() {
                 check_function_body(db, op);
+            }
+        }
+    }
+}
+
+/// Debug helper to trace function parameter types through the pipeline.
+fn debug_func_params<'db>(db: &'db dyn salsa::Database, module: &Module<'db>, phase: &str) {
+    let body = module.body(db);
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Check for func.func or wasm.func operations
+            if let Ok(func_op) = trunk_ir::dialect::func::Func::from_operation(db, *op) {
+                let fn_ty = func_op.r#type(db);
+                if let Some(core_fn) = core::Func::from_type(db, fn_ty) {
+                    let params: Vec<_> = core_fn
+                        .params(db)
+                        .iter()
+                        .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                        .collect();
+                    tracing::debug!(
+                        "[{}] func.func {}: params={:?}, result={}.{}",
+                        phase,
+                        func_op.sym_name(db),
+                        params,
+                        core_fn.result(db).dialect(db),
+                        core_fn.result(db).name(db)
+                    );
+                }
+            } else if let Ok(wasm_func) = wasm::Func::from_operation(db, *op) {
+                let fn_ty = wasm_func.r#type(db);
+                if let Some(core_fn) = core::Func::from_type(db, fn_ty) {
+                    let params: Vec<_> = core_fn
+                        .params(db)
+                        .iter()
+                        .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                        .collect();
+                    tracing::debug!(
+                        "[{}] wasm.func {}: params={:?}, result={}.{}",
+                        phase,
+                        wasm_func.sym_name(db),
+                        params,
+                        core_fn.result(db).dialect(db),
+                        core_fn.result(db).name(db)
+                    );
+                }
             }
         }
     }

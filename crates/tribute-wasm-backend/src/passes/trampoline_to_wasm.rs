@@ -22,15 +22,16 @@
 //!
 //! This pass uses TypeConverter to consistently convert trampoline types to ADT types.
 
-use tribute_ir::dialect::{adt, tribute_rt};
+use tribute_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
+use trunk_ir::dialect::func::{self, Func};
 use trunk_ir::dialect::trampoline::{self, STEP_TAG_DONE, STEP_TAG_SHIFT};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{
     MaterializeResult, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{
-    Attribute, DialectOp, DialectType, Location, Operation, Symbol, Type, Value, ValueDef,
+    Attribute, DialectOp, DialectType, IdVec, Location, Operation, Symbol, Type, Value, ValueDef,
 };
 
 /// Global variable indices for yield state
@@ -44,6 +45,10 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
     let type_converter = create_type_converter();
 
     let applicator = PatternApplicator::new(type_converter)
+        .add_pattern(ConvertFuncTypePattern)
+        .add_pattern(ConvertCallTypePattern)
+        .add_pattern(ConvertCallIndirectTypePattern)
+        .add_pattern(ConvertWasmIfTypePattern)
         .add_pattern(LowerBuildContinuationPattern)
         .add_pattern(LowerStepDonePattern)
         .add_pattern(LowerStepShiftPattern)
@@ -67,17 +72,21 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 // ============================================================================
 
 /// Get the canonical Step ADT type.
-/// Layout: (tag: i32, value: any, prompt: i32, op_idx: i32)
+/// Layout: (tag: i32, value: anyref, prompt: i32, op_idx: i32)
+///
+/// IMPORTANT: Must use wasm::Anyref to match step_marker_type in gc_types.rs.
+/// Using tribute_rt::Any would create a different type identity, causing
+/// type_idx_by_type lookup failures.
 fn step_adt_type(db: &dyn salsa::Database) -> Type<'_> {
     let i32_ty = core::I32::new(db).as_type();
-    let any_ty = tribute_rt::Any::new(db).as_type();
+    let anyref_ty = wasm::Anyref::new(db).as_type();
 
     adt::struct_type(
         db,
         "_Step",
         vec![
             (Symbol::new("tag"), i32_ty),
-            (Symbol::new("value"), any_ty),
+            (Symbol::new("value"), anyref_ty),
             (Symbol::new("prompt"), i32_ty),
             (Symbol::new("op_idx"), i32_ty),
         ],
@@ -85,35 +94,39 @@ fn step_adt_type(db: &dyn salsa::Database) -> Type<'_> {
 }
 
 /// Get the canonical Continuation ADT type.
-/// Layout: (resume_fn: funcref, state: any, tag: i32, shift_value: any)
+/// Layout: (resume_fn: funcref, state: anyref, tag: i32, shift_value: anyref)
+///
+/// Uses wasm::Anyref for consistency with step_adt_type.
 fn continuation_adt_type(db: &dyn salsa::Database) -> Type<'_> {
     let i32_ty = core::I32::new(db).as_type();
     let funcref_ty = wasm::Funcref::new(db).as_type();
-    let any_ty = tribute_rt::Any::new(db).as_type();
+    let anyref_ty = wasm::Anyref::new(db).as_type();
 
     adt::struct_type(
         db,
         "_Continuation",
         vec![
             (Symbol::new("resume_fn"), funcref_ty),
-            (Symbol::new("state"), any_ty),
+            (Symbol::new("state"), anyref_ty),
             (Symbol::new("tag"), i32_ty),
-            (Symbol::new("shift_value"), any_ty),
+            (Symbol::new("shift_value"), anyref_ty),
         ],
     )
 }
 
 /// Get the canonical ResumeWrapper ADT type.
-/// Layout: (state: any, resume_value: any)
+/// Layout: (state: anyref, resume_value: anyref)
+///
+/// Uses wasm::Anyref for consistency with step_adt_type.
 fn resume_wrapper_adt_type(db: &dyn salsa::Database) -> Type<'_> {
-    let any_ty = tribute_rt::Any::new(db).as_type();
+    let anyref_ty = wasm::Anyref::new(db).as_type();
 
     adt::struct_type(
         db,
         "_ResumeWrapper",
         vec![
-            (Symbol::new("state"), any_ty),
-            (Symbol::new("resume_value"), any_ty),
+            (Symbol::new("state"), anyref_ty),
+            (Symbol::new("resume_value"), anyref_ty),
         ],
     )
 }
@@ -190,28 +203,28 @@ fn resume_wrapper_field_index(field_name: Symbol) -> u32 {
     })
 }
 
-/// Cast a value to `tribute_rt::Any` type if needed.
+/// Cast a value to `wasm::Anyref` type if needed.
 fn cast_to_any<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     value: Value<'db>,
     ops: &mut Vec<Operation<'db>>,
 ) -> Value<'db> {
-    let any_ty = tribute_rt::Any::new(db).as_type();
-    let cast_op = adt::ref_cast(db, location, value, any_ty, any_ty);
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+    let cast_op = adt::ref_cast(db, location, value, anyref_ty, anyref_ty);
     let cast_val = cast_op.as_operation().result(db, 0);
     ops.push(cast_op.as_operation());
     cast_val
 }
 
-/// Create a null reference of `tribute_rt::Any` type.
+/// Create a null reference of `wasm::Anyref` type.
 fn null_any<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     ops: &mut Vec<Operation<'db>>,
 ) -> Value<'db> {
-    let any_ty = tribute_rt::Any::new(db).as_type();
-    let null_op = adt::ref_null(db, location, any_ty, any_ty);
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+    let null_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
     let null_val = null_op.as_operation().result(db, 0);
     ops.push(null_op.as_operation());
     null_val
@@ -402,7 +415,7 @@ impl<'db> RewritePattern<'db> for LowerStepGetPattern {
 
         let location = op.location(db);
         let step_type = step_adt_type(db);
-        let any_ty = tribute_rt::Any::new(db).as_type();
+        let any_ty = wasm::Anyref::new(db).as_type();
 
         let field_name = step_get.field(db);
         let field_idx = step_field_index(field_name);
@@ -473,7 +486,7 @@ impl<'db> RewritePattern<'db> for LowerContinuationGetPattern {
 
         let location = op.location(db);
         let cont_type = continuation_adt_type(db);
-        let any_ty = tribute_rt::Any::new(db).as_type();
+        let any_ty = wasm::Anyref::new(db).as_type();
 
         let field_name = cont_get.field(db);
         let field_idx = continuation_field_index(field_name);
@@ -628,7 +641,7 @@ impl<'db> RewritePattern<'db> for LowerResumeWrapperGetPattern {
 
         let location = op.location(db);
         let wrapper_type = resume_wrapper_adt_type(db);
-        let any_ty = tribute_rt::Any::new(db).as_type();
+        let any_ty = wasm::Anyref::new(db).as_type();
 
         let field_name = wrapper_get.field(db);
         let field_idx = resume_wrapper_field_index(field_name);
@@ -682,7 +695,7 @@ impl<'db> RewritePattern<'db> for LowerStateGetPattern {
         }
 
         let location = op.location(db);
-        let any_ty = tribute_rt::Any::new(db).as_type();
+        let any_ty = wasm::Anyref::new(db).as_type();
 
         let field_idx = op
             .attributes(db)
@@ -937,5 +950,256 @@ impl<'db> RewritePattern<'db> for LowerCheckYieldPattern {
         let get_yield = wasm::global_get(db, location, i32_ty, YIELD_STATE_IDX);
 
         RewriteResult::Replace(get_yield.as_operation())
+    }
+}
+
+// ============================================================================
+// Pattern: Convert function type with trampoline.Step return type
+// ============================================================================
+
+/// Convert function signatures that return trampoline.Step to return _Step ADT.
+///
+/// This pattern matches func.func operations and updates their type attribute
+/// when the return type is trampoline.Step.
+struct ConvertFuncTypePattern;
+
+impl<'db> RewritePattern<'db> for ConvertFuncTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(func) = Func::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let func_ty = func.r#type(db);
+        let Some(fn_ty) = core::Func::from_type(db, func_ty) else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Convert parameter types
+        let mut params_changed = false;
+        let new_params: Vec<Type<'db>> = fn_ty
+            .params(db)
+            .iter()
+            .map(|&ty| {
+                if trampoline::Step::from_type(db, ty).is_some() {
+                    params_changed = true;
+                    step_adt_type(db)
+                } else if trampoline::Continuation::from_type(db, ty).is_some() {
+                    params_changed = true;
+                    continuation_adt_type(db)
+                } else if trampoline::ResumeWrapper::from_type(db, ty).is_some() {
+                    params_changed = true;
+                    resume_wrapper_adt_type(db)
+                } else {
+                    ty
+                }
+            })
+            .collect();
+
+        // Convert result type
+        let result_ty = fn_ty.result(db);
+        let (new_result, result_changed) = if trampoline::Step::from_type(db, result_ty).is_some() {
+            (step_adt_type(db), true)
+        } else if trampoline::Continuation::from_type(db, result_ty).is_some() {
+            (continuation_adt_type(db), true)
+        } else if trampoline::ResumeWrapper::from_type(db, result_ty).is_some() {
+            (resume_wrapper_adt_type(db), true)
+        } else {
+            (result_ty, false)
+        };
+
+        if !params_changed && !result_changed {
+            return RewriteResult::Unchanged;
+        }
+
+        tracing::debug!(
+            "ConvertFuncTypePattern: converting func {} signature (params_changed={}, result_changed={}, orig_params={:?}, new_params={:?})",
+            func.sym_name(db),
+            params_changed,
+            result_changed,
+            fn_ty
+                .params(db)
+                .iter()
+                .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                .collect::<Vec<_>>(),
+            new_params
+                .iter()
+                .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                .collect::<Vec<_>>()
+        );
+
+        // Build new function type
+        let new_fn_ty = core::Func::with_effect(
+            db,
+            new_params.into_iter().collect(),
+            new_result,
+            fn_ty.effect(db),
+        );
+
+        tracing::debug!(
+            "ConvertFuncTypePattern: new func type has result={}.{}, params={:?}",
+            new_fn_ty.result(db).dialect(db),
+            new_fn_ty.result(db).name(db),
+            new_fn_ty
+                .params(db)
+                .iter()
+                .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                .collect::<Vec<_>>()
+        );
+
+        // Rebuild function with new type
+        let new_op = op
+            .modify(db)
+            .attr(Symbol::new("type"), Attribute::Type(new_fn_ty.as_type()))
+            .build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Convert func.call result types from trampoline types to ADT types.
+struct ConvertCallTypePattern;
+
+impl<'db> RewritePattern<'db> for ConvertCallTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(_) = func::Call::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let results = op.results(db);
+        if results.is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        let result_ty = results[0];
+        let new_result_ty = convert_trampoline_type(db, result_ty);
+
+        if new_result_ty == result_ty {
+            return RewriteResult::Unchanged;
+        }
+
+        tracing::debug!(
+            "ConvertCallTypePattern: converting result type from {}.{} to {}.{}",
+            result_ty.dialect(db),
+            result_ty.name(db),
+            new_result_ty.dialect(db),
+            new_result_ty.name(db)
+        );
+
+        let new_op = op
+            .modify(db)
+            .results(IdVec::from(vec![new_result_ty]))
+            .build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Convert func.call_indirect result types from trampoline types to ADT types.
+struct ConvertCallIndirectTypePattern;
+
+impl<'db> RewritePattern<'db> for ConvertCallIndirectTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(_) = func::CallIndirect::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let results = op.results(db);
+        if results.is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        let result_ty = results[0];
+        let new_result_ty = convert_trampoline_type(db, result_ty);
+
+        if new_result_ty == result_ty {
+            return RewriteResult::Unchanged;
+        }
+
+        tracing::debug!(
+            "ConvertCallIndirectTypePattern: converting result type from {}.{} to {}.{}",
+            result_ty.dialect(db),
+            result_ty.name(db),
+            new_result_ty.dialect(db),
+            new_result_ty.name(db)
+        );
+
+        let new_op = op
+            .modify(db)
+            .results(IdVec::from(vec![new_result_ty]))
+            .build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Convert wasm.if result types from trampoline types to ADT types.
+/// Note: scf.if is converted to wasm.if by scf_to_wasm before this pass runs.
+struct ConvertWasmIfTypePattern;
+
+impl<'db> RewritePattern<'db> for ConvertWasmIfTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(_) = wasm::If::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let results = op.results(db);
+        if results.is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        let result_ty = results[0];
+        let new_result_ty = convert_trampoline_type(db, result_ty);
+
+        if new_result_ty == result_ty {
+            return RewriteResult::Unchanged;
+        }
+
+        tracing::debug!(
+            "ConvertWasmIfTypePattern: converting result type from {}.{} to {}.{}",
+            result_ty.dialect(db),
+            result_ty.name(db),
+            new_result_ty.dialect(db),
+            new_result_ty.name(db)
+        );
+
+        let new_op = op
+            .modify(db)
+            .results(IdVec::from(vec![new_result_ty]))
+            .build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Convert a trampoline type to its corresponding ADT type.
+fn convert_trampoline_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
+    if trampoline::Step::from_type(db, ty).is_some() {
+        step_adt_type(db)
+    } else if trampoline::Continuation::from_type(db, ty).is_some() {
+        continuation_adt_type(db)
+    } else if trampoline::ResumeWrapper::from_type(db, ty).is_some() {
+        resume_wrapper_adt_type(db)
+    } else {
+        ty
     }
 }

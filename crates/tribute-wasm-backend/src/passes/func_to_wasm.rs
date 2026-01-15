@@ -47,6 +47,24 @@ impl<'db> RewritePattern<'db> for FuncFuncPattern {
         // PatternApplicator will recursively process the body region
         let new_op = op.modify(db).dialect_str("wasm").name_str("func").build();
 
+        // Debug: verify type attribute is preserved
+        if let Some(Attribute::Type(ty)) = new_op.attributes(db).get(&trunk_ir::Symbol::new("type"))
+        {
+            if let Some(fn_ty) = trunk_ir::dialect::core::Func::from_type(db, *ty) {
+                tracing::debug!(
+                    "FuncFuncPattern: {} -> wasm.func with params={:?}, result={}.{}",
+                    _func_op.sym_name(db),
+                    fn_ty
+                        .params(db)
+                        .iter()
+                        .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                        .collect::<Vec<_>>(),
+                    fn_ty.result(db).dialect(db),
+                    fn_ty.result(db).name(db)
+                );
+            }
+        }
+
         RewriteResult::Replace(new_op)
     }
 }

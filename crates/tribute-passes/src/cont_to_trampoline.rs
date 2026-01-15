@@ -13,6 +13,8 @@
 //! This pass is backend-agnostic and should run after `tribute_to_cont`/`handler_lower`
 //! and before `trampoline_to_adt`.
 
+use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::{LazyLock, Mutex};
 
 use tribute_ir::dialect::adt;
@@ -24,7 +26,8 @@ use trunk_ir::rewrite::{
     OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{
-    Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol, Type, Value,
+    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol, Type,
+    Value,
 };
 
 // ============================================================================
@@ -40,9 +43,24 @@ pub fn lower_cont_to_trampoline<'db>(
     RESUME_FUNCTIONS.lock().unwrap().clear();
     *RESUME_COUNTER.lock().unwrap() = 0;
 
-    let converter = TypeConverter::new();
+    // Step 1: Identify effectful functions (before transformation)
+    let effectful_funcs = identify_effectful_functions(db, &module);
 
-    let applicator = PatternApplicator::new(converter)
+    // Step 2: Update function signatures, call result types, and scf.if types
+    let applicator = PatternApplicator::new(TypeConverter::new())
+        .add_pattern(UpdateFuncTypePattern {
+            effectful_funcs: effectful_funcs.clone(),
+        })
+        .add_pattern(UpdateFuncCallResultTypePattern {
+            effectful_funcs: effectful_funcs.clone(),
+        })
+        .add_pattern(UpdateScfIfTypePattern {
+            effectful_funcs: effectful_funcs.clone(),
+        });
+    let result = applicator.apply(db, module);
+
+    // Step 3: Transform cont.* operations to trampoline.* operations
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(LowerShiftPattern)
         .add_pattern(LowerResumePattern)
         .add_pattern(LowerGetContinuationPattern)
@@ -51,16 +69,25 @@ pub fn lower_cont_to_trampoline<'db>(
         .add_pattern(LowerPushPromptPattern)
         .add_pattern(LowerHandlerDispatchPattern);
 
-    let result = applicator.apply(db, module);
+    let result = applicator.apply(db, result.module);
+
+    // Step 4: Wrap returns in effectful functions with step_done
+    let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(
+        WrapReturnsInEffectfulFuncsPattern {
+            effectful_funcs: Rc::clone(&effectful_funcs),
+        },
+    );
+    let result = applicator.apply(db, result.module);
+    let module = result.module;
 
     // Add generated resume functions to module
     let resume_funcs: Vec<Operation<'db>> = RESUME_FUNCTIONS.lock().unwrap().drain(..).collect();
     if resume_funcs.is_empty() {
-        return result.module;
+        return module;
     }
 
     // Add resume functions to module body
-    let body = result.module.body(db);
+    let body = module.body(db);
     let mut blocks: Vec<Block<'db>> = body.blocks(db).iter().copied().collect();
     if let Some(block) = blocks.first_mut() {
         let mut ops: Vec<Operation<'db>> = block.operations(db).iter().copied().collect();
@@ -75,12 +102,130 @@ pub fn lower_cont_to_trampoline<'db>(
     }
 
     let new_body = Region::new(db, body.location(db), IdVec::from(blocks));
-    Module::create(
-        db,
-        result.module.location(db),
-        result.module.name(db),
-        new_body,
-    )
+    Module::create(db, module.location(db), module.name(db), new_body)
+}
+
+// ============================================================================
+// Effectful Function Analysis
+// ============================================================================
+
+/// Identify all effectful functions in the module.
+/// A function is effectful if it contains `cont.shift` or `cont.push_prompt` operations,
+/// or if it calls another effectful function (transitive closure).
+fn identify_effectful_functions<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<'db>,
+) -> Rc<HashSet<Symbol>> {
+    let mut effectful = HashSet::new();
+    let mut all_funcs: Vec<(Symbol, Region<'db>)> = Vec::new();
+
+    // First pass: identify direct effectful functions and collect all functions
+    collect_direct_effectful_funcs(db, &module.body(db), &mut effectful, &mut all_funcs);
+
+    // Second pass: propagate effectfulness through the call graph
+    // Keep iterating until no new effectful functions are found
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (func_name, body) in &all_funcs {
+            if effectful.contains(func_name) {
+                continue;
+            }
+            if calls_effectful_function(db, body, &effectful) {
+                effectful.insert(*func_name);
+                changed = true;
+            }
+        }
+    }
+
+    tracing::debug!(
+        "identify_effectful_functions: found {} effectful functions: {:?}",
+        effectful.len(),
+        effectful.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+    );
+    Rc::new(effectful)
+}
+
+/// Collect directly effectful functions and all functions for later propagation.
+fn collect_direct_effectful_funcs<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    effectful: &mut HashSet<Symbol>,
+    all_funcs: &mut Vec<(Symbol, Region<'db>)>,
+) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if let Ok(func) = Func::from_operation(db, *op) {
+                let func_name = func.sym_name(db);
+                let body = func.body(db);
+
+                all_funcs.push((func_name, body));
+
+                if contains_effectful_ops(db, &body) {
+                    effectful.insert(func_name);
+                }
+            }
+
+            // Recursively check nested regions
+            for nested_region in op.regions(db).iter() {
+                collect_direct_effectful_funcs(db, nested_region, effectful, all_funcs);
+            }
+        }
+    }
+}
+
+/// Check if a region calls any effectful function.
+fn calls_effectful_function<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    effectful: &HashSet<Symbol>,
+) -> bool {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Check if this is a func.call to an effectful function
+            if let Ok(call) = func::Call::from_operation(db, *op)
+                && effectful.contains(&call.callee(db))
+            {
+                return true;
+            }
+
+            // Recursively check nested regions
+            for nested_region in op.regions(db).iter() {
+                if calls_effectful_function(db, nested_region, effectful) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Recursively check if a region contains effectful operations:
+/// - cont.shift (direct yield)
+/// - cont.push_prompt (prompt installation)
+/// - cont.handler_dispatch (handler arm that processes Step)
+/// - cont.resume (resumes a continuation, returns Step)
+fn contains_effectful_ops<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Check for continuation operations that return Step
+            if cont::Shift::from_operation(db, *op).is_ok()
+                || cont::PushPrompt::from_operation(db, *op).is_ok()
+                || cont::HandlerDispatch::from_operation(db, *op).is_ok()
+                || cont::Resume::from_operation(db, *op).is_ok()
+            {
+                return true;
+            }
+
+            // Recursively check nested regions
+            for nested_region in op.regions(db).iter() {
+                if contains_effectful_ops(db, nested_region) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 // ============================================================================
@@ -588,6 +733,371 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
         );
 
         RewriteResult::expand(vec![check_yield.as_operation(), if_op.as_operation()])
+    }
+}
+
+// ============================================================================
+// Pattern: Update func.func type for effectful functions
+// ============================================================================
+
+struct UpdateFuncTypePattern {
+    effectful_funcs: Rc<HashSet<Symbol>>,
+}
+
+impl<'db> RewritePattern<'db> for UpdateFuncTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(func) = Func::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let func_name = func.sym_name(db);
+        if !self.effectful_funcs.contains(&func_name) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Get the current function type
+        let func_ty = func.r#type(db);
+        let Some(fn_ty) = core::Func::from_type(db, func_ty) else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Create new function type with Step as return type
+        let step_ty = trampoline::Step::new(db).as_type();
+        let original_result = fn_ty.result(db);
+
+        // Skip if already returning Step
+        if trampoline::Step::from_type(db, original_result).is_some() {
+            return RewriteResult::Unchanged;
+        }
+
+        let params = fn_ty.params(db);
+        let effect = fn_ty.effect(db);
+        let new_fn_ty = core::Func::with_effect(db, params, step_ty, effect);
+
+        // Rebuild the function operation with updated type and original_result_type attribute
+        let new_op = op
+            .modify(db)
+            .attr("type", Attribute::Type(new_fn_ty.as_type()))
+            .attr("original_result_type", Attribute::Type(original_result))
+            .build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+// ============================================================================
+// Pattern: Update scf.if result types in effectful functions
+// ============================================================================
+
+struct UpdateScfIfTypePattern {
+    effectful_funcs: Rc<HashSet<Symbol>>,
+}
+
+impl<'db> RewritePattern<'db> for UpdateScfIfTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(_) = scf::If::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Check if result type needs update
+        let result_types = op.results(db);
+        if result_types.is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        let step_ty = trampoline::Step::new(db).as_type();
+
+        // Skip if already Step
+        if trampoline::Step::from_type(db, result_types[0]).is_some() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Check if any branch yields a call to an effectful function or returns Step
+        // by looking at the scf.yield operands in the then/else regions
+        let regions = op.regions(db);
+        let mut needs_step = false;
+
+        for region in regions.iter() {
+            if region_yields_effectful_result(db, region, &self.effectful_funcs) {
+                needs_step = true;
+                break;
+            }
+        }
+
+        if !needs_step {
+            return RewriteResult::Unchanged;
+        }
+
+        // Update result type to Step
+        let new_op = op.modify(db).results(IdVec::from(vec![step_ty])).build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Check if a region's scf.yield yields a value from an effectful function call.
+fn region_yields_effectful_result<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    effectful_funcs: &HashSet<Symbol>,
+) -> bool {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Check if this is scf.yield
+            if let Ok(yield_op) = scf::Yield::from_operation(db, *op) {
+                // Check if any yielded value comes from an effectful call
+                for value in yield_op.values(db).iter() {
+                    if value_from_effectful_call(db, *value, effectful_funcs) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if a value comes from a call to an effectful function.
+fn value_from_effectful_call<'db>(
+    db: &'db dyn salsa::Database,
+    value: Value<'db>,
+    effectful_funcs: &HashSet<Symbol>,
+) -> bool {
+    use trunk_ir::ValueDef;
+
+    match value.def(db) {
+        ValueDef::OpResult(def_op) => {
+            // Check if this is a func.call to an effectful function
+            if let Ok(call) = func::Call::from_operation(db, def_op)
+                && effectful_funcs.contains(&call.callee(db))
+            {
+                return true;
+            }
+            // Also check if it's a Step-producing operation
+            if trampoline::StepDone::from_operation(db, def_op).is_ok()
+                || trampoline::StepShift::from_operation(db, def_op).is_ok()
+            {
+                return true;
+            }
+            // Check if nested if already returns Step
+            if scf::If::from_operation(db, def_op).is_ok()
+                && let Some(result_ty) = def_op.results(db).first()
+            {
+                return trampoline::Step::from_type(db, *result_ty).is_some();
+            }
+            false
+        }
+        ValueDef::BlockArg(_) => false,
+    }
+}
+
+// ============================================================================
+// Pattern: Update func.call result types for calls to effectful functions
+// ============================================================================
+
+struct UpdateFuncCallResultTypePattern {
+    effectful_funcs: Rc<HashSet<Symbol>>,
+}
+
+impl<'db> RewritePattern<'db> for UpdateFuncCallResultTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(call) = func::Call::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Check if calling an effectful function
+        let callee = call.callee(db);
+        if !self.effectful_funcs.contains(&callee) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Check if result type already Step
+        let result_types = op.results(db);
+        if result_types.is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        let step_ty = trampoline::Step::new(db).as_type();
+        if trampoline::Step::from_type(db, result_types[0]).is_some() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Update result type to Step
+        let new_op = op.modify(db).results(IdVec::from(vec![step_ty])).build();
+
+        RewriteResult::Replace(new_op)
+    }
+}
+
+// ============================================================================
+// Pattern: Wrap returns in effectful functions with step_done
+// ============================================================================
+
+struct WrapReturnsInEffectfulFuncsPattern {
+    effectful_funcs: Rc<HashSet<Symbol>>,
+}
+
+impl<'db> RewritePattern<'db> for WrapReturnsInEffectfulFuncsPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Match func.func operations
+        let Ok(func) = Func::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Only process effectful functions
+        let func_name = func.sym_name(db);
+        if !self.effectful_funcs.contains(&func_name) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Transform the function body - wrap non-Step returns with step_done
+        let body = func.body(db);
+        let (new_body, modified) = wrap_returns_in_region(db, body);
+
+        if !modified {
+            return RewriteResult::Unchanged;
+        }
+
+        // Rebuild the function with the transformed body
+        let new_op = op.modify(db).regions(IdVec::from(vec![new_body])).build();
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Recursively wrap returns in a region with step_done.
+/// Returns (new_region, was_modified).
+fn wrap_returns_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: Region<'db>,
+) -> (Region<'db>, bool) {
+    let mut new_blocks = Vec::new();
+    let mut any_modified = false;
+
+    for block in region.blocks(db).iter() {
+        let (new_block, modified) = wrap_returns_in_block(db, *block);
+        new_blocks.push(new_block);
+        any_modified |= modified;
+    }
+
+    if !any_modified {
+        return (region, false);
+    }
+
+    (
+        Region::new(db, region.location(db), IdVec::from(new_blocks)),
+        true,
+    )
+}
+
+/// Wrap returns in a block with step_done.
+/// Returns (new_block, was_modified).
+fn wrap_returns_in_block<'db>(
+    db: &'db dyn salsa::Database,
+    block: Block<'db>,
+) -> (Block<'db>, bool) {
+    let mut new_ops = Vec::new();
+    let mut modified = false;
+
+    for op in block.operations(db).iter() {
+        // First, recursively process nested regions
+        let mut op_modified = false;
+        let op_with_transformed_regions = if !op.regions(db).is_empty() {
+            let mut new_regions = Vec::new();
+            for r in op.regions(db).iter() {
+                let (new_r, r_modified) = wrap_returns_in_region(db, *r);
+                new_regions.push(new_r);
+                op_modified |= r_modified;
+            }
+            if op_modified {
+                op.modify(db).regions(IdVec::from(new_regions)).build()
+            } else {
+                *op
+            }
+        } else {
+            *op
+        };
+
+        modified |= op_modified;
+
+        // Check if this is a func.return
+        if func::Return::from_operation(db, op_with_transformed_regions).is_ok() {
+            let operands = op_with_transformed_regions.operands(db);
+
+            if let Some(&value) = operands.first() {
+                // Check if already returning Step
+                if !is_step_value(db, value) {
+                    let location = op_with_transformed_regions.location(db);
+                    let step_ty = trampoline::Step::new(db).as_type();
+
+                    // Create step_done(value)
+                    let step_done = trampoline::step_done(db, location, value, step_ty);
+                    let step_value = step_done.as_operation().result(db, 0);
+                    new_ops.push(step_done.as_operation());
+
+                    // Create new return with step value
+                    let new_return = func::r#return(db, location, Some(step_value));
+                    new_ops.push(new_return.as_operation());
+                    modified = true;
+                    continue;
+                }
+            }
+        }
+
+        new_ops.push(op_with_transformed_regions);
+    }
+
+    if !modified {
+        return (block, false);
+    }
+
+    (
+        Block::new(
+            db,
+            block.id(db),
+            block.location(db),
+            block.args(db).clone(),
+            IdVec::from(new_ops),
+        ),
+        true,
+    )
+}
+
+/// Check if a value is already a Step type (from step_shift, step_done, or check_yield result).
+fn is_step_value<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> bool {
+    use trunk_ir::ValueDef;
+
+    match value.def(db) {
+        ValueDef::OpResult(def_op) => {
+            // Check if the defining operation produces Step
+            trampoline::StepShift::from_operation(db, def_op).is_ok()
+                || trampoline::StepDone::from_operation(db, def_op).is_ok()
+                || scf::If::from_operation(db, def_op).is_ok() // scf.if might yield Step
+        }
+        ValueDef::BlockArg(_) => {
+            // Block args could be Step, but we can't easily tell from here
+            // For safety, don't wrap block args
+            false
+        }
     }
 }
 
