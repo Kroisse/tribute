@@ -111,15 +111,13 @@ pub(crate) fn handle_call_indirect<'db>(
         let is_core_func = core::Func::from_type(db, ty).is_some();
         // core.ptr is used for function pointers in the IR, lowered to funcref in wasm
         let is_core_ptr = core::Ptr::from_type(db, ty).is_some();
-        // i32 is used for function table index (closure calls)
-        let is_i32 = core::I32::from_type(db, ty).is_some();
-        // Note: closure structs are NOT included here because their field 0 is now i32
-        // (function table index), not funcref. Closure calls go through call_indirect path.
+        // Note: i32 (function table index) is NOT included here - it should use
+        // call_indirect, not call_ref. Closure calls go through the call_indirect path.
         debug!(
-            "call_indirect: is_funcref={}, is_anyref={}, is_core_func={}, is_core_ptr={}, is_i32={}",
-            is_funcref, is_anyref, is_core_func, is_core_ptr, is_i32
+            "call_indirect: is_funcref={}, is_anyref={}, is_core_func={}, is_core_ptr={}",
+            is_funcref, is_anyref, is_core_func, is_core_ptr
         );
-        is_funcref || is_anyref || is_core_func || is_core_ptr || is_i32
+        is_funcref || is_anyref || is_core_func || is_core_ptr
     });
     debug!("call_indirect: is_ref_type={}", is_ref_type);
 
