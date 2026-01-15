@@ -15,8 +15,8 @@ use tribute_ir::dialect::{tribute, tribute_rt};
 use crate::{CompilationError, CompilationResult};
 
 use super::super::{
-    FunctionEmitContext, ModuleInfo, attr_u32, emit_operands, emit_value, is_closure_struct_type,
-    is_step_type, resolve_callee, set_result_local, value_type,
+    FunctionEmitContext, ModuleInfo, attr_u32, emit_operands, emit_value, is_step_type,
+    resolve_callee, set_result_local, value_type,
 };
 
 /// Handle wasm.call operation
@@ -109,14 +109,13 @@ pub(crate) fn handle_call_indirect<'db>(
         let is_funcref = wasm::Funcref::from_type(db, ty).is_some();
         let is_anyref = wasm::Anyref::from_type(db, ty).is_some();
         let is_core_func = core::Func::from_type(db, ty).is_some();
-        // Check if this is a closure struct (adt.struct with name "_closure")
-        // Closure structs contain (funcref, anyref) and are used for call_indirect
-        let is_closure_struct = is_closure_struct_type(db, ty);
+        // Note: closure structs are NOT included here because their field 0 is now i32
+        // (function table index), not funcref. Closure calls go through call_indirect path.
         debug!(
-            "call_indirect: is_funcref={}, is_anyref={}, is_core_func={}, is_closure_struct={}",
-            is_funcref, is_anyref, is_core_func, is_closure_struct
+            "call_indirect: is_funcref={}, is_anyref={}, is_core_func={}",
+            is_funcref, is_anyref, is_core_func
         );
-        is_funcref || is_anyref || is_core_func || is_closure_struct
+        is_funcref || is_anyref || is_core_func
     });
     debug!("call_indirect: is_ref_type={}", is_ref_type);
 
@@ -246,14 +245,12 @@ pub(crate) fn handle_call_indirect<'db>(
         // Emit the funcref (first operand)
         emit_value(db, first_operand, ctx, function)?;
 
-        // Cast anyref/closure struct to typed function reference if needed
-        // Closure struct (adt.struct with name "_closure") contains funcref in field 0.
-        // When we extract the funcref via struct_get, the IR type may still be adt.struct,
-        // but the actual wasm value is funcref. Cast to the concrete function type.
+        // Cast anyref or generic func type to typed function reference if needed.
+        // When the IR type is anyref or core.func, we need to cast to the concrete
+        // function type before call_ref.
         if let Some(ty) = first_operand_ty
             && (wasm::Anyref::from_type(db, ty).is_some()
-                || core::Func::from_type(db, ty).is_some()
-                || is_closure_struct_type(db, ty))
+                || core::Func::from_type(db, ty).is_some())
         {
             // Cast to (ref null func_type)
             function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));

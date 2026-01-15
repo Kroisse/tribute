@@ -176,12 +176,12 @@ impl<'db> GcTypeRegistry<'db> {
                     mutable: false,
                 },
             ]),
-            // Index 4: ClosureStruct - struct { funcref, anyref }
-            // Uniform representation for all closures: function reference + environment.
+            // Index 4: ClosureStruct - struct { func_idx: i32, env: anyref }
+            // Uniform representation for all closures: function table index + environment.
             // All closures share this type regardless of their specific function/env types.
             GcTypeDef::Struct(vec![
                 FieldType {
-                    element_type: StorageType::Val(ValType::Ref(RefType::FUNCREF)),
+                    element_type: StorageType::Val(ValType::I32),
                     mutable: false,
                 },
                 FieldType {
@@ -608,10 +608,10 @@ pub fn register_closure_type<'db>(
         return idx;
     }
 
-    // Create closure struct type: (funcref, anyref)
+    // Create closure struct type: (func_idx: i32, env: anyref)
     let def = GcTypeDef::Struct(vec![
         FieldType {
-            element_type: StorageType::Val(ValType::Ref(RefType::FUNCREF)),
+            element_type: StorageType::Val(ValType::I32),
             mutable: false,
         },
         FieldType {
@@ -980,10 +980,10 @@ mod tests {
         match &types[0] {
             GcTypeDef::Struct(fields) => {
                 assert_eq!(fields.len(), CLOSURE_FIELD_COUNT);
-                // Field 0: funcref
+                // Field 0: i32 (function table index)
                 assert!(matches!(
                     fields[0].element_type,
-                    StorageType::Val(ValType::Ref(RefType::FUNCREF))
+                    StorageType::Val(ValType::I32)
                 ));
                 // Field 1: anyref
                 assert!(matches!(
@@ -1175,12 +1175,12 @@ mod tests {
         let types = registry.user_types();
         assert_eq!(types.len(), 1);
 
-        // Closure: (funcref, anyref)
+        // Closure: (i32, anyref)
         match &types[0] {
             GcTypeDef::Struct(fields) => {
                 assert!(matches!(
                     fields[0].element_type,
-                    StorageType::Val(ValType::Ref(RefType::FUNCREF))
+                    StorageType::Val(ValType::I32)
                 ));
             }
             _ => panic!("Expected struct type for closure"),
