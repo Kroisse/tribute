@@ -1,5 +1,7 @@
 # Tribute
 
+[![codecov](https://codecov.io/github/Kroisse/tribute/graph/badge.svg?token=T09M1R6UGG)](https://codecov.io/github/Kroisse/tribute)
+
 A pure, practical functional language that's easy to learn with simple and familiar syntax.
 
 ## Features
