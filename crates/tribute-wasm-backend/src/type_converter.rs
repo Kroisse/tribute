@@ -42,13 +42,19 @@ use trunk_ir::dialect::arith;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// # use tribute_ir::dialect::tribute_rt;
+/// # use trunk_ir::dialect::core;
+/// # use trunk_ir::DialectType;
 /// use tribute_wasm_backend::type_converter::wasm_type_converter;
 ///
+/// # let db = salsa::DatabaseImpl::default();
 /// let converter = wasm_type_converter();
 ///
-/// // Convert tribute.int to core.i32
-/// let i32_ty = converter.convert_type(db, tribute_int_ty);
+/// // Convert tribute_rt.int to core.i32
+/// # let int_ty = tribute_rt::Int::new(&db).as_type();
+/// let i32_ty = converter.convert_type(&db, int_ty).unwrap();
+/// # assert_eq!(i32_ty, core::I32::new(&db).as_type());
 /// ```
 pub fn wasm_type_converter() -> TypeConverter {
     TypeConverter::new()

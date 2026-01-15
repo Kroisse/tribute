@@ -140,15 +140,24 @@ dialect! {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// # use trunk_ir::{Attribute, BlockArg, Symbol};
+/// # use trunk_ir::dialect::core;
+/// # use trunk_ir::DialectType;
+/// use tribute_ir::dialect::tribute_pat::block_arg_attrs;
+///
+/// # let db = salsa::DatabaseImpl::default();
+/// # let i32_ty = core::I32::new(&db).as_type();
 /// // Pattern: Some(value) => ...
 /// // The 'value' binding becomes a block argument with name attribute
-/// BlockArg::with_attr(
-///     db,
-///     extracted_ty,
+/// let block_arg = BlockArg::with_attr(
+///     &db,
+///     i32_ty,
 ///     block_arg_attrs::BIND_NAME(),
 ///     Attribute::Symbol(Symbol::new("value")),
-/// )
+/// );
+/// # let name = block_arg.get_attr(&db, block_arg_attrs::BIND_NAME());
+/// # assert!(matches!(name, Some(Attribute::Symbol(_))));
 /// ```
 pub mod block_arg_attrs {
     use trunk_ir::Symbol;
