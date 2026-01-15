@@ -144,8 +144,13 @@ fn add_function_table<'db>(
     // Create wasm.elem with table 0 and offset 0
     let elem_op = wasm::elem(db, location, Some(0), Some(0), funcs_region);
 
-    // Prepend table and elem operations to the module body
+    // Prepend table and elem operations to the module body.
+    // Note: Empty modules are considered malformed IR - we fail fast here.
     let body = module.body(db);
+    assert!(
+        !body.blocks(db).is_empty(),
+        "module body must have at least one block"
+    );
     let first_block = &body.blocks(db)[0];
     let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
     new_ops.push(table_op.as_operation());
@@ -240,7 +245,7 @@ impl<'db> RewritePattern<'db> for FuncCallPattern {
 /// Pattern for `func.call_indirect` -> `wasm.call_indirect`
 ///
 /// Transforms indirect function calls for closures.
-/// The callee (funcref) is the first operand, followed by arguments.
+/// The callee (i32 table index) is the first operand, followed by arguments.
 struct FuncCallIndirectPattern;
 
 impl<'db> RewritePattern<'db> for FuncCallIndirectPattern {

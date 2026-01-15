@@ -26,6 +26,23 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type, Value, ValueDef};
 
+/// Create the unified closure struct type: `{ table_idx: i32, env: anyref }`.
+///
+/// All closures share the same struct type regardless of their specific function/env types.
+/// This ensures consistent representation across the lowering pipeline.
+fn closure_struct_type(db: &dyn salsa::Database) -> Type<'_> {
+    let i32_ty = core::I32::new(db).as_type();
+    let anyref_ty = tribute_rt::Any::new(db).as_type();
+    adt::struct_type(
+        db,
+        Symbol::new("_closure"),
+        vec![
+            (Symbol::new("table_idx"), i32_ty),
+            (Symbol::new("env"), anyref_ty),
+        ],
+    )
+}
+
 /// Lower closure operations in the module.
 ///
 /// Pattern ordering is important:
@@ -167,18 +184,7 @@ impl<'db> RewritePattern<'db> for LowerClosureNewPattern {
         let funcref = constant_op.as_operation().result(db, 0);
 
         // Create closure struct type: adt.struct with (i32 table_idx, anyref env) fields
-        // Use i32 for function table index (not funcref) for call_indirect approach.
-        // All closures share the same struct type regardless of their specific function/env types.
-        let i32_ty = core::I32::new(db).as_type();
-        let anyref_ty = tribute_rt::Any::new(db).as_type();
-        let closure_struct_ty = adt::struct_type(
-            db,
-            trunk_ir::Symbol::new("_closure"),
-            vec![
-                (trunk_ir::Symbol::new("table_idx"), i32_ty),
-                (trunk_ir::Symbol::new("env"), anyref_ty),
-            ],
-        );
+        let closure_struct_ty = closure_struct_type(db);
 
         // Generate: %closure = adt.struct_new(%funcref, %env) : closure_struct_type
         let struct_new_op = adt::struct_new(
@@ -369,17 +375,7 @@ impl<'db> RewritePattern<'db> for LowerClosureFuncPattern {
 
         // The result type is now i32 (function table index), not funcref
         let i32_ty = core::I32::new(db).as_type();
-        let anyref_ty = tribute_rt::Any::new(db).as_type();
-
-        // Use the unified _closure struct type (i32 table_idx, anyref env)
-        let struct_ty = adt::struct_type(
-            db,
-            trunk_ir::Symbol::new("_closure"),
-            vec![
-                (trunk_ir::Symbol::new("table_idx"), i32_ty),
-                (trunk_ir::Symbol::new("env"), anyref_ty),
-            ],
-        );
+        let struct_ty = closure_struct_type(db);
 
         // Generate: %table_idx = adt.struct_get %closure, 0
         // Parameter order: (db, location, operand, result_type, struct_type, field_idx)
@@ -427,17 +423,7 @@ impl<'db> RewritePattern<'db> for LowerClosureEnvPattern {
             .copied()
             .expect("closure.env should have a result");
 
-        // Use the unified _closure struct type (i32 table_idx, anyref env)
-        let i32_ty = core::I32::new(db).as_type();
-        let anyref_ty = tribute_rt::Any::new(db).as_type();
-        let struct_ty = adt::struct_type(
-            db,
-            trunk_ir::Symbol::new("_closure"),
-            vec![
-                (trunk_ir::Symbol::new("table_idx"), i32_ty),
-                (trunk_ir::Symbol::new("env"), anyref_ty),
-            ],
-        );
+        let struct_ty = closure_struct_type(db);
 
         // Generate: %env = adt.struct_get %closure, 1
         // Parameter order: (db, location, operand, result_type, struct_type, field_idx)
@@ -524,25 +510,6 @@ fn get_value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Optio
             None
         }
     }
-}
-
-/// Get the env type from a closure value by inspecting the closure.new operation.
-#[allow(dead_code)]
-fn get_env_type_from_closure<'db>(
-    db: &'db dyn salsa::Database,
-    closure_value: Value<'db>,
-) -> Type<'db> {
-    if let ValueDef::OpResult(op) = closure_value.def(db)
-        && let Ok(closure_new) = closure::New::from_operation(db, op)
-    {
-        let env_value = closure_new.env(db);
-        if let Some(env_ty) = get_value_type(db, env_value) {
-            return env_ty;
-        }
-    }
-
-    // Fallback: return nil type
-    *core::Nil::new(db)
 }
 
 /// Get the function type from a closure struct value.
