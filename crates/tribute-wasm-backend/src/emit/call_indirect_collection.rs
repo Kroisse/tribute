@@ -110,7 +110,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
                         continue; // Skip invalid call_indirect
                     }
 
-                    // Check if first operand is a ref type (funcref/anyref/core.func/closure struct)
+                    // Check if first operand is a ref type (funcref/anyref/core.func/core.ptr/closure struct)
                     // or i32 (function table index for closure calls).
                     // If so, the callee identifier is FIRST and we skip it for params.
                     // Otherwise, the callee is LAST (legacy order).
@@ -120,6 +120,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
                         wasm::Funcref::from_type(db, ty).is_some()
                             || wasm::Anyref::from_type(db, ty).is_some()
                             || core::Func::from_type(db, ty).is_some()
+                            || core::Ptr::from_type(db, ty).is_some()
                             || core::I32::from_type(db, ty).is_some() // i32 table index for closures
                             || is_closure_struct_type(db, ty)
                     });

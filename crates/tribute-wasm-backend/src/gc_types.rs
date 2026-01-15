@@ -381,6 +381,11 @@ pub fn type_to_storage_type<'db>(
     if tribute_rt::is_float(db, ty) {
         return StorageType::Val(ValType::F64);
     }
+    // Tribute-rt Any type (type-erased reference, always anyref)
+    if tribute_rt::Any::from_type(db, ty).is_some() {
+        debug!("type_to_storage_type: tribute_rt.any -> ANYREF");
+        return StorageType::Val(ValType::Ref(RefType::ANYREF));
+    }
 
     // Core function type (core.func) - stored as funcref
     if core::Func::from_type(db, ty).is_some() {
@@ -660,14 +665,27 @@ pub const STEP_TAG_SHIFT: i32 = 1;
 
 /// Create the Step marker type.
 ///
-/// This creates a unique type to use as a key in the registry, ensuring
-/// Step doesn't share type indices with other struct types.
+/// This creates a unique ADT struct type to use as a key in the registry.
+/// Step is used for trampoline-based effect system.
 ///
-/// This is public so that cont_to_wasm.rs can use it for struct_new operations
-/// that create Step values.
+/// Layout: (tag: i32, value: anyref, prompt: i32, op_idx: i32)
 pub fn step_marker_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
-    // Use wasm.step type via typed wrapper
-    wasm::Step::new(db).as_type()
+    use tribute_ir::dialect::adt;
+    use trunk_ir::Symbol;
+
+    let i32_ty = core::I32::new(db).as_type();
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+
+    adt::struct_type(
+        db,
+        "_Step",
+        vec![
+            (Symbol::new("tag"), i32_ty),
+            (Symbol::new("value"), anyref_ty),
+            (Symbol::new("prompt"), i32_ty),
+            (Symbol::new("op_idx"), i32_ty),
+        ],
+    )
 }
 
 /// Register the Step struct type in the registry.
@@ -707,56 +725,8 @@ pub fn get_step_type_idx<'db>(
 }
 
 // ============================================================================
-// Continuation Type Collection
+// Continuation State Type Collection
 // ============================================================================
-
-/// Continuation struct field count.
-/// Continuation structs have 4 fields: (resume_fn, state, tag, shift_value)
-pub const CONT_FIELD_COUNT: usize = 4;
-
-/// Register the continuation struct type in the registry.
-///
-/// Continuations are represented as WasmGC structs with four fields:
-/// - Field 0: resume function (funcref) - function to call when resuming
-/// - Field 1: state (anyref) - captured local state struct
-/// - Field 2: tag (i32) - prompt tag this continuation belongs to
-/// - Field 3: shift_value (anyref) - value yielded by shift (for handler)
-///
-/// This function uses the structref placeholder with CONT_FIELD_COUNT
-/// to ensure all continuation operations use the same type index.
-pub fn register_continuation_type<'db>(
-    db: &'db dyn salsa::Database,
-    registry: &mut GcTypeRegistry<'db>,
-) -> u32 {
-    let structref_ty = wasm::Structref::new(db).as_type();
-
-    // Check if already registered
-    if let Some(idx) = registry.get_placeholder_idx(structref_ty, CONT_FIELD_COUNT) {
-        return idx;
-    }
-
-    // Create continuation struct type: (funcref, anyref, i32, anyref)
-    let def = GcTypeDef::Struct(vec![
-        FieldType {
-            element_type: StorageType::Val(ValType::Ref(RefType::FUNCREF)),
-            mutable: false,
-        },
-        FieldType {
-            element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-            mutable: false,
-        },
-        FieldType {
-            element_type: StorageType::Val(ValType::I32),
-            mutable: false,
-        },
-        FieldType {
-            element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-            mutable: false,
-        },
-    ]);
-
-    registry.register_placeholder(structref_ty, CONT_FIELD_COUNT, def)
-}
 
 /// Register a continuation state struct type for a specific field count.
 ///
@@ -1034,49 +1004,6 @@ mod tests {
     }
 
     #[test]
-    fn test_register_continuation_type() {
-        let db = salsa::DatabaseImpl::default();
-        let mut registry = GcTypeRegistry::new();
-
-        let idx1 = register_continuation_type(&db, &mut registry);
-        assert_eq!(idx1, FIRST_USER_TYPE_IDX);
-
-        // Calling again should return the same index
-        let idx2 = register_continuation_type(&db, &mut registry);
-        assert_eq!(idx2, FIRST_USER_TYPE_IDX);
-
-        // Verify continuation type structure
-        let types = registry.user_types();
-        assert_eq!(types.len(), 1);
-        match &types[0] {
-            GcTypeDef::Struct(fields) => {
-                assert_eq!(fields.len(), CONT_FIELD_COUNT);
-                // Field 0: funcref (resume function)
-                assert!(matches!(
-                    fields[0].element_type,
-                    StorageType::Val(ValType::Ref(RefType::FUNCREF))
-                ));
-                // Field 1: anyref (state)
-                assert!(matches!(
-                    fields[1].element_type,
-                    StorageType::Val(ValType::Ref(RefType::ANYREF))
-                ));
-                // Field 2: i32 (tag)
-                assert!(matches!(
-                    fields[2].element_type,
-                    StorageType::Val(ValType::I32)
-                ));
-                // Field 3: anyref (shift_value)
-                assert!(matches!(
-                    fields[3].element_type,
-                    StorageType::Val(ValType::Ref(RefType::ANYREF))
-                ));
-            }
-            _ => panic!("Expected struct type for continuation"),
-        }
-    }
-
-    #[test]
     fn test_register_cont_state_type() {
         let db = salsa::DatabaseImpl::default();
         let mut registry = GcTypeRegistry::new();
@@ -1096,35 +1023,6 @@ mod tests {
         // Different field count gets different index
         let idx5 = register_cont_state_type(&db, &mut registry, 5);
         assert_eq!(idx5, FIRST_USER_TYPE_IDX + 2);
-
-        assert_eq!(registry.user_types().len(), 3);
-    }
-
-    #[test]
-    fn test_closure_and_continuation_coexist() {
-        let db = salsa::DatabaseImpl::default();
-        let mut registry = GcTypeRegistry::new();
-
-        // Register closure (2 fields)
-        let closure_idx = register_closure_type(&db, &mut registry);
-        assert_eq!(closure_idx, FIRST_USER_TYPE_IDX);
-
-        // Register continuation (4 fields) - different field count, different index
-        let cont_idx = register_continuation_type(&db, &mut registry);
-        assert_eq!(cont_idx, FIRST_USER_TYPE_IDX + 1);
-
-        // Register state with 2 fields - same field count as closure, but
-        // closure is already registered so should get same index
-        let state2_idx = register_cont_state_type(&db, &mut registry, 2);
-        assert_eq!(state2_idx, closure_idx); // Reuses closure's type index
-
-        // State with 3 fields - new type (no longer matches continuation which has 4 fields)
-        let state3_idx = register_cont_state_type(&db, &mut registry, 3);
-        assert_eq!(state3_idx, FIRST_USER_TYPE_IDX + 2);
-
-        // State with 4 fields - same as continuation, reuses its index
-        let state4_idx = register_cont_state_type(&db, &mut registry, 4);
-        assert_eq!(state4_idx, cont_idx);
 
         assert_eq!(registry.user_types().len(), 3);
     }

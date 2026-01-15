@@ -109,13 +109,17 @@ pub(crate) fn handle_call_indirect<'db>(
         let is_funcref = wasm::Funcref::from_type(db, ty).is_some();
         let is_anyref = wasm::Anyref::from_type(db, ty).is_some();
         let is_core_func = core::Func::from_type(db, ty).is_some();
+        // core.ptr is used for function pointers in the IR, lowered to funcref in wasm
+        let is_core_ptr = core::Ptr::from_type(db, ty).is_some();
+        // i32 is used for function table index (closure calls)
+        let is_i32 = core::I32::from_type(db, ty).is_some();
         // Note: closure structs are NOT included here because their field 0 is now i32
         // (function table index), not funcref. Closure calls go through call_indirect path.
         debug!(
-            "call_indirect: is_funcref={}, is_anyref={}, is_core_func={}",
-            is_funcref, is_anyref, is_core_func
+            "call_indirect: is_funcref={}, is_anyref={}, is_core_func={}, is_core_ptr={}, is_i32={}",
+            is_funcref, is_anyref, is_core_func, is_core_ptr, is_i32
         );
-        is_funcref || is_anyref || is_core_func
+        is_funcref || is_anyref || is_core_func || is_core_ptr || is_i32
     });
     debug!("call_indirect: is_ref_type={}", is_ref_type);
 
@@ -246,11 +250,15 @@ pub(crate) fn handle_call_indirect<'db>(
         // Emit the funcref (first operand)
         emit_value(db, first_operand, ctx, function)?;
 
-        // Cast anyref or generic func type to typed function reference if needed.
+        // Cast funcref/anyref or generic func type to typed function reference if needed.
+        // wasm.funcref needs to be cast since call_ref requires typed function reference.
         // When the IR type is anyref or core.func, we need to cast to the concrete
         // function type before call_ref.
+        // Note: closure structs are NOT handled here anymore - they use i32 table index
+        // and go through the call_indirect path instead of call_ref.
         if let Some(ty) = first_operand_ty
-            && (wasm::Anyref::from_type(db, ty).is_some()
+            && (wasm::Funcref::from_type(db, ty).is_some()
+                || wasm::Anyref::from_type(db, ty).is_some()
                 || core::Func::from_type(db, ty).is_some())
         {
             // Cast to (ref null func_type)
