@@ -1367,12 +1367,12 @@ mod tests {
         match result {
             RewriteResult::Expand(ops) => {
                 for op in ops.iter() {
-                    if op.dialect(db) == adt::DIALECT_NAME() && op.name(db) == adt::STRUCT_GET() {
-                        if let Some(Attribute::IntBits(idx)) =
+                    if op.dialect(db) == adt::DIALECT_NAME()
+                        && op.name(db) == adt::STRUCT_GET()
+                        && let Some(Attribute::IntBits(idx)) =
                             op.attributes(db).get(&Symbol::new("field"))
-                        {
-                            return *idx;
-                        }
+                    {
+                        return *idx;
                     }
                 }
                 999 // Not found
@@ -1416,12 +1416,12 @@ mod tests {
         let mut indices = Vec::new();
         if let RewriteResult::Expand(ops) = result {
             for op in ops.iter() {
-                if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == wasm::GLOBAL_SET() {
-                    if let Some(Attribute::IntBits(idx)) =
+                if op.dialect(db) == wasm::DIALECT_NAME()
+                    && op.name(db) == wasm::GLOBAL_SET()
+                    && let Some(Attribute::IntBits(idx)) =
                         op.attributes(db).get(&Symbol::new("index"))
-                    {
-                        indices.push(*idx as u32);
-                    }
+                {
+                    indices.push(*idx as u32);
                 }
             }
         }
