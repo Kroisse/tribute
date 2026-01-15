@@ -24,7 +24,8 @@ use super::result::RewriteResult;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// use trunk_ir::Operation;
 /// use trunk_ir::rewrite::{OpAdaptor, RewritePattern, RewriteResult};
 ///
 /// struct RenamePattern;
@@ -41,8 +42,7 @@ use super::result::RewriteResult;
 ///         }
 ///         // Access remapped operands and their types
 ///         if let Some(operand) = adaptor.operand(0) {
-///             let ty = adaptor.get_value_type(db, operand);
-///             // ...
+///             let _ty = adaptor.get_value_type(db, operand);
 ///         }
 ///         let new_op = op.modify(db).name_str("target").build();
 ///         RewriteResult::Replace(new_op)

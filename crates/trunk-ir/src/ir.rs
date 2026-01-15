@@ -57,10 +57,12 @@ impl Symbol {
     /// This is useful for optimization: when you need to work with the symbol's text
     /// without allocating a String, use this method. For example:
     ///
-    /// ```ignore
+    /// ```
+    /// use trunk_ir::Symbol;
+    /// let symbol = Symbol::new("something");
     /// // Avoid: symbol.to_string() == "something"
     /// // Prefer:
-    /// symbol.with_str(|s| s == "something")
+    /// assert!(symbol.with_str(|s| s == "something"));
     /// ```
     pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
         let interner = INTERNER.read_recursive();
@@ -436,12 +438,19 @@ impl<'db> OperationBuilder<'db> {
 /// Builder for constructing Block instances.
 ///
 /// Supports fluent API for adding block arguments with attributes:
-/// ```ignore
-/// BlockBuilder::new(db, location)
-///     .arg(ty1).attr(BIND_NAME(), name_sym)  // arg with attribute
-///     .arg(ty2)                               // arg without attributes
-///     .op(some_op)
-///     .build()
+/// ```no_run
+/// # use trunk_ir::{BlockBuilder, Location, PathId, Span, Symbol};
+/// # use trunk_ir::dialect::core;
+/// # use trunk_ir::DialectType;
+/// # let db = salsa::DatabaseImpl::default();
+/// # let path = PathId::new(&db, "test.trb".to_owned());
+/// # let location = Location::new(path, Span::new(0, 0));
+/// # let ty = core::I32::new(&db).as_type();
+/// let block = BlockBuilder::new(&db, location)
+///     .arg(ty).attr("bind_name", Symbol::new("x"))
+///     .arg(ty)  // arg without attributes
+///     .build();
+/// assert_eq!(block.args(&db).len(), 2);
 /// ```
 pub struct BlockBuilder<'db> {
     db: &'db dyn salsa::Database,
@@ -516,10 +525,21 @@ impl<'db> BlockBuilder<'db> {
     /// Must be called after `.arg()`. Panics if no argument is pending.
     ///
     /// # Example
-    /// ```ignore
-    /// builder
+    /// ```no_run
+    /// # use trunk_ir::{Attribute, BlockBuilder, Location, PathId, Span, Symbol};
+    /// # use trunk_ir::dialect::core;
+    /// # use trunk_ir::DialectType;
+    /// # let db = salsa::DatabaseImpl::default();
+    /// # let path = PathId::new(&db, "test.trb".to_owned());
+    /// # let location = Location::new(path, Span::new(0, 0));
+    /// # let ty = core::I32::new(&db).as_type();
+    /// # let builder = BlockBuilder::new(&db, location);
+    /// let block = builder
     ///     .arg(ty).attr("bind_name", Symbol::new("x"))
     ///     .arg(ty).attr("flag", true)
+    ///     .build();
+    /// # let arg0 = &block.args(&db)[0];
+    /// # assert!(arg0.get_attr(&db, Symbol::new("bind_name")).is_some());
     /// ```
     pub fn attr(mut self, key: impl Into<Symbol>, value: impl Into<Attribute<'db>>) -> Self {
         let (_, attrs) = self

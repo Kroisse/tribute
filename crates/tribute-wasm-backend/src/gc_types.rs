@@ -19,7 +19,7 @@
 //!
 //! The registry is populated by a collection pass before lowering:
 //!
-//! ```ignore
+//! ```text
 //! let registry = collect_gc_types(db, module);
 //! let lowered = adt_to_wasm::lower(db, module, &registry);
 //! ```

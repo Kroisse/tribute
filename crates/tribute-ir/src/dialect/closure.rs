@@ -11,13 +11,21 @@
 //!
 //! ## Usage
 //!
-//! ```ignore
+//! ```
+//! # use trunk_ir::dialect::core;
+//! # use trunk_ir::DialectType;
+//! use tribute_ir::dialect::closure;
+//!
+//! # let db = salsa::DatabaseImpl::default();
+//! # let func_type = core::I32::new(&db).as_type(); // simplified example
 //! // Create a closure type wrapping a function type
-//! let closure_ty = closure::Closure::new(db, func_type);
+//! let closure_ty = closure::Closure::new(&db, func_type);
 //!
 //! // Check if a type is a closure
-//! if let Some(closure) = closure::Closure::from_type(db, ty) {
-//!     let inner_fn = closure.func_type(db);
+//! # let ty = closure_ty.as_type();
+//! if let Some(closure) = closure::Closure::from_type(&db, ty) {
+//!     let inner_fn = closure.func_type(&db);
+//!     # assert_eq!(inner_fn, func_type);
 //! }
 //! ```
 

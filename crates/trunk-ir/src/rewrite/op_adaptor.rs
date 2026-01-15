@@ -21,20 +21,27 @@ use super::RewriteContext;
 ///
 /// # Example
 ///
-/// ```ignore
-/// fn match_and_rewrite<'db>(
-///     &self,
-///     db: &'db dyn Database,
-///     op: &Operation<'db>,
-///     adaptor: &OpAdaptor<'db, '_>,
-/// ) -> RewriteResult<'db> {
-///     // Get remapped operand
-///     let operand = adaptor.operand(0)?;
+/// ```no_run
+/// use trunk_ir::Operation;
+/// use trunk_ir::rewrite::{OpAdaptor, RewritePattern, RewriteResult};
 ///
-///     // Get type of operand (already converted by TypeConverter if configured)
-///     let ty = adaptor.operand_type(0);
+/// struct MyPattern;
 ///
-///     // ...
+/// impl<'db> RewritePattern<'db> for MyPattern {
+///     fn match_and_rewrite(
+///         &self,
+///         db: &'db dyn salsa::Database,
+///         op: &Operation<'db>,
+///         adaptor: &OpAdaptor<'db, '_>,
+///     ) -> RewriteResult<'db> {
+///         // Get remapped operand
+///         let operand = adaptor.operand(0).unwrap();
+///
+///         // Get type of operand (already converted by TypeConverter if configured)
+///         let _ty = adaptor.operand_type(0);
+///
+///         RewriteResult::Unchanged
+///     }
 /// }
 /// ```
 pub struct OpAdaptor<'db, 'ctx> {

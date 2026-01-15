@@ -85,22 +85,29 @@ impl<F> MaterializeFn for F where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use trunk_ir::dialect::core;
+/// use trunk_ir::rewrite::{MaterializeResult, TypeConverter};
+/// use trunk_ir::DialectType;
+///
 /// let converter = TypeConverter::new()
 ///     .add_conversion(|db, ty| {
-///         if is_high_level_type(db, ty) {
-///             Some(low_level_type(db))
+///         // Convert i64 to i32
+///         if core::I64::from_type(db, ty).is_some() {
+///             Some(core::I32::new(db).as_type())
 ///         } else {
 ///             None
 ///         }
 ///     })
-///     .add_materialization(|db, loc, value, from_ty, to_ty| {
-///         if needs_cast(from_ty, to_ty) {
-///             MaterializeResult::single(create_cast(db, loc, value, to_ty))
-///         } else {
-///             MaterializeResult::Skip
-///         }
+///     .add_materialization(|_db, _loc, _value, _from_ty, _to_ty| {
+///         // For this example, skip materialization
+///         MaterializeResult::Skip
 ///     });
+///
+/// let db = salsa::DatabaseImpl::default();
+/// let i64_ty = core::I64::new(&db).as_type();
+/// let result = converter.convert_type(&db, i64_ty);
+/// assert!(result.is_some());
 /// ```
 pub struct TypeConverter {
     conversions: Vec<Box<dyn TypeConversionFn>>,
