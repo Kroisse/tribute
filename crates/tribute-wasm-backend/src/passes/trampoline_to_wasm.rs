@@ -1226,6 +1226,14 @@ fn convert_trampoline_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::rewrite::RewriteContext;
+    use trunk_ir::{PathId, Span};
+
+    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
+        let path = PathId::new(db, "test.trb".to_owned());
+        Location::new(path, Span::new(0, 0))
+    }
 
     // ========================================================================
     // Test: yield_globals constants
@@ -1257,5 +1265,189 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ========================================================================
+    // Test: LowerBuildContinuationPattern
+    // ========================================================================
+
+    /// Test helper: creates build_continuation and applies the pattern.
+    /// Returns the struct_new operation's field count.
+    #[salsa::tracked]
+    fn build_continuation_produces_struct_new(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        let location = test_location(db);
+        let cont_ty = trampoline::Continuation::new(db).as_type();
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let funcref_ty = wasm::Funcref::new(db).as_type();
+
+        // Create operands: resume_fn (funcref), state (anyref), shift_value (anyref)
+        let resume_fn_op = adt::ref_null(db, location, funcref_ty, funcref_ty);
+        let state_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
+        let shift_value_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
+
+        let resume_fn = resume_fn_op.as_operation().result(db, 0);
+        let state = state_op.as_operation().result(db, 0);
+        let shift_value = shift_value_op.as_operation().result(db, 0);
+
+        // Create trampoline.build_continuation
+        let build_cont_op = trampoline::build_continuation(
+            db,
+            location,
+            resume_fn,
+            state,
+            shift_value,
+            cont_ty,
+            1,
+            0,
+        );
+
+        // Apply the pattern
+        let pattern = LowerBuildContinuationPattern;
+        let ctx = RewriteContext::new();
+        let op = build_cont_op.as_operation();
+        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx);
+        let result = pattern.match_and_rewrite(db, &op, &adaptor);
+
+        // Extract the final operation (should be adt.struct_new)
+        match result {
+            RewriteResult::Expand(ops) => {
+                let last_op = ops.last().unwrap();
+                (last_op.dialect(db), last_op.name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("unexpected")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_build_continuation_lowers_to_struct_new(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = build_continuation_produces_struct_new(db);
+        assert_eq!(dialect, adt::DIALECT_NAME());
+        assert_eq!(name, adt::STRUCT_NEW());
+    }
+
+    // ========================================================================
+    // Test: LowerStateGetPattern
+    // ========================================================================
+
+    /// Test helper: creates state_get with field attribute and applies pattern.
+    /// Returns the field index used in the lowered struct_get.
+    #[salsa::tracked]
+    fn state_get_extracts_field_index(db: &dyn salsa::Database) -> u64 {
+        let location = test_location(db);
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+
+        // Create a dummy state value
+        let state_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
+        let state_val = state_op.as_operation().result(db, 0);
+
+        // Create trampoline.state_get with field="field2"
+        let fields = vec![
+            (Symbol::new("field0"), anyref_ty),
+            (Symbol::new("field1"), anyref_ty),
+            (Symbol::new("field2"), anyref_ty),
+        ];
+        let state_type = adt::struct_type(db, Symbol::new("TestState"), fields);
+        let state_get_op =
+            trampoline::state_get(db, location, state_val, anyref_ty, Symbol::new("field2"));
+
+        // Add state_type attribute manually (needed by the pattern)
+        let op = state_get_op.as_operation();
+        let op = op
+            .modify(db)
+            .attr(Symbol::new("state_type"), Attribute::Type(state_type))
+            .build();
+
+        // Apply the pattern
+        let pattern = LowerStateGetPattern;
+        let ctx = RewriteContext::new();
+        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx);
+        let result = pattern.match_and_rewrite(db, &op, &adaptor);
+
+        // Extract field_idx from the resulting adt.struct_get
+        match result {
+            RewriteResult::Expand(ops) => {
+                for op in ops.iter() {
+                    if op.dialect(db) == adt::DIALECT_NAME() && op.name(db) == adt::STRUCT_GET() {
+                        if let Some(Attribute::IntBits(idx)) =
+                            op.attributes(db).get(&Symbol::new("field"))
+                        {
+                            return *idx;
+                        }
+                    }
+                }
+                999 // Not found
+            }
+            _ => 999,
+        }
+    }
+
+    #[salsa_test]
+    fn test_state_get_parses_field_attribute(db: &salsa::DatabaseImpl) {
+        let field_idx = state_get_extracts_field_index(db);
+        assert_eq!(field_idx, 2, "field2 should be parsed to index 2");
+    }
+
+    // ========================================================================
+    // Test: LowerSetYieldStatePattern
+    // ========================================================================
+
+    /// Test helper: creates set_yield_state and applies pattern.
+    /// Returns the global indices used in the lowered global_set operations.
+    #[salsa::tracked]
+    fn set_yield_state_uses_correct_globals(db: &dyn salsa::Database) -> Vec<u32> {
+        let location = test_location(db);
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+
+        // Create a dummy continuation value
+        let cont_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
+        let cont_val = cont_op.as_operation().result(db, 0);
+
+        // Create trampoline.set_yield_state
+        let set_yield_op = trampoline::set_yield_state(db, location, cont_val, 42, 7);
+
+        // Apply the pattern
+        let pattern = LowerSetYieldStatePattern;
+        let ctx = RewriteContext::new();
+        let op = set_yield_op.as_operation();
+        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx);
+        let result = pattern.match_and_rewrite(db, &op, &adaptor);
+
+        // Extract global indices from global_set operations
+        let mut indices = Vec::new();
+        if let RewriteResult::Expand(ops) = result {
+            for op in ops.iter() {
+                if op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == wasm::GLOBAL_SET() {
+                    if let Some(Attribute::IntBits(idx)) =
+                        op.attributes(db).get(&Symbol::new("index"))
+                    {
+                        indices.push(*idx as u32);
+                    }
+                }
+            }
+        }
+        indices
+    }
+
+    #[salsa_test]
+    fn test_set_yield_state_uses_yield_globals(db: &salsa::DatabaseImpl) {
+        let indices = set_yield_state_uses_correct_globals(db);
+
+        // Should set: STATE_IDX (0), TAG_IDX (1), CONT_IDX (2), OP_IDX (3)
+        assert!(
+            indices.contains(&yield_globals::STATE_IDX),
+            "Should set yield_state global"
+        );
+        assert!(
+            indices.contains(&yield_globals::TAG_IDX),
+            "Should set yield_tag global"
+        );
+        assert!(
+            indices.contains(&yield_globals::CONT_IDX),
+            "Should set yield_cont global"
+        );
+        assert!(
+            indices.contains(&yield_globals::OP_IDX),
+            "Should set yield_op_idx global"
+        );
     }
 }
