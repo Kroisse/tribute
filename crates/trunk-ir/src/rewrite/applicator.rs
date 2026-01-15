@@ -127,7 +127,8 @@ impl<'db> PatternApplicator<'db> {
         let mut total_changes = 0;
 
         for iteration in 0..self.max_iterations {
-            // Collect block argument types for this iteration
+            // Collect raw block argument types for this iteration.
+            // Type conversion is applied at access sites (OpAdaptor::get_value_type).
             let block_arg_types = collect_block_arg_types(db, &current);
             let mut ctx = RewriteContext::with_block_arg_types(block_arg_types);
             let new_module = self.rewrite_module(db, &current, &mut ctx);
@@ -237,7 +238,13 @@ impl<'db> PatternApplicator<'db> {
             .collect();
 
         // Step 3: Create OpAdaptor with remapped operands and pre-converted types
-        let adaptor = OpAdaptor::new(remapped_op, remapped_operands, operand_types, ctx);
+        let adaptor = OpAdaptor::new(
+            remapped_op,
+            remapped_operands,
+            operand_types,
+            ctx,
+            &self.type_converter,
+        );
 
         // Step 4: Try each pattern
         for pattern in &self.patterns {
@@ -333,9 +340,12 @@ impl<'db> Default for PatternApplicator<'db> {
 
 /// Collect block argument types from a module.
 ///
-/// Traverses all blocks in the module and collects the types of their arguments.
-/// This is needed because `ValueDef::BlockArg` only stores the `BlockId`,
-/// not the type information.
+/// Traverses all blocks in the module and collects the raw (unconverted) types
+/// of their arguments. This is needed because `ValueDef::BlockArg` only stores
+/// the `BlockId`, not the type information.
+///
+/// Type conversion is applied at access sites (e.g., `OpAdaptor::get_value_type`)
+/// rather than during collection to avoid double conversion.
 fn collect_block_arg_types<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<'db>,

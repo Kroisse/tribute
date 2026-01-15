@@ -170,6 +170,21 @@ impl TypeConverter {
         self.convert_type(db, ty).is_none()
     }
 
+    /// Convert a collection of types.
+    ///
+    /// For each type, applies the first matching conversion. If no conversion
+    /// matches, the original type is preserved.
+    pub fn convert_types<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        types: &crate::IdVec<Type<'db>>,
+    ) -> crate::IdVec<Type<'db>> {
+        types
+            .iter()
+            .map(|ty| self.convert_type(db, *ty).unwrap_or(*ty))
+            .collect()
+    }
+
     /// Materialize a value conversion.
     ///
     /// Generates IR operations to convert a value from `from_ty` to `to_ty`.

@@ -16,8 +16,8 @@ use super::RewriteContext;
 /// convenient access to value types including block arguments. It uses
 /// the delegation pattern to hide the internal `RewriteContext`.
 ///
-/// When a `TypeConverter` is provided, `operand_type()` returns converted types
-/// automatically (e.g., `tribute.int` → `core.i32`).
+/// All type accessors (`operand_type()`, `get_value_type()`, `result_type()`)
+/// automatically apply type conversion via the `TypeConverter`.
 ///
 /// # Example
 ///
@@ -37,8 +37,11 @@ use super::RewriteContext;
 ///         // Get remapped operand
 ///         let operand = adaptor.operand(0).unwrap();
 ///
-///         // Get type of operand (already converted by TypeConverter if configured)
+///         // Get type of operand (automatically converted)
 ///         let _ty = adaptor.operand_type(0);
+///
+///         // Get result type (automatically converted)
+///         let _result_ty = adaptor.result_type(db, 0);
 ///
 ///         RewriteResult::Unchanged
 ///     }
@@ -53,6 +56,8 @@ pub struct OpAdaptor<'db, 'ctx> {
     operand_types: Vec<Option<Type<'db>>>,
     /// Reference to the rewrite context (private).
     ctx: &'ctx RewriteContext<'db>,
+    /// Reference to the type converter for automatic type conversion.
+    type_converter: &'ctx super::TypeConverter,
 }
 
 impl<'db, 'ctx> OpAdaptor<'db, 'ctx> {
@@ -65,16 +70,24 @@ impl<'db, 'ctx> OpAdaptor<'db, 'ctx> {
         remapped_operands: IdVec<Value<'db>>,
         operand_types: Vec<Option<Type<'db>>>,
         ctx: &'ctx RewriteContext<'db>,
+        type_converter: &'ctx super::TypeConverter,
     ) -> Self {
         Self {
             op,
             remapped_operands,
             operand_types,
             ctx,
+            type_converter,
         }
     }
 
     /// Get the original operation.
+    ///
+    /// Use this for dialect/name matching or accessing attributes.
+    ///
+    /// **Warning**: Do NOT use `op.results(db)` to get result types.
+    /// Use [`result_type()`](Self::result_type) or [`result_types()`](Self::result_types)
+    /// instead, which apply automatic type conversion.
     pub fn operation(&self) -> Operation<'db> {
         self.op
     }
@@ -94,15 +107,47 @@ impl<'db, 'ctx> OpAdaptor<'db, 'ctx> {
         self.remapped_operands.len()
     }
 
-    /// Get the type of a value, including block arguments.
+    /// Get the type of a value with automatic type conversion applied.
     ///
-    /// This delegates to `RewriteContext::get_value_type`.
+    /// This looks up the type via `RewriteContext::get_value_type` and then
+    /// applies type conversion via the `TypeConverter`.
     pub fn get_value_type(
         &self,
         db: &'db dyn salsa::Database,
         value: Value<'db>,
     ) -> Option<Type<'db>> {
+        let raw_ty = self.ctx.get_value_type(db, value)?;
+        Some(
+            self.type_converter
+                .convert_type(db, raw_ty)
+                .unwrap_or(raw_ty),
+        )
+    }
+
+    /// Get the raw (unconverted) type of a value.
+    ///
+    /// Use this when you need the original type without conversion.
+    pub fn get_raw_value_type(
+        &self,
+        db: &'db dyn salsa::Database,
+        value: Value<'db>,
+    ) -> Option<Type<'db>> {
         self.ctx.get_value_type(db, value)
+    }
+
+    /// Get the result type at the given index with automatic type conversion.
+    ///
+    /// Returns `None` if the index is out of bounds.
+    pub fn result_type(&self, db: &'db dyn salsa::Database, index: usize) -> Option<Type<'db>> {
+        self.op
+            .results(db)
+            .get(index)
+            .map(|ty| self.type_converter.convert_type(db, *ty).unwrap_or(*ty))
+    }
+
+    /// Get all result types with automatic type conversion applied.
+    pub fn result_types(&self, db: &'db dyn salsa::Database) -> IdVec<Type<'db>> {
+        self.type_converter.convert_types(db, self.op.results(db))
     }
 
     /// Look up the final mapped value for a given value.
