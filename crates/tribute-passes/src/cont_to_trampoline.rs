@@ -383,36 +383,6 @@ fn state_type_name(
     format!("__State_{:x}", hash & 0xFFFFFF)
 }
 
-/// Get the type of a value from its defining operation.
-/// Note: For block args, use the types from ShiftPointInfo.live_value_types instead.
-#[allow(dead_code)]
-fn get_value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Type<'db> {
-    use trunk_ir::ValueDef;
-
-    match value.def(db) {
-        ValueDef::OpResult(op) => {
-            op.results(db)
-                .get(value.index(db))
-                .copied()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "missing result type for op result index {}",
-                        value.index(db)
-                    )
-                })
-        }
-        ValueDef::BlockArg(block_id) => {
-            // Block args should use types from analysis (ShiftPointInfo.live_value_types)
-            // This path indicates a programming error
-            panic!(
-                "get_value_type called on block arg {:?} index {} - use live_value_types instead",
-                block_id,
-                value.index(db)
-            )
-        }
-    }
-}
-
 // ============================================================================
 // Pattern: Lower cont.shift
 // ============================================================================
