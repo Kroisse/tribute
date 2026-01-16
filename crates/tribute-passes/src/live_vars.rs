@@ -15,6 +15,8 @@ use trunk_ir::{DialectOp, Operation, Region, Value};
 pub struct ShiftPoint<'db> {
     /// Index of this shift point (0, 1, 2, ...)
     pub index: usize,
+    /// Total number of shift points in the function
+    pub total_shifts: usize,
     /// The shift operation itself
     pub shift_op: Operation<'db>,
     /// Values that are live at this shift point (defined before, used after)
@@ -74,15 +76,11 @@ impl<'db> FunctionAnalysis<'db> {
 
         // Build shift points with continuation ops and live variables
         let mut shift_points = Vec::new();
+        let total_shifts = shift_indices.len();
         for (shift_idx, (op_index, shift_op)) in shift_indices.iter().enumerate() {
-            // Continuation ops: everything after this shift until the next shift (or end)
-            let next_shift_index = shift_indices
-                .get(shift_idx + 1)
-                .map(|(i, _)| *i)
-                .unwrap_or(ops.len());
-
-            let continuation_ops: Vec<Operation<'db>> =
-                ops[op_index + 1..next_shift_index].to_vec();
+            // Continuation ops: everything after this shift until the end
+            // (includes subsequent shifts - they will be handled in resume functions)
+            let continuation_ops: Vec<Operation<'db>> = ops[op_index + 1..].to_vec();
 
             // Compute live variables: defined before shift, used in continuation
             let defined_before: HashSet<Value<'db>> = collect_defined_values(db, &ops[..*op_index]);
@@ -93,6 +91,7 @@ impl<'db> FunctionAnalysis<'db> {
 
             shift_points.push(ShiftPoint {
                 index: shift_idx,
+                total_shifts,
                 shift_op: *shift_op,
                 live_values,
                 continuation_ops,

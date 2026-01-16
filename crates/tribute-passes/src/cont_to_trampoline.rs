@@ -49,12 +49,12 @@ struct ResumeFuncSpec<'db> {
     shift_result_value: Option<Value<'db>>,
     /// Operations that form the continuation (ops after shift)
     continuation_ops: Vec<Operation<'db>>,
-    /// Whether this is the last shift point (returns final value)
-    is_last: bool,
     /// Name of next resume function (if not last)
     next_resume_name: Option<String>,
     /// Location for generating code
     location: Location<'db>,
+    /// Shift analysis for handling nested shifts in continuation
+    shift_analysis: ShiftAnalysis<'db>,
 }
 
 /// Shared storage for resume function specs during pattern matching.
@@ -464,21 +464,18 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let funcref_ty = wasm::Funcref::new(db).as_type();
         let resume_name = fresh_resume_name(&self.resume_counter);
 
-        // Determine if this is the last shift point and get next resume name
-        let (is_last, next_resume_name) = if let Some(info) = shift_info {
+        // Determine next resume name if not the last shift point
+        let next_resume_name = if let Some(info) = shift_info {
             if info.index + 1 >= info.total_shifts {
-                (true, None)
+                None
             } else {
                 // Pre-compute next resume function name
-                let next_name = {
-                    let counter = self.resume_counter.borrow();
-                    let next_id = *counter; // This will be the next ID
-                    format!("__resume_{}", next_id)
-                };
-                (false, Some(next_name))
+                let counter = self.resume_counter.borrow();
+                let next_id = *counter; // This will be the next ID
+                Some(format!("__resume_{}", next_id))
             }
         } else {
-            (true, None)
+            None
         };
 
         // Record resume function spec with continuation info
@@ -491,9 +488,9 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
             continuation_ops: shift_info
                 .map(|i| i.continuation_ops.clone())
                 .unwrap_or_default(),
-            is_last,
             next_resume_name,
             location,
+            shift_analysis: self.shift_analysis.clone(),
         });
 
         let resume_name_sym = Symbol::from_dynamic(&resume_name);
@@ -611,6 +608,8 @@ fn create_resume_function_with_continuation<'db>(
 
             // Execute continuation operations with value remapping
             let mut last_result: Option<Value<'db>> = None;
+            let mut encountered_shift = false;
+
             for op in &spec.continuation_ops {
                 // Skip func.return - we'll handle the final return ourselves
                 if func::Return::from_operation(db, *op).is_ok() {
@@ -619,6 +618,95 @@ fn create_resume_function_with_continuation<'db>(
                         last_result = Some(*value_map.get(&return_val).unwrap_or(&return_val));
                     }
                     continue;
+                }
+
+                // Handle cont.shift - transform to step_shift with next resume function
+                if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
+                    // Get next resume function name
+                    let next_resume_name = spec.next_resume_name.as_ref().expect(
+                        "encountered shift in continuation but no next_resume_name specified",
+                    );
+
+                    // Look up shift analysis for this shift point
+                    let shift_span = op.location(db).span;
+                    let next_shift_info = spec.shift_analysis.get(&shift_span);
+
+                    // Get shift properties
+                    let tag = shift_op.tag(db);
+                    let ability_ref_type = shift_op.ability_ref(db);
+                    let ability_name = core::AbilityRefType::from_type(db, ability_ref_type)
+                        .and_then(|ar| ar.name(db));
+                    let op_name = Some(shift_op.op_name(db));
+                    let op_idx = compute_op_idx(ability_name, op_name);
+
+                    // Build state struct with current live values (remapped)
+                    let state_name =
+                        Symbol::from_dynamic(&state_type_name(ability_name, op_name, tag));
+                    let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
+                        if let Some(info) = next_shift_info {
+                            info.live_values
+                                .iter()
+                                .enumerate()
+                                .map(|(i, v)| {
+                                    let remapped_v = *value_map.get(v).unwrap_or(v);
+                                    let field_name = Symbol::from_dynamic(&format!("field_{}", i));
+                                    let field_type = get_value_type(db, remapped_v);
+                                    (remapped_v, (field_name, field_type))
+                                })
+                                .unzip()
+                        } else {
+                            (vec![], vec![])
+                        };
+
+                    let state_adt_ty = adt::struct_type(db, state_name, state_fields);
+                    let state_op = builder.op(trampoline::build_state(
+                        db,
+                        location,
+                        state_values,
+                        state_adt_ty,
+                        state_adt_ty,
+                    ));
+                    let state_val = state_op.result(db);
+
+                    // Get resume function reference
+                    let funcref_ty = wasm::Funcref::new(db).as_type();
+                    let resume_name_sym = Symbol::from_dynamic(next_resume_name);
+                    let const_op =
+                        builder.op(func::constant(db, location, funcref_ty, resume_name_sym));
+                    let resume_fn_val = const_op.result(db);
+
+                    // Get shift value (remap if needed)
+                    let shift_value_val = op
+                        .operands(db)
+                        .first()
+                        .map(|&v| *value_map.get(&v).unwrap_or(&v))
+                        .unwrap_or(state_val);
+
+                    // Build continuation
+                    let cont_ty = trampoline::Continuation::new(db).as_type();
+                    let cont_op = builder.op(trampoline::build_continuation(
+                        db,
+                        location,
+                        resume_fn_val,
+                        state_val,
+                        shift_value_val,
+                        cont_ty,
+                        tag,
+                        op_idx,
+                    ));
+                    let cont_val = cont_op.result(db);
+
+                    // Set yield state and return step_shift
+                    builder.op(trampoline::set_yield_state(
+                        db, location, cont_val, tag, op_idx,
+                    ));
+                    let step_shift = builder.op(trampoline::step_shift(
+                        db, location, cont_val, step_ty, tag, op_idx,
+                    ));
+                    builder.op(func::r#return(db, location, Some(step_shift.result(db))));
+
+                    encountered_shift = true;
+                    break; // Stop processing further ops
                 }
 
                 // Remap operands
@@ -653,10 +741,13 @@ fn create_resume_function_with_continuation<'db>(
                 }
             }
 
-            // Return Step.Done with the final result (or resume_value as fallback)
-            let final_value = last_result.unwrap_or(resume_value);
-            let step_done = builder.op(trampoline::step_done(db, location, final_value, step_ty));
-            builder.op(func::r#return(db, location, Some(step_done.result(db))));
+            // Return Step.Done with the final result (only if no shift was encountered)
+            if !encountered_shift {
+                let final_value = last_result.unwrap_or(resume_value);
+                let step_done =
+                    builder.op(trampoline::step_done(db, location, final_value, step_ty));
+                builder.op(func::r#return(db, location, Some(step_done.result(db))));
+            }
         },
     );
 
