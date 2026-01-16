@@ -81,6 +81,7 @@
 
 mod applicator;
 mod context;
+mod conversion_target;
 mod op_adaptor;
 mod pattern;
 mod result;
@@ -88,6 +89,7 @@ mod type_converter;
 
 pub use applicator::{ApplyResult, PatternApplicator};
 pub use context::RewriteContext;
+pub use conversion_target::{ConversionError, ConversionTarget, IllegalOp};
 pub use op_adaptor::OpAdaptor;
 pub use pattern::{OperationMatcher, RewritePattern};
 pub use result::RewriteResult;

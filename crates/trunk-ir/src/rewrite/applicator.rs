@@ -9,6 +9,7 @@ use crate::dialect::core::Module;
 use crate::{Block, BlockId, IdVec, Operation, Region, Type};
 
 use super::context::RewriteContext;
+use super::conversion_target::{ConversionError, ConversionTarget};
 use super::op_adaptor::OpAdaptor;
 use super::pattern::RewritePattern;
 use super::result::RewriteResult;
@@ -23,6 +24,33 @@ pub struct ApplyResult<'db> {
     pub total_changes: usize,
     /// Whether fixpoint was reached (no more changes possible).
     pub reached_fixpoint: bool,
+}
+
+impl<'db> ApplyResult<'db> {
+    /// Verify that the transformed module contains no illegal operations
+    /// according to the given conversion target.
+    ///
+    /// Returns `Ok(self)` if verification passes, or `Err(ConversionError)`
+    /// if illegal operations remain.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let target = ConversionTarget::new()
+    ///     .legal_dialect("trampoline")
+    ///     .illegal_dialect("cont");
+    ///
+    /// let result = applicator.apply(db, module)
+    ///     .verify(db, &target)?;  // Fails if any cont.* ops remain
+    /// ```
+    pub fn verify(
+        self,
+        db: &'db dyn salsa::Database,
+        target: &ConversionTarget,
+    ) -> Result<Self, ConversionError> {
+        target.verify(db, &self.module)?;
+        Ok(self)
+    }
 }
 
 /// Applies a set of rewrite patterns to IR until fixpoint.
@@ -88,6 +116,8 @@ pub struct PatternApplicator<'db> {
     patterns: Vec<Box<dyn RewritePattern<'db> + 'db>>,
     max_iterations: usize,
     type_converter: super::TypeConverter,
+    /// Optional conversion target for skipping legal operations.
+    conversion_target: Option<ConversionTarget>,
 }
 
 impl<'db> PatternApplicator<'db> {
@@ -103,12 +133,38 @@ impl<'db> PatternApplicator<'db> {
             patterns: Vec::new(),
             max_iterations: 100,
             type_converter,
+            conversion_target: None,
         }
     }
 
     /// Set the maximum number of iterations before giving up.
     pub fn with_max_iterations(mut self, max: usize) -> Self {
         self.max_iterations = max;
+        self
+    }
+
+    /// Set a conversion target for this applicator.
+    ///
+    /// When a conversion target is set, operations that are already legal
+    /// according to the target will be skipped during pattern matching.
+    /// This provides an optimization for partial conversion scenarios.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let target = ConversionTarget::new()
+    ///     .legal_dialect("func")
+    ///     .illegal_dialect("cont");
+    ///
+    /// let applicator = PatternApplicator::new(TypeConverter::new())
+    ///     .with_conversion_target(target)
+    ///     .add_pattern(LowerContPattern);
+    ///
+    /// // func.* operations will be skipped, only cont.* will be matched
+    /// let result = applicator.apply(db, module);
+    /// ```
+    pub fn with_conversion_target(mut self, target: ConversionTarget) -> Self {
+        self.conversion_target = Some(target);
         self
     }
 
@@ -208,9 +264,22 @@ impl<'db> PatternApplicator<'db> {
         )
     }
 
+    /// Check if an operation is legal according to the conversion target.
+    fn is_op_legal(&self, db: &'db dyn salsa::Database, op: &Operation<'db>) -> bool {
+        if let Some(ref target) = self.conversion_target {
+            let dialect = op.dialect(db);
+            let name = op.name(db);
+            dialect.with_str(|d| name.with_str(|n| target.is_legal(d, n)))
+        } else {
+            // No conversion target means no legality constraints
+            false
+        }
+    }
+
     /// Rewrite a single operation.
     ///
     /// This is the core rewrite loop:
+    /// 0. Skip pattern matching if operation is already legal
     /// 1. Remap operands using the current value map
     /// 2. Compute converted operand types using the type converter
     /// 3. Create OpAdaptor with remapped operands and pre-converted types
@@ -224,6 +293,17 @@ impl<'db> PatternApplicator<'db> {
         op: &Operation<'db>,
         ctx: &mut RewriteContext<'db>,
     ) -> Vec<Operation<'db>> {
+        // Step 0: Skip pattern matching for legal operations
+        // (still need to remap operands and process nested regions)
+        if self.is_op_legal(db, op) {
+            let remapped_op = ctx.remap_operands(db, op);
+            let final_op = self.rewrite_op_regions(db, &remapped_op, ctx);
+            if final_op != *op {
+                ctx.map_results(db, op, &final_op);
+            }
+            return vec![final_op];
+        }
+
         // Step 1: Remap operands from previous transformations
         let remapped_op = ctx.remap_operands(db, op);
 
@@ -518,5 +598,47 @@ mod tests {
         assert!(reached_fixpoint);
         assert_eq!(total_changes, 0);
         assert_eq!(iterations, 1);
+    }
+
+    /// Apply patterns with a conversion target that makes arith.const legal.
+    #[salsa::tracked]
+    fn apply_with_legal_arith<'db>(
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+    ) -> (bool, usize, usize, Module<'db>) {
+        use super::ConversionTarget;
+
+        let target = ConversionTarget::new().legal_dialect("arith");
+        let applicator = PatternApplicator::new(TypeConverter::new())
+            .with_conversion_target(target)
+            .add_pattern(ConstToMulPattern);
+        let result = applicator.apply(db, module);
+        (
+            result.reached_fixpoint,
+            result.total_changes,
+            result.iterations,
+            result.module,
+        )
+    }
+
+    #[salsa_test]
+    fn test_conversion_target_skips_legal_ops(db: &salsa::DatabaseImpl) {
+        // Same module as basic test, but arith is marked as legal
+        let module = make_const_module(db);
+        let (reached_fixpoint, total_changes, iterations, result_module) =
+            apply_with_legal_arith(db, module);
+
+        // Should reach fixpoint with NO changes because arith.const is legal
+        assert!(reached_fixpoint);
+        assert_eq!(total_changes, 0, "Legal ops should be skipped");
+        assert_eq!(iterations, 1);
+
+        // Module should be unchanged (still has arith.const(42))
+        let ops = result_module.body(db).blocks(db)[0].operations(db);
+        assert_eq!(ops.len(), 1, "Module should still have 1 operation");
+        assert_eq!(ops[0].name(db), arith::CONST());
+
+        let const_op = arith::Const::from_operation(db, ops[0]).unwrap();
+        assert_eq!(const_op.value(db), Attribute::IntBits(42));
     }
 }
