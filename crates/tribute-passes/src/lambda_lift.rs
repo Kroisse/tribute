@@ -292,14 +292,10 @@ impl<'db> LambdaInfoCollector<'db> {
     fn get_continuation_type_from_handler_suspend(&self, op: &Operation<'db>) -> Option<Type<'db>> {
         use tribute_pat::handler_suspend_attrs::CONTINUATION_TYPE;
 
-        if let Some(Attribute::Type(cont_ty)) = op.attributes(self.db).get(&CONTINUATION_TYPE()) {
+        let attrs = op.attributes(self.db);
+        if let Some(Attribute::Type(cont_ty)) = attrs.get(&CONTINUATION_TYPE()) {
             // Only return if it's not a type variable (meaning it was resolved by TypeSubst)
             if !tribute::is_type_var(self.db, *cont_ty) {
-                tracing::trace!(
-                    "get_continuation_type_from_handler_suspend: found {}.{}",
-                    cont_ty.dialect(self.db),
-                    cont_ty.name(self.db)
-                );
                 return Some(*cont_ty);
             }
         }
@@ -346,19 +342,18 @@ impl<'db> LambdaInfoCollector<'db> {
                     let cont_region = handler_suspend.continuation(self.db);
 
                     // First, try to get continuation type from handler_suspend attribute
-                    let cont_ty = self
-                        .get_continuation_type_from_handler_suspend(op)
-                        .or_else(|| self.get_continuation_type_from_region(&cont_region))
-                        .unwrap_or_else(|| {
-                            // Fallback: create a closure type if typeck didn't set the type
-                            let func_ty = core::Func::new(
-                                self.db,
-                                IdVec::from(vec![ty]), // param: effect result type
-                                ty,                    // return: same as effect result (simplified)
-                            )
-                            .as_type();
-                            closure::Closure::new(self.db, func_ty).as_type()
-                        });
+                    let from_attr = self.get_continuation_type_from_handler_suspend(op);
+                    let from_region = self.get_continuation_type_from_region(&cont_region);
+                    let cont_ty = from_attr.or(from_region).unwrap_or_else(|| {
+                        // Fallback: create a closure type if typeck didn't set the type
+                        let func_ty = core::Func::new(
+                            self.db,
+                            IdVec::from(vec![ty]), // param: effect result type
+                            ty,                    // return: same as effect result (simplified)
+                        )
+                        .as_type();
+                        closure::Closure::new(self.db, func_ty).as_type()
+                    });
                     self.collect_pattern_bindings(&cont_region, cont_ty);
                 } else {
                     // Recurse into nested regions (for variant fields, etc.)

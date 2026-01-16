@@ -967,4 +967,110 @@ mod tests {
             .get(&trunk_ir::Symbol::new("abi"));
         assert!(abi.is_none());
     }
+
+    #[test]
+    fn test_function_declaration_effect_annotation() {
+        use trunk_ir::DialectType;
+        use trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func as CoreFunc};
+
+        let db = salsa::DatabaseImpl::default();
+        // Function declaration with explicit effect annotation
+        let source = r#"
+            ability State(s) {
+                fn get() -> s
+            }
+            fn get_state() ->{State(Int)} Int {
+                State::get()
+            }
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        let ops = blocks[0].operations(&db);
+
+        // Find the get_state function (skip ability definition)
+        let func_op = ops
+            .iter()
+            .find_map(|op| {
+                func::Func::from_operation(&db, *op)
+                    .ok()
+                    .filter(|f| f.name(&db) == "get_state")
+            })
+            .expect("Should have get_state function");
+
+        let func_ty = func_op.r#type(&db);
+        let core_func = CoreFunc::from_type(&db, func_ty).expect("Should be a function type");
+
+        // Function should have the effect annotation
+        let effect = core_func
+            .effect(&db)
+            .expect("Function type should have effect annotation");
+        let effect_row = EffectRowType::from_type(&db, effect).expect("Should be an effect row");
+
+        // Should have 1 ability (State)
+        let abilities = effect_row.abilities(&db);
+        assert_eq!(abilities.len(), 1, "Should have 1 ability (State)");
+
+        // Verify the ability is State(Int)
+        let ability = AbilityRefType::from_type(&db, abilities[0]).expect("Should be ability ref");
+        assert_eq!(
+            ability.name(&db).map(|s| s.to_string()),
+            Some("State".to_string())
+        );
+
+        // Verify the ability has Int parameter
+        let params = ability.params(&db);
+        assert_eq!(params.len(), 1, "State should have 1 type parameter");
+    }
+
+    #[test]
+    fn test_extern_function_effect_annotation() {
+        use trunk_ir::DialectType;
+        use trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func as CoreFunc};
+
+        let db = salsa::DatabaseImpl::default();
+        // Extern function with effect annotation
+        let source = r#"
+            ability IO {
+                fn read_line() -> Text
+            }
+            extern fn do_io() ->{IO} Int
+        "#;
+        let module = lower_and_get_module(&db, source);
+
+        let body_region = module.body(&db);
+        let blocks = body_region.blocks(&db);
+        let ops = blocks[0].operations(&db);
+
+        // Find the do_io extern function
+        let func_op = ops
+            .iter()
+            .find_map(|op| {
+                func::Func::from_operation(&db, *op)
+                    .ok()
+                    .filter(|f| f.name(&db) == "do_io")
+            })
+            .expect("Should have do_io function");
+
+        let func_ty = func_op.r#type(&db);
+        let core_func = CoreFunc::from_type(&db, func_ty).expect("Should be a function type");
+
+        // Function should have the effect annotation
+        let effect = core_func
+            .effect(&db)
+            .expect("Extern function should have effect annotation");
+        let effect_row = EffectRowType::from_type(&db, effect).expect("Should be an effect row");
+
+        // Should have 1 ability (IO)
+        let abilities = effect_row.abilities(&db);
+        assert_eq!(abilities.len(), 1, "Should have 1 ability (IO)");
+
+        // Verify the ability is IO
+        let ability = AbilityRefType::from_type(&db, abilities[0]).expect("Should be ability ref");
+        assert_eq!(
+            ability.name(&db).map(|s| s.to_string()),
+            Some("IO".to_string())
+        );
+    }
 }

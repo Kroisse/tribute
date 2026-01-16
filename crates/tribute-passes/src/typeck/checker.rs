@@ -227,15 +227,22 @@ impl<'db> TypeChecker<'db> {
     /// This restriction may be lifted in the future with named effects.
     fn check_ability_conflicts(&self, span: trunk_ir::Span) {
         if let Some((name, abilities)) = self.current_effect.find_conflicting_abilities() {
-            if abilities.iter().any(|ability| {
-                ability
-                    .params
-                    .iter()
-                    .any(|ty| tribute::is_type_var(self.db, *ty))
-            }) {
+            // Filter to only fully concrete abilities (non-empty params with no type variables)
+            let concrete: Vec<_> = abilities
+                .iter()
+                .filter(|ability| {
+                    !ability.params.is_empty()
+                        && !ability
+                            .params
+                            .iter()
+                            .any(|ty| tribute::is_type_var(self.db, *ty))
+                })
+                .collect();
+            // Skip if fewer than 2 concrete abilities (no conflict to report yet)
+            if concrete.len() < 2 {
                 return;
             }
-            let ability_strs: Vec<String> = abilities
+            let ability_strs: Vec<String> = concrete
                 .iter()
                 .map(|a| {
                     if a.params.is_empty() {
@@ -285,10 +292,6 @@ impl<'db> TypeChecker<'db> {
             if let Ok(func_op) = func::Func::from_operation(self.db, *op) {
                 let name = func_op.name(self.db);
                 let func_type = func_op.r#type(self.db);
-                trace!(
-                    "collect_function_types_from_block: {:?} -> {:?}",
-                    name, func_type
-                );
                 Arc::make_mut(&mut self.function_types).insert(name, func_type);
             }
         }

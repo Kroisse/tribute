@@ -1075,12 +1075,13 @@ impl<'db> Resolver<'db> {
         builder.build()
     }
 
-    /// Resolve a function type (params and result).
+    /// Resolve a function type (params and result), preserving effect annotation.
     fn resolve_func_type(&self, ty: Type<'db>) -> Type<'db> {
         // Check if this is a func type (core.func)
         if let Some(func_ty) = core::Func::from_type(self.db, ty) {
             let params = func_ty.params(self.db);
             let result = func_ty.result(self.db);
+            let effect = func_ty.effect(self.db);
 
             // Resolve all parameter types
             let resolved_params: IdVec<_> = params.iter().map(|p| self.resolve_type(*p)).collect();
@@ -1088,8 +1089,11 @@ impl<'db> Resolver<'db> {
             // Resolve result type
             let resolved_result = self.resolve_type(result);
 
-            // Create resolved function type
-            *core::Func::new(self.db, resolved_params, resolved_result)
+            // Resolve effect type if present
+            let resolved_effect = effect.map(|e| self.resolve_type(e));
+
+            // Create resolved function type with effect preserved
+            *core::Func::with_effect(self.db, resolved_params, resolved_result, resolved_effect)
         } else {
             // Not a func type, just resolve it normally
             self.resolve_type(ty)
