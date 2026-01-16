@@ -398,8 +398,13 @@ pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, module: Module<'db>) ->
 /// - `ability.perform` → `cont.shift` (with evidence lookup)
 /// - `ability.resume` → `cont.resume`
 /// - `ability.abort` → `cont.drop`
+///
+/// Returns an error if any `ability.*` operations remain after conversion.
 #[salsa::tracked]
-pub fn stage_handler_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+pub fn stage_handler_lower<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Result<Module<'db>, trunk_ir::rewrite::ConversionError> {
     lower_handlers(db, module)
 }
 
@@ -414,11 +419,13 @@ pub fn stage_handler_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db
 ///
 /// This is a backend-agnostic pass that prepares continuation operations for
 /// the trampoline (yield-bubbling) implementation strategy.
+///
+/// Returns an error if any `cont.*` operations (except `cont.drop`) remain after conversion.
 #[salsa::tracked]
 pub fn stage_cont_to_trampoline<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
-) -> Module<'db> {
+) -> Result<Module<'db>, trunk_ir::rewrite::ConversionError> {
     lower_cont_to_trampoline(db, module)
 }
 
@@ -569,7 +576,10 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 /// 12. DCE - Dead code elimination
 /// 13. Final resolve - Report unresolved references
 #[salsa::tracked]
-pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+pub fn compile<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Module<'db>, trunk_ir::rewrite::ConversionError> {
     // Parse and lower to initial IR
     let module = parse_and_lower(db, source);
 
@@ -588,17 +598,17 @@ pub fn compile<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'
     let module = stage_evidence(db, module);
     let module = stage_tribute_to_cont(db, module); // tribute.handle → cont.push_prompt + cont.handler_dispatch
     let module = stage_tribute_to_scf(db, module); // tribute.case → scf.if
-    let module = stage_handler_lower(db, module); // ability.perform → cont.shift, etc.
+    let module = stage_handler_lower(db, module)?; // ability.perform → cont.shift, etc.
 
     // Continuation lowering (backend-agnostic trampoline implementation)
-    let module = stage_cont_to_trampoline(db, module); // cont.shift → trampoline ops
+    let module = stage_cont_to_trampoline(db, module)?; // cont.shift → trampoline ops
 
     let module = stage_dce(db, module);
 
     // Final pass: resolve any remaining unresolved references and emit diagnostics
     let env = build_env(db, &module);
     let mut resolver = Resolver::with_unresolved_reporting(db, env);
-    resolver.resolve_module(&module)
+    Ok(resolver.resolve_module(&module))
 }
 
 /// Compile to WebAssembly binary.
@@ -629,10 +639,10 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_evidence(db, module);
     let module = stage_tribute_to_cont(db, module);
     let module = stage_tribute_to_scf(db, module);
-    let module = stage_handler_lower(db, module);
+    let module = stage_handler_lower(db, module).ok()?;
 
     // Continuation lowering (backend-agnostic trampoline implementation)
-    let module = stage_cont_to_trampoline(db, module);
+    let module = stage_cont_to_trampoline(db, module).ok()?;
 
     let module = stage_dce(db, module);
 
@@ -650,13 +660,31 @@ pub fn compile_with_diagnostics<'db>(
     // Run the full compilation pipeline (which checks for unresolved references)
     // Type checking is performed inside the tracked `compile` function,
     // so diagnostics are properly accumulated via Salsa.
-    let module = compile(db, source);
+    let result = compile(db, source);
 
     // Collect all accumulated diagnostics from the compilation
-    let diagnostics = compile::accumulated::<Diagnostic>(db, source)
+    let mut diagnostics: Vec<Diagnostic> = compile::accumulated::<Diagnostic>(db, source)
         .into_iter()
         .cloned()
         .collect();
+
+    let module = match result {
+        Ok(module) => module,
+        Err(err) => {
+            // Add conversion error as diagnostic
+            diagnostics.push(Diagnostic {
+                message: format!("{}", err),
+                span: trunk_ir::Span::new(0, 0),
+                severity: tribute_passes::DiagnosticSeverity::Error,
+                phase: tribute_passes::CompilationPhase::Lowering,
+            });
+            // Return a minimal module on error
+            let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
+            let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
+            let empty_body = trunk_ir::Region::new(db, location, trunk_ir::IdVec::from(Vec::new()));
+            Module::create(db, location, trunk_ir::Symbol::new("error"), empty_body)
+        }
+    };
 
     CompilationResult {
         module,
@@ -673,7 +701,7 @@ mod tests {
 
     #[salsa::tracked]
     fn test_compile(db: &dyn salsa::Database, source: SourceCst) -> Module<'_> {
-        compile(db, source)
+        compile(db, source).expect("compilation should succeed")
     }
 
     fn source_from_str(path: &str, text: &str) -> SourceCst {

@@ -27,7 +27,9 @@ use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::{adt, closure, tribute, tribute_rt};
 use trunk_ir::Attribute;
 use trunk_ir::dialect::{cont, core, wasm};
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+};
 use trunk_ir::{DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value, ValueDef};
 
 use crate::type_converter::wasm_type_converter;
@@ -50,7 +52,9 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) -> co
         .add_pattern(IfResultTypePattern)
         .add_pattern(BlockResultTypePattern)
         .add_pattern(LoopResultTypePattern);
-    applicator.apply(db, module).module
+    // No specific conversion target - type concretization is an optimization pass
+    let target = ConversionTarget::new();
+    applicator.apply_partial(db, module, target).module
 }
 
 /// Collect function return types from the module.

@@ -22,7 +22,9 @@
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{core, wasm};
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+};
 use trunk_ir::{DialectOp, DialectType, Operation};
 
 use crate::gc_types::BOXED_F64_IDX;
@@ -30,6 +32,8 @@ use crate::type_converter::wasm_type_converter;
 
 /// Lower tribute_rt dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    // No specific conversion target - tribute_rt lowering is a dialect transformation
+    let target = ConversionTarget::new();
     PatternApplicator::new(wasm_type_converter())
         .add_pattern(BoxIntPattern)
         .add_pattern(UnboxIntPattern)
@@ -39,7 +43,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(UnboxFloatPattern)
         .add_pattern(BoxBoolPattern)
         .add_pattern(UnboxBoolPattern)
-        .apply(db, module)
+        .apply_partial(db, module, target)
         .module
 }
 

@@ -33,18 +33,20 @@ use trunk_ir::dialect::{cont, core, func};
 #[cfg(test)]
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionError, ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    TypeConverter,
 };
 use trunk_ir::{Block, BlockId, DialectOp, IdVec, Operation, Region};
 
 /// Lower handler operations from ability dialect to cont dialect.
 ///
 /// This is the main entry point for the handler lowering pass.
+/// Returns an error if any `ability.*` operations remain after conversion.
 #[salsa::tracked]
 pub fn lower_handlers<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
-) -> core::Module<'db> {
+) -> Result<core::Module<'db>, ConversionError> {
     let converter = TypeConverter::new()
         .add_conversion(|db, ty| {
             tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
@@ -61,22 +63,16 @@ pub fn lower_handlers<'db>(
 
     // Note: tribute.handle → cont.push_prompt is now handled by tribute_to_scf.
     // This pass only handles ability.* → cont.* transformations.
+    // Verify all ability.* ops are converted after the pass
+    let target = ConversionTarget::new().illegal_dialect("ability");
+
     let applicator = PatternApplicator::new(converter)
         .add_pattern(LowerPerformPattern::new())
         .add_pattern(LowerContinuationCallPattern) // Must come before LowerResumePattern
         .add_pattern(LowerResumePattern)
         .add_pattern(LowerAbortPattern);
 
-    let module = applicator.apply(db, module).module;
-
-    // Verify all ability.* ops are converted
-    let target = ConversionTarget::new().illegal_dialect("ability");
-    if let Err(err) = target.verify(db, &module) {
-        tracing::warn!("handler_lower: {}", err);
-        debug_assert!(false, "handler_lower: {}", err);
-    }
-
-    module
+    Ok(applicator.apply(db, module, target)?.module)
 }
 
 // === Prompt Tag Generation ===

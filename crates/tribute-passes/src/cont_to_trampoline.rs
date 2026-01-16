@@ -24,7 +24,8 @@ use trunk_ir::dialect::func::{self, Func};
 use trunk_ir::dialect::{arith, cont, scf, wasm};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionError, ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    TypeConverter,
 };
 use trunk_ir::{
     Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Span, Symbol,
@@ -83,10 +84,12 @@ struct ShiftPointInfo<'db> {
 }
 
 /// Lower cont dialect operations to trampoline dialect.
+///
+/// Returns an error if any `cont.*` operations (except `cont.drop`) remain after conversion.
 pub fn lower_cont_to_trampoline<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
-) -> Module<'db> {
+) -> Result<Module<'db>, ConversionError> {
     // Shared state for resume function generation (no global state!)
     let resume_specs: ResumeSpecs<'db> = Rc::new(RefCell::new(Vec::new()));
     let resume_counter: ResumeCounter = Rc::new(RefCell::new(0));
@@ -95,6 +98,8 @@ pub fn lower_cont_to_trampoline<'db>(
     let effectful_funcs = identify_effectful_functions(db, &module);
 
     // Step 2: Update function signatures, call result types, and scf.if types
+    // Use empty target for intermediate steps (no verification needed)
+    let empty_target = ConversionTarget::new();
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(UpdateFuncTypePattern {
             effectful_funcs: effectful_funcs.clone(),
@@ -105,7 +110,7 @@ pub fn lower_cont_to_trampoline<'db>(
         .add_pattern(UpdateScfIfTypePattern {
             effectful_funcs: effectful_funcs.clone(),
         });
-    let result = applicator.apply(db, module);
+    let result = applicator.apply_partial(db, module, empty_target.clone());
 
     // Step 2.5: Analyze shift points in effectful functions (before transforming them)
     let shift_analysis = analyze_shift_points(db, &result.module, &effectful_funcs);
@@ -124,7 +129,7 @@ pub fn lower_cont_to_trampoline<'db>(
         .add_pattern(LowerPushPromptPattern)
         .add_pattern(LowerHandlerDispatchPattern);
 
-    let result = applicator.apply(db, result.module);
+    let result = applicator.apply_partial(db, result.module, empty_target.clone());
 
     // Step 4: Wrap returns in effectful functions with step_done
     let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(
@@ -132,7 +137,7 @@ pub fn lower_cont_to_trampoline<'db>(
             effectful_funcs: Rc::clone(&effectful_funcs),
         },
     );
-    let result = applicator.apply(db, result.module);
+    let result = applicator.apply_partial(db, result.module, empty_target);
     let module = result.module;
 
     // Verify all cont.* ops (except cont.drop) are converted
@@ -143,11 +148,8 @@ pub fn lower_cont_to_trampoline<'db>(
     // Generate resume functions from collected specs
     let specs = resume_specs.borrow();
     if specs.is_empty() {
-        if let Err(err) = conversion_target.verify(db, &module) {
-            tracing::warn!("cont_to_trampoline: {}", err);
-            debug_assert!(false, "cont_to_trampoline: {}", err);
-        }
-        return module;
+        conversion_target.verify(db, &module)?;
+        return Ok(module);
     }
 
     let _location = module.location(db);
@@ -174,12 +176,8 @@ pub fn lower_cont_to_trampoline<'db>(
     let new_body = Region::new(db, body.location(db), IdVec::from(blocks));
     let module = Module::create(db, module.location(db), module.name(db), new_body);
 
-    if let Err(err) = conversion_target.verify(db, &module) {
-        tracing::warn!("cont_to_trampoline: {}", err);
-        debug_assert!(false, "cont_to_trampoline: {}", err);
-    }
-
-    module
+    conversion_target.verify(db, &module)?;
+    Ok(module)
 }
 
 // ============================================================================

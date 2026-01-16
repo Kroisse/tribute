@@ -11,7 +11,9 @@ use std::collections::HashMap;
 
 use tracing::debug;
 use trunk_ir::dialect::{core, wasm};
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+};
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Type, Value,
     ValueDef,
@@ -413,12 +415,15 @@ pub fn assign_gc_type_indices<'db>(
         registry.signature_to_idx.len()
     );
 
+    // No specific conversion target - these are optimization passes
+    let target = ConversionTarget::new();
+
     // Phase 2: Update struct_new operations
     let applicator =
         PatternApplicator::new(wasm_type_converter()).add_pattern(UpdateStructNewPattern {
             registry: registry.clone(),
         });
-    let module = applicator.apply(db, module).module;
+    let module = applicator.apply_partial(db, module, target.clone()).module;
 
     // Phase 3: Re-collect with updated struct_new to get value->type_idx mapping
     let registry = collect_struct_types(db, module);
@@ -428,12 +433,12 @@ pub fn assign_gc_type_indices<'db>(
         PatternApplicator::new(wasm_type_converter()).add_pattern(UpdateStructGetPattern {
             registry: registry.clone(),
         });
-    let module = applicator.apply(db, module).module;
+    let module = applicator.apply_partial(db, module, target.clone()).module;
 
     // Phase 5: Update ref_cast operations
     let applicator = PatternApplicator::new(wasm_type_converter())
         .add_pattern(UpdateRefCastPattern { registry });
-    applicator.apply(db, module).module
+    applicator.apply_partial(db, module, target).module
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 
 use crate::dialect::core::Module;
-use crate::{Operation, OperationWalk, WalkAction};
+use crate::{Operation, OperationWalk, Symbol, WalkAction};
 
 /// Specifies legality constraints for IR transformation passes.
 ///
@@ -29,24 +29,24 @@ use crate::{Operation, OperationWalk, WalkAction};
 #[derive(Debug, Clone, Default)]
 pub struct ConversionTarget {
     /// Dialects that are legal (allowed to remain after conversion).
-    legal_dialects: HashSet<&'static str>,
+    legal_dialects: HashSet<Symbol>,
     /// Dialects that are illegal (must be fully converted).
-    illegal_dialects: HashSet<&'static str>,
+    illegal_dialects: HashSet<Symbol>,
     /// Operations that are explicitly legal regardless of dialect.
-    legal_ops: HashSet<(&'static str, &'static str)>,
+    legal_ops: HashSet<(Symbol, Symbol)>,
     /// Operations that are explicitly illegal regardless of dialect.
-    illegal_ops: HashSet<(&'static str, &'static str)>,
+    illegal_ops: HashSet<(Symbol, Symbol)>,
 }
 
 /// Error returned when verification fails.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
 pub struct ConversionError {
     /// List of illegal operations found.
     pub illegal_ops: Vec<IllegalOp>,
 }
 
 /// Information about an illegal operation found during verification.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
 pub struct IllegalOp {
     /// The dialect name of the illegal operation.
     pub dialect: String,
@@ -79,30 +79,34 @@ impl ConversionTarget {
     }
 
     /// Mark a dialect as legal (operations from this dialect may remain).
-    pub fn legal_dialect(mut self, dialect: &'static str) -> Self {
+    pub fn legal_dialect(mut self, dialect: impl Into<Symbol>) -> Self {
+        let dialect = dialect.into();
         self.legal_dialects.insert(dialect);
-        self.illegal_dialects.remove(dialect);
+        self.illegal_dialects.remove(&dialect);
         self
     }
 
     /// Mark a dialect as illegal (all operations must be converted).
-    pub fn illegal_dialect(mut self, dialect: &'static str) -> Self {
+    pub fn illegal_dialect(mut self, dialect: impl Into<Symbol>) -> Self {
+        let dialect = dialect.into();
         self.illegal_dialects.insert(dialect);
-        self.legal_dialects.remove(dialect);
+        self.legal_dialects.remove(&dialect);
         self
     }
 
     /// Mark a specific operation as legal regardless of its dialect's legality.
-    pub fn legal_op(mut self, dialect: &'static str, name: &'static str) -> Self {
-        self.legal_ops.insert((dialect, name));
-        self.illegal_ops.remove(&(dialect, name));
+    pub fn legal_op(mut self, dialect: impl Into<Symbol>, name: impl Into<Symbol>) -> Self {
+        let key = (dialect.into(), name.into());
+        self.legal_ops.insert(key);
+        self.illegal_ops.remove(&key);
         self
     }
 
     /// Mark a specific operation as illegal regardless of its dialect's legality.
-    pub fn illegal_op(mut self, dialect: &'static str, name: &'static str) -> Self {
-        self.illegal_ops.insert((dialect, name));
-        self.legal_ops.remove(&(dialect, name));
+    pub fn illegal_op(mut self, dialect: impl Into<Symbol>, name: impl Into<Symbol>) -> Self {
+        let key = (dialect.into(), name.into());
+        self.illegal_ops.insert(key);
+        self.legal_ops.remove(&key);
         self
     }
 
@@ -112,28 +116,20 @@ impl ConversionTarget {
     /// 1. Check explicit op legality (legal_ops/illegal_ops)
     /// 2. Check dialect legality (legal_dialects/illegal_dialects)
     /// 3. If neither specified, operation is considered legal
-    pub fn is_legal(&self, dialect: &str, name: &str) -> bool {
+    pub fn is_legal(&self, dialect: Symbol, name: Symbol) -> bool {
         // 1. Check explicit op-level rules first
-        if self
-            .legal_ops
-            .iter()
-            .any(|(d, n)| *d == dialect && *n == name)
-        {
+        if self.legal_ops.contains(&(dialect, name)) {
             return true;
         }
-        if self
-            .illegal_ops
-            .iter()
-            .any(|(d, n)| *d == dialect && *n == name)
-        {
+        if self.illegal_ops.contains(&(dialect, name)) {
             return false;
         }
 
         // 2. Check dialect-level rules
-        if self.legal_dialects.iter().any(|d| *d == dialect) {
+        if self.legal_dialects.contains(&dialect) {
             return true;
         }
-        if self.illegal_dialects.iter().any(|d| *d == dialect) {
+        if self.illegal_dialects.contains(&dialect) {
             return false;
         }
 
@@ -142,7 +138,7 @@ impl ConversionTarget {
     }
 
     /// Check if an operation is illegal according to this target.
-    pub fn is_illegal(&self, dialect: &str, name: &str) -> bool {
+    pub fn is_illegal(&self, dialect: Symbol, name: Symbol) -> bool {
         !self.is_legal(dialect, name)
     }
 
@@ -176,15 +172,12 @@ impl ConversionTarget {
         let mut illegal = Vec::new();
         let body = module.body(db);
         let _ = body.walk_all::<()>(db, |op: Operation<'db>| {
-            let dialect_sym = op.dialect(db);
-            let name_sym = op.name(db);
-            // Use with_str to get &str from Symbol for comparison
-            let is_illegal = dialect_sym
-                .with_str(|dialect| name_sym.with_str(|name| self.is_illegal(dialect, name)));
-            if is_illegal {
+            let dialect = op.dialect(db);
+            let name = op.name(db);
+            if self.is_illegal(dialect, name) {
                 illegal.push(IllegalOp {
-                    dialect: dialect_sym.to_string(),
-                    name: name_sym.to_string(),
+                    dialect: dialect.to_string(),
+                    name: name.to_string(),
                 });
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -218,8 +211,8 @@ mod tests {
     #[test]
     fn test_empty_target_allows_all() {
         let target = ConversionTarget::new();
-        assert!(target.is_legal("any", "op"));
-        assert!(target.is_legal("cont", "shift"));
+        assert!(target.is_legal(Symbol::new("any"), Symbol::new("op")));
+        assert!(target.is_legal(Symbol::new("cont"), Symbol::new("shift")));
     }
 
     #[test]
@@ -228,12 +221,12 @@ mod tests {
             .legal_dialect("func")
             .illegal_dialect("cont");
 
-        assert!(target.is_legal("func", "call"));
-        assert!(target.is_legal("func", "return"));
-        assert!(!target.is_legal("cont", "shift"));
-        assert!(!target.is_legal("cont", "resume"));
+        assert!(target.is_legal(Symbol::new("func"), Symbol::new("call")));
+        assert!(target.is_legal(Symbol::new("func"), Symbol::new("return")));
+        assert!(!target.is_legal(Symbol::new("cont"), Symbol::new("shift")));
+        assert!(!target.is_legal(Symbol::new("cont"), Symbol::new("resume")));
         // Unspecified dialects are legal by default
-        assert!(target.is_legal("arith", "add"));
+        assert!(target.is_legal(Symbol::new("arith"), Symbol::new("add")));
     }
 
     #[test]
@@ -242,9 +235,9 @@ mod tests {
             .illegal_dialect("cont")
             .legal_op("cont", "drop"); // Allow cont.drop even though cont is illegal
 
-        assert!(!target.is_legal("cont", "shift"));
-        assert!(!target.is_legal("cont", "resume"));
-        assert!(target.is_legal("cont", "drop")); // Explicitly legal
+        assert!(!target.is_legal(Symbol::new("cont"), Symbol::new("shift")));
+        assert!(!target.is_legal(Symbol::new("cont"), Symbol::new("resume")));
+        assert!(target.is_legal(Symbol::new("cont"), Symbol::new("drop"))); // Explicitly legal
     }
 
     #[test]
@@ -253,8 +246,8 @@ mod tests {
             .legal_dialect("func")
             .illegal_op("func", "deprecated_call");
 
-        assert!(target.is_legal("func", "call"));
-        assert!(!target.is_legal("func", "deprecated_call"));
+        assert!(target.is_legal(Symbol::new("func"), Symbol::new("call")));
+        assert!(!target.is_legal(Symbol::new("func"), Symbol::new("deprecated_call")));
     }
 
     #[test]
@@ -263,13 +256,13 @@ mod tests {
         let target = ConversionTarget::new()
             .legal_dialect("cont")
             .illegal_dialect("cont");
-        assert!(!target.is_legal("cont", "shift"));
+        assert!(!target.is_legal(Symbol::new("cont"), Symbol::new("shift")));
 
         // Setting illegal then legal should make it legal
         let target = ConversionTarget::new()
             .illegal_dialect("cont")
             .legal_dialect("cont");
-        assert!(target.is_legal("cont", "shift"));
+        assert!(target.is_legal(Symbol::new("cont"), Symbol::new("shift")));
     }
 
     #[test]

@@ -12,13 +12,17 @@ use tracing::warn;
 
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, core, wasm};
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type};
 
 use crate::type_converter::wasm_type_converter;
 
 /// Lower arith dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    // No specific conversion target - arith lowering is a dialect transformation
+    let target = ConversionTarget::new();
     let applicator = PatternApplicator::new(wasm_type_converter())
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
@@ -26,7 +30,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(ArithNegPattern)
         .add_pattern(ArithBitwisePattern)
         .add_pattern(ArithConversionPattern);
-    applicator.apply(db, module).module
+    applicator.apply_partial(db, module, target).module
 }
 
 /// Pattern for `arith.const` -> `wasm.{type}_const`

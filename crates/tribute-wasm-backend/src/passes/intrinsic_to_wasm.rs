@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use tribute_ir::ModulePathExt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
 use crate::type_converter::wasm_type_converter;
@@ -193,7 +195,9 @@ pub fn lower<'db>(
         .add_pattern(BytesSliceOrPanicPattern)
         .add_pattern(BytesConcatPattern);
 
-    applicator.apply(db, module).module
+    // No specific conversion target - intrinsic lowering is a dialect transformation
+    let target = ConversionTarget::new();
+    applicator.apply_partial(db, module, target).module
 }
 
 /// Pattern for `wasm.call(__print_line)` -> `fd_write` sequence

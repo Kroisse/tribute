@@ -28,7 +28,8 @@ use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func::{self, Func};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{
-    MaterializeResult, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, MaterializeResult, OpAdaptor, PatternApplicator, RewritePattern,
+    RewriteResult, TypeConverter,
 };
 use trunk_ir::{
     Attribute, DialectOp, DialectType, IdVec, Location, Operation, Symbol, Type, Value,
@@ -60,7 +61,9 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(LowerGetYieldShiftValuePattern)
         .add_pattern(LowerCheckYieldPattern);
 
-    applicator.apply(db, module).module
+    // No specific conversion target - trampoline lowering is a dialect transformation
+    let target = ConversionTarget::new();
+    applicator.apply_partial(db, module, target).module
 }
 
 // ============================================================================

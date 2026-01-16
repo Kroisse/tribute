@@ -18,7 +18,9 @@ use std::collections::HashMap;
 
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{func, wasm};
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+};
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol,
 };
@@ -29,6 +31,9 @@ use crate::type_converter::wasm_type_converter;
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     // 1. Collect all functions referenced by func.constant operations
     let func_refs = collect_func_constant_refs(db, &module);
+
+    // No specific conversion target - func lowering is a dialect transformation
+    let target = ConversionTarget::new();
 
     if func_refs.is_empty() {
         // No func.constant operations - just apply patterns without table generation
@@ -42,7 +47,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
             .add_pattern(FuncConstantPattern {
                 table_indices: HashMap::new(),
             })
-            .apply(db, module)
+            .apply_partial(db, module, target)
             .module;
     }
 
@@ -69,7 +74,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(FuncConstantPattern {
             table_indices: table_indices.clone(),
         })
-        .apply(db, module);
+        .apply_partial(db, module, target);
 
     // 4. Add wasm.table and wasm.elem to the module
     add_function_table(db, result.module, &sorted_funcs, table_size)

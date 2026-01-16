@@ -64,7 +64,7 @@ impl<'db> ApplyResult<'db> {
 /// # use trunk_ir::dialect::{arith, core};
 /// # use trunk_ir::dialect::core::Module;
 /// # use trunk_ir::types::DialectType;
-/// use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+/// use trunk_ir::rewrite::{ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 ///
 /// /// Pattern that replaces `arith.const(0)` with `arith.const(1)`.
 /// struct ZeroToOnePattern;
@@ -98,17 +98,18 @@ impl<'db> ApplyResult<'db> {
 /// #     Module::create(db, location, Symbol::new("test"), region)
 /// # }
 /// # #[salsa::tracked]
-/// # fn apply_pattern(db: &dyn salsa::Database, module: Module<'_>) -> bool {
+/// # fn apply_pattern(db: &dyn salsa::Database, module: Module<'_>) -> Result<bool, trunk_ir::rewrite::ConversionError> {
 /// #     use trunk_ir::rewrite::TypeConverter;
+/// #     let target = ConversionTarget::new().illegal_dialect("arith");
 /// #     let applicator = PatternApplicator::new(TypeConverter::new())
 /// #         .add_pattern(ZeroToOnePattern)
 /// #         .with_max_iterations(50);
-/// #     let result = applicator.apply(db, module);
-/// #     result.reached_fixpoint
+/// #     let result = applicator.apply(db, module, target)?;
+/// #     Ok(result.reached_fixpoint)
 /// # }
 /// # DatabaseImpl::default().attach(|db| {
 /// #     let module = make_module(db);
-/// let reached = apply_pattern(db, module);
+/// let reached = apply_pattern(db, module).unwrap();
 /// assert!(reached);
 /// # });
 /// ```
@@ -116,8 +117,6 @@ pub struct PatternApplicator<'db> {
     patterns: Vec<Box<dyn RewritePattern<'db> + 'db>>,
     max_iterations: usize,
     type_converter: super::TypeConverter,
-    /// Optional conversion target for skipping legal operations.
-    conversion_target: Option<ConversionTarget>,
 }
 
 impl<'db> PatternApplicator<'db> {
@@ -133,38 +132,12 @@ impl<'db> PatternApplicator<'db> {
             patterns: Vec::new(),
             max_iterations: 100,
             type_converter,
-            conversion_target: None,
         }
     }
 
     /// Set the maximum number of iterations before giving up.
     pub fn with_max_iterations(mut self, max: usize) -> Self {
         self.max_iterations = max;
-        self
-    }
-
-    /// Set a conversion target for this applicator.
-    ///
-    /// When a conversion target is set, operations that are already legal
-    /// according to the target will be skipped during pattern matching.
-    /// This provides an optimization for partial conversion scenarios.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let target = ConversionTarget::new()
-    ///     .legal_dialect("func")
-    ///     .illegal_dialect("cont");
-    ///
-    /// let applicator = PatternApplicator::new(TypeConverter::new())
-    ///     .with_conversion_target(target)
-    ///     .add_pattern(LowerContPattern);
-    ///
-    /// // func.* operations will be skipped, only cont.* will be matched
-    /// let result = applicator.apply(db, module);
-    /// ```
-    pub fn with_conversion_target(mut self, target: ConversionTarget) -> Self {
-        self.conversion_target = Some(target);
         self
     }
 
@@ -177,8 +150,71 @@ impl<'db> PatternApplicator<'db> {
         self
     }
 
-    /// Apply all patterns to a module until fixpoint.
-    pub fn apply(&self, db: &'db dyn salsa::Database, module: Module<'db>) -> ApplyResult<'db> {
+    /// Apply all patterns to a module until fixpoint, then verify conversion.
+    ///
+    /// This method:
+    /// 1. Skips pattern matching for operations that are already legal
+    /// 2. Applies patterns until fixpoint is reached
+    /// 3. Verifies that no illegal operations remain
+    ///
+    /// Returns `Err(ConversionError)` if illegal operations remain after conversion.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let target = ConversionTarget::new()
+    ///     .legal_dialect("trampoline")
+    ///     .illegal_dialect("cont");
+    ///
+    /// let result = applicator.apply(db, module, target)?;
+    /// // All cont.* ops are guaranteed to be converted
+    /// ```
+    pub fn apply(
+        &self,
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+        target: ConversionTarget,
+    ) -> Result<ApplyResult<'db>, ConversionError> {
+        let result = self.apply_internal(db, module, &target);
+        target.verify(db, &result.module)?;
+        Ok(result)
+    }
+
+    /// Apply all patterns to a module until fixpoint, without verification.
+    ///
+    /// This method skips pattern matching for legal operations (optimization)
+    /// but does NOT verify that all illegal operations are converted.
+    ///
+    /// Use this for:
+    /// - Partial conversions where some illegal ops may remain
+    /// - Multi-phase lowering where verification happens at a later stage
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let target = ConversionTarget::new()
+    ///     .legal_dialect("func")
+    ///     .illegal_dialect("tribute");
+    ///
+    /// // Only convert some tribute.* ops, others handled by later passes
+    /// let result = applicator.apply_partial(db, module, target);
+    /// ```
+    pub fn apply_partial(
+        &self,
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+        target: ConversionTarget,
+    ) -> ApplyResult<'db> {
+        self.apply_internal(db, module, &target)
+    }
+
+    /// Internal apply implementation used by both `apply` and `apply_partial`.
+    fn apply_internal(
+        &self,
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+        target: &ConversionTarget,
+    ) -> ApplyResult<'db> {
         let mut current = module;
         let mut total_changes = 0;
 
@@ -187,7 +223,7 @@ impl<'db> PatternApplicator<'db> {
             // Type conversion is applied at access sites (OpAdaptor::get_value_type).
             let block_arg_types = collect_block_arg_types(db, &current);
             let mut ctx = RewriteContext::with_block_arg_types(block_arg_types);
-            let new_module = self.rewrite_module(db, &current, &mut ctx);
+            let new_module = self.rewrite_module(db, &current, &mut ctx, target);
 
             if ctx.changes_made() == 0 {
                 // Fixpoint reached
@@ -218,9 +254,10 @@ impl<'db> PatternApplicator<'db> {
         db: &'db dyn salsa::Database,
         module: &Module<'db>,
         ctx: &mut RewriteContext<'db>,
+        target: &ConversionTarget,
     ) -> Module<'db> {
         let body = module.body(db);
-        let new_body = self.rewrite_region(db, &body, ctx);
+        let new_body = self.rewrite_region(db, &body, ctx, target);
 
         // Rebuild module with new body
         Module::create(db, module.location(db), module.name(db), new_body)
@@ -232,11 +269,12 @@ impl<'db> PatternApplicator<'db> {
         db: &'db dyn salsa::Database,
         region: &Region<'db>,
         ctx: &mut RewriteContext<'db>,
+        target: &ConversionTarget,
     ) -> Region<'db> {
         let new_blocks: IdVec<Block<'db>> = region
             .blocks(db)
             .iter()
-            .map(|block| self.rewrite_block(db, block, ctx))
+            .map(|block| self.rewrite_block(db, block, ctx, target))
             .collect();
 
         Region::new(db, region.location(db), new_blocks)
@@ -248,11 +286,12 @@ impl<'db> PatternApplicator<'db> {
         db: &'db dyn salsa::Database,
         block: &Block<'db>,
         ctx: &mut RewriteContext<'db>,
+        target: &ConversionTarget,
     ) -> Block<'db> {
         let new_ops: IdVec<Operation<'db>> = block
             .operations(db)
             .iter()
-            .flat_map(|op| self.rewrite_operation(db, op, ctx))
+            .flat_map(|op| self.rewrite_operation(db, op, ctx, target))
             .collect();
 
         Block::new(
@@ -265,15 +304,12 @@ impl<'db> PatternApplicator<'db> {
     }
 
     /// Check if an operation is legal according to the conversion target.
-    fn is_op_legal(&self, db: &'db dyn salsa::Database, op: &Operation<'db>) -> bool {
-        if let Some(ref target) = self.conversion_target {
-            let dialect = op.dialect(db);
-            let name = op.name(db);
-            dialect.with_str(|d| name.with_str(|n| target.is_legal(d, n)))
-        } else {
-            // No conversion target means no legality constraints
-            false
-        }
+    fn is_op_legal(
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        target: &ConversionTarget,
+    ) -> bool {
+        target.is_legal(op.dialect(db), op.name(db))
     }
 
     /// Rewrite a single operation.
@@ -292,12 +328,14 @@ impl<'db> PatternApplicator<'db> {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
         ctx: &mut RewriteContext<'db>,
+        target: &ConversionTarget,
     ) -> Vec<Operation<'db>> {
         // Step 0: Skip pattern matching for legal operations
         // (still need to remap operands and process nested regions)
-        if self.is_op_legal(db, op) {
+        // Only skip if target has constraints - otherwise try all patterns
+        if target.has_constraints() && Self::is_op_legal(db, op, target) {
             let remapped_op = ctx.remap_operands(db, op);
-            let final_op = self.rewrite_op_regions(db, &remapped_op, ctx);
+            let final_op = self.rewrite_op_regions(db, &remapped_op, ctx, target);
             if final_op != *op {
                 ctx.map_results(db, op, &final_op);
             }
@@ -334,7 +372,7 @@ impl<'db> PatternApplicator<'db> {
                 RewriteResult::Replace(new_op) => {
                     ctx.record_change();
                     // Recursively rewrite regions in the new operation
-                    let final_op = self.rewrite_op_regions(db, &new_op, ctx);
+                    let final_op = self.rewrite_op_regions(db, &new_op, ctx, target);
                     // Map ORIGINAL op results to FINAL op results
                     ctx.map_results(db, op, &final_op);
                     return vec![final_op];
@@ -345,7 +383,7 @@ impl<'db> PatternApplicator<'db> {
                     // Recursively rewrite regions in all new operations
                     let final_ops: Vec<_> = ops
                         .into_iter()
-                        .map(|expanded_op| self.rewrite_op_regions(db, &expanded_op, ctx))
+                        .map(|expanded_op| self.rewrite_op_regions(db, &expanded_op, ctx, target))
                         .collect();
                     // Map ORIGINAL op results to LAST expanded op results.
                     // The pattern is: earlier ops produce intermediate values,
@@ -380,7 +418,7 @@ impl<'db> PatternApplicator<'db> {
         }
 
         // Step 5: No pattern matched - recursively process regions
-        let final_op = self.rewrite_op_regions(db, &remapped_op, ctx);
+        let final_op = self.rewrite_op_regions(db, &remapped_op, ctx, target);
 
         // Step 6: Map ORIGINAL op results to FINAL op results if they differ
         // This is critical when operands were remapped but no pattern matched
@@ -397,6 +435,7 @@ impl<'db> PatternApplicator<'db> {
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
         ctx: &mut RewriteContext<'db>,
+        target: &ConversionTarget,
     ) -> Operation<'db> {
         let regions = op.regions(db);
         if regions.is_empty() {
@@ -405,7 +444,7 @@ impl<'db> PatternApplicator<'db> {
 
         let new_regions: IdVec<Region<'db>> = regions
             .iter()
-            .map(|region| self.rewrite_region(db, region, ctx))
+            .map(|region| self.rewrite_region(db, region, ctx, target))
             .collect();
 
         op.modify(db).regions(new_regions).build()
@@ -551,9 +590,13 @@ mod tests {
         db: &'db dyn salsa::Database,
         module: Module<'db>,
     ) -> (bool, usize, usize, Module<'db>) {
+        use super::ConversionTarget;
+
+        // Use apply_partial with an empty target (no legality constraints)
+        let target = ConversionTarget::new();
         let applicator =
             PatternApplicator::new(TypeConverter::new()).add_pattern(ConstToMulPattern);
-        let result = applicator.apply(db, module);
+        let result = applicator.apply_partial(db, module, target);
         (
             result.reached_fixpoint,
             result.total_changes,
@@ -609,10 +652,9 @@ mod tests {
         use super::ConversionTarget;
 
         let target = ConversionTarget::new().legal_dialect("arith");
-        let applicator = PatternApplicator::new(TypeConverter::new())
-            .with_conversion_target(target)
-            .add_pattern(ConstToMulPattern);
-        let result = applicator.apply(db, module);
+        let applicator =
+            PatternApplicator::new(TypeConverter::new()).add_pattern(ConstToMulPattern);
+        let result = applicator.apply_partial(db, module, target);
         (
             result.reached_fixpoint,
             result.total_changes,

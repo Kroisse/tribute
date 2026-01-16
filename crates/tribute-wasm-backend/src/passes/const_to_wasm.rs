@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use tribute_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
 use crate::type_converter::wasm_type_converter;
@@ -175,10 +177,12 @@ pub fn lower<'db>(
     let string_allocations = analysis.string_allocations(db).clone();
     let bytes_allocations = analysis.bytes_allocations(db).clone();
 
+    // No specific conversion target - const lowering is a dialect transformation
+    let target = ConversionTarget::new();
     PatternApplicator::new(wasm_type_converter())
         .add_pattern(StringConstPattern::new(string_allocations))
         .add_pattern(BytesConstPattern::new(bytes_allocations))
-        .apply(db, module)
+        .apply_partial(db, module, target)
         .module
 }
 
