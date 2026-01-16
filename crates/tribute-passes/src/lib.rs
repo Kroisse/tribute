@@ -18,6 +18,7 @@ pub mod cont_to_trampoline;
 pub mod evidence;
 pub mod handler_lower;
 pub mod lambda_lift;
+pub mod live_vars;
 pub mod resolve;
 pub mod tdnr;
 pub mod tribute_to_cont;

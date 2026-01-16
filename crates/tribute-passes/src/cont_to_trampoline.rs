@@ -14,9 +14,10 @@
 //! and before `trampoline_to_adt`.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+use crate::live_vars::FunctionAnalysis;
 use tribute_ir::dialect::{adt, trampoline};
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func::{self, Func};
@@ -26,24 +27,60 @@ use trunk_ir::rewrite::{
     OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{
-    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol, Type,
-    Value,
+    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Span, Symbol,
+    Type, Value,
 };
 
 // ============================================================================
 // Public API
 // ============================================================================
 
-/// Metadata for generating resume functions (lifetime-free).
-struct ResumeFuncSpec {
+/// Metadata for generating resume functions with continuation code.
+struct ResumeFuncSpec<'db> {
+    /// Name of the resume function
     name: String,
+    /// State struct type (used to extract captured values)
+    state_type: Type<'db>,
+    /// Fields in the state struct (field_name, field_type)
+    state_fields: Vec<(Symbol, Type<'db>)>,
+    /// Original values that were captured (for value remapping)
+    original_live_values: Vec<Value<'db>>,
+    /// The original shift result value (maps to resume_value)
+    shift_result_value: Option<Value<'db>>,
+    /// Operations that form the continuation (ops after shift)
+    continuation_ops: Vec<Operation<'db>>,
+    /// Name of next resume function (if not last)
+    next_resume_name: Option<String>,
+    /// Location for generating code
+    location: Location<'db>,
+    /// Shift analysis for handling nested shifts in continuation
+    shift_analysis: ShiftAnalysis<'db>,
 }
 
 /// Shared storage for resume function specs during pattern matching.
-type ResumeSpecs = Rc<RefCell<Vec<ResumeFuncSpec>>>;
+type ResumeSpecs<'db> = Rc<RefCell<Vec<ResumeFuncSpec<'db>>>>;
 
 /// Shared counter for generating unique resume function names.
 type ResumeCounter = Rc<RefCell<u32>>;
+
+/// Analysis results for shift points, keyed by shift operation's span.
+/// Using Span as key because Operation identity may not be stable across phases.
+type ShiftAnalysis<'db> = Rc<HashMap<Span, ShiftPointInfo<'db>>>;
+
+/// Information about a shift point for code generation.
+#[derive(Clone)]
+struct ShiftPointInfo<'db> {
+    /// Index of this shift point in the function (0, 1, 2, ...)
+    index: usize,
+    /// Total number of shift points in the function
+    total_shifts: usize,
+    /// Live values at this shift point (defined before, used after) with their types
+    live_values: Vec<(Value<'db>, Type<'db>)>,
+    /// The result value of the shift operation (maps to resume_value)
+    shift_result_value: Option<Value<'db>>,
+    /// Operations after this shift until next shift or function end
+    continuation_ops: Vec<Operation<'db>>,
+}
 
 /// Lower cont dialect operations to trampoline dialect.
 pub fn lower_cont_to_trampoline<'db>(
@@ -51,7 +88,7 @@ pub fn lower_cont_to_trampoline<'db>(
     module: Module<'db>,
 ) -> Module<'db> {
     // Shared state for resume function generation (no global state!)
-    let resume_specs: ResumeSpecs = Rc::new(RefCell::new(Vec::new()));
+    let resume_specs: ResumeSpecs<'db> = Rc::new(RefCell::new(Vec::new()));
     let resume_counter: ResumeCounter = Rc::new(RefCell::new(0));
 
     // Step 1: Identify effectful functions (before transformation)
@@ -70,11 +107,15 @@ pub fn lower_cont_to_trampoline<'db>(
         });
     let result = applicator.apply(db, module);
 
+    // Step 2.5: Analyze shift points in effectful functions (before transforming them)
+    let shift_analysis = analyze_shift_points(db, &result.module, &effectful_funcs);
+
     // Step 3: Transform cont.* operations to trampoline.* operations
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(LowerShiftPattern {
             resume_specs: Rc::clone(&resume_specs),
             resume_counter: Rc::clone(&resume_counter),
+            shift_analysis: Rc::clone(&shift_analysis),
         })
         .add_pattern(LowerResumePattern)
         .add_pattern(LowerGetContinuationPattern)
@@ -100,10 +141,10 @@ pub fn lower_cont_to_trampoline<'db>(
         return module;
     }
 
-    let location = module.location(db);
+    let _location = module.location(db);
     let resume_funcs: Vec<Operation<'db>> = specs
         .iter()
-        .map(|spec| create_resume_function(db, Symbol::from_dynamic(&spec.name), location))
+        .map(|spec| create_resume_function_with_continuation(db, spec))
         .collect();
 
     // Add resume functions to module body
@@ -123,6 +164,63 @@ pub fn lower_cont_to_trampoline<'db>(
 
     let new_body = Region::new(db, body.location(db), IdVec::from(blocks));
     Module::create(db, module.location(db), module.name(db), new_body)
+}
+
+// ============================================================================
+// Shift Point Analysis
+// ============================================================================
+
+/// Analyze all effectful functions for shift points.
+/// Returns a map from shift operation span to shift point info.
+fn analyze_shift_points<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<'db>,
+    effectful_funcs: &HashSet<Symbol>,
+) -> ShiftAnalysis<'db> {
+    let mut analysis = HashMap::new();
+
+    // Walk through all functions
+    for block in module.body(db).blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if let Ok(func) = Func::from_operation(db, *op) {
+                let func_name = func.sym_name(db);
+                if !effectful_funcs.contains(&func_name) {
+                    continue;
+                }
+
+                // Analyze this effectful function
+                let body = func.body(db);
+                if let Some(func_analysis) = FunctionAnalysis::analyze(db, &body) {
+                    let total_shifts = func_analysis.shift_points.len();
+                    for shift_point in func_analysis.shift_points {
+                        let span = shift_point.shift_op.location(db).span;
+                        // Get the shift result value if the operation has results
+                        let shift_result_value = if !shift_point.shift_op.results(db).is_empty() {
+                            Some(shift_point.shift_op.result(db, 0))
+                        } else {
+                            None
+                        };
+                        analysis.insert(
+                            span,
+                            ShiftPointInfo {
+                                index: shift_point.index,
+                                total_shifts,
+                                live_values: shift_point.live_values,
+                                shift_result_value,
+                                continuation_ops: shift_point.continuation_ops,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::debug!(
+        "analyze_shift_points: found {} shift points",
+        analysis.len()
+    );
+    Rc::new(analysis)
 }
 
 // ============================================================================
@@ -260,8 +358,14 @@ fn fresh_resume_name(counter: &ResumeCounter) -> String {
     format!("__resume_{}", id)
 }
 
-/// Generate a unique state type name based on ability and operation info.
-fn state_type_name(ability_name: Option<Symbol>, op_name: Option<Symbol>, tag: u32) -> String {
+/// Generate a unique state type name based on ability, operation info, and shift index.
+/// The shift_index ensures different shift points for the same ability/op have distinct state types.
+fn state_type_name(
+    ability_name: Option<Symbol>,
+    op_name: Option<Symbol>,
+    tag: u32,
+    shift_index: usize,
+) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -273,6 +377,7 @@ fn state_type_name(ability_name: Option<Symbol>, op_name: Option<Symbol>, tag: u
         name.to_string().hash(&mut hasher);
     }
     tag.hash(&mut hasher);
+    shift_index.hash(&mut hasher);
 
     let hash = hasher.finish();
     format!("__State_{:x}", hash & 0xFFFFFF)
@@ -282,12 +387,13 @@ fn state_type_name(ability_name: Option<Symbol>, op_name: Option<Symbol>, tag: u
 // Pattern: Lower cont.shift
 // ============================================================================
 
-struct LowerShiftPattern {
-    resume_specs: ResumeSpecs,
+struct LowerShiftPattern<'db> {
+    resume_specs: ResumeSpecs<'db>,
     resume_counter: ResumeCounter,
+    shift_analysis: ShiftAnalysis<'db>,
 }
 
-impl<'db> RewritePattern<'db> for LowerShiftPattern {
+impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
     fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
@@ -309,15 +415,43 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern {
         let op_name = Some(shift_op.op_name(db));
         let op_idx = compute_op_idx(ability_name, op_name);
 
+        // Look up shift point analysis - fail fast if missing
+        let shift_info = self.shift_analysis.get(&location.span).unwrap_or_else(|| {
+            panic!(
+                "missing shift analysis for cont.shift at {:?} (ability: {:?}, op: {:?})",
+                location.span, ability_name, op_name
+            )
+        });
+
         let mut ops = Vec::new();
 
-        // === 1. Build State Struct ===
-        // For now, capture no locals (simplified implementation)
-        // Create an empty ADT struct type with a unique name for the state.
-        // When we capture locals, we'll add fields here.
-        let state_name = Symbol::from_dynamic(&state_type_name(ability_name, op_name, tag));
-        let state_adt_ty = adt::struct_type(db, state_name, vec![]);
-        let state_op = trampoline::build_state(db, location, vec![], state_adt_ty, state_adt_ty);
+        // === 1. Build State Struct with live values ===
+        let state_name = Symbol::from_dynamic(&state_type_name(
+            ability_name,
+            op_name,
+            tag,
+            shift_info.index,
+        ));
+
+        // Get live values and their types from analysis
+        let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) = shift_info
+            .live_values
+            .iter()
+            .enumerate()
+            .map(|(i, (v, ty))| {
+                let field_name = Symbol::from_dynamic(&format!("field_{}", i));
+                (*v, (field_name, *ty))
+            })
+            .unzip();
+
+        let state_adt_ty = adt::struct_type(db, state_name, state_fields.clone());
+        let state_op = trampoline::build_state(
+            db,
+            location,
+            state_values.clone(),
+            state_adt_ty,
+            state_adt_ty,
+        );
         let state_val = state_op.as_operation().result(db, 0);
         ops.push(state_op.as_operation());
 
@@ -325,9 +459,27 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern {
         let funcref_ty = wasm::Funcref::new(db).as_type();
         let resume_name = fresh_resume_name(&self.resume_counter);
 
-        // Record resume function spec (to be generated later)
+        // Determine next resume name if not the last shift point
+        let next_resume_name = if shift_info.index + 1 >= shift_info.total_shifts {
+            None
+        } else {
+            // Pre-compute next resume function name
+            let counter = self.resume_counter.borrow();
+            let next_id = *counter; // This will be the next ID
+            Some(format!("__resume_{}", next_id))
+        };
+
+        // Record resume function spec with continuation info
         self.resume_specs.borrow_mut().push(ResumeFuncSpec {
             name: resume_name.clone(),
+            state_type: state_adt_ty,
+            state_fields,
+            original_live_values: state_values.clone(),
+            shift_result_value: shift_info.shift_result_value,
+            continuation_ops: shift_info.continuation_ops.clone(),
+            next_resume_name,
+            location,
+            shift_analysis: self.shift_analysis.clone(),
         });
 
         let resume_name_sym = Symbol::from_dynamic(&resume_name);
@@ -368,16 +520,22 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern {
     }
 }
 
-/// Create a resume function that just returns the resume value.
-/// This is a simplified implementation - full implementation would capture/restore state.
-fn create_resume_function<'db>(
+/// Create a resume function with continuation code.
+///
+/// The resume function:
+/// 1. Extracts state and resume_value from the wrapper
+/// 2. Restores captured local values from state
+/// 3. Executes the continuation operations (with value remapping)
+/// 4. Returns the final result (or yields again for chained shifts)
+fn create_resume_function_with_continuation<'db>(
     db: &'db dyn salsa::Database,
-    name: Symbol,
-    location: Location<'db>,
+    spec: &ResumeFuncSpec<'db>,
 ) -> Operation<'db> {
     let wrapper_ty = trampoline::ResumeWrapper::new(db).as_type();
     let step_ty = trampoline::Step::new(db).as_type();
     let anyref_ty = wasm::Anyref::new(db).as_type();
+    let location = spec.location;
+    let name = Symbol::from_dynamic(&spec.name);
 
     let func_op = Func::build(
         db,
@@ -388,7 +546,10 @@ fn create_resume_function<'db>(
         |builder| {
             let wrapper_arg = builder.block_arg(db, 0);
 
-            // Extract resume_value from wrapper (anyref type)
+            // Build value map for remapping
+            let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
+
+            // Extract resume_value from wrapper
             let get_resume_value = builder.op(trampoline::resume_wrapper_get(
                 db,
                 location,
@@ -398,9 +559,188 @@ fn create_resume_function<'db>(
             ));
             let resume_value = get_resume_value.result(db);
 
-            // Return Step.Done with resume_value
-            let step_done = builder.op(trampoline::step_done(db, location, resume_value, step_ty));
-            builder.op(func::r#return(db, location, Some(step_done.result(db))));
+            // Map shift result to resume_value
+            if let Some(shift_result) = spec.shift_result_value {
+                value_map.insert(shift_result, resume_value);
+            }
+
+            // If we have state fields, extract the state and get captured values
+            if !spec.state_fields.is_empty() {
+                let get_state = builder.op(trampoline::resume_wrapper_get(
+                    db,
+                    location,
+                    wrapper_arg,
+                    spec.state_type,
+                    Symbol::new("state"),
+                ));
+                let state_val = get_state.result(db);
+
+                // Extract each captured local from state and map to original value
+                for (i, ((_field_name, field_type), original_value)) in spec
+                    .state_fields
+                    .iter()
+                    .zip(spec.original_live_values.iter())
+                    .enumerate()
+                {
+                    let get_field = builder.op(adt::struct_get(
+                        db,
+                        location,
+                        state_val,
+                        *field_type,
+                        spec.state_type,
+                        Attribute::IntBits(i as u64),
+                    ));
+                    let extracted_value = get_field.result(db);
+                    value_map.insert(*original_value, extracted_value);
+                }
+            }
+
+            // Execute continuation operations with value remapping
+            let mut last_result: Option<Value<'db>> = None;
+            let mut encountered_shift = false;
+
+            for op in &spec.continuation_ops {
+                // Skip func.return - we'll handle the final return ourselves
+                if func::Return::from_operation(db, *op).is_ok() {
+                    // Get the return value and use it as last_result
+                    if let Some(&return_val) = op.operands(db).first() {
+                        last_result = Some(*value_map.get(&return_val).unwrap_or(&return_val));
+                    }
+                    continue;
+                }
+
+                // Handle cont.shift - transform to step_shift with next resume function
+                if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
+                    // Get next resume function name
+                    let next_resume_name = spec.next_resume_name.as_ref().expect(
+                        "encountered shift in continuation but no next_resume_name specified",
+                    );
+
+                    // Look up shift analysis for this shift point
+                    let shift_span = op.location(db).span;
+                    let next_shift_info = spec.shift_analysis.get(&shift_span);
+
+                    // Get shift properties
+                    let tag = shift_op.tag(db);
+                    let ability_ref_type = shift_op.ability_ref(db);
+                    let ability_name = core::AbilityRefType::from_type(db, ability_ref_type)
+                        .and_then(|ar| ar.name(db));
+                    let op_name = Some(shift_op.op_name(db));
+                    let op_idx = compute_op_idx(ability_name, op_name);
+
+                    // Build state struct with current live values (remapped)
+                    let shift_index = next_shift_info.map(|info| info.index).unwrap_or(0);
+                    let state_name = Symbol::from_dynamic(&state_type_name(
+                        ability_name,
+                        op_name,
+                        tag,
+                        shift_index,
+                    ));
+                    let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
+                        if let Some(info) = next_shift_info {
+                            info.live_values
+                                .iter()
+                                .enumerate()
+                                .map(|(i, (v, ty))| {
+                                    let remapped_v = *value_map.get(v).unwrap_or(v);
+                                    let field_name = Symbol::from_dynamic(&format!("field_{}", i));
+                                    (remapped_v, (field_name, *ty))
+                                })
+                                .unzip()
+                        } else {
+                            (vec![], vec![])
+                        };
+
+                    let state_adt_ty = adt::struct_type(db, state_name, state_fields);
+                    let state_op = builder.op(trampoline::build_state(
+                        db,
+                        location,
+                        state_values,
+                        state_adt_ty,
+                        state_adt_ty,
+                    ));
+                    let state_val = state_op.result(db);
+
+                    // Get resume function reference
+                    let funcref_ty = wasm::Funcref::new(db).as_type();
+                    let resume_name_sym = Symbol::from_dynamic(next_resume_name);
+                    let const_op =
+                        builder.op(func::constant(db, location, funcref_ty, resume_name_sym));
+                    let resume_fn_val = const_op.result(db);
+
+                    // Get shift value (remap if needed)
+                    let shift_value_val = op
+                        .operands(db)
+                        .first()
+                        .map(|&v| *value_map.get(&v).unwrap_or(&v))
+                        .unwrap_or(state_val);
+
+                    // Build continuation
+                    let cont_ty = trampoline::Continuation::new(db).as_type();
+                    let cont_op = builder.op(trampoline::build_continuation(
+                        db,
+                        location,
+                        resume_fn_val,
+                        state_val,
+                        shift_value_val,
+                        cont_ty,
+                        tag,
+                        op_idx,
+                    ));
+                    let cont_val = cont_op.result(db);
+
+                    // Set yield state and return step_shift
+                    builder.op(trampoline::set_yield_state(
+                        db, location, cont_val, tag, op_idx,
+                    ));
+                    let step_shift = builder.op(trampoline::step_shift(
+                        db, location, cont_val, step_ty, tag, op_idx,
+                    ));
+                    builder.op(func::r#return(db, location, Some(step_shift.result(db))));
+
+                    encountered_shift = true;
+                    break; // Stop processing further ops
+                }
+
+                // Remap operands
+                let remapped_operands: IdVec<Value<'db>> = op
+                    .operands(db)
+                    .iter()
+                    .map(|&v| *value_map.get(&v).unwrap_or(&v))
+                    .collect();
+
+                // Build new operation with remapped operands
+                let new_op = if remapped_operands != *op.operands(db) {
+                    let new_op = op.modify(db).operands(remapped_operands).build();
+                    builder.op(new_op);
+                    new_op
+                } else {
+                    builder.op(*op);
+                    *op
+                };
+
+                // Map old results to new results
+                for i in 0..op.results(db).len() {
+                    let old_result = op.result(db, i);
+                    let new_result = new_op.result(db, i);
+                    if old_result != new_result {
+                        value_map.insert(old_result, new_result);
+                    }
+                }
+
+                // Track last result for final return
+                if !new_op.results(db).is_empty() {
+                    last_result = Some(new_op.result(db, 0));
+                }
+            }
+
+            // Return Step.Done with the final result (only if no shift was encountered)
+            if !encountered_shift {
+                let final_value = last_result.unwrap_or(resume_value);
+                let step_done =
+                    builder.op(trampoline::step_done(db, location, final_value, step_ty));
+                builder.op(func::r#return(db, location, Some(step_done.result(db))));
+            }
         },
     );
 
@@ -1356,18 +1696,82 @@ mod tests {
 
     #[test]
     fn test_resume_specs_isolation() {
-        // Each call should have independent state
-        let specs1: ResumeSpecs = Rc::new(RefCell::new(Vec::new()));
-        let specs2: ResumeSpecs = Rc::new(RefCell::new(Vec::new()));
+        // Test that different ResumeCounter instances are independent
+        let counter1 = Rc::new(RefCell::new(0u32));
+        let counter2 = Rc::new(RefCell::new(0u32));
 
-        specs1.borrow_mut().push(ResumeFuncSpec {
-            name: "test1".to_string(),
-        });
-        specs1.borrow_mut().push(ResumeFuncSpec {
-            name: "test2".to_string(),
-        });
+        // Increment counter1 twice
+        *counter1.borrow_mut() += 1;
+        *counter1.borrow_mut() += 1;
 
-        assert_eq!(specs1.borrow().len(), 2);
-        assert_eq!(specs2.borrow().len(), 0, "specs2 should be independent");
+        // counter2 should still be 0
+        assert_eq!(*counter1.borrow(), 2);
+        assert_eq!(*counter2.borrow(), 0, "counter2 should be independent");
+    }
+
+    // ========================================================================
+    // Test: Utility functions
+    // ========================================================================
+
+    #[test]
+    fn test_compute_op_idx_deterministic() {
+        // Same inputs should produce same output
+        let idx1 = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
+        let idx2 = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
+        assert_eq!(idx1, idx2, "Same inputs should produce same op_idx");
+
+        // Different op names should produce different indices
+        let idx_get = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
+        let idx_set = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("set")));
+        assert_ne!(
+            idx_get, idx_set,
+            "Different ops should have different indices"
+        );
+
+        // Different abilities should produce different indices
+        let idx_state = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
+        let idx_console = compute_op_idx(Some(Symbol::new("Console")), Some(Symbol::new("get")));
+        assert_ne!(
+            idx_state, idx_console,
+            "Different abilities should have different indices"
+        );
+    }
+
+    #[test]
+    fn test_state_type_name_deterministic() {
+        // Same inputs should produce same output
+        let name1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
+        let name2 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
+        assert_eq!(name1, name2, "Same inputs should produce same name");
+
+        // Name should start with __State_ prefix
+        assert!(
+            name1.starts_with("__State_"),
+            "State type name should have __State_ prefix"
+        );
+
+        // Different tags should produce different names
+        let name_tag0 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
+        let name_tag1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 1, 0);
+        assert_ne!(
+            name_tag0, name_tag1,
+            "Different tags should produce different names"
+        );
+
+        // Different ops should produce different names
+        let name_get = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
+        let name_set = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("set")), 0, 0);
+        assert_ne!(
+            name_get, name_set,
+            "Different ops should produce different names"
+        );
+
+        // Different shift indices should produce different names
+        let name_idx0 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
+        let name_idx1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 1);
+        assert_ne!(
+            name_idx0, name_idx1,
+            "Different shift indices should produce different names"
+        );
     }
 }
