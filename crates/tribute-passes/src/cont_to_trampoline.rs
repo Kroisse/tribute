@@ -1715,4 +1715,62 @@ mod tests {
         assert_eq!(*counter1.borrow(), 2);
         assert_eq!(*counter2.borrow(), 0, "counter2 should be independent");
     }
+
+    // ========================================================================
+    // Test: Utility functions
+    // ========================================================================
+
+    #[test]
+    fn test_compute_op_idx_deterministic() {
+        // Same inputs should produce same output
+        let idx1 = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
+        let idx2 = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
+        assert_eq!(idx1, idx2, "Same inputs should produce same op_idx");
+
+        // Different op names should produce different indices
+        let idx_get = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
+        let idx_set = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("set")));
+        assert_ne!(
+            idx_get, idx_set,
+            "Different ops should have different indices"
+        );
+
+        // Different abilities should produce different indices
+        let idx_state = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
+        let idx_console = compute_op_idx(Some(Symbol::new("Console")), Some(Symbol::new("get")));
+        assert_ne!(
+            idx_state, idx_console,
+            "Different abilities should have different indices"
+        );
+    }
+
+    #[test]
+    fn test_state_type_name_deterministic() {
+        // Same inputs should produce same output
+        let name1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0);
+        let name2 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0);
+        assert_eq!(name1, name2, "Same inputs should produce same name");
+
+        // Name should start with __State_ prefix
+        assert!(
+            name1.starts_with("__State_"),
+            "State type name should have __State_ prefix"
+        );
+
+        // Different tags should produce different names
+        let name_tag0 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0);
+        let name_tag1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 1);
+        assert_ne!(
+            name_tag0, name_tag1,
+            "Different tags should produce different names"
+        );
+
+        // Different ops should produce different names
+        let name_get = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0);
+        let name_set = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("set")), 0);
+        assert_ne!(
+            name_get, name_set,
+            "Different ops should produce different names"
+        );
+    }
 }
