@@ -227,18 +227,22 @@ impl<'db> TypeChecker<'db> {
     /// This restriction may be lifted in the future with named effects.
     fn check_ability_conflicts(&self, span: trunk_ir::Span) {
         if let Some((name, abilities)) = self.current_effect.find_conflicting_abilities() {
-            // Skip if any ability has type variables (not yet resolved) or
-            // no parameters (from ability definition, awaiting inference)
-            if abilities.iter().any(|ability| {
-                ability.params.is_empty()
-                    || ability
-                        .params
-                        .iter()
-                        .any(|ty| tribute::is_type_var(self.db, *ty))
-            }) {
+            // Filter to only fully concrete abilities (non-empty params with no type variables)
+            let concrete: Vec<_> = abilities
+                .iter()
+                .filter(|ability| {
+                    !ability.params.is_empty()
+                        && !ability
+                            .params
+                            .iter()
+                            .any(|ty| tribute::is_type_var(self.db, *ty))
+                })
+                .collect();
+            // Skip if fewer than 2 concrete abilities (no conflict to report yet)
+            if concrete.len() < 2 {
                 return;
             }
-            let ability_strs: Vec<String> = abilities
+            let ability_strs: Vec<String> = concrete
                 .iter()
                 .map(|a| {
                     if a.params.is_empty() {
@@ -1187,16 +1191,6 @@ impl<'db> TypeChecker<'db> {
                     if let Some(Attribute::Type(ability_ty)) = attrs.get(&ability_ref_sym)
                         && let Some(pattern_ability) = AbilityRef::from_type(self.db, *ability_ty)
                     {
-                        tracing::debug!(
-                            "check_handler_pattern_continuations: pattern_ability={:?}, params.len={}, current_effect={:?}",
-                            pattern_ability.name,
-                            pattern_ability.params.len(),
-                            self.current_effect
-                                .abilities()
-                                .iter()
-                                .map(|a| a.name)
-                                .collect::<Vec<_>>()
-                        );
                         // Find the fully parameterized ability from the effect row
                         let matching_abilities = if !pattern_ability.params.is_empty() {
                             vec![pattern_ability.clone()]
