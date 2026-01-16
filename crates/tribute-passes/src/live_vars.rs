@@ -152,20 +152,12 @@ fn has_shift_in_nested_region<'db>(db: &'db dyn salsa::Database, op: &Operation<
 
 /// Check if a region contains any shift operation.
 fn region_contains_shift<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if cont::Shift::from_operation(db, *op).is_ok() {
-                return true;
-            }
-            // Recursively check nested regions
-            for nested in op.regions(db).iter() {
-                if region_contains_shift(db, nested) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+    use std::ops::ControlFlow;
+    use trunk_ir::OperationWalk;
+
+    region
+        .walk::<cont::Shift, ()>(db, |_| ControlFlow::Break(()))
+        .is_break()
 }
 
 /// Collect all values used as operands by a slice of operations.
@@ -174,31 +166,19 @@ fn collect_used_values<'db>(
     db: &'db dyn salsa::Database,
     ops: &[Operation<'db>],
 ) -> HashSet<Value<'db>> {
+    use std::ops::ControlFlow;
+    use trunk_ir::{OperationWalk, WalkAction};
+
     let mut used = HashSet::new();
     for op in ops {
-        collect_used_in_op(db, *op, &mut used);
+        let _ = op.walk_all::<()>(db, |nested_op| {
+            for operand in nested_op.operands(db).iter() {
+                used.insert(*operand);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
     }
     used
-}
-
-/// Recursively collect all values used as operands in an operation and its nested regions.
-fn collect_used_in_op<'db>(
-    db: &'db dyn salsa::Database,
-    op: Operation<'db>,
-    used: &mut HashSet<Value<'db>>,
-) {
-    // Collect operands of this operation
-    for operand in op.operands(db).iter() {
-        used.insert(*operand);
-    }
-    // Recursively check nested regions
-    for region in op.regions(db).iter() {
-        for block in region.blocks(db).iter() {
-            for nested_op in block.operations(db).iter() {
-                collect_used_in_op(db, *nested_op, used);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

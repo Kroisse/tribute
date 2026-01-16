@@ -17,6 +17,7 @@ pub mod rewrite;
 pub mod transforms;
 pub mod type_interface;
 pub mod types;
+pub mod walk;
 
 // Re-export paste for use in macros
 #[doc(hidden)]
@@ -29,6 +30,7 @@ pub use ir::{Block, BlockArg, BlockBuilder, BlockId, Operation, Region, Symbol, 
 pub use location::{Location, PathId, Span, Spanned};
 pub use ops::{ConversionError, DialectOp};
 pub use types::{Attribute, Attrs, DialectType, Type};
+pub use walk::{OperationWalk, WalkAction};
 
 /// Small vector for values tracked by Salsa framework.
 pub type IdVec<T> = smallvec::SmallVec<[T; 2]>;
