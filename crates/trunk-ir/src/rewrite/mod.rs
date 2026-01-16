@@ -21,7 +21,7 @@
 //! # use trunk_ir::dialect::{arith, core};
 //! # use trunk_ir::dialect::core::Module;
 //! # use trunk_ir::types::DialectType;
-//! use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+//! use trunk_ir::rewrite::{ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
 //!
 //! /// Pattern that replaces `arith.const(0)` with `arith.const(1)`.
 //! struct ZeroToOnePattern;
@@ -61,7 +61,8 @@
 //! #     let applicator = PatternApplicator::new(TypeConverter::new())
 //! #         .add_pattern(ZeroToOnePattern)
 //! #         .with_max_iterations(50);
-//! #     let result = applicator.apply(db, module);
+//! #     let target = ConversionTarget::new();
+//! #     let result = applicator.apply_partial(db, module, target);
 //! #     result.reached_fixpoint
 //! # }
 //! # DatabaseImpl::default().attach(|db| {

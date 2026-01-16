@@ -98,18 +98,18 @@ impl<'db> ApplyResult<'db> {
 /// #     Module::create(db, location, Symbol::new("test"), region)
 /// # }
 /// # #[salsa::tracked]
-/// # fn apply_pattern(db: &dyn salsa::Database, module: Module<'_>) -> Result<bool, trunk_ir::rewrite::ConversionError> {
+/// # fn apply_pattern(db: &dyn salsa::Database, module: Module<'_>) -> bool {
 /// #     use trunk_ir::rewrite::TypeConverter;
-/// #     let target = ConversionTarget::new().illegal_dialect("arith");
+/// #     let target = ConversionTarget::new();
 /// #     let applicator = PatternApplicator::new(TypeConverter::new())
 /// #         .add_pattern(ZeroToOnePattern)
 /// #         .with_max_iterations(50);
-/// #     let result = applicator.apply(db, module, target)?;
-/// #     Ok(result.reached_fixpoint)
+/// #     let result = applicator.apply_partial(db, module, target);
+/// #     result.reached_fixpoint
 /// # }
 /// # DatabaseImpl::default().attach(|db| {
 /// #     let module = make_module(db);
-/// let reached = apply_pattern(db, module).unwrap();
+/// let reached = apply_pattern(db, module);
 /// assert!(reached);
 /// # });
 /// ```
