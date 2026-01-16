@@ -74,8 +74,8 @@ struct ShiftPointInfo<'db> {
     index: usize,
     /// Total number of shift points in the function
     total_shifts: usize,
-    /// Live values at this shift point (defined before, used after)
-    live_values: Vec<Value<'db>>,
+    /// Live values at this shift point (defined before, used after) with their types
+    live_values: Vec<(Value<'db>, Type<'db>)>,
     /// The result value of the shift operation (maps to resume_value)
     shift_result_value: Option<Value<'db>>,
     /// Operations after this shift until next shift or function end
@@ -358,8 +358,14 @@ fn fresh_resume_name(counter: &ResumeCounter) -> String {
     format!("__resume_{}", id)
 }
 
-/// Generate a unique state type name based on ability and operation info.
-fn state_type_name(ability_name: Option<Symbol>, op_name: Option<Symbol>, tag: u32) -> String {
+/// Generate a unique state type name based on ability, operation info, and shift index.
+/// The shift_index ensures different shift points for the same ability/op have distinct state types.
+fn state_type_name(
+    ability_name: Option<Symbol>,
+    op_name: Option<Symbol>,
+    tag: u32,
+    shift_index: usize,
+) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -371,24 +377,38 @@ fn state_type_name(ability_name: Option<Symbol>, op_name: Option<Symbol>, tag: u
         name.to_string().hash(&mut hasher);
     }
     tag.hash(&mut hasher);
+    shift_index.hash(&mut hasher);
 
     let hash = hasher.finish();
     format!("__State_{:x}", hash & 0xFFFFFF)
 }
 
 /// Get the type of a value from its defining operation.
+/// Note: For block args, use the types from ShiftPointInfo.live_value_types instead.
+#[allow(dead_code)]
 fn get_value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Type<'db> {
     use trunk_ir::ValueDef;
 
     match value.def(db) {
-        ValueDef::OpResult(op) => op
-            .results(db)
-            .get(value.index(db))
-            .copied()
-            .unwrap_or_else(|| wasm::Anyref::new(db).as_type()),
-        ValueDef::BlockArg(_) => {
-            // For block args, default to anyref
-            wasm::Anyref::new(db).as_type()
+        ValueDef::OpResult(op) => {
+            op.results(db)
+                .get(value.index(db))
+                .copied()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing result type for op result index {}",
+                        value.index(db)
+                    )
+                })
+        }
+        ValueDef::BlockArg(block_id) => {
+            // Block args should use types from analysis (ShiftPointInfo.live_value_types)
+            // This path indicates a programming error
+            panic!(
+                "get_value_type called on block arg {:?} index {} - use live_value_types instead",
+                block_id,
+                value.index(db)
+            )
         }
     }
 }
@@ -436,17 +456,21 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let mut ops = Vec::new();
 
         // === 1. Build State Struct with live values ===
-        let state_name = Symbol::from_dynamic(&state_type_name(ability_name, op_name, tag));
+        let state_name = Symbol::from_dynamic(&state_type_name(
+            ability_name,
+            op_name,
+            tag,
+            shift_info.index,
+        ));
 
         // Get live values and their types from analysis
         let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) = shift_info
             .live_values
             .iter()
             .enumerate()
-            .map(|(i, v)| {
+            .map(|(i, (v, ty))| {
                 let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                let field_type = get_value_type(db, *v);
-                (*v, (field_name, field_type))
+                (*v, (field_name, *ty))
             })
             .unzip();
 
@@ -635,18 +659,22 @@ fn create_resume_function_with_continuation<'db>(
                     let op_idx = compute_op_idx(ability_name, op_name);
 
                     // Build state struct with current live values (remapped)
-                    let state_name =
-                        Symbol::from_dynamic(&state_type_name(ability_name, op_name, tag));
+                    let shift_index = next_shift_info.map(|info| info.index).unwrap_or(0);
+                    let state_name = Symbol::from_dynamic(&state_type_name(
+                        ability_name,
+                        op_name,
+                        tag,
+                        shift_index,
+                    ));
                     let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
                         if let Some(info) = next_shift_info {
                             info.live_values
                                 .iter()
                                 .enumerate()
-                                .map(|(i, v)| {
+                                .map(|(i, (v, ty))| {
                                     let remapped_v = *value_map.get(v).unwrap_or(v);
                                     let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                                    let field_type = get_value_type(db, remapped_v);
-                                    (remapped_v, (field_name, field_type))
+                                    (remapped_v, (field_name, *ty))
                                 })
                                 .unzip()
                         } else {
@@ -1742,8 +1770,8 @@ mod tests {
     #[test]
     fn test_state_type_name_deterministic() {
         // Same inputs should produce same output
-        let name1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0);
-        let name2 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0);
+        let name1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
+        let name2 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
         assert_eq!(name1, name2, "Same inputs should produce same name");
 
         // Name should start with __State_ prefix
@@ -1753,19 +1781,27 @@ mod tests {
         );
 
         // Different tags should produce different names
-        let name_tag0 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0);
-        let name_tag1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 1);
+        let name_tag0 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
+        let name_tag1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 1, 0);
         assert_ne!(
             name_tag0, name_tag1,
             "Different tags should produce different names"
         );
 
         // Different ops should produce different names
-        let name_get = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0);
-        let name_set = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("set")), 0);
+        let name_get = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
+        let name_set = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("set")), 0, 0);
         assert_ne!(
             name_get, name_set,
             "Different ops should produce different names"
+        );
+
+        // Different shift indices should produce different names
+        let name_idx0 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
+        let name_idx1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 1);
+        assert_ne!(
+            name_idx0, name_idx1,
+            "Different shift indices should produce different names"
         );
     }
 }

@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use trunk_ir::dialect::cont;
-use trunk_ir::{DialectOp, Operation, Region, Value};
+use trunk_ir::{DialectOp, Operation, Region, Type, Value};
 
 /// Information about a single shift point in a function.
 #[derive(Debug, Clone)]
@@ -19,8 +19,8 @@ pub struct ShiftPoint<'db> {
     pub total_shifts: usize,
     /// The shift operation itself
     pub shift_op: Operation<'db>,
-    /// Values that are live at this shift point (defined before, used after)
-    pub live_values: Vec<Value<'db>>,
+    /// Values that are live at this shift point (defined before, used after) with their types
+    pub live_values: Vec<(Value<'db>, Type<'db>)>,
     /// Operations that come after this shift point (the continuation)
     pub continuation_ops: Vec<Operation<'db>>,
 }
@@ -82,16 +82,25 @@ impl<'db> FunctionAnalysis<'db> {
             // (includes subsequent shifts - they will be handled in resume functions)
             let continuation_ops: Vec<Operation<'db>> = ops[op_index + 1..].to_vec();
 
+            // Phase 1-2: Reject if any continuation op has nested regions
+            // (value remapping doesn't traverse into nested regions yet)
+            if continuation_ops.iter().any(|op| has_nested_regions(db, op)) {
+                tracing::debug!(
+                    "FunctionAnalysis: skipping function with nested regions in continuation"
+                );
+                return None;
+            }
+
             // Compute live variables: defined before shift, used in continuation
             // Preserve deterministic order by iterating in program order
             let used_after: HashSet<Value<'db>> = collect_used_values(db, &continuation_ops);
-            let mut live_values: Vec<Value<'db>> = Vec::new();
+            let mut live_values: Vec<(Value<'db>, Type<'db>)> = Vec::new();
 
             // 1. Block args (function parameters) are defined before any op
             for i in 0..block.args(db).len() {
                 let arg_value = block.arg(db, i);
                 if used_after.contains(&arg_value) {
-                    live_values.push(arg_value);
+                    live_values.push((arg_value, block.arg_ty(db, i)));
                 }
             }
 
@@ -100,7 +109,7 @@ impl<'db> FunctionAnalysis<'db> {
                 for i in 0..op.results(db).len() {
                     let v = op.result(db, i);
                     if used_after.contains(&v) {
-                        live_values.push(v);
+                        live_values.push((v, op.results(db)[i]));
                     }
                 }
             }
@@ -116,6 +125,19 @@ impl<'db> FunctionAnalysis<'db> {
 
         Some(Self { shift_points })
     }
+}
+
+/// Check if an operation has nested regions that would need value remapping.
+/// Phase 1-2: We don't support operations with nested regions in continuation ops
+/// because value remapping doesn't traverse into them yet.
+/// Note: cont.shift has a handler region, but that's not part of continuation,
+/// so we exclude shift operations from this check.
+fn has_nested_regions<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> bool {
+    // Shift has handler region, but that's not continuation code
+    if cont::Shift::from_operation(db, *op).is_ok() {
+        return false;
+    }
+    !op.regions(db).is_empty()
 }
 
 /// Check if an operation has a shift inside any of its nested regions.
