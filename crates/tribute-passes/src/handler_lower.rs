@@ -33,7 +33,7 @@ use trunk_ir::dialect::{cont, core, func};
 #[cfg(test)]
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::rewrite::{
-    OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{Block, BlockId, DialectOp, IdVec, Operation, Region};
 
@@ -67,7 +67,16 @@ pub fn lower_handlers<'db>(
         .add_pattern(LowerResumePattern)
         .add_pattern(LowerAbortPattern);
 
-    applicator.apply(db, module).module
+    let module = applicator.apply(db, module).module;
+
+    // Verify all ability.* ops are converted
+    let target = ConversionTarget::new().illegal_dialect("ability");
+    if let Err(err) = target.verify(db, &module) {
+        tracing::warn!("handler_lower: {}", err);
+        debug_assert!(false, "handler_lower: {}", err);
+    }
+
+    module
 }
 
 // === Prompt Tag Generation ===

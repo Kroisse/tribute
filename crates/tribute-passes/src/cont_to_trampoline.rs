@@ -24,7 +24,7 @@ use trunk_ir::dialect::func::{self, Func};
 use trunk_ir::dialect::{arith, cont, scf, wasm};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::rewrite::{
-    OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{
     Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Span, Symbol,
@@ -135,9 +135,18 @@ pub fn lower_cont_to_trampoline<'db>(
     let result = applicator.apply(db, result.module);
     let module = result.module;
 
+    // Verify all cont.* ops (except cont.drop) are converted
+    let conversion_target = ConversionTarget::new()
+        .illegal_dialect("cont")
+        .legal_op("cont", "drop");
+
     // Generate resume functions from collected specs
     let specs = resume_specs.borrow();
     if specs.is_empty() {
+        if let Err(err) = conversion_target.verify(db, &module) {
+            tracing::warn!("cont_to_trampoline: {}", err);
+            debug_assert!(false, "cont_to_trampoline: {}", err);
+        }
         return module;
     }
 
@@ -163,7 +172,14 @@ pub fn lower_cont_to_trampoline<'db>(
     }
 
     let new_body = Region::new(db, body.location(db), IdVec::from(blocks));
-    Module::create(db, module.location(db), module.name(db), new_body)
+    let module = Module::create(db, module.location(db), module.name(db), new_body);
+
+    if let Err(err) = conversion_target.verify(db, &module) {
+        tracing::warn!("cont_to_trampoline: {}", err);
+        debug_assert!(false, "cont_to_trampoline: {}", err);
+    }
+
+    module
 }
 
 // ============================================================================
