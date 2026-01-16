@@ -298,24 +298,24 @@ fn calls_effectful_function<'db>(
     region: &Region<'db>,
     effectful: &HashSet<Symbol>,
 ) -> bool {
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            // Check if this is a func.call to an effectful function
-            if let Ok(call) = func::Call::from_operation(db, *op)
+    use std::ops::ControlFlow;
+    use trunk_ir::{OperationWalk, WalkAction};
+
+    region
+        .walk_all::<()>(db, |op| {
+            // Skip nested function definitions - they're analyzed separately
+            if Func::from_operation(db, op).is_ok() {
+                return ControlFlow::Continue(WalkAction::Skip);
+            }
+            if let Ok(call) = func::Call::from_operation(db, op)
                 && effectful.contains(&call.callee(db))
             {
-                return true;
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(WalkAction::Advance)
             }
-
-            // Recursively check nested regions
-            for nested_region in op.regions(db).iter() {
-                if calls_effectful_function(db, nested_region, effectful) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+        })
+        .is_break()
 }
 
 /// Recursively check if a region contains effectful operations:
@@ -324,26 +324,29 @@ fn calls_effectful_function<'db>(
 /// - cont.handler_dispatch (handler arm that processes Step)
 /// - cont.resume (resumes a continuation, returns Step)
 fn contains_effectful_ops<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            // Check for continuation operations that return Step
-            if cont::Shift::from_operation(db, *op).is_ok()
-                || cont::PushPrompt::from_operation(db, *op).is_ok()
-                || cont::HandlerDispatch::from_operation(db, *op).is_ok()
-                || cont::Resume::from_operation(db, *op).is_ok()
-            {
-                return true;
-            }
+    use std::ops::ControlFlow;
+    use trunk_ir::{OperationWalk, WalkAction};
 
-            // Recursively check nested regions
-            for nested_region in op.regions(db).iter() {
-                if contains_effectful_ops(db, nested_region) {
-                    return true;
-                }
+    region
+        .walk_all::<()>(db, |op| {
+            // Skip nested function definitions - they're analyzed separately
+            if Func::from_operation(db, op).is_ok() {
+                return ControlFlow::Continue(WalkAction::Skip);
             }
-        }
-    }
-    false
+            // cont.shift is effectful
+            if cont::Shift::from_operation(db, op).is_ok() {
+                return ControlFlow::Break(());
+            }
+            // These are also effectful operations
+            if cont::PushPrompt::from_operation(db, op).is_ok()
+                || cont::HandlerDispatch::from_operation(db, op).is_ok()
+                || cont::Resume::from_operation(db, op).is_ok()
+            {
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        })
+        .is_break()
 }
 
 // ============================================================================
@@ -1772,6 +1775,92 @@ mod tests {
         assert_ne!(
             name_idx0, name_idx1,
             "Different shift indices should produce different names"
+        );
+    }
+
+    // ========================================================================
+    // Test: contains_effectful_ops skips inner functions
+    // ========================================================================
+
+    /// Test helper: creates a region with an inner function containing cont.shift.
+    /// The outer region should NOT be considered effectful since inner functions are skipped.
+    #[salsa::tracked]
+    fn contains_effectful_ops_with_inner_func(db: &dyn salsa::Database) -> bool {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let ability_ref_ty =
+            core::AbilityRefType::with_params(db, Symbol::new("State"), IdVec::from(vec![i32_ty]))
+                .as_type();
+
+        // Create inner function with cont.shift
+        let inner_func = Func::build(db, location, "inner_fn", IdVec::new(), i32_ty, |entry| {
+            let handler_region = Region::new(db, location, IdVec::new());
+            let shift_op = entry.op(cont::shift(
+                db,
+                location,
+                vec![],
+                i32_ty,
+                0,
+                ability_ref_ty,
+                Symbol::new("get"),
+                handler_region,
+            ));
+            entry.op(func::r#return(db, location, Some(shift_op.result(db))));
+        });
+
+        // Outer region contains only the inner function definition (no direct effectful ops)
+        let mut outer_builder = BlockBuilder::new(db, location);
+        outer_builder.op(inner_func.as_operation());
+        outer_builder.op(arith::Const::i32(db, location, 42));
+        let outer_block = outer_builder.build();
+        let outer_region = Region::new(db, location, IdVec::from(vec![outer_block]));
+
+        contains_effectful_ops(db, &outer_region)
+    }
+
+    /// Test helper: creates a region with cont.shift directly (no inner function).
+    #[salsa::tracked]
+    fn contains_effectful_ops_direct_shift(db: &dyn salsa::Database) -> bool {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let ability_ref_ty =
+            core::AbilityRefType::with_params(db, Symbol::new("State"), IdVec::from(vec![i32_ty]))
+                .as_type();
+
+        // Region with direct cont.shift (not inside inner function)
+        let mut builder = BlockBuilder::new(db, location);
+        let handler_region = Region::new(db, location, IdVec::new());
+        builder.op(cont::shift(
+            db,
+            location,
+            vec![],
+            i32_ty,
+            0,
+            ability_ref_ty,
+            Symbol::new("get"),
+            handler_region,
+        ));
+        let block = builder.build();
+        let region = Region::new(db, location, IdVec::from(vec![block]));
+
+        contains_effectful_ops(db, &region)
+    }
+
+    #[salsa_test]
+    fn test_contains_effectful_ops_skips_inner_functions(db: &salsa::DatabaseImpl) {
+        // Inner function's effectful ops should NOT make the outer region effectful
+        assert!(
+            !contains_effectful_ops_with_inner_func(db),
+            "Outer region should not be effectful when shift is only in inner function"
+        );
+    }
+
+    #[salsa_test]
+    fn test_contains_effectful_ops_detects_direct_shift(db: &salsa::DatabaseImpl) {
+        // Direct shift in the region should be detected
+        assert!(
+            contains_effectful_ops_direct_shift(db),
+            "Region with direct cont.shift should be effectful"
         );
     }
 }

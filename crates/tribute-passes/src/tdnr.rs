@@ -367,14 +367,13 @@ fn collect_ops_in_region<'db>(
     region: Region<'db>,
     ops: &mut std::collections::HashSet<trunk_ir::Operation<'db>>,
 ) {
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter().copied() {
-            ops.insert(op);
-            for nested in op.regions(db).iter().copied() {
-                collect_ops_in_region(db, nested, ops);
-            }
-        }
-    }
+    use std::ops::ControlFlow;
+    use trunk_ir::{OperationWalk, WalkAction};
+
+    let _ = region.walk_all::<()>(db, |op| {
+        ops.insert(op);
+        ControlFlow::Continue(WalkAction::Advance)
+    });
 }
 
 #[cfg(debug_assertions)]
@@ -384,29 +383,27 @@ fn verify_refs_in_region<'db>(
     all_ops: &std::collections::HashSet<trunk_ir::Operation<'db>>,
     context: &str,
 ) {
-    use trunk_ir::ValueDef;
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter().copied() {
-            for operand in op.operands(db).iter() {
-                if let ValueDef::OpResult(ref_op) = operand.def(db)
-                    && !all_ops.contains(&ref_op)
-                {
-                    tracing::warn!(
-                        "STALE REFERENCE DETECTED in {}!\n  \
-                         Operation {}.{} references {}.{} which is NOT in the module",
-                        context,
-                        op.dialect(db),
-                        op.name(db),
-                        ref_op.dialect(db),
-                        ref_op.name(db)
-                    );
-                }
-            }
-            for nested in op.regions(db).iter().copied() {
-                verify_refs_in_region(db, nested, all_ops, context);
+    use std::ops::ControlFlow;
+    use trunk_ir::{OperationWalk, ValueDef, WalkAction};
+
+    let _ = region.walk_all::<()>(db, |op| {
+        for operand in op.operands(db).iter() {
+            if let ValueDef::OpResult(ref_op) = operand.def(db)
+                && !all_ops.contains(&ref_op)
+            {
+                tracing::warn!(
+                    "STALE REFERENCE DETECTED in {}!\n  \
+                     Operation {}.{} references {}.{} which is NOT in the module",
+                    context,
+                    op.dialect(db),
+                    op.name(db),
+                    ref_op.dialect(db),
+                    ref_op.name(db)
+                );
             }
         }
-    }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
 }
 
 #[cfg(test)]
