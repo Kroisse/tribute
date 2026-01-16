@@ -83,11 +83,27 @@ impl<'db> FunctionAnalysis<'db> {
             let continuation_ops: Vec<Operation<'db>> = ops[op_index + 1..].to_vec();
 
             // Compute live variables: defined before shift, used in continuation
-            let defined_before: HashSet<Value<'db>> = collect_defined_values(db, &ops[..*op_index]);
+            // Preserve deterministic order by iterating in program order
             let used_after: HashSet<Value<'db>> = collect_used_values(db, &continuation_ops);
+            let mut live_values: Vec<Value<'db>> = Vec::new();
 
-            let live_values: Vec<Value<'db>> =
-                defined_before.intersection(&used_after).copied().collect();
+            // 1. Block args (function parameters) are defined before any op
+            for i in 0..block.args(db).len() {
+                let arg_value = block.arg(db, i);
+                if used_after.contains(&arg_value) {
+                    live_values.push(arg_value);
+                }
+            }
+
+            // 2. Op results before the shift, in program order
+            for op in &ops[..*op_index] {
+                for i in 0..op.results(db).len() {
+                    let v = op.result(db, i);
+                    if used_after.contains(&v) {
+                        live_values.push(v);
+                    }
+                }
+            }
 
             shift_points.push(ShiftPoint {
                 index: shift_idx,
@@ -130,42 +146,37 @@ fn region_contains_shift<'db>(db: &'db dyn salsa::Database, region: &Region<'db>
     false
 }
 
-/// Collect all values defined by a slice of operations.
-fn collect_defined_values<'db>(
-    db: &'db dyn salsa::Database,
-    ops: &[Operation<'db>],
-) -> HashSet<Value<'db>> {
-    let mut defined = HashSet::new();
-    for op in ops {
-        for i in 0..op.results(db).len() {
-            defined.insert(op.result(db, i));
-        }
-    }
-    defined
-}
-
 /// Collect all values used as operands by a slice of operations.
+/// Recursively traverses nested regions to arbitrary depth.
 fn collect_used_values<'db>(
     db: &'db dyn salsa::Database,
     ops: &[Operation<'db>],
 ) -> HashSet<Value<'db>> {
     let mut used = HashSet::new();
     for op in ops {
-        for operand in op.operands(db).iter() {
-            used.insert(*operand);
-        }
-        // Also check operands in nested regions
-        for region in op.regions(db).iter() {
-            for block in region.blocks(db).iter() {
-                for nested_op in block.operations(db).iter() {
-                    for operand in nested_op.operands(db).iter() {
-                        used.insert(*operand);
-                    }
-                }
+        collect_used_in_op(db, *op, &mut used);
+    }
+    used
+}
+
+/// Recursively collect all values used as operands in an operation and its nested regions.
+fn collect_used_in_op<'db>(
+    db: &'db dyn salsa::Database,
+    op: Operation<'db>,
+    used: &mut HashSet<Value<'db>>,
+) {
+    // Collect operands of this operation
+    for operand in op.operands(db).iter() {
+        used.insert(*operand);
+    }
+    // Recursively check nested regions
+    for region in op.regions(db).iter() {
+        for block in region.blocks(db).iter() {
+            for nested_op in block.operations(db).iter() {
+                collect_used_in_op(db, *nested_op, used);
             }
         }
     }
-    used
 }
 
 #[cfg(test)]

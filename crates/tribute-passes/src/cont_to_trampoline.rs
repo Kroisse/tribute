@@ -425,8 +425,13 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let op_name = Some(shift_op.op_name(db));
         let op_idx = compute_op_idx(ability_name, op_name);
 
-        // Look up shift point analysis
-        let shift_info = self.shift_analysis.get(&location.span);
+        // Look up shift point analysis - fail fast if missing
+        let shift_info = self.shift_analysis.get(&location.span).unwrap_or_else(|| {
+            panic!(
+                "missing shift analysis for cont.shift at {:?} (ability: {:?}, op: {:?})",
+                location.span, ability_name, op_name
+            )
+        });
 
         let mut ops = Vec::new();
 
@@ -434,20 +439,16 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let state_name = Symbol::from_dynamic(&state_type_name(ability_name, op_name, tag));
 
         // Get live values and their types from analysis
-        let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
-            if let Some(info) = shift_info {
-                info.live_values
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                        let field_type = get_value_type(db, *v);
-                        (*v, (field_name, field_type))
-                    })
-                    .unzip()
-            } else {
-                (vec![], vec![])
-            };
+        let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) = shift_info
+            .live_values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let field_name = Symbol::from_dynamic(&format!("field_{}", i));
+                let field_type = get_value_type(db, *v);
+                (*v, (field_name, field_type))
+            })
+            .unzip();
 
         let state_adt_ty = adt::struct_type(db, state_name, state_fields.clone());
         let state_op = trampoline::build_state(
@@ -465,17 +466,13 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let resume_name = fresh_resume_name(&self.resume_counter);
 
         // Determine next resume name if not the last shift point
-        let next_resume_name = if let Some(info) = shift_info {
-            if info.index + 1 >= info.total_shifts {
-                None
-            } else {
-                // Pre-compute next resume function name
-                let counter = self.resume_counter.borrow();
-                let next_id = *counter; // This will be the next ID
-                Some(format!("__resume_{}", next_id))
-            }
-        } else {
+        let next_resume_name = if shift_info.index + 1 >= shift_info.total_shifts {
             None
+        } else {
+            // Pre-compute next resume function name
+            let counter = self.resume_counter.borrow();
+            let next_id = *counter; // This will be the next ID
+            Some(format!("__resume_{}", next_id))
         };
 
         // Record resume function spec with continuation info
@@ -484,10 +481,8 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
             state_type: state_adt_ty,
             state_fields,
             original_live_values: state_values.clone(),
-            shift_result_value: shift_info.and_then(|i| i.shift_result_value),
-            continuation_ops: shift_info
-                .map(|i| i.continuation_ops.clone())
-                .unwrap_or_default(),
+            shift_result_value: shift_info.shift_result_value,
+            continuation_ops: shift_info.continuation_ops.clone(),
             next_resume_name,
             location,
             shift_analysis: self.shift_analysis.clone(),
