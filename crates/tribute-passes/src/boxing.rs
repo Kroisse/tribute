@@ -32,7 +32,7 @@ use tribute_ir::dialect::{closure, tribute, tribute_rt};
 use trunk_ir::dialect::core::{self, F64 as CoreF64, I32 as CoreI32, Module};
 use trunk_ir::dialect::func;
 use trunk_ir::rewrite::{
-    OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{Attribute, DialectOp, DialectType, Location, Operation, Symbol, Type, Value};
 
@@ -535,10 +535,12 @@ pub fn insert_boxing<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let func_types = collect_func_types(db, &module);
 
     // Second pass: apply boxing patterns
+    // No specific conversion target - this is an optimization pass, not a dialect lowering
+    let target = ConversionTarget::new();
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(BoxCallPattern { func_types })
         .add_pattern(BoxCallIndirectPattern)
-        .apply(db, module)
+        .apply_partial(db, module, target)
         .module
 }
 

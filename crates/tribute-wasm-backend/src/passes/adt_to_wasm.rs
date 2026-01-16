@@ -45,13 +45,17 @@ use tracing::warn;
 use tribute_ir::{ModulePathExt as _, dialect::adt};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+};
 use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation, Symbol, Type};
 
 use crate::type_converter::wasm_type_converter;
 
 /// Lower adt dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    // No specific conversion target - adt lowering is a dialect transformation
+    let target = ConversionTarget::new();
     PatternApplicator::new(wasm_type_converter())
         .add_pattern(StructNewPattern)
         .add_pattern(StructGetPattern)
@@ -68,7 +72,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(RefNullPattern)
         .add_pattern(RefIsNullPattern)
         .add_pattern(RefCastPattern)
-        .apply(db, module)
+        .apply_partial(db, module, target)
         .module
 }
 

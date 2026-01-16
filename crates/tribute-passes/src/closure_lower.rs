@@ -22,7 +22,7 @@
 use tribute_ir::dialect::{adt, closure, tribute_rt};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::{
-    OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type, Value, ValueDef};
 
@@ -69,6 +69,8 @@ pub fn lower_closures<'db>(
             tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
         });
 
+    // No specific conversion target - closure lowering is an optimization pass
+    let target = ConversionTarget::new();
     let applicator = PatternApplicator::new(converter)
         // First, update function signatures: core.func params → closure.closure
         .add_pattern(UpdateFuncSignaturePattern)
@@ -76,7 +78,7 @@ pub fn lower_closures<'db>(
         .add_pattern(LowerClosureNewPattern)
         .add_pattern(LowerClosureFuncPattern)
         .add_pattern(LowerClosureEnvPattern);
-    applicator.apply(db, module).module
+    applicator.apply_partial(db, module, target).module
 }
 
 /// Pattern: Update function signatures to convert `core.func` parameters to `closure.closure`.

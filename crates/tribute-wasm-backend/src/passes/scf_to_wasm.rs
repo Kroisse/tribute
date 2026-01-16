@@ -10,20 +10,24 @@
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+};
 use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, idvec};
 
 use crate::type_converter::wasm_type_converter;
 
 /// Lower scf dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    // No specific conversion target - scf lowering is a dialect transformation
+    let target = ConversionTarget::new();
     let applicator = PatternApplicator::new(wasm_type_converter())
         .add_pattern(ScfIfPattern)
         .add_pattern(ScfLoopPattern)
         .add_pattern(ScfYieldPattern)
         .add_pattern(ScfContinuePattern)
         .add_pattern(ScfBreakPattern);
-    applicator.apply(db, module).module
+    applicator.apply_partial(db, module, target).module
 }
 
 /// Pattern for `scf.if` -> `wasm.if`
