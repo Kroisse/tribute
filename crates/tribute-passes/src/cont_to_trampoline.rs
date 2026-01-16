@@ -36,7 +36,6 @@ use trunk_ir::{
 // ============================================================================
 
 /// Metadata for generating resume functions with continuation code.
-#[allow(dead_code)] // Some fields used in Phase 2 implementation
 struct ResumeFuncSpec<'db> {
     /// Name of the resume function
     name: String,
@@ -44,11 +43,15 @@ struct ResumeFuncSpec<'db> {
     state_type: Type<'db>,
     /// Fields in the state struct (field_name, field_type)
     state_fields: Vec<(Symbol, Type<'db>)>,
-    /// Operations that form the continuation (ops after shift) - used in Phase 2
+    /// Original values that were captured (for value remapping)
+    original_live_values: Vec<Value<'db>>,
+    /// The original shift result value (maps to resume_value)
+    shift_result_value: Option<Value<'db>>,
+    /// Operations that form the continuation (ops after shift)
     continuation_ops: Vec<Operation<'db>>,
-    /// Whether this is the last shift point (returns final value) - used in Phase 2
+    /// Whether this is the last shift point (returns final value)
     is_last: bool,
-    /// Name of next resume function (if not last) - used in Phase 2
+    /// Name of next resume function (if not last)
     next_resume_name: Option<String>,
     /// Location for generating code
     location: Location<'db>,
@@ -73,6 +76,8 @@ struct ShiftPointInfo<'db> {
     total_shifts: usize,
     /// Live values at this shift point (defined before, used after)
     live_values: Vec<Value<'db>>,
+    /// The result value of the shift operation (maps to resume_value)
+    shift_result_value: Option<Value<'db>>,
     /// Operations after this shift until next shift or function end
     continuation_ops: Vec<Operation<'db>>,
 }
@@ -189,12 +194,19 @@ fn analyze_shift_points<'db>(
                     let total_shifts = func_analysis.shift_points.len();
                     for shift_point in func_analysis.shift_points {
                         let span = shift_point.shift_op.location(db).span;
+                        // Get the shift result value if the operation has results
+                        let shift_result_value = if !shift_point.shift_op.results(db).is_empty() {
+                            Some(shift_point.shift_op.result(db, 0))
+                        } else {
+                            None
+                        };
                         analysis.insert(
                             span,
                             ShiftPointInfo {
                                 index: shift_point.index,
                                 total_shifts,
                                 live_values: shift_point.live_values,
+                                shift_result_value,
                                 continuation_ops: shift_point.continuation_ops,
                             },
                         );
@@ -474,6 +486,8 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
             name: resume_name.clone(),
             state_type: state_adt_ty,
             state_fields,
+            original_live_values: state_values.clone(),
+            shift_result_value: shift_info.and_then(|i| i.shift_result_value),
             continuation_ops: shift_info
                 .map(|i| i.continuation_ops.clone())
                 .unwrap_or_default(),
@@ -525,7 +539,7 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
 /// The resume function:
 /// 1. Extracts state and resume_value from the wrapper
 /// 2. Restores captured local values from state
-/// 3. Executes the continuation operations
+/// 3. Executes the continuation operations (with value remapping)
 /// 4. Returns the final result (or yields again for chained shifts)
 fn create_resume_function_with_continuation<'db>(
     db: &'db dyn salsa::Database,
@@ -537,15 +551,6 @@ fn create_resume_function_with_continuation<'db>(
     let location = spec.location;
     let name = Symbol::from_dynamic(&spec.name);
 
-    // For Phase 1-2, we generate a simplified resume function.
-    // The full implementation with value remapping will come later.
-    //
-    // Current approach:
-    // - Extract resume_value from wrapper (this is the result of the effect operation)
-    // - If there are captured locals, extract them from state
-    // - Execute continuation operations (currently just return resume_value as placeholder)
-    // - Return Step.Done with the final value
-
     let func_op = Func::build(
         db,
         location,
@@ -554,6 +559,9 @@ fn create_resume_function_with_continuation<'db>(
         step_ty,
         |builder| {
             let wrapper_arg = builder.block_arg(db, 0);
+
+            // Build value map for remapping
+            let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
             // Extract resume_value from wrapper
             let get_resume_value = builder.op(trampoline::resume_wrapper_get(
@@ -565,8 +573,13 @@ fn create_resume_function_with_continuation<'db>(
             ));
             let resume_value = get_resume_value.result(db);
 
+            // Map shift result to resume_value
+            if let Some(shift_result) = spec.shift_result_value {
+                value_map.insert(shift_result, resume_value);
+            }
+
             // If we have state fields, extract the state and get captured values
-            let _restored_locals: Vec<Value<'db>> = if !spec.state_fields.is_empty() {
+            if !spec.state_fields.is_empty() {
                 let get_state = builder.op(trampoline::resume_wrapper_get(
                     db,
                     location,
@@ -576,37 +589,73 @@ fn create_resume_function_with_continuation<'db>(
                 ));
                 let state_val = get_state.result(db);
 
-                // Extract each captured local from state
-                spec.state_fields
+                // Extract each captured local from state and map to original value
+                for (i, ((_field_name, field_type), original_value)) in spec
+                    .state_fields
                     .iter()
+                    .zip(spec.original_live_values.iter())
                     .enumerate()
-                    .map(|(i, (_field_name, field_type))| {
-                        let get_field = builder.op(adt::struct_get(
-                            db,
-                            location,
-                            state_val,
-                            *field_type,
-                            spec.state_type,
-                            Attribute::IntBits(i as u64),
-                        ));
-                        get_field.result(db)
-                    })
-                    .collect()
-            } else {
-                vec![]
-            };
+                {
+                    let get_field = builder.op(adt::struct_get(
+                        db,
+                        location,
+                        state_val,
+                        *field_type,
+                        spec.state_type,
+                        Attribute::IntBits(i as u64),
+                    ));
+                    let extracted_value = get_field.result(db);
+                    value_map.insert(*original_value, extracted_value);
+                }
+            }
 
-            // TODO: For Phase 2, we need to:
-            // 1. Clone/remap the continuation_ops to use restored locals and resume_value
-            // 2. Execute those ops in this function
-            // 3. Return the final result or yield again
-            //
-            // For now, we just return resume_value wrapped in Step.Done
-            // This works for simple cases like State::get() where the continuation
-            // just uses the returned value directly.
+            // Execute continuation operations with value remapping
+            let mut last_result: Option<Value<'db>> = None;
+            for op in &spec.continuation_ops {
+                // Skip func.return - we'll handle the final return ourselves
+                if func::Return::from_operation(db, *op).is_ok() {
+                    // Get the return value and use it as last_result
+                    if let Some(&return_val) = op.operands(db).first() {
+                        last_result = Some(*value_map.get(&return_val).unwrap_or(&return_val));
+                    }
+                    continue;
+                }
 
-            // Return Step.Done with resume_value
-            let step_done = builder.op(trampoline::step_done(db, location, resume_value, step_ty));
+                // Remap operands
+                let remapped_operands: IdVec<Value<'db>> = op
+                    .operands(db)
+                    .iter()
+                    .map(|&v| *value_map.get(&v).unwrap_or(&v))
+                    .collect();
+
+                // Build new operation with remapped operands
+                let new_op = if remapped_operands != *op.operands(db) {
+                    let new_op = op.modify(db).operands(remapped_operands).build();
+                    builder.op(new_op);
+                    new_op
+                } else {
+                    builder.op(*op);
+                    *op
+                };
+
+                // Map old results to new results
+                for i in 0..op.results(db).len() {
+                    let old_result = op.result(db, i);
+                    let new_result = new_op.result(db, i);
+                    if old_result != new_result {
+                        value_map.insert(old_result, new_result);
+                    }
+                }
+
+                // Track last result for final return
+                if !new_op.results(db).is_empty() {
+                    last_result = Some(new_op.result(db, 0));
+                }
+            }
+
+            // Return Step.Done with the final result (or resume_value as fallback)
+            let final_value = last_result.unwrap_or(resume_value);
+            let step_done = builder.op(trampoline::step_done(db, location, final_value, step_ty));
             builder.op(func::r#return(db, location, Some(step_done.result(db))));
         },
     );
