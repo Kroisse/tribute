@@ -90,7 +90,7 @@ mod type_converter;
 
 pub use applicator::{ApplyResult, PatternApplicator};
 pub use context::RewriteContext;
-pub use conversion_target::{ConversionError, ConversionTarget, IllegalOp};
+pub use conversion_target::{ConversionError, ConversionTarget, IllegalOp, LegalityCheck};
 pub use op_adaptor::OpAdaptor;
 pub use pattern::{OperationMatcher, RewritePattern};
 pub use result::RewriteResult;

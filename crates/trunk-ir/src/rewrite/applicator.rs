@@ -304,12 +304,14 @@ impl<'db> PatternApplicator<'db> {
     }
 
     /// Check if an operation is legal according to the conversion target.
+    ///
+    /// This uses `is_legal_op()` which includes dynamic legality checks.
     fn is_op_legal(
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
         target: &ConversionTarget,
     ) -> bool {
-        target.is_legal(op.dialect(db), op.name(db))
+        target.is_legal_op(db, *op)
     }
 
     /// Rewrite a single operation.

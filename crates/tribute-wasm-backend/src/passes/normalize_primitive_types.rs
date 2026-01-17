@@ -27,7 +27,7 @@ use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{func, wasm};
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    ConversionTarget, LegalityCheck, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
 };
 use trunk_ir::{Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Type};
 
@@ -47,7 +47,77 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(NormalizeOpResultPattern);
 
     let target = ConversionTarget::new();
-    applicator.apply_partial(db, module, target).module
+    let result = applicator.apply_partial(db, module, target).module;
+
+    // Verify no illegal primitive types remain using dynamic legality check
+    #[cfg(debug_assertions)]
+    {
+        let verification_target =
+            ConversionTarget::new().add_dynamic_check(check_no_illegal_primitive_types);
+
+        if let Err(err) = verification_target.verify(db, &result) {
+            panic!(
+                "normalize_primitive_types: illegal operations remain after normalization:\n{}",
+                err
+            );
+        }
+    }
+
+    result
+}
+
+/// Dynamic legality check that marks operations with illegal primitive types as illegal.
+///
+/// An operation is illegal if:
+/// - Any of its result types is a tribute_rt primitive type (int, nat, bool, float)
+/// - Its function type (for func.func/wasm.func) contains primitive types
+fn check_no_illegal_primitive_types<'db>(
+    db: &'db dyn salsa::Database,
+    op: Operation<'db>,
+) -> LegalityCheck {
+    // Check operation result types
+    for result_ty in op.results(db).iter() {
+        if is_illegal_primitive_type(db, *result_ty) {
+            return LegalityCheck::Illegal;
+        }
+    }
+
+    // Check function types in func.func and wasm.func
+    if let Ok(func_op) = func::Func::from_operation(db, op)
+        && has_illegal_func_type(db, func_op.r#type(db))
+    {
+        return LegalityCheck::Illegal;
+    }
+    if let Ok(func_op) = wasm::Func::from_operation(db, op)
+        && has_illegal_func_type(db, func_op.r#type(db))
+    {
+        return LegalityCheck::Illegal;
+    }
+
+    LegalityCheck::Continue
+}
+
+/// Check if a type is an illegal primitive type that should have been normalized.
+fn is_illegal_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    tribute_rt::Int::from_type(db, ty).is_some()
+        || tribute_rt::Nat::from_type(db, ty).is_some()
+        || tribute_rt::Bool::from_type(db, ty).is_some()
+        || tribute_rt::Float::from_type(db, ty).is_some()
+}
+
+/// Check if a function type contains illegal primitive types.
+fn has_illegal_func_type<'db>(db: &'db dyn salsa::Database, func_ty: Type<'db>) -> bool {
+    let Some(core_func) = core::Func::from_type(db, func_ty) else {
+        return false;
+    };
+
+    for param_ty in core_func.params(db).iter() {
+        if is_illegal_primitive_type(db, *param_ty) {
+            return true;
+        }
+    }
+
+    is_illegal_primitive_type(db, core_func.result(db))
 }
 
 /// Convert a primitive type to its core equivalent.
