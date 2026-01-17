@@ -1213,10 +1213,9 @@ fn build_suspend_dispatch_region<'db>(
     let i32_ty = core::I32::new(db).as_type();
 
     if suspend_arms.is_empty() {
-        // No suspend arms - return a default value (unreachable in practice)
+        // No suspend arms - this path is unreachable in practice
         let mut builder = BlockBuilder::new(db, location);
-        let zero = builder.op(arith::Const::i32(db, location, 0));
-        builder.op(scf::r#yield(db, location, vec![zero.result(db)]));
+        builder.op(func::unreachable(db, location));
         return Region::new(db, location, IdVec::from(vec![builder.build()]));
     }
 

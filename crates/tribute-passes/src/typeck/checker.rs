@@ -1214,8 +1214,8 @@ impl<'db> TypeChecker<'db> {
                     && op.name(self.db) == tribute_pat::HANDLER_DONE()
                 {
                     // handler_done has a result region containing the pattern for the result value
-                    // The result variable should have the same type as the handler's body result
-                    // Since we don't know that yet, we use a fresh type var that will be unified later
+                    // The result variable should have the same type as the handler's body result.
+                    // handler_result_ty is already a fresh type var created for this handler's result.
                     let result_regions = op.regions(self.db);
                     if let Some(result_region) = result_regions.first() {
                         // Look for tribute_pat.bind in the result pattern
@@ -1225,8 +1225,7 @@ impl<'db> TypeChecker<'db> {
                                     && pat_op.name(self.db) == tribute_pat::BIND()
                                 {
                                     // Get the bind operation's result (the bound variable)
-                                    // and set its type to a fresh type var that will be unified
-                                    // with the handler body's result type
+                                    // and set its type to handler_result_ty (the handler's result type var)
                                     let bound_value = pat_op.result(self.db, 0);
                                     // Use handler_result_ty as the type for the done result
                                     // The body yield will unify with this

@@ -444,26 +444,33 @@ fn normalize_region_block_args<'db>(
                 })
                 .collect();
 
-            if args_changed {
-                any_changed = true;
-                // Recursively normalize nested regions in operations
-                let new_ops: IdVec<Operation<'db>> = block
-                    .operations(db)
-                    .iter()
-                    .map(|op| {
-                        if op.regions(db).is_empty() {
-                            *op
-                        } else {
-                            let new_regions: IdVec<Region<'db>> = op
-                                .regions(db)
-                                .iter()
-                                .map(|r| normalize_region_block_args(db, *r))
-                                .collect();
+            // Always normalize nested regions in operations (regardless of args_changed)
+            let mut ops_changed = false;
+            let new_ops: IdVec<Operation<'db>> = block
+                .operations(db)
+                .iter()
+                .map(|op| {
+                    let regions = op.regions(db);
+                    if regions.is_empty() {
+                        *op
+                    } else {
+                        let new_regions: IdVec<Region<'db>> = regions
+                            .iter()
+                            .map(|r| normalize_region_block_args(db, *r))
+                            .collect();
+                        // Only modify operation if regions actually changed
+                        if new_regions != *regions {
+                            ops_changed = true;
                             op.modify(db).regions(new_regions).build()
+                        } else {
+                            *op
                         }
-                    })
-                    .collect();
+                    }
+                })
+                .collect();
 
+            if args_changed || ops_changed {
+                any_changed = true;
                 Block::new(db, block.id(db), block.location(db), new_args, new_ops)
             } else {
                 *block

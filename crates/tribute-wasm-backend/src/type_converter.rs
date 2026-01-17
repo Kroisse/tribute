@@ -158,6 +158,22 @@ pub fn wasm_type_converter() -> TypeConverter {
 
             MaterializeResult::Skip
         })
+        // Boxing: f64 → anyref (via box_float)
+        .add_materialization(|db, location, value, from_ty, to_ty| {
+            let to_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
+            if !to_anyref {
+                return MaterializeResult::Skip;
+            }
+
+            // f64 → anyref: use tribute_rt.box_float
+            if core::F64::from_type(db, from_ty).is_some() {
+                let anyref_ty = wasm::Anyref::new(db).as_type();
+                let box_op = tribute_rt::box_float(db, location, value, anyref_ty);
+                return MaterializeResult::single(box_op.as_operation());
+            }
+
+            MaterializeResult::Skip
+        })
         // Unboxing: i31ref/anyref → primitive types
         .add_materialization(|db, location, value, from_ty, to_ty| {
             let from_i31ref = wasm::I31ref::from_type(db, from_ty).is_some();
@@ -188,6 +204,22 @@ pub fn wasm_type_converter() -> TypeConverter {
 
                 // i31ref can be unboxed directly
                 let unbox_op = tribute_rt::unbox_int(db, location, value, i32_ty);
+                return MaterializeResult::single(unbox_op.as_operation());
+            }
+
+            MaterializeResult::Skip
+        })
+        // Unboxing: anyref → f64 (via unbox_float)
+        .add_materialization(|db, location, value, from_ty, to_ty| {
+            let from_anyref = wasm::Anyref::from_type(db, from_ty).is_some();
+            if !from_anyref {
+                return MaterializeResult::Skip;
+            }
+
+            // anyref → f64: use tribute_rt.unbox_float
+            if core::F64::from_type(db, to_ty).is_some() {
+                let f64_ty = core::F64::new(db).as_type();
+                let unbox_op = tribute_rt::unbox_float(db, location, value, f64_ty);
                 return MaterializeResult::single(unbox_op.as_operation());
             }
 

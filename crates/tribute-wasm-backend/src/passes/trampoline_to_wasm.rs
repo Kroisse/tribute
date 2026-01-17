@@ -34,7 +34,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::{
     Attribute, Block, BlockArg, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol,
-    Type, Value,
+    Type, Value, ValueDef,
 };
 
 use crate::constants::yield_globals;
@@ -205,19 +205,67 @@ fn resume_wrapper_field_index(field_name: Symbol) -> u32 {
     })
 }
 
-/// Cast a value to `wasm::Anyref` type if needed.
+/// Get the type of a Value by examining its definition.
+///
+/// Returns the type for operation results, but None for block arguments
+/// (since BlockId doesn't have direct access to block argument types).
+fn get_value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
+    match value.def(db) {
+        ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
+        ValueDef::BlockArg(_block_id) => {
+            // BlockId doesn't have direct access to block argument types.
+            // For block arguments, we fall back to the default ref_cast behavior.
+            None
+        }
+    }
+}
+
+/// Cast a value to `wasm::Anyref` type, boxing primitives if needed.
+///
+/// - For i32: boxes to i31ref then casts to anyref
+/// - For f64: boxes using tribute_rt.box_float
+/// - For reference types: uses ref_cast upcast
 fn cast_to_any<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     value: Value<'db>,
     ops: &mut Vec<Operation<'db>>,
 ) -> Value<'db> {
-    // In WASM GC, anyref is a supertype of all reference types.
-    // Upcasting to anyref is implicit at runtime, but we need to express
-    // this in the IR for proper type tracking.
-    // We use wasm.ref_cast with anyref as target, which will be lowered
-    // to a no-op in emit (since upcasting to anyref is always valid).
     let anyref_ty = wasm::Anyref::new(db).as_type();
+
+    // Try to get the value's type to determine if boxing is needed
+    if let Some(value_ty) = get_value_type(db, value) {
+        // Already anyref - no conversion needed
+        if wasm::Anyref::from_type(db, value_ty).is_some() {
+            return value;
+        }
+
+        // i32 → box to i31ref → cast to anyref
+        if core::I32::from_type(db, value_ty).is_some() {
+            let i31ref_ty = wasm::I31ref::new(db).as_type();
+            let box_op = tribute_rt::box_int(db, location, value, i31ref_ty);
+            let boxed_value = box_op.as_operation().result(db, 0);
+            ops.push(box_op.as_operation());
+
+            // i31ref is a subtype of anyref, upcast it
+            let cast_op = wasm::ref_cast(db, location, boxed_value, anyref_ty, anyref_ty, None);
+            let cast_val = cast_op.as_operation().result(db, 0);
+            ops.push(cast_op.as_operation());
+            return cast_val;
+        }
+
+        // f64 → box using tribute_rt.box_float
+        if core::F64::from_type(db, value_ty).is_some() {
+            let box_op = tribute_rt::box_float(db, location, value, anyref_ty);
+            let boxed_value = box_op.as_operation().result(db, 0);
+            ops.push(box_op.as_operation());
+            return boxed_value;
+        }
+    }
+
+    // For reference types, upcast to anyref using ref_cast.
+    // In WASM GC, anyref is a supertype of all reference types.
+    // This will be lowered to a no-op in emit (since upcasting is always valid).
     let cast_op = wasm::ref_cast(db, location, value, anyref_ty, anyref_ty, None);
     let cast_val = cast_op.as_operation().result(db, 0);
     ops.push(cast_op.as_operation());
@@ -484,16 +532,11 @@ impl<'db> RewritePattern<'db> for LowerStepGetPattern {
                 let unbox_op = tribute_rt::unbox_int(db, location, i31ref_value, i32_ty);
                 ops.push(unbox_op.as_operation());
             } else if is_float_primitive {
-                // For float primitives: anyref -> boxed_f64 struct -> f64
-                // Currently just ref_cast (may need struct_get for BoxedF64 struct)
-                let cast_op = adt::ref_cast(
-                    db,
-                    location,
-                    any_value,
-                    expected_result_type,
-                    expected_result_type,
-                );
-                ops.push(cast_op.as_operation());
+                // For float primitives: anyref → f64 (via unbox_float)
+                // The box_float operation boxes f64 into a struct, and unbox_float extracts it
+                let f64_ty = core::F64::new(db).as_type();
+                let unbox_op = tribute_rt::unbox_float(db, location, any_value, f64_ty);
+                ops.push(unbox_op.as_operation());
             } else {
                 // For reference types: just ref_cast
                 let cast_op = adt::ref_cast(
