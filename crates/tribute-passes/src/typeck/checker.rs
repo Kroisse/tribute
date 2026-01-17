@@ -1057,6 +1057,33 @@ impl<'db> TypeChecker<'db> {
         // The value should match the enclosing block's result type
     }
 
+    /// Get the type of the value yielded by a region.
+    ///
+    /// This looks for a `tribute.yield` operation in the last block of the region
+    /// and returns the type of its operand.
+    fn get_region_yield_type(&self, region: &Region<'db>) -> Option<Type<'db>> {
+        let blocks = region.blocks(self.db);
+        let last_block = blocks.last()?;
+        let ops = last_block.operations(self.db);
+
+        // Find tribute.yield in the block
+        for op in ops.iter().rev() {
+            if op.dialect(self.db) == tribute::DIALECT_NAME()
+                && op.name(self.db) == tribute::YIELD()
+            {
+                // Get the operand of yield (the value being yielded)
+                let operands = op.operands(self.db);
+                if let Some(value) = operands.first() {
+                    // Return the type we've recorded for this value
+                    let ty = self.get_type(*value);
+                    tracing::debug!(?value, ?ty, "get_region_yield_type: found yield operand");
+                    return ty;
+                }
+            }
+        }
+        None
+    }
+
     fn check_src_tuple(&mut self, op: &Operation<'db>) {
         let results = op.results(self.db);
         let result_type = results
@@ -1181,8 +1208,40 @@ impl<'db> TypeChecker<'db> {
                     op.dialect(self.db),
                     op.name(self.db)
                 );
-                // Check for pat.handler_suspend
+
+                // Check for pat.handler_done - bind result variable type
                 if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
+                    && op.name(self.db) == tribute_pat::HANDLER_DONE()
+                {
+                    // handler_done has a result region containing the pattern for the result value
+                    // The result variable should have the same type as the handler's body result
+                    // Since we don't know that yet, we use a fresh type var that will be unified later
+                    let result_regions = op.regions(self.db);
+                    if let Some(result_region) = result_regions.first() {
+                        // Look for tribute_pat.bind in the result pattern
+                        for result_block in result_region.blocks(self.db).iter() {
+                            for pat_op in result_block.operations(self.db).iter() {
+                                if pat_op.dialect(self.db) == tribute_pat::DIALECT_NAME()
+                                    && pat_op.name(self.db) == tribute_pat::BIND()
+                                {
+                                    // Get the bind operation's result (the bound variable)
+                                    // and set its type to a fresh type var that will be unified
+                                    // with the handler body's result type
+                                    let bound_value = pat_op.result(self.db, 0);
+                                    // Use handler_result_ty as the type for the done result
+                                    // The body yield will unify with this
+                                    self.record_type(bound_value, handler_result_ty);
+                                    tracing::debug!(
+                                        "check_handler_pattern_continuations: bound done result to {:?}",
+                                        handler_result_ty
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                // Check for pat.handler_suspend
+                else if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
                     && op.name(self.db) == tribute_pat::HANDLER_SUSPEND()
                 {
                     let attrs = op.attributes(self.db);
@@ -1388,9 +1447,22 @@ impl<'db> TypeChecker<'db> {
                             );
                         }
 
-                        // Check the body region
+                        // Check the body region and unify its result with handler result
                         if let Some(body_region) = arm_regions.get(1) {
                             self.check_region(body_region);
+
+                            // Find the yield value in the body and unify with result_type
+                            if let Some(yield_value_type) = self.get_region_yield_type(body_region)
+                            {
+                                tracing::debug!(
+                                    ?result_type,
+                                    ?yield_value_type,
+                                    "check_ability_prompt: unifying handler result with arm yield"
+                                );
+                                self.constraints.add_type_eq(result_type, yield_value_type);
+                            } else {
+                                tracing::debug!("check_ability_prompt: no yield found in arm body");
+                            }
                         }
                     }
                 }

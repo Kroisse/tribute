@@ -24,6 +24,7 @@
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::trampoline::{self, STEP_TAG_DONE, STEP_TAG_SHIFT};
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func::{self, Func};
 use trunk_ir::dialect::wasm;
@@ -32,7 +33,8 @@ use trunk_ir::rewrite::{
     RewriteResult, TypeConverter,
 };
 use trunk_ir::{
-    Attribute, DialectOp, DialectType, IdVec, Location, Operation, Symbol, Type, Value,
+    Attribute, Block, BlockArg, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol,
+    Type, Value,
 };
 
 use crate::constants::yield_globals;
@@ -59,7 +61,8 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(LowerResetYieldStatePattern)
         .add_pattern(LowerGetYieldContinuationPattern)
         .add_pattern(LowerGetYieldShiftValuePattern)
-        .add_pattern(LowerCheckYieldPattern);
+        .add_pattern(LowerCheckYieldPattern)
+        .add_pattern(LowerGetYieldOpIdxPattern);
 
     // No specific conversion target - trampoline lowering is a dialect transformation
     let target = ConversionTarget::new();
@@ -209,8 +212,13 @@ fn cast_to_any<'db>(
     value: Value<'db>,
     ops: &mut Vec<Operation<'db>>,
 ) -> Value<'db> {
+    // In WASM GC, anyref is a supertype of all reference types.
+    // Upcasting to anyref is implicit at runtime, but we need to express
+    // this in the IR for proper type tracking.
+    // We use wasm.ref_cast with anyref as target, which will be lowered
+    // to a no-op in emit (since upcasting to anyref is always valid).
     let anyref_ty = wasm::Anyref::new(db).as_type();
-    let cast_op = adt::ref_cast(db, location, value, anyref_ty, anyref_ty);
+    let cast_op = wasm::ref_cast(db, location, value, anyref_ty, anyref_ty, None);
     let cast_val = cast_op.as_operation().result(db, 0);
     ops.push(cast_op.as_operation());
     cast_val
@@ -439,7 +447,7 @@ impl<'db> RewritePattern<'db> for LowerStepGetPattern {
             .copied()
             .expect("step_get requires operand");
 
-        // field 1 (value) is any type and needs casting
+        // field 1 (value) is any type and needs casting or unboxing
         let is_any_field = field_idx == 1;
 
         if is_any_field {
@@ -456,14 +464,53 @@ impl<'db> RewritePattern<'db> for LowerStepGetPattern {
             let any_value = struct_get.as_operation().result(db, 0);
             ops.push(struct_get.as_operation());
 
-            let cast_op = adt::ref_cast(
-                db,
-                location,
-                any_value,
-                expected_result_type,
-                expected_result_type,
-            );
-            ops.push(cast_op.as_operation());
+            // Check if expected_result_type is a primitive type that needs unboxing
+            // TODO: This layer shouldn't need to know about tribute_rt types.
+            // A type normalization pass should convert tribute_rt.int -> core.i32 before WASM backend.
+            let is_int_primitive = tribute_rt::Int::from_type(db, expected_result_type).is_some()
+                || tribute_rt::Nat::from_type(db, expected_result_type).is_some()
+                || tribute_rt::Bool::from_type(db, expected_result_type).is_some()
+                || core::I32::from_type(db, expected_result_type).is_some();
+            let is_float_primitive = tribute_rt::Float::from_type(db, expected_result_type)
+                .is_some()
+                || core::F64::from_type(db, expected_result_type).is_some();
+
+            if is_int_primitive {
+                // For int primitives: anyref -> i31ref -> i32 (via unbox_int)
+                let i31ref_ty = wasm::I31ref::new(db).as_type();
+                let i32_ty = core::I32::new(db).as_type();
+
+                // Cast anyref to i31ref
+                let ref_cast_op =
+                    wasm::ref_cast(db, location, any_value, i31ref_ty, i31ref_ty, None);
+                let i31ref_value = ref_cast_op.as_operation().result(db, 0);
+                ops.push(ref_cast_op.as_operation());
+
+                // Unbox i31ref to i32
+                let unbox_op = tribute_rt::unbox_int(db, location, i31ref_value, i32_ty);
+                ops.push(unbox_op.as_operation());
+            } else if is_float_primitive {
+                // For float primitives: anyref -> boxed_f64 struct -> f64
+                // Currently just ref_cast (may need struct_get for BoxedF64 struct)
+                let cast_op = adt::ref_cast(
+                    db,
+                    location,
+                    any_value,
+                    expected_result_type,
+                    expected_result_type,
+                );
+                ops.push(cast_op.as_operation());
+            } else {
+                // For reference types: just ref_cast
+                let cast_op = adt::ref_cast(
+                    db,
+                    location,
+                    any_value,
+                    expected_result_type,
+                    expected_result_type,
+                );
+                ops.push(cast_op.as_operation());
+            }
 
             RewriteResult::expand(ops)
         } else {
@@ -963,6 +1010,32 @@ impl<'db> RewritePattern<'db> for LowerCheckYieldPattern {
     }
 }
 
+/// Lower `trampoline.get_yield_op_idx` → wasm.global_get (yield_op_idx)
+struct LowerGetYieldOpIdxPattern;
+
+impl<'db> RewritePattern<'db> for LowerGetYieldOpIdxPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        if op.dialect(db) != trampoline::DIALECT_NAME()
+            || op.name(db) != trampoline::GET_YIELD_OP_IDX()
+        {
+            return RewriteResult::Unchanged;
+        }
+
+        let location = op.location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Get op_idx from global
+        let get_op_idx = wasm::global_get(db, location, i32_ty, yield_globals::OP_IDX);
+
+        RewriteResult::Replace(get_op_idx.as_operation())
+    }
+}
+
 // ============================================================================
 // Pattern: Convert function type with trampoline.Step return type
 // ============================================================================
@@ -1042,7 +1115,42 @@ impl<'db> RewritePattern<'db> for ConvertFuncTypePattern {
                 .collect::<Vec<_>>()
         );
 
-        // Build new function type
+        // Rebuild function with new type AND update block arguments
+        // The block arguments must match the function signature parameter types
+        // IMPORTANT: Build new_blocks first (using new_params.iter()), then new_fn_ty
+        let body = func.body(db);
+        let blocks = body.blocks(db);
+        let new_blocks: IdVec<Block<'db>> = blocks
+            .iter()
+            .enumerate()
+            .map(|(block_idx, block)| {
+                if block_idx == 0 && params_changed {
+                    // Entry block: update block args to match new param types
+                    let new_block_args: IdVec<BlockArg<'db>> = new_params
+                        .iter()
+                        .enumerate()
+                        .map(|(i, ty)| {
+                            // Preserve any existing attributes from the original block arg
+                            let orig_arg = block.args(db).get(i);
+                            let attrs = orig_arg.map(|a| a.attrs(db).clone()).unwrap_or_default();
+                            BlockArg::new(db, *ty, attrs)
+                        })
+                        .collect();
+                    Block::new(
+                        db,
+                        block.id(db),
+                        block.location(db),
+                        new_block_args,
+                        block.operations(db).clone(),
+                    )
+                } else {
+                    *block
+                }
+            })
+            .collect();
+        let new_body = Region::new(db, body.location(db), new_blocks);
+
+        // Build new function type (consumes new_params)
         let new_fn_ty = core::Func::with_effect(
             db,
             new_params.into_iter().collect(),
@@ -1061,10 +1169,10 @@ impl<'db> RewritePattern<'db> for ConvertFuncTypePattern {
                 .collect::<Vec<_>>()
         );
 
-        // Rebuild function with new type
         let new_op = op
             .modify(db)
             .attr(Symbol::new("type"), Attribute::Type(new_fn_ty.as_type()))
+            .regions(IdVec::from(vec![new_body]))
             .build();
 
         RewriteResult::Replace(new_op)

@@ -621,6 +621,9 @@ pub struct Resolver<'db> {
     local_scopes: Vec<HashMap<Symbol, LocalBinding<'db>>>,
     /// If true, emit diagnostics for unresolved references instead of passing through.
     report_unresolved: bool,
+    /// Counter for generating fresh type variable IDs.
+    /// We use a high starting value to avoid collision with tirgen-generated IDs.
+    next_type_var_id: u64,
 }
 
 impl<'db> Resolver<'db> {
@@ -633,6 +636,8 @@ impl<'db> Resolver<'db> {
             import_scopes: vec![HashMap::new()],
             local_scopes: Vec::new(),
             report_unresolved: false,
+            // Start at a high value to avoid collision with tirgen IDs
+            next_type_var_id: 100_000,
         }
     }
 
@@ -647,7 +652,15 @@ impl<'db> Resolver<'db> {
             import_scopes: vec![HashMap::new()],
             local_scopes: Vec::new(),
             report_unresolved: true,
+            next_type_var_id: 100_000,
         }
+    }
+
+    /// Generate a fresh type variable with a unique ID.
+    fn fresh_type_var(&mut self) -> Type<'db> {
+        let id = self.next_type_var_id;
+        self.next_type_var_id += 1;
+        tribute::type_var_with_id(self.db, id)
     }
 
     /// Get the environment.
@@ -1182,29 +1195,16 @@ impl<'db> Resolver<'db> {
 
     /// Collect a single let binding from a pattern operation.
     fn collect_let_binding_from_op(&mut self, op: &Operation<'db>, value: Value<'db>) {
-        // Use a type variable - typechecker will infer the actual type
-        let infer_ty = || tribute::new_type_var(self.db, std::collections::BTreeMap::new());
-
         if let Ok(bind_op) = tribute_pat::Bind::from_operation(self.db, *op) {
             // tribute_pat.bind("x") - bind x to the value
             let name = bind_op.name(self.db);
-            self.add_local(
-                name,
-                LocalBinding::LetBinding {
-                    value,
-                    ty: infer_ty(),
-                },
-            );
+            let ty = self.fresh_type_var();
+            self.add_local(name, LocalBinding::LetBinding { value, ty });
         } else if let Ok(as_pat_op) = tribute_pat::AsPat::from_operation(self.db, *op) {
             // tribute_pat.as_pat: bind the name to value, then recurse on inner pattern
             let name = as_pat_op.name(self.db);
-            self.add_local(
-                name,
-                LocalBinding::LetBinding {
-                    value,
-                    ty: infer_ty(),
-                },
-            );
+            let ty = self.fresh_type_var();
+            self.add_local(name, LocalBinding::LetBinding { value, ty });
             // Recurse on inner pattern with the same value
             self.collect_let_bindings(&as_pat_op.inner(self.db), value);
         } else if tribute_pat::Wildcard::from_operation(self.db, *op).is_ok() {
@@ -1246,8 +1246,7 @@ impl<'db> Resolver<'db> {
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_NAME()) {
                     // Pattern binding - value comes from pattern matching at runtime
-                    let infer_ty =
-                        tribute::new_type_var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty = self.fresh_type_var();
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
                 }
             }
@@ -1255,8 +1254,7 @@ impl<'db> Resolver<'db> {
                 // pat.as_pat has a "name" attribute and an inner pattern region
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_NAME()) {
-                    let infer_ty =
-                        tribute::new_type_var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty = self.fresh_type_var();
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
                 }
                 // Also collect from inner pattern region
@@ -1268,8 +1266,7 @@ impl<'db> Resolver<'db> {
                 // pat.list_rest has a "rest_name" attribute
                 let attrs = op.attributes(self.db);
                 if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_REST_NAME()) {
-                    let infer_ty =
-                        tribute::new_type_var(self.db, std::collections::BTreeMap::new());
+                    let infer_ty = self.fresh_type_var();
                     self.add_local(*sym, LocalBinding::PatternBinding { ty: infer_ty });
                 }
                 // Also collect from head pattern region
@@ -1329,9 +1326,7 @@ impl<'db> Resolver<'db> {
                     let attrs = op.attributes(self.db);
                     if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_NAME()) {
                         // Use the continuation type if available, otherwise fall back to fresh type var
-                        let ty = continuation_type.unwrap_or_else(|| {
-                            tribute::new_type_var(self.db, std::collections::BTreeMap::new())
-                        });
+                        let ty = continuation_type.unwrap_or_else(|| self.fresh_type_var());
                         self.add_local(*sym, LocalBinding::PatternBinding { ty });
                     }
                 } else {
