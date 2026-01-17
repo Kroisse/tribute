@@ -618,39 +618,6 @@ fn are_reference_compatible<'db>(
     is_anyref_like(db, ty1) && is_anyref_like(db, ty2)
 }
 
-/// Check if two types are both primitive types that map to the same WASM type.
-///
-/// This handles cases where `tribute_rt.int` and `core.i32` both map to `i32` in WASM.
-///
-/// TODO: This function exists because tribute_rt types are not normalized to core types
-/// before reaching the WASM backend. A type normalization pass should make this unnecessary.
-fn are_primitive_compatible<'db>(
-    db: &'db dyn salsa::Database,
-    ty1: Type<'db>,
-    ty2: Type<'db>,
-) -> bool {
-    fn is_i32_like<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-        tribute_rt::Int::from_type(db, ty).is_some()
-            || tribute_rt::Nat::from_type(db, ty).is_some()
-            || tribute_rt::Bool::from_type(db, ty).is_some()
-            || core::I32::from_type(db, ty).is_some()
-    }
-
-    fn is_f64_like<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-        tribute_rt::Float::from_type(db, ty).is_some() || core::F64::from_type(db, ty).is_some()
-    }
-
-    // Both i32-like
-    if is_i32_like(db, ty1) && is_i32_like(db, ty2) {
-        return true;
-    }
-    // Both f64-like
-    if is_f64_like(db, ty1) && is_f64_like(db, ty2) {
-        return true;
-    }
-    false
-}
-
 /// Try to infer a concrete type from regions by looking at yield operations.
 ///
 /// For control flow operations like `wasm.if`, all branches should yield the same type.
@@ -679,15 +646,6 @@ fn infer_type_from_regions<'db>(
             Some(prev) if are_reference_compatible(db, prev, ty) => {
                 // Both types are reference-like and will be lowered to anyref
                 // Keep the first one
-            }
-            Some(prev) if are_primitive_compatible(db, prev, ty) => {
-                // Both types are primitive-like and will be lowered to the same WASM type
-                // Prefer core.i32/core.f64 over tribute_rt types for clarity
-                if core::I32::from_type(db, ty).is_some() || core::F64::from_type(db, ty).is_some()
-                {
-                    found = Some(ty);
-                }
-                // Otherwise keep the first one
             }
             Some(prev) => {
                 // Type disagreement across regions - this indicates a type error

@@ -8,7 +8,6 @@
 //! - wasm.br_if (conditional branch)
 
 use tracing::debug;
-use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::{DialectType, Operation, Type, Value};
 use wasm_encoder::{BlockType, Function, HeapType, Instruction, RefType, ValType};
@@ -166,26 +165,6 @@ fn compute_block_type<'db>(
     }
     if core::F64::from_type(db, ty).is_some() {
         debug!("block_type: using f64 for core.f64");
-        return Ok(BlockType::Result(ValType::F64));
-    }
-
-    // Check for tribute_rt primitive types (int, nat, bool -> i32, float -> f64)
-    // TODO: This layer shouldn't need to know about tribute_rt types.
-    // Consider adding a type normalization pass that converts tribute_rt.int -> core.i32, etc.
-    // before reaching the WASM backend.
-    if tribute_rt::Int::from_type(db, ty).is_some()
-        || tribute_rt::Nat::from_type(db, ty).is_some()
-        || tribute_rt::Bool::from_type(db, ty).is_some()
-    {
-        debug!(
-            "block_type: using i32 for primitive type {}.{}",
-            ty.dialect(db),
-            ty.name(db)
-        );
-        return Ok(BlockType::Result(ValType::I32));
-    }
-    if tribute_rt::Float::from_type(db, ty).is_some() {
-        debug!("block_type: using f64 for tribute_rt.float");
         return Ok(BlockType::Result(ValType::F64));
     }
 

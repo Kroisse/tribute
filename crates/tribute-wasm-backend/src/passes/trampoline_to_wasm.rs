@@ -465,15 +465,9 @@ impl<'db> RewritePattern<'db> for LowerStepGetPattern {
             ops.push(struct_get.as_operation());
 
             // Check if expected_result_type is a primitive type that needs unboxing
-            // TODO: This layer shouldn't need to know about tribute_rt types.
-            // A type normalization pass should convert tribute_rt.int -> core.i32 before WASM backend.
-            let is_int_primitive = tribute_rt::Int::from_type(db, expected_result_type).is_some()
-                || tribute_rt::Nat::from_type(db, expected_result_type).is_some()
-                || tribute_rt::Bool::from_type(db, expected_result_type).is_some()
-                || core::I32::from_type(db, expected_result_type).is_some();
-            let is_float_primitive = tribute_rt::Float::from_type(db, expected_result_type)
-                .is_some()
-                || core::F64::from_type(db, expected_result_type).is_some();
+            // After normalize_primitive_types pass, types are already core.i32/f64
+            let is_int_primitive = core::I32::from_type(db, expected_result_type).is_some();
+            let is_float_primitive = core::F64::from_type(db, expected_result_type).is_some();
 
             if is_int_primitive {
                 // For int primitives: anyref -> i31ref -> i32 (via unbox_int)
