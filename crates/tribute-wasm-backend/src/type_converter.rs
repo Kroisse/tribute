@@ -207,6 +207,8 @@ pub fn wasm_type_converter() -> TypeConverter {
             MaterializeResult::Skip
         })
         // Boxing: primitive types → i31ref/anyref
+        // Generate wasm ops directly (wasm.ref_i31) since materialization runs
+        // after tribute_rt_to_wasm pass
         .add_materialization(|db, location, value, from_ty, to_ty| {
             let to_i31ref = wasm::I31ref::from_type(db, to_ty).is_some();
             let to_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
@@ -215,36 +217,41 @@ pub fn wasm_type_converter() -> TypeConverter {
                 return MaterializeResult::Skip;
             }
 
-            // Int/Nat/I32 → i31ref/anyref: use tribute_rt.box_int
+            // Int/Nat/I32 → i31ref/anyref: use wasm.ref_i31 directly
             let is_int_like = tribute_rt::Int::from_type(db, from_ty).is_some()
                 || tribute_rt::Nat::from_type(db, from_ty).is_some()
                 || core::I32::from_type(db, from_ty).is_some();
 
             if is_int_like {
                 let i31ref_ty = wasm::I31ref::new(db).as_type();
-                let box_op = tribute_rt::box_int(db, location, value, i31ref_ty);
-                return MaterializeResult::single(box_op.as_operation());
+                // wasm.ref_i31: i32 -> i31ref
+                let ref_i31_op = wasm::ref_i31(db, location, value, i31ref_ty);
+                return MaterializeResult::single(ref_i31_op.as_operation());
             }
 
             MaterializeResult::Skip
         })
-        // Boxing: f64 → anyref (via box_float)
+        // Boxing: f64 → anyref (via wasm.struct_new for BoxedF64)
         .add_materialization(|db, location, value, from_ty, to_ty| {
+            use crate::gc_types::BOXED_F64_IDX;
+
             let to_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
             if !to_anyref {
                 return MaterializeResult::Skip;
             }
 
-            // f64 → anyref: use tribute_rt.box_float
+            // f64 → anyref: use wasm.struct_new (BoxedF64 struct)
             if core::F64::from_type(db, from_ty).is_some() {
                 let anyref_ty = wasm::Anyref::new(db).as_type();
-                let box_op = tribute_rt::box_float(db, location, value, anyref_ty);
-                return MaterializeResult::single(box_op.as_operation());
+                let struct_new_op =
+                    wasm::struct_new(db, location, vec![value], anyref_ty, BOXED_F64_IDX);
+                return MaterializeResult::single(struct_new_op.as_operation());
             }
 
             MaterializeResult::Skip
         })
         // Unboxing: i31ref/anyref → primitive types
+        // Generate wasm ops directly (wasm.ref_cast + wasm.i31_get_s)
         .add_materialization(|db, location, value, from_ty, to_ty| {
             let from_i31ref = wasm::I31ref::from_type(db, from_ty).is_some();
             let from_anyref = wasm::Anyref::from_type(db, from_ty).is_some();
@@ -253,7 +260,7 @@ pub fn wasm_type_converter() -> TypeConverter {
                 return MaterializeResult::Skip;
             }
 
-            // i31ref/anyref → Int/Nat/I32: use tribute_rt.unbox_int
+            // i31ref/anyref → Int/Nat/I32: use wasm.i31_get_s directly
             let is_int_like = tribute_rt::Int::from_type(db, to_ty).is_some()
                 || tribute_rt::Nat::from_type(db, to_ty).is_some()
                 || core::I32::from_type(db, to_ty).is_some();
@@ -265,32 +272,49 @@ pub fn wasm_type_converter() -> TypeConverter {
                 // anyref needs ref_cast to i31ref first (abstract type, no type_idx)
                 if from_anyref {
                     let ref_cast = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
-                    let unbox_op = tribute_rt::unbox_int(db, location, ref_cast.result(db), i32_ty);
+                    // wasm.i31_get_s: i31ref -> i32 (signed)
+                    let i31_get_op = wasm::i31_get_s(db, location, ref_cast.result(db), i32_ty);
                     return MaterializeResult::ops([
                         ref_cast.as_operation(),
-                        unbox_op.as_operation(),
+                        i31_get_op.as_operation(),
                     ]);
                 }
 
                 // i31ref can be unboxed directly
-                let unbox_op = tribute_rt::unbox_int(db, location, value, i32_ty);
-                return MaterializeResult::single(unbox_op.as_operation());
+                // wasm.i31_get_s: i31ref -> i32 (signed)
+                let i31_get_op = wasm::i31_get_s(db, location, value, i32_ty);
+                return MaterializeResult::single(i31_get_op.as_operation());
             }
 
             MaterializeResult::Skip
         })
-        // Unboxing: anyref → f64 (via unbox_float)
+        // Unboxing: anyref → f64 (via wasm.struct_get from BoxedF64)
         .add_materialization(|db, location, value, from_ty, to_ty| {
+            use crate::gc_types::BOXED_F64_IDX;
+
             let from_anyref = wasm::Anyref::from_type(db, from_ty).is_some();
             if !from_anyref {
                 return MaterializeResult::Skip;
             }
 
-            // anyref → f64: use tribute_rt.unbox_float
+            // anyref → f64: use wasm.ref_cast + wasm.struct_get
             if core::F64::from_type(db, to_ty).is_some() {
+                let anyref_ty = wasm::Anyref::new(db).as_type();
                 let f64_ty = core::F64::new(db).as_type();
-                let unbox_op = tribute_rt::unbox_float(db, location, value, f64_ty);
-                return MaterializeResult::single(unbox_op.as_operation());
+
+                // Cast anyref to BoxedF64 struct first
+                let cast_op = wasm::ref_cast(
+                    db,
+                    location,
+                    value,
+                    anyref_ty,
+                    anyref_ty,
+                    Some(BOXED_F64_IDX),
+                );
+                // wasm.struct_get extracts field 0 (the f64 value) from BoxedF64
+                let get_op =
+                    wasm::struct_get(db, location, cast_op.result(db), f64_ty, BOXED_F64_IDX, 0);
+                return MaterializeResult::ops([cast_op.as_operation(), get_op.as_operation()]);
             }
 
             MaterializeResult::Skip
@@ -475,8 +499,9 @@ mod tests {
     #[salsa_test]
     fn test_materialize_box_int_to_i31ref(db: &salsa::DatabaseImpl) {
         let (dialect, name) = do_materialize_box_test(db);
-        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
-        assert_eq!(name, tribute_rt::BOX_INT());
+        // Now generates wasm.ref_i31 directly (not tribute_rt.box_int)
+        assert_eq!(dialect, wasm::DIALECT_NAME());
+        assert_eq!(name, wasm::REF_I31());
     }
 
     /// Helper: test unboxing materialization (i31ref → i32)
@@ -507,8 +532,9 @@ mod tests {
     #[salsa_test]
     fn test_materialize_unbox_i31ref_to_int(db: &salsa::DatabaseImpl) {
         let (dialect, name) = do_materialize_unbox_test(db);
-        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
-        assert_eq!(name, tribute_rt::UNBOX_INT());
+        // Now generates wasm.i31_get_s directly (not tribute_rt.unbox_int)
+        assert_eq!(dialect, wasm::DIALECT_NAME());
+        assert_eq!(name, wasm::I31_GET_S());
     }
 
     /// Helper: test boxing tribute_rt.int → anyref
@@ -538,8 +564,9 @@ mod tests {
     #[salsa_test]
     fn test_materialize_tribute_rt_int_to_anyref(db: &salsa::DatabaseImpl) {
         let (dialect, name) = do_materialize_int_to_anyref_test(db);
-        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
-        assert_eq!(name, tribute_rt::BOX_INT());
+        // Now generates wasm.ref_i31 directly (not tribute_rt.box_int)
+        assert_eq!(dialect, wasm::DIALECT_NAME());
+        assert_eq!(name, wasm::REF_I31());
     }
 
     /// Helper: test unboxing anyref → i32 (should generate ref_cast + unbox_int)
@@ -572,13 +599,10 @@ mod tests {
     #[salsa_test]
     fn test_materialize_unbox_anyref_to_i32(db: &salsa::DatabaseImpl) {
         let (count, ops) = do_materialize_unbox_anyref_test(db);
-        // Should generate 2 ops: ref_cast + unbox_int
+        // Should generate 2 ops: ref_cast + i31_get_s (now generates wasm ops directly)
         assert_eq!(count, 2);
         assert_eq!(ops[0], (wasm::DIALECT_NAME(), wasm::REF_CAST()));
-        assert_eq!(
-            ops[1],
-            (tribute_rt::DIALECT_NAME(), tribute_rt::UNBOX_INT())
-        );
+        assert_eq!(ops[1], (wasm::DIALECT_NAME(), wasm::I31_GET_S()));
     }
 
     /// Test that tribute_rt.int → core.i32 materialization returns NoOp.
