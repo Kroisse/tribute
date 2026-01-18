@@ -303,4 +303,270 @@ mod tests {
         assert!(!are_equivalent_primitives(db, int_ty, f64_ty));
         assert!(!are_equivalent_primitives(db, float_ty, i32_ty));
     }
+
+    // === Boxing materialization tests ===
+    // Each test uses a separate tracked function to satisfy Salsa requirements
+
+    #[salsa::tracked]
+    fn do_box_int_to_any(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = generic_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let block_id = BlockId::fresh();
+        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        let from_ty = tribute_rt::Int::new(db).as_type();
+        let to_ty = tribute_rt::Any::new(db).as_type();
+
+        let result = converter.materialize(db, location, value, from_ty, to_ty);
+        match result {
+            Some(MaterializeResult::Ops(ops)) if !ops.is_empty() => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_int_to_any_generates_box_int(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_box_int_to_any(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::BOX_INT());
+    }
+
+    #[salsa::tracked]
+    fn do_box_bool_to_any(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = generic_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let block_id = BlockId::fresh();
+        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        let from_ty = tribute_rt::Bool::new(db).as_type();
+        let to_ty = tribute_rt::Any::new(db).as_type();
+
+        let result = converter.materialize(db, location, value, from_ty, to_ty);
+        match result {
+            Some(MaterializeResult::Ops(ops)) if !ops.is_empty() => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_bool_to_any_generates_box_bool(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_box_bool_to_any(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::BOX_BOOL());
+    }
+
+    #[salsa::tracked]
+    fn do_box_float_to_any(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = generic_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let block_id = BlockId::fresh();
+        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        let from_ty = tribute_rt::Float::new(db).as_type();
+        let to_ty = tribute_rt::Any::new(db).as_type();
+
+        let result = converter.materialize(db, location, value, from_ty, to_ty);
+        match result {
+            Some(MaterializeResult::Ops(ops)) if !ops.is_empty() => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_float_to_any_generates_box_float(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_box_float_to_any(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::BOX_FLOAT());
+    }
+
+    #[salsa::tracked]
+    fn do_box_i32_to_any(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = generic_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let block_id = BlockId::fresh();
+        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        let from_ty = core::I32::new(db).as_type();
+        let to_ty = tribute_rt::Any::new(db).as_type();
+
+        let result = converter.materialize(db, location, value, from_ty, to_ty);
+        match result {
+            Some(MaterializeResult::Ops(ops)) if !ops.is_empty() => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_i32_to_any_generates_box_int(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_box_i32_to_any(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::BOX_INT());
+    }
+
+    // === Unboxing materialization tests ===
+
+    #[salsa::tracked]
+    fn do_unbox_any_to_int(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = generic_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let block_id = BlockId::fresh();
+        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        let from_ty = tribute_rt::Any::new(db).as_type();
+        let to_ty = tribute_rt::Int::new(db).as_type();
+
+        let result = converter.materialize(db, location, value, from_ty, to_ty);
+        match result {
+            Some(MaterializeResult::Ops(ops)) if !ops.is_empty() => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_any_to_int_generates_unbox_int(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_unbox_any_to_int(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::UNBOX_INT());
+    }
+
+    #[salsa::tracked]
+    fn do_unbox_any_to_nat(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = generic_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let block_id = BlockId::fresh();
+        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        let from_ty = tribute_rt::Any::new(db).as_type();
+        let to_ty = tribute_rt::Nat::new(db).as_type();
+
+        let result = converter.materialize(db, location, value, from_ty, to_ty);
+        match result {
+            Some(MaterializeResult::Ops(ops)) if !ops.is_empty() => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_any_to_nat_generates_unbox_nat(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_unbox_any_to_nat(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::UNBOX_NAT());
+    }
+
+    #[salsa::tracked]
+    fn do_unbox_any_to_bool(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = generic_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let block_id = BlockId::fresh();
+        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        let from_ty = tribute_rt::Any::new(db).as_type();
+        let to_ty = tribute_rt::Bool::new(db).as_type();
+
+        let result = converter.materialize(db, location, value, from_ty, to_ty);
+        match result {
+            Some(MaterializeResult::Ops(ops)) if !ops.is_empty() => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_any_to_bool_generates_unbox_bool(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_unbox_any_to_bool(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::UNBOX_BOOL());
+    }
+
+    #[salsa::tracked]
+    fn do_unbox_any_to_float(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = generic_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let block_id = BlockId::fresh();
+        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        let from_ty = tribute_rt::Any::new(db).as_type();
+        let to_ty = tribute_rt::Float::new(db).as_type();
+
+        let result = converter.materialize(db, location, value, from_ty, to_ty);
+        match result {
+            Some(MaterializeResult::Ops(ops)) if !ops.is_empty() => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_any_to_float_generates_unbox_float(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_unbox_any_to_float(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::UNBOX_FLOAT());
+    }
+
+    #[salsa::tracked]
+    fn do_unbox_any_to_i32(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = generic_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let block_id = BlockId::fresh();
+        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        let from_ty = tribute_rt::Any::new(db).as_type();
+        let to_ty = core::I32::new(db).as_type();
+
+        let result = converter.materialize(db, location, value, from_ty, to_ty);
+        match result {
+            Some(MaterializeResult::Ops(ops)) if !ops.is_empty() => {
+                (ops[0].dialect(db), ops[0].name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("error")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_any_to_i32_generates_unbox_int(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = do_unbox_any_to_i32(db);
+        assert_eq!(dialect, tribute_rt::DIALECT_NAME());
+        assert_eq!(name, tribute_rt::UNBOX_INT());
+    }
 }
