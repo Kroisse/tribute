@@ -369,3 +369,216 @@ pub(crate) fn get_type_idx_from_attrs<'db>(
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::dialect::core;
+
+    // ========================================
+    // Test: type_to_valtype primitives
+    // ========================================
+
+    #[salsa_test]
+    fn test_type_to_valtype_i32(db: &salsa::DatabaseImpl) {
+        let i32_ty = core::I32::new(db).as_type();
+        let result = type_to_valtype(db, i32_ty, &HashMap::new());
+        assert!(matches!(result, Ok(ValType::I32)));
+    }
+
+    #[salsa_test]
+    fn test_type_to_valtype_i64(db: &salsa::DatabaseImpl) {
+        let i64_ty = core::I64::new(db).as_type();
+        let result = type_to_valtype(db, i64_ty, &HashMap::new());
+        assert!(matches!(result, Ok(ValType::I64)));
+    }
+
+    #[salsa_test]
+    fn test_type_to_valtype_f32(db: &salsa::DatabaseImpl) {
+        let f32_ty = core::F32::new(db).as_type();
+        let result = type_to_valtype(db, f32_ty, &HashMap::new());
+        assert!(matches!(result, Ok(ValType::F32)));
+    }
+
+    #[salsa_test]
+    fn test_type_to_valtype_f64(db: &salsa::DatabaseImpl) {
+        let f64_ty = core::F64::new(db).as_type();
+        let result = type_to_valtype(db, f64_ty, &HashMap::new());
+        assert!(matches!(result, Ok(ValType::F64)));
+    }
+
+    #[salsa_test]
+    fn test_type_to_valtype_nil(db: &salsa::DatabaseImpl) {
+        let nil_ty = core::Nil::new(db).as_type();
+        let result = type_to_valtype(db, nil_ty, &HashMap::new());
+        assert!(result.is_ok());
+        let val_type = result.unwrap();
+        assert!(matches!(
+            val_type,
+            ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::None,
+                },
+            })
+        ));
+    }
+
+    // ========================================
+    // Test: is_nil_type
+    // ========================================
+
+    #[salsa_test]
+    fn test_is_nil_type_true(db: &salsa::DatabaseImpl) {
+        let nil_ty = core::Nil::new(db).as_type();
+        assert!(is_nil_type(db, nil_ty));
+    }
+
+    #[salsa_test]
+    fn test_is_nil_type_false_for_i32(db: &salsa::DatabaseImpl) {
+        let i32_ty = core::I32::new(db).as_type();
+        assert!(!is_nil_type(db, i32_ty));
+    }
+
+    // ========================================
+    // Test: symbol_to_abstract_heap_type
+    // ========================================
+
+    #[test]
+    fn test_symbol_to_abstract_heap_type_any() {
+        let result = symbol_to_abstract_heap_type("any");
+        assert!(result.is_ok());
+        assert!(matches!(
+            result.unwrap(),
+            HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Any,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_symbol_to_abstract_heap_type_anyref() {
+        let result = symbol_to_abstract_heap_type("anyref");
+        assert!(result.is_ok());
+        assert!(matches!(
+            result.unwrap(),
+            HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Any,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_symbol_to_abstract_heap_type_func() {
+        let result = symbol_to_abstract_heap_type("func");
+        assert!(result.is_ok());
+        assert!(matches!(
+            result.unwrap(),
+            HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Func,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_symbol_to_abstract_heap_type_struct() {
+        let result = symbol_to_abstract_heap_type("struct");
+        assert!(result.is_ok());
+        assert!(matches!(
+            result.unwrap(),
+            HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Struct,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_symbol_to_abstract_heap_type_i31() {
+        let result = symbol_to_abstract_heap_type("i31");
+        assert!(result.is_ok());
+        assert!(matches!(
+            result.unwrap(),
+            HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::I31,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_symbol_to_abstract_heap_type_unknown() {
+        let result = symbol_to_abstract_heap_type("unknown");
+        assert!(result.is_err());
+    }
+
+    // ========================================
+    // Test: result_types
+    // ========================================
+
+    #[salsa_test]
+    fn test_result_types_nil_returns_empty(db: &salsa::DatabaseImpl) {
+        let nil_ty = core::Nil::new(db).as_type();
+        let result = result_types(db, nil_ty, &HashMap::new());
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[salsa_test]
+    fn test_result_types_i32_returns_i32(db: &salsa::DatabaseImpl) {
+        let i32_ty = core::I32::new(db).as_type();
+        let result = result_types(db, i32_ty, &HashMap::new());
+        assert!(result.is_ok());
+        let types = result.unwrap();
+        assert_eq!(types.len(), 1);
+        assert!(matches!(types[0], ValType::I32));
+    }
+
+    // ========================================
+    // Test: get_type_idx_from_attrs
+    // ========================================
+
+    #[salsa_test]
+    fn test_get_type_idx_from_attrs_with_type_idx(db: &salsa::DatabaseImpl) {
+        let mut attrs = trunk_ir::Attrs::new();
+        attrs.insert(ATTR_TYPE_IDX(), Attribute::IntBits(42));
+        let result = get_type_idx_from_attrs(db, &attrs, None, &HashMap::new());
+        assert_eq!(result, Some(42));
+    }
+
+    #[salsa_test]
+    fn test_get_type_idx_from_attrs_with_type_map(db: &salsa::DatabaseImpl) {
+        let i32_ty = core::I32::new(db).as_type();
+        let mut type_map = HashMap::new();
+        type_map.insert(i32_ty, 100u32);
+
+        let mut attrs = trunk_ir::Attrs::new();
+        attrs.insert(ATTR_TYPE(), Attribute::Type(i32_ty));
+
+        let result = get_type_idx_from_attrs(db, &attrs, None, &type_map);
+        assert_eq!(result, Some(100));
+    }
+
+    #[salsa_test]
+    fn test_get_type_idx_from_attrs_inferred(db: &salsa::DatabaseImpl) {
+        let i32_ty = core::I32::new(db).as_type();
+        let mut type_map = HashMap::new();
+        type_map.insert(i32_ty, 50u32);
+
+        let attrs = trunk_ir::Attrs::new();
+        let result = get_type_idx_from_attrs(db, &attrs, Some(i32_ty), &type_map);
+        assert_eq!(result, Some(50));
+    }
+
+    #[salsa_test]
+    fn test_get_type_idx_from_attrs_none_when_not_found(db: &salsa::DatabaseImpl) {
+        let attrs = trunk_ir::Attrs::new();
+        let result = get_type_idx_from_attrs(db, &attrs, None, &HashMap::new());
+        assert_eq!(result, None);
+    }
+}

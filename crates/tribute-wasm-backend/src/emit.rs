@@ -1966,4 +1966,276 @@ mod tests {
         let bytes = result.unwrap();
         assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
     }
+
+    // ========================================
+    // Test: ref.null with anyref type (ref_handlers)
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_ref_null_anyref_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let nil_ty = core::Nil::new(db).as_type();
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
+
+        // Create ref.null anyref (heap_type must be a wasm type)
+        let ref_null = wasm::ref_null(db, location, anyref_ty, anyref_ty, None).as_operation();
+
+        // Return statement
+        let func_return = wasm::r#return(db, location, vec![]).as_operation();
+
+        let body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![ref_null, func_return],
+        );
+        let body_region = Region::new(db, location, idvec![body_block]);
+
+        let wasm_func = wasm::func(
+            db,
+            location,
+            Symbol::new("test_ref_null"),
+            func_ty,
+            body_region,
+        )
+        .as_operation();
+
+        let module_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
+        let module_region = Region::new(db, location, idvec![module_block]);
+        core::Module::create(db, location, "test".into(), module_region)
+    }
+
+    #[salsa_test]
+    fn test_ref_null_anyref_type_emit(db: &salsa::DatabaseImpl) {
+        let module = make_ref_null_anyref_module(db);
+        let result = emit_wasm(db, module);
+        assert!(
+            result.is_ok(),
+            "ref.null anyref type should compile: {:?}",
+            result.err()
+        );
+
+        let bytes = result.unwrap();
+        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
+    }
+
+    // ========================================
+    // Test: struct_get operation (struct_handlers)
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_struct_get_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
+
+        // Create a function that creates a struct and gets a field
+        // Field value
+        let field = wasm::i32_const(db, location, i32_ty, 42).as_operation();
+
+        // Create struct
+        let struct_new = wasm::struct_new(
+            db,
+            location,
+            vec![field.result(db, 0)],
+            i32_ty,
+            FIRST_USER_TYPE_IDX,
+        )
+        .as_operation();
+
+        // Get field from struct
+        let struct_get = wasm::struct_get(
+            db,
+            location,
+            struct_new.result(db, 0),
+            i32_ty,
+            FIRST_USER_TYPE_IDX,
+            0,
+        )
+        .as_operation();
+
+        // Return statement
+        let func_return = wasm::r#return(db, location, vec![]).as_operation();
+
+        let body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![field, struct_new, struct_get, func_return],
+        );
+        let body_region = Region::new(db, location, idvec![body_block]);
+
+        let wasm_func = wasm::func(
+            db,
+            location,
+            Symbol::new("test_struct_get"),
+            func_ty,
+            body_region,
+        )
+        .as_operation();
+
+        let module_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
+        let module_region = Region::new(db, location, idvec![module_block]);
+        core::Module::create(db, location, "test".into(), module_region)
+    }
+
+    #[salsa_test]
+    fn test_struct_get_emit(db: &salsa::DatabaseImpl) {
+        let module = make_struct_get_module(db);
+        let result = emit_wasm(db, module);
+        assert!(
+            result.is_ok(),
+            "struct.get should compile: {:?}",
+            result.err()
+        );
+
+        let bytes = result.unwrap();
+        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
+    }
+
+    // ========================================
+    // Test: anyref operand in struct (value_emission)
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_anyref_operand_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let nil_ty = core::Nil::new(db).as_type();
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
+
+        // Create ref.null anyref - tests that reference operands work properly
+        let anyref_val = wasm::ref_null(db, location, anyref_ty, anyref_ty, None).as_operation();
+
+        // Create a struct with i32 and anyref fields (closure-like pattern)
+        let i32_ty = core::I32::new(db).as_type();
+        let i32_val = wasm::i32_const(db, location, i32_ty, 1).as_operation();
+
+        // Two-field struct: (i32, anyref)
+        let struct_new = wasm::struct_new(
+            db,
+            location,
+            vec![i32_val.result(db, 0), anyref_val.result(db, 0)],
+            i32_ty,
+            FIRST_USER_TYPE_IDX,
+        )
+        .as_operation();
+
+        // Return statement
+        let func_return = wasm::r#return(db, location, vec![]).as_operation();
+
+        let body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![anyref_val, i32_val, struct_new, func_return],
+        );
+        let body_region = Region::new(db, location, idvec![body_block]);
+
+        let wasm_func = wasm::func(
+            db,
+            location,
+            Symbol::new("test_anyref_operand"),
+            func_ty,
+            body_region,
+        )
+        .as_operation();
+
+        let module_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
+        let module_region = Region::new(db, location, idvec![module_block]);
+        core::Module::create(db, location, "test".into(), module_region)
+    }
+
+    #[salsa_test]
+    fn test_anyref_operand_in_struct(db: &salsa::DatabaseImpl) {
+        let module = make_anyref_operand_module(db);
+        let result = emit_wasm(db, module);
+        assert!(
+            result.is_ok(),
+            "anyref operand should compile: {:?}",
+            result.err()
+        );
+
+        let bytes = result.unwrap();
+        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
+    }
+
+    // ========================================
+    // Test: ref.cast with concrete type (ref_handlers)
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_ref_cast_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
+
+        // Create a struct
+        let field = wasm::i32_const(db, location, i32_ty, 42).as_operation();
+
+        let struct_new = wasm::struct_new(
+            db,
+            location,
+            vec![field.result(db, 0)],
+            i32_ty,
+            FIRST_USER_TYPE_IDX,
+        )
+        .as_operation();
+
+        // Cast the struct to a concrete type (target_type, result_type, type_idx)
+        let ref_cast = wasm::ref_cast(
+            db,
+            location,
+            struct_new.result(db, 0),
+            i32_ty,
+            i32_ty,
+            Some(FIRST_USER_TYPE_IDX),
+        )
+        .as_operation();
+
+        // Return statement
+        let func_return = wasm::r#return(db, location, vec![]).as_operation();
+
+        let body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![field, struct_new, ref_cast, func_return],
+        );
+        let body_region = Region::new(db, location, idvec![body_block]);
+
+        let wasm_func = wasm::func(
+            db,
+            location,
+            Symbol::new("test_ref_cast"),
+            func_ty,
+            body_region,
+        )
+        .as_operation();
+
+        let module_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
+        let module_region = Region::new(db, location, idvec![module_block]);
+        core::Module::create(db, location, "test".into(), module_region)
+    }
+
+    #[salsa_test]
+    fn test_ref_cast_concrete_type_emit(db: &salsa::DatabaseImpl) {
+        let module = make_ref_cast_module(db);
+        let result = emit_wasm(db, module);
+        assert!(
+            result.is_ok(),
+            "ref.cast with concrete type should compile: {:?}",
+            result.err()
+        );
+
+        let bytes = result.unwrap();
+        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
+    }
 }
