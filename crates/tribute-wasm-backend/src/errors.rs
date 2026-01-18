@@ -59,6 +59,10 @@ impl CompilationError {
     pub fn ir_validation(msg: impl std::fmt::Display) -> Self {
         CompilationErrorKind::IrValidation(msg.to_string()).into()
     }
+
+    pub fn unresolved_casts(msg: impl std::fmt::Display) -> Self {
+        CompilationErrorKind::UnresolvedCasts(msg.to_string()).into()
+    }
 }
 
 #[derive(Clone, Display, Debug, PartialEq)]
@@ -86,6 +90,9 @@ pub enum CompilationErrorKind {
 
     #[display("IR validation failed: {_0}")]
     IrValidation(String),
+
+    #[display("Unresolved type casts: {_0}")]
+    UnresolvedCasts(String),
 }
 
 impl std::error::Error for CompilationError {}

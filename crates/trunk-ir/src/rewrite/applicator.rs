@@ -5,8 +5,9 @@
 
 use std::collections::HashMap;
 
-use crate::dialect::core::Module;
-use crate::{Block, BlockId, IdVec, Operation, Region, Type};
+use crate::dialect::core::{self, Module};
+use crate::ops::DialectOp;
+use crate::{Block, BlockId, IdVec, Operation, Region, Type, Value};
 
 use super::context::RewriteContext;
 use super::conversion_target::{ConversionError, ConversionTarget};
@@ -314,17 +315,59 @@ impl<'db> PatternApplicator<'db> {
         target.is_legal_op(db, *op)
     }
 
+    /// Insert `core.unrealized_conversion_cast` operations for type mismatches.
+    ///
+    /// When an operand's raw type differs from its converted type, this method
+    /// inserts a cast operation to bridge the type mismatch. The cast will be
+    /// resolved later by a materialization pass.
+    ///
+    /// Returns:
+    /// - The (possibly modified) operands with cast results replacing original values
+    /// - A vector of cast operations to prepend before the current operation
+    fn insert_conversion_casts(
+        &self,
+        db: &'db dyn salsa::Database,
+        location: crate::Location<'db>,
+        operands: &IdVec<Value<'db>>,
+        ctx: &RewriteContext<'db>,
+    ) -> (IdVec<Value<'db>>, Vec<Operation<'db>>) {
+        let mut cast_ops = Vec::new();
+        let mut new_operands = IdVec::with_capacity(operands.len());
+
+        for operand in operands.iter() {
+            let Some(raw_ty) = ctx.get_value_type(db, *operand) else {
+                new_operands.push(*operand);
+                continue;
+            };
+
+            let converted_ty = self.type_converter.convert_type(db, raw_ty);
+            if let Some(target_ty) = converted_ty {
+                // Type needs conversion - insert unrealized_conversion_cast
+                let cast_op = core::unrealized_conversion_cast(db, location, *operand, target_ty);
+                let cast_result = cast_op.as_operation().result(db, 0);
+                cast_ops.push(cast_op.as_operation());
+                new_operands.push(cast_result);
+            } else {
+                // Type is already legal - keep original operand
+                new_operands.push(*operand);
+            }
+        }
+
+        (new_operands, cast_ops)
+    }
+
     /// Rewrite a single operation.
     ///
     /// This is the core rewrite loop:
     /// 0. Skip pattern matching if operation is already legal
     /// 1. Remap operands using the current value map
-    /// 2. Compute converted operand types using the type converter
-    /// 3. Create OpAdaptor with remapped operands and pre-converted types
-    /// 4. Try each pattern in order
-    /// 5. If a pattern matches, apply it and record mappings
-    /// 6. Recursively rewrite any nested regions
-    /// 7. Map original operation results to final operation results
+    /// 2. Insert unrealized_conversion_cast for type mismatches
+    /// 3. Compute converted operand types using the type converter
+    /// 4. Create OpAdaptor with remapped operands and pre-converted types
+    /// 5. Try each pattern in order
+    /// 6. If a pattern matches, apply it and record mappings
+    /// 7. Recursively rewrite any nested regions
+    /// 8. Map original operation results to final operation results
     fn rewrite_operation(
         &self,
         db: &'db dyn salsa::Database,
@@ -346,10 +389,33 @@ impl<'db> PatternApplicator<'db> {
 
         // Step 1: Remap operands from previous transformations
         let remapped_op = ctx.remap_operands(db, op);
+        let location = remapped_op.location(db);
 
-        // Step 2: Compute converted operand types
+        // Step 2: Insert conversion casts for type mismatches
+        // Skip inserting casts for unrealized_conversion_cast itself to avoid infinite loops.
+        // The cast op is the type conversion boundary - its operands keep the original type.
         let remapped_operands = remapped_op.operands(db).clone();
-        let operand_types: Vec<Option<Type<'db>>> = remapped_operands
+        let (casted_operands, cast_ops) = if remapped_op.dialect(db) == core::DIALECT_NAME()
+            && remapped_op.name(db) == core::UNREALIZED_CONVERSION_CAST()
+        {
+            (remapped_operands.clone(), Vec::new())
+        } else {
+            self.insert_conversion_casts(db, location, &remapped_operands, ctx)
+        };
+
+        // Update operation with casted operands if any casts were inserted
+        let remapped_op = if !cast_ops.is_empty() {
+            ctx.record_change();
+            remapped_op
+                .modify(db)
+                .operands(casted_operands.clone())
+                .build()
+        } else {
+            remapped_op
+        };
+
+        // Step 3: Compute converted operand types (now using casted operands)
+        let operand_types: Vec<Option<Type<'db>>> = casted_operands
             .iter()
             .map(|v| {
                 ctx.get_value_type(db, *v)
@@ -357,16 +423,16 @@ impl<'db> PatternApplicator<'db> {
             })
             .collect();
 
-        // Step 3: Create OpAdaptor with remapped operands and pre-converted types
+        // Step 4: Create OpAdaptor with remapped operands and pre-converted types
         let adaptor = OpAdaptor::new(
             remapped_op,
-            remapped_operands,
+            casted_operands,
             operand_types,
             ctx,
             &self.type_converter,
         );
 
-        // Step 4: Try each pattern
+        // Step 5: Try each pattern
         for pattern in &self.patterns {
             match pattern.match_and_rewrite(db, &remapped_op, &adaptor) {
                 RewriteResult::Unchanged => continue,
@@ -377,7 +443,10 @@ impl<'db> PatternApplicator<'db> {
                     let final_op = self.rewrite_op_regions(db, &new_op, ctx, target);
                     // Map ORIGINAL op results to FINAL op results
                     ctx.map_results(db, op, &final_op);
-                    return vec![final_op];
+                    // Prepend cast ops before the result
+                    let mut result = cast_ops;
+                    result.push(final_op);
+                    return result;
                 }
 
                 RewriteResult::Expand(ops) => {
@@ -393,7 +462,10 @@ impl<'db> PatternApplicator<'db> {
                     if let Some(last) = final_ops.last() {
                         ctx.map_results(db, op, last);
                     }
-                    return final_ops;
+                    // Prepend cast ops before the expanded ops
+                    let mut result = cast_ops;
+                    result.extend(final_ops);
+                    return result;
                 }
 
                 RewriteResult::Erase { replacement_values } => {
@@ -414,21 +486,25 @@ impl<'db> PatternApplicator<'db> {
                             ctx.map_value(old_val, val);
                         }
                     }
-                    return vec![];
+                    // Cast ops still need to be in the output even if op is erased
+                    return cast_ops;
                 }
             }
         }
 
-        // Step 5: No pattern matched - recursively process regions
+        // Step 6: No pattern matched - recursively process regions
         let final_op = self.rewrite_op_regions(db, &remapped_op, ctx, target);
 
-        // Step 6: Map ORIGINAL op results to FINAL op results if they differ
+        // Step 7: Map ORIGINAL op results to FINAL op results if they differ
         // This is critical when operands were remapped but no pattern matched
         if final_op != *op {
             ctx.map_results(db, op, &final_op);
         }
 
-        vec![final_op]
+        // Prepend cast ops before the final op
+        let mut result = cast_ops;
+        result.push(final_op);
+        result
     }
 
     /// Rewrite nested regions within an operation.
@@ -684,5 +760,84 @@ mod tests {
 
         let const_op = arith::Const::from_operation(db, ops[0]).unwrap();
         assert_eq!(const_op.value(db), Attribute::IntBits(42));
+    }
+
+    /// Create a module with a mul operation that uses i32 operands.
+    #[salsa::tracked]
+    fn make_mul_module_i32(db: &dyn salsa::Database) -> Module<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+
+        let lhs = arith::r#const(db, location, i32_ty, Attribute::IntBits(3));
+        let rhs = arith::r#const(db, location, i32_ty, Attribute::IntBits(4));
+        let mul = arith::mul(db, location, lhs.result(db), rhs.result(db), i32_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![lhs.as_operation(), rhs.as_operation(), mul.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, Symbol::new("test"), region)
+    }
+
+    /// Apply with type converter that converts i32 → i64.
+    #[salsa::tracked]
+    fn apply_with_i32_to_i64_converter<'db>(
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+    ) -> (bool, usize, Module<'db>) {
+        use super::ConversionTarget;
+
+        let type_converter = TypeConverter::new().add_conversion(|db, ty| {
+            core::I32::from_type(db, ty).map(|_| core::I64::new(db).as_type())
+        });
+
+        let target = ConversionTarget::new();
+        let applicator = PatternApplicator::new(type_converter);
+        let result = applicator.apply_partial(db, module, target);
+        (result.reached_fixpoint, result.total_changes, result.module)
+    }
+
+    #[salsa_test]
+    fn test_unrealized_conversion_cast_insertion(db: &salsa::DatabaseImpl) {
+        let module = make_mul_module_i32(db);
+        let (reached_fixpoint, total_changes, result_module) =
+            apply_with_i32_to_i64_converter(db, module);
+
+        assert!(reached_fixpoint);
+        // We should have changes because casts were inserted
+        assert!(total_changes > 0, "Type conversion should trigger changes");
+
+        // The module should now contain unrealized_conversion_cast operations
+        let ops = result_module.body(db).blocks(db)[0].operations(db);
+
+        // Count unrealized_conversion_cast operations
+        let cast_count = ops
+            .iter()
+            .filter(|op| op.name(db) == core::UNREALIZED_CONVERSION_CAST())
+            .count();
+
+        // We expect casts for the mul operands (2 operands that need i32 → i64 conversion)
+        assert!(
+            cast_count >= 2,
+            "Expected at least 2 unrealized_conversion_cast ops, got {}",
+            cast_count
+        );
+
+        // Verify cast ops have correct target type (i64)
+        let i64_ty = core::I64::new(db).as_type();
+        for op in ops.iter() {
+            if op.name(db) == core::UNREALIZED_CONVERSION_CAST() {
+                let result_ty = op.results(db)[0];
+                assert_eq!(
+                    result_ty, i64_ty,
+                    "unrealized_conversion_cast should produce i64 type"
+                );
+            }
+        }
     }
 }

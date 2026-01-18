@@ -143,7 +143,8 @@ impl<'db, 'a> CastResolver<'db, 'a> {
         for block in region.blocks(self.db).iter() {
             let block_id = block.id(self.db);
             for (idx, arg) in block.args(self.db).iter().enumerate() {
-                self.block_arg_types.insert((block_id, idx), arg.ty(self.db));
+                self.block_arg_types
+                    .insert((block_id, idx), arg.ty(self.db));
             }
             // Recurse into nested regions
             for op in block.operations(self.db).iter() {

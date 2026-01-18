@@ -244,15 +244,59 @@ impl<'db> WasmLowerer<'db> {
     fn lower_block(&mut self, block: Block<'db>) -> Block<'db> {
         let location = block.location(self.db);
         let args = block.args(self.db).clone();
+        let block_id = block.id(self.db);
         let mut builder = BlockBuilder::new(self.db, location)
-            .id(block.id(self.db))
-            .block_args(args);
+            .id(block_id)
+            .block_args(args.clone());
+
+        // Pre-map tribute.var results to block arguments before processing operations.
+        // This ensures that when casts reference tribute.var results, they can be
+        // properly remapped to the actual block argument values.
+        self.map_var_to_block_args(block_id, &args, block.operations(self.db));
 
         for op in block.operations(self.db).iter().copied() {
             self.lower_op(&mut builder, op);
         }
 
         builder.build()
+    }
+
+    /// Map tribute.var operation results to their corresponding block arguments.
+    ///
+    /// tribute.var operations reference variables by name. For function parameters,
+    /// these map to block arguments with matching bind_name attributes.
+    fn map_var_to_block_args(
+        &mut self,
+        block_id: trunk_ir::BlockId,
+        args: &IdVec<trunk_ir::BlockArg<'db>>,
+        operations: &IdVec<Operation<'db>>,
+    ) {
+        let bind_name_key = Symbol::new("bind_name");
+
+        for op in operations.iter() {
+            if op.dialect(self.db) == tribute::DIALECT_NAME()
+                && op.name(self.db) == tribute::VAR()
+                && let Ok(var_op) = tribute::Var::from_operation(self.db, *op)
+            {
+                let var_name = var_op.name(self.db);
+
+                // Find block argument with matching bind_name
+                for (idx, arg) in args.iter().enumerate() {
+                    if let Some(Attribute::Symbol(name)) = arg.attrs(self.db).get(&bind_name_key)
+                        && *name == var_name
+                    {
+                        let var_result = op.result(self.db, 0);
+                        let block_arg_value = Value::new(
+                            self.db,
+                            trunk_ir::ValueDef::BlockArg(block_id),
+                            idx,
+                        );
+                        self.ctx.map_value(var_result, block_arg_value);
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     fn module_preamble_ops(&mut self, builder: &mut BlockBuilder<'db>, location: Location<'db>) {
@@ -639,10 +683,14 @@ impl<'db> WasmLowerer<'db> {
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
 
-        // Skip tribute dialect metadata operations - they have no runtime representation.
+        // Skip tribute.var: it's already mapped to block arguments in map_var_to_block_args
+        if dialect == tribute::DIALECT_NAME() && name == tribute::VAR() {
+            return;
+        }
+
+        // Skip other tribute dialect metadata operations - they have no runtime representation.
         if dialect == tribute::DIALECT_NAME() {
             // These are all metadata/definition ops that don't produce wasm code:
-            // - var: variable references (resolved during name resolution)
             // - ability_def: ability type definitions
             // - enum_def, variant_def, field_def, struct_def: type definitions
             return;

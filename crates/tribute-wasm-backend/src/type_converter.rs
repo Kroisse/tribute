@@ -573,11 +573,9 @@ mod tests {
     /// Test that tribute_rt.int → core.i32 materialization returns NoOp.
     /// These are the same underlying representation, no conversion needed.
     #[salsa::tracked]
-    fn do_materialize_primitive_equivalence_test(
-        db: &dyn salsa::Database,
-    ) -> bool {
-        use trunk_ir::{Attribute, Location, PathId, Span, Value, ValueDef};
+    fn do_materialize_primitive_equivalence_test(db: &dyn salsa::Database) -> bool {
         use trunk_ir::rewrite::MaterializeResult;
+        use trunk_ir::{Attribute, Location, PathId, Span, Value, ValueDef};
 
         let converter = wasm_type_converter();
         let path = PathId::new(db, "test.trb".to_owned());
@@ -596,6 +594,9 @@ mod tests {
     #[salsa_test]
     fn test_materialize_tribute_rt_int_to_core_i32_is_noop(db: &salsa::DatabaseImpl) {
         let is_noop = do_materialize_primitive_equivalence_test(db);
-        assert!(is_noop, "tribute_rt.Int → core.I32 should be NoOp (same representation)");
+        assert!(
+            is_noop,
+            "tribute_rt.Int → core.I32 should be NoOp (same representation)"
+        );
     }
 }

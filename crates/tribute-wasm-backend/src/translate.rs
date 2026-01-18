@@ -4,9 +4,11 @@
 //! to a WebAssembly binary. It combines lowering (IR transformation) and emission
 //! (binary generation) into a single tracked artifact.
 
+use crate::type_converter::wasm_type_converter;
 use crate::{ATTR_MODULE, ATTR_NAME, ATTR_SYM_NAME};
 use trunk_ir::Operation;
 use trunk_ir::Symbol;
+use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::dialect::core::Module;
 
 // Re-export for convenience
@@ -52,10 +54,17 @@ pub fn compile_to_wasm<'db>(
     // Phase 1 - Lower to wasm dialect
     let lowered = crate::lower_wasm::lower_to_wasm(db, module);
 
-    // Phase 2 - Validate IR (check for unresolved types and non-wasm ops)
+    // Phase 2 - Resolve unrealized_conversion_cast operations
+    let type_converter = wasm_type_converter();
+
+    let lowered = resolve_unrealized_casts(db, lowered, &type_converter)
+        .map(|r| r.module)
+        .map_err(crate::CompilationError::unresolved_casts)?;
+
+    // Phase 3 - Validate IR (check for unresolved types and non-wasm ops)
     crate::validate_wasm_ir(db, lowered)?;
 
-    // Phase 3 - Emit wasm binary
+    // Phase 4 - Emit wasm binary
     let bytes = crate::emit_wasm(db, lowered)?;
 
     // Extract exports and imports from module
