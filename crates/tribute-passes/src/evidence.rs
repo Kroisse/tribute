@@ -42,8 +42,8 @@
 
 use std::collections::HashSet;
 
-use tribute_ir::dialect::{ability, tribute_rt};
-use trunk_ir::dialect::{core, func};
+use tribute_ir::dialect::{ability, adt, tribute, tribute_rt};
+use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
@@ -87,11 +87,13 @@ pub fn insert_evidence<'db>(
     // Both phases use PatternApplicator
     // Phase 1: Add evidence parameters to function signatures
     // Phase 2: Transform calls inside effectful functions to pass evidence
+    // Phase 3: Transform calls inside tribute.handle bodies to pass null evidence
     // No specific conversion target - evidence insertion is a transformation pass
     let target = ConversionTarget::new();
     PatternApplicator::new(converter)
         .add_pattern(AddEvidenceParamPattern::new(effectful_fns.clone()))
-        .add_pattern(TransformCallsPattern::new(effectful_fns))
+        .add_pattern(TransformCallsPattern::new(effectful_fns.clone()))
+        .add_pattern(TransformHandlerCallsPattern::new(effectful_fns))
         .apply_partial(db, module, target)
         .module
 }
@@ -103,18 +105,28 @@ fn transform_calls_in_block<'db>(
     ev_value: Value<'db>,
     effectful_fns: &HashSet<Symbol>,
 ) -> (Block<'db>, bool) {
+    use std::collections::HashMap;
+
     let mut new_ops = Vec::new();
     let mut changed = false;
+    let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
     for op in block.operations(db).iter() {
+        // First, remap operands using the value map
+        let remapped_operands: Vec<Value<'db>> = op
+            .operands(db)
+            .iter()
+            .map(|v| *value_map.get(v).unwrap_or(v))
+            .collect();
+
         // Check if this is a call to an effectful function
         if let Ok(call_op) = func::Call::from_operation(db, *op) {
             let callee = call_op.callee(db);
             if effectful_fns.contains(&callee) {
                 // Add evidence as first argument
-                let args = call_op.args(db);
                 let mut new_args: Vec<Value<'db>> = vec![ev_value];
-                new_args.extend(args.iter().copied());
+                // Use remapped operands (which are the call args)
+                new_args.extend(remapped_operands.iter().copied());
 
                 let location = op.location(db);
                 let result_ty = op
@@ -124,7 +136,16 @@ fn transform_calls_in_block<'db>(
                     .unwrap_or_else(|| *core::Nil::new(db));
 
                 let new_call = func::call(db, location, new_args, result_ty, callee);
-                new_ops.push(new_call.as_operation());
+                let new_call_op = new_call.as_operation();
+
+                // Map old result to new result
+                if !op.results(db).is_empty() {
+                    let old_result = op.result(db, 0);
+                    let new_result = new_call_op.result(db, 0);
+                    value_map.insert(old_result, new_result);
+                }
+
+                new_ops.push(new_call_op);
                 changed = true;
                 continue;
             }
@@ -148,12 +169,45 @@ fn transform_calls_in_block<'db>(
 
             if region_changed {
                 changed = true;
-                new_ops.push(op.modify(db).regions(new_regions).build());
+                // Rebuild op with new regions and remapped operands
+                let new_op = op
+                    .modify(db)
+                    .operands(IdVec::from(remapped_operands))
+                    .regions(new_regions)
+                    .build();
+                // Map old results to new results
+                for i in 0..op.results(db).len() {
+                    let old_result = op.result(db, i);
+                    let new_result = new_op.result(db, i);
+                    value_map.insert(old_result, new_result);
+                }
+                new_ops.push(new_op);
                 continue;
             }
         }
 
-        new_ops.push(*op);
+        // If operands were remapped or we have changes, rebuild the operation
+        let operands_changed = op
+            .operands(db)
+            .iter()
+            .zip(remapped_operands.iter())
+            .any(|(old, new)| old != new);
+
+        if operands_changed {
+            let new_op = op
+                .modify(db)
+                .operands(IdVec::from(remapped_operands))
+                .build();
+            // Map old results to new results
+            for i in 0..op.results(db).len() {
+                let old_result = op.result(db, i);
+                let new_result = new_op.result(db, i);
+                value_map.insert(old_result, new_result);
+            }
+            new_ops.push(new_op);
+        } else {
+            new_ops.push(*op);
+        }
     }
 
     let new_block = Block::new(
@@ -409,6 +463,68 @@ impl<'db> RewritePattern<'db> for TransformCallsPattern {
         let new_func = func::func(db, location, func_name, func_ty, new_body);
 
         RewriteResult::Replace(new_func.as_operation())
+    }
+}
+
+/// Pattern: Transform calls to effectful functions inside tribute.handle bodies.
+///
+/// This pattern matches `tribute.handle` operations and transforms all calls to
+/// effectful functions within their body regions to pass a null evidence pointer.
+/// The handler will provide the actual evidence at runtime via evidence lookup.
+struct TransformHandlerCallsPattern {
+    effectful_fns: HashSet<Symbol>,
+}
+
+impl TransformHandlerCallsPattern {
+    fn new(effectful_fns: HashSet<Symbol>) -> Self {
+        Self { effectful_fns }
+    }
+}
+
+impl<'db> RewritePattern<'db> for TransformHandlerCallsPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Match: tribute.handle
+        let handle_op = match tribute::Handle::from_operation(db, *op) {
+            Ok(h) => h,
+            Err(_) => return RewriteResult::Unchanged,
+        };
+
+        let location = op.location(db);
+        let body_region = handle_op.body(db);
+        let arms_region = handle_op.arms(db);
+        let result_type = op
+            .results(db)
+            .first()
+            .copied()
+            .unwrap_or_else(|| core::Nil::new(db).as_type());
+
+        // Create null evidence pointer for handler body calls
+        let ev_ty = ability::EvidencePtr::new(db).as_type();
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let null_ev_op = adt::ref_null(db, location, ev_ty, anyref_ty);
+        let null_ev_value = null_ev_op.as_operation().result(db, 0);
+
+        // Transform calls in body region
+        let (new_body, body_changed) =
+            transform_calls_in_region(db, &body_region, null_ev_value, &self.effectful_fns);
+
+        if !body_changed {
+            return RewriteResult::Unchanged;
+        }
+
+        // Rebuild tribute.handle with transformed body
+        // We need to prepend the null_ev_op to the operations
+        let mut result_ops = vec![null_ev_op.as_operation()];
+
+        let new_handle = tribute::handle(db, location, result_type, new_body, arms_region);
+        result_ops.push(new_handle.as_operation());
+
+        RewriteResult::expand(result_ops)
     }
 }
 

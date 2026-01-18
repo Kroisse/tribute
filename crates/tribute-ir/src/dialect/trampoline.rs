@@ -134,6 +134,12 @@ dialect! {
         /// This is the value passed to the effect operation (e.g., `State::set!(n)`).
         fn get_yield_shift_value() -> result;
 
+        /// `trampoline.get_yield_op_idx` operation: gets op_idx from global yield state.
+        ///
+        /// Returns the op_idx that was stored by set_yield_state.
+        /// Used in handler dispatch to determine which handler arm to execute.
+        fn get_yield_op_idx() -> result;
+
         /// `trampoline.build_state` operation: creates a state struct.
         ///
         /// Captures local variables at a shift point for later restoration.

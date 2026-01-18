@@ -7,6 +7,7 @@ pub mod arith_to_wasm;
 pub mod const_to_wasm;
 pub mod func_to_wasm;
 pub mod intrinsic_to_wasm;
+pub mod normalize_primitive_types;
 pub mod scf_to_wasm;
 pub mod trampoline_to_wasm;
 pub mod tribute_rt_to_wasm;

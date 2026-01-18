@@ -18,15 +18,46 @@
 //! ```
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::dialect::core::Module;
 use crate::{Operation, OperationWalk, Symbol, WalkAction};
+
+/// Result of a dynamic legality check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegalityCheck {
+    /// The operation is definitely legal.
+    Legal,
+    /// The operation is definitely illegal.
+    Illegal,
+    /// This check cannot determine legality; continue to the next rule.
+    Continue,
+}
+
+/// Trait for dynamic legality check functions.
+///
+/// This trait is automatically implemented for closures with the appropriate signature.
+pub trait DynamicLegalityCheckFn:
+    for<'db> Fn(&'db dyn salsa::Database, Operation<'db>) -> LegalityCheck + Send + Sync
+{
+}
+
+impl<F> DynamicLegalityCheckFn for F where
+    F: for<'db> Fn(&'db dyn salsa::Database, Operation<'db>) -> LegalityCheck + Send + Sync
+{
+}
 
 /// Specifies legality constraints for IR transformation passes.
 ///
 /// A `ConversionTarget` declares which dialects are legal (allowed to remain
 /// after conversion) and which are illegal (must be fully converted).
-#[derive(Debug, Clone, Default)]
+///
+/// Legality is determined in the following order:
+/// 1. Dynamic checks (most specific)
+/// 2. Explicit operation rules (`legal_ops`, `illegal_ops`)
+/// 3. Dialect rules (`legal_dialects`, `illegal_dialects`)
+/// 4. Default: legal
+#[derive(Clone, Default)]
 pub struct ConversionTarget {
     /// Dialects that are legal (allowed to remain after conversion).
     legal_dialects: HashSet<Symbol>,
@@ -36,6 +67,24 @@ pub struct ConversionTarget {
     legal_ops: HashSet<(Symbol, Symbol)>,
     /// Operations that are explicitly illegal regardless of dialect.
     illegal_ops: HashSet<(Symbol, Symbol)>,
+    /// Dynamic legality checks that can inspect operation properties.
+    /// Uses `Arc` to allow cloning while keeping the trait objects.
+    dynamic_checks: Vec<Arc<dyn DynamicLegalityCheckFn>>,
+}
+
+impl std::fmt::Debug for ConversionTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConversionTarget")
+            .field("legal_dialects", &self.legal_dialects)
+            .field("illegal_dialects", &self.illegal_dialects)
+            .field("legal_ops", &self.legal_ops)
+            .field("illegal_ops", &self.illegal_ops)
+            .field(
+                "dynamic_checks",
+                &format!("[{} checks]", self.dynamic_checks.len()),
+            )
+            .finish()
+    }
 }
 
 /// Error returned when verification fails.
@@ -110,6 +159,62 @@ impl ConversionTarget {
         self
     }
 
+    /// Add a dynamic legality check that can inspect operation properties.
+    ///
+    /// Dynamic checks are evaluated first, before static rules. They can return:
+    /// - `LegalityCheck::Legal` - operation is definitely legal
+    /// - `LegalityCheck::Illegal` - operation is definitely illegal
+    /// - `LegalityCheck::Continue` - this check cannot determine, continue to next rule
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let target = ConversionTarget::new()
+    ///     .add_dynamic_check(|db, op| {
+    ///         // Check if any result type is illegal
+    ///         for result_ty in op.results(db).iter() {
+    ///             if is_illegal_type(db, *result_ty) {
+    ///                 return LegalityCheck::Illegal;
+    ///             }
+    ///         }
+    ///         LegalityCheck::Continue
+    ///     });
+    /// ```
+    pub fn add_dynamic_check<F>(mut self, check: F) -> Self
+    where
+        F: for<'db> Fn(&'db dyn salsa::Database, Operation<'db>) -> LegalityCheck
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.dynamic_checks.push(Arc::new(check));
+        self
+    }
+
+    /// Check if an operation is legal, considering dynamic checks.
+    ///
+    /// Resolution order:
+    /// 1. Dynamic checks (first match wins)
+    /// 2. Explicit op legality (`legal_ops`/`illegal_ops`)
+    /// 3. Dialect legality (`legal_dialects`/`illegal_dialects`)
+    /// 4. Default: legal
+    pub fn is_legal_op<'db>(&self, db: &'db dyn salsa::Database, op: Operation<'db>) -> bool {
+        let dialect = op.dialect(db);
+        let name = op.name(db);
+
+        // 1. Check dynamic predicates first
+        for check in &self.dynamic_checks {
+            match check(db, op) {
+                LegalityCheck::Legal => return true,
+                LegalityCheck::Illegal => return false,
+                LegalityCheck::Continue => continue,
+            }
+        }
+
+        // 2-4. Fall back to static rules
+        self.is_legal(dialect, name)
+    }
+
     /// Check if an operation is legal according to this target.
     ///
     /// Resolution order:
@@ -162,6 +267,9 @@ impl ConversionTarget {
     }
 
     /// Find all illegal operations in a module.
+    ///
+    /// This method uses `is_legal_op()` to check each operation, which includes
+    /// dynamic legality checks.
     pub fn find_illegal_ops<'db>(
         &self,
         db: &'db dyn salsa::Database,
@@ -172,9 +280,9 @@ impl ConversionTarget {
         let mut illegal = Vec::new();
         let body = module.body(db);
         let _ = body.walk_all::<()>(db, |op: Operation<'db>| {
-            let dialect = op.dialect(db);
-            let name = op.name(db);
-            if self.is_illegal(dialect, name) {
+            if !self.is_legal_op(db, op) {
+                let dialect = op.dialect(db);
+                let name = op.name(db);
                 illegal.push(IllegalOp {
                     dialect: dialect.to_string(),
                     name: name.to_string(),
@@ -191,6 +299,7 @@ impl ConversionTarget {
             || !self.illegal_dialects.is_empty()
             || !self.legal_ops.is_empty()
             || !self.illegal_ops.is_empty()
+            || !self.dynamic_checks.is_empty()
     }
 }
 
@@ -374,5 +483,94 @@ mod tests {
         assert_eq!(illegal.len(), 1);
         assert_eq!(illegal[0].dialect, "cont");
         assert_eq!(illegal[0].name, "shift");
+    }
+
+    #[salsa_test]
+    fn test_dynamic_check_illegal(db: &salsa::DatabaseImpl) {
+        let module = make_legal_module(db);
+
+        // Mark all arith.const with value 42 as illegal using dynamic check
+        let target = ConversionTarget::new().add_dynamic_check(|db, op| {
+            if let Ok(const_op) = arith::Const::from_operation(db, op)
+                && const_op.value(db) == crate::Attribute::IntBits(42)
+            {
+                return LegalityCheck::Illegal;
+            }
+            LegalityCheck::Continue
+        });
+
+        let illegal = target.find_illegal_ops(db, &module);
+        assert_eq!(illegal.len(), 1);
+        assert_eq!(illegal[0].dialect, "arith");
+        assert_eq!(illegal[0].name, "const");
+    }
+
+    #[salsa_test]
+    fn test_dynamic_check_legal_overrides_static_illegal(db: &salsa::DatabaseImpl) {
+        let module = make_illegal_module(db);
+
+        // Make cont dialect illegal statically, but allow cont.shift dynamically
+        let target = ConversionTarget::new()
+            .illegal_dialect("cont")
+            .add_dynamic_check(|db, op| {
+                // Allow cont.shift explicitly
+                if op.dialect(db) == Symbol::new("cont") && op.name(db) == Symbol::new("shift") {
+                    return LegalityCheck::Legal;
+                }
+                LegalityCheck::Continue
+            });
+
+        let result = target.verify(db, &module);
+        assert!(
+            result.is_ok(),
+            "Dynamic Legal should override static illegal"
+        );
+    }
+
+    #[salsa_test]
+    fn test_dynamic_check_continue_falls_through(db: &salsa::DatabaseImpl) {
+        let module = make_illegal_module(db);
+
+        // Dynamic check always returns Continue, so static rules apply
+        let target = ConversionTarget::new()
+            .illegal_dialect("cont")
+            .add_dynamic_check(|_, _| LegalityCheck::Continue);
+
+        let result = target.verify(db, &module);
+        assert!(
+            result.is_err(),
+            "Continue should fall through to static rules"
+        );
+    }
+
+    #[test]
+    fn test_has_constraints_with_dynamic_check() {
+        let with_dynamic =
+            ConversionTarget::new().add_dynamic_check(|_, _| LegalityCheck::Continue);
+        assert!(with_dynamic.has_constraints());
+    }
+
+    #[salsa::tracked]
+    fn make_const_42_op(db: &dyn salsa::Database) -> Operation<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        arith::r#const(db, location, i32_ty, crate::Attribute::IntBits(42)).as_operation()
+    }
+
+    #[salsa_test]
+    fn test_is_legal_op_with_dynamic_check(db: &salsa::DatabaseImpl) {
+        let op = make_const_42_op(db);
+
+        // Dynamic check marks value 42 as illegal
+        let target = ConversionTarget::new().add_dynamic_check(|db, op| {
+            if let Ok(const_op) = arith::Const::from_operation(db, op)
+                && const_op.value(db) == crate::Attribute::IntBits(42)
+            {
+                return LegalityCheck::Illegal;
+            }
+            LegalityCheck::Continue
+        });
+
+        assert!(!target.is_legal_op(db, op));
     }
 }

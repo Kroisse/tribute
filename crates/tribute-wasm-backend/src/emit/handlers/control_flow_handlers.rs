@@ -137,8 +137,10 @@ fn compute_block_type<'db>(
 
     let ty = result_ty.expect("result_ty should be Some when has_result is true");
 
-    // IMPORTANT: Check core.func BEFORE type_idx_by_type lookup.
-    // core.func types should always use funcref block type, not concrete struct types.
+    // IMPORTANT: Check primitive types BEFORE type_idx_by_type lookup.
+    // Primitive types should use their native WASM types, not GC struct references.
+
+    // core.func types should use funcref block type
     if core::Func::from_type(db, ty).is_some() {
         debug!(
             "block_type: using funcref for core.func type {}.{}",
@@ -146,6 +148,24 @@ fn compute_block_type<'db>(
             ty.name(db)
         );
         return Ok(BlockType::Result(ValType::Ref(RefType::FUNCREF)));
+    }
+
+    // Check for core primitive types (i32, i64, f32, f64)
+    if core::I32::from_type(db, ty).is_some() {
+        debug!("block_type: using i32 for core.i32");
+        return Ok(BlockType::Result(ValType::I32));
+    }
+    if core::I64::from_type(db, ty).is_some() {
+        debug!("block_type: using i64 for core.i64");
+        return Ok(BlockType::Result(ValType::I64));
+    }
+    if core::F32::from_type(db, ty).is_some() {
+        debug!("block_type: using f32 for core.f32");
+        return Ok(BlockType::Result(ValType::F32));
+    }
+    if core::F64::from_type(db, ty).is_some() {
+        debug!("block_type: using f64 for core.f64");
+        return Ok(BlockType::Result(ValType::F64));
     }
 
     if let Some(&type_idx) = module_info.type_idx_by_type.get(&ty) {

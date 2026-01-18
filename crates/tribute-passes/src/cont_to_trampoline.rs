@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::live_vars::FunctionAnalysis;
-use tribute_ir::dialect::{adt, trampoline};
+use tribute_ir::dialect::{adt, trampoline, tribute_rt};
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func::{self, Func};
 use trunk_ir::dialect::{arith, cont, scf, wasm};
@@ -35,6 +35,23 @@ use trunk_ir::{
 // ============================================================================
 // Public API
 // ============================================================================
+
+/// Create a TypeConverter with standard tribute_rt -> core type conversions.
+fn standard_type_converter() -> TypeConverter {
+    TypeConverter::new()
+        .add_conversion(|db, ty| {
+            tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Nat::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Bool::from_type(db, ty).map(|_| core::I::<1>::new(db).as_type())
+        })
+        .add_conversion(|db, ty| {
+            tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
+        })
+}
 
 /// Metadata for generating resume functions with continuation code.
 struct ResumeFuncSpec<'db> {
@@ -100,7 +117,7 @@ pub fn lower_cont_to_trampoline<'db>(
     // Step 2: Update function signatures, call result types, and scf.if types
     // Use empty target for intermediate steps (no verification needed)
     let empty_target = ConversionTarget::new();
-    let applicator = PatternApplicator::new(TypeConverter::new())
+    let applicator = PatternApplicator::new(standard_type_converter())
         .add_pattern(UpdateFuncTypePattern {
             effectful_funcs: effectful_funcs.clone(),
         })
@@ -116,7 +133,7 @@ pub fn lower_cont_to_trampoline<'db>(
     let shift_analysis = analyze_shift_points(db, &result.module, &effectful_funcs);
 
     // Step 3: Transform cont.* operations to trampoline.* operations
-    let applicator = PatternApplicator::new(TypeConverter::new())
+    let applicator = PatternApplicator::new(standard_type_converter())
         .add_pattern(LowerShiftPattern {
             resume_specs: Rc::clone(&resume_specs),
             resume_counter: Rc::clone(&resume_counter),
@@ -132,7 +149,7 @@ pub fn lower_cont_to_trampoline<'db>(
     let result = applicator.apply_partial(db, result.module, empty_target.clone());
 
     // Step 4: Wrap returns in effectful functions with step_done
-    let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(
+    let applicator = PatternApplicator::new(standard_type_converter()).add_pattern(
         WrapReturnsInEffectfulFuncsPattern {
             effectful_funcs: Rc::clone(&effectful_funcs),
         },
@@ -307,6 +324,8 @@ fn collect_direct_effectful_funcs<'db>(
 }
 
 /// Check if a region calls any effectful function.
+/// NOTE: Calls inside push_prompt/handler_dispatch regions are skipped because
+/// those effects are handled by the enclosing handler.
 fn calls_effectful_function<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
@@ -319,6 +338,13 @@ fn calls_effectful_function<'db>(
         .walk_all::<()>(db, |op| {
             // Skip nested function definitions - they're analyzed separately
             if Func::from_operation(db, op).is_ok() {
+                return ControlFlow::Continue(WalkAction::Skip);
+            }
+            // Skip push_prompt and handler_dispatch regions - effectful calls
+            // inside these are handled by the enclosing handler
+            if cont::PushPrompt::from_operation(db, op).is_ok()
+                || cont::HandlerDispatch::from_operation(db, op).is_ok()
+            {
                 return ControlFlow::Continue(WalkAction::Skip);
             }
             if let Ok(call) = func::Call::from_operation(db, op)
@@ -334,9 +360,9 @@ fn calls_effectful_function<'db>(
 
 /// Recursively check if a region contains effectful operations:
 /// - cont.shift (direct yield)
-/// - cont.push_prompt (prompt installation)
-/// - cont.handler_dispatch (handler arm that processes Step)
 /// - cont.resume (resumes a continuation, returns Step)
+///
+/// NOTE: push_prompt and handler_dispatch are NOT effectful - they handle effects.
 fn contains_effectful_ops<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
     use std::ops::ControlFlow;
     use trunk_ir::{OperationWalk, WalkAction};
@@ -347,17 +373,17 @@ fn contains_effectful_ops<'db>(db: &'db dyn salsa::Database, region: &Region<'db
             if Func::from_operation(db, op).is_ok() {
                 return ControlFlow::Continue(WalkAction::Skip);
             }
-            // cont.shift is effectful
+            // cont.shift is effectful - it yields control
             if cont::Shift::from_operation(db, op).is_ok() {
                 return ControlFlow::Break(());
             }
-            // These are also effectful operations
-            if cont::PushPrompt::from_operation(db, op).is_ok()
-                || cont::HandlerDispatch::from_operation(db, op).is_ok()
-                || cont::Resume::from_operation(db, op).is_ok()
-            {
+            // cont.resume is effectful - it resumes a continuation and returns Step
+            if cont::Resume::from_operation(db, op).is_ok() {
                 return ControlFlow::Break(());
             }
+            // NOTE: push_prompt and handler_dispatch are NOT effectful.
+            // They HANDLE effects, not GENERATE them. A function containing only
+            // these operations (with no unhandled effects) is pure.
             ControlFlow::Continue(WalkAction::Advance)
         })
         .is_break()
@@ -1019,12 +1045,34 @@ fn build_yield_else_branch<'db>(
     body_result: Option<Value<'db>>,
     step_ty: Type<'db>,
 ) -> Region<'db> {
+    use trunk_ir::ValueDef;
+
     let mut builder = BlockBuilder::new(db, location);
 
     let step_value = if let Some(result) = body_result {
-        let step_done = builder.op(trampoline::step_done(db, location, result, step_ty));
-        step_done.result(db)
+        // Check if result is already a Step (from effectful call or scf.if returning Step)
+        let is_step = match result.def(db) {
+            ValueDef::OpResult(def_op) => {
+                // Check if this operation produces Step
+                def_op
+                    .results(db)
+                    .first()
+                    .map(|ty| trampoline::Step::from_type(db, *ty).is_some())
+                    .unwrap_or(false)
+            }
+            ValueDef::BlockArg(_) => false,
+        };
+
+        if is_step {
+            // Already a Step, return it directly
+            result
+        } else {
+            // Wrap the value in step_done
+            let step_done = builder.op(trampoline::step_done(db, location, result, step_ty));
+            step_done.result(db)
+        }
     } else {
+        // No body result - create a step_done with zero value (unit placeholder)
         let zero = builder.op(arith::Const::i32(db, location, 0));
         let step_done = builder.op(trampoline::step_done(
             db,
@@ -1060,7 +1108,14 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
 
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
-        let step_ty = trampoline::Step::new(db).as_type();
+
+        // Get the result type from the handler_dispatch operation
+        // This is the user's result type, not Step
+        let result_ty = op
+            .results(db)
+            .first()
+            .copied()
+            .unwrap_or_else(|| core::Nil::new(db).as_type());
 
         // Get the body region with multiple blocks
         let body_region = op
@@ -1077,39 +1132,233 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
             Region::new(db, location, IdVec::new())
         };
 
-        // Block 1+ = suspend cases (include all suspend blocks, not just the first one)
-        let suspend_region = if blocks.len() > 1 {
-            let suspend_blocks: Vec<_> = blocks.iter().skip(1).copied().collect();
-            Region::new(db, location, IdVec::from(suspend_blocks))
-        } else {
-            let mut builder = BlockBuilder::new(db, location);
-            let zero = builder.op(arith::Const::i32(db, location, 0));
-            let step_done = builder.op(trampoline::step_done(
-                db,
-                location,
-                zero.result(db),
-                step_ty,
-            ));
-            builder.op(scf::r#yield(db, location, vec![step_done.result(db)]));
-            Region::new(db, location, IdVec::from(vec![builder.build()]))
-        };
+        // Collect suspend arms with their expected op_idx
+        let suspend_arms = collect_suspend_arms(db, blocks);
+
+        // Build suspend dispatch region with nested scf.if
+        let suspend_region = build_suspend_dispatch_region(db, location, result_ty, &suspend_arms);
 
         // check_yield
         let check_yield = trampoline::check_yield(db, location, i32_ty);
         let is_yielding = check_yield.as_operation().result(db, 0);
 
-        // scf.if
+        // scf.if: if is_yielding { dispatch } else { done }
         let if_op = scf::r#if(
             db,
             location,
             is_yielding,
-            step_ty,
+            result_ty,
             suspend_region,
             done_region,
         );
 
         RewriteResult::expand(vec![check_yield.as_operation(), if_op.as_operation()])
     }
+}
+
+/// Information about a suspend arm for dispatch.
+struct SuspendArm<'db> {
+    /// Expected op_idx for this arm
+    expected_op_idx: u32,
+    /// The block containing the handler arm code
+    block: Block<'db>,
+}
+
+/// Collect suspend arms from handler blocks with their expected op_idx.
+fn collect_suspend_arms<'db>(
+    db: &'db dyn salsa::Database,
+    blocks: &IdVec<Block<'db>>,
+) -> Vec<SuspendArm<'db>> {
+    let mut arms = Vec::new();
+
+    // Skip block 0 (done case), process blocks 1+ (suspend cases)
+    for block in blocks.iter().skip(1) {
+        // Extract ability_ref and op_name from marker block arg
+        let block_args = block.args(db);
+        if let Some(marker_arg) = block_args.first() {
+            let attrs = marker_arg.attrs(db);
+            let ability_ref = attrs.get(&Symbol::new("ability_ref")).and_then(|a| {
+                if let Attribute::Type(ty) = a {
+                    core::AbilityRefType::from_type(db, *ty).and_then(|ar| ar.name(db))
+                } else {
+                    None
+                }
+            });
+            let op_name = attrs.get(&Symbol::new("op_name")).and_then(|a| {
+                if let Attribute::Symbol(s) = a {
+                    Some(*s)
+                } else {
+                    None
+                }
+            });
+
+            let expected_op_idx = compute_op_idx(ability_ref, op_name);
+            arms.push(SuspendArm {
+                expected_op_idx,
+                block: *block,
+            });
+        }
+    }
+
+    arms
+}
+
+/// Build a single-block region for suspend dispatch using nested scf.if.
+fn build_suspend_dispatch_region<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    result_ty: Type<'db>,
+    suspend_arms: &[SuspendArm<'db>],
+) -> Region<'db> {
+    let i32_ty = core::I32::new(db).as_type();
+
+    if suspend_arms.is_empty() {
+        // No suspend arms - this path is unreachable in practice
+        let mut builder = BlockBuilder::new(db, location);
+        builder.op(func::unreachable(db, location));
+        return Region::new(db, location, IdVec::from(vec![builder.build()]));
+    }
+
+    // Build a single block that does:
+    // 1. Get current op_idx
+    // 2. Build nested if-else chain to dispatch
+    let mut builder = BlockBuilder::new(db, location);
+
+    // Get current op_idx from global state
+    let get_op_idx = builder.op(trampoline::get_yield_op_idx(db, location, i32_ty));
+    let current_op_idx = get_op_idx.result(db);
+
+    // Build nested if-else dispatch
+    let final_result = build_nested_dispatch(
+        db,
+        &mut builder,
+        location,
+        result_ty,
+        current_op_idx,
+        suspend_arms,
+        0,
+    );
+
+    // Yield the result
+    builder.op(scf::r#yield(db, location, vec![final_result]));
+
+    Region::new(db, location, IdVec::from(vec![builder.build()]))
+}
+
+/// Build nested if-else dispatch for suspend arms.
+/// Returns the final result value.
+///
+/// Strategy: The last arm becomes the default else case (no condition check needed).
+/// - For 1 arm: if (true) { arm0 } else { arm0 } (always executes arm0)
+/// - For 2 arms: if (op_idx == 0) { arm0 } else { arm1 }
+/// - For 3 arms: if (op_idx == 0) { arm0 } else { if (op_idx == 1) { arm1 } else { arm2 } }
+fn build_nested_dispatch<'db>(
+    db: &'db dyn salsa::Database,
+    builder: &mut BlockBuilder<'db>,
+    location: Location<'db>,
+    result_ty: Type<'db>,
+    current_op_idx: Value<'db>,
+    suspend_arms: &[SuspendArm<'db>],
+    arm_index: usize,
+) -> Value<'db> {
+    let i32_ty = core::I32::new(db).as_type();
+
+    // Safety check
+    if arm_index >= suspend_arms.len() {
+        panic!("build_nested_dispatch: arm_index out of bounds");
+    }
+
+    let arm = &suspend_arms[arm_index];
+    let is_last_arm = arm_index + 1 >= suspend_arms.len();
+
+    // Build then region: execute this arm's block code
+    let then_region = build_arm_region(db, location, result_ty, &arm.block);
+
+    if is_last_arm {
+        // Last arm (or only arm): use always-true condition, duplicate arm for else
+        let true_const = builder.op(arith::Const::i32(db, location, 1));
+        let else_region = build_arm_region(db, location, result_ty, &arm.block);
+
+        let if_op = builder.op(scf::r#if(
+            db,
+            location,
+            true_const.result(db),
+            result_ty,
+            then_region,
+            else_region,
+        ));
+
+        return if_op.result(db);
+    }
+
+    // Not the last arm: build if-else with condition check
+
+    // Compare current op_idx with expected
+    let expected_const = builder.op(arith::Const::i32(db, location, arm.expected_op_idx as i32));
+    let cmp_op = builder.op(arith::cmp_eq(
+        db,
+        location,
+        current_op_idx,
+        expected_const.result(db),
+        i32_ty,
+    ));
+    let is_match = cmp_op.result(db);
+
+    // Build else region: recurse to next arm (which may be last and become default)
+    let mut else_builder = BlockBuilder::new(db, location);
+    let else_result = build_nested_dispatch(
+        db,
+        &mut else_builder,
+        location,
+        result_ty,
+        current_op_idx,
+        suspend_arms,
+        arm_index + 1,
+    );
+    else_builder.op(scf::r#yield(db, location, vec![else_result]));
+    let else_region = Region::new(db, location, IdVec::from(vec![else_builder.build()]));
+
+    // Create scf.if for this dispatch level
+    let if_op = builder.op(scf::r#if(
+        db,
+        location,
+        is_match,
+        result_ty,
+        then_region,
+        else_region,
+    ));
+
+    if_op.result(db)
+}
+
+/// Build a single-block region from a handler arm block.
+fn build_arm_region<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    _step_ty: Type<'db>,
+    arm_block: &Block<'db>,
+) -> Region<'db> {
+    // Create a new block with the same operations but without the marker block arg
+    // The arm block's operations should already end with scf.yield
+
+    // Skip the first block arg (marker arg) if present
+    let original_args = arm_block.args(db);
+    let new_args = if !original_args.is_empty() {
+        IdVec::from(original_args.iter().skip(1).cloned().collect::<Vec<_>>())
+    } else {
+        IdVec::new()
+    };
+
+    // Create new block with same id, location, filtered args, and same operations
+    let new_block = Block::new(
+        db,
+        arm_block.id(db),
+        arm_block.location(db),
+        new_args,
+        arm_block.operations(db).clone(),
+    );
+
+    Region::new(db, location, IdVec::from(vec![new_block]))
 }
 
 // ============================================================================
@@ -1494,6 +1743,13 @@ fn get_region_result_value<'db>(
     let last_block = blocks.last()?;
     let ops = last_block.operations(db);
     let last_op = ops.last()?;
+
+    // If the last op is scf.yield, return its first operand (the yielded value)
+    if let Ok(yield_op) = scf::Yield::from_operation(db, *last_op) {
+        return yield_op.values(db).first().copied();
+    }
+
+    // Otherwise, return the first result of the last op
     last_op.results(db).first().map(|_| last_op.result(db, 0))
 }
 
@@ -1523,7 +1779,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::ir::BlockBuilder;
     use trunk_ir::rewrite::RewriteContext;
-    use trunk_ir::{BlockId, PathId, Span};
+    use trunk_ir::{BlockArg, BlockId, PathId, Span};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "test.trb".to_owned());
@@ -1535,14 +1791,55 @@ mod tests {
     // ========================================================================
 
     /// Test helper: builds handler_dispatch with multiple suspend blocks and applies pattern.
-    /// Returns the number of blocks in the suspend region.
+    /// Helper function to count nested scf.if operations in a region.
+    /// This counts the total number of scf.if operations, including nested ones.
+    fn count_scf_if_in_region<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> usize {
+        let mut count = 0;
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                if scf::If::from_operation(db, *op).is_ok() {
+                    count += 1;
+                    // Count nested scf.if in the then/else regions
+                    for nested_region in op.regions(db).iter() {
+                        count += count_scf_if_in_region(db, nested_region);
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    /// Returns the number of nested scf.if operations in the suspend region.
+    /// With the new dispatch structure, each suspend arm becomes a branch in nested scf.if.
+    /// For 2 suspend arms: if (op_idx == 0) { arm0 } else { if (true) { arm1 } else { arm1 } }
+    /// So we expect 2 scf.if operations (outer dispatch + inner for last arm).
     #[salsa::tracked]
-    fn handler_dispatch_suspend_block_count(db: &dyn salsa::Database) -> usize {
+    fn handler_dispatch_scf_if_count(db: &dyn salsa::Database) -> usize {
         let location = test_location(db);
         let step_ty = trampoline::Step::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
 
         // Create 3 blocks: done block + 2 suspend blocks
         let done_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+
+        // Create marker block args for suspend blocks (required by collect_suspend_arms)
+        let marker_arg1 = {
+            let mut attrs = std::collections::BTreeMap::new();
+            attrs.insert(
+                Symbol::new("op_name"),
+                Attribute::Symbol(Symbol::new("get")),
+            );
+            BlockArg::new(db, i32_ty, attrs)
+        };
+
+        let marker_arg2 = {
+            let mut attrs = std::collections::BTreeMap::new();
+            attrs.insert(
+                Symbol::new("op_name"),
+                Attribute::Symbol(Symbol::new("set")),
+            );
+            BlockArg::new(db, i32_ty, attrs)
+        };
 
         let mut builder1 = BlockBuilder::new(db, location);
         let zero1 = builder1.op(arith::Const::i32(db, location, 1));
@@ -1553,7 +1850,17 @@ mod tests {
             step_ty,
         ));
         builder1.op(scf::r#yield(db, location, vec![step1.result(db)]));
-        let suspend_block1 = builder1.build();
+        let suspend_block1 = {
+            let block = builder1.build();
+            // Rebuild block with marker arg
+            Block::new(
+                db,
+                block.id(db),
+                location,
+                IdVec::from(vec![marker_arg1]),
+                block.operations(db).clone(),
+            )
+        };
 
         let mut builder2 = BlockBuilder::new(db, location);
         let zero2 = builder2.op(arith::Const::i32(db, location, 2));
@@ -1564,7 +1871,17 @@ mod tests {
             step_ty,
         ));
         builder2.op(scf::r#yield(db, location, vec![step2.result(db)]));
-        let suspend_block2 = builder2.build();
+        let suspend_block2 = {
+            let block = builder2.build();
+            // Rebuild block with marker arg
+            Block::new(
+                db,
+                block.id(db),
+                location,
+                IdVec::from(vec![marker_arg2]),
+                block.operations(db).clone(),
+            )
+        };
 
         let body_region = Region::new(
             db,
@@ -1593,13 +1910,14 @@ mod tests {
         );
         let result = pattern.match_and_rewrite(db, &dispatch_op, &adaptor);
 
-        // Extract suspend region block count
+        // Count scf.if operations in the suspend region
         match result {
             RewriteResult::Expand(ops) if ops.len() == 2 => {
                 let if_op = &ops[1];
                 let regions = if_op.regions(db);
                 if !regions.is_empty() {
-                    regions[0].blocks(db).len()
+                    // Count scf.if in suspend region (regions[0])
+                    count_scf_if_in_region(db, &regions[0])
                 } else {
                     0
                 }
@@ -1610,8 +1928,15 @@ mod tests {
 
     #[salsa_test]
     fn test_handler_dispatch_collects_all_suspend_blocks(db: &salsa::DatabaseImpl) {
-        let count = handler_dispatch_suspend_block_count(db);
-        assert_eq!(count, 2, "Suspend region should have all 2 suspend blocks");
+        // With 2 suspend arms, we expect:
+        // - 1 outer scf.if for op_idx dispatch
+        // - 1 inner scf.if for the last arm (always-true condition)
+        // Total: 2 scf.if operations
+        let count = handler_dispatch_scf_if_count(db);
+        assert_eq!(
+            count, 2,
+            "Suspend region should have nested scf.if for 2 suspend arms"
+        );
     }
 
     // ========================================================================

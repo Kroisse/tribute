@@ -31,6 +31,11 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     tracing::debug!("=== AFTER arith_to_wasm ===\n{:?}", module);
     let module = crate::passes::scf_to_wasm::lower(db, module);
 
+    // Normalize tribute_rt primitive types (int, nat, bool, float) to core types
+    // BEFORE trampoline_to_wasm so downstream passes don't need to handle tribute_rt
+    let module = crate::passes::normalize_primitive_types::lower(db, module);
+    tracing::debug!("=== AFTER normalize_primitive_types ===\n{:?}", module);
+
     // Convert trampoline types/ops BEFORE func_to_wasm so function signatures
     // have ADT types (not trampoline.Step) when converted to wasm.func
     let module = crate::passes::trampoline_to_wasm::lower(db, module);
