@@ -286,11 +286,8 @@ impl<'db> WasmLowerer<'db> {
                         && *name == var_name
                     {
                         let var_result = op.result(self.db, 0);
-                        let block_arg_value = Value::new(
-                            self.db,
-                            trunk_ir::ValueDef::BlockArg(block_id),
-                            idx,
-                        );
+                        let block_arg_value =
+                            Value::new(self.db, trunk_ir::ValueDef::BlockArg(block_id), idx);
                         self.ctx.map_value(var_result, block_arg_value);
                         break;
                     }

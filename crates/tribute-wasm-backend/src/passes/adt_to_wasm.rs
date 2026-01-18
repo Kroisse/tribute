@@ -44,11 +44,10 @@ use tracing::warn;
 
 use tribute_ir::{ModulePathExt as _, dialect::adt};
 use trunk_ir::dialect::core::Module;
-use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
 };
-use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Operation, Symbol, Type};
+use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type};
 
 use crate::type_converter::wasm_type_converter;
 
@@ -106,8 +105,8 @@ impl<'db> RewritePattern<'db> for StructNewPattern {
 
 /// Pattern for `adt.struct_get` -> `wasm.struct_get`
 ///
-/// If the operand is an abstract type (structref/anyref), inserts a ref_cast
-/// to the concrete struct type before the struct_get.
+/// Type casting from abstract types (structref/anyref) to concrete struct types
+/// is handled by the emit stage in `struct_handlers.rs`, not here.
 struct StructGetPattern;
 
 impl<'db> RewritePattern<'db> for StructGetPattern {
@@ -115,7 +114,7 @@ impl<'db> RewritePattern<'db> for StructGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
+        _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(struct_get) = adt::StructGet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -132,27 +131,6 @@ impl<'db> RewritePattern<'db> for StructGetPattern {
             return RewriteResult::Unchanged;
         };
 
-        let location = op.location(db);
-        let operand = op.operands(db).first().copied().unwrap();
-
-        // Check if operand type is abstract (structref/anyref) and needs casting
-        let operand_ty = adaptor.operand_type(0);
-        let struct_ty = struct_get.r#type(db);
-        let needs_cast = operand_ty.is_some_and(|ty| {
-            wasm::Structref::from_type(db, ty).is_some()
-                || wasm::Anyref::from_type(db, ty).is_some()
-        });
-
-        let (final_operand, prefix_ops) = if needs_cast {
-            // Insert ref_cast from abstract type to concrete struct type
-            let ref_cast = wasm::ref_cast(db, location, operand, struct_ty, struct_ty, None);
-            let ref_cast_op = ref_cast.as_operation();
-            let cast_result = ref_cast_op.result(db, 0);
-            (cast_result, vec![ref_cast_op])
-        } else {
-            (operand, vec![])
-        };
-
         // Build wasm.struct_get: change dialect/name and add field_idx attr
         // Preserve type attribute (if present) for cases where emit can't infer from operand types
         // Note: original 'field' attr remains but emit only looks for 'field_idx'
@@ -160,17 +138,10 @@ impl<'db> RewritePattern<'db> for StructGetPattern {
             .modify(db)
             .dialect_str("wasm")
             .name_str("struct_get")
-            .operands(IdVec::from(vec![final_operand]))
             .attr("field_idx", Attribute::IntBits(field_idx))
             .build();
 
-        if prefix_ops.is_empty() {
-            RewriteResult::Replace(new_op)
-        } else {
-            let mut all_ops = prefix_ops;
-            all_ops.push(new_op);
-            RewriteResult::Expand(all_ops)
-        }
+        RewriteResult::Replace(new_op)
     }
 }
 

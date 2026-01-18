@@ -122,11 +122,22 @@ pub fn wasm_type_converter() -> TypeConverter {
                 return MaterializeResult::NoOp;
             }
 
-            // Both are structref types - generate ref_cast (abstract type, no type_idx)
-            let from_is_structref = is_struct_like(db, from_ty);
-            let to_is_structref = is_struct_like(db, to_ty);
+            // adt.typeref ↔ wasm.structref: same runtime representation, no cast needed
+            // This covers the common case of passing structs between typed and untyped contexts
+            let from_is_typeref = adt::is_typeref(db, from_ty);
+            let to_is_typeref = adt::is_typeref(db, to_ty);
+            let from_is_structref = wasm::Structref::from_type(db, from_ty).is_some();
+            let to_is_structref = wasm::Structref::from_type(db, to_ty).is_some();
 
-            if from_is_structref && to_is_structref {
+            if (from_is_typeref && to_is_structref) || (from_is_structref && to_is_typeref) {
+                return MaterializeResult::NoOp;
+            }
+
+            // Both are struct-like types but need actual bridging - generate ref_cast
+            let from_is_struct_like = is_struct_like(db, from_ty);
+            let to_is_struct_like = is_struct_like(db, to_ty);
+
+            if from_is_struct_like && to_is_struct_like {
                 let cast_op = wasm::ref_cast(db, location, value, to_ty, to_ty, None);
                 let mut ops = OpVec::new();
                 ops.push(cast_op.as_operation());

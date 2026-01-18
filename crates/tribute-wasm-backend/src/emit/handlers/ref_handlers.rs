@@ -74,8 +74,47 @@ pub(crate) fn handle_ref_cast<'db>(
     // If so, use the concrete type index from the placeholder map
     let heap_type = if let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE()) {
         if wasm::Structref::from_type(db, *target_ty).is_some() {
-            // structref placeholder - try to find concrete type via field_count
-            if let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count")) {
+            // structref placeholder - try to find concrete type via type attribute first
+            // The `type` attribute contains the actual adt.struct/typeref type
+            if let Some(Attribute::Type(concrete_ty)) = attrs.get(&Symbol::new("type")) {
+                if let Some(&type_idx) = module_info.type_idx_by_type.get(concrete_ty) {
+                    tracing::debug!(
+                        "ref_cast: using type attr for concrete type_idx={} ({}.{})",
+                        type_idx,
+                        concrete_ty.dialect(db),
+                        concrete_ty.name(db)
+                    );
+                    HeapType::Concrete(type_idx)
+                } else if let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
+                {
+                    // Fall back to placeholder lookup
+                    if let Some(&type_idx) = module_info
+                        .placeholder_struct_type_idx
+                        .get(&(*target_ty, *fc as usize))
+                    {
+                        tracing::debug!(
+                            "ref_cast: found placeholder type_idx={} for field_count={}",
+                            type_idx,
+                            fc
+                        );
+                        HeapType::Concrete(type_idx)
+                    } else {
+                        tracing::debug!(
+                            "ref_cast: placeholder lookup FAILED for field_count={}, falling back to abstract structref",
+                            fc
+                        );
+                        HeapType::Abstract {
+                            shared: false,
+                            ty: AbstractHeapType::Struct,
+                        }
+                    }
+                } else {
+                    HeapType::Abstract {
+                        shared: false,
+                        ty: AbstractHeapType::Struct,
+                    }
+                }
+            } else if let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count")) {
                 if let Some(&type_idx) = module_info
                     .placeholder_struct_type_idx
                     .get(&(*target_ty, *fc as usize))
