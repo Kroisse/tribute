@@ -294,10 +294,10 @@ impl<'db> LambdaInfoCollector<'db> {
 
         let attrs = op.attributes(self.db);
         if let Some(Attribute::Type(cont_ty)) = attrs.get(&CONTINUATION_TYPE()) {
-            // Only return if it's not a type variable (meaning it was resolved by TypeSubst)
-            if !tribute::is_type_var(self.db, *cont_ty) {
-                return Some(*cont_ty);
-            }
+            // Return the type regardless of whether it's a type variable.
+            // TypeSubst should have already resolved it; if not, let it propagate
+            // so downstream passes can handle or report it.
+            return Some(*cont_ty);
         }
         None
     }
@@ -309,10 +309,9 @@ impl<'db> LambdaInfoCollector<'db> {
                 if tribute_pat::Bind::from_operation(self.db, *op).is_ok() {
                     // Get the result type of the bind operation
                     if let Some(&ty) = op.results(self.db).first() {
-                        // Only return if it's not a type variable
-                        if !tribute::is_type_var(self.db, ty) {
-                            return Some(ty);
-                        }
+                        // Return the type regardless of whether it's a type variable.
+                        // TypeSubst should have already resolved it.
+                        return Some(ty);
                     }
                 }
             }

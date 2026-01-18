@@ -288,6 +288,13 @@ impl<'db, 'a> CastResolver<'db, 'a> {
             }
             Some(crate::rewrite::MaterializeResult::Skip) | None => {
                 // Could not materialize - keep the cast and mark as unresolved
+                tracing::debug!(
+                    "resolve_unrealized_casts: FAILED to materialize {}.{} -> {}.{}",
+                    from_type.dialect(self.db),
+                    from_type.name(self.db),
+                    to_type.dialect(self.db),
+                    to_type.name(self.db),
+                );
                 self.unresolved.push(UnresolvedCast {
                     location,
                     from_type,

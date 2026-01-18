@@ -22,7 +22,7 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
-use tribute_ir::dialect::{adt, tribute, tribute_rt};
+use tribute_ir::dialect::{adt, closure, tribute, tribute_rt};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::rewrite::{MaterializeResult, OpVec, TypeConverter};
 use trunk_ir::{Attribute, Symbol};
@@ -115,6 +115,14 @@ pub fn wasm_type_converter() -> TypeConverter {
                 None
             }
         })
+        // Convert closure.closure → wasm.structref (closures are structs)
+        .add_conversion(|db, ty| {
+            if closure::Closure::from_type(db, ty).is_some() {
+                Some(wasm::Structref::new(db).as_type())
+            } else {
+                None
+            }
+        })
         // Materialization for struct type bridging
         .add_materialization(|db, location, value, from_ty, to_ty| {
             // Same type - no materialization needed
@@ -201,6 +209,12 @@ pub fn wasm_type_converter() -> TypeConverter {
             // wasm.structref → wasm.anyref (structref is a subtype of anyref)
             if wasm::Structref::from_type(db, from_ty).is_some()
                 && wasm::Anyref::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // closure.closure → wasm.structref (same representation)
+            if closure::Closure::from_type(db, from_ty).is_some()
+                && wasm::Structref::from_type(db, to_ty).is_some()
             {
                 return MaterializeResult::NoOp;
             }

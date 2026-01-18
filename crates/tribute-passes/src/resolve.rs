@@ -967,20 +967,13 @@ impl<'db> Resolver<'db> {
                 if let Some(resolved) = self.try_resolve_var(&remapped_op) {
                     resolved
                 } else {
-                    // Check if already resolved (has a concrete type, not tribute.type or type_var)
-                    // This happens when re-processing an already-resolved module:
-                    // - tribute.type: Not yet resolved
-                    // - type.var: Unresolved, with type variable from inference
-                    // - Concrete types (core.*, adt.*): Already resolved local var
-                    let is_already_resolved =
-                        remapped_op.results(self.db).first().is_some_and(|ty| {
-                            // Type is resolved if it's not a source type placeholder and not a type variable
-                            let dialect = ty.dialect(self.db);
-                            dialect != tribute::DIALECT_NAME()
-                        });
-
+                    // Check if this is a resolved local variable.
+                    // The `resolved_local` attribute is set when the var was bound
+                    // to a local (function parameter, let binding, etc.).
+                    // Note: We can't use result type to determine resolution status
+                    // because type inference may assign concrete types to unresolved vars.
                     let is_resolved_local = self.is_marked_resolved_local(&remapped_op);
-                    if self.report_unresolved && !is_already_resolved && !is_resolved_local {
+                    if self.report_unresolved && !is_resolved_local {
                         self.emit_unresolved_var_diagnostic(&remapped_op);
                     }
                     vec![self.resolve_op_regions(&remapped_op)]
