@@ -238,7 +238,22 @@ fn resolve_from_ref_cast<'db>(
         let is_placeholder = wasm::Structref::from_type(db, *target_ty).is_some();
 
         if is_placeholder {
-            // Use placeholder lookup with field_count
+            // For placeholder types like wasm.structref, try to find the concrete type
+            // from struct_get's type attribute first (this has the actual adt.struct/typeref type)
+            if let Some(Attribute::Type(struct_ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
+                // Try direct lookup with the concrete struct type
+                if let Some(&idx) = module_info.type_idx_by_type.get(struct_ty) {
+                    debug!(
+                        "struct_get: using struct_get type attr for type_idx={} ({}.{})",
+                        idx,
+                        struct_ty.dialect(db),
+                        struct_ty.name(db)
+                    );
+                    return Ok(idx);
+                }
+            }
+
+            // Use placeholder lookup with field_count as fallback
             let field_count =
                 if let Some(Attribute::IntBits(fc)) = def_attrs.get(&Symbol::new("field_count")) {
                     debug!("struct_get: ref_cast (placeholder) has field_count={}", *fc);

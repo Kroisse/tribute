@@ -9,6 +9,7 @@
 pub mod dialect;
 
 // === IR infrastructure ===
+pub mod conversion;
 pub mod ir;
 pub mod location;
 pub mod op_interface;

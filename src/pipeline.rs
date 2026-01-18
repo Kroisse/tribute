@@ -79,6 +79,7 @@ use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::const_inline::inline_module;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence::insert_evidence;
+use tribute_passes::generic_type_converter;
 use tribute_passes::handler_lower::lower_handlers;
 use tribute_passes::lambda_lift::lift_lambdas;
 use tribute_passes::lower_cont_to_trampoline;
@@ -89,6 +90,7 @@ use tribute_passes::tdnr::resolve_tdnr;
 use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 use tribute_wasm_backend::{WasmBinary, compile_to_wasm};
 use trunk_ir::Span;
+use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::transforms::eliminate_dead_functions;
 use trunk_ir::{Block, BlockId, IdVec, Region, Symbol};
@@ -461,6 +463,27 @@ pub fn stage_dce<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Modu
     result.module
 }
 
+/// Resolve unrealized conversion casts.
+///
+/// This pass eliminates `core.unrealized_conversion_cast` operations that may
+/// have been inserted during earlier passes (e.g., handler lowering, trampoline
+/// conversion). It uses the generic type converter for target-agnostic type
+/// materializations.
+///
+/// Casts that cannot be resolved with the generic converter will be left for
+/// backend-specific converters to handle.
+#[salsa::tracked]
+pub fn stage_resolve_casts<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    let type_converter = generic_type_converter();
+    match resolve_unrealized_casts(db, module, &type_converter) {
+        Ok(result) => result.module,
+        Err(_) => {
+            // Some casts couldn't be resolved - leave them for backend-specific handling
+            module
+        }
+    }
+}
+
 /// Lower to WebAssembly binary.
 ///
 /// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
@@ -645,6 +668,9 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_cont_to_trampoline(db, module).ok()?;
 
     let module = stage_dce(db, module);
+
+    // Resolve any unrealized_conversion_cast operations from earlier passes
+    let module = stage_resolve_casts(db, module);
 
     // Lower to WebAssembly
     stage_lower_to_wasm(db, module)

@@ -556,6 +556,10 @@ impl<'db> TypeChecker<'db> {
                 // For struct/variant construction, the result type is already set correctly
                 // to the struct/enum type. Just record this type for the result value.
                 self.check_adt_new(op);
+            } else if name == adt::VARIANT_GET() {
+                self.check_variant_get(op);
+            } else if name == adt::STRUCT_GET() {
+                self.check_struct_get(op);
             } else {
                 self.check_unknown_op(op);
             }
@@ -1118,6 +1122,118 @@ impl<'db> TypeChecker<'db> {
         self.record_type(value, *bytes_type);
     }
 
+    /// Check `adt.variant_get` operation.
+    ///
+    /// This operation extracts a field from a variant. The operand can be:
+    /// 1. A variant instance type (from variant_cast) - field types are directly available
+    /// 2. An enum type (raw scrutinee) - we look up field types from enum definition
+    ///
+    /// The `field` attribute specifies which field to extract (by index or name).
+    fn check_variant_get(&mut self, op: &Operation<'db>) {
+        let results = op.results(self.db);
+        let result_type = results
+            .first()
+            .copied()
+            .unwrap_or_else(|| self.fresh_type_var());
+
+        // Get the operand (variant reference) type
+        let operands = op.operands(self.db);
+        if let Some(&ref_operand) = operands.first()
+            && let Some(ref_type) = self.get_type(ref_operand)
+            && let Some(field_type) = self.get_variant_field_type(op, ref_type)
+        {
+            trace!(
+                ?ref_type,
+                ?field_type,
+                ?result_type,
+                "check_variant_get: constraining result type"
+            );
+            self.constrain_eq(result_type, field_type);
+        }
+
+        let value = op.result(self.db, 0);
+        self.record_type(value, result_type);
+    }
+
+    /// Get the field type from a variant_get operation's operand type.
+    ///
+    /// Handles both variant instance types and enum types.
+    fn get_variant_field_type(
+        &self,
+        op: &Operation<'db>,
+        operand_type: Type<'db>,
+    ) -> Option<Type<'db>> {
+        // Get field index from the operation's `field` attribute
+        let field_attr = op.attributes(self.db).get(&Symbol::new("field"))?;
+        let field_index = match field_attr {
+            Attribute::IntBits(idx) => *idx as usize,
+            _ => return None,
+        };
+
+        // Case 1: Variant instance type (has variant_fields attribute)
+        if let Some(field_types) = adt::get_variant_field_types(self.db, operand_type) {
+            return field_types.get(field_index).copied();
+        }
+
+        // Case 2: Enum type - we need to find which variant this is for
+        // This happens in pattern matching where the scrutinee is still the enum type.
+        // We can't determine the field type here without additional context.
+        // The type will be constrained when we check the arm in check_case_arm_with_variant.
+        None
+    }
+
+    /// Check `adt.struct_get` operation.
+    ///
+    /// This operation extracts a field from a struct. The `field` attribute
+    /// specifies which field (by index or name), and `type` attribute provides
+    /// the struct type.
+    fn check_struct_get(&mut self, op: &Operation<'db>) {
+        let results = op.results(self.db);
+        let result_type = results
+            .first()
+            .copied()
+            .unwrap_or_else(|| self.fresh_type_var());
+
+        // Try to get field type from struct type attribute
+        if let Some(Attribute::Type(struct_type)) = op.attributes(self.db).get(&Symbol::new("type"))
+            && let Some(field_type) = self.get_struct_field_type(op, *struct_type)
+        {
+            trace!(
+                ?struct_type,
+                ?field_type,
+                ?result_type,
+                "check_struct_get: constraining result type"
+            );
+            self.constrain_eq(result_type, field_type);
+        }
+
+        let value = op.result(self.db, 0);
+        self.record_type(value, result_type);
+    }
+
+    /// Get the field type from a struct_get operation.
+    fn get_struct_field_type(
+        &self,
+        op: &Operation<'db>,
+        struct_type: Type<'db>,
+    ) -> Option<Type<'db>> {
+        let field_attr = op.attributes(self.db).get(&Symbol::new("field"))?;
+
+        // Get struct fields
+        let fields = adt::get_struct_fields(self.db, struct_type)?;
+
+        match field_attr {
+            // Field by index
+            Attribute::IntBits(idx) => fields.get(*idx as usize).map(|(_, ty)| *ty),
+            // Field by name
+            Attribute::Symbol(name) => fields
+                .iter()
+                .find(|(field_name, _)| field_name == name)
+                .map(|(_, ty)| *ty),
+            _ => None,
+        }
+    }
+
     // === list dialect checking ===
 
     fn check_list_new(&mut self, op: &Operation<'db>) {
@@ -1139,6 +1255,9 @@ impl<'db> TypeChecker<'db> {
             .copied()
             .unwrap_or_else(|| self.fresh_type_var());
 
+        // Get scrutinee type (the value being matched on)
+        let scrutinee_type = op.operands(self.db).first().and_then(|v| self.get_type(*v));
+
         // Check each branch region and collect handled abilities from handler patterns
         let regions = op.regions(self.db);
         let mut handled_abilities = Vec::new();
@@ -1159,6 +1278,18 @@ impl<'db> TypeChecker<'db> {
                                 &mut handled_abilities,
                                 result_type,
                             );
+
+                            // For variant patterns, constrain variant_get result types
+                            // based on the pattern's variant and the enum definition
+                            if let Some(scrutinee_ty) = scrutinee_type
+                                && let Some(body_region) = arm_regions.get(1)
+                            {
+                                self.constrain_variant_get_types_in_arm(
+                                    pattern_region,
+                                    body_region,
+                                    scrutinee_ty,
+                                );
+                            }
                         }
 
                         // Check the body region (second region)
@@ -1180,6 +1311,129 @@ impl<'db> TypeChecker<'db> {
 
         let value = op.result(self.db, 0);
         self.record_type(value, result_type);
+    }
+
+    /// Constrain `adt.variant_get` result types in a case arm body.
+    ///
+    /// When a case arm has a variant pattern (e.g., `Some(x)`), the body may contain
+    /// `adt.variant_get` operations that extract fields from the scrutinee. These
+    /// operations have type variable results that need to be constrained to the
+    /// actual field types from the enum definition.
+    ///
+    /// This method:
+    /// 1. Extracts the variant tag from the pattern region
+    /// 2. Looks up the variant's field types from the enum type
+    /// 3. Finds all `adt.variant_get` ops in the body and constrains their result types
+    fn constrain_variant_get_types_in_arm(
+        &mut self,
+        pattern_region: &Region<'db>,
+        body_region: &Region<'db>,
+        scrutinee_type: Type<'db>,
+    ) {
+        // Extract variant tag from pattern
+        let variant_tag = self.extract_variant_tag_from_pattern(pattern_region);
+        let Some(tag) = variant_tag else {
+            return;
+        };
+
+        // Look up variant field types from enum type
+        let Some(variants) = adt::get_enum_variants(self.db, scrutinee_type) else {
+            return;
+        };
+        let Some((_, field_types)) = variants.iter().find(|(name, _)| *name == tag) else {
+            return;
+        };
+
+        trace!(
+            ?tag,
+            ?field_types,
+            "constrain_variant_get_types_in_arm: found variant"
+        );
+
+        // Find all adt.variant_get operations in the body and constrain their types
+        for block in body_region.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter() {
+                if op.dialect(self.db) == adt::DIALECT_NAME()
+                    && op.name(self.db) == adt::VARIANT_GET()
+                {
+                    // Get field index from the operation
+                    if let Some(Attribute::IntBits(idx)) =
+                        op.attributes(self.db).get(&Symbol::new("field"))
+                    {
+                        let field_idx = *idx as usize;
+                        if let Some(field_type) = field_types.get(field_idx) {
+                            // Resolve tribute.type to concrete types before constraining
+                            let resolved_field_type = self.resolve_tribute_type(*field_type);
+                            // Get the result type variable
+                            let result_types = op.results(self.db);
+                            if let Some(&result_ty) = result_types.first() {
+                                trace!(
+                                    field_idx,
+                                    ?resolved_field_type,
+                                    ?result_ty,
+                                    "constrain_variant_get_types_in_arm: constraining field type"
+                                );
+                                self.constrain_eq(result_ty, resolved_field_type);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Resolve `tribute.type` references to concrete types.
+    ///
+    /// The enum definition stores field types as `tribute.type { name: "Int" }`
+    /// which are type references, not concrete types. This method resolves them
+    /// to their concrete counterparts (e.g., `tribute_rt.int`).
+    ///
+    /// User-defined types (like `Expr`) are returned as-is since they will be
+    /// resolved through the enum type lookup.
+    fn resolve_tribute_type(&self, ty: Type<'db>) -> Type<'db> {
+        use tribute_ir::dialect::tribute_rt;
+
+        // Check if this is a tribute.type reference
+        if ty.dialect(self.db) != tribute::DIALECT_NAME() || ty.name(self.db) != tribute::TYPE() {
+            return ty;
+        }
+
+        // Get the type name from the name attribute
+        let Some(Attribute::Symbol(name_sym)) = ty.get_attr(self.db, Symbol::new("name")) else {
+            return ty;
+        };
+
+        // Resolve well-known primitive types
+        let name_str = name_sym.to_string();
+        match &*name_str {
+            "Int" => tribute_rt::int_type(self.db),
+            "Bool" => tribute_rt::bool_type(self.db),
+            "Float" => tribute_rt::float_type(self.db),
+            "Nat" => tribute_rt::nat_type(self.db),
+            "String" => *core::String::new(self.db),
+            "Bytes" => *core::Bytes::new(self.db),
+            "Nil" => *core::Nil::new(self.db),
+            // User-defined types - leave as-is for now
+            _ => ty,
+        }
+    }
+
+    /// Extract the variant tag from a pattern region.
+    ///
+    /// Looks for `tribute_pat.variant` operation and extracts its `variant` attribute.
+    fn extract_variant_tag_from_pattern(&self, pattern_region: &Region<'db>) -> Option<Symbol> {
+        for block in pattern_region.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter() {
+                if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
+                    && op.name(self.db) == tribute_pat::VARIANT()
+                    && let Some(Attribute::Symbol(tag)) =
+                        op.attributes(self.db).get(&Symbol::new("variant"))
+                {
+                    return Some(*tag);
+                }
+            }
+        }
+        None
     }
 
     /// Check handler patterns and bind continuation types.

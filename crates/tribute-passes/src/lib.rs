@@ -23,6 +23,7 @@ pub mod resolve;
 pub mod tdnr;
 pub mod tribute_to_cont;
 pub mod tribute_to_scf;
+pub mod type_converter;
 pub mod typeck;
 
 // Re-exports
@@ -41,4 +42,5 @@ pub use tribute_to_scf::lower_tribute_to_scf;
 pub use trunk_ir::rewrite::{
     ApplyResult, PatternApplicator, RewriteContext, RewritePattern, RewriteResult,
 };
+pub use type_converter::generic_type_converter;
 pub use typeck::{Constraint, EffectRow, TypeChecker, TypeSolver, typecheck_module};

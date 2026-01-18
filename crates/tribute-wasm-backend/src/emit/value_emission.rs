@@ -81,6 +81,17 @@ pub(super) fn emit_operands<'db>(
                     value.index(db)
                 );
             } else {
+                // Debug: print all operands for context
+                tracing::error!("emit_operands: stale value detected in operands list:");
+                for (i, v) in operands.iter().enumerate() {
+                    let def_info = match v.def(db) {
+                        trunk_ir::ValueDef::OpResult(op) => {
+                            format!("{}.{}", op.dialect(db), op.name(db))
+                        }
+                        trunk_ir::ValueDef::BlockArg(bid) => format!("block_arg({:?})", bid),
+                    };
+                    tracing::error!("  operand[{}]: {:?} -> {}", i, v, def_info);
+                }
                 panic!(
                     "emit_operands: stale SSA value: {}.{} index={}",
                     stale_op.dialect(db),
