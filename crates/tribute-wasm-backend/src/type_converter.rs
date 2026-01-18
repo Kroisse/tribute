@@ -136,6 +136,65 @@ pub fn wasm_type_converter() -> TypeConverter {
             // Cannot materialize this conversion
             MaterializeResult::Skip
         })
+        // Primitive type equivalence: tribute_rt types are represented as core types
+        // These are no-op conversions (same underlying representation)
+        .add_materialization(|db, _location, _value, from_ty, to_ty| {
+            // tribute_rt.int → core.i32 (same representation)
+            if tribute_rt::Int::from_type(db, from_ty).is_some()
+                && core::I32::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // tribute_rt.nat → core.i32 (same representation)
+            if tribute_rt::Nat::from_type(db, from_ty).is_some()
+                && core::I32::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // tribute_rt.bool → core.i32 (same representation)
+            if tribute_rt::Bool::from_type(db, from_ty).is_some()
+                && core::I32::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // core.i1 → core.i32 (same representation for wasm)
+            if core::I::<1>::from_type(db, from_ty).is_some()
+                && core::I32::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // tribute_rt.float → core.f64 (same representation)
+            if tribute_rt::Float::from_type(db, from_ty).is_some()
+                && core::F64::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // tribute_rt.intref → wasm.i31ref (same representation)
+            if tribute_rt::Intref::from_type(db, from_ty).is_some()
+                && wasm::I31ref::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // tribute_rt.any → wasm.anyref (same representation)
+            if tribute_rt::Any::from_type(db, from_ty).is_some()
+                && wasm::Anyref::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // wasm.i31ref → wasm.anyref (i31ref is a subtype of anyref)
+            if wasm::I31ref::from_type(db, from_ty).is_some()
+                && wasm::Anyref::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // wasm.structref → wasm.anyref (structref is a subtype of anyref)
+            if wasm::Structref::from_type(db, from_ty).is_some()
+                && wasm::Anyref::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            MaterializeResult::Skip
+        })
         // Boxing: primitive types → i31ref/anyref
         .add_materialization(|db, location, value, from_ty, to_ty| {
             let to_i31ref = wasm::I31ref::from_type(db, to_ty).is_some();
@@ -509,5 +568,34 @@ mod tests {
             ops[1],
             (tribute_rt::DIALECT_NAME(), tribute_rt::UNBOX_INT())
         );
+    }
+
+    /// Test that tribute_rt.int → core.i32 materialization returns NoOp.
+    /// These are the same underlying representation, no conversion needed.
+    #[salsa::tracked]
+    fn do_materialize_primitive_equivalence_test(
+        db: &dyn salsa::Database,
+    ) -> bool {
+        use trunk_ir::{Attribute, Location, PathId, Span, Value, ValueDef};
+        use trunk_ir::rewrite::MaterializeResult;
+
+        let converter = wasm_type_converter();
+        let path = PathId::new(db, "test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+
+        let int_ty = tribute_rt::Int::new(db).as_type();
+        let const_op = arith::r#const(db, location, int_ty, Attribute::IntBits(42));
+        let value = Value::new(db, ValueDef::OpResult(const_op.as_operation()), 0);
+
+        let i32_ty = core::I32::new(db).as_type();
+        let result = converter.materialize(db, location, value, int_ty, i32_ty);
+
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_materialize_tribute_rt_int_to_core_i32_is_noop(db: &salsa::DatabaseImpl) {
+        let is_noop = do_materialize_primitive_equivalence_test(db);
+        assert!(is_noop, "tribute_rt.Int → core.I32 should be NoOp (same representation)");
     }
 }
