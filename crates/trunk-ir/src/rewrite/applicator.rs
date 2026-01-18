@@ -359,15 +359,15 @@ impl<'db> PatternApplicator<'db> {
     /// Rewrite a single operation.
     ///
     /// This is the core rewrite loop:
-    /// 0. Skip pattern matching if operation is already legal
     /// 1. Remap operands using the current value map
     /// 2. Insert unrealized_conversion_cast for type mismatches
-    /// 3. Compute converted operand types using the type converter
-    /// 4. Create OpAdaptor with remapped operands and pre-converted types
-    /// 5. Try each pattern in order
-    /// 6. If a pattern matches, apply it and record mappings
-    /// 7. Recursively rewrite any nested regions
-    /// 8. Map original operation results to final operation results
+    /// 3. Skip pattern matching if operation is already legal (but keep casts)
+    /// 4. Compute converted operand types using the type converter
+    /// 5. Create OpAdaptor with remapped operands and pre-converted types
+    /// 6. Try each pattern in order
+    /// 7. If a pattern matches, apply it and record mappings
+    /// 8. Recursively rewrite any nested regions
+    /// 9. Map original operation results to final operation results
     fn rewrite_operation(
         &self,
         db: &'db dyn salsa::Database,
@@ -375,18 +375,6 @@ impl<'db> PatternApplicator<'db> {
         ctx: &mut RewriteContext<'db>,
         target: &ConversionTarget,
     ) -> Vec<Operation<'db>> {
-        // Step 0: Skip pattern matching for legal operations
-        // (still need to remap operands and process nested regions)
-        // Only skip if target has constraints - otherwise try all patterns
-        if target.has_constraints() && Self::is_op_legal(db, op, target) {
-            let remapped_op = ctx.remap_operands(db, op);
-            let final_op = self.rewrite_op_regions(db, &remapped_op, ctx, target);
-            if final_op != *op {
-                ctx.map_results(db, op, &final_op);
-            }
-            return vec![final_op];
-        }
-
         // Step 1: Remap operands from previous transformations
         let remapped_op = ctx.remap_operands(db, op);
         let location = remapped_op.location(db);
@@ -414,7 +402,20 @@ impl<'db> PatternApplicator<'db> {
             remapped_op
         };
 
-        // Step 3: Compute converted operand types (now using casted operands)
+        // Step 3: Skip pattern matching for legal operations
+        // (still need to remap operands and process nested regions, and keep any casts)
+        // Only skip if target has constraints - otherwise try all patterns
+        if target.has_constraints() && Self::is_op_legal(db, &remapped_op, target) {
+            let final_op = self.rewrite_op_regions(db, &remapped_op, ctx, target);
+            if final_op != *op {
+                ctx.map_results(db, op, &final_op);
+            }
+            let mut result = cast_ops;
+            result.push(final_op);
+            return result;
+        }
+
+        // Step 4: Compute converted operand types (now using casted operands)
         let operand_types: Vec<Option<Type<'db>>> = casted_operands
             .iter()
             .map(|v| {
@@ -423,7 +424,7 @@ impl<'db> PatternApplicator<'db> {
             })
             .collect();
 
-        // Step 4: Create OpAdaptor with remapped operands and pre-converted types
+        // Step 5: Create OpAdaptor with remapped operands and pre-converted types
         let adaptor = OpAdaptor::new(
             remapped_op,
             casted_operands,
@@ -432,7 +433,7 @@ impl<'db> PatternApplicator<'db> {
             &self.type_converter,
         );
 
-        // Step 5: Try each pattern
+        // Step 6: Try each pattern
         for pattern in &self.patterns {
             match pattern.match_and_rewrite(db, &remapped_op, &adaptor) {
                 RewriteResult::Unchanged => continue,
@@ -492,10 +493,10 @@ impl<'db> PatternApplicator<'db> {
             }
         }
 
-        // Step 6: No pattern matched - recursively process regions
+        // Step 7: No pattern matched - recursively process regions
         let final_op = self.rewrite_op_regions(db, &remapped_op, ctx, target);
 
-        // Step 7: Map ORIGINAL op results to FINAL op results if they differ
+        // Step 8: Map ORIGINAL op results to FINAL op results if they differ
         // This is critical when operands were remapped but no pattern matched
         if final_op != *op {
             ctx.map_results(db, op, &final_op);
