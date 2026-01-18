@@ -20,7 +20,7 @@
 use tribute_ir::dialect::{tribute, tribute_rt};
 use trunk_ir::dialect::core;
 use trunk_ir::rewrite::{MaterializeResult, TypeConverter};
-use trunk_ir::{Attribute, DialectType, Symbol, Type};
+use trunk_ir::{Attribute, DialectOp, DialectType, Symbol, Type};
 
 /// Create a TypeConverter configured for target-agnostic type conversions.
 ///
@@ -124,6 +124,79 @@ pub fn generic_type_converter() -> TypeConverter {
                 && core::F64::from_type(db, to_ty).is_some()
             {
                 return MaterializeResult::NoOp;
+            }
+
+            MaterializeResult::Skip
+        })
+        // Boxing: primitive types → tribute_rt.any
+        // Generate tribute_rt.box_* ops which will be lowered by tribute_rt_to_wasm
+        .add_materialization(|db, location, value, from_ty, to_ty| {
+            // Only handle conversions to tribute_rt.any
+            if tribute_rt::Any::from_type(db, to_ty).is_none() {
+                return MaterializeResult::Skip;
+            }
+
+            let any_ty = tribute_rt::Any::new(db).as_type();
+
+            // Int/Nat/I32 → any: use tribute_rt.box_int
+            if tribute_rt::Int::from_type(db, from_ty).is_some()
+                || tribute_rt::Nat::from_type(db, from_ty).is_some()
+                || core::I32::from_type(db, from_ty).is_some()
+            {
+                let box_op = tribute_rt::box_int(db, location, value, any_ty);
+                return MaterializeResult::single(box_op.as_operation());
+            }
+
+            // Bool → any: use tribute_rt.box_bool
+            if tribute_rt::Bool::from_type(db, from_ty).is_some() {
+                let box_op = tribute_rt::box_bool(db, location, value, any_ty);
+                return MaterializeResult::single(box_op.as_operation());
+            }
+
+            // Float/F64 → any: use tribute_rt.box_float
+            if tribute_rt::Float::from_type(db, from_ty).is_some()
+                || core::F64::from_type(db, from_ty).is_some()
+            {
+                let box_op = tribute_rt::box_float(db, location, value, any_ty);
+                return MaterializeResult::single(box_op.as_operation());
+            }
+
+            MaterializeResult::Skip
+        })
+        // Unboxing: tribute_rt.any → primitive types
+        // Generate tribute_rt.unbox_* ops which will be lowered by tribute_rt_to_wasm
+        .add_materialization(|db, location, value, from_ty, to_ty| {
+            // Only handle conversions from tribute_rt.any
+            if tribute_rt::Any::from_type(db, from_ty).is_none() {
+                return MaterializeResult::Skip;
+            }
+
+            // any → Int/I32: use tribute_rt.unbox_int
+            if tribute_rt::Int::from_type(db, to_ty).is_some()
+                || core::I32::from_type(db, to_ty).is_some()
+            {
+                let unbox_op = tribute_rt::unbox_int(db, location, value, to_ty);
+                return MaterializeResult::single(unbox_op.as_operation());
+            }
+
+            // any → Nat: use tribute_rt.unbox_nat
+            if tribute_rt::Nat::from_type(db, to_ty).is_some() {
+                let unbox_op = tribute_rt::unbox_nat(db, location, value, to_ty);
+                return MaterializeResult::single(unbox_op.as_operation());
+            }
+
+            // any → Bool: use tribute_rt.unbox_bool
+            if tribute_rt::Bool::from_type(db, to_ty).is_some() {
+                let unbox_op = tribute_rt::unbox_bool(db, location, value, to_ty);
+                return MaterializeResult::single(unbox_op.as_operation());
+            }
+
+            // any → Float/F64: use tribute_rt.unbox_float
+            if tribute_rt::Float::from_type(db, to_ty).is_some()
+                || core::F64::from_type(db, to_ty).is_some()
+            {
+                let unbox_op = tribute_rt::unbox_float(db, location, value, to_ty);
+                return MaterializeResult::single(unbox_op.as_operation());
             }
 
             MaterializeResult::Skip
