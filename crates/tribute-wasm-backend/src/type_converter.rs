@@ -155,6 +155,30 @@ pub fn wasm_type_converter() -> TypeConverter {
                 return MaterializeResult::Ops(ops);
             }
 
+            // anyref → concrete struct type: use ref_cast
+            // This handles cases like closure env or resume wrapper parameters
+            // that are passed as anyref for uniform calling convention.
+            // We EXCLUDE wasm.anyref as target since that's handled by primitive equivalence.
+            let from_is_anyref = wasm::Anyref::from_type(db, from_ty).is_some()
+                || tribute_rt::Any::from_type(db, from_ty).is_some();
+            let to_is_abstract_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
+            if from_is_anyref && to_is_struct_like && !to_is_abstract_anyref {
+                // Convert trampoline types to their ADT representation for the cast
+                let target_ty = if trampoline::ResumeWrapper::from_type(db, to_ty).is_some() {
+                    resume_wrapper_adt_type(db)
+                } else if trampoline::Step::from_type(db, to_ty).is_some() {
+                    step_adt_type(db)
+                } else if trampoline::Continuation::from_type(db, to_ty).is_some() {
+                    continuation_adt_type(db)
+                } else {
+                    to_ty
+                };
+                let cast_op = wasm::ref_cast(db, location, value, target_ty, target_ty, None);
+                let mut ops = OpVec::new();
+                ops.push(cast_op.as_operation());
+                return MaterializeResult::Ops(ops);
+            }
+
             // Cannot materialize this conversion
             MaterializeResult::Skip
         })
@@ -358,7 +382,19 @@ fn is_struct_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     }
 
     // Check for variant instance types (have is_variant attribute)
-    adt::is_variant_instance_type(db, ty)
+    if adt::is_variant_instance_type(db, ty) {
+        return true;
+    }
+
+    // trampoline types that get lowered to ADT structs
+    if trampoline::Step::from_type(db, ty).is_some()
+        || trampoline::Continuation::from_type(db, ty).is_some()
+        || trampoline::ResumeWrapper::from_type(db, ty).is_some()
+    {
+        return true;
+    }
+
+    false
 }
 
 #[cfg(test)]

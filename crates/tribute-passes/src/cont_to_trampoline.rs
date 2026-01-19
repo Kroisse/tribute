@@ -1212,24 +1212,42 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
 /// 2. Restores captured local values from state
 /// 3. Executes the continuation operations (with value remapping)
 /// 4. Returns the final result (or yields again for chained shifts)
+///
+/// NOTE: Resume functions take evidence as first parameter for calling convention
+/// consistency with lifted lambdas. All functions in the function table use the
+/// same signature: (evidence, env/wrapper, args...). The evidence parameter may
+/// be unused in resume functions but is required for call_indirect type compatibility.
 fn create_resume_function_with_continuation<'db>(
     db: &'db dyn salsa::Database,
     spec: &ResumeFuncSpec<'db>,
 ) -> Operation<'db> {
+    let evidence_ty = tribute_ir::dialect::ability::EvidencePtr::new(db).as_type();
     let wrapper_ty = trampoline::ResumeWrapper::new(db).as_type();
     let step_ty = trampoline::Step::new(db).as_type();
     let anyref_ty = tribute_rt::Any::new(db).as_type();
     let location = spec.location;
     let name = Symbol::from_dynamic(&spec.name);
 
+    // Resume functions take (evidence, wrapper as anyref) for calling convention consistency
+    // with lifted lambdas. Using anyref allows uniform call_indirect type.
+    // The function casts anyref to the specific wrapper_ty at the start.
     let func_op = Func::build(
         db,
         location,
         name,
-        IdVec::from(vec![wrapper_ty]),
+        IdVec::from(vec![evidence_ty, anyref_ty]),
         step_ty,
         |builder| {
-            let wrapper_arg = builder.block_arg(db, 0);
+            // Evidence is at index 0 (unused but required for calling convention)
+            // Wrapper is at index 1 as anyref, needs cast to specific type
+            let wrapper_anyref = builder.block_arg(db, 1);
+            let wrapper_cast = builder.op(core::unrealized_conversion_cast(
+                db,
+                location,
+                wrapper_anyref,
+                wrapper_ty,
+            ));
+            let wrapper_arg = wrapper_cast.result(db);
 
             // Build value map for remapping
             let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
@@ -1522,12 +1540,19 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         ops.push(wrapper_op.as_operation());
 
         // === 5. Call resume function ===
+        // Resume functions take (evidence, wrapper) for calling convention consistency
+        // with lifted lambdas. We pass null evidence since we're inside a handler arm.
+        let evidence_ty = tribute_ir::dialect::ability::EvidencePtr::new(db).as_type();
+        let null_evidence = adt::ref_null(db, location, evidence_ty, anyref_ty);
+        ops.push(null_evidence.as_operation());
+        let evidence_val = null_evidence.as_operation().result(db, 0);
+
         let step_ty = trampoline::Step::new(db).as_type();
         let call_op = func::call_indirect(
             db,
             location,
             resume_fn_val,
-            IdVec::from(vec![wrapper_val]),
+            IdVec::from(vec![evidence_val, wrapper_val]),
             step_ty,
         );
         ops.push(call_op.as_operation());

@@ -35,9 +35,12 @@
 //!     ▼ boxing
 //! Module (boxing explicit)
 //!     │
-//!     ├─────────────── Closure Processing ────────────┤
+//!     ├─────────────── Evidence & Closure Processing ─┤
+//!     ▼ evidence_params (Phase 1)
+//! Module (evidence params added to signatures)
+//!     │
 //!     ▼ lambda_lift
-//! Module (lambdas lifted)
+//! Module (lambdas lifted, captures evidence)
 //!     │
 //!     ▼ closure_lower
 //! Module (closure.* lowered)
@@ -45,9 +48,8 @@
 //!     ▼ tdnr
 //! Module (UFCS resolved)
 //!     │
-//!     ├─────────────── Ability Processing ────────────┤
-//!     ▼ evidence_insert
-//! Module (evidence params added)
+//!     ▼ evidence_calls (Phase 2)
+//! Module (evidence passed through calls)
 //!     │
 //!     ▼ handler_lower
 //! Module (ability.* → cont.*)
@@ -78,7 +80,7 @@ use tribute_passes::boxing::insert_boxing;
 use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::const_inline::inline_module;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_passes::evidence::insert_evidence;
+use tribute_passes::evidence::{add_evidence_params, insert_evidence, transform_evidence_calls};
 use tribute_passes::generic_type_converter;
 use tribute_passes::handler_lower::lower_handlers;
 use tribute_passes::lambda_lift::lift_lambdas;
@@ -382,7 +384,36 @@ pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Mod
     resolve_tdnr(db, module)
 }
 
-/// Evidence Insertion.
+/// Evidence Parameters (Phase 1).
+///
+/// Adds evidence parameter as first argument to effectful functions.
+/// This must run BEFORE lambda lifting so that lambdas can capture evidence.
+///
+/// Evidence is a runtime structure for dynamic handler dispatch.
+/// Pure functions (with empty effect row) are unchanged.
+#[salsa::tracked]
+pub fn stage_evidence_params<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Module<'db> {
+    add_evidence_params(db, module)
+}
+
+/// Evidence Call Transformation (Phase 2).
+///
+/// Transforms call sites to pass evidence through:
+/// - Calls inside effectful functions pass the evidence parameter
+/// - Calls inside tribute.handle bodies pass null evidence
+///
+/// This must run AFTER lambda lifting and closure lowering so that:
+/// - Lifted lambdas already have evidence parameters
+/// - Closure calls can also receive evidence
+#[salsa::tracked]
+pub fn stage_evidence_calls<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    transform_evidence_calls(db, module)
+}
+
+/// Evidence Insertion (Combined).
 ///
 /// This pass transforms effectful functions for ability system support:
 /// - Adds evidence parameter as first argument to effectful functions
@@ -390,6 +421,9 @@ pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Mod
 ///
 /// Evidence is a runtime structure for dynamic handler dispatch.
 /// Pure functions (with empty effect row) are unchanged.
+///
+/// NOTE: This is the legacy combined pass. For the new pipeline, use
+/// `stage_evidence_params` before lambda_lift and `stage_evidence_calls` after closure_lower.
 #[salsa::tracked]
 pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     insert_evidence(db, module)
@@ -633,14 +667,15 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 /// 3. Const Inline - Inline constant values
 /// 4. Typecheck - Type inference and checking
 /// 5. Boxing - Insert explicit boxing/unboxing for polymorphic calls
-/// 6. Lambda Lift - Lift lambdas to top-level
-/// 7. Closure Lower - Lower closure operations
-/// 8. TDNR - Type-directed name resolution
-/// 9. Evidence - Insert evidence parameters
-/// 10. Handler Lower - Lower ability ops to cont ops
-/// 11. Lower Case - Lower case to scf.if
-/// 12. DCE - Dead code elimination
-/// 13. Final resolve - Report unresolved references
+/// 6. Evidence Params - Add evidence parameters to effectful functions (Phase 1)
+/// 7. Lambda Lift - Lift lambdas to top-level (captures evidence)
+/// 8. Closure Lower - Lower closure operations
+/// 9. TDNR - Type-directed name resolution
+/// 10. Evidence Calls - Transform calls to pass evidence (Phase 2)
+/// 11. Handler Lower - Lower ability ops to cont ops
+/// 12. Lower Case - Lower case to scf.if
+/// 13. DCE - Dead code elimination
+/// 14. Final resolve - Report unresolved references
 #[salsa::tracked]
 pub fn compile<'db>(
     db: &'db dyn salsa::Database,
@@ -655,13 +690,18 @@ pub fn compile<'db>(
     let module = stage_typecheck(db, module);
     let module = stage_boxing(db, module);
 
+    // Evidence parameters (Phase 1) - BEFORE lambda lifting
+    // so that lambdas can capture evidence from enclosing functions
+    let module = stage_evidence_params(db, module);
+
     // Closure processing
     let module = stage_lambda_lift(db, module);
     let module = stage_closure_lower(db, module);
     let module = stage_tdnr(db, module);
 
-    // Ability and case lowering
-    let module = stage_evidence(db, module);
+    // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
+    // so that closure calls can also receive evidence
+    let module = stage_evidence_calls(db, module);
     let module = stage_tribute_to_cont(db, module); // tribute.handle → cont.push_prompt + cont.handler_dispatch
     let module = stage_tribute_to_scf(db, module); // tribute.case → scf.if
     let module = stage_handler_lower(db, module)?; // ability.perform → cont.shift, etc.
@@ -700,10 +740,13 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_const_inline(db, module);
     let module = stage_typecheck(db, module);
     let module = stage_boxing(db, module);
+    // Evidence parameters (Phase 1) - BEFORE lambda lifting
+    let module = stage_evidence_params(db, module);
     let module = stage_lambda_lift(db, module);
     let module = stage_closure_lower(db, module);
     let module = stage_tdnr(db, module);
-    let module = stage_evidence(db, module);
+    // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
+    let module = stage_evidence_calls(db, module);
     let module = stage_tribute_to_cont(db, module);
     let module = stage_tribute_to_scf(db, module);
     let module = stage_handler_lower(db, module).ok()?;

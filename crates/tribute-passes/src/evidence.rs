@@ -51,26 +51,9 @@ use trunk_ir::{
     Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
 };
 
-/// Insert evidence parameters for effectful functions.
-///
-/// This is the main entry point for the evidence insertion pass.
-///
-/// The pass works in two phases via `PatternApplicator`:
-/// 1. `AddEvidenceParamPattern`: Add evidence parameter to effectful function signatures
-/// 2. `TransformCallsPattern`: Transform calls inside effectful functions to pass evidence
-#[salsa::tracked]
-pub fn insert_evidence<'db>(
-    db: &'db dyn salsa::Database,
-    module: core::Module<'db>,
-) -> core::Module<'db> {
-    // Collect all effectful functions
-    let effectful_fns = collect_effectful_functions(db, &module);
-
-    if effectful_fns.is_empty() {
-        return module;
-    }
-
-    let converter = TypeConverter::new()
+/// Create the standard type converter for evidence passes.
+fn create_type_converter() -> TypeConverter {
+    TypeConverter::new()
         .add_conversion(|db, ty| {
             tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
         })
@@ -82,20 +65,128 @@ pub fn insert_evidence<'db>(
         })
         .add_conversion(|db, ty| {
             tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
-        });
+        })
+}
 
-    // Both phases use PatternApplicator
-    // Phase 1: Add evidence parameters to function signatures
-    // Phase 2: Transform calls inside effectful functions to pass evidence
-    // Phase 3: Transform calls inside tribute.handle bodies to pass null evidence
-    // No specific conversion target - evidence insertion is a transformation pass
+/// Phase 1: Add evidence parameters to effectful function signatures.
+///
+/// This pass adds an evidence pointer parameter as the first argument to all
+/// effectful functions. This must run BEFORE lambda lifting so that:
+/// 1. Lambdas can capture the evidence parameter from their enclosing function
+/// 2. Lifted lambdas will have evidence in scope
+///
+/// Transformation:
+/// ```text
+/// fn foo(x: Int) ->{State(Int)} Int
+///   =>
+/// fn foo(ev: Evidence, x: Int) -> Int
+/// ```
+#[salsa::tracked]
+pub fn add_evidence_params<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+) -> core::Module<'db> {
+    let effectful_fns = collect_effectful_functions(db, &module);
+
+    if effectful_fns.is_empty() {
+        return module;
+    }
+
+    let converter = create_type_converter();
     let target = ConversionTarget::new();
     PatternApplicator::new(converter)
-        .add_pattern(AddEvidenceParamPattern::new(effectful_fns.clone()))
-        .add_pattern(TransformCallsPattern::new(effectful_fns.clone()))
-        .add_pattern(TransformHandlerCallsPattern::new(effectful_fns))
+        .add_pattern(AddEvidenceParamPattern::new(effectful_fns))
         .apply_partial(db, module, target)
         .module
+}
+
+/// Phase 2: Transform calls to pass evidence through.
+///
+/// This pass transforms call sites to pass evidence:
+/// 1. Calls inside effectful functions pass the evidence parameter
+/// 2. Calls inside tribute.handle bodies pass null evidence
+///
+/// This must run AFTER lambda lifting and closure lowering so that:
+/// 1. Lifted lambdas already have evidence parameters
+/// 2. Closure calls can also receive evidence
+///
+/// Transformation:
+/// ```text
+/// func.call @effectful_fn(%arg)
+///   =>
+/// func.call @effectful_fn(%ev, %arg)
+/// ```
+#[salsa::tracked]
+pub fn transform_evidence_calls<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+) -> core::Module<'db> {
+    // Collect functions that are explicitly effectful (have effect row with abilities)
+    let effectful_fns = collect_effectful_functions(db, &module);
+
+    // Also collect functions that have evidence parameter (added by add_evidence_params or lambda_lift)
+    // These functions need their internal calls transformed even if their type no longer shows effects
+    let fns_with_evidence = collect_functions_with_evidence_param(db, &module);
+
+    if effectful_fns.is_empty() && fns_with_evidence.is_empty() {
+        return module;
+    }
+
+    // Combine both sets for the callee check - we need to pass evidence to calls to either type
+    let all_effectful: HashSet<Symbol> = effectful_fns.union(&fns_with_evidence).copied().collect();
+
+    let converter = create_type_converter();
+    let target = ConversionTarget::new();
+    PatternApplicator::new(converter)
+        .add_pattern(TransformCallsPattern::new(all_effectful.clone()))
+        .add_pattern(TransformHandlerCallsPattern::new(all_effectful))
+        .apply_partial(db, module, target)
+        .module
+}
+
+/// Collect all function names that have `ability.evidence_ptr` as their first parameter.
+fn collect_functions_with_evidence_param<'db>(
+    db: &'db dyn salsa::Database,
+    module: &core::Module<'db>,
+) -> HashSet<Symbol> {
+    let mut fns_with_evidence = HashSet::new();
+
+    let body = module.body(db);
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if let Ok(func_op) = func::Func::from_operation(db, *op) {
+                let func_ty = func_op.r#type(db);
+                if let Some(core_func) = core::Func::from_type(db, func_ty) {
+                    let params = core_func.params(db);
+                    if !params.is_empty()
+                        && ability::EvidencePtr::from_type(db, params[0]).is_some()
+                    {
+                        fns_with_evidence.insert(func_op.sym_name(db));
+                    }
+                }
+            }
+        }
+    }
+
+    fns_with_evidence
+}
+
+/// Insert evidence parameters for effectful functions.
+///
+/// This is the combined entry point that runs both phases sequentially.
+/// For the new pipeline that separates lambda lifting, use `add_evidence_params`
+/// and `transform_evidence_calls` separately.
+///
+/// The pass works in two phases via `PatternApplicator`:
+/// 1. `AddEvidenceParamPattern`: Add evidence parameter to effectful function signatures
+/// 2. `TransformCallsPattern`: Transform calls inside effectful functions to pass evidence
+#[salsa::tracked]
+pub fn insert_evidence<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+) -> core::Module<'db> {
+    let module = add_evidence_params(db, module);
+    transform_evidence_calls(db, module)
 }
 
 /// Transform calls in a block, returning the new block and whether any changes were made.
@@ -123,6 +214,14 @@ fn transform_calls_in_block<'db>(
         if let Ok(call_op) = func::Call::from_operation(db, *op) {
             let callee = call_op.callee(db);
             if effectful_fns.contains(&callee) {
+                // Check if evidence is already the first argument (to prevent re-adding)
+                let first_arg = remapped_operands.first().copied();
+                if first_arg == Some(ev_value) {
+                    // Already has evidence as first arg, skip transformation
+                    new_ops.push(*op);
+                    continue;
+                }
+
                 // Add evidence as first argument
                 let mut new_args: Vec<Value<'db>> = vec![ev_value];
                 // Use remapped operands (which are the call args)
@@ -150,6 +249,11 @@ fn transform_calls_in_block<'db>(
                 continue;
             }
         }
+
+        // NOTE: Indirect calls (closure calls) are handled by closure_lower pass,
+        // which has access to closure type information before lowering.
+        // We don't handle them here because closure types have already been lowered
+        // to adt.struct by the time this pass runs.
 
         // Recursively transform nested regions (e.g., in scf.if, tribute.case)
         let regions = op.regions(db);
@@ -247,7 +351,7 @@ fn transform_calls_in_region<'db>(
 }
 
 /// Collect all function names that are effectful.
-fn collect_effectful_functions<'db>(
+pub fn collect_effectful_functions<'db>(
     db: &'db dyn salsa::Database,
     module: &core::Module<'db>,
 ) -> HashSet<Symbol> {
@@ -273,7 +377,7 @@ fn collect_effectful_functions<'db>(
 /// A function is considered effectful if its effect row contains actual abilities.
 /// A row with only a tail variable (polymorphic row) but no concrete abilities
 /// is considered pure, since at this point no effects were inferred for it.
-fn is_effectful_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+pub fn is_effectful_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
     let Some(func_ty) = core::Func::from_type(db, ty) else {
         return false;
     };
@@ -417,11 +521,6 @@ impl<'db> RewritePattern<'db> for TransformCallsPattern {
 
         let func_name = func_op.sym_name(db);
 
-        // Only process effectful functions (they have evidence parameter)
-        if !self.effectful_fns.contains(&func_name) {
-            return RewriteResult::Unchanged;
-        }
-
         // Get evidence value from first block's first argument
         let body = func_op.body(db);
         let blocks = body.blocks(db);
@@ -431,6 +530,20 @@ impl<'db> RewritePattern<'db> for TransformCallsPattern {
 
         let args = entry_block.args(db);
         if args.is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Check if this function has an evidence parameter.
+        // Process if:
+        // 1. It's in effectful_fns (explicitly effectful), OR
+        // 2. Its first parameter is ability.evidence_ptr (e.g., lifted lambdas)
+        let func_ty = func_op.r#type(db);
+        let first_param_type =
+            core::Func::from_type(db, func_ty).and_then(|ft| ft.params(db).first().copied());
+        let has_evidence_param =
+            first_param_type.is_some_and(|ty| ability::EvidencePtr::from_type(db, ty).is_some());
+
+        if !self.effectful_fns.contains(&func_name) && !has_evidence_param {
             return RewriteResult::Unchanged;
         }
 
