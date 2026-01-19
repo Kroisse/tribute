@@ -324,6 +324,8 @@ impl<'db> HandlerLowerer<'db> {
         let body_region = build_handler_body_region(self.db, location, done_body, &suspend_bodies);
 
         // Build cont.handler_dispatch using typed helper
+        // Order: operand, output_type, tag_attr, result_type_attr, region
+        // output_type and result_type_attr are the same here (both are the handler's result type)
         let dispatch_op = cont::handler_dispatch(
             self.db,
             location,

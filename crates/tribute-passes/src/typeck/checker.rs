@@ -676,11 +676,8 @@ impl<'db> TypeChecker<'db> {
         // Restore entry block arg types
         self.entry_block_arg_types = saved_entry_args;
 
-        // Record result type
-        if let Some(ty) = func_type {
-            let value = op.result(self.db, 0);
-            self.record_type(value, ty);
-        }
+        // Note: func.func is a declaration without result values (unlike func.call),
+        // so we don't record a result type here.
     }
 
     fn check_return(&mut self, _op: &Operation<'db>) {
