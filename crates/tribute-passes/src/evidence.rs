@@ -42,31 +42,15 @@
 
 use std::collections::HashSet;
 
-use tribute_ir::dialect::{ability, adt, tribute, tribute_rt};
+use crate::type_converter::generic_type_converter;
+use tribute_ir::dialect::{ability, adt, tribute};
 use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
 };
 use trunk_ir::{
     Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
 };
-
-/// Create the standard type converter for evidence passes.
-fn create_type_converter() -> TypeConverter {
-    TypeConverter::new()
-        .add_conversion(|db, ty| {
-            tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
-        })
-        .add_conversion(|db, ty| {
-            tribute_rt::Nat::from_type(db, ty).map(|_| core::I32::new(db).as_type())
-        })
-        .add_conversion(|db, ty| {
-            tribute_rt::Bool::from_type(db, ty).map(|_| core::I::<1>::new(db).as_type())
-        })
-        .add_conversion(|db, ty| {
-            tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
-        })
-}
 
 /// Phase 1: Add evidence parameters to effectful function signatures.
 ///
@@ -92,7 +76,7 @@ pub fn add_evidence_params<'db>(
         return module;
     }
 
-    let converter = create_type_converter();
+    let converter = generic_type_converter();
     let target = ConversionTarget::new();
     PatternApplicator::new(converter)
         .add_pattern(AddEvidenceParamPattern::new(effectful_fns))
@@ -135,7 +119,7 @@ pub fn transform_evidence_calls<'db>(
     // Combine both sets for the callee check - we need to pass evidence to calls to either type
     let all_effectful: HashSet<Symbol> = effectful_fns.union(&fns_with_evidence).copied().collect();
 
-    let converter = create_type_converter();
+    let converter = generic_type_converter();
     let target = ConversionTarget::new();
     PatternApplicator::new(converter)
         .add_pattern(TransformCallsPattern::new(all_effectful.clone()))
