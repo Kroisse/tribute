@@ -293,50 +293,64 @@ fn analyze_shift_points<'db>(
 ) -> ShiftAnalysis<'db> {
     let mut analysis = HashMap::new();
 
-    // Walk through all functions
-    for block in module.body(db).blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if let Ok(func) = Func::from_operation(db, *op) {
-                let func_name = func.sym_name(db);
-                if !effectful_funcs.contains(&func_name) {
-                    continue;
-                }
-
-                // Analyze this effectful function
-                let body = func.body(db);
-                if let Some(func_analysis) = FunctionAnalysis::analyze(db, &body) {
-                    let total_shifts = func_analysis.shift_points.len();
-                    for shift_point in func_analysis.shift_points {
-                        let span = shift_point.shift_op.location(db).span;
-                        // Get the shift result value and type if the operation has results
-                        let (shift_result_value, shift_result_type) =
-                            if let Some(result_type) = shift_point.shift_op.results(db).first() {
-                                (Some(shift_point.shift_op.result(db, 0)), Some(*result_type))
-                            } else {
-                                (None, None)
-                            };
-                        analysis.insert(
-                            span,
-                            ShiftPointInfo {
-                                index: shift_point.index,
-                                total_shifts,
-                                live_values: shift_point.live_values,
-                                shift_result_value,
-                                shift_result_type,
-                                continuation_ops: shift_point.continuation_ops,
-                            },
-                        );
-                    }
-                }
-            }
-        }
-    }
+    // Recursively walk through all functions (including those in nested regions)
+    analyze_shift_points_in_region(db, &module.body(db), effectful_funcs, &mut analysis);
 
     tracing::debug!(
         "analyze_shift_points: found {} shift points",
         analysis.len()
     );
     Rc::new(analysis)
+}
+
+/// Helper to recursively analyze shift points in a region.
+fn analyze_shift_points_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    effectful_funcs: &HashSet<Symbol>,
+    analysis: &mut HashMap<Span, ShiftPointInfo<'db>>,
+) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if let Ok(func) = Func::from_operation(db, *op) {
+                let func_name = func.sym_name(db);
+                if effectful_funcs.contains(&func_name) {
+                    // Analyze this effectful function
+                    let body = func.body(db);
+                    if let Some(func_analysis) = FunctionAnalysis::analyze(db, &body) {
+                        let total_shifts = func_analysis.shift_points.len();
+                        for shift_point in func_analysis.shift_points {
+                            let span = shift_point.shift_op.location(db).span;
+                            // Get the shift result value and type if the operation has results
+                            let (shift_result_value, shift_result_type) = if let Some(result_type) =
+                                shift_point.shift_op.results(db).first()
+                            {
+                                (Some(shift_point.shift_op.result(db, 0)), Some(*result_type))
+                            } else {
+                                (None, None)
+                            };
+                            analysis.insert(
+                                span,
+                                ShiftPointInfo {
+                                    index: shift_point.index,
+                                    total_shifts,
+                                    live_values: shift_point.live_values,
+                                    shift_result_value,
+                                    shift_result_type,
+                                    continuation_ops: shift_point.continuation_ops,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Recursively check nested regions
+            for nested_region in op.regions(db).iter() {
+                analyze_shift_points_in_region(db, nested_region, effectful_funcs, analysis);
+            }
+        }
+    }
 }
 
 /// Collect spans of handler_dispatch operations inside effectful functions.
@@ -367,19 +381,37 @@ fn collect_handlers_in_effectful_funcs<'db>(
         }
     }
 
-    // Walk through all functions
-    for block in module.body(db).blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if let Ok(func) = Func::from_operation(db, *op) {
-                let func_name = func.sym_name(db);
-                if !effectful_funcs.contains(&func_name) {
-                    continue;
+    // Helper to recursively find and process effectful functions
+    fn find_effectful_funcs_and_collect<'db>(
+        db: &'db dyn salsa::Database,
+        region: &Region<'db>,
+        effectful_funcs: &HashSet<Symbol>,
+        handler_spans: &mut HashSet<Span>,
+    ) {
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                if let Ok(func) = Func::from_operation(db, *op) {
+                    let func_name = func.sym_name(db);
+                    if effectful_funcs.contains(&func_name) {
+                        // Collect handler_dispatch spans in this effectful function
+                        collect_handlers_in_region(db, &func.body(db), handler_spans);
+                    }
                 }
-                // Collect handler_dispatch spans in this effectful function
-                collect_handlers_in_region(db, &func.body(db), &mut handler_spans);
+                // Recursively check nested regions for more functions
+                for nested_region in op.regions(db).iter() {
+                    find_effectful_funcs_and_collect(
+                        db,
+                        nested_region,
+                        effectful_funcs,
+                        handler_spans,
+                    );
+                }
             }
         }
     }
+
+    // Walk through all functions (including those in nested regions)
+    find_effectful_funcs_and_collect(db, &module.body(db), effectful_funcs, &mut handler_spans);
 
     tracing::debug!(
         "collect_handlers_in_effectful_funcs: found {} handlers in effectful functions",
@@ -419,10 +451,31 @@ fn truncate_after_shift<'db>(
             .collect::<Vec<_>>()
     );
     let body = module.body(db);
-    let mut new_ops = Vec::new();
-    let mut modified = false;
+    let (new_body, modified) =
+        find_and_truncate_effectful_funcs_in_region(db, &body, effectful_funcs);
 
-    for block in body.blocks(db).iter() {
+    if !modified {
+        return module;
+    }
+
+    Module::create(db, module.location(db), module.name(db), new_body)
+}
+
+/// Recursively find and truncate effectful functions in a region.
+/// This includes functions nested inside other operations (e.g., inside enum definitions).
+/// Returns (modified_region, was_modified).
+fn find_and_truncate_effectful_funcs_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    effectful_funcs: &HashSet<Symbol>,
+) -> (Region<'db>, bool) {
+    let mut new_blocks = Vec::new();
+    let mut region_modified = false;
+
+    for block in region.blocks(db).iter() {
+        let mut new_ops = Vec::new();
+        let mut block_modified = false;
+
         for op in block.operations(db).iter() {
             if let Ok(func) = Func::from_operation(db, *op) {
                 let func_name = func.sym_name(db);
@@ -431,28 +484,61 @@ fn truncate_after_shift<'db>(
                     let (new_func, func_modified) =
                         truncate_func_after_shift(db, *op, effectful_funcs);
                     new_ops.push(new_func);
-                    modified |= func_modified;
+                    block_modified |= func_modified;
                     continue;
                 }
             }
-            new_ops.push(*op);
+
+            // Recursively process nested regions to find more effectful functions
+            let regions = op.regions(db);
+            if regions.is_empty() {
+                new_ops.push(*op);
+            } else {
+                let mut new_regions = Vec::new();
+                let mut op_modified = false;
+
+                for nested_region in regions.iter() {
+                    let (new_nested, nested_modified) = find_and_truncate_effectful_funcs_in_region(
+                        db,
+                        nested_region,
+                        effectful_funcs,
+                    );
+                    new_regions.push(new_nested);
+                    op_modified |= nested_modified;
+                }
+
+                if op_modified {
+                    let new_op = op.modify(db).regions(IdVec::from(new_regions)).build();
+                    new_ops.push(new_op);
+                    block_modified = true;
+                } else {
+                    new_ops.push(*op);
+                }
+            }
+        }
+
+        if block_modified {
+            new_blocks.push(Block::new(
+                db,
+                block.id(db),
+                block.location(db),
+                block.args(db).clone(),
+                IdVec::from(new_ops),
+            ));
+            region_modified = true;
+        } else {
+            new_blocks.push(*block);
         }
     }
 
-    if !modified {
-        return module;
+    if region_modified {
+        (
+            Region::new(db, region.location(db), IdVec::from(new_blocks)),
+            true,
+        )
+    } else {
+        (*region, false)
     }
-
-    // Rebuild module with modified operations
-    let new_block = Block::new(
-        db,
-        body.blocks(db)[0].id(db),
-        body.blocks(db)[0].location(db),
-        body.blocks(db)[0].args(db).clone(),
-        IdVec::from(new_ops),
-    );
-    let new_body = Region::new(db, body.location(db), IdVec::from(vec![new_block]));
-    Module::create(db, module.location(db), module.name(db), new_body)
 }
 
 /// Truncate a single function's body after the first effect point.
@@ -887,6 +973,11 @@ fn identify_effectful_functions<'db>(
 }
 
 /// Collect directly effectful functions and all functions for later propagation.
+///
+/// A function is considered effectful if its type signature has a non-empty effect row,
+/// which means either:
+/// - It has concrete abilities (e.g., `->{State(Int)}`)
+/// - It has a polymorphic effect row (e.g., `->{e}` with a tail variable)
 fn collect_direct_effectful_funcs<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
@@ -894,14 +985,28 @@ fn collect_direct_effectful_funcs<'db>(
     all_funcs: &mut Vec<(Symbol, Region<'db>)>,
 ) {
     for block in region.blocks(db).iter() {
+        tracing::trace!(
+            "collect_direct_effectful_funcs: block has {} operations",
+            block.operations(db).len()
+        );
         for op in block.operations(db).iter() {
+            tracing::trace!(
+                "collect_direct_effectful_funcs: op {}.{}",
+                op.dialect(db),
+                op.name(db)
+            );
             if let Ok(func) = Func::from_operation(db, *op) {
                 let func_name = func.sym_name(db);
                 let body = func.body(db);
+                tracing::trace!(
+                    "collect_direct_effectful_funcs: found func.func '{}'",
+                    func_name
+                );
 
                 all_funcs.push((func_name, body));
 
-                if contains_effectful_ops(db, &body) {
+                // Check the function's type signature for effectfulness
+                if has_effectful_type(db, func.ty(db)) {
                     effectful.insert(func_name);
                 }
             }
@@ -912,6 +1017,26 @@ fn collect_direct_effectful_funcs<'db>(
             }
         }
     }
+}
+
+/// Check if a function type has a non-empty effect row.
+///
+/// Returns true if the effect row:
+/// - Has any concrete abilities, OR
+/// - Has a tail variable (is polymorphic)
+fn has_effectful_type<'db>(db: &'db dyn salsa::Database, func_ty: Type<'db>) -> bool {
+    let Some(func) = core::Func::from_type(db, func_ty) else {
+        return false;
+    };
+    let Some(effect) = func.effect(db) else {
+        return false;
+    };
+    let Some(row) = core::EffectRowType::from_type(db, effect) else {
+        return false;
+    };
+    let abilities = row.abilities(db);
+    let tail_var = row.tail_var(db);
+    !abilities.is_empty() || tail_var.is_some()
 }
 
 /// Check if a region calls any effectful function.
@@ -988,48 +1113,13 @@ fn block_calls_effectful_inner<'db>(
     false
 }
 
-/// Recursively check if a region contains effectful operations:
-/// - cont.shift (direct yield)
-/// - cont.resume (resumes a continuation, returns Step)
-///
-/// NOTE: handler_dispatch is NOT considered effectful here because:
-/// - For closed handlers, the trampoline loop returns user_result_ty (not Step)
-/// - The function's return type should remain user_result_ty
-/// - Open handlers (which propagate effects) are not yet supported
-///
-/// If we need to support open handlers in the future, we'll need a different
-/// approach (e.g., an attribute on the handler to indicate open vs closed).
-fn contains_effectful_ops<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
-    use std::ops::ControlFlow;
-    use trunk_ir::{OperationWalk, WalkAction};
-
-    region
-        .walk_all::<()>(db, |op| {
-            // Skip nested function definitions - they're analyzed separately
-            if Func::from_operation(db, op).is_ok() {
-                return ControlFlow::Continue(WalkAction::Skip);
-            }
-            // cont.shift is effectful - it yields control
-            if cont::Shift::from_operation(db, op).is_ok() {
-                return ControlFlow::Break(());
-            }
-            // cont.resume is effectful - it resumes a continuation and returns Step
-            if cont::Resume::from_operation(db, op).is_ok() {
-                return ControlFlow::Break(());
-            }
-            // cont.push_prompt is effectful - it establishes an effect handler and
-            // the function may return Step when the body suspends
-            if cont::PushPrompt::from_operation(db, op).is_ok() {
-                return ControlFlow::Break(());
-            }
-            // NOTE: handler_dispatch is intentionally NOT checked here.
-            // Closed handlers have their own trampoline loop that returns user_result_ty,
-            // so the containing function does not need Step return type.
-            ControlFlow::Continue(WalkAction::Advance)
-        })
-        .is_break()
-}
-
+// NOTE: handler_dispatch is NOT considered effectful here because:
+// - For closed handlers, the trampoline loop returns user_result_ty (not Step)
+// - The function's return type should remain user_result_ty
+// - Open handlers (which propagate effects) are not yet supported
+//
+// If we need to support open handlers in the future, we'll need a different
+// approach (e.g., an attribute on the handler to indicate open vs closed).
 // ============================================================================
 // Resume Function Helpers
 // ============================================================================
@@ -3648,92 +3738,6 @@ mod tests {
         assert_ne!(
             name_idx0, name_idx1,
             "Different shift indices should produce different names"
-        );
-    }
-
-    // ========================================================================
-    // Test: contains_effectful_ops skips inner functions
-    // ========================================================================
-
-    /// Test helper: creates a region with an inner function containing cont.shift.
-    /// The outer region should NOT be considered effectful since inner functions are skipped.
-    #[salsa::tracked]
-    fn contains_effectful_ops_with_inner_func(db: &dyn salsa::Database) -> bool {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let ability_ref_ty =
-            core::AbilityRefType::with_params(db, Symbol::new("State"), IdVec::from(vec![i32_ty]))
-                .as_type();
-
-        // Create inner function with cont.shift
-        let inner_func = Func::build(db, location, "inner_fn", IdVec::new(), i32_ty, |entry| {
-            let handler_region = Region::new(db, location, IdVec::new());
-            let shift_op = entry.op(cont::shift(
-                db,
-                location,
-                vec![],
-                i32_ty,
-                0,
-                ability_ref_ty,
-                Symbol::new("get"),
-                handler_region,
-            ));
-            entry.op(func::r#return(db, location, Some(shift_op.result(db))));
-        });
-
-        // Outer region contains only the inner function definition (no direct effectful ops)
-        let mut outer_builder = BlockBuilder::new(db, location);
-        outer_builder.op(inner_func.as_operation());
-        outer_builder.op(arith::Const::i32(db, location, 42));
-        let outer_block = outer_builder.build();
-        let outer_region = Region::new(db, location, IdVec::from(vec![outer_block]));
-
-        contains_effectful_ops(db, &outer_region)
-    }
-
-    /// Test helper: creates a region with cont.shift directly (no inner function).
-    #[salsa::tracked]
-    fn contains_effectful_ops_direct_shift(db: &dyn salsa::Database) -> bool {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let ability_ref_ty =
-            core::AbilityRefType::with_params(db, Symbol::new("State"), IdVec::from(vec![i32_ty]))
-                .as_type();
-
-        // Region with direct cont.shift (not inside inner function)
-        let mut builder = BlockBuilder::new(db, location);
-        let handler_region = Region::new(db, location, IdVec::new());
-        builder.op(cont::shift(
-            db,
-            location,
-            vec![],
-            i32_ty,
-            0,
-            ability_ref_ty,
-            Symbol::new("get"),
-            handler_region,
-        ));
-        let block = builder.build();
-        let region = Region::new(db, location, IdVec::from(vec![block]));
-
-        contains_effectful_ops(db, &region)
-    }
-
-    #[salsa_test]
-    fn test_contains_effectful_ops_skips_inner_functions(db: &salsa::DatabaseImpl) {
-        // Inner function's effectful ops should NOT make the outer region effectful
-        assert!(
-            !contains_effectful_ops_with_inner_func(db),
-            "Outer region should not be effectful when shift is only in inner function"
-        );
-    }
-
-    #[salsa_test]
-    fn test_contains_effectful_ops_detects_direct_shift(db: &salsa::DatabaseImpl) {
-        // Direct shift in the region should be detected
-        assert!(
-            contains_effectful_ops_direct_shift(db),
-            "Region with direct cont.shift should be effectful"
         );
     }
 }

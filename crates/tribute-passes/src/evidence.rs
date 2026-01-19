@@ -449,8 +449,9 @@ impl<'db> RewritePattern<'db> for AddEvidenceParamPattern {
         new_params.extend(params.iter().copied());
 
         let result_ty = core_func.result(db);
-        // Create pure function type (effects are now explicit via evidence)
-        let new_func_ty = core::Func::new(db, new_params.clone(), result_ty);
+        // Preserve effect annotation - cont_to_trampoline needs it to identify effectful functions
+        let effect = core_func.effect(db);
+        let new_func_ty = core::Func::with_effect(db, new_params.clone(), result_ty, effect);
 
         // Rebuild body region with evidence as first block argument
         let old_body = func_op.body(db);
