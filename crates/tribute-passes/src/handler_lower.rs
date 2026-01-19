@@ -23,7 +23,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use tribute_ir::dialect::{ability, tribute, tribute_rt};
+use tribute_ir::dialect::{ability, trampoline, tribute, tribute_rt};
 #[cfg(test)]
 use trunk_ir::Attribute;
 use trunk_ir::DialectType;
@@ -307,14 +307,17 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         let value = adaptor.operand(1).expect("resume requires value");
 
         let location = op.location(db);
-        let result_ty = op
-            .results(db)
-            .first()
-            .copied()
-            .unwrap_or_else(|| *core::Nil::new(db));
+
+        // NOTE: cont.resume returns Step type, not the user-facing result type.
+        // In trampoline-based effect handling, resume actually returns Step
+        // because the resumed continuation may suspend again.
+        // The trampoline loop processes the Step to either:
+        // - Extract the value (Done case) for user code
+        // - Continue processing (Shift case) for nested effects
+        let step_ty = trampoline::Step::new(db).as_type();
 
         // Create cont.resume with remapped operands
-        let new_op = cont::resume(db, location, continuation, value, result_ty);
+        let new_op = cont::resume(db, location, continuation, value, step_ty);
 
         RewriteResult::Replace(new_op.as_operation())
     }

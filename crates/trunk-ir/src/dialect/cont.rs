@@ -61,9 +61,18 @@ dialect! {
         /// - `ability_ref`: the ability type (for distinguishing same-named ops)
         /// - `op_name`: the operation name symbol
         ///
+        /// The `tag` attribute identifies which prompt this handler is associated with.
+        /// When a shift occurs, the tag is compared to determine which handler should
+        /// process the effect. If the tags don't match, the effect propagates upward.
+        ///
+        /// The `result_type` attribute stores the user-facing result type (the type
+        /// that the done branch extracts from Step). This is needed because the
+        /// operation's output type may be changed to Step during trampoline lowering.
+        ///
         /// In yield bubbling, this checks the global yield state:
         /// - If not yielding: execute block 0 (done)
         /// - If yielding: dispatch to appropriate suspend block based on ability_ref + op_name
+        #[attr(tag: u32, result_type: Type)]
         fn handler_dispatch(result) -> output {
             #[region(body)] {}
         };

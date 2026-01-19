@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use tracing::debug;
 use tribute_ir::dialect::{tribute, tribute_rt};
-use trunk_ir::dialect::{core, func, wasm};
+use trunk_ir::dialect::{cont, core, func, wasm};
 use trunk_ir::{Attribute, BlockId, DialectOp, DialectType, IdVec, Region, Symbol, Type};
 
 use crate::errors::CompilationResult;
@@ -123,6 +123,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
                             || core::Ptr::from_type(db, ty).is_some()
                             || core::I32::from_type(db, ty).is_some() // i32 table index for closures
                             || is_closure_struct_type(db, ty)
+                            || cont::Continuation::from_type(db, ty).is_some() // cont.continuation is funcref-like
                     });
 
                     // Helper to normalize IR types to wasm types for call_indirect.
@@ -222,6 +223,25 @@ pub(crate) fn collect_call_indirect_types<'db>(
                             );
                             result_ty = crate::gc_types::step_marker_type(db);
                         }
+                    }
+
+                    // Normalize result type: primitive types and type_var should become anyref
+                    // This must match the normalization done in call_handlers for emit
+                    if tribute_rt::is_int(db, result_ty)
+                        || tribute_rt::is_nat(db, result_ty)
+                        || tribute_rt::is_bool(db, result_ty)
+                        || tribute_rt::is_float(db, result_ty)
+                        || tribute_rt::Any::from_type(db, result_ty).is_some()
+                        || tribute::is_type_var(db, result_ty)
+                        || core::Nil::from_type(db, result_ty).is_some()
+                    {
+                        debug!(
+                            "collect_call_indirect_types: normalizing result {} to anyref",
+                            result_ty.dialect(db).with_str(|d| result_ty
+                                .name(db)
+                                .with_str(|n| format!("{}.{}", d, n)))
+                        );
+                        result_ty = anyref_ty;
                     }
 
                     // Create function type

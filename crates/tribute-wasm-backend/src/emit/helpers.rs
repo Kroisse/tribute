@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use tribute_ir::dialect::{ability, adt, closure, tribute, tribute_rt};
+use tribute_ir::dialect::{ability, adt, closure, trampoline, tribute, tribute_rt};
 use trunk_ir::dialect::{cont, core, wasm};
 use trunk_ir::{Attribute, Attrs, BlockId, DialectType, Symbol, Type, Value, ValueDef};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
@@ -176,6 +176,39 @@ pub(crate) fn type_to_valtype<'db>(
         }))
     } else if cont::Continuation::from_type(db, ty).is_some() {
         // Continuation types are represented as GC structs at runtime
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Struct,
+            },
+        }))
+    } else if trampoline::Step::from_type(db, ty).is_some() {
+        // trampoline.step is the same as wasm.step - uses STEP_IDX
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(STEP_IDX),
+        }))
+    } else if trampoline::Continuation::from_type(db, ty).is_some() {
+        // trampoline.continuation is represented as GC struct at runtime
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Struct,
+            },
+        }))
+    } else if trampoline::State::from_type(db, ty).is_some() {
+        // trampoline.state is represented as GC struct at runtime
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Struct,
+            },
+        }))
+    } else if trampoline::ResumeWrapper::from_type(db, ty).is_some() {
+        // trampoline.resume_wrapper is represented as GC struct at runtime
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Abstract {

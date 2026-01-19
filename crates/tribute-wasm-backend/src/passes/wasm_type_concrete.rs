@@ -320,6 +320,14 @@ impl<'db> RewritePattern<'db> for IfResultTypePattern {
             return RewriteResult::Unchanged;
         }
 
+        // If result type is already nil (void), branches use terminators (break/continue)
+        // and don't yield values, so skip type inference
+        if let Some(result_ty) = op.results(db).first()
+            && core::Nil::from_type(db, *result_ty).is_some()
+        {
+            return RewriteResult::Unchanged;
+        }
+
         // Try to infer concrete type from regions
         let Some(concrete_ty) = infer_type_from_regions(db, op.regions(db)) else {
             return RewriteResult::Unchanged;
@@ -639,7 +647,9 @@ fn infer_type_from_regions<'db>(
         }
 
         match found {
-            None => found = Some(ty),
+            None => {
+                found = Some(ty);
+            }
             Some(prev) if prev == ty => {
                 // Types agree, continue
             }

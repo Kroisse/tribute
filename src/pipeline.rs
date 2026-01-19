@@ -88,6 +88,8 @@ use tribute_passes::lower_tribute_to_scf;
 use tribute_passes::resolve::{Resolver, build_env};
 use tribute_passes::tdnr::resolve_tdnr;
 use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
+use tribute_passes::update_effectful_types;
+use tribute_wasm_backend::type_converter::wasm_type_converter;
 use tribute_wasm_backend::{WasmBinary, compile_to_wasm};
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
@@ -410,6 +412,25 @@ pub fn stage_handler_lower<'db>(
     lower_handlers(db, module)
 }
 
+/// Update type signatures for effectful functions.
+///
+/// This pass updates type signatures so that effectful functions return `trampoline.step`
+/// instead of their original return type. This must run BEFORE `stage_cont_to_trampoline`
+/// to ensure correct type information is available during lowering.
+///
+/// Updates:
+/// - Function return types for effectful functions
+/// - Function call result types for calls to effectful functions
+/// - `scf.if` result types when branches call effectful functions
+/// - `cont.push_prompt` result types (always returns step)
+#[salsa::tracked]
+pub fn stage_update_effectful_types<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Module<'db> {
+    update_effectful_types(db, module)
+}
+
 /// Continuation to Trampoline Lowering.
 ///
 /// This pass transforms continuation operations to trampoline operations:
@@ -421,6 +442,8 @@ pub fn stage_handler_lower<'db>(
 ///
 /// This is a backend-agnostic pass that prepares continuation operations for
 /// the trampoline (yield-bubbling) implementation strategy.
+///
+/// IMPORTANT: `stage_update_effectful_types` MUST be called before this pass.
 ///
 /// Returns an error if any `cont.*` operations (except `cont.drop`) remain after conversion.
 #[salsa::tracked]
@@ -475,6 +498,26 @@ pub fn stage_dce<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Modu
 #[salsa::tracked]
 pub fn stage_resolve_casts<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     let type_converter = generic_type_converter();
+    match resolve_unrealized_casts(db, module, &type_converter) {
+        Ok(result) => result.module,
+        Err(_) => {
+            // Some casts couldn't be resolved - leave them for backend-specific handling
+            module
+        }
+    }
+}
+
+/// Resolve unrealized conversion casts for WebAssembly backend.
+///
+/// This pass uses the WebAssembly-specific type converter which handles
+/// additional conversions like `tribute_rt.any → core.ptr` and
+/// `tribute_rt.any → core.nil`.
+#[salsa::tracked]
+pub fn stage_resolve_casts_wasm<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Module<'db> {
+    let type_converter = wasm_type_converter();
     match resolve_unrealized_casts(db, module, &type_converter) {
         Ok(result) => result.module,
         Err(_) => {
@@ -624,6 +667,7 @@ pub fn compile<'db>(
     let module = stage_handler_lower(db, module)?; // ability.perform → cont.shift, etc.
 
     // Continuation lowering (backend-agnostic trampoline implementation)
+    let module = stage_update_effectful_types(db, module); // Update types for effectful functions
     let module = stage_cont_to_trampoline(db, module)?; // cont.shift → trampoline ops
 
     let module = stage_dce(db, module);
@@ -665,12 +709,14 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_handler_lower(db, module).ok()?;
 
     // Continuation lowering (backend-agnostic trampoline implementation)
+    let module = stage_update_effectful_types(db, module);
     let module = stage_cont_to_trampoline(db, module).ok()?;
 
     let module = stage_dce(db, module);
 
     // Resolve any unrealized_conversion_cast operations from earlier passes
-    let module = stage_resolve_casts(db, module);
+    // Use wasm-specific type converter for full materialization support
+    let module = stage_resolve_casts_wasm(db, module);
 
     // Lower to WebAssembly
     stage_lower_to_wasm(db, module)

@@ -111,6 +111,8 @@ pub(crate) fn handle_call_indirect<'db>(
         let is_core_func = core::Func::from_type(db, ty).is_some();
         // core.ptr is used for function pointers in the IR, lowered to funcref in wasm
         let is_core_ptr = core::Ptr::from_type(db, ty).is_some();
+        // Note: cont.continuation now uses call_indirect (table-based) for consistency
+        // with lambda calls. The continuation struct holds a table index, not a funcref.
         // Note: i32 (function table index) is NOT included here - it should use
         // call_indirect, not call_ref. Closure calls go through the call_indirect path.
         debug!(
@@ -177,6 +179,25 @@ pub(crate) fn handle_call_indirect<'db>(
             );
             result_ty = crate::gc_types::step_marker_type(db);
         }
+    }
+
+    // Normalize result type: primitive types and type_var should become anyref
+    // This must match the normalization done in collect_call_indirect_types
+    if tribute_rt::is_int(db, result_ty)
+        || tribute_rt::is_nat(db, result_ty)
+        || tribute_rt::is_bool(db, result_ty)
+        || tribute_rt::is_float(db, result_ty)
+        || tribute_rt::Any::from_type(db, result_ty).is_some()
+        || tribute::is_type_var(db, result_ty)
+        || core::Nil::from_type(db, result_ty).is_some()
+    {
+        debug!(
+            "call_indirect emit: normalizing result {} to anyref",
+            result_ty
+                .dialect(db)
+                .with_str(|d| result_ty.name(db).with_str(|n| format!("{}.{}", d, n)))
+        );
+        result_ty = anyref_ty;
     }
 
     // Construct function type

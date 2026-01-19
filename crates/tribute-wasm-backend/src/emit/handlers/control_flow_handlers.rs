@@ -25,14 +25,32 @@ use super::super::{
 
 /// Emit local.get for a value
 fn emit_value_get<'db>(
+    db: &'db dyn salsa::Database,
     value: Value<'db>,
     ctx: &FunctionEmitContext<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let index = ctx
-        .value_locals
-        .get(&value)
-        .ok_or_else(|| CompilationError::invalid_module("value missing local mapping"))?;
+    let index = ctx.value_locals.get(&value).ok_or_else(|| {
+        let def_info = match value.def(db) {
+            trunk_ir::ValueDef::OpResult(op) => {
+                format!(
+                    "OpResult from {}.{} at {:?}",
+                    op.dialect(db),
+                    op.name(db),
+                    op.location(db)
+                )
+            }
+            trunk_ir::ValueDef::BlockArg(block_id) => {
+                format!("BlockArg({:?}) index={}", block_id, value.index(db))
+            }
+        };
+        tracing::error!(
+            "value missing local mapping: value={:?}, def={}",
+            value,
+            def_info
+        );
+        CompilationError::invalid_module("value missing local mapping")
+    })?;
     function.instruction(&Instruction::LocalGet(*index));
     Ok(())
 }
@@ -94,7 +112,7 @@ pub(crate) fn handle_if<'db>(
     };
     emit_region_ops(db, then_region, ctx, module_info, function)?;
     if let Some(value) = then_result {
-        emit_value_get(value, ctx, function)?;
+        emit_value_get(db, value, ctx, function)?;
     }
 
     // Emit else branch if present
@@ -109,7 +127,7 @@ pub(crate) fn handle_if<'db>(
         function.instruction(&Instruction::Else);
         emit_region_ops(db, else_region, ctx, module_info, function)?;
         if let Some(value) = else_result {
-            emit_value_get(value, ctx, function)?;
+            emit_value_get(db, value, ctx, function)?;
         }
     } else if has_result {
         return Err(CompilationError::invalid_module(
@@ -220,7 +238,7 @@ pub(crate) fn handle_block<'db>(
         let value = region_result_value(db, region).ok_or_else(|| {
             CompilationError::invalid_module("wasm.block body missing result value")
         })?;
-        emit_value_get(value, ctx, function)?;
+        emit_value_get(db, value, ctx, function)?;
     }
 
     function.instruction(&Instruction::End);
@@ -256,7 +274,7 @@ pub(crate) fn handle_loop<'db>(
         let value = region_result_value(db, region).ok_or_else(|| {
             CompilationError::invalid_module("wasm.loop body missing result value")
         })?;
-        emit_value_get(value, ctx, function)?;
+        emit_value_get(db, value, ctx, function)?;
     }
 
     function.instruction(&Instruction::End);

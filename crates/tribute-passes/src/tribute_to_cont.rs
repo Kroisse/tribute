@@ -329,6 +329,8 @@ impl<'db> HandlerLowerer<'db> {
             location,
             push_prompt_result,
             result_type,
+            tag,
+            result_type,
             body_region,
         );
 

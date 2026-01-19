@@ -38,7 +38,11 @@ impl std::fmt::Display for UnresolvedCastError<'_> {
             self.unresolved.len()
         )?;
         for cast in &self.unresolved {
-            writeln!(f, "  - at {:?}", cast.location)?;
+            writeln!(
+                f,
+                "  - {:?} -> {:?} at {:?}",
+                cast.from_type, cast.to_type, cast.location
+            )?;
         }
         Ok(())
     }
