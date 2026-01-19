@@ -191,6 +191,11 @@ pub fn lower_cont_to_trampoline<'db>(
     // Step 2: Analyze shift points in effectful functions
     let shift_analysis = analyze_shift_points(db, &module, &effectful_funcs);
 
+    // Step 2.5: Collect handler_dispatch ops that are inside effectful functions
+    // These handlers should return Step type (for propagation up the call stack)
+    let handlers_in_effectful_funcs =
+        collect_handlers_in_effectful_funcs(db, &module, &effectful_funcs);
+
     // Step 3: Lower cont.* operations to trampoline.*
     let empty_target = ConversionTarget::new();
     let applicator = PatternApplicator::new(standard_type_converter())
@@ -204,7 +209,10 @@ pub fn lower_cont_to_trampoline<'db>(
         .add_pattern(LowerGetShiftValuePattern)
         .add_pattern(LowerGetDoneValuePattern)
         .add_pattern(LowerPushPromptPattern)
-        .add_pattern(LowerHandlerDispatchPattern);
+        .add_pattern(LowerHandlerDispatchPattern {
+            effectful_funcs: Rc::clone(&effectful_funcs),
+            handlers_in_effectful_funcs: Rc::new(handlers_in_effectful_funcs),
+        });
 
     let result = applicator.apply_partial(db, module, empty_target.clone());
 
@@ -326,6 +334,55 @@ fn analyze_shift_points<'db>(
     Rc::new(analysis)
 }
 
+/// Collect spans of handler_dispatch operations inside effectful functions.
+/// These handlers should return Step type (to be propagated by the effectful function).
+fn collect_handlers_in_effectful_funcs<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<'db>,
+    effectful_funcs: &HashSet<Symbol>,
+) -> HashSet<Span> {
+    let mut handler_spans = HashSet::new();
+
+    fn collect_handlers_in_region<'db>(
+        db: &'db dyn salsa::Database,
+        region: &Region<'db>,
+        handler_spans: &mut HashSet<Span>,
+    ) {
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                // Check if this is a handler_dispatch
+                if cont::HandlerDispatch::from_operation(db, *op).is_ok() {
+                    handler_spans.insert(op.location(db).span);
+                }
+                // Recursively check nested regions
+                for region in op.regions(db).iter() {
+                    collect_handlers_in_region(db, region, handler_spans);
+                }
+            }
+        }
+    }
+
+    // Walk through all functions
+    for block in module.body(db).blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if let Ok(func) = Func::from_operation(db, *op) {
+                let func_name = func.sym_name(db);
+                if !effectful_funcs.contains(&func_name) {
+                    continue;
+                }
+                // Collect handler_dispatch spans in this effectful function
+                collect_handlers_in_region(db, &func.body(db), &mut handler_spans);
+            }
+        }
+    }
+
+    tracing::debug!(
+        "collect_handlers_in_effectful_funcs: found {} handlers in effectful functions",
+        handler_spans.len()
+    );
+    handler_spans
+}
+
 // ============================================================================
 // Truncate After Shift
 // ============================================================================
@@ -407,11 +464,18 @@ fn truncate_func_after_shift<'db>(
 
     let func_name = func.sym_name(db);
     let body = func.body(db);
-    let (new_body, modified) = truncate_region_after_shift(db, body, effectful_funcs);
+    let (new_body, body_modified) = truncate_region_after_shift(db, body, effectful_funcs);
+
+    // Effectful functions need Step return type even if body wasn't truncated
+    // (e.g., push_prompt may be in a nested region like handler_dispatch)
+    let is_effectful = effectful_funcs.contains(&func_name);
+    let modified = body_modified || is_effectful;
 
     tracing::debug!(
-        "truncate_func_after_shift: {} modified={}",
+        "truncate_func_after_shift: {} body_modified={} is_effectful={} modified={}",
         func_name,
+        body_modified,
+        is_effectful,
         modified
     );
 
@@ -419,10 +483,28 @@ fn truncate_func_after_shift<'db>(
         return (func_op, false);
     }
 
-    let new_op = func_op
-        .modify(db)
-        .regions(IdVec::from(vec![new_body]))
-        .build();
+    // Change return type to Step for effectful functions
+    // The function type is stored in the "type" attribute, not in results
+    let step_ty = trampoline::Step::new(db).as_type();
+
+    let mut builder = func_op.modify(db).regions(IdVec::from(vec![new_body]));
+
+    if is_effectful {
+        // Get the existing function type and modify its return type
+        let old_func_ty = func.r#type(db);
+        if let Some(func_ty) = core::Func::from_type(db, old_func_ty) {
+            let params = func_ty.params(db);
+            let effect = func_ty.effect(db);
+            let new_func_ty = core::Func::with_effect(db, params, step_ty, effect);
+            builder = builder.attr(Symbol::new("type"), Attribute::Type(new_func_ty.as_type()));
+            tracing::debug!(
+                "truncate_func_after_shift: {} changed return type to Step",
+                func_name
+            );
+        }
+    }
+
+    let new_op = builder.build();
     (new_op, true)
 }
 
@@ -466,8 +548,12 @@ fn truncate_block_after_shift<'db>(
     let mut effect_location: Option<Location<'db>> = None;
 
     tracing::debug!(
-        "truncate_block_after_shift: checking block with {} ops",
-        ops.len()
+        "truncate_block_after_shift: checking block with {} ops: [{}]",
+        ops.len(),
+        ops.iter()
+            .map(|op| format!("{}.{}", op.dialect(db), op.name(db)))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
     for op in ops.iter() {
@@ -490,41 +576,113 @@ fn truncate_block_after_shift<'db>(
             continue;
         }
 
+        // Check if this is a push_prompt operation (establishes an effect handler)
+        // The push_prompt result is the Step value from the handler
+        if cont::PushPrompt::from_operation(db, *op).is_ok() {
+            // Create new operation with Step result type
+            let step_ty = trampoline::Step::new(db).as_type();
+            let new_result_types = if !op.results(db).is_empty() {
+                IdVec::from(vec![step_ty])
+            } else {
+                op.results(db).clone()
+            };
+            let new_op = Operation::new(
+                db,
+                op.location(db),
+                op.dialect(db),
+                op.name(db),
+                op.operands(db).clone(),
+                new_result_types,
+                op.attributes(db).clone(),
+                op.regions(db).clone(),
+                op.successors(db).clone(),
+            );
+            new_ops.push(new_op);
+            found_effect_point = true;
+            if !new_op.results(db).is_empty() {
+                effect_result = Some(new_op.result(db, 0));
+            }
+            effect_location = Some(op.location(db));
+            tracing::debug!(
+                "truncate_block_after_shift: found push_prompt, changed result type to Step"
+            );
+            continue;
+        }
+
         // Check if this is a call to an effectful function
         if let Ok(call) = func::Call::from_operation(db, *op)
             && effectful_funcs.contains(&call.callee(db))
         {
-            new_ops.push(*op);
+            // Create new operation with Step result type
+            let step_ty = trampoline::Step::new(db).as_type();
+            let new_result_types = if !op.results(db).is_empty() {
+                IdVec::from(vec![step_ty])
+            } else {
+                op.results(db).clone()
+            };
+            let new_op = Operation::new(
+                db,
+                op.location(db),
+                op.dialect(db),
+                op.name(db),
+                op.operands(db).clone(),
+                new_result_types,
+                op.attributes(db).clone(),
+                op.regions(db).clone(),
+                op.successors(db).clone(),
+            );
+            new_ops.push(new_op);
             found_effect_point = true;
-            if !op.results(db).is_empty() {
-                effect_result = Some(op.result(db, 0));
+            if !new_op.results(db).is_empty() {
+                effect_result = Some(new_op.result(db, 0));
             }
             effect_location = Some(op.location(db));
             tracing::debug!(
-                "truncate_block_after_shift: found effectful call to {}",
+                "truncate_block_after_shift: found effectful call to {}, changed result type to Step",
                 call.callee(db)
             );
             continue;
         }
 
-        // Check if this is a scf.if that contains effectful code
+        // Check if this is a scf.if that contains effectful code or returns Step
+        let step_ty = trampoline::Step::new(db).as_type();
         if scf::If::from_operation(db, *op).is_ok() {
+            // Check if result type is Step (from push_prompt/check_yield)
+            let returns_step = op.results(db).first().is_some_and(|ty| *ty == step_ty);
+
             // Check if any branch contains effectful code (calls to effectful funcs)
             let has_effectful_code = op
                 .regions(db)
                 .iter()
                 .any(|r| calls_effectful_function(db, r, effectful_funcs));
 
-            if has_effectful_code {
+            if has_effectful_code || returns_step {
                 new_ops.push(*op);
                 found_effect_point = true;
                 if !op.results(db).is_empty() {
                     effect_result = Some(op.result(db, 0));
                 }
                 effect_location = Some(op.location(db));
-                tracing::debug!("truncate_block_after_shift: found scf.if with effectful code");
+                tracing::debug!(
+                    "truncate_block_after_shift: found scf.if with effectful code or Step result (returns_step={}, has_effectful_code={})",
+                    returns_step,
+                    has_effectful_code
+                );
                 continue;
             }
+        }
+
+        // Check if this is a scf.loop with Step result type (trampoline loop)
+        // These loops are generated by LowerHandlerDispatchPattern in effectful functions
+        if scf::Loop::from_operation(db, *op).is_ok()
+            && op.results(db).first().is_some_and(|ty| *ty == step_ty)
+        {
+            new_ops.push(*op);
+            found_effect_point = true;
+            effect_result = Some(op.result(db, 0));
+            effect_location = Some(op.location(db));
+            tracing::debug!("truncate_block_after_shift: found scf.loop with Step result");
+            continue;
         }
 
         new_ops.push(*op);
@@ -741,6 +899,11 @@ fn contains_effectful_ops<'db>(db: &'db dyn salsa::Database, region: &Region<'db
             }
             // cont.resume is effectful - it resumes a continuation and returns Step
             if cont::Resume::from_operation(db, op).is_ok() {
+                return ControlFlow::Break(());
+            }
+            // cont.push_prompt is effectful - it establishes an effect handler and
+            // the function may return Step when the body suspends
+            if cont::PushPrompt::from_operation(db, op).is_ok() {
                 return ControlFlow::Break(());
             }
             // NOTE: handler_dispatch is intentionally NOT checked here.
@@ -1523,7 +1686,12 @@ fn build_yield_else_branch<'db>(
 // Pattern: Lower cont.handler_dispatch
 // ============================================================================
 
-struct LowerHandlerDispatchPattern;
+struct LowerHandlerDispatchPattern {
+    effectful_funcs: Rc<HashSet<Symbol>>,
+    /// Spans of handler_dispatch operations that are inside effectful functions.
+    /// These handlers should return Step type for propagation.
+    handlers_in_effectful_funcs: Rc<HashSet<Span>>,
+}
 
 impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
     fn match_and_rewrite(
@@ -1563,11 +1731,17 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
         // Collect suspend arms with their expected op_idx
         let suspend_arms = collect_suspend_arms(db, blocks);
 
-        // Closed handlers: loop returns user_result_ty (all effects handled)
-        // Done branch extracts value and breaks with user_result_ty
-        // Shift branch dispatches and continues with new Step
-        // TODO: For open handlers, loop_result_ty should be step_ty
-        let loop_result_ty = user_result_ty;
+        // Check if this handler is inside an effectful function
+        // If so, the loop should return Step type for propagation up the call stack
+        let is_in_effectful_func = self.handlers_in_effectful_funcs.contains(&location.span);
+        let loop_result_ty = if is_in_effectful_func {
+            tracing::debug!(
+                "LowerHandlerDispatchPattern: handler in effectful func, returning Step"
+            );
+            step_ty
+        } else {
+            user_result_ty
+        };
 
         // Build the trampoline loop body
         let loop_body = self.build_trampoline_loop_body(
@@ -1580,6 +1754,7 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
             i32_ty,
             i1_ty,
             anyref_ty,
+            is_in_effectful_func,
         );
 
         // Create scf.loop with step_operand as initial value
@@ -1608,6 +1783,7 @@ impl LowerHandlerDispatchPattern {
         i32_ty: Type<'db>,
         i1_ty: Type<'db>,
         anyref_ty: Type<'db>,
+        is_in_effectful_func: bool,
     ) -> Region<'db> {
         use trunk_ir::BlockArg;
 
@@ -1638,9 +1814,17 @@ impl LowerHandlerDispatchPattern {
             i1_ty,
         ));
 
-        // Build Done branch: extract value and break with Step::Done
-        let done_branch =
-            self.build_done_branch(db, location, current_step, user_result_ty, anyref_ty);
+        // Build Done branch: extract value and break with result
+        // If in effectful func, wrap result in Step.Done for propagation
+        let done_branch = self.build_done_branch(
+            db,
+            location,
+            current_step,
+            user_result_ty,
+            anyref_ty,
+            step_ty,
+            is_in_effectful_func,
+        );
 
         // Build Shift branch: check tag and dispatch
         let shift_branch = self.build_shift_branch(
@@ -1679,7 +1863,9 @@ impl LowerHandlerDispatchPattern {
     }
 
     /// Build the Done branch of the trampoline loop.
-    /// Extracts value from Step and breaks with user_result_ty (closed handler).
+    /// Extracts value from Step and breaks with result.
+    /// If `is_in_effectful_func` is true, wraps result in Step.Done for propagation.
+    #[allow(clippy::too_many_arguments)]
     fn build_done_branch<'db>(
         &self,
         db: &'db dyn salsa::Database,
@@ -1687,6 +1873,8 @@ impl LowerHandlerDispatchPattern {
         current_step: Value<'db>,
         user_result_ty: Type<'db>,
         anyref_ty: Type<'db>,
+        step_ty: Type<'db>,
+        is_in_effectful_func: bool,
     ) -> Region<'db> {
         let mut builder = BlockBuilder::new(db, location);
 
@@ -1713,9 +1901,14 @@ impl LowerHandlerDispatchPattern {
             step_value
         };
 
-        // Closed handler: break directly with the extracted value
-        // (For open handlers, we would wrap in Step::Done and return Step)
-        builder.op(scf::r#break(db, location, result_value));
+        if is_in_effectful_func {
+            // In effectful function: wrap result in Step.Done for propagation
+            let step_done = builder.op(trampoline::step_done(db, location, result_value, step_ty));
+            builder.op(scf::r#break(db, location, step_done.result(db)));
+        } else {
+            // Closed handler: break directly with the extracted value
+            builder.op(scf::r#break(db, location, result_value));
+        }
 
         let block = builder.build();
         Region::new(db, location, IdVec::from(vec![block]))
@@ -1791,7 +1984,7 @@ impl LowerHandlerDispatchPattern {
     ) -> Region<'db> {
         // This is similar to the existing build_suspend_dispatch_region
         // but the result is Step (from resume calls) for continuing the loop
-        build_suspend_dispatch_region(db, location, step_ty, suspend_arms)
+        build_suspend_dispatch_region(db, location, step_ty, suspend_arms, &self.effectful_funcs)
     }
 
     /// Build propagate region for unhandled effects (open handlers).
@@ -1866,6 +2059,7 @@ fn build_suspend_dispatch_region<'db>(
     location: Location<'db>,
     result_ty: Type<'db>,
     suspend_arms: &[SuspendArm<'db>],
+    effectful_funcs: &HashSet<Symbol>,
 ) -> Region<'db> {
     let i32_ty = core::I32::new(db).as_type();
 
@@ -1894,6 +2088,7 @@ fn build_suspend_dispatch_region<'db>(
         current_op_idx,
         suspend_arms,
         0,
+        effectful_funcs,
     );
 
     // Yield the result
@@ -1909,6 +2104,7 @@ fn build_suspend_dispatch_region<'db>(
 /// - For 1 arm: if (true) { arm0 } else { arm0 } (always executes arm0)
 /// - For 2 arms: if (op_idx == 0) { arm0 } else { arm1 }
 /// - For 3 arms: if (op_idx == 0) { arm0 } else { if (op_idx == 1) { arm1 } else { arm2 } }
+#[allow(clippy::too_many_arguments)]
 fn build_nested_dispatch<'db>(
     db: &'db dyn salsa::Database,
     builder: &mut BlockBuilder<'db>,
@@ -1917,6 +2113,7 @@ fn build_nested_dispatch<'db>(
     current_op_idx: Value<'db>,
     suspend_arms: &[SuspendArm<'db>],
     arm_index: usize,
+    effectful_funcs: &HashSet<Symbol>,
 ) -> Value<'db> {
     let i32_ty = core::I32::new(db).as_type();
 
@@ -1929,12 +2126,12 @@ fn build_nested_dispatch<'db>(
     let is_last_arm = arm_index + 1 >= suspend_arms.len();
 
     // Build then region: execute this arm's block code
-    let then_region = build_arm_region(db, location, &arm.block);
+    let then_region = build_arm_region(db, location, &arm.block, effectful_funcs);
 
     if is_last_arm {
         // Last arm (or only arm): use always-true condition, duplicate arm for else
         let true_const = builder.op(arith::Const::i32(db, location, 1));
-        let else_region = build_arm_region(db, location, &arm.block);
+        let else_region = build_arm_region(db, location, &arm.block, effectful_funcs);
 
         let if_op = builder.op(scf::r#if(
             db,
@@ -1971,6 +2168,7 @@ fn build_nested_dispatch<'db>(
         current_op_idx,
         suspend_arms,
         arm_index + 1,
+        effectful_funcs,
     );
     else_builder.op(scf::r#yield(db, location, vec![else_result]));
     let else_region = Region::new(db, location, IdVec::from(vec![else_builder.build()]));
@@ -2001,6 +2199,7 @@ fn build_arm_region<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     arm_block: &Block<'db>,
+    effectful_funcs: &HashSet<Symbol>,
 ) -> Region<'db> {
     // Skip the first block arg (marker arg) if present
     let original_args = arm_block.args(db);
@@ -2057,6 +2256,9 @@ fn build_arm_region<'db>(
         //
         // We build a value remapping so that references to cast outputs use the
         // cast inputs instead.
+        //
+        // We also remap effectful function call results to their new Step-typed results
+        // so downstream operations reference the correct values.
         let mut value_remap: std::collections::HashMap<Value<'db>, Value<'db>> =
             std::collections::HashMap::new();
 
@@ -2068,14 +2270,19 @@ fn build_arm_region<'db>(
             }
         }
 
-        // Helper to remap a value through the cast remap chain
-        let remap_value = |v: Value<'db>| -> Value<'db> {
+        // Helper to remap a value through the remap chain
+        // Note: This closure is called in the loop below, where value_remap may be mutated
+        // So we use a function that takes the map as a parameter instead
+        fn remap_value_inner<'db>(
+            v: Value<'db>,
+            value_remap: &std::collections::HashMap<Value<'db>, Value<'db>>,
+        ) -> Value<'db> {
             let mut current = v;
             while let Some(&remapped) = value_remap.get(&current) {
                 current = remapped;
             }
             current
-        };
+        }
 
         // Build operations, skipping ALL casts and scf.yield
         let mut ops: Vec<Operation<'db>> = Vec::new();
@@ -2105,28 +2312,62 @@ fn build_arm_region<'db>(
                 }
             }
 
+            // Detect effectful function calls - their results are Step at runtime
+            // even though their IR type might be the original return type (e.g., i32)
+            let is_effectful_call = if let Ok(call) = func::Call::from_operation(db, *op) {
+                let callee = call.callee(db);
+                let is_effectful = effectful_funcs.contains(&callee);
+                let has_results = !op.results(db).is_empty();
+                if is_effectful && has_results {
+                    tracing::debug!(
+                        "build_arm_region: found effectful call to {}, changing result type to Step",
+                        callee
+                    );
+                }
+                is_effectful && has_results
+            } else {
+                false
+            };
+
             // Remap operands if needed
             let operands = op.operands(db);
             let remapped_operands: IdVec<Value<'db>> = operands
                 .iter()
-                .map(|v| remap_value(*v))
+                .map(|v| remap_value_inner(*v, &value_remap))
                 .collect::<Vec<_>>()
                 .into();
 
-            // If operands changed, create new operation
-            if remapped_operands != *operands {
+            // Determine result types - effectful calls need Step type
+            let result_types = if is_effectful_call {
+                // Replace the first result type with Step
+                let mut types = op.results(db).clone();
+                if !types.is_empty() {
+                    types = IdVec::from(vec![step_ty]);
+                }
+                types
+            } else {
+                op.results(db).clone()
+            };
+
+            // If operands or result types changed, create new operation
+            if remapped_operands != *operands || is_effectful_call {
                 let new_op = Operation::new(
                     db,
                     op.location(db),
                     op.dialect(db),
                     op.name(db),
                     remapped_operands,
-                    op.results(db).clone(),
+                    result_types,
                     op.attributes(db).clone(),
                     op.regions(db).clone(),
                     op.successors(db).clone(),
                 );
                 ops.push(new_op);
+                if is_effectful_call {
+                    // Effectful call returns Step at runtime - subsequent ops are handled by continuation
+                    last_step_value = Some(new_op.result(db, 0));
+                    break;
+                }
             } else {
                 ops.push(*op);
             }
@@ -2461,9 +2702,20 @@ impl<'db> RewritePattern<'db> for WrapReturnsInEffectfulFuncsPattern {
             return RewriteResult::Unchanged;
         }
 
+        tracing::debug!(
+            "WrapReturnsInEffectfulFuncsPattern: processing {}",
+            func_name
+        );
+
         // Transform the function body - wrap non-Step returns with step_done
         let body = func.body(db);
         let (new_body, modified) = wrap_returns_in_region(db, body);
+
+        tracing::debug!(
+            "WrapReturnsInEffectfulFuncsPattern: {} modified={}",
+            func_name,
+            modified
+        );
 
         if !modified {
             return RewriteResult::Unchanged;
@@ -2536,7 +2788,12 @@ fn wrap_returns_in_block<'db>(
 
             if let Some(&value) = operands.first() {
                 // Check if already returning Step
-                if !is_step_value(db, value) {
+                let is_step = is_step_value(db, value);
+                tracing::debug!(
+                    "wrap_returns_in_block: found func.return, value is_step={}",
+                    is_step
+                );
+                if !is_step {
                     let location = op_with_transformed_regions.location(db);
                     let step_ty = trampoline::Step::new(db).as_type();
 
@@ -2549,6 +2806,7 @@ fn wrap_returns_in_block<'db>(
                     let new_return = func::r#return(db, location, Some(step_value));
                     new_ops.push(new_return.as_operation());
                     modified = true;
+                    tracing::debug!("wrap_returns_in_block: wrapped return with step_done");
                     continue;
                 }
             }
@@ -2774,7 +3032,12 @@ mod tests {
         .as_operation();
 
         // Apply pattern
-        let pattern = LowerHandlerDispatchPattern;
+        let effectful_funcs = Rc::new(HashSet::new());
+        let handlers_in_effectful_funcs = Rc::new(HashSet::new());
+        let pattern = LowerHandlerDispatchPattern {
+            effectful_funcs,
+            handlers_in_effectful_funcs,
+        };
         let ctx = RewriteContext::new();
         let type_converter = TypeConverter::new();
         let adaptor = OpAdaptor::new(
