@@ -208,6 +208,11 @@ pub fn lower_cont_to_trampoline<'db>(
         .add_pattern(LowerGetContinuationPattern)
         .add_pattern(LowerGetShiftValuePattern)
         .add_pattern(LowerGetDoneValuePattern)
+        .add_pattern(UpdateEffectfulCallResultTypePattern {
+            effectful_funcs: Rc::clone(&effectful_funcs),
+        })
+        .add_pattern(UpdateScfIfResultTypePattern)
+        .add_pattern(UpdateScfYieldToStepPattern)
         .add_pattern(LowerPushPromptPattern)
         .add_pattern(LowerHandlerDispatchPattern {
             effectful_funcs: Rc::clone(&effectful_funcs),
@@ -534,6 +539,91 @@ fn truncate_region_after_shift<'db>(
     )
 }
 
+/// Truncate an scf.if branch region, keeping only operations up to the first
+/// effectful call and ending with scf.yield(Step value).
+fn truncate_scf_if_branch<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    effectful_funcs: &HashSet<Symbol>,
+    step_ty: Type<'db>,
+) -> Region<'db> {
+    let new_blocks: IdVec<Block<'db>> = region
+        .blocks(db)
+        .iter()
+        .map(|block| truncate_scf_if_block(db, block, effectful_funcs, step_ty))
+        .collect();
+    Region::new(db, region.location(db), new_blocks)
+}
+
+/// Truncate an scf.if block, keeping operations up to the first effectful call
+/// and replacing the terminator with scf.yield(Step value).
+fn truncate_scf_if_block<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    effectful_funcs: &HashSet<Symbol>,
+    step_ty: Type<'db>,
+) -> Block<'db> {
+    let ops = block.operations(db);
+    let mut new_ops: Vec<Operation<'db>> = Vec::new();
+    let mut step_value: Option<Value<'db>> = None;
+
+    for op in ops.iter() {
+        // Skip scf.yield - we'll add our own at the end
+        if scf::Yield::from_operation(db, *op).is_ok() {
+            continue;
+        }
+
+        // Check if this is a call to an effectful function
+        if let Ok(call) = func::Call::from_operation(db, *op)
+            && effectful_funcs.contains(&call.callee(db))
+        {
+            // Create new call with Step result type
+            let new_call = Operation::new(
+                db,
+                op.location(db),
+                op.dialect(db),
+                op.name(db),
+                op.operands(db).clone(),
+                IdVec::from(vec![step_ty]),
+                op.attributes(db).clone(),
+                op.regions(db).clone(),
+                op.successors(db).clone(),
+            );
+            step_value = Some(new_call.result(db, 0));
+            new_ops.push(new_call);
+            break; // Stop processing after effectful call
+        }
+
+        // Check if this operation already produces Step
+        if op
+            .results(db)
+            .first()
+            .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
+        {
+            step_value = Some(op.result(db, 0));
+            new_ops.push(*op);
+            break; // Stop processing after Step-producing op
+        }
+
+        // Keep other operations
+        new_ops.push(*op);
+    }
+
+    // Add scf.yield with Step value
+    if let Some(val) = step_value {
+        let yield_op = scf::r#yield(db, block.location(db), vec![val]);
+        new_ops.push(yield_op.as_operation());
+    }
+
+    Block::new(
+        db,
+        block.id(db),
+        block.location(db),
+        block.args(db).clone(),
+        new_ops.into(),
+    )
+}
+
 /// Truncate a block after the first effect point (step_shift or effectful call).
 /// Returns (modified_block, was_modified).
 fn truncate_block_after_shift<'db>(
@@ -645,10 +735,12 @@ fn truncate_block_after_shift<'db>(
         }
 
         // Check if this is a scf.if that contains effectful code or returns Step
-        let step_ty = trampoline::Step::new(db).as_type();
         if scf::If::from_operation(db, *op).is_ok() {
             // Check if result type is Step (from push_prompt/check_yield)
-            let returns_step = op.results(db).first().is_some_and(|ty| *ty == step_ty);
+            let returns_step = op
+                .results(db)
+                .first()
+                .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some());
 
             // Check if any branch contains effectful code (calls to effectful funcs)
             let has_effectful_code = op
@@ -657,16 +749,37 @@ fn truncate_block_after_shift<'db>(
                 .any(|r| calls_effectful_function(db, r, effectful_funcs));
 
             if has_effectful_code || returns_step {
-                new_ops.push(*op);
+                // Recursively process scf.if regions to truncate branches
+                let step_ty = trampoline::Step::new(db).as_type();
+                let new_regions: IdVec<Region<'db>> = op
+                    .regions(db)
+                    .iter()
+                    .map(|region| truncate_scf_if_branch(db, region, effectful_funcs, step_ty))
+                    .collect();
+
+                // Create new scf.if with Step result type and truncated regions
+                let new_op = Operation::new(
+                    db,
+                    op.location(db),
+                    op.dialect(db),
+                    op.name(db),
+                    op.operands(db).clone(),
+                    IdVec::from(vec![step_ty]),
+                    op.attributes(db).clone(),
+                    new_regions,
+                    op.successors(db).clone(),
+                );
+                new_ops.push(new_op);
                 found_effect_point = true;
-                if !op.results(db).is_empty() {
-                    effect_result = Some(op.result(db, 0));
-                }
+                effect_result = Some(new_op.result(db, 0));
                 effect_location = Some(op.location(db));
+                let result_ty = op.results(db).first();
                 tracing::debug!(
-                    "truncate_block_after_shift: found scf.if with effectful code or Step result (returns_step={}, has_effectful_code={})",
+                    "truncate_block_after_shift: found scf.if with effectful code or Step result (returns_step={}, has_effectful_code={}, result_ty={:?}, location={:?})",
                     returns_step,
-                    has_effectful_code
+                    has_effectful_code,
+                    result_ty,
+                    op.location(db)
                 );
                 continue;
             }
@@ -675,7 +788,10 @@ fn truncate_block_after_shift<'db>(
         // Check if this is a scf.loop with Step result type (trampoline loop)
         // These loops are generated by LowerHandlerDispatchPattern in effectful functions
         if scf::Loop::from_operation(db, *op).is_ok()
-            && op.results(db).first().is_some_and(|ty| *ty == step_ty)
+            && op
+                .results(db)
+                .first()
+                .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
         {
             new_ops.push(*op);
             found_effect_point = true;
@@ -1554,6 +1670,258 @@ impl<'db> RewritePattern<'db> for LowerGetDoneValuePattern {
 
         RewriteResult::expand(vec![step_get_op.as_operation(), cast_op.as_operation()])
     }
+}
+
+// ============================================================================
+// Pattern: Update func.call result type for effectful functions
+// ============================================================================
+
+/// Pattern that updates func.call to effectful functions to return Step type.
+/// This handles calls inside scf.if/scf.loop regions that weren't processed
+/// by truncate_after_shift (which only processes function entry blocks).
+struct UpdateEffectfulCallResultTypePattern {
+    effectful_funcs: Rc<HashSet<Symbol>>,
+}
+
+impl<'db> RewritePattern<'db> for UpdateEffectfulCallResultTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Only handle func.call operations
+        let Ok(call) = func::Call::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let callee = call.callee(db);
+
+        // Skip if not an effectful function
+        if !self.effectful_funcs.contains(&callee) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Skip if already returns Step
+        let step_ty = trampoline::Step::new(db).as_type();
+        if op
+            .results(db)
+            .first()
+            .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
+        {
+            return RewriteResult::Unchanged;
+        }
+
+        // Skip if no results
+        if op.results(db).is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        let location = op.location(db);
+        let original_result_ty = op.results(db).first().copied().unwrap();
+
+        tracing::debug!(
+            "UpdateEffectfulCallResultTypePattern: updating call to {} from {} to Step",
+            callee,
+            original_result_ty.name(db)
+        );
+
+        // Create new call with Step result type
+        let new_call = Operation::new(
+            db,
+            location,
+            op.dialect(db),
+            op.name(db),
+            adaptor.operands().clone(),
+            IdVec::from(vec![step_ty]),
+            op.attributes(db).clone(),
+            op.regions(db).clone(),
+            op.successors(db).clone(),
+        );
+
+        // Return the new call directly without adding a cast.
+        // The Step value should propagate up through the effectful context.
+        // Any downstream operations that need the original type will need to handle
+        // Step unpacking appropriately.
+        RewriteResult::replace(new_call)
+    }
+}
+
+// ============================================================================
+// Pattern: Update scf.if result type when branches contain effectful calls
+// ============================================================================
+
+/// Pattern that updates scf.if result type to Step when its branches
+/// contain calls that return Step (effectful calls that have been transformed).
+///
+/// NOTE: This pattern only changes the result type. The internal scf.yield
+/// operations are updated by UpdateScfYieldToStepPattern which runs after
+/// the nested regions have been processed by PatternApplicator.
+struct UpdateScfIfResultTypePattern;
+
+impl<'db> RewritePattern<'db> for UpdateScfIfResultTypePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Only handle scf.if operations
+        if scf::If::from_operation(db, *op).is_err() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Skip if no results
+        if op.results(db).is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Skip if already returns Step
+        let step_ty = trampoline::Step::new(db).as_type();
+        if op
+            .results(db)
+            .first()
+            .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
+        {
+            return RewriteResult::Unchanged;
+        }
+
+        // Check if any branch contains operations that return Step type
+        // This includes func.call that have been transformed to return Step
+        let branches_have_step_ops = op.regions(db).iter().any(|region| {
+            region.blocks(db).iter().any(|block| {
+                block.operations(db).iter().any(|branch_op| {
+                    // Check if any operation produces Step type result
+                    branch_op
+                        .results(db)
+                        .first()
+                        .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
+                })
+            })
+        });
+
+        if !branches_have_step_ops {
+            return RewriteResult::Unchanged;
+        }
+
+        let loc = op.location(db);
+        tracing::debug!(
+            "UpdateScfIfResultTypePattern: updating scf.if result to Step at {:?}",
+            loc
+        );
+
+        // Only change the result type - let PatternApplicator handle nested regions
+        // and UpdateScfYieldToStepPattern handle the yield updates
+        let new_if = Operation::new(
+            db,
+            op.location(db),
+            op.dialect(db),
+            op.name(db),
+            op.operands(db).clone(),
+            IdVec::from(vec![step_ty]),
+            op.attributes(db).clone(),
+            op.regions(db).clone(), // Keep original regions - will be processed recursively
+            op.successors(db).clone(),
+        );
+
+        RewriteResult::replace(new_if)
+    }
+}
+
+/// Pattern that updates scf.yield to yield Step value when it's inside
+/// a block that contains effectful operations returning Step.
+///
+/// This pattern is applied after UpdateEffectfulCallResultTypePattern has
+/// changed func.call results to Step, so we can find the actual Step values.
+struct UpdateScfYieldToStepPattern;
+
+impl<'db> RewritePattern<'db> for UpdateScfYieldToStepPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Only handle scf.yield operations
+        let Ok(_yield_op) = scf::Yield::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Skip if already yielding Step
+        if let Some(operand) = adaptor.operands().first()
+            && let Some(ty) = adaptor.get_raw_value_type(db, *operand)
+            && trampoline::Step::from_type(db, ty).is_some()
+        {
+            return RewriteResult::Unchanged;
+        }
+
+        // Check the context to find if there's a Step value we should yield instead
+        // We look at the remapped operand types to see what the current value types are
+        let current_operands = adaptor.operands();
+        if current_operands.is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Get the actual type of the yielded value
+        let yielded_value = current_operands[0];
+        let Some(yielded_ty) = adaptor.get_raw_value_type(db, yielded_value) else {
+            return RewriteResult::Unchanged;
+        };
+
+        // If the yielded value is already Step, no change needed
+        if trampoline::Step::from_type(db, yielded_ty).is_some() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Check if we can find the Step value through cast chain
+        // The yielded value might be a cast result where the input is Step
+        if let Some(step_value) = find_step_source(db, yielded_value, adaptor) {
+            tracing::debug!(
+                "UpdateScfYieldToStepPattern: updating scf.yield to yield Step at {:?}",
+                op.location(db)
+            );
+            let new_yield = scf::r#yield(db, op.location(db), vec![step_value]);
+            return RewriteResult::replace(new_yield.as_operation());
+        }
+
+        RewriteResult::Unchanged
+    }
+}
+
+/// Find the Step source value by tracing through the value map and cast chain.
+fn find_step_source<'db>(
+    db: &'db dyn salsa::Database,
+    value: Value<'db>,
+    adaptor: &OpAdaptor<'db, '_>,
+) -> Option<Value<'db>> {
+    // Check if the value itself is Step (after remapping)
+    if let Some(ty) = adaptor.get_raw_value_type(db, value)
+        && trampoline::Step::from_type(db, ty).is_some()
+    {
+        return Some(value);
+    }
+
+    // Check if the value definition is a cast from Step
+    if let trunk_ir::ValueDef::OpResult(defining_op) = value.def(db) {
+        // If this is a cast, check the input
+        if let Ok(cast) = core::UnrealizedConversionCast::from_operation(db, defining_op) {
+            let input = cast.value(db);
+            if let Some(input_ty) = adaptor.get_raw_value_type(db, input)
+                && trampoline::Step::from_type(db, input_ty).is_some()
+            {
+                return Some(input);
+            }
+        }
+
+        // Check if the defining op produces Step
+        if let Some(ty) = defining_op.results(db).first()
+            && trampoline::Step::from_type(db, *ty).is_some()
+        {
+            return Some(defining_op.result(db, 0));
+        }
+    }
+
+    None
 }
 
 // ============================================================================
