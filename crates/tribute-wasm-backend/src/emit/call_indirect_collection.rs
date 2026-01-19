@@ -227,14 +227,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
 
                     // Normalize result type: primitive types and type_var should become anyref
                     // This must match the normalization done in call_handlers for emit
-                    if tribute_rt::is_int(db, result_ty)
-                        || tribute_rt::is_nat(db, result_ty)
-                        || tribute_rt::is_bool(db, result_ty)
-                        || tribute_rt::is_float(db, result_ty)
-                        || tribute_rt::Any::from_type(db, result_ty).is_some()
-                        || tribute::is_type_var(db, result_ty)
-                        || core::Nil::from_type(db, result_ty).is_some()
-                    {
+                    if crate::emit::helpers::should_normalize_to_anyref(db, result_ty) {
                         debug!(
                             "collect_call_indirect_types: normalizing result {} to anyref",
                             result_ty.dialect(db).with_str(|d| result_ty

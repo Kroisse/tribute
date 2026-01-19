@@ -654,7 +654,8 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 /// 11. Handler Lower - Lower ability ops to cont ops
 /// 12. Lower Case - Lower case to scf.if
 /// 13. DCE - Dead code elimination
-/// 14. Final resolve - Report unresolved references
+/// 14. Resolve Casts - Resolve unrealized_conversion_cast operations
+/// 15. Final resolve - Report unresolved references
 #[salsa::tracked]
 pub fn compile<'db>(
     db: &'db dyn salsa::Database,
@@ -690,6 +691,9 @@ pub fn compile<'db>(
     let module = stage_cont_to_trampoline(db, module)?; // cont.shift → trampoline ops
 
     let module = stage_dce(db, module);
+
+    // Resolve any unrealized_conversion_cast operations from earlier passes
+    let module = stage_resolve_casts(db, module);
 
     // Final pass: resolve any remaining unresolved references and emit diagnostics
     let env = build_env(db, &module);

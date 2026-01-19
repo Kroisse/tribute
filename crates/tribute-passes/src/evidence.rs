@@ -200,16 +200,15 @@ fn transform_calls_in_block<'db>(
             if effectful_fns.contains(&callee) {
                 // Check if evidence is already the first argument (to prevent re-adding)
                 let first_arg = remapped_operands.first().copied();
-                if first_arg == Some(ev_value) {
-                    // Already has evidence as first arg, skip transformation
-                    new_ops.push(*op);
-                    continue;
-                }
-
-                // Add evidence as first argument
-                let mut new_args: Vec<Value<'db>> = vec![ev_value];
-                // Use remapped operands (which are the call args)
-                new_args.extend(remapped_operands.iter().copied());
+                let new_args = if first_arg == Some(ev_value) {
+                    // Already has evidence as first arg, just use remapped operands
+                    remapped_operands.clone()
+                } else {
+                    // Add evidence as first argument
+                    let mut args: Vec<Value<'db>> = vec![ev_value];
+                    args.extend(remapped_operands.iter().copied());
+                    args
+                };
 
                 let location = op.location(db);
                 let result_ty = op

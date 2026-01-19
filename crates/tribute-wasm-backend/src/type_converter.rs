@@ -34,6 +34,29 @@ use trunk_ir::{DialectOp, DialectType, Type};
 #[cfg(test)]
 use trunk_ir::dialect::arith;
 
+/// Helper to generate i31 unboxing operations (ref_cast to i31ref + i31_get_s).
+///
+/// This is used when converting anyref-typed values back to i32, such as
+/// extracting values from Step structs which store all values as anyref.
+fn unbox_via_i31<'db>(
+    db: &'db dyn salsa::Database,
+    location: trunk_ir::Location<'db>,
+    value: trunk_ir::Value<'db>,
+) -> MaterializeResult<'db> {
+    let i31ref_ty = wasm::I31ref::new(db).as_type();
+    let i32_ty = core::I32::new(db).as_type();
+
+    // Cast anyref to i31ref
+    let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
+    // Extract i32 from i31ref
+    let get_op = wasm::i31_get_s(db, location, cast_op.as_operation().result(db, 0), i32_ty);
+
+    let mut ops = OpVec::new();
+    ops.push(cast_op.as_operation());
+    ops.push(get_op.as_operation());
+    MaterializeResult::Ops(ops)
+}
+
 /// Create a TypeConverter configured for WASM backend type conversions.
 ///
 /// This converter handles the IR-level type transformations needed during
@@ -250,75 +273,27 @@ pub fn wasm_type_converter() -> TypeConverter {
             if wasm::Anyref::from_type(db, from_ty).is_some()
                 && core::I32::from_type(db, to_ty).is_some()
             {
-                let i31ref_ty = wasm::I31ref::new(db).as_type();
-                let i32_ty = core::I32::new(db).as_type();
-
-                // Cast anyref to i31ref
-                let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
-                // Extract i32 from i31ref
-                let get_op =
-                    wasm::i31_get_s(db, location, cast_op.as_operation().result(db, 0), i32_ty);
-
-                let mut ops = OpVec::new();
-                ops.push(cast_op.as_operation());
-                ops.push(get_op.as_operation());
-                return MaterializeResult::Ops(ops);
+                return unbox_via_i31(db, location, value);
             }
             // tribute_rt.any → core.i32 (unbox via i31, same as wasm.anyref)
             if tribute_rt::Any::from_type(db, from_ty).is_some()
                 && core::I32::from_type(db, to_ty).is_some()
             {
-                let i31ref_ty = wasm::I31ref::new(db).as_type();
-                let i32_ty = core::I32::new(db).as_type();
-
-                // First convert tribute_rt.any to wasm.anyref (NoOp at runtime)
-                // Then cast anyref to i31ref and extract i32
-                let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
-                let get_op =
-                    wasm::i31_get_s(db, location, cast_op.as_operation().result(db, 0), i32_ty);
-
-                let mut ops = OpVec::new();
-                ops.push(cast_op.as_operation());
-                ops.push(get_op.as_operation());
-                return MaterializeResult::Ops(ops);
+                return unbox_via_i31(db, location, value);
             }
             // wasm.anyref → tribute_rt.int (unbox via i31)
             // Same as anyref -> core.i32, tribute_rt.int is represented as i32
             if wasm::Anyref::from_type(db, from_ty).is_some()
                 && tribute_rt::Int::from_type(db, to_ty).is_some()
             {
-                let i31ref_ty = wasm::I31ref::new(db).as_type();
-                let i32_ty = core::I32::new(db).as_type();
-
-                // Cast anyref to i31ref
-                let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
-                // Extract i32 from i31ref
-                let get_op =
-                    wasm::i31_get_s(db, location, cast_op.as_operation().result(db, 0), i32_ty);
-
-                let mut ops = OpVec::new();
-                ops.push(cast_op.as_operation());
-                ops.push(get_op.as_operation());
-                return MaterializeResult::Ops(ops);
+                return unbox_via_i31(db, location, value);
             }
             // tribute_rt.any → tribute_rt.int (unbox via i31)
             // Used when extracting values from state structs (stored as anyref)
             if tribute_rt::Any::from_type(db, from_ty).is_some()
                 && tribute_rt::Int::from_type(db, to_ty).is_some()
             {
-                let i31ref_ty = wasm::I31ref::new(db).as_type();
-                let i32_ty = core::I32::new(db).as_type();
-
-                // Cast anyref to i31ref
-                let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
-                // Extract i32 from i31ref
-                let get_op =
-                    wasm::i31_get_s(db, location, cast_op.as_operation().result(db, 0), i32_ty);
-
-                let mut ops = OpVec::new();
-                ops.push(cast_op.as_operation());
-                ops.push(get_op.as_operation());
-                return MaterializeResult::Ops(ops);
+                return unbox_via_i31(db, location, value);
             }
             // wasm.anyref → core.ptr (treat pointer as anyref subtype)
             if wasm::Anyref::from_type(db, from_ty).is_some()

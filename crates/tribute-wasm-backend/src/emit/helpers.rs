@@ -65,6 +65,25 @@ pub(crate) fn is_step_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> 
     ty == crate::gc_types::step_marker_type(db)
 }
 
+/// Check if a type should be normalized to anyref in polymorphic contexts.
+///
+/// This is used during call_indirect type signature construction where
+/// primitive types, type variables, and other types that are boxed at runtime
+/// should be normalized to anyref to ensure consistent function signatures.
+///
+/// This predicate must be kept in sync between:
+/// - `emit/call_indirect_collection.rs` (type collection phase)
+/// - `emit/handlers/call_handlers.rs` (emission phase)
+pub(crate) fn should_normalize_to_anyref<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    tribute_rt::is_int(db, ty)
+        || tribute_rt::is_nat(db, ty)
+        || tribute_rt::is_bool(db, ty)
+        || tribute_rt::is_float(db, ty)
+        || tribute_rt::Any::from_type(db, ty).is_some()
+        || tribute::is_type_var(db, ty)
+        || core::Nil::from_type(db, ty).is_some()
+}
+
 // ============================================================================
 // Type conversion
 // ============================================================================
