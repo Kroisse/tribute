@@ -91,7 +91,6 @@ use tribute_passes::resolve::{Resolver, build_env};
 use tribute_passes::tdnr::resolve_tdnr;
 use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 use tribute_passes::update_effectful_types;
-use tribute_wasm_backend::type_converter::wasm_type_converter;
 use tribute_wasm_backend::{WasmBinary, compile_to_wasm};
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
@@ -541,26 +540,6 @@ pub fn stage_resolve_casts<'db>(db: &'db dyn salsa::Database, module: Module<'db
     }
 }
 
-/// Resolve unrealized conversion casts for WebAssembly backend.
-///
-/// This pass uses the WebAssembly-specific type converter which handles
-/// additional conversions like `tribute_rt.any → core.ptr` and
-/// `tribute_rt.any → core.nil`.
-#[salsa::tracked]
-pub fn stage_resolve_casts_wasm<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Module<'db> {
-    let type_converter = wasm_type_converter();
-    match resolve_unrealized_casts(db, module, &type_converter) {
-        Ok(result) => result.module,
-        Err(_) => {
-            // Some casts couldn't be resolved - leave them for backend-specific handling
-            module
-        }
-    }
-}
-
 /// Lower to WebAssembly binary.
 ///
 /// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
@@ -758,8 +737,7 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_dce(db, module);
 
     // Resolve any unrealized_conversion_cast operations from earlier passes
-    // Use wasm-specific type converter for full materialization support
-    let module = stage_resolve_casts_wasm(db, module);
+    let module = stage_resolve_casts(db, module);
 
     // Lower to WebAssembly
     stage_lower_to_wasm(db, module)
