@@ -6,8 +6,7 @@
 use std::collections::HashMap;
 
 use tracing::debug;
-use tribute_ir::dialect::tribute;
-use trunk_ir::{Attribute, BlockId, IdVec, Symbol, Type, Value, ValueDef};
+use trunk_ir::{BlockId, IdVec, Type, Value, ValueDef};
 use wasm_encoder::{AbstractHeapType, HeapType, Instruction};
 
 use crate::CompilationResult;
@@ -63,42 +62,23 @@ pub(super) fn emit_operands<'db>(
 
         // If operand not found and not a block arg, this is an ERROR - stale value reference!
         if let ValueDef::OpResult(stale_op) = value.def(db) {
-            // For tribute.var, try to find what it references by looking at its name attribute
-            if stale_op.dialect(db) == tribute::DIALECT_NAME()
-                && stale_op.name(db) == tribute::VAR()
-            {
-                let var_name = stale_op
-                    .attributes(db)
-                    .get(&Symbol::new("name"))
-                    .and_then(|a| match a {
-                        Attribute::Symbol(s) => Some(s.with_str(|s| s.to_owned())),
-                        _ => None,
-                    })
-                    .unwrap_or_else(|| "<unknown>".to_owned());
-                panic!(
-                    "emit_operands: stale SSA value: tribute.var '{}' index={} (var references should have been resolved)",
-                    var_name,
-                    value.index(db)
-                );
-            } else {
-                // Debug: print all operands for context
-                tracing::error!("emit_operands: stale value detected in operands list:");
-                for (i, v) in operands.iter().enumerate() {
-                    let def_info = match v.def(db) {
-                        trunk_ir::ValueDef::OpResult(op) => {
-                            format!("{}.{}", op.dialect(db), op.name(db))
-                        }
-                        trunk_ir::ValueDef::BlockArg(bid) => format!("block_arg({:?})", bid),
-                    };
-                    tracing::error!("  operand[{}]: {:?} -> {}", i, v, def_info);
-                }
-                panic!(
-                    "emit_operands: stale SSA value: {}.{} index={}",
-                    stale_op.dialect(db),
-                    stale_op.name(db),
-                    value.index(db)
-                );
+            // Debug: print all operands for context
+            tracing::error!("emit_operands: stale value detected in operands list:");
+            for (i, v) in operands.iter().enumerate() {
+                let def_info = match v.def(db) {
+                    trunk_ir::ValueDef::OpResult(op) => {
+                        format!("{}.{}", op.dialect(db), op.name(db))
+                    }
+                    trunk_ir::ValueDef::BlockArg(bid) => format!("block_arg({:?})", bid),
+                };
+                tracing::error!("  operand[{}]: {:?} -> {}", i, v, def_info);
             }
+            panic!(
+                "emit_operands: stale SSA value: {}.{} index={} (value references should have been resolved before emit)",
+                stale_op.dialect(db),
+                stale_op.name(db),
+                value.index(db)
+            );
         }
     }
     Ok(())

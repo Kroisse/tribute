@@ -63,6 +63,10 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = crate::passes::wasm_type_concrete::lower(db, module);
     debug_func_params(db, &module, "after wasm_type_concrete");
 
+    // Resolve remaining tribute.type references to ADT types
+    let module = crate::passes::resolve_type_references::lower(db, module);
+    debug_func_params(db, &module, "after resolve_type_references");
+
     // Const analysis and lowering (string/bytes constants to data segments)
     let const_analysis = crate::passes::const_to_wasm::analyze_consts(db, module);
     let module = crate::passes::const_to_wasm::lower(db, module, const_analysis);

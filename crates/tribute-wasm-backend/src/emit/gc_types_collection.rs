@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use tracing::debug;
 
-use tribute_ir::dialect::{adt, closure, tribute, tribute_rt};
+use tribute_ir::dialect::{adt, closure, tribute_rt};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::{Attribute, BlockId, DialectOp, DialectType, Operation, Region, Symbol, Type};
 use wasm_encoder::{FieldType, StorageType, ValType};
@@ -99,16 +99,9 @@ fn register_type<'db>(type_idx_by_type: &mut HashMap<Type<'db>, u32>, idx: u32, 
 
 /// Get the canonical type name for comparison.
 ///
-/// For unresolved tribute.type, returns the name attribute.
 /// For variant instance types, returns the base enum's name.
 /// For adt.enum/struct types, returns the name attribute.
 fn get_canonical_type_name<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Symbol> {
-    // Check if this is an unresolved tribute.type
-    if tribute::is_unresolved_type(db, ty)
-        && let Some(Attribute::Symbol(name_sym)) = ty.get_attr(db, Symbol::new("name"))
-    {
-        return Some(*name_sym);
-    }
     // Check if this is a variant instance type
     if adt::is_variant_instance_type(db, ty)
         && let Some(base_enum) = adt::get_base_enum(db, ty)
@@ -133,22 +126,8 @@ fn get_canonical_type_name<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> 
 
 /// Normalize a type for GC struct field comparison.
 ///
-/// Converts `tribute.type(name=X)` to the corresponding concrete type,
-/// handling cases where typeck didn't fully resolve type names.
+/// Normalizes tribute_rt types and variant instances to their canonical form.
 fn normalize_type_for_gc<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
-    // Check if this is an unresolved tribute.type
-    if tribute::is_unresolved_type(db, ty)
-        && let Some(Attribute::Symbol(name_sym)) = ty.get_attr(db, Symbol::new("name"))
-    {
-        return name_sym.with_str(|name_str| match name_str {
-            "Int" => core::I32::new(db).as_type(),
-            "Nat" => core::I32::new(db).as_type(),
-            "Bool" => core::I32::new(db).as_type(),
-            "Float" => core::F64::new(db).as_type(),
-            "String" => core::String::new(db).as_type(),
-            _ => ty, // User-defined type - leave as is for now
-        });
-    }
     // Normalize variant instance types to their base enum
     if adt::is_variant_instance_type(db, ty)
         && let Some(base_enum) = adt::get_base_enum(db, ty)
@@ -677,11 +656,9 @@ pub(crate) fn collect_gc_types<'db>(
                 {
                     register_type(&mut type_idx_by_type, type_idx, ty);
                 }
-                // Only record field type if result type is concrete (not a type variable).
-                // Type variables map to ANYREF and would conflict with concrete types.
-                if let Some(result_ty) = op.results(db).first().copied()
-                    && !tribute::is_type_var(db, result_ty)
-                {
+                // Record field type from result type
+                // Note: tribute.type_var should be resolved to concrete types before emit
+                if let Some(result_ty) = op.results(db).first().copied() {
                     debug!(
                         "GC: struct_get type_idx={} recording field {} with result_ty {}.{}",
                         type_idx,
@@ -787,10 +764,9 @@ pub(crate) fn collect_gc_types<'db>(
                 {
                     register_type(&mut type_idx_by_type, type_idx, ty);
                 }
-                // Only record element type if result type is concrete (not a type variable).
-                if let Some(result_ty) = op.results(db).first().copied()
-                    && !tribute::is_type_var(db, result_ty)
-                {
+                // Record element type from result type
+                // Note: tribute.type_var should be resolved to concrete types before emit
+                if let Some(result_ty) = op.results(db).first().copied() {
                     record_array_elem(type_idx, builder, result_ty)?;
                 }
             }

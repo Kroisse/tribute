@@ -52,6 +52,8 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) -> co
         .add_pattern(IfResultTypePattern)
         .add_pattern(BlockResultTypePattern)
         .add_pattern(LoopResultTypePattern)
+        // Concretize function signatures
+        .add_pattern(FuncSignatureTypeVarPattern)
         // Fallback pattern: convert remaining type_var to anyref
         .add_pattern(FallbackTypeVarPattern);
     // No specific conversion target - type concretization is an optimization pass
@@ -561,6 +563,75 @@ fn get_field_type_from_struct<'db>(
     }
 
     None
+}
+
+/// Pattern to concretize type_var in wasm.func signatures.
+///
+/// This pattern converts `tribute.type_var` in function parameter and return types
+/// to `wasm.anyref` to ensure all functions have concrete signatures.
+struct FuncSignatureTypeVarPattern;
+
+impl<'db> RewritePattern<'db> for FuncSignatureTypeVarPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Only handle wasm.func operations
+        let Ok(func_op) = wasm::Func::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let func_ty = func_op.r#type(db);
+        let Some(core_func) = core::Func::from_type(db, func_ty) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let params = core_func.params(db);
+        let result = core_func.result(db);
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+
+        // Check if any param or result is a type_var
+        let has_type_var_in_params = params.iter().any(|ty| tribute::is_type_var(db, *ty));
+        let has_type_var_in_result = tribute::is_type_var(db, result);
+
+        if !has_type_var_in_params && !has_type_var_in_result {
+            return RewriteResult::Unchanged;
+        }
+
+        // Convert type_var to anyref in params
+        let new_params: IdVec<Type<'db>> = params
+            .iter()
+            .map(|ty| {
+                if tribute::is_type_var(db, *ty) {
+                    anyref_ty
+                } else {
+                    *ty
+                }
+            })
+            .collect();
+
+        // Convert type_var to anyref in result
+        let new_result = if tribute::is_type_var(db, result) {
+            anyref_ty
+        } else {
+            result
+        };
+
+        let new_func_ty = core::Func::new(db, new_params, new_result).as_type();
+
+        debug!(
+            "wasm_type_concrete: concretizing wasm.func {} signature type_var to anyref",
+            func_op.sym_name(db)
+        );
+
+        let new_op = op
+            .modify(db)
+            .attr("type", Attribute::Type(new_func_ty))
+            .build();
+        RewriteResult::Replace(new_op)
+    }
 }
 
 /// Fallback pattern to convert any remaining type_var results to anyref.

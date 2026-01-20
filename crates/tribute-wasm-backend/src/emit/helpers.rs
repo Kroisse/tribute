@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use tribute_ir::dialect::{ability, adt, closure, trampoline, tribute, tribute_rt};
+use tribute_ir::dialect::{ability, adt, closure, trampoline, tribute_rt};
 use trunk_ir::dialect::{cont, core, wasm};
 use trunk_ir::{Attribute, Attrs, BlockId, DialectType, Symbol, Type, Value, ValueDef};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
@@ -80,9 +80,9 @@ pub(crate) fn should_normalize_to_anyref<'db>(db: &'db dyn salsa::Database, ty: 
         || tribute_rt::is_bool(db, ty)
         || tribute_rt::is_float(db, ty)
         || tribute_rt::Any::from_type(db, ty).is_some()
-        || tribute::is_type_var(db, ty)
     // Note: core::Nil is NOT normalized to anyref. Nil uses (ref null none) which is
     // a subtype of anyref, so it can be passed where anyref is expected without boxing.
+    // Note: tribute.type_var should be resolved before emit by wasm_type_concrete pass.
 }
 
 // ============================================================================
@@ -238,33 +238,10 @@ pub(crate) fn type_to_valtype<'db>(
         }))
     } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
         // ADT types (structs, variants) - use concrete GC type reference
-        // Check this BEFORE tribute::is_type_var to handle struct types with type_idx
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(type_idx),
         }))
-    } else if tribute::is_type_var(db, ty) {
-        // Generic type variables use anyref (uniform representation)
-        // Values must be boxed when passed to generic functions
-        Ok(ValType::Ref(RefType::ANYREF))
-    } else if tribute::is_unresolved_type(db, ty) {
-        // Unresolved type references (tribute.type) - map known primitives
-        if let Some(Attribute::Symbol(name_sym)) = ty.get_attr(db, Symbol::new("name")) {
-            let result = name_sym.with_str(|name_str| match name_str {
-                "Int" | "Nat" | "Bool" => Some(ValType::I32),
-                "Float" => Some(ValType::F64),
-                // Note: Unresolved "String" uses anyref, not i32 like core::String.
-                // This is intentional - unresolved types may appear in polymorphic contexts
-                // where anyref representation is expected.
-                "String" => Some(ValType::Ref(RefType::ANYREF)),
-                _ => None, // User-defined type
-            });
-            if let Some(val_type) = result {
-                return Ok(val_type);
-            }
-        }
-        // User-defined types use anyref
-        Ok(ValType::Ref(RefType::ANYREF))
     } else if ty.dialect(db) == adt::DIALECT_NAME() {
         // ADT base types (e.g., adt.Expr) without specific variant type_idx
         // These represent "any variant of this enum" and use anyref

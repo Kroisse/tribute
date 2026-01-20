@@ -10,7 +10,7 @@ use trunk_ir::dialect::{core, wasm};
 use trunk_ir::{DialectType, IdVec, Symbol, ValueDef};
 use wasm_encoder::{Function, HeapType, Instruction};
 
-use tribute_ir::dialect::{tribute, tribute_rt};
+use tribute_ir::dialect::tribute_rt;
 
 use crate::{CompilationError, CompilationResult};
 
@@ -130,12 +130,13 @@ pub(crate) fn handle_call_indirect<'db>(
     // a subtype of anyref, so it can be passed without boxing.
     let anyref_ty = wasm::Anyref::new(db).as_type();
     let normalize_param_type = |ty: trunk_ir::Type<'db>| -> trunk_ir::Type<'db> {
+        // Note: tribute.type_var should be resolved before emit by wasm_type_concrete pass
         if tribute_rt::is_int(db, ty)
             || tribute_rt::is_nat(db, ty)
             || tribute_rt::is_bool(db, ty)
             || tribute_rt::is_float(db, ty)
-            || tribute_rt::Any::from_type(db, ty).is_some() // tribute_rt.any → wasm.anyref
-            || tribute::is_type_var(db, ty)
+            || tribute_rt::Any::from_type(db, ty).is_some()
+        // tribute_rt.any → wasm.anyref
         {
             anyref_ty
         } else {
@@ -157,27 +158,22 @@ pub(crate) fn handle_call_indirect<'db>(
         CompilationError::invalid_module("wasm.call_indirect must have a result type")
     })?;
 
-    // If result type is anyref/type_var but enclosing function returns funcref or Step,
+    // If result type is anyref but enclosing function returns funcref or Step,
     // upgrade the result type accordingly. This is needed because WebAssembly GC has separate
     // type hierarchies, and effectful functions return Step for yield bubbling.
+    // Note: tribute.type_var should be resolved before emit by wasm_type_concrete pass.
     let funcref_ty = wasm::Funcref::new(db).as_type();
     if let Some(func_ret_ty) = ctx.func_return_type {
         let is_anyref_result = wasm::Anyref::from_type(db, result_ty).is_some();
-        let is_type_var_result = tribute::is_type_var(db, result_ty);
-        let is_polymorphic_result = is_anyref_result || is_type_var_result;
         let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty).is_some()
             || core::Func::from_type(db, func_ret_ty).is_some();
         // Check for Step type (trampoline-based effect system)
         let func_returns_step = is_step_type(db, func_ret_ty);
-        if is_polymorphic_result && func_returns_funcref {
-            debug!(
-                "call_indirect emit: upgrading polymorphic result to funcref for enclosing function"
-            );
+        if is_anyref_result && func_returns_funcref {
+            debug!("call_indirect emit: upgrading anyref result to funcref for enclosing function");
             result_ty = funcref_ty;
-        } else if is_polymorphic_result && func_returns_step {
-            debug!(
-                "call_indirect emit: upgrading polymorphic result to Step for enclosing function"
-            );
+        } else if is_anyref_result && func_returns_step {
+            debug!("call_indirect emit: upgrading anyref result to Step for enclosing function");
             result_ty = crate::gc_types::step_marker_type(db);
         }
     }

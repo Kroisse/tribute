@@ -9,6 +9,7 @@
 pub mod const_to_wasm;
 pub mod intrinsic_to_wasm;
 pub mod normalize_primitive_types;
+pub mod resolve_type_references;
 pub mod tribute_rt_to_wasm;
 pub mod wasm_gc_type_assign;
 pub mod wasm_type_concrete;
