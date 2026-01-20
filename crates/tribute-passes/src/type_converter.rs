@@ -11,11 +11,11 @@
 //! | `tribute_rt.int`    | `core.i32`      | Arbitrary precision → i32 (Phase 1) |
 //! | `tribute_rt.nat`    | `core.i32`      | Arbitrary precision → i32 (Phase 1) |
 //! | `tribute_rt.bool`   | `core.i32`      | Boolean as i32                      |
-//! | `core.i1`           | `core.i32`      | Target-agnostic i1 → i32            |
 //! | `tribute_rt.float`  | `core.f64`      | Float as f64                        |
 //!
-//! Backend-specific type conversions (e.g., `tribute_rt.any` → `wasm.anyref`)
-//! are handled by backend-specific type converters.
+//! Backend-specific type conversions (e.g., `core.i1 → core.i32`,
+//! `tribute_rt.any` → `wasm.anyref`) are handled by backend-specific
+//! type converters.
 
 use tribute_ir::dialect::{tribute, tribute_rt};
 use trunk_ir::dialect::core;

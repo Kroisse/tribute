@@ -1,4 +1,4 @@
-//! Normalize tribute primitive types to core types.
+//! Normalize tribute primitive types to core/wasm types.
 //!
 //! This pass converts high-level `tribute_rt` primitive types and unresolved
 //! `tribute.type` references to their corresponding `core` types early in the
@@ -13,6 +13,8 @@
 //! | `tribute_rt.nat`         | `core.i32`    |
 //! | `tribute_rt.bool`        | `core.i32`    |
 //! | `tribute_rt.float`       | `core.f64`    |
+//! | `tribute_rt.any`         | `wasm.anyref` |
+//! | `tribute_rt.intref`      | `wasm.i31ref` |
 //! | `tribute.type(name=Int)` | `core.i32`    |
 //! | `tribute.type(name=Nat)` | `core.i32`    |
 //! | `tribute.type(name=Bool)`| `core.i32`    |

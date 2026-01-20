@@ -313,7 +313,7 @@ fn step_field_index(field_name: Symbol) -> u32 {
         "value" => 1,
         "prompt" => 2,
         "op_idx" => 3,
-        _ => 1, // default to value
+        _ => panic!("unknown Step field: {s}"),
     })
 }
 
@@ -324,7 +324,7 @@ fn continuation_field_index(field_name: Symbol) -> u32 {
         "state" => 1,
         "tag" => 2,
         "shift_value" => 3,
-        _ => 0,
+        _ => panic!("unknown Continuation field: {s}"),
     })
 }
 
@@ -333,7 +333,7 @@ fn resume_wrapper_field_index(field_name: Symbol) -> u32 {
     field_name.with_str(|s| match s {
         "state" => 0,
         "resume_value" => 1,
-        _ => 0,
+        _ => panic!("unknown ResumeWrapper field: {s}"),
     })
 }
 
@@ -737,14 +737,15 @@ impl<'db> RewritePattern<'db> for LowerContinuationGetPattern {
             let any_value = struct_get.as_operation().result(db, 0);
             ops.push(struct_get.as_operation());
 
-            let cast_op = adt::ref_cast(
+            // Use TypeConverter materialization to unbox to the expected type
+            materialize_from_any(
                 db,
                 location,
                 any_value,
                 expected_result_type,
-                expected_result_type,
+                adaptor,
+                &mut ops,
             );
-            ops.push(cast_op.as_operation());
 
             RewriteResult::expand(ops)
         } else {
@@ -916,14 +917,15 @@ impl<'db> RewritePattern<'db> for LowerResumeWrapperGetPattern {
         let any_value = struct_get.as_operation().result(db, 0);
         ops.push(struct_get.as_operation());
 
-        let cast_op = adt::ref_cast(
+        // Use TypeConverter materialization to unbox to the expected type
+        materialize_from_any(
             db,
             location,
             any_value,
             expected_result_type,
-            expected_result_type,
+            adaptor,
+            &mut ops,
         );
-        ops.push(cast_op.as_operation());
 
         RewriteResult::expand(ops)
     }
@@ -987,14 +989,15 @@ impl<'db> RewritePattern<'db> for LowerStateGetPattern {
         let any_value = struct_get.as_operation().result(db, 0);
         ops.push(struct_get.as_operation());
 
-        let cast_op = adt::ref_cast(
+        // Use TypeConverter materialization to unbox to the expected type
+        materialize_from_any(
             db,
             location,
             any_value,
             expected_result_type,
-            expected_result_type,
+            adaptor,
+            &mut ops,
         );
-        ops.push(cast_op.as_operation());
 
         RewriteResult::expand(ops)
     }
@@ -1047,8 +1050,9 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
         ops.push(tag_const.as_operation());
         ops.push(wasm::global_set(db, location, tag_val, yield_globals::TAG_IDX).as_operation());
 
-        // Set $yield_cont = continuation
-        ops.push(wasm::global_set(db, location, cont_val, yield_globals::CONT_IDX).as_operation());
+        // Set $yield_cont = continuation (as anyref)
+        let cont_any = materialize_to_any(db, location, cont_val, adaptor, &mut ops);
+        ops.push(wasm::global_set(db, location, cont_any, yield_globals::CONT_IDX).as_operation());
 
         // Set $yield_op_idx = op_idx
         let op_idx_const = wasm::i32_const(db, location, i32_ty, op_idx as i32);

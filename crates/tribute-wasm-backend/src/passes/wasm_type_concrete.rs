@@ -31,7 +31,10 @@ use trunk_ir::dialect::{cont, core, wasm};
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
 };
-use trunk_ir::{DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value, ValueDef};
+use trunk_ir::{
+    Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
+    ValueDef,
+};
 
 use crate::type_converter::wasm_type_converter;
 
@@ -570,6 +573,10 @@ fn get_field_type_from_struct<'db>(
 ///
 /// This pattern converts `tribute.type_var` in function parameter and return types
 /// to `wasm.anyref` to ensure all functions have concrete signatures.
+///
+/// NOTE: This pattern also updates the entry block arguments to match the new
+/// parameter types. Without this, the function signature would say `anyref` but
+/// the entry block arguments would still have `type_var`, causing a type mismatch.
 struct FuncSignatureTypeVarPattern;
 
 impl<'db> RewritePattern<'db> for FuncSignatureTypeVarPattern {
@@ -620,7 +627,11 @@ impl<'db> RewritePattern<'db> for FuncSignatureTypeVarPattern {
             result
         };
 
-        let new_func_ty = core::Func::new(db, new_params, new_result).as_type();
+        let new_func_ty = core::Func::new(db, new_params.clone(), new_result).as_type();
+
+        // Rebuild entry block with new parameter types
+        let body = func_op.body(db);
+        let new_body = rebuild_entry_block_for_anyref(db, body, &new_params);
 
         debug!(
             "wasm_type_concrete: concretizing wasm.func {} signature type_var to anyref",
@@ -630,9 +641,53 @@ impl<'db> RewritePattern<'db> for FuncSignatureTypeVarPattern {
         let new_op = op
             .modify(db)
             .attr("type", Attribute::Type(new_func_ty))
+            .regions(vec![new_body].into_iter().collect())
             .build();
         RewriteResult::Replace(new_op)
     }
+}
+
+/// Helper to rebuild entry block with converted argument types for anyref conversion.
+fn rebuild_entry_block_for_anyref<'db>(
+    db: &'db dyn salsa::Database,
+    body: Region<'db>,
+    new_params: &IdVec<Type<'db>>,
+) -> Region<'db> {
+    let blocks = body.blocks(db);
+
+    let new_blocks: IdVec<Block<'db>> = blocks
+        .iter()
+        .enumerate()
+        .map(|(block_idx, block)| {
+            if block_idx == 0 {
+                // Entry block: update argument types
+                let args = block.args(db);
+                let new_args: IdVec<BlockArg<'db>> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, arg)| {
+                        if i < new_params.len() && new_params[i] != arg.ty(db) {
+                            BlockArg::new(db, new_params[i], arg.attrs(db).clone())
+                        } else {
+                            *arg
+                        }
+                    })
+                    .collect();
+
+                Block::new(
+                    db,
+                    block.id(db),
+                    block.location(db),
+                    new_args,
+                    block.operations(db).clone(),
+                )
+            } else {
+                *block
+            }
+        })
+        .collect();
+
+    Region::new(db, body.location(db), new_blocks)
 }
 
 /// Fallback pattern to convert any remaining type_var results to anyref.
