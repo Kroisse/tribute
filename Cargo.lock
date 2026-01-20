@@ -1263,10 +1263,12 @@ dependencies = [
 name = "trunk-ir-wasm-backend"
 version = "0.1.0"
 dependencies = [
+ "derive_more",
  "insta",
  "salsa",
  "salsa-test-macros",
  "tracing",
+ "tribute-ir",
  "trunk-ir",
  "wasm-encoder",
 ]

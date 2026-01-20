@@ -11,6 +11,8 @@ use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
 use crate::errors::CompilationErrorKind;
 use crate::gc_types::{ATTR_TYPE, ATTR_TYPE_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, STEP_IDX};
+// Re-export is_closure_struct_type for use by handlers via emit.rs
+pub(crate) use crate::gc_types::is_closure_struct_type;
 use crate::{CompilationError, CompilationResult};
 
 // ============================================================================
@@ -38,25 +40,7 @@ pub(crate) fn is_nil_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> b
     core::Nil::from_type(db, ty).is_some()
 }
 
-/// Check if a type is a closure struct (adt.struct with name "_closure").
-/// Closure structs contain (funcref, anyref) and are used for call_indirect.
-pub(crate) fn is_closure_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    // Check if it's an adt.struct type
-    if ty.dialect(db) != adt::DIALECT_NAME() {
-        return false;
-    }
-    if ty.name(db) != Symbol::new("struct") {
-        return false;
-    }
-    // Check if the struct name is "_closure"
-    ty.attrs(db).get(&Symbol::new("name")).is_some_and(|attr| {
-        if let Attribute::Symbol(name) = attr {
-            name.with_str(|s| s == "_closure")
-        } else {
-            false
-        }
-    })
-}
+// Note: is_closure_struct_type is imported from gc_types
 
 /// Check if a type is the Step type (for trampoline-based effect system).
 /// Step is an ADT struct with name "_Step".
