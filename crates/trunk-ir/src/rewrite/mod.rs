@@ -86,6 +86,7 @@ mod conversion_target;
 mod op_adaptor;
 mod pattern;
 mod result;
+mod signature_conversion;
 mod type_converter;
 
 pub use applicator::{ApplyResult, PatternApplicator};
@@ -94,4 +95,7 @@ pub use conversion_target::{ConversionError, ConversionTarget, IllegalOp, Legali
 pub use op_adaptor::OpAdaptor;
 pub use pattern::{OperationMatcher, RewritePattern};
 pub use result::RewriteResult;
+pub use signature_conversion::{
+    FuncSignatureConversionPattern, WasmFuncSignatureConversionPattern,
+};
 pub use type_converter::{MaterializeResult, OpVec, TypeConverter, base_type_converter};

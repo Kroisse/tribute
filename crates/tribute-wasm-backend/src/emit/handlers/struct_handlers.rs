@@ -3,8 +3,7 @@
 //! This module handles WebAssembly GC struct operations (struct.new, struct.get, struct.set).
 
 use tracing::debug;
-use tribute_ir::dialect::adt;
-use trunk_ir::dialect::{cont, wasm};
+use trunk_ir::dialect::{adt, cont, wasm};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, ValueDef};
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 

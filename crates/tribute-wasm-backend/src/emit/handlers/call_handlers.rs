@@ -10,8 +10,6 @@ use trunk_ir::dialect::{core, wasm};
 use trunk_ir::{DialectType, IdVec, Symbol, ValueDef};
 use wasm_encoder::{Function, HeapType, Instruction};
 
-use tribute_ir::dialect::tribute_rt;
-
 use crate::{CompilationError, CompilationResult};
 
 use super::super::{
@@ -124,20 +122,15 @@ pub(crate) fn handle_call_indirect<'db>(
     debug!("call_indirect: is_ref_type={}", is_ref_type);
 
     // Build parameter types (all operands except first which is funcref/table_idx)
-    // Normalize IR types to wasm types - primitive IR types that might be boxed
-    // (in polymorphic handlers) should use anyref.
+    // After normalize_primitive_types pass, anyref types are already wasm.anyref.
     // Note: core::Nil is NOT normalized - it uses (ref null none) which is
     // a subtype of anyref, so it can be passed without boxing.
     let anyref_ty = wasm::Anyref::new(db).as_type();
     let normalize_param_type = |ty: trunk_ir::Type<'db>| -> trunk_ir::Type<'db> {
-        // Note: tribute.type_var should be resolved before emit by wasm_type_concrete pass
-        if tribute_rt::is_int(db, ty)
-            || tribute_rt::is_nat(db, ty)
-            || tribute_rt::is_bool(db, ty)
-            || tribute_rt::is_float(db, ty)
-            || tribute_rt::Any::from_type(db, ty).is_some()
-        // tribute_rt.any → wasm.anyref
-        {
+        // After normalize_primitive_types pass:
+        // - tribute_rt.any → wasm.anyref
+        // So we only need to check for wasm.anyref
+        if wasm::Anyref::from_type(db, ty).is_some() {
             anyref_ty
         } else {
             ty

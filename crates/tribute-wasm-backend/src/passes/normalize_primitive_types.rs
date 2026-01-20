@@ -110,6 +110,8 @@ fn is_illegal_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -
         || tribute_rt::Nat::from_type(db, ty).is_some()
         || tribute_rt::Bool::from_type(db, ty).is_some()
         || tribute_rt::Float::from_type(db, ty).is_some()
+        || tribute_rt::Any::from_type(db, ty).is_some()
+        || tribute_rt::Intref::from_type(db, ty).is_some()
     {
         return true;
     }
@@ -155,6 +157,16 @@ fn convert_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> O
     // tribute_rt.float -> core.f64
     if tribute_rt::Float::from_type(db, ty).is_some() {
         return Some(core::F64::new(db).as_type());
+    }
+
+    // tribute_rt.any -> wasm.anyref
+    if tribute_rt::Any::from_type(db, ty).is_some() {
+        return Some(wasm::Anyref::new(db).as_type());
+    }
+
+    // tribute_rt.intref -> wasm.i31ref
+    if tribute_rt::Intref::from_type(db, ty).is_some() {
+        return Some(wasm::I31ref::new(db).as_type());
     }
 
     // tribute.type(name=X) -> core type for known primitives

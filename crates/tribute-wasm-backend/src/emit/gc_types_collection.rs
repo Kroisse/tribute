@@ -7,8 +7,7 @@ use std::collections::HashMap;
 
 use tracing::debug;
 
-use tribute_ir::dialect::{adt, closure, tribute_rt};
-use trunk_ir::dialect::{core, wasm};
+use trunk_ir::dialect::{adt, core, wasm};
 use trunk_ir::{Attribute, BlockId, DialectOp, DialectType, Operation, Region, Symbol, Type};
 use wasm_encoder::{FieldType, StorageType, ValType};
 
@@ -134,17 +133,8 @@ fn normalize_type_for_gc<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Ty
     {
         return base_enum;
     }
-    // Also normalize tribute_rt types
-    if tribute_rt::Int::from_type(db, ty).is_some() || tribute_rt::Nat::from_type(db, ty).is_some()
-    {
-        return core::I32::new(db).as_type();
-    }
-    if tribute_rt::Bool::from_type(db, ty).is_some() {
-        return core::I32::new(db).as_type();
-    }
-    if tribute_rt::Float::from_type(db, ty).is_some() {
-        return core::F64::new(db).as_type();
-    }
+    // Note: tribute_rt types (int, nat, bool, float, any, intref) should be
+    // converted to core/wasm types by normalize_primitive_types pass before emit.
     ty
 }
 
@@ -340,7 +330,7 @@ pub(crate) fn collect_gc_types<'db>(
         // Fall back to type attribute (legacy, will be removed)
         if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
             // Special case: closure types use builtin CLOSURE_STRUCT_IDX
-            if closure::Closure::from_type(db, *ty).is_some() || is_closure_struct_type(db, *ty) {
+            if is_closure_struct_type(db, *ty) {
                 return Some(CLOSURE_STRUCT_IDX);
             }
             if let Some(&idx) = type_idx_by_type.get(ty) {
@@ -362,7 +352,7 @@ pub(crate) fn collect_gc_types<'db>(
         // Fall back to inferred type (from result or operand types)
         if let Some(ty) = inferred_type {
             // Special case: closure types use builtin CLOSURE_STRUCT_IDX
-            if closure::Closure::from_type(db, ty).is_some() || is_closure_struct_type(db, ty) {
+            if is_closure_struct_type(db, ty) {
                 return Some(CLOSURE_STRUCT_IDX);
             }
             if let Some(&idx) = type_idx_by_type.get(&ty) {

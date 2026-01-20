@@ -182,4 +182,12 @@ impl<'db, 'ctx> OpAdaptor<'db, 'ctx> {
         self.type_converter
             .materialize(db, location, value, from_ty, to_ty)
     }
+
+    /// Get a reference to the type converter.
+    ///
+    /// This allows patterns to use the same type converter that the
+    /// `PatternApplicator` uses for operand/result type conversion.
+    pub fn type_converter(&self) -> &'ctx super::TypeConverter {
+        self.type_converter
+    }
 }

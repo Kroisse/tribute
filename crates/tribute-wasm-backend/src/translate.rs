@@ -10,7 +10,6 @@ use trunk_ir::Operation;
 use trunk_ir::Symbol;
 use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::dialect::core::Module;
-
 // Re-export for convenience
 pub use crate::CompilationResult;
 
@@ -56,7 +55,6 @@ pub fn compile_to_wasm<'db>(
 
     // Phase 2 - Resolve unrealized_conversion_cast operations
     let type_converter = wasm_type_converter();
-
     let lowered = resolve_unrealized_casts(db, lowered, &type_converter)
         .map(|r| r.module)
         .map_err(crate::CompilationError::unresolved_casts)?;

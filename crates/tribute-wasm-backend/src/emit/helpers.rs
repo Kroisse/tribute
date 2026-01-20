@@ -5,8 +5,7 @@
 
 use std::collections::HashMap;
 
-use tribute_ir::dialect::{ability, adt, closure, trampoline, tribute_rt};
-use trunk_ir::dialect::{cont, core, wasm};
+use trunk_ir::dialect::{adt, cont, core, trampoline, wasm};
 use trunk_ir::{Attribute, Attrs, BlockId, DialectType, Symbol, Type, Value, ValueDef};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
@@ -68,21 +67,20 @@ pub(crate) fn is_step_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> 
 /// Check if a type should be normalized to anyref in polymorphic contexts.
 ///
 /// This is used during call_indirect type signature construction where
-/// primitive types, type variables, and other types that are boxed at runtime
-/// should be normalized to anyref to ensure consistent function signatures.
+/// types that need boxing at runtime should be normalized to anyref.
 ///
-/// This predicate must be kept in sync between:
-/// - `emit/call_indirect_collection.rs` (type collection phase)
-/// - `emit/handlers/call_handlers.rs` (emission phase)
+/// After normalize_primitive_types pass, tribute_rt types are already converted:
+/// - tribute_rt.int/nat/bool → core.i32
+/// - tribute_rt.float → core.f64
+/// - tribute_rt.any → wasm.anyref
+///
+/// So we only need to check for the anyref type itself.
 pub(crate) fn should_normalize_to_anyref<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    tribute_rt::is_int(db, ty)
-        || tribute_rt::is_nat(db, ty)
-        || tribute_rt::is_bool(db, ty)
-        || tribute_rt::is_float(db, ty)
-        || tribute_rt::Any::from_type(db, ty).is_some()
+    // wasm.anyref is already the normalized form - this is what we expect after
+    // normalize_primitive_types converts tribute_rt.any → wasm.anyref
+    wasm::Anyref::from_type(db, ty).is_some()
     // Note: core::Nil is NOT normalized to anyref. Nil uses (ref null none) which is
     // a subtype of anyref, so it can be passed where anyref is expected without boxing.
-    // Note: tribute.type_var should be resolved before emit by wasm_type_concrete pass.
 }
 
 // ============================================================================
@@ -95,19 +93,13 @@ pub(crate) fn type_to_valtype<'db>(
     ty: Type<'db>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
 ) -> CompilationResult<ValType> {
-    if core::I32::from_type(db, ty).is_some()
-        || core::I1::from_type(db, ty).is_some()
-        || tribute_rt::is_int(db, ty)
-        || tribute_rt::is_nat(db, ty)
-        || tribute_rt::is_bool(db, ty)
-    {
-        // tribute_rt.int/nat/bool are represented as i32 in WebAssembly
+    if core::I32::from_type(db, ty).is_some() || core::I1::from_type(db, ty).is_some() {
         Ok(ValType::I32)
     } else if core::I64::from_type(db, ty).is_some() {
         Ok(ValType::I64)
     } else if core::F32::from_type(db, ty).is_some() {
         Ok(ValType::F32)
-    } else if core::F64::from_type(db, ty).is_some() || tribute_rt::is_float(db, ty) {
+    } else if core::F64::from_type(db, ty).is_some() {
         Ok(ValType::F64)
     } else if core::Bytes::from_type(db, ty).is_some() {
         // Bytes uses WasmGC struct representation
@@ -120,18 +112,6 @@ pub(crate) fn type_to_valtype<'db>(
     {
         // String and ptr still use linear memory (i32 pointer)
         Ok(ValType::I32)
-    } else if tribute_rt::is_any(db, ty) {
-        // tribute_rt.any is the type-erased reference (maps to anyref)
-        Ok(ValType::Ref(RefType::ANYREF))
-    } else if tribute_rt::is_intref(db, ty) {
-        // tribute_rt.intref is the boxed integer reference (maps to i31ref)
-        Ok(ValType::Ref(RefType {
-            nullable: true,
-            heap_type: HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::I31,
-            },
-        }))
     } else if ty.dialect(db) == wasm::DIALECT_NAME() {
         // WASM dialect types (e.g., wasm.structref for continuation frames)
         // IMPORTANT: Must check BEFORE type_idx_by_type.get() to avoid returning
@@ -177,19 +157,10 @@ pub(crate) fn type_to_valtype<'db>(
         // The function signature is preserved in the IR and registered
         // in the type section by collect_call_indirect_types.
         Ok(ValType::Ref(RefType::FUNCREF))
-    } else if closure::Closure::from_type(db, ty).is_some() {
-        // Closure types map to the builtin CLOSURE_STRUCT_IDX which has
-        // (funcref, anyref) fields for uniform closure representation.
-        // IMPORTANT: Check this BEFORE type_idx_by_type.get() to ensure all
-        // closure::Closure types use the builtin CLOSURE_STRUCT_IDX (4).
-        Ok(ValType::Ref(RefType {
-            nullable: true,
-            heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
-        }))
     } else if is_closure_struct_type(db, ty) {
         // ADT struct named "_closure" maps to builtin CLOSURE_STRUCT_IDX.
-        // IMPORTANT: Check this BEFORE type_idx_by_type.get() to ensure
-        // _closure structs use the correct builtin type.
+        // Note: closure::Closure types are converted to adt.struct(name="_closure")
+        // by TypeConverter before emit, so we only check for the ADT form here.
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
@@ -245,9 +216,6 @@ pub(crate) fn type_to_valtype<'db>(
     } else if ty.dialect(db) == adt::DIALECT_NAME() {
         // ADT base types (e.g., adt.Expr) without specific variant type_idx
         // These represent "any variant of this enum" and use anyref
-        Ok(ValType::Ref(RefType::ANYREF))
-    } else if ability::EvidencePtr::from_type(db, ty).is_some() {
-        // Evidence pointer for ability system - use anyref as runtime handle
         Ok(ValType::Ref(RefType::ANYREF))
     } else if core::Nil::from_type(db, ty).is_some() {
         // Nil type - use (ref null none) for empty environments
