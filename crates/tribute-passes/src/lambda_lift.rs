@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{adt, closure, tribute, tribute_pat};
+use tribute_ir::dialect::{ability, adt, closure, tribute, tribute_pat, tribute_rt};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{
@@ -294,10 +294,10 @@ impl<'db> LambdaInfoCollector<'db> {
 
         let attrs = op.attributes(self.db);
         if let Some(Attribute::Type(cont_ty)) = attrs.get(&CONTINUATION_TYPE()) {
-            // Only return if it's not a type variable (meaning it was resolved by TypeSubst)
-            if !tribute::is_type_var(self.db, *cont_ty) {
-                return Some(*cont_ty);
-            }
+            // Return the type regardless of whether it's a type variable.
+            // TypeSubst should have already resolved it; if not, let it propagate
+            // so downstream passes can handle or report it.
+            return Some(*cont_ty);
         }
         None
     }
@@ -309,10 +309,9 @@ impl<'db> LambdaInfoCollector<'db> {
                 if tribute_pat::Bind::from_operation(self.db, *op).is_ok() {
                     // Get the result type of the bind operation
                     if let Some(&ty) = op.results(self.db).first() {
-                        // Only return if it's not a type variable
-                        if !tribute::is_type_var(self.db, ty) {
-                            return Some(ty);
-                        }
+                        // Return the type regardless of whether it's a type variable.
+                        // TypeSubst should have already resolved it.
+                        return Some(ty);
                     }
                 }
             }
@@ -835,14 +834,33 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         effect_type: Option<Type<'db>>,
         body: &Region<'db>,
     ) -> Operation<'db> {
-        // Build parameter list: env first, then original params
+        // All lifted lambdas receive an evidence parameter.
+        // This is necessary because:
+        // 1. Effectful lambdas need evidence for their own effect operations
+        // 2. Pure lambdas may call effectful closures (e.g., continuations in handler arms)
+        // The evidence may be null at runtime for pure contexts.
+        //
+        // TODO: Optimize by only adding evidence when needed (requires call analysis)
+
+        // Build parameter list: evidence, env (as anyref), then original params
+        // Using anyref for env allows uniform call_indirect signature across all closures.
+        // The function casts anyref to the specific env_type at the start.
         let mut all_params: IdVec<Type<'db>> = IdVec::new();
-        all_params.push(env_type);
+
+        // Always add evidence parameter for lifted lambdas
+        all_params.push(ability::EvidencePtr::new(self.db).as_type());
+
+        // Use anyref for env parameter to allow uniform call_indirect type
+        let anyref_ty = tribute_rt::Any::new(self.db).as_type();
+        all_params.push(anyref_ty);
         all_params.extend(param_types.iter().copied());
 
         let db = self.db;
         let captures_vec: Vec<_> = captures.to_vec();
         let param_count = param_types.len();
+
+        // Evidence is always at 0, env is at 1
+        let env_offset = 1;
 
         // Build the function
         func::Func::build_with_effect(
@@ -853,8 +871,12 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
             result_type,
             effect_type,
             |entry| {
-                // Get env parameter (first block argument)
-                let env_param = entry.block_arg(db, 0);
+                // Get env parameter as anyref and cast to specific env_type
+                let env_anyref = entry.block_arg(db, env_offset);
+                let env_cast = entry.op(core::unrealized_conversion_cast(
+                    db, location, env_anyref, env_type,
+                ));
+                let env_param = env_cast.result(db);
 
                 // Build mapping: capture name -> extracted value
                 let mut capture_values: HashMap<Symbol, Value<'db>> = HashMap::new();
@@ -878,10 +900,13 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                     // Build value remapping context
                     let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
-                    // Map original block args (params 0..n) to new block args (1..n+1)
+                    // Map original block args (params 0..n) to new block args
+                    // New layout: [evidence?, env, params...]
+                    // For effectful: params start at env_offset + 1
+                    // For pure: params start at 1
                     for i in 0..param_count {
                         let orig_arg = Value::new(db, ValueDef::BlockArg(orig_block_id), i);
-                        let new_arg = entry.block_arg(db, i + 1);
+                        let new_arg = entry.block_arg(db, i + env_offset + 1);
                         value_map.insert(orig_arg, new_arg);
                     }
 
@@ -898,8 +923,10 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                             if param_decl_count < param_count {
                                 // This is a parameter declaration
                                 // Map its result to the shifted block arg
+                                // New layout: [evidence?, env, params...]
                                 let orig_result = op.result(db, 0);
-                                let new_arg = entry.block_arg(db, param_decl_count + 1);
+                                let new_arg =
+                                    entry.block_arg(db, param_decl_count + env_offset + 1);
                                 value_map.insert(orig_result, new_arg);
                                 param_decl_count += 1;
                                 // Don't emit the tribute.var op - params are block args now

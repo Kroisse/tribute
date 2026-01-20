@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use tracing::debug;
 use tribute_ir::dialect::{tribute, tribute_rt};
-use trunk_ir::dialect::{core, func, wasm};
+use trunk_ir::dialect::{cont, core, func, wasm};
 use trunk_ir::{Attribute, BlockId, DialectOp, DialectType, IdVec, Region, Symbol, Type};
 
 use crate::errors::CompilationResult;
@@ -123,6 +123,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
                             || core::Ptr::from_type(db, ty).is_some()
                             || core::I32::from_type(db, ty).is_some() // i32 table index for closures
                             || is_closure_struct_type(db, ty)
+                            || cont::Continuation::from_type(db, ty).is_some() // cont.continuation is funcref-like
                     });
 
                     // Helper to normalize IR types to wasm types for call_indirect.
@@ -130,7 +131,9 @@ pub(crate) fn collect_call_indirect_types<'db>(
                     // use anyref, since that's what's actually on the wasm stack.
                     let anyref_ty = wasm::Anyref::new(db).as_type();
                     let normalize_param_type = |ty: Type<'db>| -> Type<'db> {
-                        // Primitive types are boxed to anyref in polymorphic handlers
+                        // Primitive types are boxed to anyref in polymorphic handlers.
+                        // Note: core::Nil is NOT normalized - it uses (ref null none) which is
+                        // a subtype of anyref, so it can be passed without boxing.
                         if tribute_rt::is_int(db, ty)
                             || tribute_rt::is_nat(db, ty)
                             || tribute_rt::is_bool(db, ty)
@@ -138,10 +141,6 @@ pub(crate) fn collect_call_indirect_types<'db>(
                             || tribute_rt::Any::from_type(db, ty).is_some() // tribute_rt.any → anyref
                             || tribute::is_type_var(db, ty)
                         {
-                            anyref_ty
-                        } else if core::Nil::from_type(db, ty).is_some() {
-                            // core.nil is represented as (ref null 11) for the nil struct
-                            // but in polymorphic contexts might be anyref
                             anyref_ty
                         } else {
                             ty
@@ -222,6 +221,18 @@ pub(crate) fn collect_call_indirect_types<'db>(
                             );
                             result_ty = crate::gc_types::step_marker_type(db);
                         }
+                    }
+
+                    // Normalize result type: primitive types and type_var should become anyref
+                    // This must match the normalization done in call_handlers for emit
+                    if crate::emit::helpers::should_normalize_to_anyref(db, result_ty) {
+                        debug!(
+                            "collect_call_indirect_types: normalizing result {} to anyref",
+                            result_ty.dialect(db).with_str(|d| result_ty
+                                .name(db)
+                                .with_str(|n| format!("{}.{}", d, n)))
+                        );
+                        result_ty = anyref_ty;
                     }
 
                     // Create function type

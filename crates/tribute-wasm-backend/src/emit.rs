@@ -814,6 +814,29 @@ fn assign_locals_in_region<'db>(
     module_info: &ModuleInfo<'db>,
 ) -> CompilationResult<()> {
     for block in region.blocks(db).iter() {
+        // Allocate locals for block arguments (for nested regions)
+        // In WASM, these represent values that flow through control structures
+        for (index, arg) in block.args(db).iter().enumerate() {
+            let block_arg = block.arg(db, index);
+            // Skip if already assigned (e.g., function entry block args)
+            if ctx.value_locals.contains_key(&block_arg) {
+                continue;
+            }
+            let arg_ty = arg.ty(db);
+            let val_type = type_to_valtype(db, arg_ty, &module_info.type_idx_by_type)?;
+            let local_index = param_count + locals.len() as u32;
+            ctx.value_locals.insert(block_arg, local_index);
+            ctx.effective_types.insert(block_arg, arg_ty);
+            locals.push(val_type);
+            tracing::debug!(
+                "Allocated local {} for block arg {:?} type {}.{}",
+                local_index,
+                block.id(db),
+                arg_ty.dialect(db),
+                arg_ty.name(db)
+            );
+        }
+
         for op in block.operations(db).iter() {
             // Skip tribute.var operations - kept for LSP support, no runtime effect
             if op.dialect(db) == tribute::DIALECT_NAME() && op.name(db) == tribute::VAR() {

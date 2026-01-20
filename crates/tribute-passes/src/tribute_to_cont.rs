@@ -164,13 +164,6 @@ impl<'db> HandlerLowerer<'db> {
             .copied()
             .unwrap_or_else(|| core::Nil::new(self.db).as_type());
 
-        // DEBUG: Print the result type
-        eprintln!(
-            "[DEBUG tribute_to_cont] tribute.handle result_type = {}.{}",
-            result_type.dialect(self.db),
-            result_type.name(self.db)
-        );
-
         // Get body and arms regions from tribute.handle
         let Ok(handle_op) = tribute::Handle::from_operation(self.db, op) else {
             return vec![op];
@@ -324,10 +317,14 @@ impl<'db> HandlerLowerer<'db> {
         let body_region = build_handler_body_region(self.db, location, done_body, &suspend_bodies);
 
         // Build cont.handler_dispatch using typed helper
+        // Order: operand, output_type, tag_attr, result_type_attr, region
+        // output_type and result_type_attr are the same here (both are the handler's result type)
         let dispatch_op = cont::handler_dispatch(
             self.db,
             location,
             push_prompt_result,
+            result_type,
+            tag,
             result_type,
             body_region,
         );

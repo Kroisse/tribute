@@ -79,7 +79,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 /// IMPORTANT: Must use wasm::Anyref to match step_marker_type in gc_types.rs.
 /// Using tribute_rt::Any would create a different type identity, causing
 /// type_idx_by_type lookup failures.
-fn step_adt_type(db: &dyn salsa::Database) -> Type<'_> {
+pub fn step_adt_type(db: &dyn salsa::Database) -> Type<'_> {
     let i32_ty = core::I32::new(db).as_type();
     let anyref_ty = wasm::Anyref::new(db).as_type();
 
@@ -96,19 +96,21 @@ fn step_adt_type(db: &dyn salsa::Database) -> Type<'_> {
 }
 
 /// Get the canonical Continuation ADT type.
-/// Layout: (resume_fn: funcref, state: anyref, tag: i32, shift_value: anyref)
+/// Layout: (resume_fn: i32, state: anyref, tag: i32, shift_value: anyref)
 ///
+/// resume_fn is stored as i32 (function table index), same as closures.
 /// Uses wasm::Anyref for consistency with step_adt_type.
-fn continuation_adt_type(db: &dyn salsa::Database) -> Type<'_> {
+pub fn continuation_adt_type(db: &dyn salsa::Database) -> Type<'_> {
     let i32_ty = core::I32::new(db).as_type();
-    let funcref_ty = wasm::Funcref::new(db).as_type();
     let anyref_ty = wasm::Anyref::new(db).as_type();
 
+    // resume_fn is stored as i32 (function table index), same as closures.
+    // This matches how func.constant is lowered to wasm.i32_const.
     adt::struct_type(
         db,
         "_Continuation",
         vec![
-            (Symbol::new("resume_fn"), funcref_ty),
+            (Symbol::new("resume_fn"), i32_ty),
             (Symbol::new("state"), anyref_ty),
             (Symbol::new("tag"), i32_ty),
             (Symbol::new("shift_value"), anyref_ty),
@@ -120,7 +122,7 @@ fn continuation_adt_type(db: &dyn salsa::Database) -> Type<'_> {
 /// Layout: (state: anyref, resume_value: anyref)
 ///
 /// Uses wasm::Anyref for consistency with step_adt_type.
-fn resume_wrapper_adt_type(db: &dyn salsa::Database) -> Type<'_> {
+pub fn resume_wrapper_adt_type(db: &dyn salsa::Database) -> Type<'_> {
     let anyref_ty = wasm::Anyref::new(db).as_type();
 
     adt::struct_type(
@@ -150,14 +152,33 @@ fn create_type_converter() -> TypeConverter {
         .add_conversion(|db, ty| {
             trampoline::ResumeWrapper::from_type(db, ty).map(|_| resume_wrapper_adt_type(db))
         })
-        // Materialize: insert ref_cast when converting anyref ↔ concrete types
-        .add_materialization(|db, location, value, from_ty, to_ty| {
+        // Materialize: trampoline types to ADT types are no-op conversions
+        .add_materialization(|db, _location, _value, from_ty, to_ty| {
             if from_ty == to_ty {
                 return MaterializeResult::Skip;
             }
-            // Insert ref_cast for reference type conversions
-            let cast_op = adt::ref_cast(db, location, value, to_ty, to_ty);
-            MaterializeResult::single(cast_op.as_operation())
+
+            // trampoline.step → _Step ADT (same representation)
+            if trampoline::Step::from_type(db, from_ty).is_some() && to_ty == step_adt_type(db) {
+                return MaterializeResult::NoOp;
+            }
+
+            // trampoline.continuation → _Continuation ADT (same representation)
+            if trampoline::Continuation::from_type(db, from_ty).is_some()
+                && to_ty == continuation_adt_type(db)
+            {
+                return MaterializeResult::NoOp;
+            }
+
+            // trampoline.resume_wrapper → _ResumeWrapper ADT (same representation)
+            if trampoline::ResumeWrapper::from_type(db, from_ty).is_some()
+                && to_ty == resume_wrapper_adt_type(db)
+            {
+                return MaterializeResult::NoOp;
+            }
+
+            // For other reference conversions, skip (let other converters handle it)
+            MaterializeResult::Skip
         })
 }
 
@@ -285,19 +306,6 @@ fn null_any<'db>(
     null_val
 }
 
-/// Create a null reference of `wasm::Funcref` type.
-fn null_funcref<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    ops: &mut Vec<Operation<'db>>,
-) -> Value<'db> {
-    let funcref_ty = wasm::Funcref::new(db).as_type();
-    let null_op = adt::ref_null(db, location, funcref_ty, funcref_ty);
-    let null_val = null_op.as_operation().result(db, 0);
-    ops.push(null_op.as_operation());
-    null_val
-}
-
 // ============================================================================
 // Patterns: Struct Operations → ADT
 // ============================================================================
@@ -334,11 +342,15 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
         let tag_value = tag_const.result(db, 0);
         ops.push(tag_const);
 
-        // resume_fn field (funcref, no casting needed)
+        // resume_fn field (i32 table index, no casting needed since func.constant
+        // is lowered to wasm.i32_const)
         let resume_fn_field = if let Some(v) = resume_fn {
             v
         } else {
-            null_funcref(db, location, &mut ops)
+            // Use -1 as null index (invalid table index sentinel)
+            let null_const = create_i32_const(db, location, -1);
+            ops.push(null_const);
+            null_const.result(db, 0)
         };
 
         // state field - cast to any
@@ -654,8 +666,35 @@ impl<'db> RewritePattern<'db> for LowerBuildStatePattern {
         let location = op.location(db);
         let operands = adaptor.operands();
 
-        // Get state type from attribute or create dynamic one
-        let state_type = build_state.state_type(db);
+        // Get state type from attribute and update field types to anyref
+        // since all operands are cast to anyref
+        let original_state_type = build_state.state_type(db);
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+
+        // Create updated state type with all fields as anyref
+        let state_type =
+            if let Some(original_fields) = adt::get_struct_fields(db, original_state_type) {
+                let state_name = original_state_type
+                    .get_attr(db, Symbol::new("name"))
+                    .and_then(|attr| {
+                        if let Attribute::Symbol(name) = attr {
+                            Some(*name)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| Symbol::new("_State"));
+
+                // Update all field types to anyref
+                let new_fields: Vec<(Symbol, Type<'db>)> = original_fields
+                    .iter()
+                    .map(|(name, _ty)| (*name, anyref_ty))
+                    .collect();
+
+                adt::struct_type(db, state_name, new_fields)
+            } else {
+                original_state_type
+            };
 
         let mut ops = Vec::new();
         let mut fields = Vec::new();
@@ -1418,10 +1457,9 @@ mod tests {
         let location = test_location(db);
         let cont_ty = trampoline::Continuation::new(db).as_type();
         let anyref_ty = wasm::Anyref::new(db).as_type();
-        let funcref_ty = wasm::Funcref::new(db).as_type();
 
-        // Create operands: resume_fn (funcref), state (anyref), shift_value (anyref)
-        let resume_fn_op = adt::ref_null(db, location, funcref_ty, funcref_ty);
+        // Create operands: resume_fn (i32 table index), state (anyref), shift_value (anyref)
+        let resume_fn_op = create_i32_const(db, location, -1);
         let state_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
         let shift_value_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
 

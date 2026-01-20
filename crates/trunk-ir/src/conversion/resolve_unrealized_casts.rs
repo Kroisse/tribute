@@ -38,7 +38,11 @@ impl std::fmt::Display for UnresolvedCastError<'_> {
             self.unresolved.len()
         )?;
         for cast in &self.unresolved {
-            writeln!(f, "  - at {:?}", cast.location)?;
+            writeln!(
+                f,
+                "  - {:?} -> {:?} at {:?}",
+                cast.from_type, cast.to_type, cast.location
+            )?;
         }
         Ok(())
     }
@@ -288,6 +292,13 @@ impl<'db, 'a> CastResolver<'db, 'a> {
             }
             Some(crate::rewrite::MaterializeResult::Skip) | None => {
                 // Could not materialize - keep the cast and mark as unresolved
+                tracing::debug!(
+                    "resolve_unrealized_casts: FAILED to materialize {}.{} -> {}.{}",
+                    from_type.dialect(self.db),
+                    from_type.name(self.db),
+                    to_type.dialect(self.db),
+                    to_type.name(self.db),
+                );
                 self.unresolved.push(UnresolvedCast {
                     location,
                     from_type,

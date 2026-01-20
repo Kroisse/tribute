@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use tribute_ir::dialect::{ability, adt, closure, tribute, tribute_rt};
+use tribute_ir::dialect::{ability, adt, closure, trampoline, tribute, tribute_rt};
 use trunk_ir::dialect::{cont, core, wasm};
 use trunk_ir::{Attribute, Attrs, BlockId, DialectType, Symbol, Type, Value, ValueDef};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
@@ -63,6 +63,26 @@ pub(crate) fn is_closure_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type
 /// Step is an ADT struct with name "_Step".
 pub(crate) fn is_step_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
     ty == crate::gc_types::step_marker_type(db)
+}
+
+/// Check if a type should be normalized to anyref in polymorphic contexts.
+///
+/// This is used during call_indirect type signature construction where
+/// primitive types, type variables, and other types that are boxed at runtime
+/// should be normalized to anyref to ensure consistent function signatures.
+///
+/// This predicate must be kept in sync between:
+/// - `emit/call_indirect_collection.rs` (type collection phase)
+/// - `emit/handlers/call_handlers.rs` (emission phase)
+pub(crate) fn should_normalize_to_anyref<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    tribute_rt::is_int(db, ty)
+        || tribute_rt::is_nat(db, ty)
+        || tribute_rt::is_bool(db, ty)
+        || tribute_rt::is_float(db, ty)
+        || tribute_rt::Any::from_type(db, ty).is_some()
+        || tribute::is_type_var(db, ty)
+    // Note: core::Nil is NOT normalized to anyref. Nil uses (ref null none) which is
+    // a subtype of anyref, so it can be passed where anyref is expected without boxing.
 }
 
 // ============================================================================
@@ -176,6 +196,39 @@ pub(crate) fn type_to_valtype<'db>(
         }))
     } else if cont::Continuation::from_type(db, ty).is_some() {
         // Continuation types are represented as GC structs at runtime
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Struct,
+            },
+        }))
+    } else if trampoline::Step::from_type(db, ty).is_some() {
+        // trampoline.step is the same as wasm.step - uses STEP_IDX
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(STEP_IDX),
+        }))
+    } else if trampoline::Continuation::from_type(db, ty).is_some() {
+        // trampoline.continuation is represented as GC struct at runtime
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Struct,
+            },
+        }))
+    } else if trampoline::State::from_type(db, ty).is_some() {
+        // trampoline.state is represented as GC struct at runtime
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Struct,
+            },
+        }))
+    } else if trampoline::ResumeWrapper::from_type(db, ty).is_some() {
+        // trampoline.resume_wrapper is represented as GC struct at runtime
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Abstract {

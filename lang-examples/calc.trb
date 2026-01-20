@@ -9,7 +9,7 @@ enum Expr {
     Div(Expr, Expr),
 }
 
-fn eval(e: Expr) -> Int {
+fn eval(e: Expr) ->{} Int {
     case e {
         Num(n) -> n,
         Add(l, r) -> eval(l) + eval(r),
@@ -19,7 +19,7 @@ fn eval(e: Expr) -> Int {
     }
 }
 
-fn main() -> Int {
+fn main() ->{} Int {
     // (1 + 2) * (10 - 4) / 2 = 9
     let expr = Div(
         Mul(

@@ -111,6 +111,8 @@ pub(crate) fn handle_call_indirect<'db>(
         let is_core_func = core::Func::from_type(db, ty).is_some();
         // core.ptr is used for function pointers in the IR, lowered to funcref in wasm
         let is_core_ptr = core::Ptr::from_type(db, ty).is_some();
+        // Note: cont.continuation now uses call_indirect (table-based) for consistency
+        // with lambda calls. The continuation struct holds a table index, not a funcref.
         // Note: i32 (function table index) is NOT included here - it should use
         // call_indirect, not call_ref. Closure calls go through the call_indirect path.
         debug!(
@@ -124,6 +126,8 @@ pub(crate) fn handle_call_indirect<'db>(
     // Build parameter types (all operands except first which is funcref/table_idx)
     // Normalize IR types to wasm types - primitive IR types that might be boxed
     // (in polymorphic handlers) should use anyref.
+    // Note: core::Nil is NOT normalized - it uses (ref null none) which is
+    // a subtype of anyref, so it can be passed without boxing.
     let anyref_ty = wasm::Anyref::new(db).as_type();
     let normalize_param_type = |ty: trunk_ir::Type<'db>| -> trunk_ir::Type<'db> {
         if tribute_rt::is_int(db, ty)
@@ -132,7 +136,6 @@ pub(crate) fn handle_call_indirect<'db>(
             || tribute_rt::is_float(db, ty)
             || tribute_rt::Any::from_type(db, ty).is_some() // tribute_rt.any → wasm.anyref
             || tribute::is_type_var(db, ty)
-            || core::Nil::from_type(db, ty).is_some()
         {
             anyref_ty
         } else {
@@ -177,6 +180,18 @@ pub(crate) fn handle_call_indirect<'db>(
             );
             result_ty = crate::gc_types::step_marker_type(db);
         }
+    }
+
+    // Normalize result type: primitive types and type_var should become anyref
+    // This must match the normalization done in collect_call_indirect_types
+    if crate::emit::helpers::should_normalize_to_anyref(db, result_ty) {
+        debug!(
+            "call_indirect emit: normalizing result {} to anyref",
+            result_ty
+                .dialect(db)
+                .with_str(|d| result_ty.name(db).with_str(|n| format!("{}.{}", d, n)))
+        );
+        result_ty = anyref_ty;
     }
 
     // Construct function type

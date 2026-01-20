@@ -19,12 +19,19 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
+use std::collections::HashSet;
+
 use tribute_ir::dialect::{adt, closure, tribute_rt};
-use trunk_ir::dialect::{core, func};
+use trunk_ir::dialect::{cont, core, func, wasm};
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
-use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type, Value, ValueDef};
+use trunk_ir::{
+    Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
+    ValueDef,
+};
+
+use crate::evidence::collect_effectful_functions;
 
 /// Create the unified closure struct type: `{ table_idx: i32, env: anyref }`.
 ///
@@ -45,16 +52,29 @@ fn closure_struct_type(db: &dyn salsa::Database) -> Type<'_> {
 
 /// Lower closure operations in the module.
 ///
-/// Pattern ordering is important:
-/// 1. LowerClosureCallPattern - expands call_indirect to use closure.func/closure.env
-/// 2. LowerClosureNewPattern - expands closure.new to func.constant + adt.struct_new
-/// 3. LowerClosureFuncPattern - extracts i32 table index from struct (field 0)
-/// 4. LowerClosureEnvPattern - extracts env from struct (field 1)
+/// This pass has two phases:
+///
+/// Phase 1 (PatternApplicator):
+/// 1. UpdateFuncSignaturePattern - updates function signatures: core.func params → closure.closure
+/// 2. LowerClosureCallPattern - expands call_indirect to use closure.func/closure.env
+/// 3. LowerClosureNewPattern - expands closure.new to func.constant + adt.struct_new
+/// 4. LowerClosureFuncPattern - extracts i32 table index from struct (field 0)
+/// 5. LowerClosureEnvPattern - extracts env from struct (field 1)
+///
+/// Phase 2 (Post-processing):
+/// - Transform ALL closure calls to pass evidence from the enclosing function
 #[salsa::tracked]
 pub fn lower_closures<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> core::Module<'db> {
+    // Collect effectful functions BEFORE lowering (while closure types are intact)
+    let effectful_fns = collect_effectful_functions(db, &module);
+
+    // Collect ALL closure calls (not just effectful) because all lifted lambdas
+    // now have evidence parameters and need evidence passed to them.
+    let all_closure_calls = collect_all_closure_calls(db, &module);
+
     let converter = TypeConverter::new()
         .add_conversion(|db, ty| {
             tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
@@ -78,7 +98,473 @@ pub fn lower_closures<'db>(
         .add_pattern(LowerClosureNewPattern)
         .add_pattern(LowerClosureFuncPattern)
         .add_pattern(LowerClosureEnvPattern);
-    applicator.apply_partial(db, module, target).module
+    let module = applicator.apply_partial(db, module, target).module;
+
+    // Phase 2: Transform closure calls to pass evidence
+    // This is done after pattern application because we need to know which
+    // calls are closure calls, and we need access to enclosing function context.
+    transform_closure_calls_with_evidence(db, module, &effectful_fns, &all_closure_calls)
+}
+
+/// Collect call_indirect operations that call ANY closure (for evidence passing).
+/// Since all lifted lambdas now have evidence parameters, we need to pass evidence
+/// to ALL closure calls, not just effectful ones.
+/// Returns a set of locations where closure calls occur.
+fn collect_all_closure_calls<'db>(
+    db: &'db dyn salsa::Database,
+    module: &core::Module<'db>,
+) -> HashSet<(usize, usize)> {
+    let mut closure_calls = HashSet::new();
+    let body = module.body(db);
+
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Process func.func operations
+            if let Ok(func_op) = func::Func::from_operation(db, *op) {
+                // Get function parameter types for BlockArg lookup
+                let func_ty = func_op.r#type(db);
+                let param_types = core::Func::from_type(db, func_ty)
+                    .map(|ft| ft.params(db).clone())
+                    .unwrap_or_default();
+
+                collect_closure_calls_in_func(
+                    db,
+                    &func_op.body(db),
+                    &param_types,
+                    &mut closure_calls,
+                );
+            }
+        }
+    }
+
+    closure_calls
+}
+
+fn collect_closure_calls_in_func<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    param_types: &IdVec<Type<'db>>,
+    closure_calls: &mut HashSet<(usize, usize)>,
+) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            collect_closure_calls_in_op(db, op, param_types, closure_calls);
+        }
+    }
+}
+
+fn collect_closure_calls_in_op<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    param_types: &IdVec<Type<'db>>,
+    closure_calls: &mut HashSet<(usize, usize)>,
+) {
+    // Check if this is a call_indirect with a closure callee
+    if func::CallIndirect::from_operation(db, *op).is_ok() {
+        let operands = op.operands(db);
+        if let Some(&callee) = operands.first() {
+            let is_closure = is_any_closure_value(db, callee, param_types);
+            tracing::debug!(
+                "collect_closure_calls: call_indirect at {:?}, callee def={:?}, is_closure={}",
+                op.location(db).span,
+                callee.def(db),
+                is_closure
+            );
+            if is_closure {
+                let loc = op.location(db);
+                closure_calls.insert((loc.span.start, loc.span.end));
+            }
+        }
+    }
+
+    // Recurse into regions
+    for region in op.regions(db).iter() {
+        for block in region.blocks(db).iter() {
+            for nested_op in block.operations(db).iter() {
+                collect_closure_calls_in_op(db, nested_op, param_types, closure_calls);
+            }
+        }
+    }
+}
+
+/// Check if a value is any closure (not just effectful).
+/// Used for evidence passing since all lifted lambdas have evidence parameters.
+fn is_any_closure_value<'db>(
+    db: &'db dyn salsa::Database,
+    value: Value<'db>,
+    param_types: &IdVec<Type<'db>>,
+) -> bool {
+    // Get the type of the value
+    let ty = match value.def(db) {
+        ValueDef::OpResult(op) => {
+            // Direct check: result of closure.new
+            if closure::New::from_operation(db, op).is_ok() {
+                tracing::debug!("is_any_closure_value: result of closure.new → true");
+                return true;
+            }
+            // Type check from result
+            op.results(db).get(value.index(db)).copied()
+        }
+        ValueDef::BlockArg(_) => {
+            // For block args, look up type from param_types using value's index
+            let idx = value.index(db);
+            let ty = param_types.get(idx).copied();
+            tracing::debug!(
+                "is_any_closure_value: block arg idx={}, param_types.len()={}, ty={:?}",
+                idx,
+                param_types.len(),
+                ty.map(|t| format!("{:?}", t))
+            );
+            ty
+        }
+    };
+
+    let Some(ty) = ty else {
+        tracing::debug!("is_any_closure_value: no type found");
+        return false;
+    };
+
+    // Check if it's a closure type
+    if closure::Closure::from_type(db, ty).is_some() {
+        tracing::debug!("is_any_closure_value: closure.closure type → true");
+        return true;
+    }
+
+    // Check if it's a core.func type (function parameter that could receive closures)
+    if core::Func::from_type(db, ty).is_some() {
+        tracing::debug!("is_any_closure_value: core.func type → true");
+        return true;
+    }
+
+    // Check if it's a cont.continuation type (continuations are also closures)
+    if cont::Continuation::from_type(db, ty).is_some() {
+        tracing::debug!("is_any_closure_value: cont.continuation type → true");
+        return true;
+    }
+
+    tracing::debug!("is_any_closure_value: not a closure type → false");
+    false
+}
+
+/// Transform ALL closure calls to pass evidence.
+///
+/// After pattern application, closure calls look like:
+/// ```text
+/// %table_idx = adt.struct_get %closure, 0
+/// %env = adt.struct_get %closure, 1
+/// %result = func.call_indirect %table_idx, %env, %args...
+/// ```
+///
+/// Since all lifted lambdas have evidence as their first parameter, we transform to:
+/// ```text
+/// %table_idx = adt.struct_get %closure, 0
+/// %env = adt.struct_get %closure, 1
+/// %result = func.call_indirect %table_idx, %evidence, %env, %args...
+/// ```
+fn transform_closure_calls_with_evidence<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+    effectful_fns: &HashSet<Symbol>,
+    closure_calls: &HashSet<(usize, usize)>,
+) -> core::Module<'db> {
+    if closure_calls.is_empty() {
+        return module;
+    }
+
+    let body = module.body(db);
+    let new_blocks: IdVec<Block<'db>> = body
+        .blocks(db)
+        .iter()
+        .map(|block| {
+            let new_ops: IdVec<Operation<'db>> = block
+                .operations(db)
+                .iter()
+                .map(|op| transform_func_for_closure_evidence(db, op, effectful_fns, closure_calls))
+                .collect();
+            Block::new(
+                db,
+                block.id(db),
+                block.location(db),
+                block.args(db).clone(),
+                new_ops,
+            )
+        })
+        .collect();
+
+    let new_body = Region::new(db, body.location(db), new_blocks);
+    core::Module::create(db, module.location(db), module.name(db), new_body)
+}
+
+/// Transform a func.func operation to pass evidence to closure calls.
+///
+/// For effectful functions (in effectful_fns), evidence is taken from the first block argument.
+/// For non-effectful functions (e.g., lambdas in handler bodies), null evidence is created.
+fn transform_func_for_closure_evidence<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    effectful_fns: &HashSet<Symbol>,
+    closure_calls: &HashSet<(usize, usize)>,
+) -> Operation<'db> {
+    // Only process func.func operations
+    let Ok(func_op) = func::Func::from_operation(db, *op) else {
+        return *op;
+    };
+
+    let func_name = func_op.sym_name(db);
+    let is_effectful = effectful_fns.contains(&func_name);
+
+    let body = func_op.body(db);
+    let blocks = body.blocks(db);
+    let Some(entry_block) = blocks.first() else {
+        return *op;
+    };
+
+    // For effectful functions, get evidence from first block argument
+    // For non-effectful functions, we'll create null evidence later if needed
+    let evidence_from_param = if is_effectful && !entry_block.args(db).is_empty() {
+        Some(entry_block.arg(db, 0))
+    } else {
+        None
+    };
+
+    // Transform closure calls in the body
+    let mut changed = false;
+    let location = op.location(db);
+
+    let new_blocks: IdVec<Block<'db>> = blocks
+        .iter()
+        .map(|block| {
+            let (new_block, block_changed, _needs_null_ev) =
+                transform_closure_calls_in_block_with_null(
+                    db,
+                    block,
+                    evidence_from_param,
+                    closure_calls,
+                    location,
+                );
+            if block_changed {
+                changed = true;
+            }
+            new_block
+        })
+        .collect();
+
+    if !changed {
+        return *op;
+    }
+
+    // Rebuild function with transformed body
+    let new_body = Region::new(db, location, new_blocks);
+    let func_ty = func_op.r#type(db);
+
+    func::func(db, location, func_name, func_ty, new_body).as_operation()
+}
+
+/// Transform closure calls in a block, creating null evidence if needed for non-effectful functions.
+fn transform_closure_calls_in_block_with_null<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    evidence_from_param: Option<Value<'db>>,
+    closure_calls: &HashSet<(usize, usize)>,
+    func_location: trunk_ir::Location<'db>,
+) -> (Block<'db>, bool, bool) {
+    use std::collections::HashMap;
+
+    let mut new_ops = Vec::new();
+    let mut changed = false;
+    let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
+    let mut needs_null_ev = false;
+    let mut null_ev_value: Option<Value<'db>> = None;
+
+    // Helper to get or create null evidence
+    let get_evidence = |new_ops: &mut Vec<Operation<'db>>,
+                        null_ev_value: &mut Option<Value<'db>>,
+                        needs_null_ev: &mut bool|
+     -> Value<'db> {
+        if let Some(ev) = evidence_from_param {
+            ev
+        } else if let Some(ev) = *null_ev_value {
+            ev
+        } else {
+            // Create null evidence
+            // Use anyref directly for wasm compatibility - ability.evidence_ptr
+            // may not be converted properly by the wasm backend
+            let anyref_ty = wasm::Anyref::new(db).as_type();
+            let null_ev_op = adt::ref_null(db, func_location, anyref_ty, anyref_ty);
+            let ev = null_ev_op.as_operation().result(db, 0);
+            new_ops.insert(0, null_ev_op.as_operation()); // Prepend to block
+            *null_ev_value = Some(ev);
+            *needs_null_ev = true;
+            ev
+        }
+    };
+
+    for op in block.operations(db).iter() {
+        // First, remap operands using the value map
+        let remapped_operands: Vec<Value<'db>> = op
+            .operands(db)
+            .iter()
+            .map(|v| *value_map.get(v).unwrap_or(v))
+            .collect();
+
+        // Check if this is a call_indirect that was a closure call
+        if func::CallIndirect::from_operation(db, *op).is_ok() {
+            let loc = op.location(db);
+            let loc_key = (loc.span.start, loc.span.end);
+
+            tracing::debug!(
+                "transform: checking call_indirect at {:?}, closure_calls contains={}, closure_calls={:?}",
+                loc_key,
+                closure_calls.contains(&loc_key),
+                closure_calls
+            );
+
+            if closure_calls.contains(&loc_key) {
+                // This was a closure call - add evidence
+                let evidence = get_evidence(&mut new_ops, &mut null_ev_value, &mut needs_null_ev);
+                tracing::debug!(
+                    "transform: adding evidence {:?} to call_indirect at {:?}, evidence_from_param={:?}",
+                    evidence,
+                    loc_key,
+                    evidence_from_param
+                );
+
+                let result_ty = op
+                    .results(db)
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| core::Nil::new(db).as_type());
+
+                // First operand is table_idx, rest are env + args
+                let table_idx = remapped_operands[0];
+                let rest_args: Vec<_> = remapped_operands[1..].to_vec();
+
+                // Build new args: [evidence, env, args...]
+                let mut new_args = vec![evidence];
+                new_args.extend(rest_args);
+
+                let new_call = func::call_indirect(db, loc, table_idx, new_args, result_ty);
+                let new_call_op = new_call.as_operation();
+
+                // Map old result to new result
+                if !op.results(db).is_empty() {
+                    let old_result = op.result(db, 0);
+                    let new_result = new_call_op.result(db, 0);
+                    value_map.insert(old_result, new_result);
+                }
+
+                new_ops.push(new_call_op);
+                changed = true;
+                continue;
+            }
+        }
+
+        // Recursively transform nested regions
+        let regions = op.regions(db);
+        if !regions.is_empty() {
+            let mut region_changed = false;
+            let new_regions: IdVec<Region<'db>> = regions
+                .iter()
+                .map(|region| {
+                    let (new_region, r_changed, _) = transform_closure_calls_in_region_with_null(
+                        db,
+                        region,
+                        evidence_from_param,
+                        closure_calls,
+                        func_location,
+                    );
+                    if r_changed {
+                        region_changed = true;
+                    }
+                    new_region
+                })
+                .collect();
+
+            if region_changed {
+                changed = true;
+                let new_op = op
+                    .modify(db)
+                    .operands(IdVec::from(remapped_operands))
+                    .regions(new_regions)
+                    .build();
+                for i in 0..op.results(db).len() {
+                    let old_result = op.result(db, i);
+                    let new_result = new_op.result(db, i);
+                    value_map.insert(old_result, new_result);
+                }
+                new_ops.push(new_op);
+                continue;
+            }
+        }
+
+        // If operands were remapped, rebuild the operation
+        let operands_changed = op
+            .operands(db)
+            .iter()
+            .zip(remapped_operands.iter())
+            .any(|(old, new)| old != new);
+
+        if operands_changed {
+            let new_op = op
+                .modify(db)
+                .operands(IdVec::from(remapped_operands))
+                .build();
+            for i in 0..op.results(db).len() {
+                let old_result = op.result(db, i);
+                let new_result = new_op.result(db, i);
+                value_map.insert(old_result, new_result);
+            }
+            new_ops.push(new_op);
+        } else {
+            new_ops.push(*op);
+        }
+    }
+
+    let new_block = Block::new(
+        db,
+        block.id(db),
+        block.location(db),
+        block.args(db).clone(),
+        new_ops.into_iter().collect(),
+    );
+
+    (new_block, changed, needs_null_ev)
+}
+
+/// Transform closure calls in a region with null evidence support.
+fn transform_closure_calls_in_region_with_null<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    evidence_from_param: Option<Value<'db>>,
+    closure_calls: &HashSet<(usize, usize)>,
+    func_location: trunk_ir::Location<'db>,
+) -> (Region<'db>, bool, bool) {
+    let mut changed = false;
+    let mut needs_null_ev = false;
+    let new_blocks: IdVec<Block<'db>> = region
+        .blocks(db)
+        .iter()
+        .map(|block| {
+            let (new_block, block_changed, block_needs_null) =
+                transform_closure_calls_in_block_with_null(
+                    db,
+                    block,
+                    evidence_from_param,
+                    closure_calls,
+                    func_location,
+                );
+            if block_changed {
+                changed = true;
+            }
+            if block_needs_null {
+                needs_null_ev = true;
+            }
+            new_block
+        })
+        .collect();
+
+    let new_region = Region::new(db, region.location(db), new_blocks);
+    (new_region, changed, needs_null_ev)
 }
 
 /// Pattern: Update function signatures to convert `core.func` parameters to `closure.closure`.

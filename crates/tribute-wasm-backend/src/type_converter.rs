@@ -22,7 +22,10 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
-use tribute_ir::dialect::{adt, tribute, tribute_rt};
+use crate::passes::trampoline_to_wasm::{
+    continuation_adt_type, resume_wrapper_adt_type, step_adt_type,
+};
+use tribute_ir::dialect::{adt, closure, trampoline, tribute, tribute_rt};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::rewrite::{MaterializeResult, OpVec, TypeConverter};
 use trunk_ir::{Attribute, Symbol};
@@ -30,6 +33,29 @@ use trunk_ir::{DialectOp, DialectType, Type};
 
 #[cfg(test)]
 use trunk_ir::dialect::arith;
+
+/// Helper to generate i31 unboxing operations (ref_cast to i31ref + i31_get_s).
+///
+/// This is used when converting anyref-typed values back to i32, such as
+/// extracting values from Step structs which store all values as anyref.
+fn unbox_via_i31<'db>(
+    db: &'db dyn salsa::Database,
+    location: trunk_ir::Location<'db>,
+    value: trunk_ir::Value<'db>,
+) -> MaterializeResult<'db> {
+    let i31ref_ty = wasm::I31ref::new(db).as_type();
+    let i32_ty = core::I32::new(db).as_type();
+
+    // Cast anyref to i31ref
+    let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
+    // Extract i32 from i31ref
+    let get_op = wasm::i31_get_s(db, location, cast_op.as_operation().result(db, 0), i32_ty);
+
+    let mut ops = OpVec::new();
+    ops.push(cast_op.as_operation());
+    ops.push(get_op.as_operation());
+    MaterializeResult::Ops(ops)
+}
 
 /// Create a TypeConverter configured for WASM backend type conversions.
 ///
@@ -115,6 +141,14 @@ pub fn wasm_type_converter() -> TypeConverter {
                 None
             }
         })
+        // Convert closure.closure → wasm.structref (closures are structs)
+        .add_conversion(|db, ty| {
+            if closure::Closure::from_type(db, ty).is_some() {
+                Some(wasm::Structref::new(db).as_type())
+            } else {
+                None
+            }
+        })
         // Materialization for struct type bridging
         .add_materialization(|db, location, value, from_ty, to_ty| {
             // Same type - no materialization needed
@@ -144,12 +178,36 @@ pub fn wasm_type_converter() -> TypeConverter {
                 return MaterializeResult::Ops(ops);
             }
 
+            // anyref → concrete struct type: use ref_cast
+            // This handles cases like closure env or resume wrapper parameters
+            // that are passed as anyref for uniform calling convention.
+            // We EXCLUDE wasm.anyref as target since that's handled by primitive equivalence.
+            let from_is_anyref = wasm::Anyref::from_type(db, from_ty).is_some()
+                || tribute_rt::Any::from_type(db, from_ty).is_some();
+            let to_is_abstract_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
+            if from_is_anyref && to_is_struct_like && !to_is_abstract_anyref {
+                // Convert trampoline types to their ADT representation for the cast
+                let target_ty = if trampoline::ResumeWrapper::from_type(db, to_ty).is_some() {
+                    resume_wrapper_adt_type(db)
+                } else if trampoline::Step::from_type(db, to_ty).is_some() {
+                    step_adt_type(db)
+                } else if trampoline::Continuation::from_type(db, to_ty).is_some() {
+                    continuation_adt_type(db)
+                } else {
+                    to_ty
+                };
+                let cast_op = wasm::ref_cast(db, location, value, target_ty, target_ty, None);
+                let mut ops = OpVec::new();
+                ops.push(cast_op.as_operation());
+                return MaterializeResult::Ops(ops);
+            }
+
             // Cannot materialize this conversion
             MaterializeResult::Skip
         })
         // Primitive type equivalence: tribute_rt types are represented as core types
         // These are no-op conversions (same underlying representation)
-        .add_materialization(|db, _location, _value, from_ty, to_ty| {
+        .add_materialization(|db, location, value, from_ty, to_ty| {
             // tribute_rt.int → core.i32 (same representation)
             if tribute_rt::Int::from_type(db, from_ty).is_some()
                 && core::I32::from_type(db, to_ty).is_some()
@@ -204,6 +262,82 @@ pub fn wasm_type_converter() -> TypeConverter {
             {
                 return MaterializeResult::NoOp;
             }
+            // closure.closure → wasm.structref (same representation)
+            if closure::Closure::from_type(db, from_ty).is_some()
+                && wasm::Structref::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // wasm.anyref → core.i32 (unbox via i31)
+            // This is used when extracting values from Step (which stores anyref)
+            if wasm::Anyref::from_type(db, from_ty).is_some()
+                && core::I32::from_type(db, to_ty).is_some()
+            {
+                return unbox_via_i31(db, location, value);
+            }
+            // tribute_rt.any → core.i32 (unbox via i31, same as wasm.anyref)
+            if tribute_rt::Any::from_type(db, from_ty).is_some()
+                && core::I32::from_type(db, to_ty).is_some()
+            {
+                return unbox_via_i31(db, location, value);
+            }
+            // wasm.anyref → tribute_rt.int (unbox via i31)
+            // Same as anyref -> core.i32, tribute_rt.int is represented as i32
+            if wasm::Anyref::from_type(db, from_ty).is_some()
+                && tribute_rt::Int::from_type(db, to_ty).is_some()
+            {
+                return unbox_via_i31(db, location, value);
+            }
+            // tribute_rt.any → tribute_rt.int (unbox via i31)
+            // Used when extracting values from state structs (stored as anyref)
+            if tribute_rt::Any::from_type(db, from_ty).is_some()
+                && tribute_rt::Int::from_type(db, to_ty).is_some()
+            {
+                return unbox_via_i31(db, location, value);
+            }
+            // wasm.anyref → core.ptr (treat pointer as anyref subtype)
+            if wasm::Anyref::from_type(db, from_ty).is_some()
+                && core::Ptr::from_type(db, to_ty).is_some()
+            {
+                // Pointers and anyref have the same representation in WasmGC
+                return MaterializeResult::NoOp;
+            }
+            // tribute_rt.any → core.ptr (same representation in WasmGC)
+            if tribute_rt::Any::from_type(db, from_ty).is_some()
+                && core::Ptr::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // wasm.anyref → core.nil (unit type, value ignored)
+            // This is used when functions return Nil but the trampoline stores anyref
+            if wasm::Anyref::from_type(db, from_ty).is_some()
+                && core::Nil::from_type(db, to_ty).is_some()
+            {
+                // Nil is a unit type - the anyref value is simply discarded
+                return MaterializeResult::NoOp;
+            }
+            // tribute_rt.any → core.nil (unit type, value ignored)
+            if tribute_rt::Any::from_type(db, from_ty).is_some()
+                && core::Nil::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // trampoline.step → _Step ADT (same representation after conversion)
+            if trampoline::Step::from_type(db, from_ty).is_some() && to_ty == step_adt_type(db) {
+                return MaterializeResult::NoOp;
+            }
+            // trampoline.continuation → _Continuation ADT (same representation)
+            if trampoline::Continuation::from_type(db, from_ty).is_some()
+                && to_ty == continuation_adt_type(db)
+            {
+                return MaterializeResult::NoOp;
+            }
+            // trampoline.resume_wrapper → _ResumeWrapper ADT (same representation)
+            if trampoline::ResumeWrapper::from_type(db, from_ty).is_some()
+                && to_ty == resume_wrapper_adt_type(db)
+            {
+                return MaterializeResult::NoOp;
+            }
             MaterializeResult::Skip
         })
 }
@@ -223,7 +357,19 @@ fn is_struct_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     }
 
     // Check for variant instance types (have is_variant attribute)
-    adt::is_variant_instance_type(db, ty)
+    if adt::is_variant_instance_type(db, ty) {
+        return true;
+    }
+
+    // trampoline types that get lowered to ADT structs
+    if trampoline::Step::from_type(db, ty).is_some()
+        || trampoline::Continuation::from_type(db, ty).is_some()
+        || trampoline::ResumeWrapper::from_type(db, ty).is_some()
+    {
+        return true;
+    }
+
+    false
 }
 
 #[cfg(test)]

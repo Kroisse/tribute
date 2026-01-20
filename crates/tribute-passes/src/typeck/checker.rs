@@ -619,12 +619,21 @@ impl<'db> TypeChecker<'db> {
     // === func dialect checking ===
 
     fn check_func_def(&mut self, op: &Operation<'db>) {
-        // Get function result type (first result type is the function type itself)
-        let results = op.results(self.db);
-        let func_type = results.first().copied();
+        // Get function type from the "type" attribute (not from results)
+        let func_type = func::Func::from_operation(self.db, *op)
+            .ok()
+            .map(|f| f.r#type(self.db));
+        tracing::debug!(?func_type, "check_func_def: entered");
 
         // Save current entry block arg types (for nested functions)
         let saved_entry_args = std::mem::take(&mut self.entry_block_arg_types);
+
+        // Extract the return type from the function signature for later unification
+        let return_type = func_type.and_then(|ft| {
+            let result = core::Func::from_type(self.db, ft).map(|f| f.result(self.db));
+            tracing::debug!(?ft, ?result, "check_func_def: extracting return type");
+            result
+        });
 
         // Check the body
         let regions = op.regions(self.db);
@@ -649,16 +658,26 @@ impl<'db> TypeChecker<'db> {
             }
 
             self.check_region(body);
+
+            // Unify the body's yield type with the function's declared return type
+            if let Some(ret_ty) = return_type {
+                let yield_ty = self.get_region_yield_type(body);
+                tracing::debug!(
+                    ?ret_ty,
+                    ?yield_ty,
+                    "check_func_def: trying to unify body yield with return type"
+                );
+                if let Some(yield_ty) = yield_ty {
+                    self.constraints.add_type_eq(ret_ty, yield_ty);
+                }
+            }
         }
 
         // Restore entry block arg types
         self.entry_block_arg_types = saved_entry_args;
 
-        // Record result type
-        if let Some(ty) = func_type {
-            let value = op.result(self.db, 0);
-            self.record_type(value, ty);
-        }
+        // Note: func.func is a declaration without result values (unlike func.call),
+        // so we don't record a result type here.
     }
 
     fn check_return(&mut self, _op: &Operation<'db>) {
@@ -1063,26 +1082,38 @@ impl<'db> TypeChecker<'db> {
 
     /// Get the type of the value yielded by a region.
     ///
-    /// This looks for a `tribute.yield` operation in the last block of the region
-    /// and returns the type of its operand.
+    /// This looks for a terminator operation (`tribute.yield` or `func.return`)
+    /// in the last block of the region and returns the type of its operand.
     fn get_region_yield_type(&self, region: &Region<'db>) -> Option<Type<'db>> {
         let blocks = region.blocks(self.db);
         let last_block = blocks.last()?;
         let ops = last_block.operations(self.db);
 
-        // Find tribute.yield in the block
+        // Find tribute.yield or func.return in the block
         for op in ops.iter().rev() {
-            if op.dialect(self.db) == tribute::DIALECT_NAME()
-                && op.name(self.db) == tribute::YIELD()
-            {
-                // Get the operand of yield (the value being yielded)
+            let dialect = op.dialect(self.db);
+            let name = op.name(self.db);
+
+            // Check for tribute.yield
+            if dialect == tribute::DIALECT_NAME() && name == tribute::YIELD() {
                 let operands = op.operands(self.db);
                 if let Some(value) = operands.first() {
-                    // Return the type we've recorded for this value
                     let ty = self.get_type(*value);
                     tracing::debug!(?value, ?ty, "get_region_yield_type: found yield operand");
                     return ty;
                 }
+            }
+
+            // Check for func.return
+            if dialect == func::DIALECT_NAME() && name == func::RETURN() {
+                let operands = op.operands(self.db);
+                if let Some(value) = operands.first() {
+                    let ty = self.get_type(*value);
+                    tracing::debug!(?value, ?ty, "get_region_yield_type: found return operand");
+                    return ty;
+                }
+                // func.return with no operand means Nil return
+                return Some(core::Nil::new(self.db).as_type());
             }
         }
         None

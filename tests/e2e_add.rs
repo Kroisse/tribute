@@ -43,8 +43,8 @@ fn test_generic_int_identity() {
     // Generic identity function that boxes Int to i31ref and unboxes back
     let source_code = Rope::from_str(
         r#"
-fn identity(x: a) -> a { x }
-fn main() -> Int { identity(42) }
+fn identity(x: a) ->{} a { x }
+fn main() ->{} Int { identity(42) }
 "#,
     );
 
@@ -70,7 +70,7 @@ fn test_struct_construction() {
         r#"
 struct Point { x: Int, y: Int }
 
-fn main() -> Int {
+fn main() ->{} Int {
     let p = Point { x: 10, y: 20 }
     42
 }
@@ -99,7 +99,7 @@ fn test_struct_accessor() {
         r#"
 struct Point { x: Int, y: Int }
 
-fn main() -> Int {
+fn main() ->{} Int {
     let p = Point { x: 10, y: 20 }
     p.x()
 }
@@ -138,8 +138,8 @@ fn test_generic_float_identity() {
     // Generic identity function that boxes Float to anyref and unboxes back
     let source_code = Rope::from_str(
         r#"
-fn identity(x: a) -> a { x }
-fn main() -> Float { identity(3.125) }
+fn identity(x: a) ->{} a { x }
+fn main() ->{} Float { identity(3.125) }
 "#,
     );
 
@@ -170,9 +170,9 @@ fn test_generic_struct_argument() {
         r#"
 struct Point { x: Int, y: Int }
 
-fn identity(x: a) -> a { x }
+fn identity(x: a) ->{} a { x }
 
-fn main() -> Int {
+fn main() ->{} Int {
     let p = Point { x: 10, y: 20 }
     let p2 = identity(p)
     p2.x()
@@ -209,9 +209,9 @@ fn test_generic_multiple_types() {
 
     let source_code = Rope::from_str(
         r#"
-fn identity(x: a) -> a { x }
+fn identity(x: a) ->{} a { x }
 
-fn main() -> Int {
+fn main() ->{} Int {
     let i = identity(42)
     let f = identity(3.14)
     i
@@ -249,9 +249,9 @@ fn test_generic_two_params() {
 
     let source_code = Rope::from_str(
         r#"
-fn first(x: a, y: b) -> a { x }
+fn first(x: a, y: b) ->{} a { x }
 
-fn main() -> Int {
+fn main() ->{} Int {
     first(10, 3.14)
 }
 "#,
@@ -287,9 +287,9 @@ fn test_generic_nested_calls() {
 
     let source_code = Rope::from_str(
         r#"
-fn identity(x: a) -> a { x }
+fn identity(x: a) ->{} a { x }
 
-fn main() -> Int {
+fn main() ->{} Int {
     identity(identity(identity(42)))
 }
 "#,
@@ -330,7 +330,7 @@ fn test_generic_indirect_call() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() -> Int {
+fn main() ->{} Int {
     let f = fn(x) { x }
     f(42)
 }
@@ -381,7 +381,7 @@ fn double(n: Int) -> Int {
     n + n
 }
 
-fn main() -> Int {
+fn main() ->{} Int {
     apply(double, 21)
 }
 "#,
@@ -426,7 +426,7 @@ fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int, x: Int) -> Int {
 fn inc(n: Int) -> Int { n + 1 }
 fn double(n: Int) -> Int { n + n }
 
-fn main() -> Int {
+fn main() ->{} Int {
     compose(inc, double, 10)
 }
 "#,
@@ -465,7 +465,7 @@ fn test_generic_function_type() {
 
     let source_code = Rope::from_str(
         r#"
-fn apply_generic(f: fn(a) -> b, x: a) -> b {
+fn apply_generic(f: fn(a) -> b, x: a) ->{} b {
     f(x)
 }
 
@@ -473,7 +473,7 @@ fn to_float(n: Int) -> Float {
     3.14
 }
 
-fn main() -> Float {
+fn main() ->{} Float {
     apply_generic(to_float, 42)
 }
 "#,
@@ -547,7 +547,7 @@ fn test_lambda_identity() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() -> Int {
+fn main() ->{} Int {
     let f = fn(x) { x }
     f(42)
 }
@@ -606,13 +606,13 @@ fn test_lambda_with_capture() {
 
     let source_code = Rope::from_str(
         r#"
-fn test_capture() -> Int {
+fn test_capture() ->{} Int {
     let a = 10
     let f = fn(x) { x + a }
     f(32)
 }
 
-fn main() -> Int {
+fn main() ->{} Int {
     test_capture()
 }
 "#,
@@ -678,7 +678,7 @@ fn test_indirect_call_ir_generation() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() -> Int {
+fn main() ->{} Int {
     let f = fn(x) { x }
     f(42)
 }
@@ -724,7 +724,7 @@ fn apply(f: fn(Int) -> Int, x: Int) -> Int {
     f(x)
 }
 
-fn main() -> Int {
+fn main() ->{} Int {
     apply(fn(n) { n + 1 }, 41)
 }
 "#,
@@ -798,7 +798,7 @@ fn apply(f: fn(Int) -> Int, x: Int) -> Int {
     f(x)
 }
 
-fn main() -> Int {
+fn main() ->{} Int {
     apply(fn(n) { n + 1 }, 41)
 }
 "#,
@@ -903,7 +903,7 @@ fn test_closure_execution_simple() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() -> Int {
+fn main() ->{} Int {
     let f = fn(x) { x + 1 }
     f(41)
 }
