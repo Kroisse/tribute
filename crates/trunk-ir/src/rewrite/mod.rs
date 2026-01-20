@@ -98,4 +98,4 @@ pub use result::RewriteResult;
 pub use signature_conversion::{
     FuncSignatureConversionPattern, WasmFuncSignatureConversionPattern,
 };
-pub use type_converter::{MaterializeResult, OpVec, TypeConverter, base_type_converter};
+pub use type_converter::{MaterializeResult, OpVec, TypeConverter};
