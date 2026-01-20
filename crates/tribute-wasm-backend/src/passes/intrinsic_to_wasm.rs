@@ -27,6 +27,67 @@ const BYTES_DATA_FIELD: u32 = 0; // ref (array i8)
 const BYTES_OFFSET_FIELD: u32 = 1; // i32
 const BYTES_LEN_FIELD: u32 = 2; // i32
 
+/// Extracted Bytes struct fields: (data, offset, len) values.
+struct BytesFields<'db> {
+    data: trunk_ir::Value<'db>,
+    offset: trunk_ir::Value<'db>,
+    len: trunk_ir::Value<'db>,
+}
+
+/// Extract (data, offset, len) fields from a Bytes struct value.
+///
+/// Returns the extracted field values and the operations that produced them.
+fn extract_bytes_fields<'db>(
+    db: &'db dyn salsa::Database,
+    location: trunk_ir::Location<'db>,
+    bytes_value: trunk_ir::Value<'db>,
+) -> (BytesFields<'db>, Vec<Operation<'db>>) {
+    let i32_ty = core::I32::new(db).as_type();
+    let i8_ty = core::I8::new(db).as_type();
+    let array_ref_ty = core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
+
+    let get_data = wasm::struct_get(
+        db,
+        location,
+        bytes_value,
+        array_ref_ty,
+        BYTES_STRUCT_IDX,
+        BYTES_DATA_FIELD,
+    );
+
+    let get_offset = wasm::struct_get(
+        db,
+        location,
+        bytes_value,
+        i32_ty,
+        BYTES_STRUCT_IDX,
+        BYTES_OFFSET_FIELD,
+    );
+
+    let get_len = wasm::struct_get(
+        db,
+        location,
+        bytes_value,
+        i32_ty,
+        BYTES_STRUCT_IDX,
+        BYTES_LEN_FIELD,
+    );
+
+    let fields = BytesFields {
+        data: get_data.result(db),
+        offset: get_offset.result(db),
+        len: get_len.result(db),
+    };
+
+    let ops = vec![
+        get_data.operation(),
+        get_offset.operation(),
+        get_len.operation(),
+    ];
+
+    (fields, ops)
+}
+
 /// Result of intrinsic analysis - tracks WASI needs and data segment allocations.
 #[salsa::tracked]
 pub struct IntrinsicAnalysis<'db> {
@@ -582,70 +643,12 @@ impl<'db> RewritePattern<'db> for BytesConcatPattern {
         let array_ref_ty =
             core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
 
-        // Get left's data, offset, len
-        let left_data = wasm::struct_get(
-            db,
-            location,
-            left,
-            array_ref_ty,
-            BYTES_STRUCT_IDX,
-            BYTES_DATA_FIELD,
-        );
-
-        let left_offset = wasm::struct_get(
-            db,
-            location,
-            left,
-            i32_ty,
-            BYTES_STRUCT_IDX,
-            BYTES_OFFSET_FIELD,
-        );
-
-        let left_len = wasm::struct_get(
-            db,
-            location,
-            left,
-            i32_ty,
-            BYTES_STRUCT_IDX,
-            BYTES_LEN_FIELD,
-        );
-
-        // Get right's data, offset, len
-        let right_data = wasm::struct_get(
-            db,
-            location,
-            right,
-            array_ref_ty,
-            BYTES_STRUCT_IDX,
-            BYTES_DATA_FIELD,
-        );
-
-        let right_offset = wasm::struct_get(
-            db,
-            location,
-            right,
-            i32_ty,
-            BYTES_STRUCT_IDX,
-            BYTES_OFFSET_FIELD,
-        );
-
-        let right_len = wasm::struct_get(
-            db,
-            location,
-            right,
-            i32_ty,
-            BYTES_STRUCT_IDX,
-            BYTES_LEN_FIELD,
-        );
+        // Extract fields from left and right Bytes structs
+        let (left_fields, left_ops) = extract_bytes_fields(db, location, left);
+        let (right_fields, right_ops) = extract_bytes_fields(db, location, right);
 
         // Calculate total_len = left.len + right.len
-        let total_len = wasm::i32_add(
-            db,
-            location,
-            left_len.result(db),
-            right_len.result(db),
-            i32_ty,
-        );
+        let total_len = wasm::i32_add(db, location, left_fields.len, right_fields.len, i32_ty);
 
         // Allocate new array: array_new_default(total_len)
         let new_array = wasm::array_new_default(
@@ -664,9 +667,9 @@ impl<'db> RewritePattern<'db> for BytesConcatPattern {
             location,
             new_array.result(db),
             zero.result(db),
-            left_data.result(db),
-            left_offset.result(db),
-            left_len.result(db),
+            left_fields.data,
+            left_fields.offset,
+            left_fields.len,
             BYTES_ARRAY_IDX,
             BYTES_ARRAY_IDX,
         );
@@ -676,10 +679,10 @@ impl<'db> RewritePattern<'db> for BytesConcatPattern {
             db,
             location,
             new_array.result(db),
-            left_len.result(db),
-            right_data.result(db),
-            right_offset.result(db),
-            right_len.result(db),
+            left_fields.len,
+            right_fields.data,
+            right_fields.offset,
+            right_fields.len,
             BYTES_ARRAY_IDX,
             BYTES_ARRAY_IDX,
         );
@@ -693,20 +696,18 @@ impl<'db> RewritePattern<'db> for BytesConcatPattern {
             BYTES_STRUCT_IDX,
         );
 
-        RewriteResult::Expand(vec![
-            left_data.operation(),
-            left_offset.operation(),
-            left_len.operation(),
-            right_data.operation(),
-            right_offset.operation(),
-            right_len.operation(),
-            total_len.operation(),
-            new_array.operation(),
-            zero.operation(),
-            copy_left.operation(),
-            copy_right.operation(),
-            struct_new.operation(),
-        ])
+        // Combine all operations in order
+        let mut ops = Vec::with_capacity(left_ops.len() + right_ops.len() + 6);
+        ops.extend(left_ops);
+        ops.extend(right_ops);
+        ops.push(total_len.operation());
+        ops.push(new_array.operation());
+        ops.push(zero.operation());
+        ops.push(copy_left.operation());
+        ops.push(copy_right.operation());
+        ops.push(struct_new.operation());
+
+        RewriteResult::Expand(ops)
     }
 }
 
