@@ -81,7 +81,8 @@ pub(crate) fn should_normalize_to_anyref<'db>(db: &'db dyn salsa::Database, ty: 
         || tribute_rt::is_float(db, ty)
         || tribute_rt::Any::from_type(db, ty).is_some()
         || tribute::is_type_var(db, ty)
-        || core::Nil::from_type(db, ty).is_some()
+    // Note: core::Nil is NOT normalized to anyref. Nil uses (ref null none) which is
+    // a subtype of anyref, so it can be passed where anyref is expected without boxing.
 }
 
 // ============================================================================

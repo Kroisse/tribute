@@ -104,64 +104,6 @@ struct ShiftPointInfo<'db> {
     continuation_ops: Vec<Operation<'db>>,
 }
 
-/// Update type signatures for effectful functions.
-///
-/// This pass updates:
-/// - Function return types: effectful functions return `trampoline.step` instead of their original type
-/// - Function call result types: calls to effectful functions return `trampoline.step`
-/// - `scf.if` result types: when branches call effectful functions
-/// - `cont.push_prompt` result types: always returns `trampoline.step`
-///
-/// This MUST run before `lower_cont_to_trampoline` to ensure correct type information
-/// is available when lowering patterns run.
-pub fn update_effectful_types<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Module<'db> {
-    // Step 1: Identify effectful functions (before transformation)
-    let effectful_funcs = identify_effectful_functions(db, &module);
-
-    // Step 2: Update type signatures
-    // NOTE: We only update push_prompt and handler_dispatch result types to Step.
-    // Effectful functions (like counter) do NOT have their return types changed to Step.
-    // When a shift occurs inside an effectful function, push_prompt catches it and returns Step.
-    // The effectful function itself never completes normally when a shift happens.
-    let empty_target = ConversionTarget::new();
-    let applicator = PatternApplicator::new(TypeConverter::new())
-        // NOTE: These type update patterns are intentionally disabled for closed handlers.
-        //
-        // Why disabled:
-        // 1. UpdateFuncTypePattern/UpdateFuncCallResultTypePattern:
-        //    - Effectful functions should keep their original return types
-        //    - push_prompt handles the Step conversion, not the effectful function itself
-        //    - When shift occurs, control jumps to push_prompt, not back to the caller
-        //
-        // 2. UpdateScfIfTypePattern:
-        //    - Closed handlers have their own trampoline loop that processes Step internally
-        //    - The handler returns user_result_ty, not Step
-        //    - Changing scf.if result types to Step would cause type mismatches
-        //
-        // NOTE: All type update patterns are now disabled because:
-        // - tribute_to_cont now sets push_prompt result type to Step directly
-        // - handler_dispatch operand is already Step-typed
-        // - Closed handlers process Step internally and return user_result_ty
-        //
-        // .add_pattern(UpdateFuncTypePattern { effectful_funcs: effectful_funcs.clone() })
-        // .add_pattern(UpdateFuncCallResultTypePattern { effectful_funcs: effectful_funcs.clone() })
-        // .add_pattern(UpdateScfIfTypePattern { effectful_funcs: effectful_funcs.clone() })
-        // .add_pattern(UpdatePushPromptResultTypePattern)
-        ;
-    // NOTE: UpdateHandlerDispatchResultTypePattern is disabled for closed handlers.
-    // Closed handlers have a trampoline loop that returns user_result_ty directly,
-    // so handler_dispatch should also return user_result_ty (not Step).
-    // Open handlers (not yet supported) would need this pattern enabled.
-    // .add_pattern(UpdateHandlerDispatchResultTypePattern)
-    let _ = effectful_funcs; // suppress unused warning
-    let result = applicator.apply_partial(db, module, empty_target);
-
-    result.module
-}
-
 /// Lower cont dialect operations to trampoline dialect.
 ///
 /// This pass transforms:
@@ -173,9 +115,6 @@ pub fn update_effectful_types<'db>(
 /// - `cont.get_shift_value` → `trampoline.get_yield_shift_value`
 /// - `cont.get_done_value` → `trampoline.step_get(field="value")`
 ///
-/// IMPORTANT: `update_effectful_types` MUST be called before this pass to ensure
-/// correct type information is available.
-///
 /// Returns an error if any `cont.*` operations (except `cont.drop`) remain after conversion.
 pub fn lower_cont_to_trampoline<'db>(
     db: &'db dyn salsa::Database,
@@ -185,7 +124,7 @@ pub fn lower_cont_to_trampoline<'db>(
     let resume_specs: ResumeSpecs<'db> = Rc::new(RefCell::new(Vec::new()));
     let resume_counter: ResumeCounter = Rc::new(RefCell::new(0));
 
-    // Step 1: Identify effectful functions (types are already updated by update_effectful_types)
+    // Step 1: Identify effectful functions
     let effectful_funcs = identify_effectful_functions(db, &module);
 
     // Step 2: Analyze shift points in effectful functions
@@ -2923,10 +2862,8 @@ fn wrap_main_with_global_trampoline<'db>(
                 // Get the function type to extract original return type
                 let func_ty = func.r#type(db);
                 if let Some(fn_ty) = core::Func::from_type(db, func_ty) {
-                    // After update_effectful_types, return type is Step
-                    // We need the original return type for _start's return
+                    // For _start wrapper, we need the main function's return type
                     // For now, assume i32 for main (common case)
-                    // TODO: Store original return type before Step conversion
                     main_original_return_ty = Some(core::I32::new(db).as_type());
                     let _ = fn_ty; // suppress unused warning
                 }

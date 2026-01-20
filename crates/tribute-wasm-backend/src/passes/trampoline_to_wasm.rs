@@ -347,8 +347,8 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
         let resume_fn_field = if let Some(v) = resume_fn {
             v
         } else {
-            // Use 0 as null index (reserved)
-            let null_const = create_i32_const(db, location, 0);
+            // Use -1 as null index (invalid table index sentinel)
+            let null_const = create_i32_const(db, location, -1);
             ops.push(null_const);
             null_const.result(db, 0)
         };
@@ -1457,10 +1457,9 @@ mod tests {
         let location = test_location(db);
         let cont_ty = trampoline::Continuation::new(db).as_type();
         let anyref_ty = wasm::Anyref::new(db).as_type();
-        let funcref_ty = wasm::Funcref::new(db).as_type();
 
-        // Create operands: resume_fn (funcref), state (anyref), shift_value (anyref)
-        let resume_fn_op = adt::ref_null(db, location, funcref_ty, funcref_ty);
+        // Create operands: resume_fn (i32 table index), state (anyref), shift_value (anyref)
+        let resume_fn_op = create_i32_const(db, location, -1);
         let state_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
         let shift_value_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
 

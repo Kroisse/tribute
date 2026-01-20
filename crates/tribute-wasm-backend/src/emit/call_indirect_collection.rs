@@ -131,7 +131,9 @@ pub(crate) fn collect_call_indirect_types<'db>(
                     // use anyref, since that's what's actually on the wasm stack.
                     let anyref_ty = wasm::Anyref::new(db).as_type();
                     let normalize_param_type = |ty: Type<'db>| -> Type<'db> {
-                        // Primitive types are boxed to anyref in polymorphic handlers
+                        // Primitive types are boxed to anyref in polymorphic handlers.
+                        // Note: core::Nil is NOT normalized - it uses (ref null none) which is
+                        // a subtype of anyref, so it can be passed without boxing.
                         if tribute_rt::is_int(db, ty)
                             || tribute_rt::is_nat(db, ty)
                             || tribute_rt::is_bool(db, ty)
@@ -139,10 +141,6 @@ pub(crate) fn collect_call_indirect_types<'db>(
                             || tribute_rt::Any::from_type(db, ty).is_some() // tribute_rt.any → anyref
                             || tribute::is_type_var(db, ty)
                         {
-                            anyref_ty
-                        } else if core::Nil::from_type(db, ty).is_some() {
-                            // core.nil is represented as (ref null 11) for the nil struct
-                            // but in polymorphic contexts might be anyref
                             anyref_ty
                         } else {
                             ty

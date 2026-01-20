@@ -1112,8 +1112,8 @@ impl<'db> TypeChecker<'db> {
                     tracing::debug!(?value, ?ty, "get_region_yield_type: found return operand");
                     return ty;
                 }
-                // func.return with no operand means void/nil return
-                return None;
+                // func.return with no operand means Nil return
+                return Some(core::Nil::new(self.db).as_type());
             }
         }
         None

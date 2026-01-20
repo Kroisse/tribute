@@ -126,6 +126,8 @@ pub(crate) fn handle_call_indirect<'db>(
     // Build parameter types (all operands except first which is funcref/table_idx)
     // Normalize IR types to wasm types - primitive IR types that might be boxed
     // (in polymorphic handlers) should use anyref.
+    // Note: core::Nil is NOT normalized - it uses (ref null none) which is
+    // a subtype of anyref, so it can be passed without boxing.
     let anyref_ty = wasm::Anyref::new(db).as_type();
     let normalize_param_type = |ty: trunk_ir::Type<'db>| -> trunk_ir::Type<'db> {
         if tribute_rt::is_int(db, ty)
@@ -134,7 +136,6 @@ pub(crate) fn handle_call_indirect<'db>(
             || tribute_rt::is_float(db, ty)
             || tribute_rt::Any::from_type(db, ty).is_some() // tribute_rt.any → wasm.anyref
             || tribute::is_type_var(db, ty)
-            || core::Nil::from_type(db, ty).is_some()
         {
             anyref_ty
         } else {
