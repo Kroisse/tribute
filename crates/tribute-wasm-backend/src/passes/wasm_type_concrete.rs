@@ -24,13 +24,17 @@ use std::collections::HashMap;
 
 use tracing::debug;
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{adt, closure, tribute, tribute_rt};
+use tribute_ir::dialect::{closure, tribute, tribute_rt};
 use trunk_ir::Attribute;
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::{cont, core, wasm};
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
 };
-use trunk_ir::{DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value, ValueDef};
+use trunk_ir::{
+    Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
+    ValueDef,
+};
 
 use crate::type_converter::wasm_type_converter;
 
@@ -51,7 +55,11 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) -> co
         .add_pattern(StructGetResultTypePattern)
         .add_pattern(IfResultTypePattern)
         .add_pattern(BlockResultTypePattern)
-        .add_pattern(LoopResultTypePattern);
+        .add_pattern(LoopResultTypePattern)
+        // Concretize function signatures
+        .add_pattern(FuncSignatureTypeVarPattern)
+        // Fallback pattern: convert remaining type_var to anyref
+        .add_pattern(FallbackTypeVarPattern);
     // No specific conversion target - type concretization is an optimization pass
     let target = ConversionTarget::new();
     applicator.apply_partial(db, module, target).module
@@ -559,6 +567,184 @@ fn get_field_type_from_struct<'db>(
     }
 
     None
+}
+
+/// Pattern to concretize type_var in wasm.func signatures.
+///
+/// This pattern converts `tribute.type_var` in function parameter and return types
+/// to `wasm.anyref` to ensure all functions have concrete signatures.
+///
+/// NOTE: This pattern also updates the entry block arguments to match the new
+/// parameter types. Without this, the function signature would say `anyref` but
+/// the entry block arguments would still have `type_var`, causing a type mismatch.
+struct FuncSignatureTypeVarPattern;
+
+impl<'db> RewritePattern<'db> for FuncSignatureTypeVarPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Only handle wasm.func operations
+        let Ok(func_op) = wasm::Func::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let func_ty = func_op.r#type(db);
+        let Some(core_func) = core::Func::from_type(db, func_ty) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let params = core_func.params(db);
+        let result = core_func.result(db);
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+
+        // Check if any param or result is a type_var
+        let has_type_var_in_params = params.iter().any(|ty| tribute::is_type_var(db, *ty));
+        let has_type_var_in_result = tribute::is_type_var(db, result);
+
+        if !has_type_var_in_params && !has_type_var_in_result {
+            return RewriteResult::Unchanged;
+        }
+
+        // Convert type_var to anyref in params
+        let new_params: IdVec<Type<'db>> = params
+            .iter()
+            .map(|ty| {
+                if tribute::is_type_var(db, *ty) {
+                    anyref_ty
+                } else {
+                    *ty
+                }
+            })
+            .collect();
+
+        // Convert type_var to anyref in result
+        let new_result = if tribute::is_type_var(db, result) {
+            anyref_ty
+        } else {
+            result
+        };
+
+        let new_func_ty = core::Func::new(db, new_params.clone(), new_result).as_type();
+
+        // Rebuild entry block with new parameter types
+        let body = func_op.body(db);
+        let new_body = rebuild_entry_block_for_anyref(db, body, &new_params);
+
+        debug!(
+            "wasm_type_concrete: concretizing wasm.func {} signature type_var to anyref",
+            func_op.sym_name(db)
+        );
+
+        let new_op = op
+            .modify(db)
+            .attr("type", Attribute::Type(new_func_ty))
+            .regions(vec![new_body].into_iter().collect())
+            .build();
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Helper to rebuild entry block with converted argument types for anyref conversion.
+fn rebuild_entry_block_for_anyref<'db>(
+    db: &'db dyn salsa::Database,
+    body: Region<'db>,
+    new_params: &IdVec<Type<'db>>,
+) -> Region<'db> {
+    let blocks = body.blocks(db);
+
+    let new_blocks: IdVec<Block<'db>> = blocks
+        .iter()
+        .enumerate()
+        .map(|(block_idx, block)| {
+            if block_idx == 0 {
+                // Entry block: update argument types
+                let args = block.args(db);
+                let new_args: IdVec<BlockArg<'db>> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, arg)| {
+                        if i < new_params.len() && new_params[i] != arg.ty(db) {
+                            BlockArg::new(db, new_params[i], arg.attrs(db).clone())
+                        } else {
+                            *arg
+                        }
+                    })
+                    .collect();
+
+                Block::new(
+                    db,
+                    block.id(db),
+                    block.location(db),
+                    new_args,
+                    block.operations(db).clone(),
+                )
+            } else {
+                *block
+            }
+        })
+        .collect();
+
+    Region::new(db, body.location(db), new_blocks)
+}
+
+/// Fallback pattern to convert any remaining type_var results to anyref.
+///
+/// This is a catch-all pattern that runs after all other patterns have been applied.
+/// Any operation with `tribute.type_var` result types that couldn't be concretized
+/// through other means will have its results converted to `wasm.anyref`.
+///
+/// Note: This pattern only converts `tribute.type_var`, NOT `tribute.type`.
+/// Unresolved `tribute.type` references to user-defined types (e.g., `tribute.type(name="Expr")`)
+/// are preserved because they represent valid ADT types that will be resolved by
+/// the GC type collection phase.
+struct FallbackTypeVarPattern;
+
+impl<'db> RewritePattern<'db> for FallbackTypeVarPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let results = op.results(db);
+        if results.is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Only convert type_var (inference variables), not unresolved type references.
+        // Unresolved tribute.type(name=X) for user-defined types should be preserved
+        // as they will be resolved by gc_types_collection.
+        let has_type_var = results.iter().any(|ty| tribute::is_type_var(db, *ty));
+        if !has_type_var {
+            return RewriteResult::Unchanged;
+        }
+
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+
+        // Replace only type_var results with anyref
+        let new_results: IdVec<Type<'db>> = results
+            .iter()
+            .map(|ty| {
+                if tribute::is_type_var(db, *ty) {
+                    anyref_ty
+                } else {
+                    *ty
+                }
+            })
+            .collect();
+
+        debug!(
+            "wasm_type_concrete: fallback converting {}.{} type_var result(s) to anyref",
+            op.dialect(db),
+            op.name(db)
+        );
+
+        let new_op = op.modify(db).results(new_results).build();
+        RewriteResult::Replace(new_op)
+    }
 }
 
 // ============================================================================

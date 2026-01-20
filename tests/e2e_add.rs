@@ -848,8 +848,7 @@ fn check_for_lowered_closure_ops(
     db: &dyn salsa::Database,
     region: &trunk_ir::Region<'_>,
 ) -> LoweredClosureOps {
-    use tribute_ir::dialect::adt;
-    use trunk_ir::dialect::func;
+    use trunk_ir::dialect::{adt, func};
 
     let mut result = LoweredClosureOps {
         has_func_constant: false,

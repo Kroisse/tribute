@@ -164,4 +164,30 @@ impl<'db, 'ctx> OpAdaptor<'db, 'ctx> {
     pub fn operand_type(&self, index: usize) -> Option<Type<'db>> {
         self.operand_types.get(index).copied().flatten()
     }
+
+    /// Materialize a value conversion from one type to another.
+    ///
+    /// This generates IR operations to convert a value from `from_ty` to `to_ty`
+    /// using the registered materializers in the type converter.
+    ///
+    /// Returns `None` if no materializer handles this conversion.
+    pub fn materialize(
+        &self,
+        db: &'db dyn salsa::Database,
+        location: crate::Location<'db>,
+        value: Value<'db>,
+        from_ty: Type<'db>,
+        to_ty: Type<'db>,
+    ) -> Option<super::MaterializeResult<'db>> {
+        self.type_converter
+            .materialize(db, location, value, from_ty, to_ty)
+    }
+
+    /// Get a reference to the type converter.
+    ///
+    /// This allows patterns to use the same type converter that the
+    /// `PatternApplicator` uses for operand/result type conversion.
+    pub fn type_converter(&self) -> &'ctx super::TypeConverter {
+        self.type_converter
+    }
 }

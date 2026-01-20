@@ -277,6 +277,11 @@ dialect! {
 
         /// `tribute.error_type` type: an error type indicating type resolution failed.
         type error_type;
+
+        /// `tribute.tuple_type` type: cons cell (head, tail).
+        /// Use `core.nil` as the tail terminator.
+        /// Example: `(a, b, c)` → `TupleType(a, TupleType(b, TupleType(c, Nil)))`
+        type tuple_type(head, tail);
     }
 }
 
@@ -433,6 +438,56 @@ inventory::submit! {
 
 // tribute.error_type -> "<error>"
 inventory::submit! { Printable::implement("tribute", "error_type", |_, _, f| f.write_str("<error>")) }
+
+// tribute.tuple_type -> "(a, b, c)"
+inventory::submit! { Printable::implement("tribute", "tuple_type", print_tuple_type) }
+
+fn print_tuple_type(
+    db: &dyn salsa::Database,
+    ty: trunk_ir::Type<'_>,
+    f: &mut Formatter<'_>,
+) -> std::fmt::Result {
+    let params = ty.params(db);
+    if params.is_empty() {
+        return f.write_str("()");
+    }
+
+    // Flatten cons cells into a list
+    let mut elements = Vec::new();
+    let mut current = ty;
+
+    while current.is_dialect(db, DIALECT_NAME(), TUPLE_TYPE()) {
+        let params = current.params(db);
+        if params.len() >= 2 {
+            elements.push(params[0]); // head
+            current = params[1]; // tail
+        } else {
+            break;
+        }
+    }
+
+    // Check if tail is nil (complete tuple)
+    let has_tail = !current.is_dialect(
+        db,
+        trunk_ir::dialect::core::DIALECT_NAME(),
+        trunk_ir::dialect::core::NIL(),
+    );
+
+    f.write_char('(')?;
+    for (i, &elem) in elements.iter().enumerate() {
+        if i > 0 {
+            f.write_str(", ")?;
+        }
+        Printable::print_type(db, elem, f)?;
+    }
+    if has_tail {
+        if !elements.is_empty() {
+            f.write_str(", ")?;
+        }
+        Printable::print_type(db, current, f)?;
+    }
+    f.write_char(')')
+}
 
 // NOTE: tribute.int and tribute.nat Printable implementations moved to tribute_rt dialect
 

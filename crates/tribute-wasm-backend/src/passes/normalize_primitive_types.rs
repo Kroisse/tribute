@@ -1,17 +1,25 @@
-//! Normalize tribute_rt primitive types to core types.
+//! Normalize tribute primitive types to core/wasm types.
 //!
-//! This pass converts high-level `tribute_rt` primitive types to their
-//! corresponding `core` types early in the WASM pipeline, ensuring that
-//! downstream passes and the emit phase don't need to handle tribute_rt types.
+//! This pass converts high-level `tribute_rt` primitive types and unresolved
+//! `tribute.type` references to their corresponding `core` types early in the
+//! WASM pipeline, ensuring that downstream passes and the emit phase don't
+//! need to handle tribute-specific types.
 //!
 //! ## Type Conversions
 //!
-//! | Source Type       | Target Type   |
-//! |-------------------|---------------|
-//! | `tribute_rt.int`  | `core.i32`    |
-//! | `tribute_rt.nat`  | `core.i32`    |
-//! | `tribute_rt.bool` | `core.i32`    |
-//! | `tribute_rt.float`| `core.f64`    |
+//! | Source Type              | Target Type   |
+//! |--------------------------|---------------|
+//! | `tribute_rt.int`         | `core.i32`    |
+//! | `tribute_rt.nat`         | `core.i32`    |
+//! | `tribute_rt.bool`        | `core.i32`    |
+//! | `tribute_rt.float`       | `core.f64`    |
+//! | `tribute_rt.any`         | `wasm.anyref` |
+//! | `tribute_rt.intref`      | `wasm.i31ref` |
+//! | `tribute.type(name=Int)` | `core.i32`    |
+//! | `tribute.type(name=Nat)` | `core.i32`    |
+//! | `tribute.type(name=Bool)`| `core.i32`    |
+//! | `tribute.type(name=Float)`| `core.f64`   |
+//! | `tribute.type(name=String)`| `core.string` |
 //!
 //! ## What this pass normalizes
 //!
@@ -99,10 +107,27 @@ fn check_no_illegal_primitive_types<'db>(
 
 /// Check if a type is an illegal primitive type that should have been normalized.
 fn is_illegal_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    tribute_rt::Int::from_type(db, ty).is_some()
+    // Check tribute_rt primitive types
+    if tribute_rt::Int::from_type(db, ty).is_some()
         || tribute_rt::Nat::from_type(db, ty).is_some()
         || tribute_rt::Bool::from_type(db, ty).is_some()
         || tribute_rt::Float::from_type(db, ty).is_some()
+        || tribute_rt::Any::from_type(db, ty).is_some()
+        || tribute_rt::Intref::from_type(db, ty).is_some()
+    {
+        return true;
+    }
+
+    // Check unresolved tribute.type for known primitives
+    if tribute::is_unresolved_type(db, ty)
+        && let Some(trunk_ir::Attribute::Symbol(name_sym)) =
+            ty.get_attr(db, trunk_ir::Symbol::new("name"))
+    {
+        return name_sym
+            .with_str(|name_str| matches!(name_str, "Int" | "Nat" | "Bool" | "Float" | "String"));
+    }
+
+    false
 }
 
 /// Check if a function type contains illegal primitive types.
@@ -134,6 +159,29 @@ fn convert_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> O
     // tribute_rt.float -> core.f64
     if tribute_rt::Float::from_type(db, ty).is_some() {
         return Some(core::F64::new(db).as_type());
+    }
+
+    // tribute_rt.any -> wasm.anyref
+    if tribute_rt::Any::from_type(db, ty).is_some() {
+        return Some(wasm::Anyref::new(db).as_type());
+    }
+
+    // tribute_rt.intref -> wasm.i31ref
+    if tribute_rt::Intref::from_type(db, ty).is_some() {
+        return Some(wasm::I31ref::new(db).as_type());
+    }
+
+    // tribute.type(name=X) -> core type for known primitives
+    if tribute::is_unresolved_type(db, ty)
+        && let Some(trunk_ir::Attribute::Symbol(name_sym)) =
+            ty.get_attr(db, trunk_ir::Symbol::new("name"))
+    {
+        return name_sym.with_str(|name_str| match name_str {
+            "Int" | "Nat" | "Bool" => Some(core::I32::new(db).as_type()),
+            "Float" => Some(core::F64::new(db).as_type()),
+            "String" => Some(core::String::new(db).as_type()),
+            _ => None, // User-defined type - don't convert
+        });
     }
 
     None

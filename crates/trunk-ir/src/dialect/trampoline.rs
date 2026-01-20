@@ -37,7 +37,7 @@
 //! - state: the captured state to restore
 //! - resume_value: the value passed to resume
 
-use trunk_ir::dialect;
+use crate::dialect;
 
 /// Tag value for Step::Done variant
 pub const STEP_TAG_DONE: i32 = 0;

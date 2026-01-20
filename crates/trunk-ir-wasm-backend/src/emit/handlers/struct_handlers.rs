@@ -3,8 +3,7 @@
 //! This module handles WebAssembly GC struct operations (struct.new, struct.get, struct.set).
 
 use tracing::debug;
-use tribute_ir::dialect::{adt, tribute};
-use trunk_ir::dialect::{cont, wasm};
+use trunk_ir::dialect::{adt, cont, wasm};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, ValueDef};
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 
@@ -344,8 +343,10 @@ fn check_struct_get_needs_boxing<'db>(
         .copied()
         .or_else(|| op.results(db).first().copied());
 
+    // Check if the result expects anyref
+    // Note: tribute.type_var should be resolved before emit by wasm_type_concrete pass
     let expects_anyref = local_type
-        .map(|ty| wasm::Anyref::from_type(db, ty).is_some() || tribute::is_type_var(db, ty))
+        .map(|ty| wasm::Anyref::from_type(db, ty).is_some())
         .unwrap_or(false);
 
     // Check if the struct field is i64

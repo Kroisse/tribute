@@ -22,11 +22,10 @@
 //!
 //! This pass uses TypeConverter to consistently convert trampoline types to ADT types.
 
-use tribute_ir::dialect::adt;
-use tribute_ir::dialect::trampoline::{self, STEP_TAG_DONE, STEP_TAG_SHIFT};
-use tribute_ir::dialect::tribute_rt;
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func::{self, Func};
+use trunk_ir::dialect::trampoline::{self, STEP_TAG_DONE, STEP_TAG_SHIFT};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{
     ConversionTarget, MaterializeResult, OpAdaptor, PatternApplicator, RewritePattern,
@@ -34,10 +33,23 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::{
     Attribute, Block, BlockArg, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol,
-    Type, Value, ValueDef,
+    Type, Value,
 };
 
-use crate::constants::yield_globals;
+/// Global variable indices for yield/trampoline state.
+///
+/// These globals are created in the WASM lowering pipeline and accessed by trampoline operations.
+/// The order must be kept consistent between global creation and access.
+pub mod yield_globals {
+    /// `$yield_state`: i32 (0 = normal, 1 = yielding)
+    pub const STATE_IDX: u32 = 0;
+    /// `$yield_tag`: i32 (prompt tag being yielded to)
+    pub const TAG_IDX: u32 = 1;
+    /// `$yield_cont`: anyref (captured continuation)
+    pub const CONT_IDX: u32 = 2;
+    /// `$yield_op_idx`: i32 (operation index within ability)
+    pub const OP_IDX: u32 = 3;
+}
 
 /// Lower all trampoline operations to WASM/ADT using RewritePattern infrastructure.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
@@ -135,6 +147,15 @@ pub fn resume_wrapper_adt_type(db: &dyn salsa::Database) -> Type<'_> {
     )
 }
 
+/// Get the BoxedF64 struct type for f64 boxing.
+/// Layout: (value: f64)
+///
+/// Used to box f64 values into anyref for storage in generic containers.
+fn boxed_f64_type(db: &dyn salsa::Database) -> Type<'_> {
+    let f64_ty = core::F64::new(db).as_type();
+    adt::struct_type(db, "_BoxedF64", vec![(Symbol::new("value"), f64_ty)])
+}
+
 // ============================================================================
 // Type Converter
 // ============================================================================
@@ -177,7 +198,107 @@ fn create_type_converter() -> TypeConverter {
                 return MaterializeResult::NoOp;
             }
 
-            // For other reference conversions, skip (let other converters handle it)
+            MaterializeResult::Skip
+        })
+        // Materialize: i32 → anyref (box via i31ref, then upcast to anyref)
+        .add_materialization(|db, location, value, from_ty, to_ty| {
+            let is_from_i32 = core::I32::from_type(db, from_ty).is_some();
+            let is_to_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
+
+            if is_from_i32 && is_to_anyref {
+                let i31ref_ty = wasm::I31ref::new(db).as_type();
+                let anyref_ty = wasm::Anyref::new(db).as_type();
+
+                // wasm.ref_i31: i32 → i31ref
+                let box_op = wasm::ref_i31(db, location, value, i31ref_ty);
+                let i31ref_value = box_op.as_operation().result(db, 0);
+
+                // Upcast i31ref → anyref (no-op in runtime, but needed for IR type correctness)
+                let upcast_op =
+                    wasm::ref_cast(db, location, i31ref_value, anyref_ty, anyref_ty, None);
+
+                return MaterializeResult::Ops(trunk_ir::smallvec::smallvec![
+                    box_op.as_operation(),
+                    upcast_op.as_operation(),
+                ]);
+            }
+            MaterializeResult::Skip
+        })
+        // Materialize: f64 → anyref (box via BoxedF64 struct)
+        .add_materialization(|db, location, value, from_ty, to_ty| {
+            let is_from_f64 = core::F64::from_type(db, from_ty).is_some();
+            let is_to_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
+
+            if is_from_f64 && is_to_anyref {
+                let boxed_ty = boxed_f64_type(db);
+                let anyref_ty = wasm::Anyref::new(db).as_type();
+
+                // Create BoxedF64 struct containing the f64 value
+                let box_op = adt::struct_new(db, location, vec![value], boxed_ty, boxed_ty);
+                let boxed_value = box_op.as_operation().result(db, 0);
+
+                // Upcast BoxedF64 to anyref
+                let upcast_op =
+                    wasm::ref_cast(db, location, boxed_value, anyref_ty, anyref_ty, None);
+
+                return MaterializeResult::Ops(trunk_ir::smallvec::smallvec![
+                    box_op.as_operation(),
+                    upcast_op.as_operation(),
+                ]);
+            }
+            MaterializeResult::Skip
+        })
+        // Materialize: anyref → i32 (unbox via i31ref)
+        .add_materialization(|db, location, value, from_ty, to_ty| {
+            let is_from_anyref = wasm::Anyref::from_type(db, from_ty).is_some();
+            let is_to_i32 = core::I32::from_type(db, to_ty).is_some();
+
+            if is_from_anyref && is_to_i32 {
+                let i31ref_ty = wasm::I31ref::new(db).as_type();
+                let i32_ty = core::I32::new(db).as_type();
+
+                // Cast anyref to i31ref
+                let ref_cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
+                let i31ref_value = ref_cast_op.as_operation().result(db, 0);
+
+                // Unbox i31ref to i32
+                let unbox_op = wasm::i31_get_s(db, location, i31ref_value, i32_ty);
+
+                return MaterializeResult::Ops(trunk_ir::smallvec::smallvec![
+                    ref_cast_op.as_operation(),
+                    unbox_op.as_operation(),
+                ]);
+            }
+            MaterializeResult::Skip
+        })
+        // Materialize: anyref → f64 (unbox via BoxedF64 struct)
+        .add_materialization(|db, location, value, from_ty, to_ty| {
+            let is_from_anyref = wasm::Anyref::from_type(db, from_ty).is_some();
+            let is_to_f64 = core::F64::from_type(db, to_ty).is_some();
+
+            if is_from_anyref && is_to_f64 {
+                let f64_ty = core::F64::new(db).as_type();
+                let boxed_ty = boxed_f64_type(db);
+
+                // Cast anyref to BoxedF64
+                let ref_cast_op = adt::ref_cast(db, location, value, boxed_ty, boxed_ty);
+                let boxed_value = ref_cast_op.as_operation().result(db, 0);
+
+                // Extract f64 from BoxedF64.value (field 0)
+                let unbox_op = adt::struct_get(
+                    db,
+                    location,
+                    boxed_value,
+                    f64_ty,
+                    boxed_ty,
+                    Attribute::IntBits(0),
+                );
+
+                return MaterializeResult::Ops(trunk_ir::smallvec::smallvec![
+                    ref_cast_op.as_operation(),
+                    unbox_op.as_operation(),
+                ]);
+            }
             MaterializeResult::Skip
         })
 }
@@ -202,7 +323,7 @@ fn step_field_index(field_name: Symbol) -> u32 {
         "value" => 1,
         "prompt" => 2,
         "op_idx" => 3,
-        _ => 1, // default to value
+        _ => panic!("unknown Step field: {s}"),
     })
 }
 
@@ -213,7 +334,7 @@ fn continuation_field_index(field_name: Symbol) -> u32 {
         "state" => 1,
         "tag" => 2,
         "shift_value" => 3,
-        _ => 0,
+        _ => panic!("unknown Continuation field: {s}"),
     })
 }
 
@@ -222,72 +343,101 @@ fn resume_wrapper_field_index(field_name: Symbol) -> u32 {
     field_name.with_str(|s| match s {
         "state" => 0,
         "resume_value" => 1,
-        _ => 0,
+        _ => panic!("unknown ResumeWrapper field: {s}"),
     })
 }
 
-/// Get the type of a Value by examining its definition.
+/// Cast a value to `wasm::Anyref` type using TypeConverter materializations.
 ///
-/// Returns the type for operation results, but None for block arguments
-/// (since BlockId doesn't have direct access to block argument types).
-fn get_value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Option<Type<'db>> {
-    match value.def(db) {
-        ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
-        ValueDef::BlockArg(_block_id) => {
-            // BlockId doesn't have direct access to block argument types.
-            // For block arguments, we fall back to the default ref_cast behavior.
-            None
-        }
-    }
-}
-
-/// Cast a value to `wasm::Anyref` type, boxing primitives if needed.
-///
+/// Uses the adaptor's materialize method to generate boxing operations:
 /// - For i32: boxes to i31ref then casts to anyref
-/// - For f64: boxes using tribute_rt.box_float
+/// - For f64: boxes using adt.struct_new (BoxedF64)
 /// - For reference types: uses ref_cast upcast
-fn cast_to_any<'db>(
+fn materialize_to_any<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     value: Value<'db>,
+    adaptor: &OpAdaptor<'db, '_>,
     ops: &mut Vec<Operation<'db>>,
 ) -> Value<'db> {
     let anyref_ty = wasm::Anyref::new(db).as_type();
 
-    // Try to get the value's type to determine if boxing is needed
-    if let Some(value_ty) = get_value_type(db, value) {
-        // Already anyref - no conversion needed
-        if wasm::Anyref::from_type(db, value_ty).is_some() {
-            return value;
-        }
+    // Get the value's type using adaptor (handles block args correctly)
+    let Some(value_ty) = adaptor.get_value_type(db, value) else {
+        // Fallback: assume it's a reference type, just upcast
+        let cast_op = wasm::ref_cast(db, location, value, anyref_ty, anyref_ty, None);
+        let cast_val = cast_op.as_operation().result(db, 0);
+        ops.push(cast_op.as_operation());
+        return cast_val;
+    };
 
-        // i32 → box to i31ref → cast to anyref
-        if core::I32::from_type(db, value_ty).is_some() {
-            let i31ref_ty = wasm::I31ref::new(db).as_type();
-            let box_op = tribute_rt::box_int(db, location, value, i31ref_ty);
-            let boxed_value = box_op.as_operation().result(db, 0);
-            ops.push(box_op.as_operation());
+    // Already anyref - no conversion needed
+    if wasm::Anyref::from_type(db, value_ty).is_some() {
+        return value;
+    }
 
-            // i31ref is a subtype of anyref, upcast it
-            let cast_op = wasm::ref_cast(db, location, boxed_value, anyref_ty, anyref_ty, None);
-            let cast_val = cast_op.as_operation().result(db, 0);
-            ops.push(cast_op.as_operation());
-            return cast_val;
-        }
-
-        // f64 → box using tribute_rt.box_float
-        if core::F64::from_type(db, value_ty).is_some() {
-            let box_op = tribute_rt::box_float(db, location, value, anyref_ty);
-            let boxed_value = box_op.as_operation().result(db, 0);
-            ops.push(box_op.as_operation());
-            return boxed_value;
+    // Try to materialize the conversion
+    if let Some(result) = adaptor.materialize(db, location, value, value_ty, anyref_ty) {
+        match result {
+            MaterializeResult::NoOp => return value,
+            MaterializeResult::Ops(mat_ops) => {
+                // Get the final value from the last op's result
+                if let Some(last_op) = mat_ops.last() {
+                    let final_value = last_op.result(db, 0);
+                    ops.extend(mat_ops);
+                    return final_value;
+                }
+            }
+            MaterializeResult::Skip => {}
         }
     }
 
-    // For reference types, upcast to anyref using ref_cast.
-    // In WASM GC, anyref is a supertype of all reference types.
-    // This will be lowered to a no-op in emit (since upcasting is always valid).
+    // Fallback: upcast to anyref using ref_cast
     let cast_op = wasm::ref_cast(db, location, value, anyref_ty, anyref_ty, None);
+    let cast_val = cast_op.as_operation().result(db, 0);
+    ops.push(cast_op.as_operation());
+    cast_val
+}
+
+/// Unbox a value from `wasm::Anyref` to a target type using TypeConverter materializations.
+///
+/// Uses the adaptor's materialize method to generate unboxing operations:
+/// - For i32: ref_cast to i31ref then i31_get_s
+/// - For f64: ref_cast to BoxedF64 then struct_get
+/// - For reference types: ref_cast
+fn materialize_from_any<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    value: Value<'db>,
+    target_ty: Type<'db>,
+    adaptor: &OpAdaptor<'db, '_>,
+    ops: &mut Vec<Operation<'db>>,
+) -> Value<'db> {
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+
+    // Already the target type - no conversion needed
+    if target_ty == anyref_ty {
+        return value;
+    }
+
+    // Try to materialize the conversion
+    if let Some(result) = adaptor.materialize(db, location, value, anyref_ty, target_ty) {
+        match result {
+            MaterializeResult::NoOp => return value,
+            MaterializeResult::Ops(mat_ops) => {
+                // Get the final value from the last op's result
+                if let Some(last_op) = mat_ops.last() {
+                    let final_value = last_op.result(db, 0);
+                    ops.extend(mat_ops);
+                    return final_value;
+                }
+            }
+            MaterializeResult::Skip => {}
+        }
+    }
+
+    // Fallback: ref_cast to target type (for reference types)
+    let cast_op = adt::ref_cast(db, location, value, target_ty, target_ty);
     let cast_val = cast_op.as_operation().result(db, 0);
     ops.push(cast_op.as_operation());
     cast_val
@@ -353,16 +503,16 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
             null_const.result(db, 0)
         };
 
-        // state field - cast to any
+        // state field - cast to any using TypeConverter materialization
         let state_field = if let Some(v) = state {
-            cast_to_any(db, location, v, &mut ops)
+            materialize_to_any(db, location, v, adaptor, &mut ops)
         } else {
             null_any(db, location, &mut ops)
         };
 
-        // shift_value field - cast to any
+        // shift_value field - cast to any using TypeConverter materialization
         let shift_value_field = if let Some(v) = shift_value {
-            cast_to_any(db, location, v, &mut ops)
+            materialize_to_any(db, location, v, adaptor, &mut ops)
         } else {
             null_any(db, location, &mut ops)
         };
@@ -410,9 +560,9 @@ impl<'db> RewritePattern<'db> for LowerStepDonePattern {
         ops.push(prompt_const);
         ops.push(op_idx_const);
 
-        // Value field - cast to any
+        // Value field - cast to any using TypeConverter materialization
         let value_field = if let Some(v) = value {
-            cast_to_any(db, location, v, &mut ops)
+            materialize_to_any(db, location, v, adaptor, &mut ops)
         } else {
             null_any(db, location, &mut ops)
         };
@@ -463,9 +613,9 @@ impl<'db> RewritePattern<'db> for LowerStepShiftPattern {
         ops.push(prompt_const);
         ops.push(op_idx_const);
 
-        // Value field - cast continuation to any
+        // Value field - cast continuation to any using TypeConverter materialization
         let value_field = if let Some(v) = continuation {
-            cast_to_any(db, location, v, &mut ops)
+            materialize_to_any(db, location, v, adaptor, &mut ops)
         } else {
             null_any(db, location, &mut ops)
         };
@@ -513,6 +663,7 @@ impl<'db> RewritePattern<'db> for LowerStepGetPattern {
         if is_any_field {
             let mut ops = Vec::new();
 
+            // Get the anyref value from the struct
             let struct_get = adt::struct_get(
                 db,
                 location,
@@ -524,42 +675,15 @@ impl<'db> RewritePattern<'db> for LowerStepGetPattern {
             let any_value = struct_get.as_operation().result(db, 0);
             ops.push(struct_get.as_operation());
 
-            // Check if expected_result_type is a primitive type that needs unboxing
-            // After normalize_primitive_types pass, types are already core.i32/f64
-            let is_int_primitive = core::I32::from_type(db, expected_result_type).is_some();
-            let is_float_primitive = core::F64::from_type(db, expected_result_type).is_some();
-
-            if is_int_primitive {
-                // For int primitives: anyref -> i31ref -> i32 (via unbox_int)
-                let i31ref_ty = wasm::I31ref::new(db).as_type();
-                let i32_ty = core::I32::new(db).as_type();
-
-                // Cast anyref to i31ref
-                let ref_cast_op =
-                    wasm::ref_cast(db, location, any_value, i31ref_ty, i31ref_ty, None);
-                let i31ref_value = ref_cast_op.as_operation().result(db, 0);
-                ops.push(ref_cast_op.as_operation());
-
-                // Unbox i31ref to i32
-                let unbox_op = tribute_rt::unbox_int(db, location, i31ref_value, i32_ty);
-                ops.push(unbox_op.as_operation());
-            } else if is_float_primitive {
-                // For float primitives: anyref → f64 (via unbox_float)
-                // The box_float operation boxes f64 into a struct, and unbox_float extracts it
-                let f64_ty = core::F64::new(db).as_type();
-                let unbox_op = tribute_rt::unbox_float(db, location, any_value, f64_ty);
-                ops.push(unbox_op.as_operation());
-            } else {
-                // For reference types: just ref_cast
-                let cast_op = adt::ref_cast(
-                    db,
-                    location,
-                    any_value,
-                    expected_result_type,
-                    expected_result_type,
-                );
-                ops.push(cast_op.as_operation());
-            }
+            // Use TypeConverter materialization to unbox to the expected type
+            materialize_from_any(
+                db,
+                location,
+                any_value,
+                expected_result_type,
+                adaptor,
+                &mut ops,
+            );
 
             RewriteResult::expand(ops)
         } else {
@@ -623,14 +747,15 @@ impl<'db> RewritePattern<'db> for LowerContinuationGetPattern {
             let any_value = struct_get.as_operation().result(db, 0);
             ops.push(struct_get.as_operation());
 
-            let cast_op = adt::ref_cast(
+            // Use TypeConverter materialization to unbox to the expected type
+            materialize_from_any(
                 db,
                 location,
                 any_value,
                 expected_result_type,
-                expected_result_type,
+                adaptor,
+                &mut ops,
             );
-            ops.push(cast_op.as_operation());
 
             RewriteResult::expand(ops)
         } else {
@@ -699,9 +824,9 @@ impl<'db> RewritePattern<'db> for LowerBuildStatePattern {
         let mut ops = Vec::new();
         let mut fields = Vec::new();
 
-        // Cast all operands to any type
+        // Cast all operands to any type using TypeConverter materialization
         for v in operands.iter() {
-            let casted = cast_to_any(db, location, *v, &mut ops);
+            let casted = materialize_to_any(db, location, *v, adaptor, &mut ops);
             fields.push(casted);
         }
 
@@ -737,16 +862,16 @@ impl<'db> RewritePattern<'db> for LowerBuildResumeWrapperPattern {
 
         let mut ops = Vec::new();
 
-        // Cast state to any
+        // Cast state to any using TypeConverter materialization
         let state_field = if let Some(v) = state {
-            cast_to_any(db, location, v, &mut ops)
+            materialize_to_any(db, location, v, adaptor, &mut ops)
         } else {
             null_any(db, location, &mut ops)
         };
 
-        // Cast resume_value to any
+        // Cast resume_value to any using TypeConverter materialization
         let resume_value_field = if let Some(v) = resume_value {
-            cast_to_any(db, location, v, &mut ops)
+            materialize_to_any(db, location, v, adaptor, &mut ops)
         } else {
             null_any(db, location, &mut ops)
         };
@@ -802,14 +927,15 @@ impl<'db> RewritePattern<'db> for LowerResumeWrapperGetPattern {
         let any_value = struct_get.as_operation().result(db, 0);
         ops.push(struct_get.as_operation());
 
-        let cast_op = adt::ref_cast(
+        // Use TypeConverter materialization to unbox to the expected type
+        materialize_from_any(
             db,
             location,
             any_value,
             expected_result_type,
-            expected_result_type,
+            adaptor,
+            &mut ops,
         );
-        ops.push(cast_op.as_operation());
 
         RewriteResult::expand(ops)
     }
@@ -873,14 +999,15 @@ impl<'db> RewritePattern<'db> for LowerStateGetPattern {
         let any_value = struct_get.as_operation().result(db, 0);
         ops.push(struct_get.as_operation());
 
-        let cast_op = adt::ref_cast(
+        // Use TypeConverter materialization to unbox to the expected type
+        materialize_from_any(
             db,
             location,
             any_value,
             expected_result_type,
-            expected_result_type,
+            adaptor,
+            &mut ops,
         );
-        ops.push(cast_op.as_operation());
 
         RewriteResult::expand(ops)
     }
@@ -933,8 +1060,9 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
         ops.push(tag_const.as_operation());
         ops.push(wasm::global_set(db, location, tag_val, yield_globals::TAG_IDX).as_operation());
 
-        // Set $yield_cont = continuation
-        ops.push(wasm::global_set(db, location, cont_val, yield_globals::CONT_IDX).as_operation());
+        // Set $yield_cont = continuation (as anyref)
+        let cont_any = materialize_to_any(db, location, cont_val, adaptor, &mut ops);
+        ops.push(wasm::global_set(db, location, cont_any, yield_globals::CONT_IDX).as_operation());
 
         // Set $yield_op_idx = op_idx
         let op_idx_const = wasm::i32_const(db, location, i32_ty, op_idx as i32);

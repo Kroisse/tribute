@@ -1239,6 +1239,7 @@ dependencies = [
  "tracing",
  "tribute-ir",
  "trunk-ir",
+ "trunk-ir-wasm-backend",
  "wasm-encoder",
 ]
 
@@ -1256,6 +1257,19 @@ dependencies = [
  "serde",
  "smallvec",
  "tracing",
+]
+
+[[package]]
+name = "trunk-ir-wasm-backend"
+version = "0.1.0"
+dependencies = [
+ "derive_more",
+ "insta",
+ "salsa",
+ "salsa-test-macros",
+ "tracing",
+ "trunk-ir",
+ "wasm-encoder",
 ]
 
 [[package]]

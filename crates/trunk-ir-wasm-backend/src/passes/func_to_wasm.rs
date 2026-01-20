@@ -19,16 +19,21 @@ use std::collections::HashMap;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{func, wasm};
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol,
 };
 
-use crate::type_converter::wasm_type_converter;
-
 /// Lower func dialect to wasm dialect.
-pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+///
+/// The `type_converter` parameter allows language-specific backends to provide
+/// their own type conversion rules.
+pub fn lower<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+    type_converter: TypeConverter,
+) -> Module<'db> {
     // 1. Collect all functions referenced by func.constant operations
     let func_refs = collect_func_constant_refs(db, &module);
 
@@ -37,7 +42,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 
     if func_refs.is_empty() {
         // No func.constant operations - just apply patterns without table generation
-        return PatternApplicator::new(wasm_type_converter())
+        return PatternApplicator::new(type_converter)
             .add_pattern(FuncFuncPattern)
             .add_pattern(FuncCallPattern)
             .add_pattern(FuncCallIndirectPattern)
@@ -64,7 +69,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
     let table_size = sorted_funcs.len() as u32;
 
     // 3. Apply patterns to transform operations
-    let result = PatternApplicator::new(wasm_type_converter())
+    let result = PatternApplicator::new(type_converter)
         .add_pattern(FuncFuncPattern)
         .add_pattern(FuncCallPattern)
         .add_pattern(FuncCallIndirectPattern)
@@ -405,6 +410,10 @@ mod tests {
         Location::new(path, Span::new(0, 0))
     }
 
+    fn test_converter() -> TypeConverter {
+        TypeConverter::new()
+    }
+
     #[salsa::tracked]
     fn make_func_call_module(db: &dyn salsa::Database) -> Module<'_> {
         let location = test_location(db);
@@ -453,7 +462,7 @@ mod tests {
 
     #[salsa::tracked]
     fn lower_and_check_names(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
-        let lowered = lower(db, module);
+        let lowered = lower(db, module, test_converter());
         let body = lowered.body(db);
         let ops = body.blocks(db)[0].operations(db);
         ops.iter().map(|op| op.full_name(db)).collect()
@@ -461,7 +470,7 @@ mod tests {
 
     #[salsa::tracked]
     fn lower_and_check_nested(db: &dyn salsa::Database, module: Module<'_>) -> (String, String) {
-        let lowered = lower(db, module);
+        let lowered = lower(db, module, test_converter());
         let body = lowered.body(db);
         let func_op = &body.blocks(db)[0].operations(db)[0];
         let func_name = func_op.full_name(db);

@@ -22,17 +22,38 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
-use crate::passes::trampoline_to_wasm::{
-    continuation_adt_type, resume_wrapper_adt_type, step_adt_type,
-};
-use tribute_ir::dialect::{adt, closure, trampoline, tribute, tribute_rt};
+use tribute_ir::dialect::{ability, closure, tribute, tribute_rt};
+use trunk_ir::dialect::{adt, trampoline};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::rewrite::{MaterializeResult, OpVec, TypeConverter};
 use trunk_ir::{Attribute, Symbol};
 use trunk_ir::{DialectOp, DialectType, Type};
+use trunk_ir_wasm_backend::passes::trampoline_to_wasm::{
+    continuation_adt_type, resume_wrapper_adt_type, step_adt_type,
+};
 
 #[cfg(test)]
 use trunk_ir::dialect::arith;
+
+/// Get the canonical Closure ADT type.
+///
+/// Layout: (table_idx: i32, env: anyref)
+///
+/// IMPORTANT: Must use wasm::Anyref (not tribute_rt::Any) to ensure consistent
+/// type identity for emit lookups. This matches the pattern used by step_adt_type.
+pub fn closure_adt_type(db: &dyn salsa::Database) -> Type<'_> {
+    let i32_ty = core::I32::new(db).as_type();
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+
+    adt::struct_type(
+        db,
+        Symbol::new("_closure"),
+        vec![
+            (Symbol::new("table_idx"), i32_ty),
+            (Symbol::new("env"), anyref_ty),
+        ],
+    )
+}
 
 /// Helper to generate i31 unboxing operations (ref_cast to i31ref + i31_get_s).
 ///
@@ -141,10 +162,19 @@ pub fn wasm_type_converter() -> TypeConverter {
                 None
             }
         })
-        // Convert closure.closure → wasm.structref (closures are structs)
+        // Convert closure.closure → adt.struct(name="_closure")
+        // This ensures emit can identify closures by ADT name rather than tribute-ir type
         .add_conversion(|db, ty| {
             if closure::Closure::from_type(db, ty).is_some() {
-                Some(wasm::Structref::new(db).as_type())
+                Some(closure_adt_type(db))
+            } else {
+                None
+            }
+        })
+        // Convert ability.evidence_ptr → wasm.anyref (evidence is a runtime handle)
+        .add_conversion(|db, ty| {
+            if ability::EvidencePtr::from_type(db, ty).is_some() {
+                Some(wasm::Anyref::new(db).as_type())
             } else {
                 None
             }
@@ -262,7 +292,11 @@ pub fn wasm_type_converter() -> TypeConverter {
             {
                 return MaterializeResult::NoOp;
             }
-            // closure.closure → wasm.structref (same representation)
+            // closure.closure → adt.struct(name="_closure") (same representation)
+            if closure::Closure::from_type(db, from_ty).is_some() && to_ty == closure_adt_type(db) {
+                return MaterializeResult::NoOp;
+            }
+            // closure.closure → wasm.structref (subtype relationship)
             if closure::Closure::from_type(db, from_ty).is_some()
                 && wasm::Structref::from_type(db, to_ty).is_some()
             {
@@ -335,6 +369,13 @@ pub fn wasm_type_converter() -> TypeConverter {
             // trampoline.resume_wrapper → _ResumeWrapper ADT (same representation)
             if trampoline::ResumeWrapper::from_type(db, from_ty).is_some()
                 && to_ty == resume_wrapper_adt_type(db)
+            {
+                return MaterializeResult::NoOp;
+            }
+            // ability.evidence_ptr → wasm.anyref (same representation)
+            // Evidence pointers are runtime handles stored as anyref
+            if ability::EvidencePtr::from_type(db, from_ty).is_some()
+                && wasm::Anyref::from_type(db, to_ty).is_some()
             {
                 return MaterializeResult::NoOp;
             }

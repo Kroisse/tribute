@@ -1,7 +1,8 @@
 //! Block and statement lowering.
 
 use tree_sitter::Node;
-use tribute_ir::dialect::{adt, list, tribute};
+use tribute_ir::dialect::{list, tribute};
+use trunk_ir::dialect::adt;
 use trunk_ir::{BlockBuilder, Value, dialect::arith};
 
 use super::context::CstLoweringCtx;

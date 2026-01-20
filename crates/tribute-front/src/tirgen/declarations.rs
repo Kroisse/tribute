@@ -1,7 +1,8 @@
 //! Declaration lowering for functions, types, and modules.
 
 use tree_sitter::Node;
-use tribute_ir::dialect::{adt, tribute};
+use tribute_ir::dialect::tribute;
+use trunk_ir::dialect::adt;
 use trunk_ir::{
     Attribute, BlockBuilder, DialectType, Region, Span, Symbol, SymbolVec, Type,
     dialect::{core, func},

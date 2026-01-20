@@ -6,7 +6,6 @@
 use std::collections::{HashMap, HashSet};
 
 use tracing::debug;
-use tribute_ir::dialect::{tribute, tribute_rt};
 use trunk_ir::dialect::{cont, core, func, wasm};
 use trunk_ir::{Attribute, BlockId, DialectOp, DialectType, IdVec, Region, Symbol, Type};
 
@@ -127,20 +126,14 @@ pub(crate) fn collect_call_indirect_types<'db>(
                     });
 
                     // Helper to normalize IR types to wasm types for call_indirect.
-                    // Primitive IR types that might be boxed (in polymorphic handlers) should
-                    // use anyref, since that's what's actually on the wasm stack.
+                    // Types that are already anyref (after normalize_primitive_types pass)
+                    // should remain anyref in the signature.
                     let anyref_ty = wasm::Anyref::new(db).as_type();
                     let normalize_param_type = |ty: Type<'db>| -> Type<'db> {
-                        // Primitive types are boxed to anyref in polymorphic handlers.
-                        // Note: core::Nil is NOT normalized - it uses (ref null none) which is
-                        // a subtype of anyref, so it can be passed without boxing.
-                        if tribute_rt::is_int(db, ty)
-                            || tribute_rt::is_nat(db, ty)
-                            || tribute_rt::is_bool(db, ty)
-                            || tribute_rt::is_float(db, ty)
-                            || tribute_rt::Any::from_type(db, ty).is_some() // tribute_rt.any → anyref
-                            || tribute::is_type_var(db, ty)
-                        {
+                        // After normalize_primitive_types pass:
+                        // - tribute_rt.any → wasm.anyref
+                        // So we only need to check for wasm.anyref
+                        if wasm::Anyref::from_type(db, ty).is_some() {
                             anyref_ty
                         } else {
                             ty
@@ -188,30 +181,26 @@ pub(crate) fn collect_call_indirect_types<'db>(
                         })
                     );
                     if let Some(func_ret_ty) = enclosing_func_return_ty {
-                        // Check if result is a polymorphic/unresolved type
+                        // Check if result is anyref (polymorphic type)
+                        // Note: tribute.type_var should be resolved to anyref before emit
+                        // by wasm_type_concrete pass
                         let is_anyref_result = wasm::Anyref::from_type(db, result_ty).is_some();
-                        let is_type_var_result = result_ty.dialect(db) == Symbol::new("tribute")
-                            && result_ty.name(db) == Symbol::new("type_var");
-                        let is_polymorphic_result = is_anyref_result || is_type_var_result;
                         let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty)
                             .is_some()
                             || core::Func::from_type(db, func_ret_ty).is_some();
                         // Check for Step type (trampoline-based effect system)
                         let func_returns_step = is_step_type(db, func_ret_ty);
                         debug!(
-                            "collect_call_indirect_types: is_anyref={}, is_type_var={}, func_returns_funcref={}, func_returns_step={}",
-                            is_anyref_result,
-                            is_type_var_result,
-                            func_returns_funcref,
-                            func_returns_step
+                            "collect_call_indirect_types: is_anyref={}, func_returns_funcref={}, func_returns_step={}",
+                            is_anyref_result, func_returns_funcref, func_returns_step
                         );
-                        if is_polymorphic_result && func_returns_funcref {
+                        if is_anyref_result && func_returns_funcref {
                             debug!(
                                 "collect_call_indirect_types: upgrading polymorphic result to funcref \
                                  for enclosing function that returns funcref"
                             );
                             result_ty = funcref_ty;
-                        } else if is_polymorphic_result && func_returns_step {
+                        } else if is_anyref_result && func_returns_step {
                             // When enclosing function returns Step (for trampoline effect system),
                             // upgrade polymorphic call_indirect results to Step too.
                             // This ensures closure/continuation calls return the right type.

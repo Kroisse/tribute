@@ -15,7 +15,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{ability, adt, closure, tribute, tribute_pat, tribute_rt};
+use tribute_ir::dialect::{ability, closure, tribute, tribute_pat, tribute_rt};
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::RewriteContext;
 use trunk_ir::{

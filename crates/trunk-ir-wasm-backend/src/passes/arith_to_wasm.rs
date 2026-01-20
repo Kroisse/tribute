@@ -13,17 +13,22 @@ use tracing::warn;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, core, wasm};
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type};
 
-use crate::type_converter::wasm_type_converter;
-
 /// Lower arith dialect to wasm dialect.
-pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+///
+/// The `type_converter` parameter allows language-specific backends to provide
+/// their own type conversion rules.
+pub fn lower<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+    type_converter: TypeConverter,
+) -> Module<'db> {
     // No specific conversion target - arith lowering is a dialect transformation
     let target = ConversionTarget::new();
-    let applicator = PatternApplicator::new(wasm_type_converter())
+    let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
         .add_pattern(ArithCmpPattern)
@@ -588,6 +593,10 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::{Block, BlockId, DialectOp, Location, PathId, Region, Span, idvec};
 
+    fn test_converter() -> TypeConverter {
+        TypeConverter::new()
+    }
+
     /// Format module operations for snapshot testing
     fn format_module_ops(db: &dyn salsa::Database, module: &Module<'_>) -> String {
         let body = module.body(db);
@@ -676,7 +685,7 @@ mod tests {
 
     #[salsa::tracked]
     fn format_lowered_module<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> String {
-        let lowered = lower(db, module);
+        let lowered = lower(db, module, test_converter());
         format_module_ops(db, &lowered)
     }
 

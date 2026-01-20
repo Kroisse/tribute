@@ -11,17 +11,22 @@ use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, idvec};
 
-use crate::type_converter::wasm_type_converter;
-
 /// Lower scf dialect to wasm dialect.
-pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+///
+/// The `type_converter` parameter allows language-specific backends to provide
+/// their own type conversion rules.
+pub fn lower<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+    type_converter: TypeConverter,
+) -> Module<'db> {
     // No specific conversion target - scf lowering is a dialect transformation
     let target = ConversionTarget::new();
-    let applicator = PatternApplicator::new(wasm_type_converter())
+    let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ScfIfPattern)
         .add_pattern(ScfLoopPattern)
         .add_pattern(ScfYieldPattern)
@@ -214,6 +219,10 @@ mod tests {
     use trunk_ir::dialect::wasm;
     use trunk_ir::{BlockId, Location, PathId, Span};
 
+    fn test_converter() -> TypeConverter {
+        TypeConverter::new()
+    }
+
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "file:///test.trb".to_owned());
         Location::new(path, Span::new(0, 0))
@@ -257,7 +266,7 @@ mod tests {
 
     #[salsa::tracked]
     fn lower_and_check(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
-        let lowered = lower(db, module);
+        let lowered = lower(db, module, test_converter());
         let body = lowered.body(db);
         let ops = body.blocks(db)[0].operations(db);
         ops.iter().map(|op| op.full_name(db)).collect()

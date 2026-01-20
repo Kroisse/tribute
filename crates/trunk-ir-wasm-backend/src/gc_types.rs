@@ -27,10 +27,8 @@
 use std::collections::HashMap;
 
 use tracing::debug;
-use tribute_ir::dialect::{adt, closure, tribute_rt};
-use trunk_ir::dialect::cont;
-use trunk_ir::dialect::{core, wasm};
-use trunk_ir::{DialectType, Symbol, Type};
+use trunk_ir::dialect::{adt, cont, core, wasm};
+use trunk_ir::{Attribute, DialectType, Symbol, Type};
 use wasm_encoder::{AbstractHeapType, FieldType, HeapType, RefType, StorageType, ValType};
 
 /// Type index for BoxedF64 (Float wrapper for polymorphic contexts).
@@ -57,6 +55,26 @@ pub const CLOSURE_STRUCT_IDX: u32 = 4;
 
 /// First type index available for user-defined types.
 pub const FIRST_USER_TYPE_IDX: u32 = 5;
+
+/// Check if a type is a closure struct (adt.struct with name "_closure").
+/// Closure structs contain (funcref, anyref) and are used for call_indirect.
+pub fn is_closure_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    // Check if it's an adt.struct type
+    if ty.dialect(db) != adt::DIALECT_NAME() {
+        return false;
+    }
+    if ty.name(db) != Symbol::new("struct") {
+        return false;
+    }
+    // Check if the struct name is "_closure"
+    ty.attrs(db).get(&Symbol::new("name")).is_some_and(|attr| {
+        if let Attribute::Symbol(name) = attr {
+            name.with_str(|s| s == "_closure")
+        } else {
+            false
+        }
+    })
+}
 
 /// Definition of a GC type (struct or array).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -373,19 +391,8 @@ pub fn type_to_storage_type<'db>(
         return StorageType::Val(ValType::F64);
     }
 
-    // Tribute-rt Int/Nat/Bool types (31-bit, lowered to i32)
-    if tribute_rt::is_int(db, ty) || tribute_rt::is_nat(db, ty) || tribute_rt::is_bool(db, ty) {
-        return StorageType::Val(ValType::I32);
-    }
-    // Tribute-rt Float type (f64)
-    if tribute_rt::is_float(db, ty) {
-        return StorageType::Val(ValType::F64);
-    }
-    // Tribute-rt Any type (type-erased reference, always anyref)
-    if tribute_rt::Any::from_type(db, ty).is_some() {
-        debug!("type_to_storage_type: tribute_rt.any -> ANYREF");
-        return StorageType::Val(ValType::Ref(RefType::ANYREF));
-    }
+    // Note: tribute_rt types (int, nat, bool, float, any) should be
+    // converted to core/wasm types by normalize_primitive_types pass before emit.
 
     // Core function type (core.func) - stored as funcref
     if core::Func::from_type(db, ty).is_some() {
@@ -424,9 +431,10 @@ pub fn type_to_storage_type<'db>(
         return StorageType::Val(ValType::Ref(RefType::ANYREF));
     }
 
-    // Closure types map to the builtin CLOSURE_STRUCT_IDX
-    if closure::Closure::from_type(db, ty).is_some() {
-        debug!("type_to_storage_type: closure.closure -> Concrete(CLOSURE_STRUCT_IDX)");
+    // Closure types (adt.struct with name="_closure") map to the builtin CLOSURE_STRUCT_IDX
+    // Note: closure::Closure types are converted to adt.struct(name="_closure") by TypeConverter
+    if is_closure_struct_type(db, ty) {
+        debug!("type_to_storage_type: closure struct -> Concrete(CLOSURE_STRUCT_IDX)");
         return StorageType::Val(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
@@ -670,8 +678,7 @@ pub const STEP_TAG_SHIFT: i32 = 1;
 ///
 /// Layout: (tag: i32, value: anyref, prompt: i32, op_idx: i32)
 pub fn step_marker_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
-    use tribute_ir::dialect::adt;
-    use trunk_ir::Symbol;
+    // Note: adt is imported from trunk_ir::dialect at the module level
 
     let i32_ty = core::I32::new(db).as_type();
     let anyref_ty = wasm::Anyref::new(db).as_type();

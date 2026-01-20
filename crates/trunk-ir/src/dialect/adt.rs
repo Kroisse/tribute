@@ -12,11 +12,11 @@
 
 use std::fmt::Write;
 
-use trunk_ir::type_interface::Printable;
-use trunk_ir::{Attribute, Attrs, IdVec, Symbol, Type, dialect};
+use crate::type_interface::Printable;
+use crate::{Attribute, Attrs, IdVec, Symbol, Type, dialect};
 
 // === Type name constants ===
-trunk_ir::symbols! {
+crate::symbols! {
     STRUCT_TYPE => "struct",
     ENUM_TYPE => "enum",
     TYPEREF => "typeref",
@@ -122,25 +122,25 @@ dialect! {
 // Reference operations: all are pure
 // Literal operations: all are pure
 
-trunk_ir::register_pure_op!(StructNew<'_>);
-trunk_ir::register_pure_op!(StructGet<'_>);
+crate::register_pure_op!(StructNew<'_>);
+crate::register_pure_op!(StructGet<'_>);
 
-trunk_ir::register_pure_op!(VariantNew<'_>);
-trunk_ir::register_pure_op!(VariantTag<'_>);
-trunk_ir::register_pure_op!(VariantIs<'_>);
-trunk_ir::register_pure_op!(VariantCast<'_>);
-trunk_ir::register_pure_op!(VariantGet<'_>);
+crate::register_pure_op!(VariantNew<'_>);
+crate::register_pure_op!(VariantTag<'_>);
+crate::register_pure_op!(VariantIs<'_>);
+crate::register_pure_op!(VariantCast<'_>);
+crate::register_pure_op!(VariantGet<'_>);
 
-trunk_ir::register_pure_op!(ArrayNew<'_>);
-trunk_ir::register_pure_op!(ArrayGet<'_>);
-trunk_ir::register_pure_op!(ArrayLen<'_>);
+crate::register_pure_op!(ArrayNew<'_>);
+crate::register_pure_op!(ArrayGet<'_>);
+crate::register_pure_op!(ArrayLen<'_>);
 
-trunk_ir::register_pure_op!(RefNull<'_>);
-trunk_ir::register_pure_op!(RefIsNull<'_>);
-trunk_ir::register_pure_op!(RefCast<'_>);
+crate::register_pure_op!(RefNull<'_>);
+crate::register_pure_op!(RefIsNull<'_>);
+crate::register_pure_op!(RefCast<'_>);
 
-trunk_ir::register_pure_op!(StringConst<'_>);
-trunk_ir::register_pure_op!(BytesConst<'_>);
+crate::register_pure_op!(StringConst<'_>);
+crate::register_pure_op!(BytesConst<'_>);
 
 // =============================================================================
 // ADT Type Constructors

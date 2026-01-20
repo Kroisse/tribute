@@ -43,7 +43,8 @@
 use std::collections::HashSet;
 
 use crate::type_converter::generic_type_converter;
-use tribute_ir::dialect::{ability, adt, tribute};
+use tribute_ir::dialect::{ability, tribute};
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,

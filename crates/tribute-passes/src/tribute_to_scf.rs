@@ -16,7 +16,8 @@ use std::collections::HashMap;
 
 use salsa::Accumulator;
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{adt, tribute, tribute_pat};
+use tribute_ir::dialect::{tribute, tribute_pat};
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, core, scf};
 use trunk_ir::rewrite::RewriteContext;

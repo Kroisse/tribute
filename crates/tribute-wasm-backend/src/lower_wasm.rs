@@ -25,11 +25,15 @@ use trunk_ir::{
 /// Entry point for lowering mid-level IR to wasm dialect.
 #[salsa::tracked]
 pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    // Phase 1: Pattern-based lowering passes
+    use crate::type_converter::wasm_type_converter;
+
+    // Phase 1: Pattern-based lowering passes (using trunk-ir-wasm-backend)
     tracing::debug!("=== BEFORE arith_to_wasm ===\n{:?}", module);
-    let module = crate::passes::arith_to_wasm::lower(db, module);
+    let module =
+        trunk_ir_wasm_backend::passes::arith_to_wasm::lower(db, module, wasm_type_converter());
     tracing::debug!("=== AFTER arith_to_wasm ===\n{:?}", module);
-    let module = crate::passes::scf_to_wasm::lower(db, module);
+    let module =
+        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(db, module, wasm_type_converter());
 
     // Normalize tribute_rt primitive types (int, nat, bool, float) to core types
     // BEFORE trampoline_to_wasm so downstream passes don't need to handle tribute_rt
@@ -38,15 +42,17 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
 
     // Convert trampoline types/ops BEFORE func_to_wasm so function signatures
     // have ADT types (not trampoline.Step) when converted to wasm.func
-    let module = crate::passes::trampoline_to_wasm::lower(db, module);
+    let module = trunk_ir_wasm_backend::passes::trampoline_to_wasm::lower(db, module);
     tracing::debug!("=== AFTER trampoline_to_wasm ===\n{:?}", module);
 
-    let module = crate::passes::func_to_wasm::lower(db, module);
+    let module =
+        trunk_ir_wasm_backend::passes::func_to_wasm::lower(db, module, wasm_type_converter());
     tracing::debug!("=== AFTER func_to_wasm ===\n{:?}", module);
     debug_func_params(db, &module, "after func_to_wasm");
 
     // Convert ALL adt ops to wasm (including those from trampoline_to_adt)
-    let module = crate::passes::adt_to_wasm::lower(db, module);
+    let module =
+        trunk_ir_wasm_backend::passes::adt_to_wasm::lower(db, module, wasm_type_converter());
     debug_func_params(db, &module, "after adt_to_wasm");
 
     // Lower tribute_rt operations (box_int, unbox_int) to wasm operations
@@ -56,6 +62,10 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     // Concretize type variables in wasm operations (resolve tribute.type_var)
     let module = crate::passes::wasm_type_concrete::lower(db, module);
     debug_func_params(db, &module, "after wasm_type_concrete");
+
+    // Resolve remaining tribute.type references to ADT types
+    let module = crate::passes::resolve_type_references::lower(db, module);
+    debug_func_params(db, &module, "after resolve_type_references");
 
     // Const analysis and lowering (string/bytes constants to data segments)
     let const_analysis = crate::passes::const_to_wasm::analyze_consts(db, module);
@@ -337,8 +347,8 @@ impl<'db> WasmLowerer<'db> {
         }
 
         // Emit yield globals for continuation support.
-        // IMPORTANT: The order of these globals must match constants::yield_globals indices.
-        // See crate::constants::yield_globals for index definitions.
+        // IMPORTANT: The order of these globals must match yield_globals indices.
+        // See trunk_ir_wasm_backend::passes::trampoline_to_wasm::yield_globals for index definitions.
         if self.has_continuations {
             // Index 0 ($yield_state): i32 (0 = normal, 1 = yielding)
             builder.op(wasm::global(
