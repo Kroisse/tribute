@@ -57,9 +57,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ConvertFuncTypePattern)
-        .add_pattern(ConvertCallTypePattern)
-        .add_pattern(ConvertCallIndirectTypePattern)
-        .add_pattern(ConvertWasmIfTypePattern)
+        .add_pattern(ConvertTrampolineResultTypePattern)
         .add_pattern(LowerBuildContinuationPattern)
         .add_pattern(LowerStepDonePattern)
         .add_pattern(LowerStepShiftPattern)
@@ -1383,19 +1381,26 @@ impl<'db> RewritePattern<'db> for ConvertFuncTypePattern {
     }
 }
 
-/// Convert func.call result types from trampoline types to ADT types.
-struct ConvertCallTypePattern;
+/// Convert result types from trampoline types to ADT types.
+///
+/// Applies to: func.call, func.call_indirect, wasm.if
+struct ConvertTrampolineResultTypePattern;
 
-impl<'db> RewritePattern<'db> for ConvertCallTypePattern {
+impl<'db> RewritePattern<'db> for ConvertTrampolineResultTypePattern {
     fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let Ok(_) = func::Call::from_operation(db, *op) else {
+        // Check if this is a supported operation type
+        let is_supported = func::Call::from_operation(db, *op).is_ok()
+            || func::CallIndirect::from_operation(db, *op).is_ok()
+            || wasm::If::from_operation(db, *op).is_ok();
+
+        if !is_supported {
             return RewriteResult::Unchanged;
-        };
+        }
 
         let results = op.results(db);
         if results.is_empty() {
@@ -1410,94 +1415,8 @@ impl<'db> RewritePattern<'db> for ConvertCallTypePattern {
         }
 
         tracing::debug!(
-            "ConvertCallTypePattern: converting result type from {}.{} to {}.{}",
-            result_ty.dialect(db),
-            result_ty.name(db),
-            new_result_ty.dialect(db),
-            new_result_ty.name(db)
-        );
-
-        let new_op = op
-            .modify(db)
-            .results(IdVec::from(vec![new_result_ty]))
-            .build();
-
-        RewriteResult::Replace(new_op)
-    }
-}
-
-/// Convert func.call_indirect result types from trampoline types to ADT types.
-struct ConvertCallIndirectTypePattern;
-
-impl<'db> RewritePattern<'db> for ConvertCallIndirectTypePattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        let Ok(_) = func::CallIndirect::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
-        };
-
-        let results = op.results(db);
-        if results.is_empty() {
-            return RewriteResult::Unchanged;
-        }
-
-        let result_ty = results[0];
-        let new_result_ty = convert_trampoline_type(db, result_ty);
-
-        if new_result_ty == result_ty {
-            return RewriteResult::Unchanged;
-        }
-
-        tracing::debug!(
-            "ConvertCallIndirectTypePattern: converting result type from {}.{} to {}.{}",
-            result_ty.dialect(db),
-            result_ty.name(db),
-            new_result_ty.dialect(db),
-            new_result_ty.name(db)
-        );
-
-        let new_op = op
-            .modify(db)
-            .results(IdVec::from(vec![new_result_ty]))
-            .build();
-
-        RewriteResult::Replace(new_op)
-    }
-}
-
-/// Convert wasm.if result types from trampoline types to ADT types.
-/// Note: scf.if is converted to wasm.if by scf_to_wasm before this pass runs.
-struct ConvertWasmIfTypePattern;
-
-impl<'db> RewritePattern<'db> for ConvertWasmIfTypePattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        let Ok(_) = wasm::If::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
-        };
-
-        let results = op.results(db);
-        if results.is_empty() {
-            return RewriteResult::Unchanged;
-        }
-
-        let result_ty = results[0];
-        let new_result_ty = convert_trampoline_type(db, result_ty);
-
-        if new_result_ty == result_ty {
-            return RewriteResult::Unchanged;
-        }
-
-        tracing::debug!(
-            "ConvertWasmIfTypePattern: converting result type from {}.{} to {}.{}",
+            "ConvertTrampolineResultTypePattern: {} - converting result type from {}.{} to {}.{}",
+            op.name(db),
             result_ty.dialect(db),
             result_ty.name(db),
             new_result_ty.dialect(db),
