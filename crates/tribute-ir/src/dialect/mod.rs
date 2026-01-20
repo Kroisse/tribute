@@ -13,11 +13,11 @@ pub mod ability;
 // === Continuation implementation ===
 pub mod trampoline;
 
-// === Type system ===
-pub mod adt;
-
 // === Closures ===
 pub mod closure;
 
 // === Data structures ===
 pub mod list;
+
+// Re-export adt from trunk-ir for backwards compatibility
+pub use trunk_ir::dialect::adt;
