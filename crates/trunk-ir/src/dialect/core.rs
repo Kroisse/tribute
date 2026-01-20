@@ -56,11 +56,6 @@ dialect! {
         /// `core.array` type: array with element type.
         type array(element);
 
-        /// `core.tuple` type: cons cell (head, tail).
-        /// Use `Nil` as the tail terminator.
-        /// Example: `(a, b, c)` → `Tuple(a, Tuple(b, Tuple(c, Nil)))`
-        type tuple(head, tail);
-
         /// `core.ref_` type: GC-managed reference.
         #[attr(nullable: bool)]
         type ref_(pointee);
@@ -633,48 +628,6 @@ fn print_func(db: &dyn salsa::Database, ty: Type<'_>, f: &mut Formatter<'_>) -> 
     }
 
     Printable::print_type(db, result, f)
-}
-
-// tuple -> "(a, b, c)"
-inventory::submit! { Printable::implement("core", "tuple", print_tuple) }
-
-fn print_tuple(db: &dyn salsa::Database, ty: Type<'_>, f: &mut Formatter<'_>) -> fmt::Result {
-    let params = ty.params(db);
-    if params.is_empty() {
-        return f.write_str("()");
-    }
-
-    // Flatten cons cells into a list
-    let mut elements = Vec::new();
-    let mut current = ty;
-
-    while current.is_dialect(db, DIALECT_NAME(), TUPLE()) {
-        let params = current.params(db);
-        if params.len() >= 2 {
-            elements.push(params[0]); // head
-            current = params[1]; // tail
-        } else {
-            break;
-        }
-    }
-
-    // Check if tail is nil (complete tuple)
-    let has_tail = !current.is_dialect(db, DIALECT_NAME(), NIL());
-
-    f.write_char('(')?;
-    for (i, &elem) in elements.iter().enumerate() {
-        if i > 0 {
-            f.write_str(", ")?;
-        }
-        Printable::print_type(db, elem, f)?;
-    }
-    if has_tail {
-        if !elements.is_empty() {
-            f.write_str(", ")?;
-        }
-        Printable::print_type(db, current, f)?;
-    }
-    f.write_char(')')
 }
 
 // array -> "Array(elem)"
