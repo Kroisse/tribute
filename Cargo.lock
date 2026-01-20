@@ -1259,6 +1259,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "trunk-ir-wasm-backend"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "salsa",
+ "salsa-test-macros",
+ "tracing",
+ "trunk-ir",
+ "wasm-encoder",
+]
+
+[[package]]
 name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
