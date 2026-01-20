@@ -51,7 +51,9 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) -> co
         .add_pattern(StructGetResultTypePattern)
         .add_pattern(IfResultTypePattern)
         .add_pattern(BlockResultTypePattern)
-        .add_pattern(LoopResultTypePattern);
+        .add_pattern(LoopResultTypePattern)
+        // Fallback pattern: convert remaining type_var to anyref
+        .add_pattern(FallbackTypeVarPattern);
     // No specific conversion target - type concretization is an optimization pass
     let target = ConversionTarget::new();
     applicator.apply_partial(db, module, target).module
@@ -559,6 +561,63 @@ fn get_field_type_from_struct<'db>(
     }
 
     None
+}
+
+/// Fallback pattern to convert any remaining type_var results to anyref.
+///
+/// This is a catch-all pattern that runs after all other patterns have been applied.
+/// Any operation with `tribute.type_var` result types that couldn't be concretized
+/// through other means will have its results converted to `wasm.anyref`.
+///
+/// Note: This pattern only converts `tribute.type_var`, NOT `tribute.type`.
+/// Unresolved `tribute.type` references to user-defined types (e.g., `tribute.type(name="Expr")`)
+/// are preserved because they represent valid ADT types that will be resolved by
+/// the GC type collection phase.
+struct FallbackTypeVarPattern;
+
+impl<'db> RewritePattern<'db> for FallbackTypeVarPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let results = op.results(db);
+        if results.is_empty() {
+            return RewriteResult::Unchanged;
+        }
+
+        // Only convert type_var (inference variables), not unresolved type references.
+        // Unresolved tribute.type(name=X) for user-defined types should be preserved
+        // as they will be resolved by gc_types_collection.
+        let has_type_var = results.iter().any(|ty| tribute::is_type_var(db, *ty));
+        if !has_type_var {
+            return RewriteResult::Unchanged;
+        }
+
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+
+        // Replace only type_var results with anyref
+        let new_results: IdVec<Type<'db>> = results
+            .iter()
+            .map(|ty| {
+                if tribute::is_type_var(db, *ty) {
+                    anyref_ty
+                } else {
+                    *ty
+                }
+            })
+            .collect();
+
+        debug!(
+            "wasm_type_concrete: fallback converting {}.{} type_var result(s) to anyref",
+            op.dialect(db),
+            op.name(db)
+        );
+
+        let new_op = op.modify(db).results(new_results).build();
+        RewriteResult::Replace(new_op)
+    }
 }
 
 // ============================================================================
