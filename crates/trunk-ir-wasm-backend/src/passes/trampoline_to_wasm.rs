@@ -69,10 +69,8 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(LowerStateGetPattern)
         .add_pattern(LowerSetYieldStatePattern)
         .add_pattern(LowerResetYieldStatePattern)
-        .add_pattern(LowerGetYieldContinuationPattern)
-        .add_pattern(LowerGetYieldShiftValuePattern)
-        .add_pattern(LowerCheckYieldPattern)
-        .add_pattern(LowerGetYieldOpIdxPattern);
+        .add_pattern(LowerYieldContinuationAccessPattern)
+        .add_pattern(LowerYieldGlobalGetPattern);
 
     // No specific conversion target - trampoline lowering is a dialect transformation
     let target = ConversionTarget::new();
@@ -1105,56 +1103,31 @@ impl<'db> RewritePattern<'db> for LowerResetYieldStatePattern {
     }
 }
 
-/// Lower `trampoline.get_yield_continuation` → wasm.global_get + wasm.ref_cast
-struct LowerGetYieldContinuationPattern;
+/// Lower yield continuation access operations → wasm.global_get + wasm.ref_cast [+ adt.struct_get]
+///
+/// Applies to:
+/// - `trampoline.get_yield_continuation` → load and cast continuation
+/// - `trampoline.get_yield_shift_value` → load, cast, and extract shift_value field
+struct LowerYieldContinuationAccessPattern;
 
-impl<'db> RewritePattern<'db> for LowerGetYieldContinuationPattern {
+impl<'db> RewritePattern<'db> for LowerYieldContinuationAccessPattern {
     fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != trampoline::DIALECT_NAME()
-            || op.name(db) != trampoline::GET_YIELD_CONTINUATION()
-        {
+        if op.dialect(db) != trampoline::DIALECT_NAME() {
             return RewriteResult::Unchanged;
         }
 
-        let location = op.location(db);
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let cont_type = continuation_adt_type(db);
-
-        let mut ops = Vec::new();
-
-        // Load continuation from $yield_cont global
-        let get_cont = wasm::global_get(db, location, anyref_ty, yield_globals::CONT_IDX);
-        let cont_anyref = get_cont.as_operation().result(db, 0);
-        ops.push(get_cont.as_operation());
-
-        // Cast anyref to continuation type
-        let cont_cast_op = wasm::ref_cast(db, location, cont_anyref, cont_type, cont_type, None);
-        ops.push(cont_cast_op.as_operation());
-
-        RewriteResult::expand(ops)
-    }
-}
-
-/// Lower `trampoline.get_yield_shift_value` → wasm.global_get + adt.struct_get
-struct LowerGetYieldShiftValuePattern;
-
-impl<'db> RewritePattern<'db> for LowerGetYieldShiftValuePattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        if op.dialect(db) != trampoline::DIALECT_NAME()
-            || op.name(db) != trampoline::GET_YIELD_SHIFT_VALUE()
-        {
+        let extract_shift_value = if op.name(db) == trampoline::GET_YIELD_CONTINUATION() {
+            false
+        } else if op.name(db) == trampoline::GET_YIELD_SHIFT_VALUE() {
+            true
+        } else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let location = op.location(db);
         let anyref_ty = wasm::Anyref::new(db).as_type();
@@ -1172,69 +1145,54 @@ impl<'db> RewritePattern<'db> for LowerGetYieldShiftValuePattern {
         let cont_ref = cont_cast.as_operation().result(db, 0);
         ops.push(cont_cast.as_operation());
 
-        // Extract shift_value from continuation (field 3)
-        let get_shift_value = adt::struct_get(
-            db,
-            location,
-            cont_ref,
-            anyref_ty,
-            cont_type,
-            Attribute::IntBits(3),
-        );
-        ops.push(get_shift_value.as_operation());
+        if extract_shift_value {
+            // Extract shift_value from continuation (field 3)
+            let get_shift_value = adt::struct_get(
+                db,
+                location,
+                cont_ref,
+                anyref_ty,
+                cont_type,
+                Attribute::IntBits(3),
+            );
+            ops.push(get_shift_value.as_operation());
+        }
 
         RewriteResult::expand(ops)
     }
 }
 
-/// Lower `trampoline.check_yield` → wasm.global_get (yield_state)
-struct LowerCheckYieldPattern;
+/// Lower yield global getter operations → wasm.global_get
+///
+/// Applies to:
+/// - `trampoline.check_yield` → yield_state global
+/// - `trampoline.get_yield_op_idx` → yield_op_idx global
+struct LowerYieldGlobalGetPattern;
 
-impl<'db> RewritePattern<'db> for LowerCheckYieldPattern {
+impl<'db> RewritePattern<'db> for LowerYieldGlobalGetPattern {
     fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        if op.dialect(db) != trampoline::DIALECT_NAME() || op.name(db) != trampoline::CHECK_YIELD()
-        {
+        if op.dialect(db) != trampoline::DIALECT_NAME() {
             return RewriteResult::Unchanged;
         }
 
-        let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Get yield state from global
-        let get_yield = wasm::global_get(db, location, i32_ty, yield_globals::STATE_IDX);
-
-        RewriteResult::Replace(get_yield.as_operation())
-    }
-}
-
-/// Lower `trampoline.get_yield_op_idx` → wasm.global_get (yield_op_idx)
-struct LowerGetYieldOpIdxPattern;
-
-impl<'db> RewritePattern<'db> for LowerGetYieldOpIdxPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        if op.dialect(db) != trampoline::DIALECT_NAME()
-            || op.name(db) != trampoline::GET_YIELD_OP_IDX()
-        {
+        let global_idx = if op.name(db) == trampoline::CHECK_YIELD() {
+            yield_globals::STATE_IDX
+        } else if op.name(db) == trampoline::GET_YIELD_OP_IDX() {
+            yield_globals::OP_IDX
+        } else {
             return RewriteResult::Unchanged;
-        }
+        };
 
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
+        let get_global = wasm::global_get(db, location, i32_ty, global_idx);
 
-        // Get op_idx from global
-        let get_op_idx = wasm::global_get(db, location, i32_ty, yield_globals::OP_IDX);
-
-        RewriteResult::Replace(get_op_idx.as_operation())
+        RewriteResult::Replace(get_global.as_operation())
     }
 }
 
