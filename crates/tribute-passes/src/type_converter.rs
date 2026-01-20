@@ -79,10 +79,6 @@ pub fn generic_type_converter() -> TypeConverter {
         .add_conversion(|db, ty| {
             tribute_rt::Bool::from_type(db, ty).map(|_| core::I32::new(db).as_type())
         })
-        // Convert core.i1 → core.i32 (most targets don't have i1)
-        .add_conversion(|db, ty| {
-            core::I::<1>::from_type(db, ty).map(|_| core::I32::new(db).as_type())
-        })
         // Convert tribute_rt.float → core.f64 (float as f64)
         .add_conversion(|db, ty| {
             tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
@@ -109,12 +105,6 @@ pub fn generic_type_converter() -> TypeConverter {
             }
             // tribute_rt.bool → core.i32 (same representation)
             if tribute_rt::Bool::from_type(db, from_ty).is_some()
-                && core::I32::from_type(db, to_ty).is_some()
-            {
-                return MaterializeResult::NoOp;
-            }
-            // core.i1 → core.i32 (same representation)
-            if core::I::<1>::from_type(db, from_ty).is_some()
                 && core::I32::from_type(db, to_ty).is_some()
             {
                 return MaterializeResult::NoOp;
@@ -212,18 +202,16 @@ pub fn are_equivalent_primitives(db: &dyn salsa::Database, from_ty: Type, to_ty:
         return true;
     }
 
-    // Int-like types
+    // Int-like types (target-agnostic: excludes core.i1 which is backend-specific)
     let from_int_like = tribute_rt::Int::from_type(db, from_ty).is_some()
         || tribute_rt::Nat::from_type(db, from_ty).is_some()
         || tribute_rt::Bool::from_type(db, from_ty).is_some()
-        || core::I32::from_type(db, from_ty).is_some()
-        || core::I::<1>::from_type(db, from_ty).is_some();
+        || core::I32::from_type(db, from_ty).is_some();
 
     let to_int_like = tribute_rt::Int::from_type(db, to_ty).is_some()
         || tribute_rt::Nat::from_type(db, to_ty).is_some()
         || tribute_rt::Bool::from_type(db, to_ty).is_some()
-        || core::I32::from_type(db, to_ty).is_some()
-        || core::I::<1>::from_type(db, to_ty).is_some();
+        || core::I32::from_type(db, to_ty).is_some();
 
     if from_int_like && to_int_like {
         return true;

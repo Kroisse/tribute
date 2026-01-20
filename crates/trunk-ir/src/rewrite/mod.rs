@@ -94,4 +94,4 @@ pub use conversion_target::{ConversionError, ConversionTarget, IllegalOp, Legali
 pub use op_adaptor::OpAdaptor;
 pub use pattern::{OperationMatcher, RewritePattern};
 pub use result::RewriteResult;
-pub use type_converter::{MaterializeResult, OpVec, TypeConverter};
+pub use type_converter::{MaterializeResult, OpVec, TypeConverter, base_type_converter};

@@ -216,6 +216,34 @@ impl Default for TypeConverter {
     }
 }
 
+/// Create a base TypeConverter for common target-agnostic conversions.
+///
+/// This provides a starting point for building target-specific converters.
+/// Currently empty, but can be extended by backends or language-specific passes.
+///
+/// # Example
+///
+/// ```
+/// use trunk_ir::rewrite::base_type_converter;
+///
+/// let converter = base_type_converter()
+///     .add_conversion(|db, ty| {
+///         // Add backend-specific conversions...
+///         None
+///     });
+/// ```
+pub fn base_type_converter() -> TypeConverter {
+    TypeConverter::new()
+        // Identity materialization for same-type conversions
+        .add_materialization(|_db, _location, _value, from_ty, to_ty| {
+            if from_ty == to_ty {
+                MaterializeResult::NoOp
+            } else {
+                MaterializeResult::Skip
+            }
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
