@@ -231,9 +231,19 @@ fn create_type_converter() -> TypeConverter {
 
             if is_from_f64 && is_to_anyref {
                 let boxed_ty = boxed_f64_type(db);
+                let anyref_ty = wasm::Anyref::new(db).as_type();
+
+                // Create BoxedF64 struct containing the f64 value
                 let box_op = adt::struct_new(db, location, vec![value], boxed_ty, boxed_ty);
+                let boxed_value = box_op.as_operation().result(db, 0);
+
+                // Upcast BoxedF64 to anyref
+                let upcast_op =
+                    wasm::ref_cast(db, location, boxed_value, anyref_ty, anyref_ty, None);
+
                 return MaterializeResult::Ops(trunk_ir::smallvec::smallvec![
-                    box_op.as_operation()
+                    box_op.as_operation(),
+                    upcast_op.as_operation(),
                 ]);
             }
             MaterializeResult::Skip
