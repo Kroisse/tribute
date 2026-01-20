@@ -164,13 +164,6 @@ impl<'db> HandlerLowerer<'db> {
             .copied()
             .unwrap_or_else(|| core::Nil::new(self.db).as_type());
 
-        // DEBUG: Print the result type
-        eprintln!(
-            "[DEBUG tribute_to_cont] tribute.handle result_type = {}.{}",
-            result_type.dialect(self.db),
-            result_type.name(self.db)
-        );
-
         // Get body and arms regions from tribute.handle
         let Ok(handle_op) = tribute::Handle::from_operation(self.db, op) else {
             return vec![op];
