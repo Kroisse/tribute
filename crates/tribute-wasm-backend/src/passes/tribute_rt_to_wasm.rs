@@ -30,6 +30,34 @@ use trunk_ir::{DialectOp, DialectType, Operation};
 use crate::gc_types::BOXED_F64_IDX;
 use crate::type_converter::wasm_type_converter;
 
+/// Create i31 unbox operations (ref_cast + i31_get_s/u).
+///
+/// Performs a cast from anyref to i31ref and then extracts the i32 value.
+/// - `is_signed = true`: Use `i31_get_s` for signed extraction (Int)
+/// - `is_signed = false`: Use `i31_get_u` for unsigned extraction (Nat, Bool)
+fn create_i31_unbox<'db>(
+    db: &'db dyn salsa::Database,
+    location: trunk_ir::Location<'db>,
+    value: trunk_ir::Value<'db>,
+    is_signed: bool,
+) -> Vec<Operation<'db>> {
+    // Cast anyref to i31ref first (abstract type, no type_idx needed)
+    let i31ref_ty = wasm::I31ref::new(db).as_type();
+    let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
+    let cast_result = cast_op.as_operation().result(db, 0);
+
+    let i32_ty = core::I32::new(db).as_type();
+
+    // Extract value: signed or unsigned
+    let get_op = if is_signed {
+        wasm::i31_get_s(db, location, cast_result, i32_ty).as_operation()
+    } else {
+        wasm::i31_get_u(db, location, cast_result, i32_ty).as_operation()
+    };
+
+    vec![cast_op.as_operation(), get_op]
+}
+
 /// Lower tribute_rt dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     // No specific conversion target - tribute_rt lowering is a dialect transformation
@@ -94,21 +122,8 @@ impl<'db> RewritePattern<'db> for UnboxIntPattern {
             return RewriteResult::Unchanged;
         };
 
-        let location = op.location(db);
-        let value = unbox_op.value(db);
-
-        // Cast anyref to i31ref first (abstract type, no type_idx needed)
-        let i31ref_ty = wasm::I31ref::new(db).as_type();
-        let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
-        let cast_result = cast_op.as_operation().result(db, 0);
-
-        // Result type is i32
-        let i32_ty = core::I32::new(db).as_type();
-
-        // wasm.i31_get_s: i31ref -> i32 (signed)
-        let get_op = wasm::i31_get_s(db, location, cast_result, i32_ty);
-
-        RewriteResult::Expand(vec![cast_op.as_operation(), get_op.as_operation()])
+        let ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), true);
+        RewriteResult::Expand(ops)
     }
 }
 
@@ -154,19 +169,8 @@ impl<'db> RewritePattern<'db> for UnboxNatPattern {
             return RewriteResult::Unchanged;
         };
 
-        let location = op.location(db);
-        let value = unbox_op.value(db);
-
-        // Cast anyref to i31ref first (abstract type, no type_idx needed)
-        let i31ref_ty = wasm::I31ref::new(db).as_type();
-        let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
-        let cast_result = cast_op.as_operation().result(db, 0);
-
-        let i32_ty = core::I32::new(db).as_type();
-
-        // wasm.i31_get_u: i31ref -> i32 (unsigned)
-        let get_op = wasm::i31_get_u(db, location, cast_result, i32_ty);
-        RewriteResult::Expand(vec![cast_op.as_operation(), get_op.as_operation()])
+        let ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), false);
+        RewriteResult::Expand(ops)
     }
 }
 
@@ -280,19 +284,9 @@ impl<'db> RewritePattern<'db> for UnboxBoolPattern {
             return RewriteResult::Unchanged;
         };
 
-        let location = op.location(db);
-        let value = unbox_op.value(db);
-
-        // Cast anyref to i31ref first (abstract type, no type_idx needed)
-        let i31ref_ty = wasm::I31ref::new(db).as_type();
-        let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
-        let cast_result = cast_op.as_operation().result(db, 0);
-
-        let i32_ty = core::I32::new(db).as_type();
-
         // Use unsigned extraction since bool is 0 or 1
-        let get_op = wasm::i31_get_u(db, location, cast_result, i32_ty);
-        RewriteResult::Expand(vec![cast_op.as_operation(), get_op.as_operation()])
+        let ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), false);
+        RewriteResult::Expand(ops)
     }
 }
 
