@@ -51,7 +51,8 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     debug_func_params(db, &module, "after func_to_wasm");
 
     // Convert ALL adt ops to wasm (including those from trampoline_to_adt)
-    let module = crate::passes::adt_to_wasm::lower(db, module);
+    let module =
+        trunk_ir_wasm_backend::passes::adt_to_wasm::lower(db, module, wasm_type_converter());
     debug_func_params(db, &module, "after adt_to_wasm");
 
     // Lower tribute_rt operations (box_int, unbox_int) to wasm operations

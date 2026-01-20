@@ -42,20 +42,25 @@
 
 use tracing::warn;
 
-use tribute_ir::{ModulePathExt as _, dialect::adt};
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
 use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type};
 
-use crate::type_converter::wasm_type_converter;
-
 /// Lower adt dialect to wasm dialect.
-pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+///
+/// The `type_converter` parameter allows language-specific backends to provide
+/// their own type conversion rules.
+pub fn lower<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+    type_converter: TypeConverter,
+) -> Module<'db> {
     // No specific conversion target - adt lowering is a dialect transformation
     let target = ConversionTarget::new();
-    PatternApplicator::new(wasm_type_converter())
+    PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
@@ -235,10 +240,9 @@ fn make_variant_type<'db>(
     let dialect = base_type.dialect(db);
 
     // For adt.typeref types, extract the actual type name from the name attribute
+    // Use full path to avoid collisions (e.g., mod_a::Expr$Add vs mod_b::Expr$Add)
     let base_name = if adt::is_typeref(db, base_type) {
-        adt::get_type_name(db, base_type)
-            .map(|name| name.last_segment())
-            .unwrap_or_else(|| base_type.name(db))
+        adt::get_type_name(db, base_type).unwrap_or_else(|| base_type.name(db))
     } else {
         base_type.name(db)
     };
@@ -623,7 +627,7 @@ mod tests {
 
     #[salsa::tracked]
     fn lower_and_check_names(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
-        let lowered = lower(db, module);
+        let lowered = lower(db, module, TypeConverter::new());
         let body = lowered.body(db);
         let ops = body.blocks(db)[0].operations(db);
         ops.iter().map(|op| op.full_name(db)).collect()
