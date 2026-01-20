@@ -61,12 +61,9 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(LowerBuildContinuationPattern)
         .add_pattern(LowerStepDonePattern)
         .add_pattern(LowerStepShiftPattern)
-        .add_pattern(LowerStepGetPattern)
-        .add_pattern(LowerContinuationGetPattern)
+        .add_pattern(LowerTrampolineStructGetPattern)
         .add_pattern(LowerBuildStatePattern)
         .add_pattern(LowerBuildResumeWrapperPattern)
-        .add_pattern(LowerResumeWrapperGetPattern)
-        .add_pattern(LowerStateGetPattern)
         .add_pattern(LowerSetYieldStatePattern)
         .add_pattern(LowerResetYieldStatePattern)
         .add_pattern(LowerYieldContinuationAccessPattern)
@@ -624,54 +621,76 @@ impl<'db> RewritePattern<'db> for LowerStepShiftPattern {
     }
 }
 
-/// Lower `trampoline.step_get` → `adt.struct_get`
-struct LowerStepGetPattern;
+/// Lower trampoline struct-get operations → `adt.struct_get` [+ materialize_from_any]
+///
+/// Applies to:
+/// - `trampoline.step_get` (field 1 is anyref)
+/// - `trampoline.continuation_get` (fields 1, 3 are anyref)
+/// - `trampoline.resume_wrapper_get` (all fields are anyref)
+/// - `trampoline.state_get` (all fields are anyref)
+struct LowerTrampolineStructGetPattern;
 
-impl<'db> RewritePattern<'db> for LowerStepGetPattern {
+impl<'db> RewritePattern<'db> for LowerTrampolineStructGetPattern {
     fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
         adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let step_get = match trampoline::StepGet::from_operation(db, *op) {
-            Ok(sg) => sg,
-            Err(_) => return RewriteResult::Unchanged,
-        };
-
-        let location = op.location(db);
-        let step_type = step_adt_type(db);
         let any_ty = wasm::Anyref::new(db).as_type();
 
-        let field_name = step_get.field(db);
-        let field_idx = step_field_index(field_name);
-        let expected_result_type = op.results(db).first().copied().unwrap_or(any_ty);
+        // Try to match each struct-get operation type and extract parameters
+        let (struct_type, field_idx, is_any_field) =
+            if let Ok(step_get) = trampoline::StepGet::from_operation(db, *op) {
+                let idx = step_field_index(step_get.field(db));
+                (step_adt_type(db), idx, idx == 1)
+            } else if let Ok(cont_get) = trampoline::ContinuationGet::from_operation(db, *op) {
+                let idx = continuation_field_index(cont_get.field(db));
+                (continuation_adt_type(db), idx, idx == 1 || idx == 3)
+            } else if let Ok(wrapper_get) = trampoline::ResumeWrapperGet::from_operation(db, *op) {
+                let idx = resume_wrapper_field_index(wrapper_get.field(db));
+                (resume_wrapper_adt_type(db), idx, true)
+            } else if let Ok(state_get) = trampoline::StateGet::from_operation(db, *op) {
+                let field_idx = state_get
+                    .field(db)
+                    .with_str(|s| s.strip_prefix("field").and_then(|n| n.parse::<u32>().ok()))
+                    .unwrap_or(0);
+                // state_type is added manually as an attribute
+                let state_type = op
+                    .attributes(db)
+                    .get(&Symbol::new("state_type"))
+                    .and_then(|a| match a {
+                        Attribute::Type(ty) => Some(*ty),
+                        _ => None,
+                    })
+                    .unwrap_or(any_ty);
+                (state_type, field_idx, true)
+            } else {
+                return RewriteResult::Unchanged;
+            };
 
-        let step_value = adaptor
+        let location = op.location(db);
+        let expected_result_type = op.results(db).first().copied().unwrap_or(any_ty);
+        let struct_value = adaptor
             .operands()
             .first()
             .copied()
-            .expect("step_get requires operand");
-
-        // field 1 (value) is any type and needs casting or unboxing
-        let is_any_field = field_idx == 1;
+            .expect("struct_get requires operand");
 
         if is_any_field {
             let mut ops = Vec::new();
 
-            // Get the anyref value from the struct
             let struct_get = adt::struct_get(
                 db,
                 location,
-                step_value,
+                struct_value,
                 any_ty,
-                step_type,
+                struct_type,
                 Attribute::IntBits(field_idx.into()),
             );
             let any_value = struct_get.as_operation().result(db, 0);
             ops.push(struct_get.as_operation());
 
-            // Use TypeConverter materialization to unbox to the expected type
             materialize_from_any(
                 db,
                 location,
@@ -686,81 +705,9 @@ impl<'db> RewritePattern<'db> for LowerStepGetPattern {
             let struct_get = adt::struct_get(
                 db,
                 location,
-                step_value,
+                struct_value,
                 expected_result_type,
-                step_type,
-                Attribute::IntBits(field_idx.into()),
-            );
-
-            RewriteResult::Replace(struct_get.as_operation())
-        }
-    }
-}
-
-/// Lower `trampoline.continuation_get` → `adt.struct_get`
-struct LowerContinuationGetPattern;
-
-impl<'db> RewritePattern<'db> for LowerContinuationGetPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        let cont_get = match trampoline::ContinuationGet::from_operation(db, *op) {
-            Ok(cg) => cg,
-            Err(_) => return RewriteResult::Unchanged,
-        };
-
-        let location = op.location(db);
-        let cont_type = continuation_adt_type(db);
-        let any_ty = wasm::Anyref::new(db).as_type();
-
-        let field_name = cont_get.field(db);
-        let field_idx = continuation_field_index(field_name);
-        let expected_result_type = op.results(db).first().copied().unwrap_or(any_ty);
-
-        let cont_value = adaptor
-            .operands()
-            .first()
-            .copied()
-            .expect("continuation_get requires operand");
-
-        // Fields 1 (state) and 3 (shift_value) are any type
-        let is_any_field = field_idx == 1 || field_idx == 3;
-
-        if is_any_field {
-            let mut ops = Vec::new();
-
-            let struct_get = adt::struct_get(
-                db,
-                location,
-                cont_value,
-                any_ty,
-                cont_type,
-                Attribute::IntBits(field_idx.into()),
-            );
-            let any_value = struct_get.as_operation().result(db, 0);
-            ops.push(struct_get.as_operation());
-
-            // Use TypeConverter materialization to unbox to the expected type
-            materialize_from_any(
-                db,
-                location,
-                any_value,
-                expected_result_type,
-                adaptor,
-                &mut ops,
-            );
-
-            RewriteResult::expand(ops)
-        } else {
-            let struct_get = adt::struct_get(
-                db,
-                location,
-                cont_value,
-                expected_result_type,
-                cont_type,
+                struct_type,
                 Attribute::IntBits(field_idx.into()),
             );
 
@@ -875,135 +822,6 @@ impl<'db> RewritePattern<'db> for LowerBuildResumeWrapperPattern {
         let fields = vec![state_field, resume_value_field];
         let struct_new = adt::struct_new(db, location, fields, wrapper_type, wrapper_type);
         ops.push(struct_new.as_operation());
-
-        RewriteResult::expand(ops)
-    }
-}
-
-/// Lower `trampoline.resume_wrapper_get` → `adt.struct_get`
-struct LowerResumeWrapperGetPattern;
-
-impl<'db> RewritePattern<'db> for LowerResumeWrapperGetPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        let wrapper_get = match trampoline::ResumeWrapperGet::from_operation(db, *op) {
-            Ok(wg) => wg,
-            Err(_) => return RewriteResult::Unchanged,
-        };
-
-        let location = op.location(db);
-        let wrapper_type = resume_wrapper_adt_type(db);
-        let any_ty = wasm::Anyref::new(db).as_type();
-
-        let field_name = wrapper_get.field(db);
-        let field_idx = resume_wrapper_field_index(field_name);
-        let expected_result_type = op.results(db).first().copied().unwrap_or(any_ty);
-
-        let wrapper_value = adaptor
-            .operands()
-            .first()
-            .copied()
-            .expect("resume_wrapper_get requires operand");
-
-        // Both fields are any type
-        let mut ops = Vec::new();
-
-        let struct_get = adt::struct_get(
-            db,
-            location,
-            wrapper_value,
-            any_ty,
-            wrapper_type,
-            Attribute::IntBits(field_idx.into()),
-        );
-        let any_value = struct_get.as_operation().result(db, 0);
-        ops.push(struct_get.as_operation());
-
-        // Use TypeConverter materialization to unbox to the expected type
-        materialize_from_any(
-            db,
-            location,
-            any_value,
-            expected_result_type,
-            adaptor,
-            &mut ops,
-        );
-
-        RewriteResult::expand(ops)
-    }
-}
-
-/// Lower `trampoline.state_get` → `adt.struct_get`
-struct LowerStateGetPattern;
-
-impl<'db> RewritePattern<'db> for LowerStateGetPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        if op.dialect(db) != trampoline::DIALECT_NAME() || op.name(db) != trampoline::STATE_GET() {
-            return RewriteResult::Unchanged;
-        }
-
-        let location = op.location(db);
-        let any_ty = wasm::Anyref::new(db).as_type();
-
-        // Extract field index from "field" attribute (Symbol type, e.g., "field0", "field1")
-        let field_idx =
-            op.attributes(db)
-                .get(&Symbol::new("field"))
-                .and_then(|a| match a {
-                    Attribute::Symbol(sym) => sym
-                        .with_str(|s| s.strip_prefix("field").and_then(|n| n.parse::<u64>().ok())),
-                    _ => None,
-                })
-                .unwrap_or(0u64);
-
-        let state_type = op
-            .attributes(db)
-            .get(&Symbol::new("state_type"))
-            .and_then(|a| match a {
-                Attribute::Type(ty) => Some(*ty),
-                _ => None,
-            })
-            .unwrap_or(any_ty);
-
-        let expected_result_type = op.results(db).first().copied().unwrap_or(any_ty);
-
-        let state_value = adaptor
-            .operands()
-            .first()
-            .copied()
-            .expect("state_get requires operand");
-
-        let mut ops = Vec::new();
-
-        let struct_get = adt::struct_get(
-            db,
-            location,
-            state_value,
-            any_ty,
-            state_type,
-            Attribute::IntBits(field_idx),
-        );
-        let any_value = struct_get.as_operation().result(db, 0);
-        ops.push(struct_get.as_operation());
-
-        // Use TypeConverter materialization to unbox to the expected type
-        materialize_from_any(
-            db,
-            location,
-            any_value,
-            expected_result_type,
-            adaptor,
-            &mut ops,
-        );
 
         RewriteResult::expand(ops)
     }
@@ -1510,7 +1328,7 @@ mod tests {
     }
 
     // ========================================================================
-    // Test: LowerStateGetPattern
+    // Test: LowerTrampolineStructGetPattern (state_get case)
     // ========================================================================
 
     /// Test helper: creates state_get with field attribute and applies pattern.
@@ -1542,7 +1360,7 @@ mod tests {
             .build();
 
         // Apply the pattern
-        let pattern = LowerStateGetPattern;
+        let pattern = LowerTrampolineStructGetPattern;
         let ctx = RewriteContext::new();
         let type_converter = TypeConverter::new();
         let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx, &type_converter);
