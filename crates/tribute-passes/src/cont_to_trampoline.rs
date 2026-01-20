@@ -18,9 +18,10 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::live_vars::FunctionAnalysis;
-use tribute_ir::dialect::{adt, trampoline, tribute_rt};
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func::{self, Func};
+use trunk_ir::dialect::{adt, trampoline};
 use trunk_ir::dialect::{arith, cont, scf};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::rewrite::{

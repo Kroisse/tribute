@@ -5,7 +5,8 @@
 use tracing::trace;
 use tree_sitter::Node;
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{adt, list, tribute, tribute_pat};
+use tribute_ir::dialect::{list, tribute, tribute_pat};
+use trunk_ir::dialect::adt;
 use trunk_ir::{
     Attribute, Block, BlockBuilder, BlockId, DialectOp, DialectType, IdVec, Operation, Region,
     Symbol, Type, Value,

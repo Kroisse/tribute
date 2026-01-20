@@ -16,7 +16,8 @@ use std::sync::Arc;
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
 use tracing::trace;
-use tribute_ir::dialect::{ability, adt, closure, list, tribute, tribute_pat};
+use tribute_ir::dialect::{ability, closure, list, tribute, tribute_pat};
+use trunk_ir::dialect::adt;
 use trunk_ir::{
     Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
     dialect::{arith, cont, core, func},

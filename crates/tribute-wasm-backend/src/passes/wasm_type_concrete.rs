@@ -24,8 +24,9 @@ use std::collections::HashMap;
 
 use tracing::debug;
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{adt, closure, tribute, tribute_rt};
+use tribute_ir::dialect::{closure, tribute, tribute_rt};
 use trunk_ir::Attribute;
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::{cont, core, wasm};
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,

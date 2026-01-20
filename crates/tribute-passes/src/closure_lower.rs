@@ -21,7 +21,8 @@
 
 use std::collections::HashSet;
 
-use tribute_ir::dialect::{adt, closure, tribute_rt};
+use tribute_ir::dialect::{closure, tribute_rt};
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::{cont, core, func, wasm};
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,

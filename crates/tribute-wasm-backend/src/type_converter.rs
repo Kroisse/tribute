@@ -22,7 +22,8 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
-use tribute_ir::dialect::{ability, adt, closure, trampoline, tribute, tribute_rt};
+use tribute_ir::dialect::{ability, closure, tribute, tribute_rt};
+use trunk_ir::dialect::{adt, trampoline};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::rewrite::{MaterializeResult, OpVec, TypeConverter};
 use trunk_ir::{Attribute, Symbol};

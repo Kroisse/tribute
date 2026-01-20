@@ -23,12 +23,13 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use tribute_ir::dialect::{ability, trampoline, tribute, tribute_rt};
+use tribute_ir::dialect::{ability, tribute, tribute_rt};
 #[cfg(test)]
 use trunk_ir::Attribute;
 use trunk_ir::DialectType;
 #[cfg(test)]
 use trunk_ir::dialect::arith;
+use trunk_ir::dialect::trampoline;
 use trunk_ir::dialect::{cont, core, func};
 #[cfg(test)]
 use trunk_ir::rewrite::RewriteContext;
