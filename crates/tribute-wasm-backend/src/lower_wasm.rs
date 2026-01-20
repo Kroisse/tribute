@@ -42,7 +42,7 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
 
     // Convert trampoline types/ops BEFORE func_to_wasm so function signatures
     // have ADT types (not trampoline.Step) when converted to wasm.func
-    let module = crate::passes::trampoline_to_wasm::lower(db, module);
+    let module = trunk_ir_wasm_backend::passes::trampoline_to_wasm::lower(db, module);
     tracing::debug!("=== AFTER trampoline_to_wasm ===\n{:?}", module);
 
     let module =
@@ -343,8 +343,8 @@ impl<'db> WasmLowerer<'db> {
         }
 
         // Emit yield globals for continuation support.
-        // IMPORTANT: The order of these globals must match constants::yield_globals indices.
-        // See crate::constants::yield_globals for index definitions.
+        // IMPORTANT: The order of these globals must match yield_globals indices.
+        // See trunk_ir_wasm_backend::passes::trampoline_to_wasm::yield_globals for index definitions.
         if self.has_continuations {
             // Index 0 ($yield_state): i32 (0 = normal, 1 = yielding)
             builder.op(wasm::global(

@@ -22,14 +22,14 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
-use crate::passes::trampoline_to_wasm::{
-    continuation_adt_type, resume_wrapper_adt_type, step_adt_type,
-};
 use tribute_ir::dialect::{adt, closure, trampoline, tribute, tribute_rt};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::rewrite::{MaterializeResult, OpVec, TypeConverter};
 use trunk_ir::{Attribute, Symbol};
 use trunk_ir::{DialectOp, DialectType, Type};
+use trunk_ir_wasm_backend::passes::trampoline_to_wasm::{
+    continuation_adt_type, resume_wrapper_adt_type, step_adt_type,
+};
 
 #[cfg(test)]
 use trunk_ir::dialect::arith;
