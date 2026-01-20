@@ -25,11 +25,15 @@ use trunk_ir::{
 /// Entry point for lowering mid-level IR to wasm dialect.
 #[salsa::tracked]
 pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    // Phase 1: Pattern-based lowering passes
+    use crate::type_converter::wasm_type_converter;
+
+    // Phase 1: Pattern-based lowering passes (using trunk-ir-wasm-backend)
     tracing::debug!("=== BEFORE arith_to_wasm ===\n{:?}", module);
-    let module = crate::passes::arith_to_wasm::lower(db, module);
+    let module =
+        trunk_ir_wasm_backend::passes::arith_to_wasm::lower(db, module, wasm_type_converter());
     tracing::debug!("=== AFTER arith_to_wasm ===\n{:?}", module);
-    let module = crate::passes::scf_to_wasm::lower(db, module);
+    let module =
+        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(db, module, wasm_type_converter());
 
     // Normalize tribute_rt primitive types (int, nat, bool, float) to core types
     // BEFORE trampoline_to_wasm so downstream passes don't need to handle tribute_rt
@@ -41,7 +45,8 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = crate::passes::trampoline_to_wasm::lower(db, module);
     tracing::debug!("=== AFTER trampoline_to_wasm ===\n{:?}", module);
 
-    let module = crate::passes::func_to_wasm::lower(db, module);
+    let module =
+        trunk_ir_wasm_backend::passes::func_to_wasm::lower(db, module, wasm_type_converter());
     tracing::debug!("=== AFTER func_to_wasm ===\n{:?}", module);
     debug_func_params(db, &module, "after func_to_wasm");
 

@@ -1239,6 +1239,7 @@ dependencies = [
  "tracing",
  "tribute-ir",
  "trunk-ir",
+ "trunk-ir-wasm-backend",
  "wasm-encoder",
 ]
 
