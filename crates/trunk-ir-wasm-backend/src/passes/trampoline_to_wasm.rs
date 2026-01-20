@@ -309,6 +309,21 @@ fn create_i32_const<'db>(
     wasm::i32_const(db, location, i32_ty, value).as_operation()
 }
 
+/// Push an i32 constant and a global_set operation to set a global variable.
+fn push_set_i32_global<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    value: i32,
+    global_idx: u32,
+    ops: &mut Vec<Operation<'db>>,
+) {
+    let i32_ty = core::I32::new(db).as_type();
+    let const_op = wasm::i32_const(db, location, i32_ty, value);
+    let const_val = const_op.as_operation().result(db, 0);
+    ops.push(const_op.as_operation());
+    ops.push(wasm::global_set(db, location, const_val, global_idx).as_operation());
+}
+
 /// Step fields: tag=0, value=1, prompt=2, op_idx=3
 fn step_field_index(field_name: Symbol) -> u32 {
     field_name.with_str(|s| match s {
@@ -847,8 +862,6 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
         };
 
         let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
         let tag = set_yield.tag(db);
         let op_idx = set_yield.op_idx(db);
 
@@ -861,28 +874,17 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
         let mut ops = Vec::new();
 
         // Set $yield_state = 1 (yielding)
-        let const_1 = wasm::i32_const(db, location, i32_ty, 1);
-        let const_1_val = const_1.as_operation().result(db, 0);
-        ops.push(const_1.as_operation());
-        ops.push(
-            wasm::global_set(db, location, const_1_val, yield_globals::STATE_IDX).as_operation(),
-        );
+        push_set_i32_global(db, location, 1, yield_globals::STATE_IDX, &mut ops);
 
         // Set $yield_tag = tag
-        let tag_const = wasm::i32_const(db, location, i32_ty, tag as i32);
-        let tag_val = tag_const.as_operation().result(db, 0);
-        ops.push(tag_const.as_operation());
-        ops.push(wasm::global_set(db, location, tag_val, yield_globals::TAG_IDX).as_operation());
+        push_set_i32_global(db, location, tag as i32, yield_globals::TAG_IDX, &mut ops);
 
         // Set $yield_cont = continuation (as anyref)
         let cont_any = materialize_to_any(db, location, cont_val, adaptor, &mut ops);
         ops.push(wasm::global_set(db, location, cont_any, yield_globals::CONT_IDX).as_operation());
 
         // Set $yield_op_idx = op_idx
-        let op_idx_const = wasm::i32_const(db, location, i32_ty, op_idx as i32);
-        let op_idx_val = op_idx_const.as_operation().result(db, 0);
-        ops.push(op_idx_const.as_operation());
-        ops.push(wasm::global_set(db, location, op_idx_val, yield_globals::OP_IDX).as_operation());
+        push_set_i32_global(db, location, op_idx as i32, yield_globals::OP_IDX, &mut ops);
 
         RewriteResult::expand(ops)
     }
@@ -905,17 +907,10 @@ impl<'db> RewritePattern<'db> for LowerResetYieldStatePattern {
         }
 
         let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
         let mut ops = Vec::new();
 
         // Set $yield_state = 0 (not yielding)
-        let const_0 = wasm::i32_const(db, location, i32_ty, 0);
-        let const_0_val = const_0.as_operation().result(db, 0);
-        ops.push(const_0.as_operation());
-        ops.push(
-            wasm::global_set(db, location, const_0_val, yield_globals::STATE_IDX).as_operation(),
-        );
+        push_set_i32_global(db, location, 0, yield_globals::STATE_IDX, &mut ops);
 
         RewriteResult::expand(ops)
     }
@@ -1040,38 +1035,21 @@ impl<'db> RewritePattern<'db> for ConvertFuncTypePattern {
             return RewriteResult::Unchanged;
         };
 
-        // Convert parameter types
-        let mut params_changed = false;
-        let new_params: Vec<Type<'db>> = fn_ty
-            .params(db)
+        // Convert parameter types using the shared helper function
+        let original_params = fn_ty.params(db);
+        let new_params: Vec<Type<'db>> = original_params
             .iter()
-            .map(|&ty| {
-                if trampoline::Step::from_type(db, ty).is_some() {
-                    params_changed = true;
-                    step_adt_type(db)
-                } else if trampoline::Continuation::from_type(db, ty).is_some() {
-                    params_changed = true;
-                    continuation_adt_type(db)
-                } else if trampoline::ResumeWrapper::from_type(db, ty).is_some() {
-                    params_changed = true;
-                    resume_wrapper_adt_type(db)
-                } else {
-                    ty
-                }
-            })
+            .map(|&ty| convert_trampoline_type(db, ty))
             .collect();
+        let params_changed = new_params
+            .iter()
+            .zip(original_params.iter())
+            .any(|(new, old)| new != old);
 
-        // Convert result type
+        // Convert result type using the shared helper function
         let result_ty = fn_ty.result(db);
-        let (new_result, result_changed) = if trampoline::Step::from_type(db, result_ty).is_some() {
-            (step_adt_type(db), true)
-        } else if trampoline::Continuation::from_type(db, result_ty).is_some() {
-            (continuation_adt_type(db), true)
-        } else if trampoline::ResumeWrapper::from_type(db, result_ty).is_some() {
-            (resume_wrapper_adt_type(db), true)
-        } else {
-            (result_ty, false)
-        };
+        let new_result = convert_trampoline_type(db, result_ty);
+        let result_changed = new_result != result_ty;
 
         if !params_changed && !result_changed {
             return RewriteResult::Unchanged;
