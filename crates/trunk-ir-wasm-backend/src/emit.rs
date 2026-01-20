@@ -836,11 +836,6 @@ fn assign_locals_in_region<'db>(
         }
 
         for op in block.operations(db).iter() {
-            // Skip tribute.var operations - kept for LSP support, no runtime effect
-            if op.dialect(db) == "tribute" && op.name(db) == "var" {
-                continue;
-            }
-
             // IMPORTANT: Process nested regions FIRST so that their effective types
             // are available when we compute the effective type for this operation.
             // This is critical for wasm.if which needs to know the branch result types.
@@ -990,10 +985,6 @@ fn emit_region_ops<'db>(
     }
     let block = &blocks[0];
     for op in block.operations(db).iter() {
-        // Skip tribute.var operations - kept for LSP support, no runtime effect
-        if op.dialect(db) == "tribute" && op.name(db) == "var" {
-            continue;
-        }
         // Skip wasm.yield - it's handled by region_result_value + emit_value_get,
         // not emitted as a real Wasm instruction
         if wasm::Yield::from_operation(db, *op).is_ok() {
