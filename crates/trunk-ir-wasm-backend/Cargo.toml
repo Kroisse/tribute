@@ -10,9 +10,6 @@ description = "WASM backend for TrunkIR (language-agnostic)"
 derive_more.workspace = true
 salsa.workspace = true
 tracing.workspace = true
-# TODO: Remove tribute-ir dependency after moving ModulePathExt to trunk-ir
-# and removing tribute.var checks from emit.rs
-tribute-ir.workspace = true
 trunk-ir.workspace = true
 wasm-encoder.workspace = true
 

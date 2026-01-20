@@ -36,8 +36,6 @@ use std::sync::LazyLock;
 
 use tracing::debug;
 
-use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::tribute;
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::{
     Attribute, Attrs, BlockId, DialectOp, DialectType, Operation, Region, Symbol, Type, Value,
@@ -499,8 +497,8 @@ pub fn emit_wasm<'db>(
             let Some(index) = module_info.func_indices.get(&func_def.name) else {
                 continue;
             };
-            // Export with simple name (last segment of qualified name)
-            let name = func_def.name.last_segment().to_string();
+            // Export with qualified name to avoid collisions (e.g., std::List::map vs std::Option::map)
+            let name = func_def.name.to_string();
             export_section.export(&name, ExportKind::Func, *index);
         }
     }
@@ -839,7 +837,7 @@ fn assign_locals_in_region<'db>(
 
         for op in block.operations(db).iter() {
             // Skip tribute.var operations - kept for LSP support, no runtime effect
-            if op.dialect(db) == tribute::DIALECT_NAME() && op.name(db) == tribute::VAR() {
+            if op.dialect(db) == "tribute" && op.name(db) == "var" {
                 continue;
             }
 
@@ -993,7 +991,7 @@ fn emit_region_ops<'db>(
     let block = &blocks[0];
     for op in block.operations(db).iter() {
         // Skip tribute.var operations - kept for LSP support, no runtime effect
-        if op.dialect(db) == tribute::DIALECT_NAME() && op.name(db) == tribute::VAR() {
+        if op.dialect(db) == "tribute" && op.name(db) == "var" {
             continue;
         }
         // Skip wasm.yield - it's handled by region_result_value + emit_value_get,

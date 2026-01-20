@@ -1268,7 +1268,6 @@ dependencies = [
  "salsa",
  "salsa-test-macros",
  "tracing",
- "tribute-ir",
  "trunk-ir",
  "wasm-encoder",
 ]
