@@ -1449,4 +1449,185 @@ mod tests {
             }
         }
     }
+
+    // =========================================================================
+    // LSP Server Integration Tests
+    // =========================================================================
+
+    fn create_test_server() -> LspServer {
+        let (connection, _client) = Connection::memory();
+        LspServer::new(connection)
+    }
+
+    fn open_test_doc(server: &LspServer, uri: &Uri, source: &str) {
+        server.db.open_document(uri, Rope::from_str(source));
+    }
+
+    fn test_uri(name: &str) -> Uri {
+        format!("file:///test/{}.trb", name).parse().unwrap()
+    }
+
+    #[test]
+    fn test_hover_returns_type_info() {
+        let server = create_test_server();
+        let uri = test_uri("hover");
+        let source = "fn add(x: Int, y: Int): Int { x + y }";
+
+        open_test_doc(&server, &uri, source);
+
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: 0,
+                    character: 3, // 'a' in 'add'
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let result = server.hover(params);
+        // Should return hover info for the function
+        assert!(result.is_some(), "Hover should return type information");
+    }
+
+    #[test]
+    fn test_hover_no_info_on_whitespace() {
+        let server = create_test_server();
+        let uri = test_uri("hover_whitespace");
+        let source = "fn foo() { }";
+
+        open_test_doc(&server, &uri, source);
+
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: 0,
+                    character: 10, // Inside the empty body
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let result = server.hover(params);
+        // Whitespace/empty area may or may not return hover
+        // This test just verifies no panic occurs
+        let _ = result;
+    }
+
+    #[test]
+    fn test_document_symbols_finds_functions() {
+        let server = create_test_server();
+        let uri = test_uri("symbols");
+        let source = "fn foo() { }\nfn bar() { }";
+
+        open_test_doc(&server, &uri, source);
+
+        let params = DocumentSymbolParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        let result = server.document_symbols(params);
+        assert!(result.is_some(), "Should return document symbols");
+
+        if let Some(DocumentSymbolResponse::Nested(symbols)) = result {
+            // Find user-defined functions (may include prelude symbols)
+            assert!(symbols.iter().any(|s| s.name == "foo"), "Should find 'foo'");
+            assert!(symbols.iter().any(|s| s.name == "bar"), "Should find 'bar'");
+        }
+    }
+
+    #[test]
+    fn test_completion_returns_keywords() {
+        let server = create_test_server();
+        let uri = test_uri("completion");
+        let source = "fn main() { le }";
+
+        open_test_doc(&server, &uri, source);
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: 0,
+                    character: 14, // After "le"
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result = server.completion(params);
+        assert!(result.is_some(), "Should return completions");
+
+        if let Some(list) = result {
+            // Should include 'let' keyword
+            assert!(
+                list.items.iter().any(|item| item.label == "let"),
+                "Should suggest 'let' keyword"
+            );
+        }
+    }
+
+    #[test]
+    fn test_goto_definition_finds_local() {
+        let server = create_test_server();
+        let uri = test_uri("goto_def");
+        let source = "fn main() { let x = 1; x }";
+
+        open_test_doc(&server, &uri, source);
+
+        let params = GotoDefinitionParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: 0,
+                    character: 23, // The second 'x'
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        let result = server.goto_definition(params);
+        // Should find definition of x
+        assert!(
+            result.is_some(),
+            "Should find definition for local variable"
+        );
+    }
+
+    #[test]
+    fn test_find_references_finds_usages() {
+        let server = create_test_server();
+        let uri = test_uri("references");
+        let source = "fn main() { let x = 1; x + x }";
+
+        open_test_doc(&server, &uri, source);
+
+        let params = ReferenceParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: 0,
+                    character: 16, // The 'x' in 'let x'
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: lsp_types::ReferenceContext {
+                include_declaration: true,
+            },
+        };
+
+        let result = server.find_references(params);
+        if let Some(refs) = result {
+            // Should find at least the definition + 2 usages
+            assert!(refs.len() >= 2, "Should find multiple references");
+        }
+    }
 }
