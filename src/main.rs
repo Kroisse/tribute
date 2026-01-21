@@ -52,7 +52,7 @@ fn main() {
 
     match cli.command {
         Command::Serve => {
-            // LSP server initializes its own tracing with LspLayer
+            // LSP server initializes its own tracing
             if let Err(e) = lsp::serve(&cli.log) {
                 eprintln!("LSP server error: {e}");
                 std::process::exit(1);
