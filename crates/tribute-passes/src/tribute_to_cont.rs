@@ -12,10 +12,8 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use salsa::Accumulator;
-use std::collections::BTreeMap;
 use tribute_ir::dialect::{tribute, tribute_pat};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{cont, core, scf};
@@ -28,8 +26,6 @@ use trunk_ir::{
     Region, SymbolVec, Type,
 };
 use trunk_ir::{Symbol, Value, ValueDef};
-
-use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
 /// Handler pattern types for matching in handler arms.
 ///
@@ -378,14 +374,9 @@ impl<'db> HandlerLowerer<'db> {
                 if let Ok(arm) = tribute::Arm::from_operation(self.db, *arm_op) {
                     let pattern_region = arm.pattern(self.db);
                     let body = arm.body(self.db);
-                    let Some(pattern) = self.analyze_handler_pattern(pattern_region) else {
-                        // Invalid pattern in handler arm - emit diagnostic and skip
-                        self.emit_error(
-                            arm_op.location(self.db),
-                            "handler arm must contain handler_done or handler_suspend pattern",
-                        );
-                        continue;
-                    };
+                    let pattern = self
+                        .analyze_handler_pattern(pattern_region)
+                        .expect("handler arm must contain handler_done or handler_suspend pattern");
 
                     arms.push(HandlerArmInfo {
                         pattern,
@@ -570,16 +561,6 @@ impl<'db> HandlerLowerer<'db> {
             Region::new(self.db, region.location(self.db), IdVec::from(vec![block]))
         }
     }
-
-    fn emit_error(&self, location: Location<'db>, message: &str) {
-        Diagnostic {
-            message: message.to_string(),
-            span: location.span,
-            severity: DiagnosticSeverity::Error,
-            phase: CompilationPhase::Optimization,
-        }
-        .accumulate(self.db);
-    }
 }
 
 /// Build a handler body region with multiple blocks for handler_dispatch.
@@ -600,21 +581,27 @@ fn build_handler_body_region<'db>(
 
     // Block 1+: suspend cases
     for (ability_ref, op_name, suspend_body) in suspend_arms {
-        for block in suspend_body.blocks(db).iter() {
-            // Create marker block arg with ability_ref and op_name attributes
-            let nil_ty = core::Nil::new(db).as_type();
-            let marker_arg = BlockArg::new(
-                db,
-                nil_ty,
-                BTreeMap::from([
-                    (Symbol::new("ability_ref"), Attribute::Type(*ability_ref)),
-                    (Symbol::new("op_name"), Attribute::Symbol(*op_name)),
-                ]),
-            );
-
-            // Prepend marker arg to existing block args
-            let mut new_args = IdVec::from(vec![marker_arg]);
-            new_args.extend(block.args(db).iter().cloned());
+        let blocks = suspend_body.blocks(db);
+        for (i, block) in blocks.iter().enumerate() {
+            let new_args = if i == 0 {
+                // Only the entry block gets the marker arg with ability_ref and op_name attributes.
+                // Internal blocks must keep their original arity to match branch arguments.
+                let nil_ty = core::Nil::new(db).as_type();
+                let marker_arg = BlockArg::new(
+                    db,
+                    nil_ty,
+                    BTreeMap::from([
+                        (Symbol::new("ability_ref"), Attribute::Type(*ability_ref)),
+                        (Symbol::new("op_name"), Attribute::Symbol(*op_name)),
+                    ]),
+                );
+                let mut args = IdVec::from(vec![marker_arg]);
+                args.extend(block.args(db).iter().cloned());
+                args
+            } else {
+                // Non-entry blocks keep their original arguments
+                block.args(db).clone()
+            };
 
             all_blocks.push(Block::new(
                 db,

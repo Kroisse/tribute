@@ -23,6 +23,7 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
+use tribute_ir::dialect::tribute;
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::{
@@ -54,9 +55,15 @@ impl<'db> RewritePattern<'db> for InlineConstPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
+        // Only match tribute.var operations
+        let Ok(var_op) = tribute::Var::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
         // Check if this is a resolved const reference
+        // (resolved_const and value are dynamic attributes added by resolve pass)
         let attrs = op.attributes(db);
         let is_resolved_const = matches!(
             attrs.get(&ATTR_RESOLVED_CONST()),
@@ -67,17 +74,15 @@ impl<'db> RewritePattern<'db> for InlineConstPattern {
             return RewriteResult::Unchanged;
         }
 
-        // Get the value attribute
-        let Some(value_attr) = attrs.get(&ATTR_VALUE()) else {
-            return RewriteResult::Unchanged;
-        };
+        // Get the value attribute - fail-fast if missing (malformed IR)
+        let value_attr = attrs
+            .get(&ATTR_VALUE())
+            .expect("tribute.var with resolved_const=true must have a value attribute");
 
-        // Get the result type
-        let Some(result_ty) = op.results(db).first().copied() else {
-            return RewriteResult::Unchanged;
-        };
-
-        let location = op.location(db);
+        let location = var_op.location(db);
+        let result_ty = adaptor
+            .result_type(db, 0)
+            .expect("tribute.var must have a result");
 
         // Create arith.const with the inlined value
         let const_op = arith::r#const(db, location, result_ty, value_attr.clone());
