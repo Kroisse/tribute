@@ -20,11 +20,15 @@
 //!
 //! After this pass, it becomes:
 //! - `arith.const(1024)` with type `i64`
+//!
+//! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core::Module;
-use trunk_ir::rewrite::RewriteContext;
-use trunk_ir::{Block, IdVec, Operation, Region};
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+};
+use trunk_ir::{Attribute, DialectOp, Operation};
 
 // =============================================================================
 // Attribute Keys
@@ -33,148 +37,52 @@ use trunk_ir::{Block, IdVec, Operation, Region};
 trunk_ir::symbols! {
     ATTR_RESOLVED_CONST => "resolved_const",
     ATTR_VALUE => "value",
-    ATTR_NAME => "name",
 }
 
 // =============================================================================
-// Const Inliner
+// Inline Const Pattern
 // =============================================================================
 
-/// Constant inliner context.
+/// Pattern to inline constant references.
 ///
-/// Transforms `tribute.var` operations marked as resolved constants into
-/// `arith.const` operations with inlined values.
-pub struct ConstInliner<'db> {
-    db: &'db dyn salsa::Database,
-    /// Rewrite context for tracking value mappings.
-    ctx: RewriteContext<'db>,
-}
+/// Matches `tribute.var` operations with `resolved_const=true` attribute
+/// and replaces them with `arith.const` operations containing the inlined value.
+struct InlineConstPattern;
 
-impl<'db> ConstInliner<'db> {
-    /// Create a new const inliner.
-    pub fn new(db: &'db dyn salsa::Database) -> Self {
-        Self {
-            db,
-            ctx: RewriteContext::new(),
-        }
-    }
-
-    /// Inline constants in a module.
-    pub fn inline_module(&mut self, module: &Module<'db>) -> Module<'db> {
-        let body = module.body(self.db);
-        let new_body = self.inline_region(&body);
-
-        Module::create(
-            self.db,
-            module.location(self.db),
-            module.name(self.db),
-            new_body,
-        )
-    }
-
-    /// Inline constants in a region.
-    fn inline_region(&mut self, region: &Region<'db>) -> Region<'db> {
-        let new_blocks: IdVec<Block<'db>> = region
-            .blocks(self.db)
-            .iter()
-            .map(|block| self.inline_block(block))
-            .collect();
-
-        Region::new(self.db, region.location(self.db), new_blocks)
-    }
-
-    /// Inline constants in a block.
-    fn inline_block(&mut self, block: &Block<'db>) -> Block<'db> {
-        let new_ops: IdVec<Operation<'db>> = block
-            .operations(self.db)
-            .iter()
-            .flat_map(|op| self.inline_operation(op))
-            .collect();
-
-        Block::new(
-            self.db,
-            block.id(self.db),
-            block.location(self.db),
-            block.args(self.db).clone(),
-            new_ops,
-        )
-    }
-
-    /// Inline constants in an operation.
-    ///
-    /// Returns the transformed operation(s). May return empty vec if erased,
-    /// or a single transformed operation.
-    fn inline_operation(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
-        // First, remap operands from previous transformations
-        let remapped_op = self.ctx.remap_operands(self.db, op);
-
-        // If operands were remapped, map old results to new results
-        if remapped_op != *op {
-            self.ctx.map_results(self.db, op, &remapped_op);
-        }
-
+impl<'db> RewritePattern<'db> for InlineConstPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
         // Check if this is a resolved const reference
-        if self.is_resolved_const(&remapped_op)
-            && let Some(inlined) = self.inline_const_ref(&remapped_op)
-        {
-            return vec![inlined];
-        }
-
-        // Not a const reference - recursively process regions
-        vec![self.inline_op_regions(&remapped_op)]
-    }
-
-    /// Check if an operation is a resolved const reference.
-    fn is_resolved_const(&self, op: &Operation<'db>) -> bool {
-        use trunk_ir::Attribute;
-
-        let attrs = op.attributes(self.db);
-        matches!(
+        let attrs = op.attributes(db);
+        let is_resolved_const = matches!(
             attrs.get(&ATTR_RESOLVED_CONST()),
             Some(Attribute::Bool(true)) | Some(Attribute::IntBits(1))
-        )
-    }
+        );
 
-    /// Inline a const reference operation.
-    fn inline_const_ref(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
-        use trunk_ir::DialectOp;
-
-        let attrs = op.attributes(self.db);
-        let value_attr = attrs.get(&ATTR_VALUE())?;
-
-        // Get the result type
-        let result_ty = op.results(self.db).first().copied()?;
-        let location = op.location(self.db);
-
-        // Create arith.const with the inlined value
-        let const_op = arith::r#const(self.db, location, result_ty, value_attr.clone());
-        let new_operation = const_op.as_operation();
-
-        // Map old result to new result
-        self.ctx.map_results(self.db, op, &new_operation);
-
-        Some(new_operation)
-    }
-
-    /// Recursively inline constants in regions within an operation.
-    fn inline_op_regions(&mut self, op: &Operation<'db>) -> Operation<'db> {
-        let regions = op.regions(self.db);
-        if regions.is_empty() {
-            return *op;
+        if !is_resolved_const {
+            return RewriteResult::Unchanged;
         }
 
-        // Process nested regions - operand remapping happens in inline_operation
-        let new_regions: IdVec<Region<'db>> = regions
-            .iter()
-            .map(|region| self.inline_region(region))
-            .collect();
+        // Get the value attribute
+        let Some(value_attr) = attrs.get(&ATTR_VALUE()) else {
+            return RewriteResult::Unchanged;
+        };
 
-        let new_op = op.modify(self.db).regions(new_regions).build();
+        // Get the result type
+        let Some(result_ty) = op.results(db).first().copied() else {
+            return RewriteResult::Unchanged;
+        };
 
-        // Map old results to new results so subsequent operations can find them
-        self.ctx.map_results(self.db, op, &new_op);
+        let location = op.location(db);
 
-        new_op
+        // Create arith.const with the inlined value
+        let const_op = arith::r#const(db, location, result_ty, value_attr.clone());
+
+        RewriteResult::Replace(const_op.as_operation())
     }
 }
 
@@ -182,86 +90,15 @@ impl<'db> ConstInliner<'db> {
 // Pipeline Integration
 // =============================================================================
 
-/// Inline constants in a module (non-tracked version for internal use).
+/// Inline constants in a module.
 ///
+/// Uses `PatternApplicator` for declarative transformation.
 /// The tracked version is in pipeline.rs (stage_const_inline).
 pub fn inline_module<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) -> Module<'db> {
-    // Sanity check: verify input module has no stale references
-    #[cfg(debug_assertions)]
-    verify_operand_references(db, *module, "const_inline input");
+    let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(InlineConstPattern);
+    let target = ConversionTarget::new();
 
-    let mut inliner = ConstInliner::new(db);
-    let result = inliner.inline_module(module);
-
-    // Sanity check: verify output module has no stale references
-    #[cfg(debug_assertions)]
-    verify_operand_references(db, result, "const_inline output");
-
-    result
-}
-
-#[cfg(debug_assertions)]
-fn verify_operand_references<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-    context: &str,
-) {
-    use std::collections::HashSet;
-
-    // Collect all operations in the module
-    let mut all_ops: HashSet<trunk_ir::Operation<'db>> = HashSet::new();
-    collect_ops_in_region(db, module.body(db), &mut all_ops);
-
-    // Verify all operand references point to operations in the set
-    verify_refs_in_region(db, module.body(db), &all_ops, context);
-}
-
-#[cfg(debug_assertions)]
-fn collect_ops_in_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: Region<'db>,
-    ops: &mut std::collections::HashSet<trunk_ir::Operation<'db>>,
-) {
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter().copied() {
-            ops.insert(op);
-            for nested in op.regions(db).iter().copied() {
-                collect_ops_in_region(db, nested, ops);
-            }
-        }
-    }
-}
-
-#[cfg(debug_assertions)]
-fn verify_refs_in_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: Region<'db>,
-    all_ops: &std::collections::HashSet<trunk_ir::Operation<'db>>,
-    context: &str,
-) {
-    use trunk_ir::ValueDef;
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter().copied() {
-            for operand in op.operands(db).iter() {
-                if let ValueDef::OpResult(ref_op) = operand.def(db)
-                    && !all_ops.contains(&ref_op)
-                {
-                    tracing::warn!(
-                        "STALE REFERENCE DETECTED in {}!\n  \
-                         Operation {}.{} references {}.{} which is NOT in the module",
-                        context,
-                        op.dialect(db),
-                        op.name(db),
-                        ref_op.dialect(db),
-                        ref_op.name(db)
-                    );
-                }
-            }
-            for nested in op.regions(db).iter().copied() {
-                verify_refs_in_region(db, nested, all_ops, context);
-            }
-        }
-    }
+    applicator.apply_partial(db, *module, target).module
 }
 
 #[cfg(test)]

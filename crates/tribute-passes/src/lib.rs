@@ -30,7 +30,7 @@ pub mod typeck;
 // Re-exports
 pub use boxing::insert_boxing;
 pub use closure_lower::lower_closures;
-pub use const_inline::{ConstInliner, inline_module};
+pub use const_inline::inline_module;
 pub use cont_to_trampoline::lower_cont_to_trampoline;
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use evidence::{
