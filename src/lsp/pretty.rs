@@ -198,4 +198,50 @@ mod tests {
         let var_t0 = tribute::type_var_with_id(db, 26);
         assert_eq!(print_type(db, var_t0), "t0");
     }
+
+    #[salsa_test]
+    fn test_format_signature_basic(db: &salsa::DatabaseImpl) {
+        let int_ty = tribute_rt::int_type(db);
+        let func_ty = *Func::new(db, idvec![int_ty, int_ty], int_ty);
+
+        let param_names = vec![Some(Symbol::new("x")), Some(Symbol::new("y"))];
+        let result = format_signature(db, func_ty, "add", &param_names, None, 0);
+
+        assert_eq!(result.signatures.len(), 1);
+        let sig = &result.signatures[0];
+        assert_eq!(sig.label, "fn add(x: Int, y: Int) -> Int");
+        assert_eq!(result.active_parameter, Some(0));
+    }
+
+    #[salsa_test]
+    fn test_format_signature_with_doc(db: &salsa::DatabaseImpl) {
+        let nil_ty = *Nil::new(db);
+        let func_ty = *Func::new(db, IdVec::new(), nil_ty);
+
+        let result = format_signature(db, func_ty, "hello", &[], Some("Says hello"), 0);
+
+        assert_eq!(result.signatures.len(), 1);
+        let sig = &result.signatures[0];
+        assert_eq!(sig.label, "fn hello() -> ()");
+        assert!(sig.documentation.is_some());
+    }
+
+    #[salsa_test]
+    fn test_format_signature_non_function(db: &salsa::DatabaseImpl) {
+        let int_ty = tribute_rt::int_type(db);
+
+        // Passing a non-function type should return empty signatures
+        let result = format_signature(db, int_ty, "not_a_func", &[], None, 0);
+
+        assert!(result.signatures.is_empty());
+    }
+
+    #[test]
+    fn test_type_var_name() {
+        assert_eq!(type_var_name(0), "a");
+        assert_eq!(type_var_name(1), "b");
+        assert_eq!(type_var_name(25), "z");
+        assert_eq!(type_var_name(26), "t0");
+        assert_eq!(type_var_name(27), "t1");
+    }
 }

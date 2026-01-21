@@ -69,3 +69,105 @@ use trunk_ir::type_interface::Printable;
 
 // evidence_ptr -> "Evidence"
 inventory::submit! { Printable::implement("ability", "evidence_ptr", |_, _, f: &mut std::fmt::Formatter<'_>| f.write_str("Evidence")) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::dialect::{arith, core};
+    use trunk_ir::type_interface::print_type;
+    use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Location, PathId, Span, Symbol};
+
+    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
+        let path = PathId::new(db, "test.trb".to_owned());
+        Location::new(path, Span::new(0, 0))
+    }
+
+    #[salsa_test]
+    fn test_evidence_ptr_type(db: &salsa::DatabaseImpl) {
+        let evidence_ty = EvidencePtr::new(db);
+
+        assert_eq!(evidence_ty.as_type().dialect(db), DIALECT_NAME());
+        assert_eq!(evidence_ty.as_type().name(db), EVIDENCE_PTR());
+    }
+
+    #[salsa_test]
+    fn test_evidence_ptr_printable(db: &salsa::DatabaseImpl) {
+        let evidence_ty = EvidencePtr::new(db);
+
+        let printed = print_type(db, evidence_ty.as_type());
+        assert_eq!(printed, "Evidence");
+    }
+
+    #[salsa::tracked]
+    fn perform_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        let location = test_location(db);
+        let int_ty = core::I32::new(db).as_type();
+        let ability_ref = core::AbilityRefType::simple(db, Symbol::new("State")).as_type();
+
+        let arg = arith::r#const(db, location, int_ty, Attribute::IntBits(0)).result(db);
+        let op = perform(
+            db,
+            location,
+            IdVec::from(vec![arg]),
+            int_ty,
+            ability_ref,
+            Symbol::new("get"),
+        );
+
+        let adapted = Perform::from_operation(db, op.as_operation()).unwrap();
+        (adapted.ability_ref(db).dialect(db), adapted.op(db))
+    }
+
+    #[salsa_test]
+    fn test_perform_operation(db: &salsa::DatabaseImpl) {
+        let (dialect, op_name) = perform_test(db);
+        assert_eq!(dialect, Symbol::new("core"));
+        assert_eq!(op_name, Symbol::new("get"));
+    }
+
+    #[salsa::tracked]
+    fn resume_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        let location = test_location(db);
+        let int_ty = core::I32::new(db).as_type();
+
+        let cont = arith::r#const(db, location, int_ty, Attribute::IntBits(0)).result(db);
+        let value = arith::r#const(db, location, int_ty, Attribute::IntBits(42)).result(db);
+
+        let op = resume(db, location, cont, value, int_ty);
+        let adapted = Resume::from_operation(db, op.as_operation()).unwrap();
+        (
+            adapted.as_operation().dialect(db),
+            adapted.as_operation().name(db),
+        )
+    }
+
+    #[salsa_test]
+    fn test_resume_operation(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = resume_test(db);
+        assert_eq!(dialect, DIALECT_NAME());
+        assert_eq!(name, RESUME());
+    }
+
+    #[salsa::tracked]
+    fn abort_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        let location = test_location(db);
+        let int_ty = core::I32::new(db).as_type();
+
+        let cont = arith::r#const(db, location, int_ty, Attribute::IntBits(0)).result(db);
+        let op = abort(db, location, cont);
+
+        let adapted = Abort::from_operation(db, op.as_operation()).unwrap();
+        (
+            adapted.as_operation().dialect(db),
+            adapted.as_operation().name(db),
+        )
+    }
+
+    #[salsa_test]
+    fn test_abort_operation(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = abort_test(db);
+        assert_eq!(dialect, DIALECT_NAME());
+        assert_eq!(name, ABORT());
+    }
+}

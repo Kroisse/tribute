@@ -106,3 +106,91 @@ fn other_error<T>(message: &str) -> Result<T, Box<unsynn::Error>> {
 fn compile_error(message: &str) -> ProcTokenStream {
     quote!(compile_error!(#message);).into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_token_stream(tokens: proc_macro2::TokenStream) -> TokenStream {
+        TokenStream::from_iter(tokens)
+    }
+
+    #[test]
+    fn test_transform_fn_basic() {
+        let input = make_token_stream(quote!(
+            fn test_example(db: &salsa::DatabaseImpl) {
+                let _ = db;
+            }
+        ));
+
+        let result = transform_fn(input);
+        assert!(result.is_ok(), "transform_fn should succeed");
+
+        let output = result.unwrap().to_string();
+        assert!(output.contains("# [test]"), "Should have #[test] attribute");
+        assert!(output.contains("attach"), "Should wrap with attach");
+    }
+
+    #[test]
+    fn test_transform_fn_no_params() {
+        let input = make_token_stream(quote!(
+            fn test_no_params() {
+                assert!(true);
+            }
+        ));
+
+        let result = transform_fn(input);
+        assert!(result.is_ok(), "transform_fn should succeed with no params");
+
+        let output = result.unwrap().to_string();
+        assert!(output.contains("db"), "Should use default 'db' identifier");
+    }
+
+    #[test]
+    fn test_transform_fn_underscore_param_fails() {
+        let input = make_token_stream(quote!(
+            fn test_underscore(_: &salsa::DatabaseImpl) {
+                ()
+            }
+        ));
+
+        let result = transform_fn(input);
+        assert!(result.is_err(), "transform_fn should fail with _ param");
+    }
+
+    #[test]
+    fn test_transform_fn_with_return_type() {
+        let input = make_token_stream(quote!(
+            fn test_with_return(db: &salsa::DatabaseImpl) -> i32 {
+                42
+            }
+        ));
+
+        let result = transform_fn(input);
+        assert!(
+            result.is_ok(),
+            "transform_fn should succeed with return type"
+        );
+
+        let output = result.unwrap().to_string();
+        assert!(output.contains("-> i32"), "Should preserve return type");
+    }
+
+    #[test]
+    fn test_transform_fn_preserves_function_name() {
+        let input = make_token_stream(quote!(
+            fn my_special_test(db: &salsa::DatabaseImpl) {
+                ()
+            }
+        ));
+
+        let result = transform_fn(input);
+        assert!(result.is_ok());
+
+        let output = result.unwrap().to_string();
+        assert!(
+            output.contains("my_special_test"),
+            "Should preserve function name"
+        );
+    }
+}

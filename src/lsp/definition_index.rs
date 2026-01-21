@@ -507,6 +507,50 @@ mod tests {
         assert_eq!(def.name, Symbol::new("foo"));
     }
 
+    #[salsa_test]
+    #[ignore = "tribute.let is removed during resolve pass, see #273"]
+    fn test_let_binding_definition(db: &salsa::DatabaseImpl) {
+        //                    0         1         2         3
+        //                    0123456789012345678901234567890123456789
+        let source_text = "fn main() { let foo = 1; foo }";
+        let source = make_source("test.trb", source_text);
+
+        let module = compile_for_lsp(db, source);
+
+        // Debug: print IR structure
+        eprintln!("IR structure:");
+        fn print_region(db: &dyn salsa::Database, region: &trunk_ir::Region, indent: usize) {
+            let prefix = "  ".repeat(indent);
+            for block in region.blocks(db) {
+                eprintln!("{}Block:", prefix);
+                for op in block.operations(db) {
+                    let dialect = op.dialect(db);
+                    let name = op.name(db);
+                    let span = op.location(db).span;
+                    eprintln!("{}  {}.{} at {:?}", prefix, dialect, name, span);
+                    for (i, region) in op.regions(db).iter().enumerate() {
+                        eprintln!("{}    Region {}:", prefix, i);
+                        print_region(db, region, indent + 3);
+                    }
+                }
+            }
+        }
+        print_region(db, &module.body(db), 0);
+
+        let index = DefinitionIndex::build(db, &module);
+
+        // Debug: print all definitions
+        eprintln!("\nDefinitions:");
+        for def in index.definitions() {
+            eprintln!("  {:?} '{}' at {:?}", def.kind, def.name, def.span);
+        }
+
+        // Should find the variable definition "foo"
+        let def = index.definition_of(Symbol::new("foo"));
+        assert!(def.is_some(), "Should find variable 'foo'");
+        assert_eq!(def.unwrap().kind, DefinitionKind::Variable);
+    }
+
     #[test]
     fn test_validate_identifier_valid() {
         // Valid function/variable identifiers

@@ -1,11 +1,12 @@
 //! Tribute compiler CLI entry point.
 
 mod cli;
+mod diagnostics;
 mod lsp;
 
-use ariadne::{Color, Label, Report, ReportKind, Source};
 use clap::Parser;
 use cli::{Cli, Command};
+use diagnostics::print_diagnostic;
 use ropey::Rope;
 use salsa::Database;
 use std::path::PathBuf;
@@ -15,44 +16,15 @@ use tribute::pipeline::{
     compile_to_wasm_binary, compile_with_diagnostics, parse_and_lower, stage_resolve,
 };
 use tribute::{SourceCst, TributeDatabaseImpl};
-use tribute_passes::diagnostic::{CompilationPhase, Diagnostic};
+use tribute_passes::diagnostic::Diagnostic;
 use tribute_passes::resolve::build_env;
-
-/// Print a diagnostic using ariadne for pretty output.
-fn print_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) {
-    let start = diag.span.start;
-    let end = diag.span.end.max(start + 1);
-
-    let color = match diag.phase {
-        CompilationPhase::Parsing => Color::Red,
-        CompilationPhase::TirGeneration => Color::Yellow,
-        CompilationPhase::NameResolution => Color::Yellow,
-        CompilationPhase::TypeChecking => Color::Magenta,
-        CompilationPhase::Lowering => Color::Cyan,
-        CompilationPhase::Optimization => Color::Blue,
-    };
-
-    let source_text: String = source.to_string();
-
-    Report::build(ReportKind::Error, (file_path, start..end))
-        .with_code(format!("{:?}", diag.phase))
-        .with_message(&diag.message)
-        .with_label(
-            Label::new((file_path, start..end))
-                .with_message(&diag.message)
-                .with_color(color),
-        )
-        .finish()
-        .eprint((file_path, Source::from(source_text)))
-        .ok();
-}
 
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
         Command::Serve => {
-            // LSP server initializes its own tracing with LspLayer
+            // LSP server initializes its own tracing
             if let Err(e) = lsp::serve(&cli.log) {
                 eprintln!("LSP server error: {e}");
                 std::process::exit(1);

@@ -99,3 +99,87 @@ pub fn get_param_names<'db>(
 
     find_in_region(db, &module.body(db), name).unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use salsa_test_macros::salsa_test;
+    use tree_sitter::Parser;
+    use tribute::SourceCst;
+    use tribute::compile_for_lsp;
+
+    fn make_source(path: &str, text: &str) -> SourceCst {
+        salsa::with_attached_database(|db| {
+            let mut parser = Parser::new();
+            parser
+                .set_language(&tree_sitter_tribute::LANGUAGE.into())
+                .expect("Failed to set language");
+            let tree = parser.parse(text, None).expect("tree");
+            SourceCst::from_path(db, path, text.into(), Some(tree))
+        })
+        .expect("attached db")
+    }
+
+    #[salsa_test]
+    fn test_find_function_type(db: &salsa::DatabaseImpl) {
+        let source_text = "fn add(x: Int, y: Int) -> Int { x + y }";
+        let source = make_source("test.trb", source_text);
+
+        let module = compile_for_lsp(db, source);
+
+        // Should find the function type for "add"
+        let func_ty = CallIndex::find_function_type(db, &module, Symbol::new("add"));
+        assert!(func_ty.is_some(), "Should find function 'add'");
+
+        // Should not find a non-existent function
+        let missing = CallIndex::find_function_type(db, &module, Symbol::new("missing"));
+        assert!(missing.is_none(), "Should not find non-existent function");
+    }
+
+    #[salsa_test]
+    fn test_get_param_names(db: &salsa::DatabaseImpl) {
+        let source_text = "fn greet(name: Text, count: Int) { }";
+        let source = make_source("test.trb", source_text);
+
+        let module = compile_for_lsp(db, source);
+
+        let names = get_param_names(db, &module, Symbol::new("greet"));
+        assert_eq!(names.len(), 2, "Should have 2 parameters");
+
+        // Parameter names should be present
+        assert!(
+            names
+                .iter()
+                .any(|n| n.map(|s| s.to_string()) == Some("name".to_string())),
+            "Should have parameter 'name'"
+        );
+        assert!(
+            names
+                .iter()
+                .any(|n| n.map(|s| s.to_string()) == Some("count".to_string())),
+            "Should have parameter 'count'"
+        );
+    }
+
+    #[salsa_test]
+    fn test_get_param_names_no_params(db: &salsa::DatabaseImpl) {
+        let source_text = "fn hello() { }";
+        let source = make_source("test.trb", source_text);
+
+        let module = compile_for_lsp(db, source);
+
+        let names = get_param_names(db, &module, Symbol::new("hello"));
+        assert!(names.is_empty(), "Should have no parameters");
+    }
+
+    #[salsa_test]
+    fn test_get_param_names_missing_function(db: &salsa::DatabaseImpl) {
+        let source_text = "fn foo() { }";
+        let source = make_source("test.trb", source_text);
+
+        let module = compile_for_lsp(db, source);
+
+        let names = get_param_names(db, &module, Symbol::new("missing"));
+        assert!(names.is_empty(), "Should return empty for missing function");
+    }
+}
