@@ -1287,3 +1287,166 @@ fn extract_doc_comment(node: tree_sitter::Node, rope: &Rope) -> Option<String> {
         Some(comments.join("\n"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_point_after_text_single_line() {
+        let start = Point { row: 0, column: 0 };
+        let result = point_after_text(start, "hello");
+        assert_eq!(result.row, 0);
+        assert_eq!(result.column, 5);
+    }
+
+    #[test]
+    fn test_point_after_text_multiline() {
+        let start = Point { row: 0, column: 0 };
+        let result = point_after_text(start, "hello\nworld");
+        assert_eq!(result.row, 1);
+        assert_eq!(result.column, 5);
+    }
+
+    #[test]
+    fn test_point_after_text_with_offset() {
+        let start = Point { row: 5, column: 10 };
+        let result = point_after_text(start, "abc");
+        assert_eq!(result.row, 5);
+        assert_eq!(result.column, 13);
+    }
+
+    #[test]
+    fn test_point_after_text_multiple_newlines() {
+        let start = Point { row: 0, column: 0 };
+        let result = point_after_text(start, "a\nb\nc");
+        assert_eq!(result.row, 2);
+        assert_eq!(result.column, 1);
+    }
+
+    #[test]
+    fn test_position_from_offset_simple() {
+        let rope = Rope::from_str("hello\nworld");
+        // 'h' is at offset 0
+        assert_eq!(position_from_offset(&rope, 0), (0, 0));
+        // 'w' is at offset 6 (after "hello\n")
+        assert_eq!(position_from_offset(&rope, 6), (1, 0));
+        // 'd' is at offset 10
+        assert_eq!(position_from_offset(&rope, 10), (1, 4));
+    }
+
+    #[test]
+    fn test_position_from_offset_clamped() {
+        let rope = Rope::from_str("hello");
+        // Offset beyond end should clamp
+        let (line, col) = position_from_offset(&rope, 100);
+        assert_eq!(line, 0);
+        assert_eq!(col, 5);
+    }
+
+    #[test]
+    fn test_offset_from_position_simple() {
+        let rope = Rope::from_str("hello\nworld");
+        assert_eq!(offset_from_position(&rope, 0, 0), Some(0));
+        assert_eq!(offset_from_position(&rope, 1, 0), Some(6));
+        assert_eq!(offset_from_position(&rope, 1, 4), Some(10));
+    }
+
+    #[test]
+    fn test_offset_from_position_invalid_line() {
+        let rope = Rope::from_str("hello");
+        assert_eq!(offset_from_position(&rope, 5, 0), None);
+    }
+
+    #[test]
+    fn test_offset_from_position_clamped_column() {
+        let rope = Rope::from_str("hi\nworld");
+        // Column beyond line length should clamp
+        let offset = offset_from_position(&rope, 0, 100);
+        assert_eq!(offset, Some(2)); // End of "hi"
+    }
+
+    #[test]
+    fn test_byte_line_col_simple() {
+        let rope = Rope::from_str("hello\nworld");
+        assert_eq!(byte_line_col(&rope, 0), (0, 0));
+        assert_eq!(byte_line_col(&rope, 6), (1, 0));
+        assert_eq!(byte_line_col(&rope, 8), (1, 2));
+    }
+
+    #[test]
+    fn test_extract_completion_prefix_simple() {
+        let rope = Rope::from_str("let foo = bar");
+        // Cursor after "bar" at offset 13
+        assert_eq!(extract_completion_prefix(&rope, 13), "bar");
+    }
+
+    #[test]
+    fn test_extract_completion_prefix_partial() {
+        let rope = Rope::from_str("let foo = ba");
+        // Cursor after "ba" at offset 12
+        assert_eq!(extract_completion_prefix(&rope, 12), "ba");
+    }
+
+    #[test]
+    fn test_extract_completion_prefix_at_start() {
+        let rope = Rope::from_str("foo");
+        assert_eq!(extract_completion_prefix(&rope, 0), "");
+    }
+
+    #[test]
+    fn test_extract_completion_prefix_after_operator() {
+        let rope = Rope::from_str("x + y");
+        // Cursor after "y" at offset 5
+        assert_eq!(extract_completion_prefix(&rope, 5), "y");
+    }
+
+    #[test]
+    fn test_extract_completion_prefix_underscore() {
+        let rope = Rope::from_str("my_var");
+        assert_eq!(extract_completion_prefix(&rope, 6), "my_var");
+    }
+
+    #[test]
+    fn test_span_to_range() {
+        let rope = Rope::from_str("hello\nworld");
+        let span = trunk_ir::Span::new(0, 5);
+        let range = span_to_range(&rope, span);
+        assert_eq!(range.start.line, 0);
+        assert_eq!(range.start.character, 0);
+        assert_eq!(range.end.line, 0);
+        assert_eq!(range.end.character, 5);
+    }
+
+    #[test]
+    fn test_span_to_range_multiline() {
+        let rope = Rope::from_str("hello\nworld");
+        let span = trunk_ir::Span::new(0, 11);
+        let range = span_to_range(&rope, span);
+        assert_eq!(range.start.line, 0);
+        assert_eq!(range.start.character, 0);
+        assert_eq!(range.end.line, 1);
+        assert_eq!(range.end.character, 5);
+    }
+
+    #[test]
+    fn test_position_offset_roundtrip() {
+        let rope = Rope::from_str("fn main() {\n    println!(\"hello\");\n}");
+
+        // Test various positions
+        let test_positions = [(0, 0), (0, 5), (1, 4), (1, 10), (2, 0)];
+
+        for (line, col) in test_positions {
+            if let Some(offset) = offset_from_position(&rope, line, col) {
+                let (recovered_line, recovered_col) = position_from_offset(&rope, offset);
+                assert_eq!(
+                    (recovered_line, recovered_col),
+                    (line, col),
+                    "Roundtrip failed for ({}, {})",
+                    line,
+                    col
+                );
+            }
+        }
+    }
+}
