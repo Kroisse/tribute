@@ -826,12 +826,9 @@ impl LspServer {
     }
 }
 
-/// Start the LSP server.
-pub fn serve(_log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let (connection, io_threads) = Connection::stdio();
-
-    // Server capabilities
-    let capabilities = ServerCapabilities {
+/// Get the server capabilities for the Tribute LSP server.
+fn server_capabilities() -> ServerCapabilities {
+    ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Options(
             TextDocumentSyncOptions {
                 open_close: Some(true),
@@ -863,13 +860,25 @@ pub fn serve(_log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
             resolve_provider: Some(false),
         })),
         ..Default::default()
-    };
+    }
+}
 
+/// Initialize the LSP server with the given connection.
+///
+/// This performs the LSP initialize handshake and returns a ready-to-run server.
+fn initialize_server(connection: Connection) -> Result<LspServer, Box<dyn Error + Send + Sync>> {
+    let capabilities = server_capabilities();
     let server_capabilities = serde_json::to_value(&capabilities)?;
     let init_params = connection.initialize(server_capabilities)?;
     let _params: InitializeParams = serde_json::from_value(init_params)?;
+    Ok(LspServer::new(connection))
+}
 
-    let mut server = LspServer::new(connection);
+/// Start the LSP server.
+pub fn serve(_log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (connection, io_threads) = Connection::stdio();
+
+    let mut server = initialize_server(connection)?;
     server.run()?;
 
     io_threads.join()?;
@@ -1478,9 +1487,39 @@ mod tests {
 
     impl TestHarness {
         fn new() -> Self {
+            use lsp_types::request::{Initialize, Request as _};
+
             let (server_conn, client_conn) = Connection::memory();
+
+            // Send initialize request from client
+            let init_params = InitializeParams::default();
+            let init_request = lsp_server::Request::new(
+                RequestId::from(0),
+                Initialize::METHOD.to_string(),
+                init_params,
+            );
+            client_conn
+                .sender
+                .send(Message::Request(init_request))
+                .unwrap();
+
+            // Send initialized notification (must be sent before initialize_server returns,
+            // because connection.initialize() waits for it)
+            let initialized = Notification::new("initialized".to_string(), serde_json::json!({}));
+            client_conn
+                .sender
+                .send(Message::Notification(initialized))
+                .unwrap();
+
+            // Server performs initialize handshake
+            // (receives init request, sends response, receives initialized notification)
+            let server = initialize_server(server_conn).unwrap();
+
+            // Client receives initialize response
+            let _response = client_conn.receiver.recv().unwrap();
+
             Self {
-                server: LspServer::new(server_conn),
+                server,
                 client: client_conn,
             }
         }
