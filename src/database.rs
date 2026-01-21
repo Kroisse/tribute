@@ -74,3 +74,71 @@ impl TributeDatabaseImpl {
         self.documents.get(key).map(|entry| *entry)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_with_thread_local() {
+        let source = "fn hello() { 42 }";
+        let rope = Rope::from_str(source);
+        let tree = parse_with_thread_local(&rope, None);
+        assert!(tree.is_some(), "Should successfully parse valid source");
+
+        let tree = tree.unwrap();
+        let root = tree.root_node();
+        assert_eq!(root.kind(), "source_file");
+    }
+
+    #[test]
+    fn test_parse_with_thread_local_incremental() {
+        let source1 = "fn foo() { 1 }";
+        let rope1 = Rope::from_str(source1);
+        let tree1 = parse_with_thread_local(&rope1, None).unwrap();
+
+        // Incremental parse with old tree
+        let source2 = "fn foo() { 2 }";
+        let rope2 = Rope::from_str(source2);
+        let tree2 = parse_with_thread_local(&rope2, Some(&tree1));
+        assert!(tree2.is_some(), "Should successfully parse with old tree");
+    }
+
+    #[test]
+    fn test_document_lifecycle() {
+        let db = TributeDatabaseImpl::default();
+        let uri: Uri = "file:///test.trb".parse().unwrap();
+        let text = Rope::from_str("fn test() { }");
+
+        // Initially no document
+        assert!(db.source_cst(&uri).is_none());
+
+        // Open document
+        db.open_document(&uri, text);
+        assert!(db.source_cst(&uri).is_some());
+
+        // Close document
+        db.close_document(&uri);
+        assert!(db.source_cst(&uri).is_none());
+    }
+
+    #[test]
+    fn test_open_document_overwrites() {
+        let db = TributeDatabaseImpl::default();
+        let uri: Uri = "file:///test.trb".parse().unwrap();
+
+        // Open with first content
+        let text1 = Rope::from_str("fn first() { }");
+        db.open_document(&uri, text1);
+
+        let cst1 = db.source_cst(&uri).unwrap();
+        assert_eq!(cst1.text(&db).to_string(), "fn first() { }");
+
+        // Open with second content (should overwrite)
+        let text2 = Rope::from_str("fn second() { }");
+        db.open_document(&uri, text2);
+
+        let cst2 = db.source_cst(&uri).unwrap();
+        assert_eq!(cst2.text(&db).to_string(), "fn second() { }");
+    }
+}
