@@ -40,6 +40,8 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = crate::passes::normalize_primitive_types::lower(db, module);
     tracing::debug!("=== AFTER normalize_primitive_types ===\n{:?}", module);
 
+    // NOTE: resolve_type_references is called in pipeline.rs before compile_to_wasm
+
     // Convert trampoline types/ops BEFORE func_to_wasm so function signatures
     // have ADT types (not trampoline.Step) when converted to wasm.func
     let module = trunk_ir_wasm_backend::passes::trampoline_to_wasm::lower(db, module);
@@ -62,10 +64,6 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     // Concretize type variables in wasm operations (resolve tribute.type_var)
     let module = crate::passes::wasm_type_concrete::lower(db, module);
     debug_func_params(db, &module, "after wasm_type_concrete");
-
-    // Resolve remaining tribute.type references to ADT types
-    let module = crate::passes::resolve_type_references::lower(db, module);
-    debug_func_params(db, &module, "after resolve_type_references");
 
     // Const analysis and lowering (string/bytes constants to data segments)
     let const_analysis = crate::passes::const_to_wasm::analyze_consts(db, module);

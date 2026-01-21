@@ -20,6 +20,7 @@ pub mod handler_lower;
 pub mod lambda_lift;
 pub mod live_vars;
 pub mod resolve;
+pub mod resolve_type_references;
 pub mod tdnr;
 pub mod tribute_to_cont;
 pub mod tribute_to_scf;

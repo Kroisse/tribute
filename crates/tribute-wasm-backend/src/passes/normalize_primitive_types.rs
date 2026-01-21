@@ -49,7 +49,6 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(NormalizeFuncFuncPattern)
-        .add_pattern(NormalizeWasmFuncPattern)
         .add_pattern(NormalizeCallPattern)
         .add_pattern(NormalizeCallIndirectPattern)
         .add_pattern(NormalizeOpResultPattern);
@@ -78,7 +77,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 ///
 /// An operation is illegal if:
 /// - Any of its result types is a tribute_rt primitive type (int, nat, bool, float)
-/// - Its function type (for func.func/wasm.func) contains primitive types
+/// - Its function type (for func.func) contains primitive types
 fn check_no_illegal_primitive_types<'db>(
     db: &'db dyn salsa::Database,
     op: Operation<'db>,
@@ -90,13 +89,8 @@ fn check_no_illegal_primitive_types<'db>(
         }
     }
 
-    // Check function types in func.func and wasm.func
+    // Check function types in func.func
     if let Ok(func_op) = func::Func::from_operation(db, op)
-        && has_illegal_func_type(db, func_op.r#type(db))
-    {
-        return LegalityCheck::Illegal;
-    }
-    if let Ok(func_op) = wasm::Func::from_operation(db, op)
         && has_illegal_func_type(db, func_op.r#type(db))
     {
         return LegalityCheck::Illegal;
@@ -271,49 +265,6 @@ impl<'db> RewritePattern<'db> for NormalizeFuncFuncPattern {
     }
 }
 
-/// Normalize wasm.func function signatures.
-struct NormalizeWasmFuncPattern;
-
-impl<'db> RewritePattern<'db> for NormalizeWasmFuncPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        let func_op = wasm::Func::from_operation(db, *op).ok();
-        let func_op = match func_op {
-            Some(f) => f,
-            None => return RewriteResult::Unchanged,
-        };
-
-        let func_ty = func_op.r#type(db);
-        let new_func_ty = match normalize_func_type(db, func_ty) {
-            Some(ty) => ty,
-            None => return RewriteResult::Unchanged,
-        };
-
-        debug!(
-            "normalize_primitive_types: wasm.func {} signature normalized",
-            func_op.sym_name(db)
-        );
-
-        // Also normalize block arguments in the body region
-        let body = func_op.body(db);
-        let new_body = normalize_region_block_args(db, body);
-
-        let new_op = wasm::func(
-            db,
-            op.location(db),
-            func_op.sym_name(db),
-            new_func_ty,
-            new_body,
-        );
-
-        RewriteResult::Replace(new_op.as_operation())
-    }
-}
-
 /// Normalize func.call operation result types.
 struct NormalizeCallPattern;
 
@@ -456,7 +407,6 @@ impl<'db> RewritePattern<'db> for NormalizeOpResultPattern {
         let dialect = op.dialect(db);
         let name = op.name(db);
         if (dialect == func::DIALECT_NAME() && name == func::FUNC())
-            || (dialect == wasm::DIALECT_NAME() && name == wasm::FUNC())
             || (dialect == func::DIALECT_NAME() && name == func::CALL())
             || (dialect == func::DIALECT_NAME() && name == func::CALL_INDIRECT())
         {
