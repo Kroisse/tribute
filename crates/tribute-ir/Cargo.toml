@@ -11,3 +11,6 @@ inventory.workspace = true
 salsa.workspace = true
 tracing.workspace = true
 trunk-ir.workspace = true
+
+[dev-dependencies]
+salsa-test-macros.workspace = true

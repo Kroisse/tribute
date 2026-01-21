@@ -1212,6 +1212,7 @@ version = "0.1.0"
 dependencies = [
  "inventory",
  "salsa",
+ "salsa-test-macros",
  "tracing",
  "trunk-ir",
 ]

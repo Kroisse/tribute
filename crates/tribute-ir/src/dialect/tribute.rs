@@ -499,3 +499,79 @@ fn fmt_var_id(f: &mut Formatter<'_>, id: u64) -> std::fmt::Result {
         write!(f, "t{}", id - 26)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::DialectType;
+    use trunk_ir::dialect::core;
+    use trunk_ir::type_interface::print_type;
+
+    #[salsa_test]
+    fn test_type_var_with_id(db: &salsa::DatabaseImpl) {
+        let var_a = type_var_with_id(db, 0);
+        assert!(is_type_var(db, var_a));
+        assert_eq!(print_type(db, var_a), "a");
+
+        let var_z = type_var_with_id(db, 25);
+        assert_eq!(print_type(db, var_z), "z");
+
+        let var_t0 = type_var_with_id(db, 26);
+        assert_eq!(print_type(db, var_t0), "t0");
+    }
+
+    #[salsa_test]
+    fn test_new_type_var(db: &salsa::DatabaseImpl) {
+        let var = new_type_var(db, BTreeMap::new());
+        assert!(is_type_var(db, var));
+        assert!(!is_error_type(db, var));
+    }
+
+    #[salsa_test]
+    fn test_new_error_type(db: &salsa::DatabaseImpl) {
+        let err = new_error_type(db, BTreeMap::new());
+        assert!(is_error_type(db, err));
+        assert!(!is_type_var(db, err));
+        assert_eq!(print_type(db, err), "<error>");
+    }
+
+    #[salsa_test]
+    fn test_unresolved_type(db: &salsa::DatabaseImpl) {
+        let ty = unresolved_type(db, Symbol::new("Int"), IdVec::new());
+        assert!(is_unresolved_type(db, ty));
+        assert_eq!(print_type(db, ty), "Int");
+
+        // With type parameters
+        let inner = type_var_with_id(db, 0);
+        let list_ty = unresolved_type(db, Symbol::new("List"), IdVec::from(vec![inner]));
+        assert!(is_unresolved_type(db, list_ty));
+        assert_eq!(print_type(db, list_ty), "List(a)");
+    }
+
+    #[salsa_test]
+    fn test_is_placeholder_type(db: &salsa::DatabaseImpl) {
+        let type_var = type_var_with_id(db, 0);
+        let error_type = new_error_type(db, BTreeMap::new());
+        let unresolved = unresolved_type(db, Symbol::new("Foo"), IdVec::new());
+        let concrete = core::I32::new(db).as_type();
+
+        assert!(is_placeholder_type(db, type_var));
+        assert!(is_placeholder_type(db, error_type));
+        assert!(is_placeholder_type(db, unresolved));
+        assert!(!is_placeholder_type(db, concrete));
+    }
+
+    #[salsa_test]
+    fn test_tuple_type_printable(db: &salsa::DatabaseImpl) {
+        let int_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+
+        // (Int, Int) -> TupleType(Int, TupleType(Int, Nil))
+        let inner = TupleType::new(db, int_ty, nil_ty);
+        let tuple = TupleType::new(db, int_ty, inner.as_type());
+
+        let printed = print_type(db, tuple.as_type());
+        assert_eq!(printed, "(I32, I32)");
+    }
+}
