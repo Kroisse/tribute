@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use tracing::debug;
 use tribute_ir::dialect::tribute;
 use trunk_ir::dialect::core::Module;
-use trunk_ir::dialect::wasm;
+use trunk_ir::dialect::func;
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
@@ -50,7 +50,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 
     // Apply patterns to resolve type references
     let applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern(ResolveWasmFuncTypePattern {
+        .add_pattern(ResolveFuncTypePattern {
             type_defs: type_defs.clone(),
         })
         .add_pattern(ResolveOperationTypesPattern { type_defs });
@@ -150,19 +150,19 @@ fn resolve_type<'db>(
     )
 }
 
-/// Pattern to resolve types in wasm.func signatures.
-struct ResolveWasmFuncTypePattern<'db> {
+/// Pattern to resolve types in func.func signatures.
+struct ResolveFuncTypePattern<'db> {
     type_defs: TypeDefs<'db>,
 }
 
-impl<'db> RewritePattern<'db> for ResolveWasmFuncTypePattern<'db> {
+impl<'db> RewritePattern<'db> for ResolveFuncTypePattern<'db> {
     fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let Ok(func_op) = wasm::Func::from_operation(db, *op) else {
+        let Ok(func_op) = func::Func::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
@@ -174,7 +174,7 @@ impl<'db> RewritePattern<'db> for ResolveWasmFuncTypePattern<'db> {
         }
 
         debug!(
-            "resolve_type_references: resolved wasm.func {} signature types",
+            "resolve_type_references: resolved func.func {} signature types",
             func_op.sym_name(db)
         );
 

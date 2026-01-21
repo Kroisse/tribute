@@ -719,6 +719,9 @@ pub fn compile_to_wasm_binary<'db>(
     // Resolve any unrealized_conversion_cast operations from earlier passes
     let module = stage_resolve_casts(db, module);
 
+    // Resolve tribute.type references to ADT types (backend-agnostic)
+    let module = tribute_passes::resolve_type_references::lower(db, module);
+
     // Lower to WebAssembly
     stage_lower_to_wasm(db, module)
 }
