@@ -62,6 +62,7 @@ lsp-server.workspace = true
 lsp-types.workspace = true
 ropey.workspace = true
 salsa.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

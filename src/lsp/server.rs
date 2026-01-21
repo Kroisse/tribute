@@ -55,21 +55,29 @@ impl LspServer {
     fn run(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         loop {
             let msg = self.connection.receiver.recv()?;
-            match msg {
-                Message::Request(req) => {
-                    if self.connection.handle_shutdown(&req)? {
-                        return Ok(());
-                    }
-                    self.handle_request(req)?;
-                }
-                Message::Response(_) => {
-                    // We don't send requests, so we shouldn't get responses
-                }
-                Message::Notification(notif) => {
-                    self.handle_notification(notif)?;
-                }
+            if self.process_message(msg)? {
+                return Ok(());
             }
         }
+    }
+
+    /// Process a single message. Returns `Ok(true)` if shutdown was requested.
+    fn process_message(&mut self, msg: Message) -> Result<bool, Box<dyn Error + Send + Sync>> {
+        match msg {
+            Message::Request(req) => {
+                if self.connection.handle_shutdown(&req)? {
+                    return Ok(true);
+                }
+                self.handle_request(req)?;
+            }
+            Message::Response(_) => {
+                // We don't send requests, so we shouldn't get responses
+            }
+            Message::Notification(notif) => {
+                self.handle_notification(notif)?;
+            }
+        }
+        Ok(false)
     }
 
     fn handle_request(&mut self, req: Request) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -1451,16 +1459,80 @@ mod tests {
     }
 
     // =========================================================================
-    // LSP Server Integration Tests
+    // LSP Server Integration Tests (Message-based)
     // =========================================================================
 
-    fn create_test_server() -> LspServer {
-        let (connection, _client) = Connection::memory();
-        LspServer::new(connection)
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    static REQUEST_ID: AtomicI32 = AtomicI32::new(1);
+
+    fn next_request_id() -> RequestId {
+        RequestId::from(REQUEST_ID.fetch_add(1, Ordering::SeqCst))
     }
 
-    fn open_test_doc(server: &LspServer, uri: &Uri, source: &str) {
-        server.db.open_document(uri, Rope::from_str(source));
+    /// Test harness that creates a server and client connection pair.
+    struct TestHarness {
+        server: LspServer,
+        client: Connection,
+    }
+
+    impl TestHarness {
+        fn new() -> Self {
+            let (server_conn, client_conn) = Connection::memory();
+            Self {
+                server: LspServer::new(server_conn),
+                client: client_conn,
+            }
+        }
+
+        /// Send a didOpen notification and process it.
+        fn open_document(&mut self, uri: &Uri, text: &str) {
+            let params = DidOpenTextDocumentParams {
+                text_document: lsp_types::TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "tribute".to_string(),
+                    version: 1,
+                    text: text.to_string(),
+                },
+            };
+            let notif = Notification::new(DidOpenTextDocument::METHOD.to_string(), params);
+            self.client
+                .sender
+                .send(Message::Notification(notif))
+                .unwrap();
+
+            // Process the message on the server side
+            let msg = self.server.connection.receiver.recv().unwrap();
+            self.server.process_message(msg).unwrap();
+
+            // Consume the diagnostics notification sent back
+            let _ = self.client.receiver.try_recv();
+        }
+
+        /// Send a request and get the response.
+        fn request<R: lsp_types::request::Request>(&mut self, params: R::Params) -> R::Result
+        where
+            R::Params: serde::Serialize,
+            R::Result: serde::de::DeserializeOwned,
+        {
+            let id = next_request_id();
+            let req = Request::new(id.clone(), R::METHOD.to_string(), params);
+            self.client.sender.send(Message::Request(req)).unwrap();
+
+            // Process the message on the server side
+            let msg = self.server.connection.receiver.recv().unwrap();
+            self.server.process_message(msg).unwrap();
+
+            // Get the response
+            match self.client.receiver.recv().unwrap() {
+                Message::Response(resp) => {
+                    assert_eq!(resp.id, id);
+                    assert!(resp.error.is_none(), "Request failed: {:?}", resp.error);
+                    serde_json::from_value(resp.result.unwrap()).unwrap()
+                }
+                other => panic!("Expected response message, got {:?}", other),
+            }
+        }
     }
 
     fn test_uri(name: &str) -> Uri {
@@ -1468,92 +1540,66 @@ mod tests {
     }
 
     #[test]
-    fn test_hover_returns_type_info() {
-        let server = create_test_server();
-        let uri = test_uri("hover");
+    fn test_hover_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("hover_msg");
         let source = "fn add(x: Int, y: Int): Int { x + y }";
 
-        open_test_doc(&server, &uri, source);
+        harness.open_document(&uri, source);
 
         let params = HoverParams {
             text_document_position_params: TextDocumentPositionParams {
-                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                text_document: lsp_types::TextDocumentIdentifier { uri },
                 position: lsp_types::Position {
                     line: 0,
-                    character: 3, // 'a' in 'add'
+                    character: 3,
                 },
             },
             work_done_progress_params: Default::default(),
         };
 
-        let result = server.hover(params);
-        // Should return hover info for the function
+        let result: Option<Hover> = harness.request::<HoverRequest>(params);
         assert!(result.is_some(), "Hover should return type information");
     }
 
     #[test]
-    fn test_hover_no_info_on_whitespace() {
-        let server = create_test_server();
-        let uri = test_uri("hover_whitespace");
-        let source = "fn foo() { }";
-
-        open_test_doc(&server, &uri, source);
-
-        let params = HoverParams {
-            text_document_position_params: TextDocumentPositionParams {
-                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
-                position: lsp_types::Position {
-                    line: 0,
-                    character: 10, // Inside the empty body
-                },
-            },
-            work_done_progress_params: Default::default(),
-        };
-
-        let result = server.hover(params);
-        // Whitespace/empty area may or may not return hover
-        // This test just verifies no panic occurs
-        let _ = result;
-    }
-
-    #[test]
-    fn test_document_symbols_finds_functions() {
-        let server = create_test_server();
-        let uri = test_uri("symbols");
+    fn test_document_symbols_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("symbols_msg");
         let source = "fn foo() { }\nfn bar() { }";
 
-        open_test_doc(&server, &uri, source);
+        harness.open_document(&uri, source);
 
         let params = DocumentSymbolParams {
-            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            text_document: lsp_types::TextDocumentIdentifier { uri },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
         };
 
-        let result = server.document_symbols(params);
+        let result: Option<DocumentSymbolResponse> =
+            harness.request::<DocumentSymbolRequest>(params);
         assert!(result.is_some(), "Should return document symbols");
 
         if let Some(DocumentSymbolResponse::Nested(symbols)) = result {
-            // Find user-defined functions (may include prelude symbols)
             assert!(symbols.iter().any(|s| s.name == "foo"), "Should find 'foo'");
             assert!(symbols.iter().any(|s| s.name == "bar"), "Should find 'bar'");
         }
     }
 
     #[test]
-    fn test_completion_returns_keywords() {
-        let server = create_test_server();
-        let uri = test_uri("completion");
+    fn test_completion_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("completion_msg");
         let source = "fn main() { le }";
 
-        open_test_doc(&server, &uri, source);
+        harness.open_document(&uri, source);
 
         let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
-                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                text_document: lsp_types::TextDocumentIdentifier { uri },
                 position: lsp_types::Position {
                     line: 0,
-                    character: 14, // After "le"
+                    character: 14,
                 },
             },
             work_done_progress_params: Default::default(),
@@ -1561,11 +1607,10 @@ mod tests {
             context: None,
         };
 
-        let result = server.completion(params);
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
         assert!(result.is_some(), "Should return completions");
 
-        if let Some(list) = result {
-            // Should include 'let' keyword
+        if let Some(lsp_types::CompletionResponse::List(list)) = result {
             assert!(
                 list.items.iter().any(|item| item.label == "let"),
                 "Should suggest 'let' keyword"
@@ -1574,27 +1619,26 @@ mod tests {
     }
 
     #[test]
-    fn test_goto_definition_finds_local() {
-        let server = create_test_server();
-        let uri = test_uri("goto_def");
+    fn test_goto_definition_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("goto_def_msg");
         let source = "fn main() { let x = 1; x }";
 
-        open_test_doc(&server, &uri, source);
+        harness.open_document(&uri, source);
 
         let params = GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
-                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                text_document: lsp_types::TextDocumentIdentifier { uri },
                 position: lsp_types::Position {
                     line: 0,
-                    character: 23, // The second 'x'
+                    character: 23,
                 },
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
         };
 
-        let result = server.goto_definition(params);
-        // Should find definition of x
+        let result: Option<GotoDefinitionResponse> = harness.request::<GotoDefinition>(params);
         assert!(
             result.is_some(),
             "Should find definition for local variable"
@@ -1602,19 +1646,19 @@ mod tests {
     }
 
     #[test]
-    fn test_find_references_finds_usages() {
-        let server = create_test_server();
-        let uri = test_uri("references");
+    fn test_find_references_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("references_msg");
         let source = "fn main() { let x = 1; x + x }";
 
-        open_test_doc(&server, &uri, source);
+        harness.open_document(&uri, source);
 
         let params = ReferenceParams {
             text_document_position: TextDocumentPositionParams {
-                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                text_document: lsp_types::TextDocumentIdentifier { uri },
                 position: lsp_types::Position {
                     line: 0,
-                    character: 16, // The 'x' in 'let x'
+                    character: 16,
                 },
             },
             work_done_progress_params: Default::default(),
@@ -1624,10 +1668,59 @@ mod tests {
             },
         };
 
-        let result = server.find_references(params);
+        let result: Option<Vec<Location>> = harness.request::<References>(params);
         if let Some(refs) = result {
-            // Should find at least the definition + 2 usages
             assert!(refs.len() >= 2, "Should find multiple references");
+        }
+    }
+
+    #[test]
+    fn test_did_change_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("change_msg");
+
+        // Open document
+        harness.open_document(&uri, "fn foo() { }");
+
+        // Send didChange notification
+        let params = DidChangeTextDocumentParams {
+            text_document: lsp_types::VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "fn foo() { }\nfn bar() { }".to_string(),
+            }],
+        };
+        let notif = Notification::new(DidChangeTextDocument::METHOD.to_string(), params);
+        harness
+            .client
+            .sender
+            .send(Message::Notification(notif))
+            .unwrap();
+
+        // Process the change
+        let msg = harness.server.connection.receiver.recv().unwrap();
+        harness.server.process_message(msg).unwrap();
+        let _ = harness.client.receiver.try_recv(); // Consume diagnostics
+
+        // Verify: document symbols should now include 'bar'
+        let params = DocumentSymbolParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        let result: Option<DocumentSymbolResponse> =
+            harness.request::<DocumentSymbolRequest>(params);
+
+        if let Some(DocumentSymbolResponse::Nested(symbols)) = result {
+            assert!(
+                symbols.iter().any(|s| s.name == "bar"),
+                "Should find 'bar' after change"
+            );
         }
     }
 }
