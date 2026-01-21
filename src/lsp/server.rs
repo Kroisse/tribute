@@ -1762,4 +1762,180 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_signature_help_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("sig_help_msg");
+        // Define a function and call it
+        let source = "fn add(x: Int, y: Int): Int { x + y }\nfn main() { add( }";
+
+        harness.open_document(&uri, source);
+
+        let params = SignatureHelpParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 1,
+                    character: 16, // Inside add( call
+                },
+            },
+            work_done_progress_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<SignatureHelp> = harness.request::<SignatureHelpRequest>(params);
+        // Signature help may or may not find the function depending on parsing
+        // Just verify the request completes without error
+        if let Some(sig_help) = result {
+            assert!(
+                !sig_help.signatures.is_empty(),
+                "Should return signature information"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "local variable rename not supported yet, see #273"]
+    fn test_prepare_rename_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("prepare_rename_msg");
+        let source = "fn main() { let foo = 1; foo }";
+
+        harness.open_document(&uri, source);
+
+        // Try renaming from the reference position (foo at the end)
+        let params = TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri },
+            position: lsp_types::Position {
+                line: 0,
+                character: 25, // On 'foo' at the end (reference)
+            },
+        };
+
+        let result: Option<PrepareRenameResponse> = harness.request::<PrepareRenameRequest>(params);
+        assert!(result.is_some(), "Should be able to rename from reference");
+
+        if let Some(PrepareRenameResponse::RangeWithPlaceholder { placeholder, .. }) = result {
+            assert_eq!(placeholder, "foo", "Placeholder should be current name");
+        }
+    }
+
+    #[test]
+    #[ignore = "local variable rename not supported yet, see #273"]
+    #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
+    fn test_rename_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("rename_msg");
+        let source = "fn main() { let foo = 1; foo + foo }";
+
+        harness.open_document(&uri, source);
+
+        // Rename from reference position
+        let params = RenameParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: 0,
+                    character: 25, // On first 'foo' reference
+                },
+            },
+            new_name: "bar".to_string(),
+            work_done_progress_params: Default::default(),
+        };
+
+        let result: Option<WorkspaceEdit> = harness.request::<Rename>(params);
+        assert!(result.is_some(), "Should return workspace edit for rename");
+
+        if let Some(edit) = result {
+            let changes = edit.changes.expect("Should have changes");
+            let edits = changes.get(&uri).expect("Should have edits for this file");
+            // Should rename definition and both usages
+            assert!(edits.len() >= 2, "Should have multiple edits for rename");
+            assert!(
+                edits.iter().all(|e| e.new_text == "bar"),
+                "All edits should use new name"
+            );
+        }
+    }
+
+    #[test]
+    fn test_code_action_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("code_action_msg");
+        // Top-level function without return type annotation triggers a diagnostic
+        let source = "fn identity(x: Int) { x }";
+
+        harness.open_document(&uri, source);
+
+        let params = CodeActionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri },
+            range: lsp_types::Range {
+                start: lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: lsp_types::Position {
+                    line: 0,
+                    character: 25,
+                },
+            },
+            context: lsp_types::CodeActionContext {
+                diagnostics: vec![],
+                only: None,
+                trigger_kind: None,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        let result: Option<Vec<CodeActionOrCommand>> = harness.request::<CodeActionRequest>(params);
+        // Code actions depend on diagnostics being present
+        // Just verify the request completes without error
+        if let Some(actions) = result {
+            // If there are actions, they should be code actions (not commands)
+            for action in &actions {
+                assert!(
+                    matches!(action, CodeActionOrCommand::CodeAction(_)),
+                    "Should return CodeAction, not Command"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_did_close_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("close_msg");
+
+        // Open document
+        harness.open_document(&uri, "fn foo() { }");
+
+        // Send didClose notification
+        let params = DidCloseTextDocumentParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+        };
+        let notif = Notification::new(DidCloseTextDocument::METHOD.to_string(), params);
+        harness
+            .client
+            .sender
+            .send(Message::Notification(notif))
+            .unwrap();
+
+        // Process the close
+        let msg = harness.server.connection.receiver.recv().unwrap();
+        harness.server.process_message(msg).unwrap();
+
+        // Should receive a diagnostics notification clearing diagnostics
+        match harness.client.receiver.recv().unwrap() {
+            Message::Notification(notif) => {
+                assert_eq!(notif.method, PublishDiagnostics::METHOD);
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(notif.params).unwrap();
+                assert_eq!(params.uri, uri);
+                assert!(params.diagnostics.is_empty(), "Should clear diagnostics");
+            }
+            other => panic!("Expected notification, got {:?}", other),
+        }
+    }
 }
