@@ -12,7 +12,7 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use tribute_ir::dialect::{tribute, tribute_pat};
 use trunk_ir::dialect::core::Module;
@@ -105,8 +105,6 @@ impl<'db> RewritePattern<'db> for LowerTributeHandlePattern {
 struct HandlerLowerer<'db> {
     db: &'db dyn salsa::Database,
     ctx: RewriteContext<'db>,
-    /// Bindings for pattern variables in the current arm being processed.
-    current_arm_bindings: HashMap<Symbol, Value<'db>>,
 }
 
 impl<'db> HandlerLowerer<'db> {
@@ -114,7 +112,6 @@ impl<'db> HandlerLowerer<'db> {
         Self {
             db,
             ctx: RewriteContext::new(),
-            current_arm_bindings: HashMap::new(),
         }
     }
 
@@ -252,16 +249,18 @@ impl<'db> HandlerLowerer<'db> {
         let done_value = get_done_value_op.as_operation().result(self.db, 0);
 
         let done_body = if let Some(done_arm) = done_arm {
-            // Bind result variable to the extracted done value
-            if let Some(pattern_region) = done_arm.pattern_region {
-                let bindings = self.extract_bindings_from_pattern(pattern_region);
-                for name in bindings.iter() {
-                    self.current_arm_bindings.insert(*name, done_value);
+            // Map body block args to the extracted done value
+            if let Some(entry_block) = done_arm.body.blocks(self.db).first().copied() {
+                let block_args = entry_block.args(self.db);
+                // For handler_done pattern, there's typically one binding (the result)
+                for i in 0..block_args.len() {
+                    let block_arg_value =
+                        Value::new(self.db, ValueDef::BlockArg(entry_block.id(self.db)), i);
+                    self.ctx.map_value(block_arg_value, done_value);
                 }
             }
 
             let lowered_body = self.lower_region(done_arm.body);
-            self.current_arm_bindings.clear();
 
             // Prepend the get_done_value operation to the body
             let body_with_extraction =
@@ -299,6 +298,7 @@ impl<'db> HandlerLowerer<'db> {
 
             // Set up bindings for continuation and args
             let mut extraction_ops: Vec<Operation<'db>> = Vec::new();
+            let mut extracted_values: Vec<Value<'db>> = Vec::new();
             let ptr_ty = core::Ptr::new(self.db).as_type();
 
             if let Some(pattern_region) = suspend_arm.pattern_region {
@@ -310,7 +310,7 @@ impl<'db> HandlerLowerer<'db> {
                     .extract_continuation_type(pattern_region)
                     .unwrap_or(ptr_ty);
 
-                for (i, name) in bindings.iter().enumerate() {
+                for i in 0..bindings.len() {
                     if i == bindings.len() - 1 {
                         // Last binding is continuation (k) - use the resolved continuation type
                         let get_cont_op =
@@ -318,14 +318,26 @@ impl<'db> HandlerLowerer<'db> {
                                 .as_operation();
                         let cont_val = get_cont_op.result(self.db, 0);
                         extraction_ops.push(get_cont_op);
-                        self.current_arm_bindings.insert(*name, cont_val);
+                        extracted_values.push(cont_val);
                     } else {
                         // Other bindings are shift_value arguments
                         let get_shift_op =
                             cont::get_shift_value(self.db, location, ptr_ty).as_operation();
                         let shift_val = get_shift_op.result(self.db, 0);
                         extraction_ops.push(get_shift_op);
-                        self.current_arm_bindings.insert(*name, shift_val);
+                        extracted_values.push(shift_val);
+                    }
+                }
+            }
+
+            // Map body block args to extracted values
+            if let Some(entry_block) = suspend_arm.body.blocks(self.db).first().copied() {
+                let block_args = entry_block.args(self.db);
+                for (i, &extracted) in extracted_values.iter().enumerate() {
+                    if i < block_args.len() {
+                        let block_arg_value =
+                            Value::new(self.db, ValueDef::BlockArg(entry_block.id(self.db)), i);
+                        self.ctx.map_value(block_arg_value, extracted);
                     }
                 }
             }
@@ -339,7 +351,6 @@ impl<'db> HandlerLowerer<'db> {
                 lowered_body
             };
 
-            self.current_arm_bindings.clear();
             suspend_bodies.push((ability_ref, op_name, body_with_extractions));
         }
 
@@ -416,16 +427,7 @@ impl<'db> HandlerLowerer<'db> {
 
     /// Remap a value through the rewrite context.
     fn remap_value(&self, value: Value<'db>) -> Value<'db> {
-        // Check if this is a tribute.var referencing a bound pattern variable
-        if let ValueDef::OpResult(def_op) = value.def(self.db)
-            && def_op.dialect(self.db) == tribute::DIALECT_NAME()
-            && def_op.name(self.db) == tribute::VAR()
-            && let Some(Attribute::Symbol(name)) =
-                def_op.attributes(self.db).get(&Symbol::new("name"))
-            && let Some(&bound_value) = self.current_arm_bindings.get(name)
-        {
-            return bound_value;
-        }
+        // Block arguments are already mapped via self.ctx
         self.ctx.lookup(value)
     }
 

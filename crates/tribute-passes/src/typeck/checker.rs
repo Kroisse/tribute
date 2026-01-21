@@ -1345,17 +1345,16 @@ impl<'db> TypeChecker<'db> {
         self.record_type(value, result_type);
     }
 
-    /// Constrain `adt.variant_get` result types in a case arm body.
+    /// Constrain types in a case arm body based on the pattern.
     ///
-    /// When a case arm has a variant pattern (e.g., `Some(x)`), the body may contain
-    /// `adt.variant_get` operations that extract fields from the scrutinee. These
-    /// operations have type variable results that need to be constrained to the
-    /// actual field types from the enum definition.
+    /// When a case arm has a variant pattern (e.g., `Some(x)`), we need to constrain:
+    /// 1. Block argument types - these represent pattern bindings
+    /// 2. `adt.variant_get` result types (legacy: for backwards compatibility)
     ///
     /// This method:
     /// 1. Extracts the variant tag from the pattern region
     /// 2. Looks up the variant's field types from the enum type
-    /// 3. Finds all `adt.variant_get` ops in the body and constrains their result types
+    /// 3. Constrains block arg types and variant_get result types
     fn constrain_variant_get_types_in_arm(
         &mut self,
         pattern_region: &Region<'db>,
@@ -1382,7 +1381,26 @@ impl<'db> TypeChecker<'db> {
             "constrain_variant_get_types_in_arm: found variant"
         );
 
-        // Find all adt.variant_get operations in the body and constrain their types
+        // Constrain body block argument types based on pattern bindings
+        // Block args correspond to pattern bindings in order
+        if let Some(entry_block) = body_region.blocks(self.db).first() {
+            let block_args = entry_block.args(self.db);
+            for (i, arg) in block_args.iter().enumerate() {
+                if i < field_types.len() {
+                    let resolved_field_type = self.resolve_tribute_type(field_types[i]);
+                    let arg_ty = arg.ty(self.db);
+                    trace!(
+                        i,
+                        ?resolved_field_type,
+                        ?arg_ty,
+                        "constrain_variant_get_types_in_arm: constraining block arg type"
+                    );
+                    self.constrain_eq(arg_ty, resolved_field_type);
+                }
+            }
+        }
+
+        // Also constrain adt.variant_get operations (for backwards compatibility)
         for block in body_region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
                 if op.dialect(self.db) == adt::DIALECT_NAME()

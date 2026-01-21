@@ -2549,11 +2549,13 @@ pub mod tests {
                 // %0 = arith.const 42
                 let const_val = entry.op(arith::Const::i64(db, location, 42));
 
-                // tribute.let(%0) { tribute_pat.bind("x") }
+                // tribute.let(%0) { tribute_pat.bind("x") } -> %result
+                // Result type is the inferred type (1 binding = 1 result)
                 entry.op(tribute::r#let(
                     db,
                     location,
                     const_val.result(db),
+                    std::iter::once(infer_ty),
                     pattern_region,
                 ));
 

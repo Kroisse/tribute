@@ -5,6 +5,7 @@
 use tracing::trace;
 use tree_sitter::Node;
 use tribute_ir::ModulePathExt;
+use tribute_ir::dialect::tribute::block_arg_attrs::{BIND_LOCATION, BIND_NAME};
 use tribute_ir::dialect::{list, tribute, tribute_pat};
 use trunk_ir::dialect::adt;
 use trunk_ir::{
@@ -25,7 +26,7 @@ use super::literals::{
     parse_bytes_literal, parse_float_literal, parse_int_literal, parse_nat_literal,
     parse_rune_literal, parse_string_literal,
 };
-use super::statements::{bind_pattern, lower_block_body};
+use super::statements::lower_block_body;
 
 // =============================================================================
 // Expression Lowering
@@ -656,13 +657,19 @@ fn lower_case_expr<'db>(
 }
 
 /// Lower a single case arm.
+///
+/// Pattern bindings are represented as block arguments on the body region's entry block.
+/// Each block argument has `bind_name` and `bind_location` attributes for LSP support.
+/// The downstream pass (tribute_to_scf) extracts values from the scrutinee and passes
+/// them as arguments to the body block.
 fn lower_case_arm<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     node: Node,
-    scrutinee: Value<'db>,
+    _scrutinee: Value<'db>,
 ) -> Option<tribute::Arm<'db>> {
     let mut cursor = node.walk();
     let location = ctx.location(&node);
+    let infer_ty = ctx.fresh_type_var();
 
     let mut pattern_node = None;
     let mut body_node = None;
@@ -681,24 +688,250 @@ fn lower_case_arm<'db>(
     let pattern_node = pattern_node?;
     let body_node = body_node?;
 
-    // Create arm body
+    // 1. Collect bindings from pattern (name + location)
+    let bindings = collect_pattern_bindings(ctx, pattern_node);
+
+    // 2. Create body block with block arguments for each binding
     let mut body_block = BlockBuilder::new(ctx.db, location);
+    for binding in &bindings {
+        body_block = body_block
+            .arg(infer_ty)
+            .attr(BIND_NAME(), binding.name)
+            .attr(BIND_LOCATION(), Attribute::Location(binding.location));
+    }
 
+    // 3. Lower body with bindings registered to block arguments
     let result_value = ctx.scoped(|ctx| {
-        // Bind pattern variables (including handler patterns)
-        bind_pattern(ctx, &mut body_block, pattern_node, scrutinee);
+        // Register each binding to its corresponding block argument
+        for (i, binding) in bindings.iter().enumerate() {
+            let block_arg = body_block.block_arg(ctx.db, i);
+            ctx.bind(binding.name, block_arg);
+        }
 
-        // Lower body
+        // Lower body expression
         lower_expr(ctx, &mut body_block, body_node)
     });
 
     let result_value = result_value?;
     body_block.op(tribute::r#yield(ctx.db, location, result_value));
 
+    // 4. Create pattern region (pure structure, no extraction ops)
     let pattern_region = pattern_to_region(ctx, pattern_node);
     let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
     Some(tribute::arm(ctx.db, location, pattern_region, body_region))
+}
+
+/// Binding information collected from a pattern.
+#[derive(Debug, Clone)]
+pub struct PatternBinding<'db> {
+    pub name: Symbol,
+    pub location: trunk_ir::Location<'db>,
+}
+
+/// Collect all bindings from a pattern node.
+///
+/// Returns bindings in the same order that `pattern_to_region` would produce them.
+/// This is used to create block arguments for case arm bodies.
+pub fn collect_pattern_bindings<'db>(
+    ctx: &CstLoweringCtx<'db>,
+    node: Node,
+) -> Vec<PatternBinding<'db>> {
+    let location = ctx.location(&node);
+    let mut bindings = Vec::new();
+
+    match node.kind() {
+        // Wrapper nodes - unwrap and recurse
+        "pattern" | "simple_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                return collect_pattern_bindings(ctx, child);
+            }
+        }
+        "identifier" | "identifier_pattern" => {
+            // Handle identifier_pattern which may have an inner identifier
+            let name = if node.kind() == "identifier_pattern" {
+                let mut cursor = node.walk();
+                node.named_children(&mut cursor)
+                    .next()
+                    .map(|child| node_text(&child, &ctx.source))
+                    .unwrap_or_else(|| node_text(&node, &ctx.source))
+            } else {
+                node_text(&node, &ctx.source)
+            };
+            bindings.push(PatternBinding {
+                name: name.into(),
+                location,
+            });
+        }
+        "wildcard_pattern" | "literal_pattern" | "nat_literal" | "int_literal" | "true"
+        | "keyword_true" | "false" | "keyword_false" | "nil" | "keyword_nil" | "string"
+        | "raw_string" | "multiline_string" => {
+            // These patterns don't introduce bindings
+        }
+        "constructor_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                match child.kind() {
+                    "type_identifier" => {
+                        // Skip the constructor name
+                    }
+                    "pattern_list" => {
+                        let mut list_cursor = child.walk();
+                        for pat_child in child.named_children(&mut list_cursor) {
+                            if !is_comment(pat_child.kind()) {
+                                bindings.extend(collect_pattern_bindings(ctx, pat_child));
+                            }
+                        }
+                    }
+                    "pattern_fields" => {
+                        let mut fields_cursor = child.walk();
+                        for field_child in child.named_children(&mut fields_cursor) {
+                            if field_child.kind() == "pattern_field" {
+                                let mut field_cursor = field_child.walk();
+                                for pat in field_child.named_children(&mut field_cursor) {
+                                    if !is_comment(pat.kind()) {
+                                        bindings.extend(collect_pattern_bindings(ctx, pat));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "tuple_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                if child.kind() == "pattern_list" {
+                    let mut list_cursor = child.walk();
+                    for pat_child in child.named_children(&mut list_cursor) {
+                        if !is_comment(pat_child.kind()) {
+                            bindings.extend(collect_pattern_bindings(ctx, pat_child));
+                        }
+                    }
+                }
+            }
+        }
+        "list_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                if child.kind() == "rest_pattern" {
+                    let mut rest_cursor = child.walk();
+                    for rest_child in child.named_children(&mut rest_cursor) {
+                        if rest_child.kind() == "identifier" {
+                            bindings.push(PatternBinding {
+                                name: node_text(&rest_child, &ctx.source).into(),
+                                location: ctx.location(&rest_child),
+                            });
+                            break;
+                        }
+                    }
+                } else {
+                    bindings.extend(collect_pattern_bindings(ctx, child));
+                }
+            }
+        }
+        "as_pattern" => {
+            let mut cursor = node.walk();
+            let mut inner_processed = false;
+
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                match child.kind() {
+                    "identifier" => {
+                        bindings.push(PatternBinding {
+                            name: node_text(&child, &ctx.source).into(),
+                            location: ctx.location(&child),
+                        });
+                    }
+                    _ if !inner_processed => {
+                        // Recurse into inner pattern
+                        bindings.extend(collect_pattern_bindings(ctx, child));
+                        inner_processed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "handler_pattern" => {
+            // Handler patterns: { result } or { Op(args) -> k }
+            collect_handler_pattern_bindings(ctx, node, &mut bindings);
+        }
+        _ => {}
+    }
+
+    bindings
+}
+
+/// Collect bindings from handler patterns.
+fn collect_handler_pattern_bindings<'db>(
+    ctx: &CstLoweringCtx<'db>,
+    node: Node,
+    bindings: &mut Vec<PatternBinding<'db>>,
+) {
+    let mut cursor = node.walk();
+
+    for child in node.named_children(&mut cursor) {
+        if is_comment(child.kind()) {
+            continue;
+        }
+        match child.kind() {
+            // Done pattern: { result }
+            "identifier" | "identifier_pattern" => {
+                // The result variable binding
+                bindings.push(PatternBinding {
+                    name: node_text(&child, &ctx.source).into(),
+                    location: ctx.location(&child),
+                });
+            }
+            // Suspend pattern: { Op(args) -> k }
+            "handler_suspend" => {
+                let mut suspend_cursor = child.walk();
+                for suspend_child in child.named_children(&mut suspend_cursor) {
+                    if is_comment(suspend_child.kind()) {
+                        continue;
+                    }
+                    match suspend_child.kind() {
+                        "pattern_list" => {
+                            // Arguments pattern bindings
+                            let mut list_cursor = suspend_child.walk();
+                            for pat_child in suspend_child.named_children(&mut list_cursor) {
+                                if !is_comment(pat_child.kind()) {
+                                    bindings.extend(collect_pattern_bindings(ctx, pat_child));
+                                }
+                            }
+                        }
+                        "identifier" => {
+                            // Continuation binding (k)
+                            bindings.push(PatternBinding {
+                                name: node_text(&suspend_child, &ctx.source).into(),
+                                location: ctx.location(&suspend_child),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Convert a pattern node to a pattern region for case arms and let bindings.

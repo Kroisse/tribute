@@ -44,6 +44,22 @@ trunk_ir::symbols! {
     VAR_ID_ATTR => "id",
 }
 
+/// Block argument attribute symbols for pattern bindings.
+///
+/// These attributes are used on block arguments to associate binding names
+/// and source locations with SSA values.
+pub mod block_arg_attrs {
+    trunk_ir::symbols! {
+        /// Attribute key for the binding name associated with a block argument.
+        /// Used in case arm body blocks to name pattern-bound values.
+        BIND_NAME => "bind_name",
+
+        /// Attribute key for the source location of a binding.
+        /// Used for LSP features like Go to Definition.
+        BIND_LOCATION => "bind_location",
+    }
+}
+
 dialect! {
     mod tribute {
         // === Unresolved operations (eliminated after resolve/TDNR) ===
@@ -118,9 +134,23 @@ dialect! {
         fn r#yield(value);
 
         /// `tribute.let` operation: let binding with pattern matching.
-        /// Binds the value operand to names defined in the pattern region.
+        ///
+        /// Returns one result for each binding in the pattern.
         /// The pattern region uses `tribute_pat.*` operations.
-        fn r#let(value) {
+        /// The downstream pass (tribute_to_scf) extracts values from `value`
+        /// and returns them as the operation's results.
+        ///
+        /// Example:
+        /// ```text
+        /// %x, %y = tribute.let %pair {
+        ///     tribute_pat.variant("Pair") {
+        ///         tribute_pat.bind("x")
+        ///         tribute_pat.bind("y")
+        ///     }
+        /// }
+        /// arith.add %x, %y
+        /// ```
+        fn r#let(value) -> #[rest] results {
             #[region(pattern)] {}
         };
 
