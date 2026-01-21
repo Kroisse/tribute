@@ -9,6 +9,8 @@
 //!
 //! This pass should run BEFORE `tribute_to_scf` as it handles handler-specific
 //! patterns that would otherwise be passed through to scf lowering.
+//!
+//! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
 use std::collections::HashMap;
 
@@ -17,7 +19,10 @@ use std::collections::BTreeMap;
 use tribute_ir::dialect::{tribute, tribute_pat};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{cont, core, scf};
-use trunk_ir::rewrite::RewriteContext;
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewriteContext, RewritePattern, RewriteResult,
+    TypeConverter,
+};
 use trunk_ir::{
     Attribute, Block, BlockArg, BlockId, DialectOp, DialectType, IdVec, Location, Operation,
     Region, SymbolVec, Type,
@@ -53,12 +58,52 @@ struct HandlerArmInfo<'db> {
 }
 
 /// Lower tribute handler operations to cont dialect.
+///
+/// Uses `PatternApplicator` for declarative transformation.
 pub fn lower_tribute_to_cont<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> Module<'db> {
-    HandlerLowerer::new(db).lower_module(module)
+    let applicator =
+        PatternApplicator::new(TypeConverter::new()).add_pattern(LowerTributeHandlePattern);
+    let target = ConversionTarget::new();
+    applicator.apply_partial(db, module, target).module
 }
+
+// =============================================================================
+// Pattern Implementation
+// =============================================================================
+
+/// Pattern to lower `tribute.handle` to `cont.push_prompt` + `cont.handler_dispatch`.
+struct LowerTributeHandlePattern;
+
+impl<'db> RewritePattern<'db> for LowerTributeHandlePattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Match: tribute.handle
+        if tribute::Handle::from_operation(db, *op).is_err() {
+            return RewriteResult::Unchanged;
+        };
+
+        // Use HandlerLowerer for the complex transformation
+        let mut lowerer = HandlerLowerer::new(db);
+        let ops = lowerer.lower_handle(*op);
+
+        if ops.len() == 1 && ops[0] == *op {
+            return RewriteResult::Unchanged;
+        }
+
+        RewriteResult::expand(ops)
+    }
+}
+
+// =============================================================================
+// Handler Lowerer (Internal Helper)
+// =============================================================================
 
 /// Lowerer for handler expressions to continuation operations.
 struct HandlerLowerer<'db> {
@@ -75,17 +120,6 @@ impl<'db> HandlerLowerer<'db> {
             ctx: RewriteContext::new(),
             current_arm_bindings: HashMap::new(),
         }
-    }
-
-    fn lower_module(&mut self, module: Module<'db>) -> Module<'db> {
-        let body = module.body(self.db);
-        let lowered = self.lower_region(body);
-        Module::create(
-            self.db,
-            module.location(self.db),
-            module.name(self.db),
-            lowered,
-        )
     }
 
     fn lower_region(&mut self, region: Region<'db>) -> Region<'db> {

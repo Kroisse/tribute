@@ -1,5 +1,3 @@
-#![allow(clippy::collapsible_if)]
-
 //! Type-Directed Name Resolution (TDNR) pass.
 //!
 //! This pass resolves remaining `tribute.call` operations that couldn't be resolved
@@ -22,195 +20,127 @@
 //! ```text
 //! stage_resolve → stage_typecheck → stage_tdnr
 //! ```
-
-use std::collections::HashMap;
+//!
+//! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
 use tracing::trace;
 
 use crate::resolve::{Binding, ModuleEnv, build_env};
 use tribute_ir::ModulePathExt;
+use tribute_ir::dialect::tribute;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func;
-use trunk_ir::rewrite::RewriteContext;
-use trunk_ir::{
-    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
-    Value,
+use trunk_ir::rewrite::{
+    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
+use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Region, Symbol, Type, Value};
 
 // =============================================================================
-// TDNR Resolver
+// TDNR Pattern
 // =============================================================================
 
-/// TDNR resolver context.
-pub struct TdnrResolver<'db> {
-    db: &'db dyn salsa::Database,
-    /// Module environment for function lookups.
+/// Pattern to resolve `tribute.call` operations using UFCS.
+///
+/// For `x.method(y)` (represented as `tribute.call` with receiver `x` and name `method`):
+/// 1. Look up `method` in the module environment
+/// 2. If it's a function and its first parameter matches `x`'s type, resolve it
+/// 3. Transform to `func.call(method, x, y, ...)`
+struct ResolveTributeCallPattern<'db> {
     env: ModuleEnv<'db>,
-    /// Rewrite context for value mapping.
-    ctx: RewriteContext<'db>,
-    /// Block argument types indexed by BlockId.
-    block_arg_types: HashMap<BlockId, IdVec<Type<'db>>>,
 }
 
-impl<'db> TdnrResolver<'db> {
-    /// Create a new TDNR resolver with the given module environment.
-    pub fn new(db: &'db dyn salsa::Database, env: ModuleEnv<'db>) -> Self {
-        Self {
-            db,
-            env,
-            ctx: RewriteContext::new(),
-            block_arg_types: HashMap::new(),
-        }
-    }
-
-    /// Resolve a module with TDNR.
-    pub fn resolve_module(&mut self, module: &Module<'db>) -> Module<'db> {
-        let body = module.body(self.db);
-        let new_body = self.resolve_region(&body);
-
-        Module::create(
-            self.db,
-            module.location(self.db),
-            module.name(self.db),
-            new_body,
-        )
-    }
-
-    /// Resolve a region.
-    fn resolve_region(&mut self, region: &Region<'db>) -> Region<'db> {
-        let new_blocks: IdVec<Block<'db>> = region
-            .blocks(self.db)
-            .iter()
-            .map(|block| self.resolve_block(block))
-            .collect();
-
-        Region::new(self.db, region.location(self.db), new_blocks)
-    }
-
-    /// Resolve a block.
-    fn resolve_block(&mut self, block: &Block<'db>) -> Block<'db> {
-        // Register block arg types for get_value_type lookups
-        self.block_arg_types
-            .insert(block.id(self.db), block.arg_types(self.db));
-
-        let new_ops: IdVec<Operation<'db>> = block
-            .operations(self.db)
-            .iter()
-            .flat_map(|op| self.resolve_operation(op))
-            .collect();
-
-        Block::new(
-            self.db,
-            block.id(self.db),
-            block.location(self.db),
-            block.args(self.db).clone(),
-            new_ops,
-        )
-    }
-
-    /// Resolve a single operation.
-    fn resolve_operation(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
-        // First, remap operands
-        let remapped_op = self.ctx.remap_operands(self.db, op);
-
-        // If operands were remapped, map old results to new results
-        if remapped_op != *op {
-            self.ctx.map_results(self.db, op, &remapped_op);
+impl<'db> RewritePattern<'db> for ResolveTributeCallPattern<'db> {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        // Match: tribute.call
+        if tribute::Call::from_operation(db, *op).is_err() {
+            return RewriteResult::Unchanged;
         }
 
-        let dialect = remapped_op.dialect(self.db);
-        let op_name = remapped_op.name(self.db);
+        trace!("TDNR: found tribute.call operation");
 
-        if dialect == "tribute" && op_name == "call" {
-            trace!("TDNR: found tribute.call operation");
-            if let Some(resolved) = self.try_resolve_method_call(&remapped_op) {
-                trace!("TDNR: resolved to {:?}", resolved.dialect(self.db));
-                self.ctx.map_results(self.db, &remapped_op, &resolved);
-                vec![resolved]
-            } else {
-                trace!("TDNR: could not resolve tribute.call");
-                // Still unresolved - keep as is (will be an error later)
-                let final_op = self.resolve_op_regions(&remapped_op);
-                if final_op != remapped_op {
-                    self.ctx.map_results(self.db, &remapped_op, &final_op);
-                }
-                vec![final_op]
-            }
-        } else {
-            // Recursively process regions
-            let final_op = self.resolve_op_regions(&remapped_op);
-            if final_op != remapped_op {
-                self.ctx.map_results(self.db, &remapped_op, &final_op);
-            }
-            vec![final_op]
-        }
-    }
-
-    /// Recursively resolve regions within an operation.
-    fn resolve_op_regions(&mut self, op: &Operation<'db>) -> Operation<'db> {
-        let regions = op.regions(self.db);
-        if regions.is_empty() {
-            return *op;
-        }
-
-        // Resolve nested regions (operand remapping happens in resolve_operation)
-        let new_regions: IdVec<Region<'db>> = regions
-            .iter()
-            .map(|region| self.resolve_region(region))
-            .collect();
-
-        op.modify(self.db).regions(new_regions).build()
-    }
-
-    /// Try to resolve a `tribute.call` as a UFCS method call.
-    ///
-    /// For `x.method(y)` (represented as `tribute.call` with receiver `x` and name `method`):
-    /// 1. Look up `method` in the module environment
-    /// 2. If it's a function and its first parameter matches `x`'s type, resolve it
-    /// 3. Transform to `func.call(method, x, y, ...)`
-    ///
-    /// Also supports qualified names: `x.foo::bar(y)` → `foo::bar(x, y)`
-    fn try_resolve_method_call(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
-        let operands = op.operands(self.db);
+        let operands = adaptor.operands();
         if operands.is_empty() {
-            return None; // No receiver
+            return RewriteResult::Unchanged; // No receiver
         }
 
         // Get method name from attributes
-        let attrs = op.attributes(self.db);
-        let Attribute::Symbol(qual_name) = attrs.get(&Symbol::new("name"))? else {
-            return None;
+        let attrs = op.attributes(db);
+        let Some(Attribute::Symbol(qual_name)) = attrs.get(&Symbol::new("name")) else {
+            return RewriteResult::Unchanged;
         };
         trace!("TDNR: method name = {:?}", qual_name);
 
         let receiver = operands[0];
 
-        // Get the receiver's type
-        let receiver_type = self.get_value_type(receiver)?;
+        // Get the receiver's type using adaptor (handles both OpResult and BlockArg)
+        let Some(receiver_type) = adaptor.get_value_type(db, receiver) else {
+            trace!("TDNR: could not get receiver type");
+            return RewriteResult::Unchanged;
+        };
         trace!(
             "TDNR: receiver_type = {}.{}",
-            receiver_type.dialect(self.db),
-            receiver_type.name(self.db)
+            receiver_type.dialect(db),
+            receiver_type.name(db)
         );
 
         // Look up the function - handle both simple and qualified names
-        let (func_path, func_ty) = if qual_name.is_simple() {
+        let Some((func_path, func_ty)) = self.lookup_function(db, *qual_name, receiver_type) else {
+            trace!("TDNR: could not resolve method");
+            return RewriteResult::Unchanged;
+        };
+
+        // Check if the first parameter type matches the receiver type
+        let Some(func_type) = core::Func::from_type(db, func_ty) else {
+            return RewriteResult::Unchanged;
+        };
+        let params = func_type.params(db);
+        let Some(first_param) = params.first() else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Match receiver type with first parameter type
+        if !types_compatible(receiver_type, *first_param) {
+            return RewriteResult::Unchanged;
+        }
+
+        // Create func.call with the resolved function
+        let location = op.location(db);
+        let Some(result_ty) = op.results(db).first().copied() else {
+            return RewriteResult::Unchanged;
+        };
+        let args: Vec<Value<'db>> = operands.iter().copied().collect();
+
+        let new_op = func::call(db, location, args, result_ty, func_path);
+        trace!("TDNR: resolved to func.call");
+
+        RewriteResult::Replace(new_op.as_operation())
+    }
+}
+
+impl<'db> ResolveTributeCallPattern<'db> {
+    /// Look up the function for a method call.
+    fn lookup_function(
+        &self,
+        db: &'db dyn salsa::Database,
+        qual_name: Symbol,
+        receiver_type: Type<'db>,
+    ) -> Option<(Symbol, Type<'db>)> {
+        if qual_name.is_simple() {
             // Simple name: first try direct lookup
-            if let Some(binding) = self.env.lookup(qual_name.last_segment()) {
-                if let Binding::Function { path, ty } = binding {
-                    (*path, *ty)
-                } else {
-                    return None;
-                }
-            } else {
-                // Direct lookup failed - try type-based namespace lookup
-                // Find a type whose definition matches the receiver type
-                self.lookup_method_in_type_namespace(qual_name.last_segment(), receiver_type)?
+            if let Some(Binding::Function { path, ty }) = self.env.lookup(qual_name.last_segment())
+            {
+                return Some((*path, *ty));
             }
+            // Direct lookup failed - try type-based namespace lookup
+            self.lookup_method_in_type_namespace(db, qual_name.last_segment(), receiver_type)
         } else {
             // Qualified name: look up by full path, fall back to namespace lookup
-            let binding = self.env.lookup_path(*qual_name).or_else(|| {
-                // Fall back to namespace lookup for enum variants, etc.
+            let binding = self.env.lookup_path(qual_name).or_else(|| {
                 let namespace = qual_name.parent_path()?;
                 self.env
                     .lookup_qualified(namespace, qual_name.last_segment())
@@ -218,104 +148,45 @@ impl<'db> TdnrResolver<'db> {
             let Binding::Function { ty, .. } = binding else {
                 return None;
             };
-            // Use the full qualified name for the call
-            (*qual_name, *ty)
-        };
-
-        // Check if the first parameter type matches the receiver type
-        let func_type = core::Func::from_type(self.db, func_ty)?;
-        let params = func_type.params(self.db);
-        let first_param = params.first()?;
-
-        // Match receiver type with first parameter type
-        if !self.types_compatible(receiver_type, *first_param) {
-            return None;
+            Some((qual_name, *ty))
         }
-
-        // Create func.call with the resolved function
-        let location = op.location(self.db);
-        let result_ty = op.results(self.db).first().copied()?;
-        let args: Vec<Value<'db>> = operands.iter().copied().collect();
-
-        let new_op = func::call(self.db, location, args, result_ty, func_path);
-        let new_operation = new_op.as_operation();
-
-        // Map old result to new result
-        let old_result = op.result(self.db, 0);
-        let new_result = new_operation.result(self.db, 0);
-        self.ctx.map_value(old_result, new_result);
-
-        Some(new_operation)
     }
 
     /// Look up a method in the namespace of a type that matches the receiver type.
-    ///
-    /// This enables UFCS for struct methods: `point.x()` → `Point::x(point)`
-    /// by finding the type definition that matches the receiver's type and
-    /// looking up the method name in that type's namespace.
     fn lookup_method_in_type_namespace(
         &self,
+        db: &'db dyn salsa::Database,
         method_name: Symbol,
         receiver_type: Type<'db>,
     ) -> Option<(Symbol, Type<'db>)> {
         trace!(
             "TDNR lookup_method_in_type_namespace: method='{}', receiver={}.{}",
             method_name,
-            receiver_type.dialect(self.db),
-            receiver_type.name(self.db)
+            receiver_type.dialect(db),
+            receiver_type.name(db)
         );
 
-        // Iterate through all namespaces and look for the method
-        // Then verify the first parameter type matches the receiver type
         for (ns_name, namespace) in self.env.namespaces_iter() {
-            if let Some(Binding::Function { path, ty }) = namespace.get(&method_name) {
-                // Check if first parameter matches receiver type
-                if let Some(func_type) = core::Func::from_type(self.db, *ty) {
-                    let params = func_type.params(self.db);
-                    if let Some(first_param) = params.first() {
-                        if self.types_compatible(receiver_type, *first_param) {
-                            trace!(
-                                "  found method {}::{} with matching first param",
-                                ns_name, method_name
-                            );
-                            return Some((*path, *ty));
-                        }
-                    }
-                }
+            if let Some(Binding::Function { path, ty }) = namespace.get(&method_name)
+                && let Some(func_type) = core::Func::from_type(db, *ty)
+                && let Some(first_param) = func_type.params(db).first()
+                && types_compatible(receiver_type, *first_param)
+            {
+                trace!(
+                    "  found method {}::{} with matching first param",
+                    ns_name, method_name
+                );
+                return Some((*path, *ty));
             }
         }
         trace!("  no matching method found");
         None
     }
+}
 
-    /// Check if two types are compatible for UFCS resolution.
-    ///
-    /// For now, this uses simple equality. A more sophisticated implementation
-    /// could consider type variables and subtyping.
-    fn types_compatible(&self, actual: Type<'db>, expected: Type<'db>) -> bool {
-        // Simple equality check - both types should be concrete after typecheck
-        actual == expected
-    }
-
-    /// Get the type of a value.
-    ///
-    /// For operation results, returns the result type.
-    /// For block arguments, returns the block argument type.
-    fn get_value_type(&self, value: Value<'db>) -> Option<Type<'db>> {
-        use trunk_ir::ValueDef;
-
-        match value.def(self.db) {
-            ValueDef::OpResult(op) => {
-                let results = op.results(self.db);
-                let index = value.index(self.db);
-                results.get(index).copied()
-            }
-            ValueDef::BlockArg(block_id) => self
-                .block_arg_types
-                .get(&block_id)
-                .and_then(|args| args.get(value.index(self.db)).copied()),
-        }
-    }
+/// Check if two types are compatible for UFCS resolution.
+fn types_compatible(actual: Type<'_>, expected: Type<'_>) -> bool {
+    actual == expected
 }
 
 // =============================================================================
@@ -327,6 +198,8 @@ impl<'db> TdnrResolver<'db> {
 /// This builds a `ModuleEnv` from the module and uses it for UFCS resolution.
 /// For `x.method(y)`, it looks up `method` in the environment and checks
 /// if the first parameter type matches `x`'s type.
+///
+/// Uses `PatternApplicator` for declarative transformation.
 pub fn resolve_tdnr<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     trace!("TDNR: starting resolution");
 
@@ -339,8 +212,13 @@ pub fn resolve_tdnr<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> M
         "TDNR: built environment with {} definitions",
         env.definitions_iter().count()
     );
-    let mut resolver = TdnrResolver::new(db, env);
-    let result = resolver.resolve_module(&module);
+
+    // Use PatternApplicator for declarative transformation
+    let applicator =
+        PatternApplicator::new(TypeConverter::new()).add_pattern(ResolveTributeCallPattern { env });
+    let target = ConversionTarget::new();
+    let result = applicator.apply_partial(db, module, target).module;
+
     trace!("TDNR: resolution complete");
     result
 }

@@ -40,7 +40,7 @@ pub use evidence::{
 pub use handler_lower::lower_handlers;
 pub use lambda_lift::lift_lambdas;
 pub use resolve::{ModuleEnv, Resolver, resolve_module};
-pub use tdnr::{TdnrResolver, resolve_tdnr};
+pub use tdnr::resolve_tdnr;
 pub use tribute_to_cont::lower_tribute_to_cont;
 pub use tribute_to_scf::lower_tribute_to_scf;
 pub use trunk_ir::rewrite::{
