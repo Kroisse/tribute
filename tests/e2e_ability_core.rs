@@ -21,7 +21,7 @@ mod common;
 
 // TODO: Re-enable once print_line is fixed for wasmtime output
 #[allow(unused_imports)]
-use common::run_wasm_main;
+use common::run_wasm;
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
@@ -45,10 +45,11 @@ fn compile_and_run(code: &str, name: &str) -> i32 {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
 
-        let _wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
+        let _wasm_binary =
+            compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
-        // run_wasm_main::<i32>(wasm_binary.bytes(db))
+        // run_wasm::<i32>(wasm_binary.bytes(db))
         0 // Placeholder - compilation succeeded
     })
 }

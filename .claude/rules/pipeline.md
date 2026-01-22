@@ -10,7 +10,7 @@ See the detailed pipeline diagram in the doc comment at the top of `src/pipeline
 |-------|----------|-------------|
 | parse_cst | `parse_cst(db, source)` | Parse source to CST using Tree-sitter |
 | lower_cst | `lower_cst(db, source, cst)` | Convert CST to TrunkIR with `tribute.*` ops |
-| resolve | `stage_resolve(db, module)` | Resolve names: `tribute.var` → `func.call`, etc. |
+| resolve | `stage_resolve(db, module)` | Resolve names: `tribute.path` → `func.call`, etc. |
 | typecheck | `stage_typecheck(db, module)` | Bidirectional type inference with effects |
 | tdnr | `stage_tdnr(db, module)` | Type-directed name resolution for UFCS |
 | const_inline | `stage_const_inline(db, module)` | Inline constant values |

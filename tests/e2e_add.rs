@@ -4,7 +4,7 @@ mod common;
 
 // TODO: Re-enable once print_line is fixed for wasmtime output
 #[allow(unused_imports)]
-use common::run_wasm_main;
+use common::run_wasm;
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
@@ -26,10 +26,11 @@ fn test_add_compiles_and_runs() {
         let source_file = SourceCst::from_path(db, "add.trb", source_code.clone(), tree);
 
         // Run full compilation pipeline including WASM lowering
-        let _wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
+        let _wasm_binary =
+            compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
-        // let result = run_wasm_main::<i32>(wasm_binary.bytes(db));
+        // let result = run_wasm::<i32>(wasm_binary.bytes(db));
         // assert_eq!(result, 42, "Expected main to return 42, got {}", result);
     });
 }
@@ -52,10 +53,11 @@ fn main() ->{} Int { identity(42) }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "int_identity.trb", source_code.clone(), tree);
 
-        let _wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
+        let _wasm_binary =
+            compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
-        // let result = run_wasm_main::<i32>(wasm_binary.bytes(db));
+        // let result = run_wasm::<i32>(wasm_binary.bytes(db));
         // assert_eq!(result, 42, "Expected main to return 42, got {}", result);
     });
 }
@@ -81,10 +83,11 @@ fn main() ->{} Int {
         let source_file =
             SourceCst::from_path(db, "struct_construction.trb", source_code.clone(), tree);
 
-        let _wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
+        let _wasm_binary =
+            compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
-        // let result = run_wasm_main::<i32>(wasm_binary.bytes(db));
+        // let result = run_wasm::<i32>(wasm_binary.bytes(db));
         // assert_eq!(result, 42, "Expected main to return 42, got {}", result);
     });
 }
@@ -123,7 +126,7 @@ fn main() ->{} Int {
         });
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
-        // let result = run_wasm_main::<i32>(wasm_binary.bytes(db));
+        // let result = run_wasm::<i32>(wasm_binary.bytes(db));
         // assert_eq!(result, 10, "Expected main to return 10, got {}", result);
     });
 }
@@ -146,10 +149,11 @@ fn main() ->{} Float { identity(3.125) }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "float_identity.trb", source_code.clone(), tree);
 
-        let _wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
+        let _wasm_binary =
+            compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
-        // let result = run_wasm_main::<f64>(wasm_binary.bytes(db));
+        // let result = run_wasm::<f64>(wasm_binary.bytes(db));
         // assert!((result - 3.125).abs() < 0.0001, "Expected main to return 3.125, got {}", result);
     });
 }
@@ -191,7 +195,7 @@ fn main() ->{} Int {
         });
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
-        // let result = run_wasm_main::<i32>(wasm_binary.bytes(db));
+        // let result = run_wasm::<i32>(wasm_binary.bytes(db));
         // assert_eq!(result, 10, "Expected main to return 10, got {}", result);
     });
 }
@@ -231,7 +235,7 @@ fn main() ->{} Int {
         });
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
-        // let result = run_wasm_main::<i32>(wasm_binary.bytes(db));
+        // let result = run_wasm::<i32>(wasm_binary.bytes(db));
         // assert_eq!(result, 42, "Expected main to return 42, got {}", result);
     });
 }
@@ -269,7 +273,7 @@ fn main() ->{} Int {
         });
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
-        // let result = run_wasm_main::<i32>(wasm_binary.bytes(db));
+        // let result = run_wasm::<i32>(wasm_binary.bytes(db));
         // assert_eq!(result, 10, "Expected main to return 10, got {}", result);
     });
 }
@@ -306,7 +310,7 @@ fn main() ->{} Int {
         });
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
-        // let result = run_wasm_main::<i32>(wasm_binary.bytes(db));
+        // let result = run_wasm::<i32>(wasm_binary.bytes(db));
         // assert_eq!(result, 42, "Expected main to return 42, got {}", result);
     });
 }
@@ -340,8 +344,7 @@ fn main() ->{} Int {
         let _module = run_tdnr(db, source_file);
 
         // Check for type errors
-        let diagnostics: Vec<_> =
-            run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> = run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -389,8 +392,7 @@ fn main() ->{} Int {
         let _module = run_tdnr(db, source_file);
 
         // Check for type errors
-        let diagnostics: Vec<_> =
-            run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> = run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -435,8 +437,7 @@ fn main() ->{} Int {
         let _module = run_tdnr(db, source_file);
 
         // Check for type errors
-        let diagnostics: Vec<_> =
-            run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> = run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -482,8 +483,7 @@ fn main() ->{} Float {
         let _module = run_tdnr(db, source_file);
 
         // Check for type errors
-        let diagnostics: Vec<_> =
-            run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> = run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -928,7 +928,7 @@ fn main() ->{} Int {
         );
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
-        // let result = run_wasm_main::<i32>(wasm_bytes);
+        // let result = run_wasm::<i32>(wasm_bytes);
         // assert_eq!(result, 42, "Expected f(41) = 42, got {}", result);
     });
 }

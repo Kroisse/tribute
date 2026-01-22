@@ -5,8 +5,8 @@ use std::process::Command;
 use std::str::FromStr;
 use tempfile::NamedTempFile;
 
-/// Run WASM binary with wasmtime CLI and parse the result from main()
-pub fn run_wasm_main<T>(wasm_bytes: &[u8]) -> T
+/// Run WASM binary with wasmtime CLI and parse the result
+pub fn run_wasm<T>(wasm_bytes: &[u8]) -> T
 where
     T: FromStr,
     T::Err: std::fmt::Debug,
