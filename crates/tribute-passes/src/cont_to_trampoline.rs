@@ -1337,7 +1337,7 @@ fn create_resume_function_with_continuation<'db>(
                         state_val,
                         anyref_ty,
                         spec.state_type,
-                        Symbol::from_dynamic(&i.to_string()),
+                        i as u64,
                     ));
                     let anyref_value = get_field.result(db);
 

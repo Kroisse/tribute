@@ -751,7 +751,7 @@ impl<'db> CaseLowerer<'db> {
                                     location,
                                     current_value,
                                     field_ty,
-                                    Symbol::from_dynamic(&field_idx.to_string()),
+                                    field_idx,
                                 );
                                 let field_val = variant_get_op.result(self.db);
                                 ops.push(variant_get_op.as_operation());
@@ -796,14 +796,13 @@ impl<'db> CaseLowerer<'db> {
                                         )
                                     });
                                 // Create tuple element extraction using struct_get with numeric index
-                                let field_idx = Symbol::from_dynamic(&elem_idx.to_string());
                                 let struct_get_op = adt::struct_get(
                                     self.db,
                                     location,
                                     current_value,
                                     elem_ty,
                                     elem_ty, // Use element type as struct type placeholder
-                                    field_idx,
+                                    elem_idx,
                                 );
                                 let elem_val = struct_get_op.result(self.db);
                                 ops.push(struct_get_op.as_operation());

@@ -20,7 +20,6 @@
 //! - `adt.variant_is` -> `wasm.ref_test` (tests if ref is of specific variant type)
 //! - `adt.variant_cast` -> `wasm.ref_cast` (casts to specific variant type)
 //! - `adt.variant_get` -> `wasm.struct_get` (direct field access, no offset)
-//! - `adt.variant_tag` -> DEPRECATED (issues warning, kept for compatibility)
 //!
 //! ## Array Operations
 //! - `adt.array_new` -> `wasm.array_new` or `wasm.array_new_default`
@@ -39,8 +38,6 @@
 //! Type information is preserved as `type` attribute when available from the source operation.
 //! For operations where the result type is set explicitly (e.g., variant_new, variant_cast),
 //! emit can infer type_idx from result/operand types without the attribute.
-
-use tracing::warn;
 
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core::Module;
@@ -65,7 +62,6 @@ pub fn lower<'db>(
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
         .add_pattern(VariantNewPattern)
-        .add_pattern(VariantTagPattern) // deprecated, kept for compatibility
         .add_pattern(VariantIsPattern)
         .add_pattern(VariantCastPattern)
         .add_pattern(VariantGetPattern)
@@ -121,30 +117,16 @@ impl<'db> RewritePattern<'db> for StructGetPattern {
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let Ok(struct_get) = adt::StructGet::from_operation(db, *op) else {
+        let Ok(_struct_get) = adt::StructGet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
-        // Get field index - parse Symbol as numeric index
-        // (name-to-index resolution should happen upstream)
-        let field_sym = struct_get.field(db);
-        let Some(field_idx) = field_sym.with_str(|s| s.parse::<u64>().ok()) else {
-            warn!(
-                "adt.struct_get field must be numeric index, got {:?}. \
-                 Field name resolution should happen in an earlier pass.",
-                field_sym
-            );
-            return RewriteResult::Unchanged;
-        };
-
-        // Build wasm.struct_get: change dialect/name and add field_idx attr
-        // Preserve type attribute (if present) for cases where emit can't infer from operand types
-        // Note: original 'field' attr remains but emit only looks for 'field_idx'
+        // Build wasm.struct_get: just change dialect/name
+        // field attribute is already u64, emit will read it directly
         let new_op = op
             .modify(db)
             .dialect_str("wasm")
             .name_str("struct_get")
-            .attr("field_idx", Attribute::IntBits(field_idx))
             .build();
 
         RewriteResult::Replace(new_op)
@@ -161,28 +143,16 @@ impl<'db> RewritePattern<'db> for StructSetPattern {
         op: &Operation<'db>,
         _adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let Ok(struct_set) = adt::StructSet::from_operation(db, *op) else {
+        let Ok(_struct_set) = adt::StructSet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
-        // Get field index - parse Symbol as numeric index
-        let field_sym = struct_set.field(db);
-        let Some(field_idx) = field_sym.with_str(|s| s.parse::<u64>().ok()) else {
-            warn!(
-                "adt.struct_set field must be numeric index, got {:?}. \
-                 Field name resolution should happen in an earlier pass.",
-                field_sym
-            );
-            return RewriteResult::Unchanged;
-        };
-
-        // Build wasm.struct_set: change dialect/name and add field_idx attr
-        // Preserve type attribute (if present) for cases where emit can't infer from operand types
+        // Build wasm.struct_set: just change dialect/name
+        // field attribute is already u64, emit will read it directly
         let new_op = op
             .modify(db)
             .dialect_str("wasm")
             .name_str("struct_set")
-            .attr("field_idx", Attribute::IntBits(field_idx))
             .build();
 
         RewriteResult::Replace(new_op)
@@ -261,37 +231,6 @@ fn make_variant_type<'db>(
     attrs.insert(adt::ATTR_VARIANT_TAG(), Attribute::Symbol(tag));
 
     Type::new(db, dialect, variant_name, params, attrs)
-}
-
-/// Pattern for `adt.variant_tag` -> `wasm.struct_get` (field 0)
-/// DEPRECATED: This pattern is kept for compatibility but should not be used
-/// with the new WasmGC subtyping approach. Use `adt.variant_is` instead.
-struct VariantTagPattern;
-
-impl<'db> RewritePattern<'db> for VariantTagPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        let Ok(_variant_tag) = adt::VariantTag::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
-        };
-
-        warn!("adt.variant_tag is deprecated, use adt.variant_is instead");
-
-        // Tag is always field 0
-        // Preserve type attribute (if present) for cases where emit can't infer from operand types
-        let struct_get = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("struct_get")
-            .attr("field_idx", Attribute::IntBits(0))
-            .build();
-
-        RewriteResult::Replace(struct_get)
-    }
 }
 
 /// Pattern for `adt.variant_is` -> `wasm.ref_test`
@@ -392,30 +331,13 @@ impl<'db> RewritePattern<'db> for VariantGetPattern {
         op: &Operation<'db>,
         adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let Ok(variant_get) = adt::VariantGet::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
-        };
-
-        // Get field index directly (no offset - tag field removed in WasmGC subtyping)
-        // Parse Symbol as numeric index
-        let field_sym = variant_get.field(db);
-        let Some(field_idx) = field_sym.with_str(|s| s.parse::<u64>().ok()) else {
-            warn!(
-                "adt.variant_get field must be numeric index, got {:?}. \
-                 Field name resolution should happen in an earlier pass.",
-                field_sym
-            );
+        let Ok(_variant_get) = adt::VariantGet::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
         // Infer type from the operand (the cast result has the variant-specific type)
-        // Set as type attribute for emit to use; clear any original attrs via fresh builder
-        // Using OpAdaptor.operand_type() handles both OpResult and BlockArg cases
-        let mut builder = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("struct_get")
-            .attr("field_idx", Attribute::IntBits(field_idx));
+        // field attribute is already u64 and will be preserved by modify()
+        let mut builder = op.modify(db).dialect_str("wasm").name_str("struct_get");
 
         // Override type attribute with operand type (original might have base enum type)
         if let Some(ref_type) = adaptor.operand_type(0) {

@@ -238,18 +238,8 @@ fn attr_u32<'db>(
 fn attr_field_idx<'db>(
     attrs: &std::collections::BTreeMap<Symbol, Attribute<'db>>,
 ) -> CompilationResult<u32> {
-    // Try field_idx first (legacy), then field
-    attr_u32(attrs, ATTR_FIELD_IDX())
-        .or_else(|_| attr_u32(attrs, ATTR_FIELD()))
-        .or_else(|_| {
-            // Handle Symbol field (e.g., "0", "1" for numeric indices)
-            match attrs.get(&ATTR_FIELD()) {
-                Some(Attribute::Symbol(sym)) => sym
-                    .with_str(|s| s.parse::<u32>())
-                    .map_err(|_| CompilationError::missing_attribute("numeric field index")),
-                _ => Err(CompilationError::missing_attribute("field index")),
-            }
-        })
+    // Try field_idx first (wasm dialect), then field (adt dialect)
+    attr_u32(attrs, ATTR_FIELD_IDX()).or_else(|_| attr_u32(attrs, ATTR_FIELD()))
 }
 
 // ============================================================================

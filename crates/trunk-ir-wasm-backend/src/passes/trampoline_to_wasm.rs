@@ -278,14 +278,7 @@ fn create_type_converter() -> TypeConverter {
                 let boxed_value = ref_cast_op.as_operation().result(db, 0);
 
                 // Extract f64 from BoxedF64.value (field 0)
-                let unbox_op = adt::struct_get(
-                    db,
-                    location,
-                    boxed_value,
-                    f64_ty,
-                    boxed_ty,
-                    Symbol::new("0"),
-                );
+                let unbox_op = adt::struct_get(db, location, boxed_value, f64_ty, boxed_ty, 0);
 
                 return MaterializeResult::Ops(trunk_ir::smallvec::smallvec![
                     ref_cast_op.as_operation(),
@@ -701,7 +694,7 @@ impl<'db> RewritePattern<'db> for LowerTrampolineStructGetPattern {
                 struct_value,
                 any_ty,
                 struct_type,
-                Symbol::from_dynamic(&field_idx.to_string()),
+                field_idx as u64,
             );
             let any_value = struct_get.as_operation().result(db, 0);
             ops.push(struct_get.as_operation());
@@ -723,7 +716,7 @@ impl<'db> RewritePattern<'db> for LowerTrampolineStructGetPattern {
                 struct_value,
                 expected_result_type,
                 struct_type,
-                Symbol::from_dynamic(&field_idx.to_string()),
+                field_idx as u64,
             );
 
             RewriteResult::Replace(struct_get.as_operation())
@@ -960,14 +953,7 @@ impl<'db> RewritePattern<'db> for LowerYieldContinuationAccessPattern {
 
         if extract_shift_value {
             // Extract shift_value from continuation (field 3)
-            let get_shift_value = adt::struct_get(
-                db,
-                location,
-                cont_ref,
-                anyref_ty,
-                cont_type,
-                Symbol::new("3"),
-            );
+            let get_shift_value = adt::struct_get(db, location, cont_ref, anyref_ty, cont_type, 3);
             ops.push(get_shift_value.as_operation());
         }
 
@@ -1350,10 +1336,10 @@ mod tests {
                 for op in ops.iter() {
                     if op.dialect(db) == adt::DIALECT_NAME()
                         && op.name(db) == adt::STRUCT_GET()
-                        && let Some(Attribute::Symbol(sym)) =
+                        && let Some(Attribute::IntBits(idx)) =
                             op.attributes(db).get(&Symbol::new("field"))
                     {
-                        return sym.with_str(|s| s.parse::<u64>().unwrap_or(999));
+                        return *idx;
                     }
                 }
                 999 // Not found

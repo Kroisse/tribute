@@ -420,7 +420,7 @@ fn generate_field_getter<'db>(
                 self_value,
                 field_type,
                 struct_ty,
-                Symbol::from_dynamic(&field_index.to_string()),
+                field_index as u64,
             ));
             entry.op(func::Return::value(
                 ctx.db,
@@ -507,12 +507,7 @@ fn generate_field_set<'db>(
                     field_values.push(new_value);
                 } else {
                     let extracted = entry.op(adt::struct_get(
-                        ctx.db,
-                        location,
-                        self_value,
-                        *fty,
-                        struct_ty,
-                        Symbol::from_dynamic(&i.to_string()),
+                        ctx.db, location, self_value, *fty, struct_ty, i as u64,
                     ));
                     field_values.push(extracted.result(ctx.db));
                 }
@@ -566,7 +561,7 @@ fn generate_field_modify<'db>(
                 self_value,
                 field_type,
                 struct_ty,
-                Symbol::from_dynamic(&field_index.to_string()),
+                field_index as u64,
             ));
 
             // Apply f to get new value
@@ -585,12 +580,7 @@ fn generate_field_modify<'db>(
                     field_values.push(new_field_value.result(ctx.db));
                 } else {
                     let extracted = entry.op(adt::struct_get(
-                        ctx.db,
-                        location,
-                        self_value,
-                        *fty,
-                        struct_ty,
-                        Symbol::from_dynamic(&i.to_string()),
+                        ctx.db, location, self_value, *fty, struct_ty, i as u64,
                     ));
                     field_values.push(extracted.result(ctx.db));
                 }

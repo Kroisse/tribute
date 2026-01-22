@@ -874,7 +874,7 @@ impl<'db> RewritePattern<'db> for LowerClosureFuncPattern {
             closure_value,
             i32_ty, // Result is i32 (table index), not funcref
             struct_ty,
-            Symbol::new("0"),
+            0,
         );
 
         RewriteResult::Replace(get_op.as_operation())
@@ -916,14 +916,7 @@ impl<'db> RewritePattern<'db> for LowerClosureEnvPattern {
 
         // Generate: %env = adt.struct_get %closure, 1
         // Parameter order: (db, location, operand, result_type, struct_type, field_idx)
-        let get_op = adt::struct_get(
-            db,
-            location,
-            closure_value,
-            result_ty,
-            struct_ty,
-            Symbol::new("1"),
-        );
+        let get_op = adt::struct_get(db, location, closure_value, result_ty, struct_ty, 1);
 
         RewriteResult::Replace(get_op.as_operation())
     }

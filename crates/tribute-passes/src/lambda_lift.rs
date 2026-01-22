@@ -892,12 +892,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                 let mut capture_values: HashMap<Symbol, Value<'db>> = HashMap::new();
                 for (i, capture) in captures_vec.iter().enumerate() {
                     let extracted = entry.op(adt::struct_get(
-                        db,
-                        location,
-                        env_param,
-                        capture.ty,
-                        env_type,
-                        Symbol::from_dynamic(&i.to_string()),
+                        db, location, env_param, capture.ty, env_type, i as u64,
                     ));
                     capture_values.insert(capture.name, extracted.result(db));
                 }

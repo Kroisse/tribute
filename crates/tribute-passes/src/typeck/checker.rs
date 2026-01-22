@@ -1313,13 +1313,8 @@ impl<'db> TypeChecker<'db> {
         let fields = adt::get_struct_fields(self.db, struct_type)?;
 
         match field_attr {
-            // Field by index
+            // Field by index (u64)
             Attribute::IntBits(idx) => fields.get(*idx as usize).map(|(_, ty)| *ty),
-            // Field by name
-            Attribute::Symbol(name) => fields
-                .iter()
-                .find(|(field_name, _)| field_name == name)
-                .map(|(_, ty)| *ty),
             _ => None,
         }
     }
