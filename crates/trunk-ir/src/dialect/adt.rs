@@ -110,7 +110,7 @@ dialect! {
 
 // === Pure operation registrations ===
 // Struct operations: new and get are pure (set modifies)
-// Variant operations: new, tag, and get are pure
+// Variant operations: new, is, cast, and get are pure
 // Array operations: new, get, and len are pure (set modifies)
 // Reference operations: all are pure
 // Literal operations: all are pure
