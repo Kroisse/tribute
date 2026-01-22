@@ -125,13 +125,14 @@ impl<'db> RewritePattern<'db> for StructGetPattern {
             return RewriteResult::Unchanged;
         };
 
-        // Get field index - must be IntBits (name-to-index resolution should happen upstream)
-        // TODO: Add a prior pass to resolve field names to indices if needed
-        let Attribute::IntBits(field_idx) = struct_get.field(db) else {
+        // Get field index - parse Symbol as numeric index
+        // (name-to-index resolution should happen upstream)
+        let field_sym = struct_get.field(db);
+        let Some(field_idx) = field_sym.with_str(|s| s.parse::<u64>().ok()) else {
             warn!(
-                "adt.struct_get field must be IntBits index, got {:?}. \
+                "adt.struct_get field must be numeric index, got {:?}. \
                  Field name resolution should happen in an earlier pass.",
-                struct_get.field(db)
+                field_sym
             );
             return RewriteResult::Unchanged;
         };
@@ -164,12 +165,13 @@ impl<'db> RewritePattern<'db> for StructSetPattern {
             return RewriteResult::Unchanged;
         };
 
-        // Get field index - must be IntBits (name-to-index resolution should happen upstream)
-        let Attribute::IntBits(field_idx) = struct_set.field(db) else {
+        // Get field index - parse Symbol as numeric index
+        let field_sym = struct_set.field(db);
+        let Some(field_idx) = field_sym.with_str(|s| s.parse::<u64>().ok()) else {
             warn!(
-                "adt.struct_set field must be IntBits index, got {:?}. \
+                "adt.struct_set field must be numeric index, got {:?}. \
                  Field name resolution should happen in an earlier pass.",
-                struct_set.field(db)
+                field_sym
             );
             return RewriteResult::Unchanged;
         };
@@ -395,12 +397,13 @@ impl<'db> RewritePattern<'db> for VariantGetPattern {
         };
 
         // Get field index directly (no offset - tag field removed in WasmGC subtyping)
-        // Must be IntBits - name-to-index resolution should happen upstream
-        let Attribute::IntBits(field_idx) = variant_get.field(db) else {
+        // Parse Symbol as numeric index
+        let field_sym = variant_get.field(db);
+        let Some(field_idx) = field_sym.with_str(|s| s.parse::<u64>().ok()) else {
             warn!(
-                "adt.variant_get field must be IntBits index, got {:?}. \
+                "adt.variant_get field must be numeric index, got {:?}. \
                  Field name resolution should happen in an earlier pass.",
-                variant_get.field(db)
+                field_sym
             );
             return RewriteResult::Unchanged;
         };

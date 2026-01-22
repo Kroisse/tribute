@@ -751,7 +751,7 @@ impl<'db> CaseLowerer<'db> {
                                     location,
                                     current_value,
                                     field_ty,
-                                    field_idx.into(),
+                                    Symbol::from_dynamic(&field_idx.to_string()),
                                 );
                                 let field_val = variant_get_op.result(self.db);
                                 ops.push(variant_get_op.as_operation());
@@ -782,14 +782,11 @@ impl<'db> CaseLowerer<'db> {
                         }
                     }
                 } else if op_name == tribute_pat::TUPLE() {
-                    // Tuple: similar to variant, extract each element
+                    // Tuple: treat as anonymous struct, extract each element by index
                     if let Some(elements_region) = op.regions(self.db).first().copied() {
                         let mut elem_idx = 0u64;
                         for elem_block in elements_region.blocks(self.db).iter() {
                             for elem_op in elem_block.operations(self.db).iter().copied() {
-                                // Create tuple element extraction
-                                let tuple_get_name =
-                                    Symbol::from_dynamic(&format!("tuple_get_{}", elem_idx));
                                 // Use the expected type from block args if available
                                 let elem_ty =
                                     expected_types.get(*type_idx).copied().unwrap_or_else(|| {
@@ -798,15 +795,18 @@ impl<'db> CaseLowerer<'db> {
                                             std::collections::BTreeMap::new(),
                                         )
                                     });
-                                let tuple_call_op = tribute::call(
+                                // Create tuple element extraction using struct_get with numeric index
+                                let field_idx = Symbol::from_dynamic(&elem_idx.to_string());
+                                let struct_get_op = adt::struct_get(
                                     self.db,
                                     location,
-                                    vec![current_value],
+                                    current_value,
                                     elem_ty,
-                                    tuple_get_name,
+                                    elem_ty, // Use element type as struct type placeholder
+                                    field_idx,
                                 );
-                                let elem_val = tuple_call_op.result(self.db);
-                                ops.push(tuple_call_op.as_operation());
+                                let elem_val = struct_get_op.result(self.db);
+                                ops.push(struct_get_op.as_operation());
 
                                 // Recurse into the element pattern
                                 let elem_region = Region::new(

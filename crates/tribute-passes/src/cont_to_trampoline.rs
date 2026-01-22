@@ -1337,7 +1337,7 @@ fn create_resume_function_with_continuation<'db>(
                         state_val,
                         anyref_ty,
                         spec.state_type,
-                        Attribute::IntBits(i as u64),
+                        Symbol::from_dynamic(&i.to_string()),
                     ));
                     let anyref_value = get_field.result(db);
 

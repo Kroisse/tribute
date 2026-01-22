@@ -874,7 +874,7 @@ impl<'db> RewritePattern<'db> for LowerClosureFuncPattern {
             closure_value,
             i32_ty, // Result is i32 (table index), not funcref
             struct_ty,
-            Attribute::IntBits(0),
+            Symbol::new("0"),
         );
 
         RewriteResult::Replace(get_op.as_operation())
@@ -922,7 +922,7 @@ impl<'db> RewritePattern<'db> for LowerClosureEnvPattern {
             closure_value,
             result_ty,
             struct_ty,
-            Attribute::IntBits(1),
+            Symbol::new("1"),
         );
 
         RewriteResult::Replace(get_op.as_operation())

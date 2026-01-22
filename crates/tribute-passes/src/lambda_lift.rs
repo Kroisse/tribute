@@ -897,7 +897,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                         env_param,
                         capture.ty,
                         env_type,
-                        trunk_ir::Attribute::IntBits(i as u64),
+                        Symbol::from_dynamic(&i.to_string()),
                     ));
                     capture_values.insert(capture.name, extracted.result(db));
                 }

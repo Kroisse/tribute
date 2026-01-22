@@ -284,7 +284,7 @@ fn create_type_converter() -> TypeConverter {
                     boxed_value,
                     f64_ty,
                     boxed_ty,
-                    Attribute::IntBits(0),
+                    Symbol::new("0"),
                 );
 
                 return MaterializeResult::Ops(trunk_ir::smallvec::smallvec![
@@ -701,7 +701,7 @@ impl<'db> RewritePattern<'db> for LowerTrampolineStructGetPattern {
                 struct_value,
                 any_ty,
                 struct_type,
-                Attribute::IntBits(field_idx.into()),
+                Symbol::from_dynamic(&field_idx.to_string()),
             );
             let any_value = struct_get.as_operation().result(db, 0);
             ops.push(struct_get.as_operation());
@@ -723,7 +723,7 @@ impl<'db> RewritePattern<'db> for LowerTrampolineStructGetPattern {
                 struct_value,
                 expected_result_type,
                 struct_type,
-                Attribute::IntBits(field_idx.into()),
+                Symbol::from_dynamic(&field_idx.to_string()),
             );
 
             RewriteResult::Replace(struct_get.as_operation())
@@ -966,7 +966,7 @@ impl<'db> RewritePattern<'db> for LowerYieldContinuationAccessPattern {
                 cont_ref,
                 anyref_ty,
                 cont_type,
-                Attribute::IntBits(3),
+                Symbol::new("3"),
             );
             ops.push(get_shift_value.as_operation());
         }
@@ -1350,10 +1350,10 @@ mod tests {
                 for op in ops.iter() {
                     if op.dialect(db) == adt::DIALECT_NAME()
                         && op.name(db) == adt::STRUCT_GET()
-                        && let Some(Attribute::IntBits(idx)) =
+                        && let Some(Attribute::Symbol(sym)) =
                             op.attributes(db).get(&Symbol::new("field"))
                     {
-                        return *idx;
+                        return sym.with_str(|s| s.parse::<u64>().unwrap_or(999));
                     }
                 }
                 999 // Not found

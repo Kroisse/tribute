@@ -420,7 +420,7 @@ fn generate_field_getter<'db>(
                 self_value,
                 field_type,
                 struct_ty,
-                Attribute::IntBits(field_index as u64),
+                Symbol::from_dynamic(&field_index.to_string()),
             ));
             entry.op(func::Return::value(
                 ctx.db,
@@ -512,7 +512,7 @@ fn generate_field_set<'db>(
                         self_value,
                         *fty,
                         struct_ty,
-                        Attribute::IntBits(i as u64),
+                        Symbol::from_dynamic(&i.to_string()),
                     ));
                     field_values.push(extracted.result(ctx.db));
                 }
@@ -566,7 +566,7 @@ fn generate_field_modify<'db>(
                 self_value,
                 field_type,
                 struct_ty,
-                Attribute::IntBits(field_index as u64),
+                Symbol::from_dynamic(&field_index.to_string()),
             ));
 
             // Apply f to get new value
@@ -590,7 +590,7 @@ fn generate_field_modify<'db>(
                         self_value,
                         *fty,
                         struct_ty,
-                        Attribute::IntBits(i as u64),
+                        Symbol::from_dynamic(&i.to_string()),
                     ));
                     field_values.push(extracted.result(ctx.db));
                 }

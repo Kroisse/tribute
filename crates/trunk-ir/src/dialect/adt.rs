@@ -39,14 +39,14 @@ dialect! {
         fn struct_new(#[rest] fields) -> result;
 
         /// `adt.struct_get` operation: reads a field from a struct.
-        /// Field can be a name (String) or index (IntBits).
+        /// Field is a Symbol: either a name (e.g., "x") or numeric index (e.g., "0").
         /// Type attribute specifies the struct type (for WASM GC lowering).
-        #[attr(r#type: Type, field: any)]
+        #[attr(r#type: Type, field: Symbol)]
         fn struct_get(r#ref) -> result;
 
         /// `adt.struct_set` operation: writes a field in a struct.
-        /// Field can be a name (String) or index (IntBits).
-        #[attr(field: any)]
+        /// Field is a Symbol: either a name (e.g., "x") or numeric index (e.g., "0").
+        #[attr(field: Symbol)]
         fn struct_set(r#ref, value);
 
         // === Variant (Sum Type) ===
@@ -70,8 +70,8 @@ dialect! {
         fn variant_cast(r#ref) -> result;
 
         /// `adt.variant_get` operation: reads a field from a variant.
-        /// Field can be a name (String) or index (IntBits).
-        #[attr(field: any)]
+        /// Field is a Symbol: either a name (e.g., "x") or numeric index (e.g., "0").
+        #[attr(field: Symbol)]
         fn variant_get(r#ref) -> result;
 
         // === Array ===

@@ -1760,7 +1760,7 @@ impl<'db> Resolver<'db> {
                     base,
                     field_ty,
                     ty,
-                    Attribute::IntBits(field_idx as u64),
+                    Symbol::from_dynamic(&field_idx.to_string()),
                 );
                 let field_val = struct_get.result(self.db);
 
