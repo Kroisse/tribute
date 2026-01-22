@@ -780,6 +780,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
             location,
             info.lifted_name,
             &info.captures,
+            &capture_values,
             env_type,
             &param_types,
             result_type,
@@ -848,6 +849,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
         location: Location<'db>,
         name: Symbol,
         captures: &[CaptureInfo<'db>],
+        outer_capture_values: &[Value<'db>],
         env_type: Type<'db>,
         param_types: &IdVec<Type<'db>>,
         result_type: Type<'db>,
@@ -877,6 +879,7 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
 
         let db = self.db;
         let captures_vec: Vec<_> = captures.to_vec();
+        let outer_values_vec: Vec<_> = outer_capture_values.to_vec();
         let param_count = param_types.len();
 
         // Evidence is always at 0, env is at 1
@@ -898,22 +901,30 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                 ));
                 let env_param = env_cast.result(db);
 
+                // Build value remapping context
+                let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
+
                 // Build mapping: capture name -> extracted value
+                // Also map outer capture values to their extracted counterparts
                 let mut capture_values: HashMap<Symbol, Value<'db>> = HashMap::new();
                 for (i, capture) in captures_vec.iter().enumerate() {
                     let extracted = entry.op(adt::struct_get(
                         db, location, env_param, capture.ty, env_type, i as u64,
                     ));
-                    capture_values.insert(capture.name, extracted.result(db));
+                    let extracted_value = extracted.result(db);
+                    capture_values.insert(capture.name, extracted_value);
+
+                    // Map outer capture value to extracted value so operands referencing
+                    // outer values get properly remapped in the lifted function body
+                    if let Some(&outer_value) = outer_values_vec.get(i) {
+                        value_map.insert(outer_value, extracted_value);
+                    }
                 }
 
                 // Transform the lambda body
                 let body_blocks = body.blocks(db);
                 if let Some(orig_block) = body_blocks.first() {
                     let orig_block_id = orig_block.id(db);
-
-                    // Build value remapping context
-                    let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
                     // Map original block args (params 0..n) to new block args
                     // New layout: [evidence?, env, params...]
