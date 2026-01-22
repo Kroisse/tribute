@@ -361,25 +361,8 @@ impl<'db> TypeChecker<'db> {
     /// a map from type names to their ADT types for use in resolving user-defined
     /// type references during type checking.
     fn collect_type_definitions_from_block(&mut self, block: &Block<'db>) {
-        for op in block.operations(self.db).iter() {
-            // Collect struct definitions
-            if let Ok(struct_def) = tribute::StructDef::from_operation(self.db, *op) {
-                let name = struct_def.sym_name(self.db);
-                if let Some(&struct_ty) = op.results(self.db).first() {
-                    trace!("collect_type_definitions: found struct {:?}", name);
-                    Arc::make_mut(&mut self.type_defs).insert(name, struct_ty);
-                }
-            }
-
-            // Collect enum definitions
-            if let Ok(enum_def) = tribute::EnumDef::from_operation(self.db, *op) {
-                let name = enum_def.sym_name(self.db);
-                if let Some(&enum_ty) = op.results(self.db).first() {
-                    trace!("collect_type_definitions: found enum {:?}", name);
-                    Arc::make_mut(&mut self.type_defs).insert(name, enum_ty);
-                }
-            }
-        }
+        let collected = collect_type_defs(self.db, block);
+        Arc::make_mut(&mut self.type_defs).extend(collected.iter().map(|(k, v)| (*k, *v)));
     }
 
     /// Look up an ability operation's signature.
@@ -1640,7 +1623,10 @@ impl<'db> TypeChecker<'db> {
                         let mut field_idx = 0;
                         for field_block in fields_region.blocks(self.db).iter() {
                             for field_op in field_block.operations(self.db).iter() {
-                                // Get the expected type for this field
+                                // Get the expected type for this field.
+                                // If field type is unavailable (malformed IR or unresolved type),
+                                // fall back to parent type. This is semantically imprecise but
+                                // allows compilation to continue; type errors will surface elsewhere.
                                 let field_type = field_types
                                     .get(field_idx)
                                     .copied()
@@ -1683,6 +1669,9 @@ impl<'db> TypeChecker<'db> {
                         let mut elem_idx = 0;
                         for elem_block in elements_region.blocks(self.db).iter() {
                             for elem_op in elem_block.operations(self.db).iter() {
+                                // If element type is unavailable (malformed IR or unresolved type),
+                                // fall back to parent type. This is semantically imprecise but
+                                // allows compilation to continue; type errors will surface elsewhere.
                                 let elem_type = element_types
                                     .get(elem_idx)
                                     .copied()
