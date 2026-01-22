@@ -656,6 +656,7 @@ impl<'db> CaseLowerer<'db> {
     ///
     /// `type_idx` tracks the current index into `expected_types` for binding types.
     /// `ops` collects the extraction operations that need to be added to the IR.
+    #[allow(clippy::too_many_arguments)]
     fn extract_values_recursive(
         &mut self,
         location: Location<'db>,

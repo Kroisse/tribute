@@ -463,10 +463,10 @@ impl<'db> LambdaInfoCollector<'db> {
             let index = value.index(self.db);
 
             // Find the name in our scope that corresponds to this block arg
-            for scope in self.local_scopes.iter().rev() {
-                for (name, ty) in scope.iter() {
-                    // Check if this is the right parameter
-                    if let Some(arg_types) = self.block_args.get(&block_id) {
+            if let Some(arg_types) = self.block_args.get(&block_id) {
+                for scope in self.local_scopes.iter().rev() {
+                    for (name, ty) in scope.iter() {
+                        // Check if this is the right parameter
                         if index < arg_types.len() && arg_types[index] == *ty {
                             return Some((*name, *ty));
                         }

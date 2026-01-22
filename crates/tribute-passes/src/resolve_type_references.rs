@@ -130,20 +130,19 @@ fn resolve_enum_type_shallow<'db>(
                 .map(|attr| {
                     if let Attribute::Type(field_ty) = attr {
                         // Only resolve tribute.type references, not recursively
-                        if tribute::is_unresolved_type(db, *field_ty) {
-                            if let Some(Attribute::Symbol(name_sym)) =
+                        if tribute::is_unresolved_type(db, *field_ty)
+                            && let Some(Attribute::Symbol(name_sym)) =
                                 field_ty.get_attr(db, Symbol::new("name"))
-                            {
-                                // Check user-defined types first
-                                if let Some(&adt_ty) = type_defs.get(name_sym) {
-                                    changed = true;
-                                    return Attribute::Type(adt_ty);
-                                }
-                                // Check primitive types
-                                if let Some(primitive_ty) = resolve_primitive_type(db, name_sym) {
-                                    changed = true;
-                                    return Attribute::Type(primitive_ty);
-                                }
+                        {
+                            // Check user-defined types first
+                            if let Some(&adt_ty) = type_defs.get(name_sym) {
+                                changed = true;
+                                return Attribute::Type(adt_ty);
+                            }
+                            // Check primitive types
+                            if let Some(primitive_ty) = resolve_primitive_type(db, name_sym) {
+                                changed = true;
+                                return Attribute::Type(primitive_ty);
                             }
                         }
                         attr.clone()

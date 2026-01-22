@@ -1526,7 +1526,7 @@ impl<'db> TypeChecker<'db> {
             "Nil" => *core::Nil::new(self.db),
             // User-defined types - look up in type definitions
             _ => {
-                if let Some(&adt_ty) = self.type_defs.get(&name_sym) {
+                if let Some(&adt_ty) = self.type_defs.get(name_sym) {
                     trace!(
                         "resolve_tribute_type: resolved {:?} to {:?}",
                         name_sym, adt_ty
