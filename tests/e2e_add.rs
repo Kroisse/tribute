@@ -182,7 +182,7 @@ fn main() ->{} Int {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "generic_struct.trb", source_code.clone(), tree);
 
-        let wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
+        let _wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
             let diagnostics: Vec<_> =
                 compile_to_wasm_binary::accumulated::<tribute::Diagnostic>(db, source_file);
             for diag in &diagnostics {
@@ -222,7 +222,7 @@ fn main() ->{} Int {
         let source_file =
             SourceCst::from_path(db, "generic_multiple.trb", source_code.clone(), tree);
 
-        let wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
+        let _wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
             let diagnostics: Vec<_> =
                 compile_to_wasm_binary::accumulated::<tribute::Diagnostic>(db, source_file);
             for diag in &diagnostics {
@@ -260,7 +260,7 @@ fn main() ->{} Int {
         let source_file =
             SourceCst::from_path(db, "generic_two_params.trb", source_code.clone(), tree);
 
-        let wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
+        let _wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
             let diagnostics: Vec<_> =
                 compile_to_wasm_binary::accumulated::<tribute::Diagnostic>(db, source_file);
             for diag in &diagnostics {
@@ -297,7 +297,7 @@ fn main() ->{} Int {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "generic_nested.trb", source_code.clone(), tree);
 
-        let wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
+        let _wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
             let diagnostics: Vec<_> =
                 compile_to_wasm_binary::accumulated::<tribute::Diagnostic>(db, source_file);
             for diag in &diagnostics {

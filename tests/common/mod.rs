@@ -6,6 +6,7 @@ use std::str::FromStr;
 use tempfile::NamedTempFile;
 
 /// Run WASM binary with wasmtime CLI and parse the result
+#[allow(dead_code)]
 pub fn run_wasm<T>(wasm_bytes: &[u8]) -> T
 where
     T: FromStr,
