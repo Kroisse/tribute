@@ -1713,7 +1713,7 @@ impl<'db> Resolver<'db> {
             ty,
             tag,
             field_names,
-            ..
+            params,
         }) = binding
         else {
             return vec![];
@@ -1778,7 +1778,7 @@ impl<'db> Resolver<'db> {
             } else if has_spread {
                 // Get field from base using adt.struct_get
                 let base = base_value.unwrap();
-                let field_ty = ty; // TODO: Get actual field type from struct definition
+                let field_ty = params.get(field_idx).copied().unwrap_or(ty);
                 let struct_get =
                     adt::struct_get(self.db, location, base, field_ty, ty, field_idx as u64);
                 let field_val = struct_get.result(self.db);
