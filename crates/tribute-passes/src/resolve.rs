@@ -1155,6 +1155,12 @@ impl<'db> Resolver<'db> {
         // until per-result extraction is implemented for destructuring patterns
         if results.len() > 1 {
             self.emit_unsupported_destructuring_diagnostic(op, results.len());
+            // Map all results to bound_value to avoid stale references if compilation continues.
+            // This is a best-effort fallback; the error should prevent successful compilation.
+            for i in 0..results.len() {
+                let old_result = op.result(self.db, i);
+                self.ctx.map_value(old_result, bound_value);
+            }
             return Vec::new();
         }
 
