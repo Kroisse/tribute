@@ -128,11 +128,12 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Create a new type checker with pre-built function and ability operation type maps.
+    /// Create a new type checker with pre-built function, ability operation, and type definition maps.
     pub fn with_type_maps(
         db: &'db dyn salsa::Database,
         function_types: Arc<HashMap<Symbol, Type<'db>>>,
         ability_op_types: Arc<HashMap<AbilityOpKey, AbilityOpSignature<'db>>>,
+        type_defs: Arc<HashMap<Symbol, Type<'db>>>,
     ) -> Self {
         Self {
             db,
@@ -144,7 +145,7 @@ impl<'db> TypeChecker<'db> {
             entry_block_arg_types: Vec::new(),
             function_types,
             ability_op_types,
-            type_defs: Arc::new(HashMap::new()),
+            type_defs,
         }
     }
 
@@ -2193,9 +2194,10 @@ pub fn typecheck_module_per_function<'db>(
 
     let block = &blocks[0];
 
-    // First pass: collect all function types and ability operation types
+    // First pass: collect all function types, ability operation types, and type definitions
     let function_types = collect_function_types(db, block);
     let ability_op_types = collect_ability_op_types(db, block);
+    let type_defs = collect_type_defs(db, block);
 
     // Second pass: type check each function with the type maps
     let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
@@ -2206,12 +2208,13 @@ pub fn typecheck_module_per_function<'db>(
                 validate_toplevel_function_types(db, &func_op);
             }
 
-            // Type check this function with access to all function and ability types
+            // Type check this function with access to all function, ability, and type maps
             let typed_op = typecheck_function_with_context(
                 db,
                 *op,
                 function_types.clone(),
                 ability_op_types.clone(),
+                type_defs.clone(),
             );
             new_ops.push(typed_op);
         } else {
@@ -2311,7 +2314,45 @@ fn collect_ability_op_types<'db>(
     Arc::new(ability_op_types)
 }
 
-/// Type check a function with access to all function and ability types.
+/// Collect type definitions (struct and enum) from a block.
+///
+/// Walks `tribute.struct_def` and `tribute.enum_def` operations and builds
+/// a map from type names to their ADT types for use in resolving user-defined
+/// type references during type checking.
+fn collect_type_defs<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+) -> Arc<HashMap<Symbol, Type<'db>>> {
+    let mut type_defs = HashMap::new();
+
+    for op in block.operations(db).iter() {
+        // Collect struct definitions
+        if let Ok(struct_def) = tribute::StructDef::from_operation(db, *op) {
+            let name = struct_def.sym_name(db);
+            if let Some(&struct_ty) = op.results(db).first() {
+                trace!("collect_type_defs: found struct {:?}", name);
+                type_defs.insert(name, struct_ty);
+            }
+        }
+
+        // Collect enum definitions
+        if let Ok(enum_def) = tribute::EnumDef::from_operation(db, *op) {
+            let name = enum_def.sym_name(db);
+            if let Some(&enum_ty) = op.results(db).first() {
+                trace!("collect_type_defs: found enum {:?}", name);
+                type_defs.insert(name, enum_ty);
+            }
+        }
+    }
+
+    trace!(
+        "collect_type_defs: collected {} type definitions",
+        type_defs.len()
+    );
+    Arc::new(type_defs)
+}
+
+/// Type check a function with access to all function, ability, and type definition maps.
 ///
 /// This is similar to `typecheck_function` but accepts type maps
 /// for proper type inference of generic function calls and handler patterns.
@@ -2320,8 +2361,9 @@ fn typecheck_function_with_context<'db>(
     func_op: Operation<'db>,
     function_types: Arc<HashMap<Symbol, Type<'db>>>,
     ability_op_types: Arc<HashMap<AbilityOpKey, AbilityOpSignature<'db>>>,
+    type_defs: Arc<HashMap<Symbol, Type<'db>>>,
 ) -> Operation<'db> {
-    let mut checker = TypeChecker::with_type_maps(db, function_types, ability_op_types);
+    let mut checker = TypeChecker::with_type_maps(db, function_types, ability_op_types, type_defs);
 
     // Check the function definition
     checker.check_func_def(&func_op);
