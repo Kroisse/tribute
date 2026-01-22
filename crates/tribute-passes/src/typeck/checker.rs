@@ -1610,8 +1610,13 @@ impl<'db> TypeChecker<'db> {
                         continue;
                     };
 
+                    // Resolve tribute.type reference before looking up enum variants.
+                    // expected_type may be a tribute.type reference which adt::get_enum_variants
+                    // cannot handle directly.
+                    let resolved_expected_type = self.resolve_tribute_type(expected_type);
+
                     // Look up field types for this variant
-                    let field_types = adt::get_enum_variants(self.db, expected_type)
+                    let field_types = adt::get_enum_variants(self.db, resolved_expected_type)
                         .and_then(|variants| {
                             variants
                                 .iter()
@@ -1632,8 +1637,10 @@ impl<'db> TypeChecker<'db> {
                         for field_block in fields_region.blocks(self.db).iter() {
                             for field_op in field_block.operations(self.db).iter() {
                                 // Get the expected type for this field
-                                let field_type =
-                                    field_types.get(field_idx).copied().unwrap_or(expected_type);
+                                let field_type = field_types
+                                    .get(field_idx)
+                                    .copied()
+                                    .unwrap_or(resolved_expected_type);
 
                                 // Create a temporary region containing just this field op
                                 // to recurse into
