@@ -577,12 +577,8 @@ pub fn stage_lower_to_wasm<'db>(
 /// - evidence/handler_lower: Keep ability structure
 /// - lower_case: Keep case/pattern structure
 /// - dce: Keep all functions
-#[salsa::tracked]
 pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = parse_and_lower(db, source);
-    let module = stage_resolve(db, module);
-    let module = stage_typecheck(db, module);
-    stage_tdnr(db, module)
+    run_tdnr(db, source)
 }
 
 /// Run pipeline up to resolve stage.
@@ -594,18 +590,30 @@ pub fn run_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Modu
 
 /// Run pipeline up to typecheck stage.
 ///
-/// Includes: parse → resolve → const_inline → typecheck
+/// Includes: parse → resolve → typecheck
 #[salsa::tracked]
 pub fn run_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let module = run_resolve(db, source);
-    let module = stage_const_inline(db, module);
     stage_typecheck(db, module)
+}
+
+/// Run pipeline up to TDNR stage.
+///
+/// Includes: parse → resolve → typecheck → tdnr
+#[salsa::tracked]
+pub fn run_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = run_typecheck(db, source);
+    stage_tdnr(db, module)
 }
 
 /// Run pipeline up to lambda lift stage.
 #[salsa::tracked]
 pub fn run_lambda_lift<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = run_typecheck(db, source);
+    let module = run_tdnr(db, source);
+    let module = stage_const_inline(db, module);
+    let module = stage_inline_refs(db, module);
+    let module = stage_boxing(db, module);
+    let module = stage_evidence_params(db, module);
     stage_lambda_lift(db, module)
 }
 
@@ -619,19 +627,19 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 /// Run pipeline through inline_refs stage.
 ///
 /// This is the common frontend + closure processing pipeline:
-/// parse → resolve → const_inline → typecheck → boxing
-/// → evidence_params → lambda_lift → closure_lower → tdnr → inline_refs
+/// parse → resolve → typecheck → tdnr → const_inline → boxing
+/// → evidence_params → lambda_lift → closure_lower → inline_refs
 ///
 /// Used as the base for both `compile` and `compile_to_wasm_binary`.
 #[salsa::tracked]
 pub fn run_to_inline_refs<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = run_typecheck(db, source);
+    let module = run_tdnr(db, source);
+    let module = stage_const_inline(db, module);
+    let module = stage_inline_refs(db, module);
     let module = stage_boxing(db, module);
     let module = stage_evidence_params(db, module);
     let module = stage_lambda_lift(db, module);
-    let module = stage_closure_lower(db, module);
-    let module = stage_tdnr(db, module);
-    stage_inline_refs(db, module)
+    stage_closure_lower(db, module)
 }
 
 // =============================================================================
