@@ -109,6 +109,13 @@ dialect! {
         #[attr(path: Symbol)]
         fn path() -> result;
 
+        /// `tribute.ref` operation: local variable reference.
+        /// Wraps a local binding (block argument) to preserve source location for hover.
+        /// This is a pass-through operation - it simply returns its input value.
+        /// The `name` attribute holds the variable name for debugging purposes.
+        #[attr(name: Symbol)]
+        fn r#ref(value) -> result;
+
         /// `tribute.binop` operation: unresolved binary operation.
         /// Used for operators that need type-directed resolution (e.g., `<>` concat).
         /// The `op` attribute holds the operator name.

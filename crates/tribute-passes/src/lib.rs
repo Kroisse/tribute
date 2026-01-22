@@ -17,6 +17,7 @@ pub mod const_inline;
 pub mod cont_to_trampoline;
 pub mod evidence;
 pub mod handler_lower;
+pub mod inline_refs;
 pub mod lambda_lift;
 pub mod live_vars;
 pub mod resolve;
@@ -38,6 +39,7 @@ pub use evidence::{
     transform_evidence_calls,
 };
 pub use handler_lower::lower_handlers;
+pub use inline_refs::inline_refs;
 pub use lambda_lift::lift_lambdas;
 pub use resolve::{ModuleEnv, Resolver, resolve_module};
 pub use tdnr::resolve_tdnr;

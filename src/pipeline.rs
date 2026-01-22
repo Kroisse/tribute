@@ -83,6 +83,7 @@ use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverit
 use tribute_passes::evidence::{add_evidence_params, insert_evidence, transform_evidence_calls};
 use tribute_passes::generic_type_converter;
 use tribute_passes::handler_lower::lower_handlers;
+use tribute_passes::inline_refs::inline_refs;
 use tribute_passes::lambda_lift::lift_lambdas;
 use tribute_passes::lower_cont_to_trampoline;
 use tribute_passes::lower_tribute_to_cont;
@@ -382,6 +383,18 @@ pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Mod
     resolve_tdnr(db, module)
 }
 
+/// Inline References.
+///
+/// This pass inlines `tribute.ref` operations by replacing their results
+/// with their operands. `tribute.ref` preserves source location for LSP hover.
+///
+/// Must run after TDNR (which preserves tribute.ref for LSP) and before
+/// code generation passes that don't understand tribute.ref.
+#[salsa::tracked]
+pub fn stage_inline_refs<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    inline_refs(db, module)
+}
+
 /// Evidence Parameters (Phase 1).
 ///
 /// Adds evidence parameter as first argument to effectful functions.
@@ -656,6 +669,7 @@ pub fn compile<'db>(
     let module = stage_lambda_lift(db, module);
     let module = stage_closure_lower(db, module);
     let module = stage_tdnr(db, module);
+    let module = stage_inline_refs(db, module);
 
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
     // so that closure calls can also receive evidence
@@ -705,9 +719,15 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_lambda_lift(db, module);
     let module = stage_closure_lower(db, module);
     let module = stage_tdnr(db, module);
+    let module = stage_inline_refs(db, module);
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
     let module = stage_evidence_calls(db, module);
     let module = stage_tribute_to_cont(db, module);
+
+    // Resolve tribute.type references to ADT types (must run before tribute_to_scf
+    // so that enum field types are properly resolved for pattern matching)
+    let module = tribute_passes::resolve_type_references::lower(db, module);
+
     let module = stage_tribute_to_scf(db, module);
     let module = stage_handler_lower(db, module).ok()?;
 
@@ -718,9 +738,6 @@ pub fn compile_to_wasm_binary<'db>(
 
     // Resolve any unrealized_conversion_cast operations from earlier passes
     let module = stage_resolve_casts(db, module);
-
-    // Resolve tribute.type references to ADT types (backend-agnostic)
-    let module = tribute_passes::resolve_type_references::lower(db, module);
 
     // Lower to WebAssembly
     stage_lower_to_wasm(db, module)

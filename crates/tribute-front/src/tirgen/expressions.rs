@@ -137,12 +137,18 @@ pub fn lower_expr<'db>(
 
         // === Identifiers and paths ===
         "identifier" => {
-            // Always create tribute.var for variable references, even for local bindings.
-            // This preserves the source span for hover. Resolution will transform
-            // local references to identity operations with the correct type.
-            let name = node_text(&node, &ctx.source);
-            let op = block.op(tribute::var(ctx.db, location, infer_ty, name.into()));
-            Some(op.result(ctx.db))
+            let name: Symbol = node_text(&node, &ctx.source).into();
+            if let Some(value) = ctx.lookup(name) {
+                // Local binding found - wrap with tribute.ref to preserve source location
+                // Use infer_ty since typechecker will unify with the actual value type
+                let op = block.op(tribute::r#ref(ctx.db, location, value, infer_ty, name));
+                Some(op.result(ctx.db))
+            } else {
+                // Module-level reference (constructor, function, etc.)
+                // Use tribute.path - resolve pass will handle it
+                let op = block.op(tribute::path(ctx.db, location, infer_ty, name));
+                Some(op.result(ctx.db))
+            }
         }
         "path_expression" => {
             let segments = collect_path_segments(ctx, node);
@@ -394,19 +400,13 @@ fn lower_call_expr<'db>(
             let name = sym_ref(&node_text(&func_node, &ctx.source));
             let args = collect_argument_list(ctx, block, node);
             if let Some(callee) = ctx.lookup(name) {
-                let op = block.op(func::call_indirect(
-                    ctx.db, location, callee, args, infer_ty,
-                ));
-                Some(op.result(ctx.db))
-            } else if ctx.is_local(name) {
-                let callee_ty = ctx.fresh_type_var();
-                let callee_op = block.op(tribute::var(ctx.db, location, callee_ty, name));
-                let callee = callee_op.result(ctx.db);
+                // Local binding found - indirect call
                 let op = block.op(func::call_indirect(
                     ctx.db, location, callee, args, infer_ty,
                 ));
                 Some(op.result(ctx.db))
             } else {
+                // Unresolved function call - resolve pass will handle
                 let op = block.op(tribute::call(ctx.db, location, args, infer_ty, name));
                 Some(op.result(ctx.db))
             }
@@ -586,11 +586,16 @@ fn lower_lambda_expr<'db>(
             .attr(Symbol::new("bind_name"), param_name);
     }
 
+    // Flush pending args so we can access them via block_arg()
+    body_block.flush_pending_arg();
+    let arg_values: IdVec<Value<'_>> = (0..param_names.len())
+        .map(|i| body_block.block_arg(ctx.db, i))
+        .collect();
+
     let result_value = ctx.scoped(|ctx| {
-        // Bind parameters
-        for param_name in param_names {
-            let param_value = body_block.op(tribute::var(ctx.db, location, infer_ty, param_name));
-            ctx.bind(param_name, param_value.result(ctx.db));
+        // Bind parameters directly from block arguments
+        for (param_name, param_value) in param_names.into_iter().zip(arg_values.iter().copied()) {
+            ctx.bind(param_name, param_value);
         }
 
         // Lower body
@@ -701,6 +706,9 @@ fn lower_case_arm<'db>(
     }
 
     // 3. Lower body with bindings registered to block arguments
+    // Flush pending arg to ensure all args are finalized before access
+    body_block.flush_pending_arg();
+
     let result_value = ctx.scoped(|ctx| {
         // Register each binding to its corresponding block argument
         for (i, binding) in bindings.iter().enumerate() {
@@ -1297,9 +1305,10 @@ fn lower_record_expr<'db>(
                         if let Some(value) = ctx.lookup(field_name) {
                             field_values.push(value);
                         } else {
-                            let var_op =
-                                block.op(tribute::var(ctx.db, location, infer_ty, field_name));
-                            field_values.push(var_op.result(ctx.db));
+                            // Module-level reference - use tribute.path
+                            let path_op =
+                                block.op(tribute::path(ctx.db, location, infer_ty, field_name));
+                            field_values.push(path_op.result(ctx.db));
                         }
                     } else {
                         // Full syntax: { name: value }
