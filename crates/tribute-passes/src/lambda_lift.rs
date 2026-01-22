@@ -79,6 +79,10 @@ struct LambdaInfoCollector<'db> {
     /// Block argument types for resolving BlockArg values.
     block_args: HashMap<BlockId, IdVec<Type<'db>>>,
 
+    /// Direct mapping from (block_id, index) to the parameter name.
+    /// This enables deterministic capture name resolution without relying on type equality.
+    block_arg_names: HashMap<(BlockId, usize), Symbol>,
+
     /// Counter for generating unique lambda names.
     lambda_counter: u64,
 
@@ -92,6 +96,7 @@ impl<'db> LambdaInfoCollector<'db> {
             db,
             local_scopes: Vec::new(),
             block_args: HashMap::new(),
+            block_arg_names: HashMap::new(),
             lambda_counter: 0,
             module_name,
         }
@@ -120,14 +125,19 @@ impl<'db> LambdaInfoCollector<'db> {
 
     /// Extract parameter names from block argument attributes.
     /// Function/lambda parameters have `bind_name` attribute on block args.
+    /// Populates both `local_scopes` (for name lookup) and `block_arg_names`
+    /// (for deterministic capture name resolution by block_id + index).
     fn extract_param_names_from_block_args(&mut self, block: &Block<'db>) {
+        let block_id = block.id(self.db);
         let args = block.args(self.db);
-        for arg in args.iter() {
+        for (i, arg) in args.iter().enumerate() {
             if let Some(Attribute::Symbol(name)) =
                 arg.get_attr(self.db, tribute::block_arg_attrs::BIND_NAME())
             {
                 let ty = arg.ty(self.db);
                 self.add_local(*name, ty);
+                // Store direct mapping from (block_id, index) -> name
+                self.block_arg_names.insert((block_id, i), *name);
             }
         }
     }
@@ -455,23 +465,23 @@ impl<'db> LambdaInfoCollector<'db> {
         }
     }
 
-    /// Find the name and type of a captured value by looking it up in local scopes.
+    /// Find the name and type of a captured value by direct lookup.
+    ///
+    /// Uses `block_arg_names` for deterministic name resolution by (block_id, index),
+    /// rather than relying on type equality which is unreliable when multiple
+    /// parameters have the same type.
     fn find_capture_name_and_type(&self, value: Value<'db>) -> Option<(Symbol, Type<'db>)> {
-        // Look through scopes to find which name maps to this value's type
-        // Since we track Symbol -> Type in scopes, we need to match by position
         if let ValueDef::BlockArg(block_id) = value.def(self.db) {
             let index = value.index(self.db);
 
-            // Find the name in our scope that corresponds to this block arg
-            if let Some(arg_types) = self.block_args.get(&block_id) {
-                for scope in self.local_scopes.iter().rev() {
-                    for (name, ty) in scope.iter() {
-                        // Check if this is the right parameter
-                        if index < arg_types.len() && arg_types[index] == *ty {
-                            return Some((*name, *ty));
-                        }
-                    }
-                }
+            // Direct lookup by (block_id, index) for deterministic name resolution
+            if let Some(&name) = self.block_arg_names.get(&(block_id, index))
+                && let Some(&ty) = self
+                    .block_args
+                    .get(&block_id)
+                    .and_then(|args| args.get(index))
+            {
+                return Some((name, ty));
             }
         }
         None
