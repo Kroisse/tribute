@@ -326,7 +326,7 @@ fn main() ->{} Int {
 #[test]
 fn test_generic_indirect_call() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_typecheck;
+    use tribute::pipeline::run_tdnr;
 
     let source_code = Rope::from_str(
         r#"
@@ -343,11 +343,11 @@ fn main() ->{} Int {
             SourceCst::from_path(db, "generic_indirect.trb", source_code.clone(), tree);
 
         // Run typecheck stage - this should succeed with generic instantiation
-        let _module = run_typecheck(db, source_file);
+        let _module = run_tdnr(db, source_file);
 
         // Check for type errors
         let diagnostics: Vec<_> =
-            run_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -369,7 +369,7 @@ fn main() ->{} Int {
 #[test]
 fn test_function_type_parameter() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_typecheck;
+    use tribute::pipeline::run_tdnr;
 
     let source_code = Rope::from_str(
         r#"
@@ -392,11 +392,11 @@ fn main() ->{} Int {
         let source_file = SourceCst::from_path(db, "function_type.trb", source_code.clone(), tree);
 
         // Run typecheck stage
-        let _module = run_typecheck(db, source_file);
+        let _module = run_tdnr(db, source_file);
 
         // Check for type errors
         let diagnostics: Vec<_> =
-            run_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -415,7 +415,7 @@ fn main() ->{} Int {
 #[test]
 fn test_nested_function_type() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_typecheck;
+    use tribute::pipeline::run_tdnr;
 
     let source_code = Rope::from_str(
         r#"
@@ -438,11 +438,11 @@ fn main() ->{} Int {
             SourceCst::from_path(db, "nested_function_type.trb", source_code.clone(), tree);
 
         // Run typecheck stage
-        let _module = run_typecheck(db, source_file);
+        let _module = run_tdnr(db, source_file);
 
         // Check for type errors
         let diagnostics: Vec<_> =
-            run_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -461,7 +461,7 @@ fn main() ->{} Int {
 #[test]
 fn test_generic_function_type() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_typecheck;
+    use tribute::pipeline::run_tdnr;
 
     let source_code = Rope::from_str(
         r#"
@@ -485,11 +485,11 @@ fn main() ->{} Float {
             SourceCst::from_path(db, "generic_function_type.trb", source_code.clone(), tree);
 
         // Run typecheck stage
-        let _module = run_typecheck(db, source_file);
+        let _module = run_tdnr(db, source_file);
 
         // Check for type errors
         let diagnostics: Vec<_> =
-            run_typecheck::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_tdnr::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);

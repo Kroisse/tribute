@@ -178,6 +178,13 @@ impl DefinitionIndex {
                 span: op_span,
                 target: path.last_segment(),
             });
+        } else if let Ok(ref_op) = tribute::Ref::from_operation(db, *op) {
+            // tribute.ref - local variable reference
+            let name = ref_op.name(db);
+            references.push(ReferenceEntry {
+                span: op_span,
+                target: name,
+            });
         }
 
         // Recurse into nested regions

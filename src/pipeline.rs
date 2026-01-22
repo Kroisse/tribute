@@ -54,14 +54,23 @@
 //!     ▼ evidence_calls (Phase 2)
 //! Module (evidence passed through calls)
 //!     │
+//!     ├─────────────── Final Lowering ────────────────┤
+//!     ▼ tribute_to_cont
+//! Module (tribute → continuation ops)
+//!     │
+//!     ▼ tribute_to_scf
+//! Module (case → scf.if)
+//!     │
 //!     ▼ handler_lower
 //! Module (ability.* → cont.*)
 //!     │
-//!     ├─────────────── Final Lowering ────────────────┤
-//!     ▼ lower_case
-//! Module (case → scf.if)
+//!     ▼ cont_to_trampoline
+//! Module (cont.* → trampoline)
 //!     │
 //!     ▼ dce
+//! Module (dead code eliminated)
+//!     │
+//!     ▼ resolve_casts
 //! Core IR Module
 //!     │
 //!     └─► [target: wasm] ─► compile_to_wasm ─► WasmBinary
@@ -567,37 +576,8 @@ pub fn stage_lower_to_wasm<'db>(
 // Useful for testing individual stages or for tools that need intermediate results.
 
 /// Compile for LSP: minimal pipeline preserving source structure.
-///
-/// This entry point runs only the passes needed for LSP features:
-/// - Parse & Lower: CST to TrunkIR
-/// - Resolve: Name resolution (completion, go-to-definition)
-/// - Typecheck: Type inference (hover)
-/// - TDNR: Type-directed name resolution (method calls)
-///
-/// Excluded passes (preserve source structure):
-/// - const_inline: Keep const references for go-to-definition
-/// - lambda_lift/closure_lower: Keep closure structure
-/// - evidence/handler_lower: Keep ability structure
-/// - lower_case: Keep case/pattern structure
-/// - dce: Keep all functions
 pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     run_tdnr(db, source)
-}
-
-/// Run pipeline up to resolve stage.
-#[salsa::tracked]
-pub fn run_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = parse_and_lower(db, source);
-    stage_resolve(db, module)
-}
-
-/// Run pipeline up to typecheck stage.
-///
-/// Includes: parse → resolve → typecheck
-#[salsa::tracked]
-pub fn run_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = run_resolve(db, source);
-    stage_typecheck(db, module)
 }
 
 /// Run pipeline up to TDNR stage.
@@ -605,7 +585,9 @@ pub fn run_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Mo
 /// Includes: parse → resolve → typecheck → tdnr
 #[salsa::tracked]
 pub fn run_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = run_typecheck(db, source);
+    let module = parse_and_lower(db, source);
+    let module = stage_resolve(db, module);
+    let module = stage_typecheck(db, module);
     stage_tdnr(db, module)
 }
 
@@ -627,24 +609,6 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
     stage_closure_lower(db, module)
 }
 
-/// Run pipeline through inline_refs stage.
-///
-/// This is the common frontend + closure processing pipeline:
-/// parse → resolve → typecheck → tdnr → const_inline → boxing
-/// → evidence_params → lambda_lift → closure_lower → inline_refs
-///
-/// Used as the base for both `compile` and `compile_to_wasm_binary`.
-#[salsa::tracked]
-pub fn run_to_inline_refs<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = run_tdnr(db, source);
-    let module = stage_const_inline(db, module);
-    let module = stage_inline_refs(db, module);
-    let module = stage_boxing(db, module);
-    let module = stage_evidence_params(db, module);
-    let module = stage_lambda_lift(db, module);
-    stage_closure_lower(db, module)
-}
-
 // =============================================================================
 // Full Pipeline (Orchestration)
 // =============================================================================
@@ -653,30 +617,13 @@ pub fn run_to_inline_refs<'db>(db: &'db dyn salsa::Database, source: SourceCst) 
 ///
 /// This is the central orchestration function that sequences all stages.
 /// Each stage is a pure transformation that takes a Module and returns a Module.
-///
-/// Pipeline:
-/// 1. Parse & Lower - CST to TrunkIR with prelude merged
-/// 2. Resolve - Name resolution
-/// 3. Const Inline - Inline constant values
-/// 4. Typecheck - Type inference and checking
-/// 5. Boxing - Insert explicit boxing/unboxing for polymorphic calls
-/// 6. Evidence Params - Add evidence parameters to effectful functions (Phase 1)
-/// 7. Lambda Lift - Lift lambdas to top-level (captures evidence)
-/// 8. Closure Lower - Lower closure operations
-/// 9. TDNR - Type-directed name resolution
-/// 10. Evidence Calls - Transform calls to pass evidence (Phase 2)
-/// 11. Handler Lower - Lower ability ops to cont ops
-/// 12. Lower Case - Lower case to scf.if
-/// 13. DCE - Dead code elimination
-/// 14. Resolve Casts - Resolve unrealized_conversion_cast operations
-/// 15. Final resolve - Report unresolved references
 #[salsa::tracked]
 pub fn compile<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Module<'db>, trunk_ir::rewrite::ConversionError> {
     // Frontend + closure processing (up to inline_refs)
-    let module = run_to_inline_refs(db, source);
+    let module = run_closure_lower(db, source);
 
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
     let module = stage_evidence_calls(db, module);
@@ -699,14 +646,13 @@ pub fn compile<'db>(
 /// Compile to WebAssembly binary.
 ///
 /// Runs the full pipeline and then lowers to WebAssembly.
-/// Uses `run_to_inline_refs` for the common frontend stages.
 #[salsa::tracked]
 pub fn compile_to_wasm_binary<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<WasmBinary<'db>> {
     // Frontend + closure processing (up to inline_refs)
-    let module = run_to_inline_refs(db, source);
+    let module = run_closure_lower(db, source);
 
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
     let module = stage_evidence_calls(db, module);
