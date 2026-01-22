@@ -1443,9 +1443,12 @@ impl<'db> TypeChecker<'db> {
 
         // Also constrain adt.variant_get operations (for backwards compatibility)
         // Extract variant tag for looking up field types
+        // Resolve tribute.type reference before enum lookup, as adt::get_enum_variants
+        // cannot handle unresolved type references.
+        let resolved_scrutinee_type = self.resolve_tribute_type(scrutinee_type);
         let variant_tag = self.extract_variant_tag_from_pattern(pattern_region);
         let field_types = variant_tag.and_then(|tag| {
-            adt::get_enum_variants(self.db, scrutinee_type).and_then(|variants| {
+            adt::get_enum_variants(self.db, resolved_scrutinee_type).and_then(|variants| {
                 variants
                     .iter()
                     .find(|(name, _)| *name == tag)
