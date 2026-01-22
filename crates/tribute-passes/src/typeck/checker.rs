@@ -2452,4 +2452,266 @@ mod tests {
             "Function with concrete types should not have type vars"
         );
     }
+
+    // =========================================================================
+    // Pattern Matching Tests
+    // =========================================================================
+
+    /// Build a module with struct field access using adt.struct_get
+    #[salsa::tracked]
+    fn build_struct_get_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = trunk_ir::Location::new(path, Span::new(0, 0));
+        let i64_ty = *core::I64::new(db);
+
+        // Create struct type: struct Point { x: i64, y: i64 }
+        let point_ty = adt::struct_type(
+            db,
+            Symbol::new("Point"),
+            vec![(Symbol::new("x"), i64_ty), (Symbol::new("y"), i64_ty)],
+        );
+
+        let func = func::Func::build(db, location, "test_struct_get", idvec![], i64_ty, |entry| {
+            // Create a struct: Point { x: 1, y: 2 }
+            let x_val = entry.op(arith::Const::i64(db, location, 1));
+            let y_val = entry.op(arith::Const::i64(db, location, 2));
+            let point = entry.op(adt::struct_new(
+                db,
+                location,
+                vec![x_val.result(db), y_val.result(db)],
+                point_ty,
+                point_ty,
+            ));
+
+            // Access field x (index 0)
+            let field_val = entry.op(adt::struct_get(
+                db,
+                location,
+                point.result(db),
+                i64_ty,
+                point_ty,
+                0,
+            ));
+            entry.op(func::Return::value(db, location, field_val.result(db)));
+        });
+
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            top.op(func);
+        })
+    }
+
+    #[salsa_test]
+    fn test_struct_get_type_inference(db: &salsa::DatabaseImpl) {
+        let module = build_struct_get_module(db);
+        let result = typecheck_module(db, &module);
+        assert!(result.is_ok(), "Struct field access should typecheck");
+    }
+
+    /// Build a module with enum variant creation using adt.variant_new
+    #[salsa::tracked]
+    fn build_variant_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = trunk_ir::Location::new(path, Span::new(0, 0));
+        let i64_ty = *core::I64::new(db);
+
+        // Create enum type: enum Option { Some(i64), None }
+        let option_ty = adt::enum_type(
+            db,
+            Symbol::new("Option"),
+            vec![
+                (Symbol::new("Some"), vec![i64_ty]),
+                (Symbol::new("None"), vec![]),
+            ],
+        );
+
+        let func = func::Func::build(
+            db,
+            location,
+            "test_variant_new",
+            idvec![],
+            option_ty,
+            |entry| {
+                // Create variant: Some(42)
+                let value = entry.op(arith::Const::i64(db, location, 42));
+                let variant = entry.op(adt::variant_new(
+                    db,
+                    location,
+                    vec![value.result(db)],
+                    option_ty,
+                    option_ty,
+                    Symbol::new("Some"),
+                ));
+                entry.op(func::Return::value(db, location, variant.result(db)));
+            },
+        );
+
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            top.op(func);
+        })
+    }
+
+    #[salsa_test]
+    fn test_variant_new_type_inference(db: &salsa::DatabaseImpl) {
+        let module = build_variant_module(db);
+        let result = typecheck_module(db, &module);
+        assert!(result.is_ok(), "Variant creation should typecheck");
+    }
+
+    /// Build a module with nested struct types
+    #[salsa::tracked]
+    fn build_nested_struct_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = trunk_ir::Location::new(path, Span::new(0, 0));
+        let i64_ty = *core::I64::new(db);
+
+        // struct Point { x: i64, y: i64 }
+        let point_ty = adt::struct_type(
+            db,
+            Symbol::new("Point"),
+            vec![(Symbol::new("x"), i64_ty), (Symbol::new("y"), i64_ty)],
+        );
+
+        // struct Line { start: Point, end: Point }
+        let line_ty = adt::struct_type(
+            db,
+            Symbol::new("Line"),
+            vec![
+                (Symbol::new("start"), point_ty),
+                (Symbol::new("end"), point_ty),
+            ],
+        );
+
+        let func = func::Func::build(
+            db,
+            location,
+            "test_nested_struct",
+            idvec![],
+            i64_ty,
+            |entry| {
+                // Create points
+                let x1 = entry.op(arith::Const::i64(db, location, 0));
+                let y1 = entry.op(arith::Const::i64(db, location, 0));
+                let start = entry.op(adt::struct_new(
+                    db,
+                    location,
+                    vec![x1.result(db), y1.result(db)],
+                    point_ty,
+                    point_ty,
+                ));
+
+                let x2 = entry.op(arith::Const::i64(db, location, 10));
+                let y2 = entry.op(arith::Const::i64(db, location, 10));
+                let end = entry.op(adt::struct_new(
+                    db,
+                    location,
+                    vec![x2.result(db), y2.result(db)],
+                    point_ty,
+                    point_ty,
+                ));
+
+                // Create line
+                let line = entry.op(adt::struct_new(
+                    db,
+                    location,
+                    vec![start.result(db), end.result(db)],
+                    line_ty,
+                    line_ty,
+                ));
+
+                // Access nested field: line.start (returns Point)
+                let line_start = entry.op(adt::struct_get(
+                    db,
+                    location,
+                    line.result(db),
+                    point_ty,
+                    line_ty,
+                    0,
+                ));
+
+                // Access deeper: line.start.x (returns i64)
+                let x_val = entry.op(adt::struct_get(
+                    db,
+                    location,
+                    line_start.result(db),
+                    i64_ty,
+                    point_ty,
+                    0,
+                ));
+                entry.op(func::Return::value(db, location, x_val.result(db)));
+            },
+        );
+
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            top.op(func);
+        })
+    }
+
+    #[salsa_test]
+    fn test_nested_struct_type_inference(db: &salsa::DatabaseImpl) {
+        let module = build_nested_struct_module(db);
+        let result = typecheck_module(db, &module);
+        assert!(result.is_ok(), "Nested struct access should typecheck");
+    }
+
+    /// Test that struct field type inference works correctly
+    #[salsa_test]
+    fn test_get_struct_field_type(db: &salsa::DatabaseImpl) {
+        let i64_ty = *core::I64::new(db);
+        let f64_ty = *core::F64::new(db);
+
+        // struct User { score: f64, age: i64 }
+        let user_ty = adt::struct_type(
+            db,
+            Symbol::new("User"),
+            vec![(Symbol::new("score"), f64_ty), (Symbol::new("age"), i64_ty)],
+        );
+
+        // Verify we can get field types from the struct
+        let fields = adt::get_struct_fields(db, user_ty);
+        assert!(fields.is_some(), "Should be able to get struct fields");
+
+        let fields = fields.unwrap();
+        assert_eq!(fields.len(), 2, "User struct should have 2 fields");
+
+        // Check field types
+        assert_eq!(fields[0].0, Symbol::new("score"));
+        assert_eq!(fields[0].1, f64_ty);
+        assert_eq!(fields[1].0, Symbol::new("age"));
+        assert_eq!(fields[1].1, i64_ty);
+    }
+
+    /// Test that enum variant field types can be retrieved
+    #[salsa_test]
+    fn test_get_enum_variant_types(db: &salsa::DatabaseImpl) {
+        let i64_ty = *core::I64::new(db);
+        let f64_ty = *core::F64::new(db);
+
+        // enum Result { Ok(i64), Err(f64) }
+        let result_ty = adt::enum_type(
+            db,
+            Symbol::new("Result"),
+            vec![
+                (Symbol::new("Ok"), vec![i64_ty]),
+                (Symbol::new("Err"), vec![f64_ty]),
+            ],
+        );
+
+        // Verify we can get variant info
+        let variants = adt::get_enum_variants(db, result_ty);
+        assert!(variants.is_some(), "Should be able to get enum variants");
+
+        let variants = variants.unwrap();
+        assert_eq!(variants.len(), 2, "Result enum should have 2 variants");
+
+        // Check variant types
+        let (ok_name, ok_fields) = &variants[0];
+        assert_eq!(*ok_name, Symbol::new("Ok"));
+        assert_eq!(ok_fields.len(), 1);
+        assert_eq!(ok_fields[0], i64_ty);
+
+        let (err_name, err_fields) = &variants[1];
+        assert_eq!(*err_name, Symbol::new("Err"));
+        assert_eq!(err_fields.len(), 1);
+        assert_eq!(err_fields[0], f64_ty);
+    }
 }
