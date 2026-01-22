@@ -172,10 +172,25 @@ impl BlockId {
 // ============================================================================
 
 /// Where a value is defined: either an operation result or a block argument.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum ValueDef<'db> {
     OpResult(Operation<'db>),
     BlockArg(BlockId),
+}
+
+impl std::fmt::Debug for ValueDef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValueDef::OpResult(op) => {
+                // Print only the Operation ID to avoid cycle
+                use salsa::plumbing::AsId;
+                write!(f, "OpResult(Operation({:?}))", op.as_id())
+            }
+            ValueDef::BlockArg(block_id) => {
+                write!(f, "BlockArg({:?})", block_id)
+            }
+        }
+    }
 }
 
 /// SSA value: a definition point plus an index.
