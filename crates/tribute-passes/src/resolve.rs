@@ -1124,6 +1124,12 @@ impl<'db> Resolver<'db> {
     /// 3. Let bindings map names directly to values, so effects flow through
     ///
     /// No special handling is needed for effect propagation in let bindings.
+    ///
+    /// ## Multiple Results (Destructuring)
+    ///
+    /// Currently only single-result let bindings are supported. If the operation
+    /// has multiple results (from destructuring patterns), an error is emitted
+    /// since per-result extraction is not yet implemented.
     fn resolve_let(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
         let operands = op.operands(self.db);
         let regions = op.regions(self.db);
@@ -1144,8 +1150,16 @@ impl<'db> Resolver<'db> {
         // Map tribute.let results to the bound value
         // This ensures that any references to the let result get the correct value
         let results = op.results(self.db);
-        for (i, _) in results.iter().enumerate() {
-            let old_result = op.result(self.db, i);
+
+        // Fail fast: multiple results would incorrectly alias to the same bound_value
+        // until per-result extraction is implemented for destructuring patterns
+        if results.len() > 1 {
+            self.emit_unsupported_destructuring_diagnostic(op, results.len());
+            return Vec::new();
+        }
+
+        // Single result case: map the result to the bound value
+        if let Some(old_result) = results.first().map(|_| op.result(self.db, 0)) {
             self.ctx.map_value(old_result, bound_value);
         }
 
@@ -1846,6 +1860,24 @@ impl<'db> Resolver<'db> {
 
         Diagnostic {
             message: format!("unresolved constructor: `{}`", name),
+            span: op.location(self.db).span,
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::NameResolution,
+        }
+        .accumulate(self.db);
+    }
+
+    /// Emit diagnostic for unsupported destructuring in let bindings.
+    ///
+    /// This is triggered when a tribute.let operation has multiple results,
+    /// which would require per-result extraction that isn't yet implemented.
+    fn emit_unsupported_destructuring_diagnostic(&self, op: &Operation<'db>, result_count: usize) {
+        Diagnostic {
+            message: format!(
+                "destructuring let bindings with {} results not yet supported; \
+                 use simple patterns or separate bindings",
+                result_count
+            ),
             span: op.location(self.db).span,
             severity: DiagnosticSeverity::Error,
             phase: CompilationPhase::NameResolution,
