@@ -492,7 +492,10 @@ impl<'db> BlockBuilder<'db> {
     }
 
     /// Flush any pending argument to the args list.
-    fn flush_pending_arg(&mut self) {
+    ///
+    /// This is useful when you need to access block arguments via `block_arg()`
+    /// before the block is fully built.
+    pub fn flush_pending_arg(&mut self) {
         if let Some((ty, attrs)) = self.pending_arg.take() {
             self.args.push(BlockArg::new(self.db, ty, attrs));
         }

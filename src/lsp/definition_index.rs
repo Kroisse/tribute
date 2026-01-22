@@ -171,15 +171,8 @@ impl DefinitionIndex {
                 span: op_span,
                 target: callee.last_segment(),
             });
-        } else if let Ok(var_op) = tribute::Var::from_operation(db, *op) {
-            // tribute.var - variable reference (before resolution)
-            let name = var_op.name(db);
-            references.push(ReferenceEntry {
-                span: op_span,
-                target: name,
-            });
         } else if let Ok(path_op) = tribute::Path::from_operation(db, *op) {
-            // tribute.path - qualified path reference (before resolution)
+            // tribute.path - module-level reference (before resolution)
             let path = path_op.path(db);
             references.push(ReferenceEntry {
                 span: op_span,

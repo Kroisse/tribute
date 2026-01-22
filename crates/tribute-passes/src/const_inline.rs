@@ -57,8 +57,8 @@ impl<'db> RewritePattern<'db> for InlineConstPattern {
         op: &Operation<'db>,
         adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        // Only match tribute.var operations
-        let Ok(var_op) = tribute::Var::from_operation(db, *op) else {
+        // Only match tribute.path operations with resolved_const attribute
+        let Ok(path_op) = tribute::Path::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
@@ -77,12 +77,12 @@ impl<'db> RewritePattern<'db> for InlineConstPattern {
         // Get the value attribute - fail-fast if missing (malformed IR)
         let value_attr = attrs
             .get(&ATTR_VALUE())
-            .expect("tribute.var with resolved_const=true must have a value attribute");
+            .expect("tribute.path with resolved_const=true must have a value attribute");
 
-        let location = var_op.location(db);
+        let location = path_op.location(db);
         let result_ty = adaptor
             .result_type(db, 0)
-            .expect("tribute.var must have a result");
+            .expect("tribute.path must have a result");
 
         // Create arith.const with the inlined value
         let const_op = arith::r#const(db, location, result_ty, value_attr.clone());

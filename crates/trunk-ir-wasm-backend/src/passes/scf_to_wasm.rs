@@ -43,7 +43,7 @@ impl<'db> RewritePattern<'db> for ScfIfPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(scf_if_op) = scf::If::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -51,7 +51,8 @@ impl<'db> RewritePattern<'db> for ScfIfPattern {
 
         // wasm.if has the same structure: cond operand, result, then/else regions
         // PatternApplicator will recursively process the regions
-        let cond = scf_if_op.cond(db);
+        // Use adaptor to get remapped cond operand (important when cond is a result of another converted op)
+        let cond = adaptor.operand(0).unwrap_or_else(|| scf_if_op.cond(db));
         let then_region = scf_if_op.then(db);
         let else_region = scf_if_op.r#else(db);
         let result_ty = op
@@ -136,15 +137,16 @@ impl<'db> RewritePattern<'db> for ScfYieldPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let Ok(yield_op) = scf::Yield::from_operation(db, *op) else {
+        if !scf::Yield::matches(db, *op) {
             return RewriteResult::Unchanged;
         };
 
         // Convert to wasm.yield which tracks the result value
         // This is needed because the yielded value may be defined outside the region
-        let Some(value) = yield_op.values(db).first().copied() else {
+        // Use adaptor to get remapped operand
+        let Some(value) = adaptor.operand(0) else {
             // No value to yield - just erase
             return RewriteResult::Erase {
                 replacement_values: vec![],

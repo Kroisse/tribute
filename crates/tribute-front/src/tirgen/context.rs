@@ -291,11 +291,6 @@ impl<'db> CstLoweringCtx<'db> {
         self.local_names.insert(name);
     }
 
-    /// Check whether a name is local in the current scope.
-    pub fn is_local(&self, name: Symbol) -> bool {
-        self.local_names.contains(&name)
-    }
-
     /// Execute a closure in a new scope. Bindings created inside are discarded after.
     pub fn scoped<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
         let saved_bindings = self.bindings.clone();

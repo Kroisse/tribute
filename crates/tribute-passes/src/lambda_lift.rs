@@ -111,15 +111,6 @@ impl<'db> LambdaInfoCollector<'db> {
         }
     }
 
-    fn lookup_local(&self, name: Symbol) -> Option<Type<'db>> {
-        for scope in self.local_scopes.iter().rev() {
-            if let Some(ty) = scope.get(&name) {
-                return Some(*ty);
-            }
-        }
-        None
-    }
-
     fn gen_lambda_name(&mut self) -> Symbol {
         let name = Symbol::from_dynamic(&format!("__lambda_{}", self.lambda_counter));
         self.lambda_counter += 1;
@@ -127,30 +118,16 @@ impl<'db> LambdaInfoCollector<'db> {
         self.module_name.join_path(name)
     }
 
-    /// Extract parameter names from tribute.var ops at the start of a block.
-    /// Function/lambda parameters are declared as tribute.var ops in the body.
-    fn extract_param_names_from_body(
-        &mut self,
-        block: &Block<'db>,
-        param_types: &IdVec<Type<'db>>,
-    ) {
-        let ops = block.operations(self.db);
-        let mut param_idx = 0;
-
-        for op in ops.iter() {
-            if param_idx >= param_types.len() {
-                break;
-            }
-
-            // Check if this is a tribute.var (parameter declaration)
-            if let Ok(var_op) = tribute::Var::from_operation(self.db, *op) {
-                let name = var_op.name(self.db);
-                let ty = param_types[param_idx];
-                self.add_local(name, ty);
-                param_idx += 1;
-            } else {
-                // Non-var op means we're past parameter declarations
-                break;
+    /// Extract parameter names from block argument attributes.
+    /// Function/lambda parameters have `bind_name` attribute on block args.
+    fn extract_param_names_from_block_args(&mut self, block: &Block<'db>) {
+        let args = block.args(self.db);
+        for arg in args.iter() {
+            if let Some(Attribute::Symbol(name)) =
+                arg.get_attr(self.db, tribute::block_arg_attrs::BIND_NAME())
+            {
+                let ty = arg.ty(self.db);
+                self.add_local(*name, ty);
             }
         }
     }
@@ -213,21 +190,9 @@ impl<'db> LambdaInfoCollector<'db> {
     fn collect_in_function(&mut self, op: func::Func<'db>) -> LambdaInfoMap<'db> {
         self.push_scope();
 
-        // Add function parameters to scope
+        // Add function parameters to scope from block argument attributes
         for block in op.body(self.db).blocks(self.db) {
-            let func_type = op.r#type(self.db);
-            if let Some(func_ty) = core::Func::from_type(self.db, func_type) {
-                let params = func_ty.params(self.db);
-                for (i, &param_ty) in params.iter().enumerate() {
-                    // Add synthetic param name for now
-                    // Real param names will be extracted from tribute.var ops in the body
-                    let param_name = Symbol::from_dynamic(&format!("__param_{}", i));
-                    self.add_local(param_name, param_ty);
-                }
-
-                // Also extract parameter names from tribute.var ops at start of body
-                self.extract_param_names_from_body(block, &params);
-            }
+            self.extract_param_names_from_block_args(block);
         }
 
         // Process function body
@@ -391,13 +356,9 @@ impl<'db> LambdaInfoCollector<'db> {
         // But first, add lambda params to scope
         self.push_scope();
 
-        let lambda_type = op.r#type(self.db);
-        if let Some(func_ty) = core::Func::from_type(self.db, lambda_type) {
-            for block in body.blocks(self.db) {
-                let params = func_ty.params(self.db);
-                // Extract parameter names from tribute.var ops
-                self.extract_param_names_from_body(block, &params);
-            }
+        // Extract parameter names from block argument attributes
+        for block in body.blocks(self.db) {
+            self.extract_param_names_from_block_args(block);
         }
 
         self.collect_region(&body);
@@ -406,21 +367,44 @@ impl<'db> LambdaInfoCollector<'db> {
     }
 
     fn analyze_captures(&self, body: &Region<'db>) -> Vec<CaptureInfo<'db>> {
+        // Collect all block IDs within this lambda body
+        let mut local_blocks = HashSet::new();
+        self.collect_block_ids(body, &mut local_blocks);
+
         let mut captures = Vec::new();
-        let mut seen_names = HashSet::new();
-        self.find_captures_in_region(body, &mut captures, &mut seen_names);
+        let mut seen_values = HashSet::new();
+        self.find_captures_in_region(body, &local_blocks, &mut captures, &mut seen_values);
         captures
+    }
+
+    /// Collect all block IDs in a region (including nested regions).
+    fn collect_block_ids(&self, region: &Region<'db>, block_ids: &mut HashSet<BlockId>) {
+        for block in region.blocks(self.db).iter() {
+            block_ids.insert(block.id(self.db));
+            for op in block.operations(self.db).iter() {
+                // Don't descend into nested lambdas
+                let dialect = op.dialect(self.db);
+                let op_name = op.name(self.db);
+                if dialect == tribute::DIALECT_NAME() && op_name == tribute::LAMBDA() {
+                    continue;
+                }
+                for nested_region in op.regions(self.db).iter() {
+                    self.collect_block_ids(nested_region, block_ids);
+                }
+            }
+        }
     }
 
     fn find_captures_in_region(
         &self,
         region: &Region<'db>,
+        local_blocks: &HashSet<BlockId>,
         captures: &mut Vec<CaptureInfo<'db>>,
-        seen_names: &mut HashSet<Symbol>,
+        seen_values: &mut HashSet<Value<'db>>,
     ) {
         for block in region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter() {
-                self.find_captures_in_op(op, captures, seen_names);
+                self.find_captures_in_op(op, local_blocks, captures, seen_values);
             }
         }
     }
@@ -428,36 +412,69 @@ impl<'db> LambdaInfoCollector<'db> {
     fn find_captures_in_op(
         &self,
         op: &Operation<'db>,
+        local_blocks: &HashSet<BlockId>,
         captures: &mut Vec<CaptureInfo<'db>>,
-        seen_names: &mut HashSet<Symbol>,
+        seen_values: &mut HashSet<Value<'db>>,
     ) {
         let dialect = op.dialect(self.db);
         let op_name = op.name(self.db);
-
-        // Check for variable references
-        if dialect == tribute::DIALECT_NAME() && op_name == tribute::VAR() {
-            if let Ok(var_op) = tribute::Var::from_operation(self.db, *op) {
-                let name = var_op.name(self.db);
-
-                if !seen_names.contains(&name)
-                    && let Some(ty) = self.lookup_local(name)
-                {
-                    seen_names.insert(name);
-                    captures.push(CaptureInfo { name, ty });
-                }
-            }
-            return;
-        }
 
         // Skip nested lambdas - they handle their own captures
         if dialect == tribute::DIALECT_NAME() && op_name == tribute::LAMBDA() {
             return;
         }
 
+        // Check operands for captures (values defined outside this lambda)
+        for operand in op.operands(self.db).iter() {
+            if seen_values.contains(operand) {
+                continue;
+            }
+
+            if let ValueDef::BlockArg(block_id) = operand.def(self.db) {
+                // If the block is not local to this lambda, it's a capture
+                if !local_blocks.contains(&block_id) {
+                    seen_values.insert(*operand);
+
+                    // Try to get the name from block arg attribute
+                    if let Some(arg_types) = self.block_args.get(&block_id) {
+                        let index = operand.index(self.db);
+                        if index < arg_types.len() {
+                            // Look up the name from the outer scope
+                            if let Some((name, ty)) = self.find_capture_name_and_type(*operand) {
+                                captures.push(CaptureInfo { name, ty });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Recurse into nested regions
         for region in op.regions(self.db).iter() {
-            self.find_captures_in_region(region, captures, seen_names);
+            self.find_captures_in_region(region, local_blocks, captures, seen_values);
         }
+    }
+
+    /// Find the name and type of a captured value by looking it up in local scopes.
+    fn find_capture_name_and_type(&self, value: Value<'db>) -> Option<(Symbol, Type<'db>)> {
+        // Look through scopes to find which name maps to this value's type
+        // Since we track Symbol -> Type in scopes, we need to match by position
+        if let ValueDef::BlockArg(block_id) = value.def(self.db) {
+            let index = value.index(self.db);
+
+            // Find the name in our scope that corresponds to this block arg
+            for scope in self.local_scopes.iter().rev() {
+                for (name, ty) in scope.iter() {
+                    // Check if this is the right parameter
+                    if let Some(arg_types) = self.block_args.get(&block_id) {
+                        if index < arg_types.len() && arg_types[index] == *ty {
+                            return Some((*name, *ty));
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 }
 
@@ -530,23 +547,15 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
     /// Extract parameter names from tribute.var ops at the start of a block
     /// and map them to block argument values.
     fn extract_param_bindings(&mut self, block: &Block<'db>) {
-        let ops = block.operations(self.db);
         let block_id = block.id(self.db);
-        let mut param_idx = 0;
+        let args = block.args(self.db);
 
-        for op in ops.iter() {
-            // Check if this is a tribute.var (parameter declaration)
-            if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::VAR()
+        for (i, arg) in args.iter().enumerate() {
+            if let Some(Attribute::Symbol(name)) =
+                arg.get_attr(self.db, tribute::block_arg_attrs::BIND_NAME())
             {
-                if let Ok(var_op) = tribute::Var::from_operation(self.db, *op) {
-                    let name = var_op.name(self.db);
-                    let block_arg = Value::new(self.db, ValueDef::BlockArg(block_id), param_idx);
-                    self.add_local(name, block_arg);
-                    param_idx += 1;
-                }
-            } else {
-                // Non-var op means we're past parameter declarations
-                break;
+                let block_arg = Value::new(self.db, ValueDef::BlockArg(block_id), i);
+                self.add_local(*name, block_arg);
             }
         }
     }
@@ -912,38 +921,11 @@ impl<'db, 'a> LambdaTransformer<'db, 'a> {
                     }
 
                     // Process operations from original body
+                    // Note: tribute.var no longer exists - params are block args,
+                    // and captures are resolved by value mapping
                     let ops = orig_block.operations(db);
-                    let mut param_decl_count = 0;
 
                     for op in ops.iter() {
-                        // Handle tribute.var ops - either parameter declarations or captured refs
-                        if let Ok(var_op) = tribute::Var::from_operation(db, *op) {
-                            let var_name = var_op.name(db);
-
-                            // Check if this is a parameter declaration (first N tribute.var ops)
-                            if param_decl_count < param_count {
-                                // This is a parameter declaration
-                                // Map its result to the shifted block arg
-                                // New layout: [evidence?, env, params...]
-                                let orig_result = op.result(db, 0);
-                                let new_arg =
-                                    entry.block_arg(db, param_decl_count + env_offset + 1);
-                                value_map.insert(orig_result, new_arg);
-                                param_decl_count += 1;
-                                // Don't emit the tribute.var op - params are block args now
-                                continue;
-                            }
-
-                            // Check if this is a captured variable reference
-                            if let Some(&extracted_val) = capture_values.get(&var_name) {
-                                // Map the tribute.var result to the extracted value
-                                let orig_result = op.result(db, 0);
-                                value_map.insert(orig_result, extracted_val);
-                                // Don't emit the tribute.var op - we use the extracted value
-                                continue;
-                            }
-                        }
-
                         // Handle tribute.yield -> func.return conversion
                         if op.dialect(db) == tribute::DIALECT_NAME()
                             && op.name(db) == tribute::YIELD()
@@ -1037,18 +1019,8 @@ fn transform_block_for_captures<'db>(
     let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
 
     for op in block.operations(db).iter() {
-        // Handle tribute.var - map captured variables
-        if let Ok(var_op) = tribute::Var::from_operation(db, *op) {
-            let var_name = var_op.name(db);
-
-            if let Some(&extracted_val) = capture_values.get(&var_name) {
-                // Map this var's result to the captured value
-                let orig_result = op.result(db, 0);
-                value_map.insert(orig_result, extracted_val);
-                // Don't emit the tribute.var - it's now the captured value
-                continue;
-            }
-        }
+        // Note: tribute.var no longer exists. Captures are now handled
+        // by direct value mapping since tirgen resolves locals directly.
 
         // Remap operands
         let remapped_operands: IdVec<Value<'db>> = op
@@ -1185,64 +1157,47 @@ mod tests {
     fn build_module_with_capture(db: &dyn salsa::Database) -> core::Module<'_> {
         let location = test_location(db);
         let lambda_loc = lambda_location(db, 50);
+        let i64_ty = *core::I64::new(db);
 
         core::Module::build(db, location, Symbol::new("test"), |top| {
-            top.op(func::Func::build(
+            top.op(func::Func::build_with_named_params(
                 db,
                 location,
                 "outer",
-                idvec![*core::I64::new(db)],
-                *core::I64::new(db),
-                |entry| {
-                    // Parameter x
-                    let x_var = entry.op(tribute::var(
-                        db,
-                        location,
-                        *core::I64::new(db),
-                        Symbol::new("x"),
-                    ));
+                None,
+                vec![(i64_ty, Some(Symbol::new("x")))],
+                i64_ty,
+                None,
+                |entry, args| {
+                    // Parameter x is the first block argument
+                    let x_arg_value = args[0];
 
                     // Lambda that captures x: fn(y) { x + y }
-                    let lambda_type =
-                        core::Func::new(db, idvec![*core::I64::new(db)], *core::I64::new(db))
-                            .as_type();
+                    let lambda_type = core::Func::new(db, idvec![i64_ty], i64_ty).as_type();
+
+                    // Create lambda body block ID first so we can reference its block arg
+                    let lambda_block_id = BlockId::fresh();
+                    let y_arg_value = Value::new(db, ValueDef::BlockArg(lambda_block_id), 0);
 
                     let lambda_body = Region::new(
                         db,
                         lambda_loc,
                         idvec![Block::new(
                             db,
-                            BlockId::fresh(),
+                            lambda_block_id,
                             lambda_loc,
-                            idvec![BlockArg::of_type(db, *core::I64::new(db))],
+                            idvec![BlockArg::with_attr(
+                                db,
+                                i64_ty,
+                                tribute::block_arg_attrs::BIND_NAME(),
+                                Attribute::Symbol(Symbol::new("y"))
+                            )],
                             {
                                 let mut ops = IdVec::new();
-                                // Parameter y declaration
-                                let y_var = tribute::var(
-                                    db,
-                                    lambda_loc,
-                                    *core::I64::new(db),
-                                    Symbol::new("y"),
-                                );
-                                ops.push(y_var.as_operation());
 
-                                // Reference to captured x
-                                let x_ref = tribute::var(
-                                    db,
-                                    lambda_loc,
-                                    *core::I64::new(db),
-                                    Symbol::new("x"),
-                                );
-                                ops.push(x_ref.as_operation());
-
-                                // x + y
-                                let add_op = arith::add(
-                                    db,
-                                    lambda_loc,
-                                    x_ref.result(db),
-                                    y_var.result(db),
-                                    *core::I64::new(db),
-                                );
+                                // x + y (x is captured from outer, y is lambda's block arg)
+                                let add_op =
+                                    arith::add(db, lambda_loc, x_arg_value, y_arg_value, i64_ty);
                                 ops.push(add_op.as_operation());
 
                                 // yield result
@@ -1261,7 +1216,6 @@ mod tests {
                         lambda_body,
                     ));
 
-                    let _ = x_var;
                     entry.op(func::Return::value(db, location, lambda.result(db)));
                 },
             ));
@@ -1290,6 +1244,7 @@ mod tests {
     fn build_module_with_simple_lambda(db: &dyn salsa::Database) -> core::Module<'_> {
         let location = test_location(db);
         let lambda_loc = lambda_location(db, 50);
+        let i64_ty = *core::I64::new(db);
 
         core::Module::build(db, location, Symbol::new("test"), |top| {
             top.op(func::Func::build(
@@ -1297,31 +1252,27 @@ mod tests {
                 location,
                 "main",
                 idvec![],
-                *core::I64::new(db),
+                i64_ty,
                 |entry| {
                     // Simple lambda: fn(x) { x }
-                    let lambda_type =
-                        core::Func::new(db, idvec![*core::I64::new(db)], *core::I64::new(db))
-                            .as_type();
+                    let lambda_type = core::Func::new(db, idvec![i64_ty], i64_ty).as_type();
+
+                    // Create lambda body block ID first so we can reference its block arg
+                    let lambda_block_id = BlockId::fresh();
+                    let x_arg_value = Value::new(db, ValueDef::BlockArg(lambda_block_id), 0);
 
                     let lambda_body = Region::new(
                         db,
                         lambda_loc,
                         idvec![Block::new(
                             db,
-                            BlockId::fresh(),
+                            lambda_block_id,
                             lambda_loc,
-                            idvec![BlockArg::of_type(db, *core::I64::new(db))],
+                            idvec![BlockArg::of_type(db, i64_ty)],
                             {
                                 let mut ops = IdVec::new();
-                                let x_var = tribute::var(
-                                    db,
-                                    lambda_loc,
-                                    *core::I64::new(db),
-                                    Symbol::new("x"),
-                                );
-                                ops.push(x_var.as_operation());
-                                let yield_op = tribute::r#yield(db, lambda_loc, x_var.result(db));
+                                // yield the block argument directly
+                                let yield_op = tribute::r#yield(db, lambda_loc, x_arg_value);
                                 ops.push(yield_op.as_operation());
                                 ops
                             },

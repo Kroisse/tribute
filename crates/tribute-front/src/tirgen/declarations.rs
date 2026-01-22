@@ -217,13 +217,13 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
             named_params,
             result,
             Some(effect_type),
-            |entry| {
-                // Bind parameters
-                for param_name in param_names_clone {
-                    let infer_ty = ctx.fresh_type_var();
-                    let param_value =
-                        entry.op(tribute::var(ctx.db, location, infer_ty, param_name));
-                    ctx.bind(param_name, param_value.result(ctx.db));
+            |entry, arg_values| {
+                // Bind parameters directly from block arguments
+                for (param_name, param_value) in param_names_clone
+                    .into_iter()
+                    .zip(arg_values.iter().copied())
+                {
+                    ctx.bind(param_name, param_value);
                 }
 
                 // Lower body statements

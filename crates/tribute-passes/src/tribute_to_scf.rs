@@ -362,7 +362,7 @@ impl<'db> CaseLowerer<'db> {
         let expected_types: Vec<_> = op.results(self.db).iter().copied().collect();
 
         // Extract values based on pattern structure
-        let extracted =
+        let (extracted, extraction_ops) =
             self.extract_values_from_pattern(location, pattern_region, value, &expected_types);
 
         // Map each result of tribute.let to the corresponding extracted value
@@ -371,17 +371,8 @@ impl<'db> CaseLowerer<'db> {
             self.ctx.map_value(let_result, extracted_value);
         }
 
-        // tribute.let is erased - the extracted values are produced by extraction ops
-        // which are generated elsewhere (e.g., in build_arm_chain for case, or inline for let)
-        // For now, we don't emit the extraction ops here because they would need to be
-        // inserted at the right place. Instead, we rely on the pattern matching to be
-        // resolved at a higher level.
-        //
-        // Actually, for let statements, we need to emit the extraction operations.
-        // Let's generate them here.
-        // tribute.let is erased - the values are mapped to extracted values
-        // No operations to emit since extraction ops are generated inline
-        vec![]
+        // Return the extraction operations (tribute.let is erased)
+        extraction_ops
     }
 
     fn rebuild_case(
@@ -581,6 +572,12 @@ impl<'db> CaseLowerer<'db> {
         // Get entry block and its arguments
         let entry_block = arm.body.blocks(self.db).first().copied();
 
+        // Collect operations to prepend (cast + extraction ops)
+        let mut ops_to_prepend: Vec<Operation<'db>> = Vec::new();
+        if let Some(cast) = cast_op {
+            ops_to_prepend.push(cast);
+        }
+
         // Extract values from pattern and map to block arguments
         if let (Some(pattern_region), Some(block)) = (arm.pattern_region, entry_block) {
             let block_args = block.args(self.db);
@@ -588,14 +585,22 @@ impl<'db> CaseLowerer<'db> {
 
             // Collect expected types from block args
             let expected_types: Vec<_> = block_args.iter().map(|arg| arg.ty(self.db)).collect();
+            tracing::debug!(
+                "lower_arm_body: expected_types from block_args: {:?}",
+                expected_types
+                    .iter()
+                    .map(|t| format!("{}.{}", t.dialect(self.db), t.name(self.db)))
+                    .collect::<Vec<_>>()
+            );
 
             // Extract values based on pattern structure, using expected types
-            let extracted_values = self.extract_values_from_pattern(
+            let (extracted_values, extraction_ops) = self.extract_values_from_pattern(
                 location,
                 pattern_region,
                 base_value,
                 &expected_types,
             );
+            ops_to_prepend.extend(extraction_ops);
 
             // Map each block argument to its extracted value
             for (i, &extracted) in extracted_values.iter().enumerate() {
@@ -610,9 +615,9 @@ impl<'db> CaseLowerer<'db> {
         // Lower the body (block arg references will be resolved via ctx)
         let lowered = self.lower_region(arm.body);
 
-        // If we created a cast op, prepend it to the first block
-        if let Some(cast) = cast_op {
-            self.prepend_op_to_region(lowered, cast)
+        // Prepend cast and extraction operations to the first block
+        if !ops_to_prepend.is_empty() {
+            self.prepend_ops_to_region(lowered, ops_to_prepend)
         } else {
             lowered
         }
@@ -631,8 +636,9 @@ impl<'db> CaseLowerer<'db> {
         pattern_region: Region<'db>,
         base_value: Value<'db>,
         expected_types: &[Type<'db>],
-    ) -> Vec<Value<'db>> {
+    ) -> (Vec<Value<'db>>, Vec<Operation<'db>>) {
         let mut values = Vec::new();
+        let mut ops = Vec::new();
         let mut type_idx = 0;
         self.extract_values_recursive(
             location,
@@ -641,13 +647,15 @@ impl<'db> CaseLowerer<'db> {
             expected_types,
             &mut type_idx,
             &mut values,
+            &mut ops,
         );
-        values
+        (values, ops)
     }
 
     /// Recursively extract values from a pattern region.
     ///
     /// `type_idx` tracks the current index into `expected_types` for binding types.
+    /// `ops` collects the extraction operations that need to be added to the IR.
     fn extract_values_recursive(
         &mut self,
         location: Location<'db>,
@@ -656,6 +664,7 @@ impl<'db> CaseLowerer<'db> {
         expected_types: &[Type<'db>],
         type_idx: &mut usize,
         values: &mut Vec<Value<'db>>,
+        ops: &mut Vec<Operation<'db>>,
     ) {
         for block in region.blocks(self.db).iter() {
             for op in block.operations(self.db).iter().copied() {
@@ -674,26 +683,77 @@ impl<'db> CaseLowerer<'db> {
                 } else if op_name == tribute_pat::VARIANT() {
                     // Variant: recurse into fields with field extraction
                     if let Some(fields_region) = op.regions(self.db).first().copied() {
+                        // Get the variant tag from the pattern
+                        let variant_tag = op
+                            .attributes(self.db)
+                            .get(&Symbol::new("variant"))
+                            .and_then(|attr| match attr {
+                                Attribute::Symbol(s) => Some(*s),
+                                _ => None,
+                            });
+
+                        // Get field types from the enum type definition
+                        let enum_ty = self.value_type(current_value);
+                        tracing::debug!(
+                            "extract_values_recursive: VARIANT {:?}, enum_ty={:?}",
+                            variant_tag,
+                            enum_ty.map(|ty| format!(
+                                "{}.{}",
+                                ty.dialect(self.db),
+                                ty.name(self.db)
+                            ))
+                        );
+                        let variant_field_types: Option<Vec<Type<'db>>> =
+                            enum_ty.and_then(|ty| {
+                                if let Some(tag) = variant_tag {
+                                    let variants = adt::get_enum_variants(self.db, ty);
+                                    tracing::debug!(
+                                        "extract_values_recursive: get_enum_variants returned {:?}",
+                                        variants.as_ref().map(|v| v.len())
+                                    );
+                                    variants.and_then(|variants| {
+                                        variants
+                                            .into_iter()
+                                            .find(|(name, _)| *name == tag)
+                                            .map(|(_, fields)| {
+                                                tracing::debug!(
+                                                    "extract_values_recursive: variant {:?} fields: {:?}",
+                                                    tag,
+                                                    fields.iter().map(|t| format!("{}.{}", t.dialect(self.db), t.name(self.db))).collect::<Vec<_>>()
+                                                );
+                                                fields
+                                            })
+                                    })
+                                } else {
+                                    None
+                                }
+                            });
+
                         // Extract field values using variant_get for each nested pattern
                         let mut field_idx = 0u64;
                         for field_block in fields_region.blocks(self.db).iter() {
                             for field_op in field_block.operations(self.db).iter().copied() {
-                                // Use the expected type from block args if available
-                                let field_ty =
-                                    expected_types.get(*type_idx).copied().unwrap_or_else(|| {
+                                // Use the actual field type from enum definition if available,
+                                // otherwise fall back to expected_types (binding types)
+                                let field_ty = variant_field_types
+                                    .as_ref()
+                                    .and_then(|types| types.get(field_idx as usize).copied())
+                                    .or_else(|| expected_types.get(*type_idx).copied())
+                                    .unwrap_or_else(|| {
                                         tribute::new_type_var(
                                             self.db,
                                             std::collections::BTreeMap::new(),
                                         )
                                     });
-                                let field_val = adt::variant_get(
+                                let variant_get_op = adt::variant_get(
                                     self.db,
                                     location,
                                     current_value,
                                     field_ty,
                                     field_idx.into(),
-                                )
-                                .result(self.db);
+                                );
+                                let field_val = variant_get_op.result(self.db);
+                                ops.push(variant_get_op.as_operation());
 
                                 // Recurse into the field pattern
                                 let field_region = Region::new(
@@ -714,6 +774,7 @@ impl<'db> CaseLowerer<'db> {
                                     expected_types,
                                     type_idx,
                                     values,
+                                    ops,
                                 );
                                 field_idx += 1;
                             }
@@ -736,14 +797,15 @@ impl<'db> CaseLowerer<'db> {
                                             std::collections::BTreeMap::new(),
                                         )
                                     });
-                                let elem_val = tribute::call(
+                                let tuple_call_op = tribute::call(
                                     self.db,
                                     location,
                                     vec![current_value],
                                     elem_ty,
                                     tuple_get_name,
-                                )
-                                .result(self.db);
+                                );
+                                let elem_val = tuple_call_op.result(self.db);
+                                ops.push(tuple_call_op.as_operation());
 
                                 // Recurse into the element pattern
                                 let elem_region = Region::new(
@@ -764,6 +826,7 @@ impl<'db> CaseLowerer<'db> {
                                     expected_types,
                                     type_idx,
                                     values,
+                                    ops,
                                 );
                                 elem_idx += 1;
                             }
@@ -781,6 +844,7 @@ impl<'db> CaseLowerer<'db> {
                             expected_types,
                             type_idx,
                             values,
+                            ops,
                         );
                     }
                 } else if op_name == tribute_pat::LITERAL() {
@@ -796,6 +860,7 @@ impl<'db> CaseLowerer<'db> {
                             expected_types,
                             type_idx,
                             values,
+                            ops,
                         );
                     }
                 }
@@ -803,15 +868,19 @@ impl<'db> CaseLowerer<'db> {
         }
     }
 
-    /// Prepend an operation to the first block of a region.
-    fn prepend_op_to_region(&self, region: Region<'db>, op: Operation<'db>) -> Region<'db> {
+    /// Prepend multiple operations to the first block of a region.
+    fn prepend_ops_to_region(
+        &self,
+        region: Region<'db>,
+        ops_to_prepend: Vec<Operation<'db>>,
+    ) -> Region<'db> {
         let blocks = region.blocks(self.db);
-        if blocks.is_empty() {
+        if blocks.is_empty() || ops_to_prepend.is_empty() {
             return region;
         }
 
         let first_block = blocks[0];
-        let mut new_ops = IdVec::from(vec![op]);
+        let mut new_ops = IdVec::from(ops_to_prepend);
         new_ops.extend(first_block.operations(self.db).iter().copied());
 
         let new_first_block = Block::new(
