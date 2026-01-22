@@ -1338,27 +1338,32 @@ impl<'db> Resolver<'db> {
     /// Resolve a function's entry block, binding parameters.
     ///
     /// Parameter names are read from block argument `bind_name` attributes
-    /// (set by tirgen) and added to the local scope.
+    /// (set by tirgen) and added to the local scope. If a block argument lacks
+    /// a `bind_name` attribute (e.g., generated functions), a positional name
+    /// like `arg0`, `arg1` is used as a fallback to ensure all parameters are
+    /// bound and can be referenced.
     fn resolve_func_entry_block(&mut self, block: &Block<'db>) -> Block<'db> {
         let block_args = block.args(self.db);
         let operations = block.operations(self.db);
 
         // Extract parameter names from block arg attributes and add to scope
         for (i, arg) in block_args.iter().enumerate() {
-            if let Some(Attribute::Symbol(name)) =
-                arg.get_attr(self.db, tribute::block_arg_attrs::BIND_NAME())
-            {
-                let block_arg = Value::new(self.db, ValueDef::BlockArg(block.id(self.db)), i);
-                let param_ty = arg.ty(self.db);
+            // Try to get bind_name attribute, fall back to positional name
+            let name = match arg.get_attr(self.db, tribute::block_arg_attrs::BIND_NAME()) {
+                Some(Attribute::Symbol(name)) => *name,
+                _ => Symbol::from_dynamic(&format!("arg{}", i)),
+            };
 
-                self.add_local(
-                    *name,
-                    LocalBinding::Parameter {
-                        value: block_arg,
-                        ty: param_ty,
-                    },
-                );
-            }
+            let block_arg = Value::new(self.db, ValueDef::BlockArg(block.id(self.db)), i);
+            let param_ty = arg.ty(self.db);
+
+            self.add_local(
+                name,
+                LocalBinding::Parameter {
+                    value: block_arg,
+                    ty: param_ty,
+                },
+            );
         }
 
         let new_args = self.resolve_block_args(block_args.iter());
