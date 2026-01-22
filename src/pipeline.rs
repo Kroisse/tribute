@@ -107,6 +107,7 @@ use tribute_wasm_backend::{WasmBinary, compile_to_wasm};
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::dialect::core::Module;
+use trunk_ir::rewrite::ConversionError;
 use trunk_ir::transforms::eliminate_dead_functions;
 use trunk_ir::{Block, BlockId, IdVec, Region, Symbol};
 
@@ -403,7 +404,10 @@ pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Mod
 /// Must run after TDNR (which preserves tribute.ref for LSP) and before
 /// code generation passes that don't understand tribute.ref.
 #[salsa::tracked]
-pub fn stage_inline_refs<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+pub fn stage_inline_refs<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Result<Module<'db>, ConversionError> {
     inline_refs(db, module)
 }
 
@@ -465,7 +469,7 @@ pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, module: Module<'db>) ->
 pub fn stage_handler_lower<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
-) -> Result<Module<'db>, trunk_ir::rewrite::ConversionError> {
+) -> Result<Module<'db>, ConversionError> {
     lower_handlers(db, module)
 }
 
@@ -486,7 +490,7 @@ pub fn stage_handler_lower<'db>(
 pub fn stage_cont_to_trampoline<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
-) -> Result<Module<'db>, trunk_ir::rewrite::ConversionError> {
+) -> Result<Module<'db>, ConversionError> {
     lower_cont_to_trampoline(db, module)
 }
 
@@ -593,20 +597,26 @@ pub fn run_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<
 
 /// Run pipeline up to lambda lift stage.
 #[salsa::tracked]
-pub fn run_lambda_lift<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+pub fn run_lambda_lift<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Module<'db>, ConversionError> {
     let module = run_tdnr(db, source);
     let module = stage_const_inline(db, module);
-    let module = stage_inline_refs(db, module);
+    let module = stage_inline_refs(db, module)?;
     let module = stage_boxing(db, module);
     let module = stage_evidence_params(db, module);
-    stage_lambda_lift(db, module)
+    Ok(stage_lambda_lift(db, module))
 }
 
 /// Run pipeline up to closure lower stage.
 #[salsa::tracked]
-pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = run_lambda_lift(db, source);
-    stage_closure_lower(db, module)
+pub fn run_closure_lower<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Module<'db>, ConversionError> {
+    let module = run_lambda_lift(db, source)?;
+    Ok(stage_closure_lower(db, module))
 }
 
 // =============================================================================
@@ -621,9 +631,9 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 pub fn compile<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-) -> Result<Module<'db>, trunk_ir::rewrite::ConversionError> {
+) -> Result<Module<'db>, ConversionError> {
     // Frontend + closure processing (up to inline_refs)
-    let module = run_closure_lower(db, source);
+    let module = run_closure_lower(db, source)?;
 
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
     let module = stage_evidence_calls(db, module);
@@ -652,7 +662,7 @@ pub fn compile_to_wasm_binary<'db>(
     source: SourceCst,
 ) -> Option<WasmBinary<'db>> {
     // Frontend + closure processing (up to inline_refs)
-    let module = run_closure_lower(db, source);
+    let module = run_closure_lower(db, source).ok()?;
 
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
     let module = stage_evidence_calls(db, module);

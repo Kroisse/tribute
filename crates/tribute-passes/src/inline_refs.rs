@@ -17,7 +17,8 @@
 use tribute_ir::dialect::tribute;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionError, ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    TypeConverter,
 };
 use trunk_ir::{DialectOp, Operation};
 
@@ -47,9 +48,12 @@ impl<'db> RewritePattern<'db> for InlineTributeRefPattern {
 }
 
 /// Inline all `tribute.ref` operations in a module.
-pub fn inline_refs<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+pub fn inline_refs<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Result<Module<'db>, ConversionError> {
     let applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(InlineTributeRefPattern);
-    let target = ConversionTarget::new();
-    applicator.apply_partial(db, module, target).module
+    let target = ConversionTarget::new().illegal_op(tribute::DIALECT_NAME(), tribute::REF());
+    Ok(applicator.apply(db, module, target)?.module)
 }

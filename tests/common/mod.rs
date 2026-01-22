@@ -17,7 +17,7 @@ where
         .expect("Failed to write WASM");
 
     let output = Command::new("wasmtime")
-        .args(["run", "--wasm", "gc", "--invoke", "main"])
+        .args(["run", "--wasm", "gc"])
         .arg(temp_file.path())
         .output()
         .expect("Failed to execute wasmtime");
