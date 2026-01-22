@@ -26,11 +26,17 @@
 //!     ▼ resolve
 //! Module (resolved names)
 //!     │
-//!     ▼ inline_constants
-//! Module (const values inlined)
-//!     │
 //!     ▼ typecheck
 //! Typed Module
+//!     │
+//!     ▼ tdnr
+//! Module (UFCS resolved)
+//!     │
+//!     ▼ const_inline
+//! Module (const values inlined)
+//!     │
+//!     ▼ inline_refs
+//! Module (tribute.ref inlined)
 //!     │
 //!     ▼ boxing
 //! Module (boxing explicit)
@@ -44,9 +50,6 @@
 //!     │
 //!     ▼ closure_lower
 //! Module (closure.* lowered)
-//!     │
-//!     ▼ tdnr
-//! Module (UFCS resolved)
 //!     │
 //!     ▼ evidence_calls (Phase 2)
 //! Module (evidence passed through calls)
