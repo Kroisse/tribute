@@ -6,7 +6,7 @@
 //! ## Dialect Organization
 //!
 //! **Unresolved operations** (eliminated after resolve/TDNR):
-//! - `tribute.var`, `tribute.call`, `tribute.path`, `tribute.binop`
+//! - `tribute.call`, `tribute.path`, `tribute.binop`
 //! - `tribute.type` (unresolved type reference)
 //!
 //! **Type definitions** (metadata):
@@ -37,7 +37,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-use trunk_ir::type_interface::Printable;
+use trunk_ir::type_interface::{PrintContext, Printable};
 use trunk_ir::{Attribute, Attrs, IdVec, Location, Symbol, dialect};
 
 trunk_ir::symbols! {
@@ -103,11 +103,6 @@ dialect! {
         /// This ensures the field name and value are always kept together.
         #[attr(name: Symbol)]
         fn field_arg(value);
-
-        /// `tribute.var` operation: unresolved variable reference (single name).
-        /// May resolve to local binding or module-level definition.
-        #[attr(name: Symbol)]
-        fn var() -> result;
 
         /// `tribute.path` operation: explicitly qualified path reference.
         /// Always refers to a module-level or type-level definition, never local.
@@ -419,8 +414,6 @@ impl<'db> Arm<'db> {
 
 // === Printable interface registrations ===
 
-use std::fmt::Formatter;
-
 // tribute.type -> "Name" or "Name(params...)"
 inventory::submit! {
     Printable::implement("tribute", "type", |db, ty, f| {
@@ -475,7 +468,7 @@ inventory::submit! { Printable::implement("tribute", "tuple_type", print_tuple_t
 fn print_tuple_type(
     db: &dyn salsa::Database,
     ty: trunk_ir::Type<'_>,
-    f: &mut Formatter<'_>,
+    f: &mut PrintContext<'_, '_>,
 ) -> std::fmt::Result {
     let params = ty.params(db);
     if params.is_empty() {
@@ -522,7 +515,7 @@ fn print_tuple_type(
 // NOTE: tribute.int and tribute.nat Printable implementations moved to tribute_rt dialect
 
 /// Convert a variable ID to a readable name (a, b, c, ..., t0, t1, ...).
-fn fmt_var_id(f: &mut Formatter<'_>, id: u64) -> std::fmt::Result {
+fn fmt_var_id(f: &mut PrintContext<'_, '_>, id: u64) -> std::fmt::Result {
     if id < 26 {
         f.write_char((b'a' + id as u8) as char)
     } else {

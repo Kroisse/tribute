@@ -40,11 +40,59 @@
 //! # assert_eq!(printed, "Lorem");
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Formatter, Write};
 use std::sync::LazyLock;
 
+use salsa::plumbing::AsId;
+
 use crate::{Type, ir::Symbol};
+
+/// Context for type printing with cycle detection.
+///
+/// Tracks types currently being printed to detect and handle recursive types.
+pub struct PrintContext<'a, 'f> {
+    /// The formatter to write output to.
+    pub fmt: &'a mut Formatter<'f>,
+    /// Set of type IDs currently being printed (for cycle detection).
+    pub visiting: &'a mut HashSet<salsa::Id>,
+}
+
+impl<'a, 'f> PrintContext<'a, 'f> {
+    /// Create a new print context.
+    pub fn new(fmt: &'a mut Formatter<'f>, visiting: &'a mut HashSet<salsa::Id>) -> Self {
+        Self { fmt, visiting }
+    }
+
+    /// Check if a type is currently being visited (cycle detection).
+    pub fn is_visiting(&self, ty: Type<'_>) -> bool {
+        self.visiting.contains(&ty.as_id())
+    }
+
+    /// Mark a type as being visited. Returns false if already visiting (cycle detected).
+    pub fn enter(&mut self, ty: Type<'_>) -> bool {
+        self.visiting.insert(ty.as_id())
+    }
+
+    /// Mark a type as no longer being visited.
+    pub fn exit(&mut self, ty: Type<'_>) {
+        self.visiting.remove(&ty.as_id());
+    }
+}
+
+impl fmt::Write for PrintContext<'_, '_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.fmt.write_str(s)
+    }
+
+    fn write_char(&mut self, c: char) -> fmt::Result {
+        self.fmt.write_char(c)
+    }
+
+    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result {
+        self.fmt.write_fmt(args)
+    }
+}
 
 /// Type name matching strategy for interface registration.
 #[derive(Clone, Copy, Debug)]
@@ -56,7 +104,9 @@ pub enum TypeMatcher {
 }
 
 /// Function type for printing a type.
-pub type PrintFn = fn(&dyn salsa::Database, Type<'_>, &mut Formatter<'_>) -> fmt::Result;
+///
+/// The `PrintContext` provides the formatter and cycle detection state.
+pub type PrintFn = fn(&dyn salsa::Database, Type<'_>, &mut PrintContext<'_, '_>) -> fmt::Result;
 
 /// Registration entry for the Printable interface.
 ///
@@ -190,24 +240,33 @@ impl Printable {
         }
     }
 
-    /// Print a type to a formatter.
+    /// Print a type to a formatter with cycle detection.
     ///
     /// Looks up the registered print function for the type's dialect and name.
     /// Falls back to `dialect.name(params...)` format for unregistered types.
+    /// Detects recursive types and prints `...` to avoid infinite loops.
     pub fn print_type(
         db: &dyn salsa::Database,
         ty: Type<'_>,
-        f: &mut Formatter<'_>,
+        f: &mut PrintContext<'_, '_>,
     ) -> fmt::Result {
+        // Cycle detection: if we're already printing this type, emit placeholder
+        if !f.enter(ty) {
+            return f.write_str("...");
+        }
+
         let dialect = ty.dialect(db);
         let name = ty.name(db);
 
-        if let Some(print_fn) = REGISTRY.lookup(dialect, name) {
+        let result = if let Some(print_fn) = REGISTRY.lookup(dialect, name) {
             print_fn(db, ty, f)
         } else {
             // Fallback: dialect.name or dialect.name(params...)
             Self::print_fallback(db, dialect, name, ty, f)
-        }
+        };
+
+        f.exit(ty);
+        result
     }
 
     /// Fallback printing for unregistered types.
@@ -216,7 +275,7 @@ impl Printable {
         dialect: Symbol,
         name: Symbol,
         ty: Type<'_>,
-        f: &mut Formatter<'_>,
+        f: &mut PrintContext<'_, '_>,
     ) -> fmt::Result {
         let params = ty.params(db);
 
@@ -255,7 +314,9 @@ where
 
 impl fmt::Display for TypeDisplay<'_, '_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Printable::print_type(self.db, self.ty, f)
+        let mut visiting = HashSet::new();
+        let mut ctx = PrintContext::new(f, &mut visiting);
+        Printable::print_type(self.db, self.ty, &mut ctx)
     }
 }
 

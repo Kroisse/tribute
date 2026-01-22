@@ -29,6 +29,8 @@
 //! }
 //! ```
 
+use std::fmt::Write;
+
 use trunk_ir::dialect;
 
 dialect! {

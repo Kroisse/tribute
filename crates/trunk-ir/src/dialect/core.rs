@@ -549,9 +549,9 @@ impl<'db> DialectType<'db> for AbilityRefType<'db> {
 
 // === Printable interface registrations ===
 
-use std::fmt::{self, Formatter, Write};
+use std::fmt::{self, Write};
 
-use crate::type_interface::Printable;
+use crate::type_interface::{PrintContext, Printable};
 
 // nil -> "()"
 inventory::submit! { Printable::implement("core", "nil", |_, _, f| f.write_str("()")) }
@@ -591,7 +591,7 @@ inventory::submit! {
 // func -> "fn(a, b) ->{eff} c"
 inventory::submit! { Printable::implement("core", "func", print_func) }
 
-fn print_func(db: &dyn salsa::Database, ty: Type<'_>, f: &mut Formatter<'_>) -> fmt::Result {
+fn print_func(db: &dyn salsa::Database, ty: Type<'_>, f: &mut PrintContext<'_, '_>) -> fmt::Result {
     let Some(func) = Func::from_type(db, ty) else {
         return f.write_str("fn(?)");
     };
@@ -660,7 +660,7 @@ inventory::submit! {
 fn print_effect_row_inner(
     db: &dyn salsa::Database,
     row: &EffectRowType<'_>,
-    f: &mut Formatter<'_>,
+    f: &mut PrintContext<'_, '_>,
 ) -> fmt::Result {
     if row.is_empty(db) {
         return Ok(());
@@ -739,7 +739,7 @@ inventory::submit! {
 }
 
 /// Convert a variable ID to a readable name (a, b, c, ..., t0, t1, ...).
-fn fmt_var_id(f: &mut Formatter<'_>, id: u64) -> fmt::Result {
+fn fmt_var_id(f: &mut PrintContext<'_, '_>, id: u64) -> fmt::Result {
     if id < 26 {
         f.write_char((b'a' + id as u8) as char)
     } else {
