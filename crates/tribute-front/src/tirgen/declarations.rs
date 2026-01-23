@@ -217,13 +217,13 @@ pub fn lower_function<'db>(ctx: &mut CstLoweringCtx<'db>, node: Node) -> Option<
             named_params,
             result,
             Some(effect_type),
-            |entry| {
-                // Bind parameters
-                for param_name in param_names_clone {
-                    let infer_ty = ctx.fresh_type_var();
-                    let param_value =
-                        entry.op(tribute::var(ctx.db, location, infer_ty, param_name));
-                    ctx.bind(param_name, param_value.result(ctx.db));
+            |entry, arg_values| {
+                // Bind parameters directly from block arguments
+                for (param_name, param_value) in param_names_clone
+                    .into_iter()
+                    .zip(arg_values.iter().copied())
+                {
+                    ctx.bind(param_name, param_value);
                 }
 
                 // Lower body statements
@@ -420,7 +420,7 @@ fn generate_field_getter<'db>(
                 self_value,
                 field_type,
                 struct_ty,
-                Attribute::IntBits(field_index as u64),
+                field_index as u64,
             ));
             entry.op(func::Return::value(
                 ctx.db,
@@ -507,12 +507,7 @@ fn generate_field_set<'db>(
                     field_values.push(new_value);
                 } else {
                     let extracted = entry.op(adt::struct_get(
-                        ctx.db,
-                        location,
-                        self_value,
-                        *fty,
-                        struct_ty,
-                        Attribute::IntBits(i as u64),
+                        ctx.db, location, self_value, *fty, struct_ty, i as u64,
                     ));
                     field_values.push(extracted.result(ctx.db));
                 }
@@ -566,7 +561,7 @@ fn generate_field_modify<'db>(
                 self_value,
                 field_type,
                 struct_ty,
-                Attribute::IntBits(field_index as u64),
+                field_index as u64,
             ));
 
             // Apply f to get new value
@@ -585,12 +580,7 @@ fn generate_field_modify<'db>(
                     field_values.push(new_field_value.result(ctx.db));
                 } else {
                     let extracted = entry.op(adt::struct_get(
-                        ctx.db,
-                        location,
-                        self_value,
-                        *fty,
-                        struct_ty,
-                        Attribute::IntBits(i as u64),
+                        ctx.db, location, self_value, *fty, struct_ty, i as u64,
                     ));
                     field_values.push(extracted.result(ctx.db));
                 }

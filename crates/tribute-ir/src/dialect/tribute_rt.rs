@@ -35,6 +35,8 @@
 //! | intref  | i31ref      | tagged pointer   |
 //! | any     | anyref      | universal ref    |
 
+use std::fmt::Write;
+
 use trunk_ir::dialect;
 
 dialect! {

@@ -5,6 +5,7 @@
 use tracing::trace;
 use tree_sitter::Node;
 use tribute_ir::ModulePathExt;
+use tribute_ir::dialect::tribute::block_arg_attrs::{BIND_LOCATION, BIND_NAME};
 use tribute_ir::dialect::{list, tribute, tribute_pat};
 use trunk_ir::dialect::adt;
 use trunk_ir::{
@@ -25,7 +26,7 @@ use super::literals::{
     parse_bytes_literal, parse_float_literal, parse_int_literal, parse_nat_literal,
     parse_rune_literal, parse_string_literal,
 };
-use super::statements::{bind_pattern, lower_block_body};
+use super::statements::lower_block_body;
 
 // =============================================================================
 // Expression Lowering
@@ -136,12 +137,18 @@ pub fn lower_expr<'db>(
 
         // === Identifiers and paths ===
         "identifier" => {
-            // Always create tribute.var for variable references, even for local bindings.
-            // This preserves the source span for hover. Resolution will transform
-            // local references to identity operations with the correct type.
-            let name = node_text(&node, &ctx.source);
-            let op = block.op(tribute::var(ctx.db, location, infer_ty, name.into()));
-            Some(op.result(ctx.db))
+            let name: Symbol = node_text(&node, &ctx.source).into();
+            if let Some(value) = ctx.lookup(name) {
+                // Local binding found - wrap with tribute.ref to preserve source location
+                // Use infer_ty since typechecker will unify with the actual value type
+                let op = block.op(tribute::r#ref(ctx.db, location, value, infer_ty, name));
+                Some(op.result(ctx.db))
+            } else {
+                // Module-level reference (constructor, function, etc.)
+                // Use tribute.path - resolve pass will handle it
+                let op = block.op(tribute::path(ctx.db, location, infer_ty, name));
+                Some(op.result(ctx.db))
+            }
         }
         "path_expression" => {
             let segments = collect_path_segments(ctx, node);
@@ -393,19 +400,13 @@ fn lower_call_expr<'db>(
             let name = sym_ref(&node_text(&func_node, &ctx.source));
             let args = collect_argument_list(ctx, block, node);
             if let Some(callee) = ctx.lookup(name) {
-                let op = block.op(func::call_indirect(
-                    ctx.db, location, callee, args, infer_ty,
-                ));
-                Some(op.result(ctx.db))
-            } else if ctx.is_local(name) {
-                let callee_ty = ctx.fresh_type_var();
-                let callee_op = block.op(tribute::var(ctx.db, location, callee_ty, name));
-                let callee = callee_op.result(ctx.db);
+                // Local binding found - indirect call
                 let op = block.op(func::call_indirect(
                     ctx.db, location, callee, args, infer_ty,
                 ));
                 Some(op.result(ctx.db))
             } else {
+                // Unresolved function call - resolve pass will handle
                 let op = block.op(tribute::call(ctx.db, location, args, infer_ty, name));
                 Some(op.result(ctx.db))
             }
@@ -585,11 +586,16 @@ fn lower_lambda_expr<'db>(
             .attr(Symbol::new("bind_name"), param_name);
     }
 
+    // Flush pending args so we can access them via block_arg()
+    body_block.flush_pending_arg();
+    let arg_values: IdVec<Value<'_>> = (0..param_names.len())
+        .map(|i| body_block.block_arg(ctx.db, i))
+        .collect();
+
     let result_value = ctx.scoped(|ctx| {
-        // Bind parameters
-        for param_name in param_names {
-            let param_value = body_block.op(tribute::var(ctx.db, location, infer_ty, param_name));
-            ctx.bind(param_name, param_value.result(ctx.db));
+        // Bind parameters directly from block arguments
+        for (param_name, param_value) in param_names.into_iter().zip(arg_values.iter().copied()) {
+            ctx.bind(param_name, param_value);
         }
 
         // Lower body
@@ -656,13 +662,19 @@ fn lower_case_expr<'db>(
 }
 
 /// Lower a single case arm.
+///
+/// Pattern bindings are represented as block arguments on the body region's entry block.
+/// Each block argument has `bind_name` and `bind_location` attributes for LSP support.
+/// The downstream pass (tribute_to_scf) extracts values from the scrutinee and passes
+/// them as arguments to the body block.
 fn lower_case_arm<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     node: Node,
-    scrutinee: Value<'db>,
+    _scrutinee: Value<'db>,
 ) -> Option<tribute::Arm<'db>> {
     let mut cursor = node.walk();
     let location = ctx.location(&node);
+    let infer_ty = ctx.fresh_type_var();
 
     let mut pattern_node = None;
     let mut body_node = None;
@@ -681,24 +693,253 @@ fn lower_case_arm<'db>(
     let pattern_node = pattern_node?;
     let body_node = body_node?;
 
-    // Create arm body
+    // 1. Collect bindings from pattern (name + location)
+    let bindings = collect_pattern_bindings(ctx, pattern_node);
+
+    // 2. Create body block with block arguments for each binding
     let mut body_block = BlockBuilder::new(ctx.db, location);
+    for binding in &bindings {
+        body_block = body_block
+            .arg(infer_ty)
+            .attr(BIND_NAME(), binding.name)
+            .attr(BIND_LOCATION(), Attribute::Location(binding.location));
+    }
+
+    // 3. Lower body with bindings registered to block arguments
+    // Flush pending arg to ensure all args are finalized before access
+    body_block.flush_pending_arg();
 
     let result_value = ctx.scoped(|ctx| {
-        // Bind pattern variables (including handler patterns)
-        bind_pattern(ctx, &mut body_block, pattern_node, scrutinee);
+        // Register each binding to its corresponding block argument
+        for (i, binding) in bindings.iter().enumerate() {
+            let block_arg = body_block.block_arg(ctx.db, i);
+            ctx.bind(binding.name, block_arg);
+        }
 
-        // Lower body
+        // Lower body expression
         lower_expr(ctx, &mut body_block, body_node)
     });
 
     let result_value = result_value?;
     body_block.op(tribute::r#yield(ctx.db, location, result_value));
 
+    // 4. Create pattern region (pure structure, no extraction ops)
     let pattern_region = pattern_to_region(ctx, pattern_node);
     let body_region = Region::new(ctx.db, location, idvec![body_block.build()]);
 
     Some(tribute::arm(ctx.db, location, pattern_region, body_region))
+}
+
+/// Binding information collected from a pattern.
+#[derive(Debug, Clone)]
+pub struct PatternBinding<'db> {
+    pub name: Symbol,
+    pub location: trunk_ir::Location<'db>,
+}
+
+/// Collect all bindings from a pattern node.
+///
+/// Returns bindings in the same order that `pattern_to_region` would produce them.
+/// This is used to create block arguments for case arm bodies.
+pub fn collect_pattern_bindings<'db>(
+    ctx: &CstLoweringCtx<'db>,
+    node: Node,
+) -> Vec<PatternBinding<'db>> {
+    let location = ctx.location(&node);
+    let mut bindings = Vec::new();
+
+    match node.kind() {
+        // Wrapper nodes - unwrap and recurse
+        "pattern" | "simple_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                return collect_pattern_bindings(ctx, child);
+            }
+        }
+        "identifier" | "identifier_pattern" => {
+            // Handle identifier_pattern which may have an inner identifier
+            let name = if node.kind() == "identifier_pattern" {
+                let mut cursor = node.walk();
+                node.named_children(&mut cursor)
+                    .next()
+                    .map(|child| node_text(&child, &ctx.source))
+                    .unwrap_or_else(|| node_text(&node, &ctx.source))
+            } else {
+                node_text(&node, &ctx.source)
+            };
+            bindings.push(PatternBinding {
+                name: name.into(),
+                location,
+            });
+        }
+        "wildcard_pattern" | "literal_pattern" | "nat_literal" | "int_literal" | "true"
+        | "keyword_true" | "false" | "keyword_false" | "nil" | "keyword_nil" | "string"
+        | "raw_string" | "multiline_string" => {
+            // These patterns don't introduce bindings
+        }
+        "constructor_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                match child.kind() {
+                    "type_identifier" => {
+                        // Skip the constructor name
+                    }
+                    "pattern_list" => {
+                        let mut list_cursor = child.walk();
+                        for pat_child in child.named_children(&mut list_cursor) {
+                            if !is_comment(pat_child.kind()) {
+                                bindings.extend(collect_pattern_bindings(ctx, pat_child));
+                            }
+                        }
+                    }
+                    "pattern_fields" => {
+                        let mut fields_cursor = child.walk();
+                        for field_child in child.named_children(&mut fields_cursor) {
+                            if field_child.kind() == "pattern_field" {
+                                let mut field_cursor = field_child.walk();
+                                for pat in field_child.named_children(&mut field_cursor) {
+                                    if !is_comment(pat.kind()) {
+                                        bindings.extend(collect_pattern_bindings(ctx, pat));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "tuple_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                if child.kind() == "pattern_list" {
+                    let mut list_cursor = child.walk();
+                    for pat_child in child.named_children(&mut list_cursor) {
+                        if !is_comment(pat_child.kind()) {
+                            bindings.extend(collect_pattern_bindings(ctx, pat_child));
+                        }
+                    }
+                }
+            }
+        }
+        "list_pattern" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                if child.kind() == "rest_pattern" {
+                    let mut rest_cursor = child.walk();
+                    for rest_child in child.named_children(&mut rest_cursor) {
+                        if rest_child.kind() == "identifier" {
+                            bindings.push(PatternBinding {
+                                name: node_text(&rest_child, &ctx.source).into(),
+                                location: ctx.location(&rest_child),
+                            });
+                            break;
+                        }
+                    }
+                } else {
+                    bindings.extend(collect_pattern_bindings(ctx, child));
+                }
+            }
+        }
+        "as_pattern" => {
+            let mut cursor = node.walk();
+            let mut inner_processed = false;
+
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                match child.kind() {
+                    "identifier" => {
+                        bindings.push(PatternBinding {
+                            name: node_text(&child, &ctx.source).into(),
+                            location: ctx.location(&child),
+                        });
+                    }
+                    _ if !inner_processed => {
+                        // Recurse into inner pattern
+                        bindings.extend(collect_pattern_bindings(ctx, child));
+                        inner_processed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "handler_pattern" => {
+            // Handler patterns: { result } or { Op(args) -> k }
+            collect_handler_pattern_bindings(ctx, node, &mut bindings);
+        }
+        _ => {}
+    }
+
+    bindings
+}
+
+/// Collect bindings from handler patterns.
+fn collect_handler_pattern_bindings<'db>(
+    ctx: &CstLoweringCtx<'db>,
+    node: Node,
+    bindings: &mut Vec<PatternBinding<'db>>,
+) {
+    let mut cursor = node.walk();
+
+    for child in node.named_children(&mut cursor) {
+        if is_comment(child.kind()) {
+            continue;
+        }
+        match child.kind() {
+            // Done pattern: { result }
+            "identifier" | "identifier_pattern" => {
+                // The result variable binding
+                bindings.push(PatternBinding {
+                    name: node_text(&child, &ctx.source).into(),
+                    location: ctx.location(&child),
+                });
+            }
+            // Suspend pattern: { Op(args) -> k }
+            "handler_suspend" => {
+                let mut suspend_cursor = child.walk();
+                for suspend_child in child.named_children(&mut suspend_cursor) {
+                    if is_comment(suspend_child.kind()) {
+                        continue;
+                    }
+                    match suspend_child.kind() {
+                        "pattern_list" => {
+                            // Arguments pattern bindings
+                            let mut list_cursor = suspend_child.walk();
+                            for pat_child in suspend_child.named_children(&mut list_cursor) {
+                                if !is_comment(pat_child.kind()) {
+                                    bindings.extend(collect_pattern_bindings(ctx, pat_child));
+                                }
+                            }
+                        }
+                        "identifier" => {
+                            // Continuation binding (k)
+                            bindings.push(PatternBinding {
+                                name: node_text(&suspend_child, &ctx.source).into(),
+                                location: ctx.location(&suspend_child),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Convert a pattern node to a pattern region for case arms and let bindings.
@@ -1064,9 +1305,10 @@ fn lower_record_expr<'db>(
                         if let Some(value) = ctx.lookup(field_name) {
                             field_values.push(value);
                         } else {
-                            let var_op =
-                                block.op(tribute::var(ctx.db, location, infer_ty, field_name));
-                            field_values.push(var_op.result(ctx.db));
+                            // Module-level reference - use tribute.path
+                            let path_op =
+                                block.op(tribute::path(ctx.db, location, infer_ty, field_name));
+                            field_values.push(path_op.result(ctx.db));
                         }
                     } else {
                         // Full syntax: { name: value }

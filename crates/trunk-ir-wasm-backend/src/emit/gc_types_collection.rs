@@ -238,6 +238,7 @@ fn attr_u32<'db>(
 fn attr_field_idx<'db>(
     attrs: &std::collections::BTreeMap<Symbol, Attribute<'db>>,
 ) -> CompilationResult<u32> {
+    // Try field_idx first (wasm dialect), then field (adt dialect)
     attr_u32(attrs, ATTR_FIELD_IDX()).or_else(|_| attr_u32(attrs, ATTR_FIELD()))
 }
 

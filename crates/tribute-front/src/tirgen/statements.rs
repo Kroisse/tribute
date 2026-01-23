@@ -1,13 +1,12 @@
 //! Block and statement lowering.
 
 use tree_sitter::Node;
-use tribute_ir::dialect::{list, tribute};
-use trunk_ir::dialect::adt;
-use trunk_ir::{BlockBuilder, Value, dialect::arith};
+use tribute_ir::dialect::tribute;
+use trunk_ir::{BlockBuilder, Value};
 
 use super::context::CstLoweringCtx;
-use super::expressions::{lower_expr, pattern_to_region};
-use super::helpers::{is_comment, node_text, sym_ref};
+use super::expressions::{collect_pattern_bindings, lower_expr, pattern_to_region};
+use super::helpers::is_comment;
 
 // =============================================================================
 // Block and Statement Lowering
@@ -59,8 +58,18 @@ pub fn lower_block_body<'db>(
 
 /// Lower a let statement.
 ///
-/// Generates a `tribute.let` operation with a pattern region for name resolution,
-/// and also calls `bind_pattern` to register bindings in the lowering context.
+/// Generates a `tribute.let` operation that returns one result per binding.
+/// The downstream pass (tribute_to_scf) extracts values from the input and
+/// produces the actual result values.
+///
+/// Example:
+/// ```text
+/// let #(x, y) = pair;
+/// // generates:
+/// %x, %y = tribute.let %pair {
+///     tribute_pat.tuple { tribute_pat.bind("x"), tribute_pat.bind("y") }
+/// }
+/// ```
 pub fn lower_let_statement<'db>(
     ctx: &mut CstLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
@@ -75,256 +84,30 @@ pub fn lower_let_statement<'db>(
     let Some(value_node) = node.child_by_field_name("value") else {
         return;
     };
-    if let Some(value) = lower_expr(ctx, block, value_node) {
-        // Generate tribute.let with pattern region for resolver
-        let pattern_region = pattern_to_region(ctx, pattern_node);
-        block.op(tribute::r#let(ctx.db, location, value, pattern_region));
 
-        // Also bind in context for tirgen's own use during lowering
-        bind_pattern(ctx, block, pattern_node, value);
-    }
-}
+    let Some(value) = lower_expr(ctx, block, value_node) else {
+        return;
+    };
 
-/// Bind a pattern to a value, emitting extraction operations as needed.
-pub fn bind_pattern<'db>(
-    ctx: &mut CstLoweringCtx<'db>,
-    block: &mut BlockBuilder<'db>,
-    pattern: Node,
-    value: Value<'db>,
-) {
-    let location = ctx.location(&pattern);
-    let infer_ty = ctx.fresh_type_var();
+    // 1. Collect bindings from pattern
+    let bindings = collect_pattern_bindings(ctx, pattern_node);
 
-    match pattern.kind() {
-        "identifier" | "identifier_pattern" => {
-            let name = node_text(&pattern, &ctx.source).into();
-            ctx.bind(name, value);
-        }
-        "wildcard_pattern" => {
-            // Discard - no binding
-        }
-        "as_pattern" => {
-            // Bind the whole value to the name, then recurse on inner pattern
-            // Use field-based access
-            if let Some(binding_node) = pattern.child_by_field_name("binding") {
-                let name = node_text(&binding_node, &ctx.source).into();
-                ctx.bind(name, value);
-            }
-            if let Some(inner_pattern) = pattern.child_by_field_name("pattern") {
-                bind_pattern(ctx, block, inner_pattern, value);
-            }
-        }
-        "literal_pattern" => {
-            // Literal patterns in let bindings don't introduce bindings
-            // They just assert the value matches - no action needed
-        }
-        "constructor_pattern" => {
-            // Destructure variant: let Some(x) = opt
-            let mut cursor = pattern.walk();
-            let mut idx = 0;
+    // 2. Generate result types (one type variable per binding)
+    let result_types: Vec<_> = bindings.iter().map(|_| ctx.fresh_type_var()).collect();
 
-            for child in pattern.named_children(&mut cursor) {
-                if is_comment(child.kind()) {
-                    continue;
-                }
-                match child.kind() {
-                    "type_identifier" => {
-                        // Skip the constructor name
-                    }
-                    "pattern_list" => {
-                        // Positional fields: Some(x, y)
-                        let mut list_cursor = child.walk();
-                        for pat_child in child.named_children(&mut list_cursor) {
-                            if is_comment(pat_child.kind()) {
-                                continue;
-                            }
-                            let field_value = block
-                                .op(adt::variant_get(
-                                    ctx.db,
-                                    location,
-                                    value,
-                                    infer_ty,
-                                    (idx as u64).into(),
-                                ))
-                                .result(ctx.db);
-                            bind_pattern(ctx, block, pat_child, field_value);
-                            idx += 1;
-                        }
-                    }
-                    "pattern_fields" => {
-                        // Named fields: Point { x, y }
-                        let mut fields_cursor = child.walk();
-                        for field_child in child.named_children(&mut fields_cursor) {
-                            if field_child.kind() == "pattern_field" {
-                                let field_value = block
-                                    .op(adt::variant_get(
-                                        ctx.db,
-                                        location,
-                                        value,
-                                        infer_ty,
-                                        (idx as u64).into(),
-                                    ))
-                                    .result(ctx.db);
+    // 3. Generate tribute.let with pattern region and result types
+    let pattern_region = pattern_to_region(ctx, pattern_node);
+    let let_op = block.op(tribute::r#let(
+        ctx.db,
+        location,
+        value,
+        result_types.iter().copied(),
+        pattern_region,
+    ));
 
-                                // Get the pattern inside the field
-                                let mut field_cursor = field_child.walk();
-                                for pat in field_child.named_children(&mut field_cursor) {
-                                    if !is_comment(pat.kind()) && pat.kind() != "identifier" {
-                                        bind_pattern(ctx, block, pat, field_value);
-                                        break;
-                                    } else if pat.kind() == "identifier" {
-                                        // Shorthand: { name } means { name: name }
-                                        let field_name = node_text(&pat, &ctx.source).into();
-                                        ctx.bind(field_name, field_value);
-                                        break;
-                                    }
-                                }
-                                idx += 1;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        "tuple_pattern" => {
-            // Destructure tuple: let #(a, b, c) = tuple
-            let mut cursor = pattern.walk();
-
-            for child in pattern.named_children(&mut cursor) {
-                if is_comment(child.kind()) {
-                    continue;
-                }
-                if child.kind() == "pattern_list" {
-                    let mut list_cursor = child.walk();
-                    let mut idx = 0;
-                    for pat_child in child.named_children(&mut list_cursor) {
-                        if is_comment(pat_child.kind()) {
-                            continue;
-                        }
-                        let elem_value = block
-                            .op(tribute::call(
-                                ctx.db,
-                                location,
-                                vec![value],
-                                infer_ty,
-                                sym_ref(&format!("tuple_get_{}", idx)),
-                            ))
-                            .result(ctx.db);
-                        bind_pattern(ctx, block, pat_child, elem_value);
-                        idx += 1;
-                    }
-                }
-            }
-        }
-        "list_pattern" => {
-            // Destructure list: let [a, b, ..rest] = list
-            let mut cursor = pattern.walk();
-            let mut idx = 0;
-            let mut rest_pattern = None;
-
-            for child in pattern.named_children(&mut cursor) {
-                if is_comment(child.kind()) {
-                    continue;
-                }
-                if child.kind() == "rest_pattern" {
-                    rest_pattern = Some(child);
-                } else {
-                    // Regular element pattern
-                    let index_value = block
-                        .op(arith::Const::i64(ctx.db, location, idx))
-                        .result(ctx.db);
-                    let elem_ty = ctx.fresh_type_var();
-                    let elem_value = block
-                        .op(list::get(
-                            ctx.db,
-                            location,
-                            value,
-                            index_value,
-                            infer_ty,
-                            elem_ty,
-                        ))
-                        .result(ctx.db);
-                    bind_pattern(ctx, block, child, elem_value);
-                    idx += 1;
-                }
-            }
-
-            // Handle rest pattern: ..rest binds to list[n..]
-            if let Some(rest_node) = rest_pattern {
-                let mut rest_cursor = rest_node.walk();
-                for rest_child in rest_node.named_children(&mut rest_cursor) {
-                    if rest_child.kind() == "identifier" {
-                        let rest_name = node_text(&rest_child, &ctx.source).into();
-                        let start_value = block
-                            .op(arith::Const::i64(ctx.db, location, idx))
-                            .result(ctx.db);
-                        let len_value = block
-                            .op(list::len(ctx.db, location, value, infer_ty))
-                            .result(ctx.db);
-                        let elem_ty = ctx.fresh_type_var();
-                        let rest_value = block
-                            .op(list::slice(
-                                ctx.db,
-                                location,
-                                value,
-                                start_value,
-                                len_value,
-                                infer_ty,
-                                elem_ty,
-                            ))
-                            .result(ctx.db);
-                        ctx.bind(rest_name, rest_value);
-                        break;
-                    }
-                }
-            }
-        }
-        "handler_pattern" => {
-            // Handler patterns: { value } or { Op(args) -> k }
-            // All bindings are handled through tribute_pat.bind in the pattern region.
-            // The resolver registers them as PatternBinding, and case_lowering
-            // remaps tribute.var references to the bound values.
-            // Record continuation/result names as locals so call lowering can pick
-            // call_indirect when needed.
-            let mut cursor = pattern.walk();
-            let mut result_name = None;
-            let mut saw_op = false;
-            let mut continuation_name = None;
-
-            for child in pattern.named_children(&mut cursor) {
-                if is_comment(child.kind()) {
-                    continue;
-                }
-                match child.kind() {
-                    "identifier" => {
-                        if saw_op {
-                            continuation_name = Some(node_text(&child, &ctx.source).into());
-                            break;
-                        } else if result_name.is_none() {
-                            result_name = Some(node_text(&child, &ctx.source).into());
-                        }
-                    }
-                    "path_expression" => {
-                        saw_op = true;
-                    }
-                    _ => {}
-                }
-            }
-
-            if let Some(name) = continuation_name.or(result_name) {
-                ctx.mark_local(name);
-            }
-        }
-        _ => {
-            // Unknown pattern - try to handle child patterns
-            let mut cursor = pattern.walk();
-            for child in pattern.named_children(&mut cursor) {
-                if !is_comment(child.kind()) {
-                    bind_pattern(ctx, block, child, value);
-                    break;
-                }
-            }
-        }
+    // 4. Bind each result to its corresponding name
+    for (i, binding) in bindings.iter().enumerate() {
+        let result_value = let_op.result(ctx.db, i);
+        ctx.bind(binding.name, result_value);
     }
 }

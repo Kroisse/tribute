@@ -116,8 +116,6 @@ struct CaseLowerer<'db> {
     variant_tags: HashMap<Symbol, u32>,
     variant_owner: HashMap<Symbol, Symbol>,
     enum_variants: HashMap<Symbol, SymbolVec>,
-    /// Current arm's pattern bindings: binding name -> bound value (scrutinee)
-    current_arm_bindings: HashMap<Symbol, Value<'db>>,
     /// Block argument types indexed by BlockId
     block_arg_types: HashMap<BlockId, IdVec<Type<'db>>>,
 }
@@ -130,7 +128,6 @@ impl<'db> CaseLowerer<'db> {
             variant_tags: HashMap::new(),
             variant_owner: HashMap::new(),
             enum_variants: HashMap::new(),
-            current_arm_bindings: HashMap::new(),
             block_arg_types: HashMap::new(),
         }
     }
@@ -196,22 +193,13 @@ impl<'db> CaseLowerer<'db> {
             return self.lower_block_expr(op);
         }
 
-        // Handle tribute.var for case pattern bindings: replace with the bound value
-        // This is used when tribute.var in arm body references a tribute_pat.bind from pattern region
-        if op.dialect(self.db) == tribute::DIALECT_NAME()
-            && op.name(self.db) == tribute::VAR()
-            && let Some(Attribute::Symbol(name)) = op.attributes(self.db).get(&Symbol::new("name"))
-            && let Some(&bound_value) = self.current_arm_bindings.get(name)
-        {
-            // Look up the current mapping for the bound value (handles remapping from lowering)
-            let current_bound_value = self.ctx.lookup(bound_value);
-            // Map tribute.var result to the bound value (scrutinee or destructured value)
-            let var_result = op.result(self.db, 0);
-            self.ctx.map_value(var_result, current_bound_value);
-            // Erase the tribute.var operation - value is remapped
-            return vec![];
+        // Handle tribute.let: extract values from pattern and produce results
+        if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::LET() {
+            return self.lower_let(op, remapped_operands);
         }
-        // If binding not found in pattern bindings, keep the operation (regular local variable)
+
+        // Note: tribute.var for pattern bindings is now handled via block args.
+        // tirgen registers bindings to block args, so tribute.var is not emitted for pattern bindings.
 
         let new_regions = op
             .regions(self.db)
@@ -350,6 +338,43 @@ impl<'db> CaseLowerer<'db> {
         ops
     }
 
+    /// Lower `tribute.let` by extracting values from the pattern and producing results.
+    ///
+    /// `tribute.let` now returns multiple results (one per binding).
+    /// This function:
+    /// 1. Extracts values from the input based on the pattern structure
+    /// 2. Maps the let operation's results to the extracted values
+    /// 3. Returns extraction operations (the let itself is erased)
+    fn lower_let(
+        &mut self,
+        op: Operation<'db>,
+        remapped_operands: IdVec<Value<'db>>,
+    ) -> Vec<Operation<'db>> {
+        let location = op.location(self.db);
+        let Some(value) = remapped_operands.first().copied() else {
+            return vec![op];
+        };
+        let Some(pattern_region) = op.regions(self.db).first().copied() else {
+            return vec![op];
+        };
+
+        // Collect expected types from the let operation's results
+        let expected_types: Vec<_> = op.results(self.db).iter().copied().collect();
+
+        // Extract values based on pattern structure
+        let (extracted, extraction_ops) =
+            self.extract_values_from_pattern(location, pattern_region, value, &expected_types);
+
+        // Map each result of tribute.let to the corresponding extracted value
+        for (i, &extracted_value) in extracted.iter().enumerate() {
+            let let_result = op.result(self.db, i);
+            self.ctx.map_value(let_result, extracted_value);
+        }
+
+        // Return the extraction operations (tribute.let is erased)
+        extraction_ops
+    }
+
     fn rebuild_case(
         &mut self,
         op: Operation<'db>,
@@ -458,70 +483,6 @@ impl<'db> CaseLowerer<'db> {
         true
     }
 
-    /// Extract binding names from a pattern region.
-    /// For simple `tribute_pat.bind("x")` patterns, returns the binding name.
-    /// For variant patterns with bindings, returns all nested binding names.
-    fn extract_bindings_from_pattern(&self, region: Region<'db>) -> SymbolVec {
-        let mut bindings = SymbolVec::new();
-        self.collect_bindings_recursive(region, &mut bindings);
-        bindings
-    }
-
-    fn collect_bindings_recursive(&self, region: Region<'db>, bindings: &mut SymbolVec) {
-        for block in region.blocks(self.db).iter() {
-            for op in block.operations(self.db).iter().copied() {
-                if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
-                    && op.name(self.db) == tribute_pat::BIND()
-                    && let Some(Attribute::Symbol(name)) =
-                        op.attributes(self.db).get(&Symbol::new("name"))
-                {
-                    bindings.push(*name);
-                }
-                // Recurse into nested regions (for variant fields, etc.)
-                for nested_region in op.regions(self.db).iter().copied() {
-                    self.collect_bindings_recursive(nested_region, bindings);
-                }
-            }
-        }
-    }
-
-    /// Collect `adt.variant_get` operations from an arm body.
-    /// Returns a map from field index to the result value.
-    fn collect_variant_get_ops(
-        &self,
-        body: Region<'db>,
-        scrutinee: Value<'db>,
-    ) -> HashMap<u64, Value<'db>> {
-        let mut field_extractions = HashMap::new();
-        let expected_ref = self.ctx.lookup(scrutinee);
-
-        for block in body.blocks(self.db).iter() {
-            for op in block.operations(self.db).iter().copied() {
-                if let Ok(vget) = adt::VariantGet::from_operation(self.db, op) {
-                    // Check if this variant_get operates on our scrutinee
-                    let operands = op.operands(self.db);
-                    if !operands.is_empty() {
-                        let ref_operand = operands[0];
-                        // The ref operand may be the original scrutinee
-                        // (tirgen passes scrutinee to variant_get)
-                        if ref_operand == scrutinee
-                            || ref_operand == expected_ref
-                            || self.ctx.lookup(ref_operand) == expected_ref
-                        {
-                            // Get field index from the operation
-                            if let Attribute::IntBits(idx) = vget.field(self.db) {
-                                let result = op.result(self.db, 0);
-                                field_extractions.insert(idx, result);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        field_extractions
-    }
-
     fn is_exhaustive(&self, arms: &[ArmInfo<'db>]) -> bool {
         if matches!(
             arms.last().map(|arm| &arm.pattern),
@@ -578,98 +539,348 @@ impl<'db> CaseLowerer<'db> {
     }
 
     /// Lower an arm body with pattern bindings set up.
-    /// For simple bind patterns, the scrutinee IS the bound value.
-    /// For variant patterns, we insert a `variant_cast` to convert the scrutinee
-    /// to the variant-specific type before field access.
+    ///
+    /// The body block has block arguments corresponding to pattern bindings.
+    /// This function:
+    /// 1. Extracts values from the scrutinee based on the pattern structure
+    /// 2. Maps body block arguments to the extracted values
+    /// 3. Lowers the body with block arg references resolved
     fn lower_arm_body(&mut self, scrutinee: Value<'db>, arm: &ArmInfo<'db>) -> Region<'db> {
         let location = arm.body.location(self.db);
 
         // For variant patterns, create a cast operation to get variant-specific reference
-        let cast_info = if let ArmPattern::Variant(variant_name) = &arm.pattern {
-            // Get the enum type from scrutinee
+        let (cast_op, cast_result) = if let ArmPattern::Variant(variant_name) = &arm.pattern {
             if let Some(enum_type) = self.value_type(scrutinee) {
-                // Create variant_cast: casts scrutinee to variant-specific type
-                // The result type uses the same enum type (will be refined to variant type in lowering)
                 let cast = adt::variant_cast(
                     self.db,
                     location,
                     scrutinee,
-                    enum_type, // result type (will become ref $Enum$Variant)
-                    enum_type, // enum type for the cast
+                    enum_type,
+                    enum_type,
                     *variant_name,
                 )
                 .as_operation();
-
                 let cast_result = cast.result(self.db, 0);
-
-                // Temporarily map scrutinee -> cast result for this arm only
-                self.ctx.map_value(scrutinee, cast_result);
-
-                Some((cast, cast_result))
+                (Some(cast), Some(cast_result))
             } else {
-                None
+                (None, None)
             }
         } else {
-            None
+            (None, None)
         };
 
-        // Extract bindings from pattern and map them to extracted field values
-        if let Some(pattern_region) = arm.pattern_region {
-            let bindings = self.extract_bindings_from_pattern(pattern_region);
+        // Get entry block and its arguments
+        let entry_block = arm.body.blocks(self.db).first().copied();
 
-            if matches!(arm.pattern, ArmPattern::Variant(_)) {
-                // For variant patterns, find adt.variant_get ops in the body
-                // and map bindings to their results (by field index order)
-                let field_extractions = self.collect_variant_get_ops(arm.body, scrutinee);
+        // Collect operations to prepend (cast + extraction ops)
+        let mut ops_to_prepend: Vec<Operation<'db>> = Vec::new();
+        if let Some(cast) = cast_op {
+            ops_to_prepend.push(cast);
+        }
 
-                for (i, name) in bindings.iter().enumerate() {
-                    if let Some(&field_value) = field_extractions.get(&(i as u64)) {
-                        self.current_arm_bindings.insert(*name, field_value);
-                    } else {
-                        // Fallback: use cast result if no variant_get found
-                        let bound_value = self.ctx.lookup(scrutinee);
-                        self.current_arm_bindings.insert(*name, bound_value);
-                    }
-                }
-            } else {
-                // For simple patterns (wildcard, bind, literal), use scrutinee directly
-                let bound_value = self.ctx.lookup(scrutinee);
-                for name in bindings {
-                    self.current_arm_bindings.insert(name, bound_value);
+        // Extract values from pattern and map to block arguments
+        if let (Some(pattern_region), Some(block)) = (arm.pattern_region, entry_block) {
+            let block_args = block.args(self.db);
+            let base_value = cast_result.unwrap_or(scrutinee);
+
+            // Collect expected types from block args
+            let expected_types: Vec<_> = block_args.iter().map(|arg| arg.ty(self.db)).collect();
+            tracing::debug!(
+                "lower_arm_body: expected_types from block_args: {:?}",
+                expected_types
+                    .iter()
+                    .map(|t| format!("{}.{}", t.dialect(self.db), t.name(self.db)))
+                    .collect::<Vec<_>>()
+            );
+
+            // Extract values based on pattern structure, using expected types
+            let (extracted_values, extraction_ops) = self.extract_values_from_pattern(
+                location,
+                pattern_region,
+                base_value,
+                &expected_types,
+            );
+            ops_to_prepend.extend(extraction_ops);
+
+            // Map each block argument to its extracted value
+            for (i, &extracted) in extracted_values.iter().enumerate() {
+                if i < block_args.len() {
+                    let block_arg_value =
+                        Value::new(self.db, ValueDef::BlockArg(block.id(self.db)), i);
+                    self.ctx.map_value(block_arg_value, extracted);
                 }
             }
         }
 
-        // Lower the body with bindings in scope
+        // Lower the body (block arg references will be resolved via ctx)
         let lowered = self.lower_region(arm.body);
 
-        // Clear bindings after processing this arm
-        self.current_arm_bindings.clear();
-
-        // Restore the scrutinee mapping (remove the temporary cast mapping)
-        // This is important so that other arms don't see the cast mapping
-        if cast_info.is_some() {
-            // Reset scrutinee mapping to itself (effectively removing the cast mapping)
-            self.ctx.map_value(scrutinee, scrutinee);
-        }
-
-        // If we created a cast op, prepend it to the first block
-        if let Some((cast_op, _)) = cast_info {
-            self.prepend_op_to_region(lowered, cast_op)
+        // Prepend cast and extraction operations to the first block
+        if !ops_to_prepend.is_empty() {
+            self.prepend_ops_to_region(lowered, ops_to_prepend)
         } else {
             lowered
         }
     }
 
-    /// Prepend an operation to the first block of a region.
-    fn prepend_op_to_region(&self, region: Region<'db>, op: Operation<'db>) -> Region<'db> {
+    /// Extract values from a pattern, generating extraction operations as needed.
+    ///
+    /// Returns a vector of values corresponding to each binding in the pattern.
+    /// The order matches the order of `tribute_pat.bind` operations in the pattern region.
+    ///
+    /// `expected_types` provides the types for each binding (from block args),
+    /// which are used when creating extraction operations.
+    fn extract_values_from_pattern(
+        &mut self,
+        location: Location<'db>,
+        pattern_region: Region<'db>,
+        base_value: Value<'db>,
+        expected_types: &[Type<'db>],
+    ) -> (Vec<Value<'db>>, Vec<Operation<'db>>) {
+        let mut values = Vec::new();
+        let mut ops = Vec::new();
+        let mut type_idx = 0;
+        self.extract_values_recursive(
+            location,
+            pattern_region,
+            base_value,
+            expected_types,
+            &mut type_idx,
+            &mut values,
+            &mut ops,
+        );
+        (values, ops)
+    }
+
+    /// Recursively extract values from a pattern region.
+    ///
+    /// `type_idx` tracks the current index into `expected_types` for binding types.
+    /// `ops` collects the extraction operations that need to be added to the IR.
+    #[allow(clippy::too_many_arguments)]
+    fn extract_values_recursive(
+        &mut self,
+        location: Location<'db>,
+        region: Region<'db>,
+        current_value: Value<'db>,
+        expected_types: &[Type<'db>],
+        type_idx: &mut usize,
+        values: &mut Vec<Value<'db>>,
+        ops: &mut Vec<Operation<'db>>,
+    ) {
+        for block in region.blocks(self.db).iter() {
+            for op in block.operations(self.db).iter().copied() {
+                if op.dialect(self.db) != tribute_pat::DIALECT_NAME() {
+                    continue;
+                }
+
+                let op_name = op.name(self.db);
+
+                if op_name == tribute_pat::BIND() {
+                    // Bind: add current value to extracted values
+                    values.push(current_value);
+                    *type_idx += 1;
+                } else if op_name == tribute_pat::WILDCARD() {
+                    // Wildcard: no binding, nothing to extract
+                } else if op_name == tribute_pat::VARIANT() {
+                    // Variant: recurse into fields with field extraction
+                    if let Some(fields_region) = op.regions(self.db).first().copied() {
+                        // Get the variant tag from the pattern
+                        let variant_tag = op
+                            .attributes(self.db)
+                            .get(&Symbol::new("variant"))
+                            .and_then(|attr| match attr {
+                                Attribute::Symbol(s) => Some(*s),
+                                _ => None,
+                            });
+
+                        // Get field types from the enum type definition
+                        let enum_ty = self.value_type(current_value);
+                        tracing::debug!(
+                            "extract_values_recursive: VARIANT {:?}, enum_ty={:?}",
+                            variant_tag,
+                            enum_ty.map(|ty| format!(
+                                "{}.{}",
+                                ty.dialect(self.db),
+                                ty.name(self.db)
+                            ))
+                        );
+                        let variant_field_types: Option<Vec<Type<'db>>> =
+                            enum_ty.and_then(|ty| {
+                                if let Some(tag) = variant_tag {
+                                    let variants = adt::get_enum_variants(self.db, ty);
+                                    tracing::debug!(
+                                        "extract_values_recursive: get_enum_variants returned {:?}",
+                                        variants.as_ref().map(|v| v.len())
+                                    );
+                                    variants.and_then(|variants| {
+                                        variants
+                                            .into_iter()
+                                            .find(|(name, _)| *name == tag)
+                                            .map(|(_, fields)| {
+                                                tracing::debug!(
+                                                    "extract_values_recursive: variant {:?} fields: {:?}",
+                                                    tag,
+                                                    fields.iter().map(|t| format!("{}.{}", t.dialect(self.db), t.name(self.db))).collect::<Vec<_>>()
+                                                );
+                                                fields
+                                            })
+                                    })
+                                } else {
+                                    None
+                                }
+                            });
+
+                        // Extract field values using variant_get for each nested pattern
+                        let mut field_idx = 0u64;
+                        for field_block in fields_region.blocks(self.db).iter() {
+                            for field_op in field_block.operations(self.db).iter().copied() {
+                                // Use the actual field type from enum definition if available,
+                                // otherwise fall back to expected_types (binding types)
+                                let field_ty = variant_field_types
+                                    .as_ref()
+                                    .and_then(|types| types.get(field_idx as usize).copied())
+                                    .or_else(|| expected_types.get(*type_idx).copied())
+                                    .unwrap_or_else(|| {
+                                        tribute::new_type_var(
+                                            self.db,
+                                            std::collections::BTreeMap::new(),
+                                        )
+                                    });
+                                let variant_get_op = adt::variant_get(
+                                    self.db,
+                                    location,
+                                    current_value,
+                                    field_ty,
+                                    field_idx,
+                                );
+                                let field_val = variant_get_op.result(self.db);
+                                ops.push(variant_get_op.as_operation());
+
+                                // Recurse into the field pattern
+                                let field_region = Region::new(
+                                    self.db,
+                                    location,
+                                    IdVec::from(vec![Block::new(
+                                        self.db,
+                                        BlockId::fresh(),
+                                        location,
+                                        IdVec::new(),
+                                        IdVec::from(vec![field_op]),
+                                    )]),
+                                );
+                                self.extract_values_recursive(
+                                    location,
+                                    field_region,
+                                    field_val,
+                                    expected_types,
+                                    type_idx,
+                                    values,
+                                    ops,
+                                );
+                                field_idx += 1;
+                            }
+                        }
+                    }
+                } else if op_name == tribute_pat::TUPLE() {
+                    // Tuple: treat as anonymous struct, extract each element by index
+                    if let Some(elements_region) = op.regions(self.db).first().copied() {
+                        let mut elem_idx = 0u64;
+                        for elem_block in elements_region.blocks(self.db).iter() {
+                            for elem_op in elem_block.operations(self.db).iter().copied() {
+                                // Use the expected type from block args if available
+                                let elem_ty =
+                                    expected_types.get(*type_idx).copied().unwrap_or_else(|| {
+                                        tribute::new_type_var(
+                                            self.db,
+                                            std::collections::BTreeMap::new(),
+                                        )
+                                    });
+                                // Create tuple element extraction using struct_get with numeric index
+                                let struct_get_op = adt::struct_get(
+                                    self.db,
+                                    location,
+                                    current_value,
+                                    elem_ty,
+                                    elem_ty, // Use element type as struct type placeholder
+                                    elem_idx,
+                                );
+                                let elem_val = struct_get_op.result(self.db);
+                                ops.push(struct_get_op.as_operation());
+
+                                // Recurse into the element pattern
+                                let elem_region = Region::new(
+                                    self.db,
+                                    location,
+                                    IdVec::from(vec![Block::new(
+                                        self.db,
+                                        BlockId::fresh(),
+                                        location,
+                                        IdVec::new(),
+                                        IdVec::from(vec![elem_op]),
+                                    )]),
+                                );
+                                self.extract_values_recursive(
+                                    location,
+                                    elem_region,
+                                    elem_val,
+                                    expected_types,
+                                    type_idx,
+                                    values,
+                                    ops,
+                                );
+                                elem_idx += 1;
+                            }
+                        }
+                    }
+                } else if op_name == tribute_pat::AS_PAT() {
+                    // As pattern: bind the value, then recurse into inner pattern
+                    values.push(current_value);
+                    *type_idx += 1;
+                    if let Some(inner_region) = op.regions(self.db).first().copied() {
+                        self.extract_values_recursive(
+                            location,
+                            inner_region,
+                            current_value,
+                            expected_types,
+                            type_idx,
+                            values,
+                            ops,
+                        );
+                    }
+                } else if op_name == tribute_pat::LITERAL() {
+                    // Literal patterns: no binding
+                }
+                // Other patterns: recurse into nested regions
+                else {
+                    for nested_region in op.regions(self.db).iter().copied() {
+                        self.extract_values_recursive(
+                            location,
+                            nested_region,
+                            current_value,
+                            expected_types,
+                            type_idx,
+                            values,
+                            ops,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Prepend multiple operations to the first block of a region.
+    fn prepend_ops_to_region(
+        &self,
+        region: Region<'db>,
+        ops_to_prepend: Vec<Operation<'db>>,
+    ) -> Region<'db> {
         let blocks = region.blocks(self.db);
-        if blocks.is_empty() {
+        if blocks.is_empty() || ops_to_prepend.is_empty() {
             return region;
         }
 
         let first_block = blocks[0];
-        let mut new_ops = IdVec::from(vec![op]);
+        let mut new_ops = IdVec::from(ops_to_prepend);
         new_ops.extend(first_block.operations(self.db).iter().copied());
 
         let new_first_block = Block::new(

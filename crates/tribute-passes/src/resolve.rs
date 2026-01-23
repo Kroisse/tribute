@@ -718,20 +718,6 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Mark a tribute.var operation as a resolved local binding.
-    fn mark_resolved_local(&self, op: Operation<'db>) -> Operation<'db> {
-        op.modify(self.db)
-            .attr(ATTR_RESOLVED_LOCAL(), Attribute::Bool(true))
-            .build()
-    }
-
-    fn is_marked_resolved_local(&self, op: &Operation<'db>) -> bool {
-        matches!(
-            op.attributes(self.db).get(&ATTR_RESOLVED_LOCAL()),
-            Some(Attribute::Bool(true)) | Some(Attribute::IntBits(1))
-        )
-    }
-
     /// Look up a name in local scopes (innermost first).
     fn lookup_local(&self, name: Symbol) -> Option<&LocalBinding<'db>> {
         for scope in self.local_scopes.iter().rev() {
@@ -964,22 +950,6 @@ impl<'db> Resolver<'db> {
                 // It will be filtered out in wasm lowering phase
                 vec![self.resolve_op_regions(&remapped_op)]
             }
-            (d, n) if d == tribute::DIALECT_NAME() && n == tribute::VAR() => {
-                if let Some(resolved) = self.try_resolve_var(&remapped_op) {
-                    resolved
-                } else {
-                    // Check if this is a resolved local variable.
-                    // The `resolved_local` attribute is set when the var was bound
-                    // to a local (function parameter, let binding, etc.).
-                    // Note: We can't use result type to determine resolution status
-                    // because type inference may assign concrete types to unresolved vars.
-                    let is_resolved_local = self.is_marked_resolved_local(&remapped_op);
-                    if self.report_unresolved && !is_resolved_local {
-                        self.emit_unresolved_var_diagnostic(&remapped_op);
-                    }
-                    vec![self.resolve_op_regions(&remapped_op)]
-                }
-            }
             (d, n) if d == tribute::DIALECT_NAME() && n == tribute::PATH() => {
                 if let Some(resolved) = self.try_resolve_path(&remapped_op) {
                     vec![resolved]
@@ -1154,6 +1124,12 @@ impl<'db> Resolver<'db> {
     /// 3. Let bindings map names directly to values, so effects flow through
     ///
     /// No special handling is needed for effect propagation in let bindings.
+    ///
+    /// ## Multiple Results (Destructuring)
+    ///
+    /// Currently only single-result let bindings are supported. If the operation
+    /// has multiple results (from destructuring patterns), an error is emitted
+    /// since per-result extraction is not yet implemented.
     fn resolve_let(&mut self, op: &Operation<'db>) -> Vec<Operation<'db>> {
         let operands = op.operands(self.db);
         let regions = op.regions(self.db);
@@ -1170,6 +1146,28 @@ impl<'db> Resolver<'db> {
         // For simple patterns like tribute_pat.bind("x"), bind x directly to the value
         // For complex patterns, we need extraction operations
         self.collect_let_bindings(pattern_region, bound_value);
+
+        // Map tribute.let results to the bound value
+        // This ensures that any references to the let result get the correct value
+        let results = op.results(self.db);
+
+        // Fail fast: multiple results would incorrectly alias to the same bound_value
+        // until per-result extraction is implemented for destructuring patterns
+        if results.len() > 1 {
+            self.emit_unsupported_destructuring_diagnostic(op, results.len());
+            // Map all results to bound_value to avoid stale references if compilation continues.
+            // This is a best-effort fallback; the error should prevent successful compilation.
+            for i in 0..results.len() {
+                let old_result = op.result(self.db, i);
+                self.ctx.map_value(old_result, bound_value);
+            }
+            return Vec::new();
+        }
+
+        // Single result case: map the result to the bound value
+        if let Some(old_result) = results.first().map(|_| op.result(self.db, 0)) {
+            self.ctx.map_value(old_result, bound_value);
+        }
 
         // tribute.let is erased from output - the bindings are tracked in scope
         Vec::new()
@@ -1359,76 +1357,40 @@ impl<'db> Resolver<'db> {
 
     /// Resolve a function's entry block, binding parameters.
     ///
-    /// The entry block starts with tribute.var operations that declare parameter names.
-    /// These are mapped to block arguments and erased from output.
+    /// Parameter names are read from block argument `bind_name` attributes
+    /// (set by tirgen) and added to the local scope. If a block argument lacks
+    /// a `bind_name` attribute (e.g., generated functions), a positional name
+    /// like `arg0`, `arg1` is used as a fallback to ensure all parameters are
+    /// bound and can be referenced.
     fn resolve_func_entry_block(&mut self, block: &Block<'db>) -> Block<'db> {
         let block_args = block.args(self.db);
         let operations = block.operations(self.db);
 
-        // Scan for initial tribute.var operations that declare parameters
-        // Only scan up to the number of block arguments
-        // Parameter declarations have the function's overall span (from lower_function)
-        let func_span = block.location(self.db).span;
-        let mut param_declarations = Vec::new();
-        for op in operations.iter() {
-            // Stop early if we've found all expected parameters
-            if param_declarations.len() >= block_args.len() {
-                break;
-            }
+        // Extract parameter names from block arg attributes and add to scope
+        for (i, arg) in block_args.iter().enumerate() {
+            // Try to get bind_name attribute, fall back to positional name
+            let name = match arg.get_attr(self.db, tribute::block_arg_attrs::BIND_NAME()) {
+                Some(Attribute::Symbol(name)) => *name,
+                _ => Symbol::from_dynamic(&format!("arg{}", i)),
+            };
 
-            if op.dialect(self.db) == tribute::DIALECT_NAME() && op.name(self.db) == tribute::VAR()
-            {
-                // Only consider as parameter declaration if span matches function span
-                // Body references have their own specific span, not the function span
-                let op_span = op.location(self.db).span;
-                if op_span != func_span {
-                    break; // Different span means it's a body reference, not a param decl
-                }
+            let block_arg = Value::new(self.db, ValueDef::BlockArg(block.id(self.db)), i);
+            let param_ty = arg.ty(self.db);
 
-                // This is a parameter declaration
-                let attrs = op.attributes(self.db);
-                if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_NAME()) {
-                    param_declarations.push((*sym, *op));
-                } else {
-                    break; // Not a proper tribute.var, stop scanning
-                }
-            } else {
-                break; // No more parameter declarations
-            }
-        }
-
-        // Map parameter names to block argument values
-        for (i, (name, op)) in param_declarations.iter().enumerate() {
-            if i < block_args.len() {
-                // Create block argument value
-                let block_arg = Value::new(self.db, ValueDef::BlockArg(block.id(self.db)), i);
-                let param_ty = block_args[i].ty(self.db);
-
-                // Add to local scope
-                self.add_local(
-                    *name,
-                    LocalBinding::Parameter {
-                        value: block_arg,
-                        ty: param_ty,
-                    },
-                );
-
-                // Map the tribute.var result to the block argument
-                let old_result = op.result(self.db, 0);
-                self.ctx.map_value(old_result, block_arg);
-            }
+            self.add_local(
+                name,
+                LocalBinding::Parameter {
+                    value: block_arg,
+                    ty: param_ty,
+                },
+            );
         }
 
         let new_args = self.resolve_block_args(block_args.iter());
 
-        // Now resolve the block, skipping parameter declaration tribute.var ops
-        let num_param_decls = param_declarations.len();
-
         let new_ops: IdVec<Operation<'db>> = operations
             .iter()
-            .enumerate()
-            .filter(|(i, _)| *i >= num_param_decls) // Skip parameter declarations
-            .flat_map(|(_, op)| self.resolve_operation(op))
+            .flat_map(|op| self.resolve_operation(op))
             .collect();
 
         Block::new(
@@ -1474,176 +1436,42 @@ impl<'db> Resolver<'db> {
 
     /// Try to resolve a `tribute.var` operation.
     ///
-    /// Returns:
-    /// - Some(vec![]) if resolved to a local binding (erased, value already mapped)
-    /// - Some(vec![op]) if resolved to a function/constructor (replaced)
-    /// - None if unresolved
-    fn try_resolve_var(&mut self, op: &Operation<'db>) -> Option<Vec<Operation<'db>>> {
-        let attrs = op.attributes(self.db);
-        let Attribute::Symbol(sym) = attrs.get(&ATTR_NAME())? else {
-            return None;
-        };
-        let name = *sym;
-        let location = op.location(self.db);
-
-        // Special case: Nil is the unit value (built-in)
-        if name == "Nil" {
-            let nil_ty = core::Nil::new(self.db).as_type();
-            // Create a unit value constant - arith.const with nil type produces no runtime value
-            let const_op = arith::r#const(self.db, location, nil_ty, Attribute::Unit);
-            let new_operation = const_op.as_operation();
-
-            // Map old result to new result
-            let old_result = op.result(self.db, 0);
-            let new_result = new_operation.result(self.db, 0);
-            self.ctx.map_value(old_result, new_result);
-
-            return Some(vec![new_operation]);
-        }
-
-        // First, check local scopes (function parameters, let bindings, pattern bindings)
-        if let Some(local) = self.lookup_local(name) {
-            match local {
-                LocalBinding::Parameter { value, ty } | LocalBinding::LetBinding { value, ty } => {
-                    // Local binding found - keep tribute.var with resolved type for hover span
-                    let resolved_ty = self.resolve_type(*ty);
-
-                    // Create new tribute.var with resolved type (keeps span for hover)
-                    let new_op = tribute::var(self.db, location, resolved_ty, *sym);
-                    let new_operation = self.mark_resolved_local(new_op.as_operation());
-
-                    // Map old result to the actual bound value (not the new tribute.var's result)
-                    // This ensures use sites get the correct value
-                    let old_result = op.result(self.db, 0);
-                    self.ctx.map_value(old_result, *value);
-
-                    // Return the new tribute.var to keep it in IR for hover
-                    return Some(vec![new_operation]);
-                }
-                LocalBinding::PatternBinding { ty } => {
-                    // Pattern binding - keep tribute.var with resolved type
-                    // tribute_to_scf will remap the result to the bound value
-                    let resolved_ty = self.resolve_type(*ty);
-                    let new_op = tribute::var(self.db, location, resolved_ty, *sym);
-                    let new_operation = self.mark_resolved_local(new_op.as_operation());
-
-                    // Map old result to new tribute.var result (will be remapped in tribute_to_scf)
-                    let old_result = op.result(self.db, 0);
-                    let new_result = new_operation.result(self.db, 0);
-                    self.ctx.map_value(old_result, new_result);
-
-                    return Some(vec![new_operation]);
-                }
-            }
-        }
-
-        // Then check module environment
-        match self.lookup_binding(name)? {
-            Binding::Function { path, ty } => {
-                // Create func.constant operation
-                // func::constant(db, location, result_type, func_ref)
-                let new_op = func::constant(self.db, location, *ty, *path);
-                let new_operation = new_op.as_operation();
-
-                // Map old result to new result
-                let old_result = op.result(self.db, 0);
-                let new_result = new_operation.result(self.db, 0);
-                self.ctx.map_value(old_result, new_result);
-
-                Some(vec![new_operation])
-            }
-            Binding::Constructor { ty, tag, .. } => {
-                // Create adt.struct_new or adt.variant_new
-                // No args here since tribute.var is just a reference (not a call)
-                let new_operation = if let Some(tag) = tag {
-                    // Enum variant constructor (with tag)
-                    // variant_new(db, location, fields, result_type, ty, tag)
-                    adt::variant_new(self.db, location, vec![], *ty, *ty, *tag).as_operation()
-                } else {
-                    // Struct constructor (no tag)
-                    // struct_new(db, location, fields, result_type, ty)
-                    adt::struct_new(self.db, location, vec![], *ty, *ty).as_operation()
-                };
-
-                // Map old result to new result
-                let old_result = op.result(self.db, 0);
-                let new_result = new_operation.result(self.db, 0);
-                self.ctx.map_value(old_result, new_result);
-
-                Some(vec![new_operation])
-            }
-            Binding::Const { value, ty, .. } => {
-                // Mark as resolved const reference (inlining happens in a separate pass)
-                let resolved_ty = self.resolve_type(*ty);
-
-                // Keep tribute.var but mark it as a resolved const reference
-                // Store the const value in an attribute for the inlining pass
-                let new_op = op
-                    .modify(self.db)
-                    .results(std::iter::once(resolved_ty).collect())
-                    .attr(ATTR_RESOLVED_CONST(), Attribute::Bool(true))
-                    .attr(ATTR_VALUE(), value.clone())
-                    .build();
-
-                // Map old result to new result
-                let old_result = op.result(self.db, 0);
-                let new_result = new_op.result(self.db, 0);
-                self.ctx.map_value(old_result, new_result);
-
-                Some(vec![new_op])
-            }
-            Binding::AbilityOp {
-                ability,
-                op_name,
-                return_ty,
-                ..
-            } => {
-                // Ability operation reference - create ability.perform
-                // NOTE: This case handles `State::get` as a bare reference (rare).
-                // Usually ability calls come through tribute.call + tribute.path which is
-                // handled in try_resolve_call.
-                let resolved_return_ty = self.resolve_type(*return_ty);
-                let new_op = ability::perform(
-                    self.db,
-                    location,
-                    std::iter::empty::<Value<'db>>(),
-                    resolved_return_ty,
-                    *ability,
-                    *op_name,
-                );
-
-                let old_result = op.result(self.db, 0);
-                let new_result = new_op.as_operation().result(self.db, 0);
-                self.ctx.map_value(old_result, new_result);
-
-                Some(vec![new_op.as_operation()])
-            }
-            Binding::TypeDef { .. } | Binding::Module { .. } => {
-                // Type used in value position - error (leave unresolved for diagnostics)
-                None
-            }
-        }
-    }
-
     /// Try to resolve a `tribute.path` operation.
+    ///
+    /// Handles both qualified paths (e.g., `std::List::map`) and simple names
+    /// (e.g., `None`, `True`) that refer to module-level definitions.
     fn try_resolve_path(&mut self, op: &Operation<'db>) -> Option<Operation<'db>> {
         let attrs = op.attributes(self.db);
         let Attribute::Symbol(path) = attrs.get(&ATTR_PATH())? else {
             return None;
         };
 
-        if path.is_simple() {
-            return None;
-        }
-
         let location = op.location(self.db);
 
-        // First try direct lookup in definitions, then fall back to namespace lookup
-        let binding = self.env.lookup_path(*path).or_else(|| {
-            // Fall back to namespace lookup for enum variants, etc.
-            let namespace = path.parent_path()?;
-            self.env.lookup_qualified(namespace, path.last_segment())
-        })?;
+        // Special case: Nil is the unit value (built-in)
+        if *path == "Nil" {
+            let nil_ty = core::Nil::new(self.db).as_type();
+            let const_op = arith::r#const(self.db, location, nil_ty, Attribute::Unit);
+            let new_operation = const_op.as_operation();
+
+            let old_result = op.result(self.db, 0);
+            let new_result = new_operation.result(self.db, 0);
+            self.ctx.map_value(old_result, new_result);
+
+            return Some(new_operation);
+        }
+
+        // Lookup binding - simple name or qualified path
+        let binding = if path.is_simple() {
+            // Simple name - lookup in module environment
+            self.lookup_binding(*path)?
+        } else {
+            // Qualified path - try direct lookup, then namespace lookup
+            self.env.lookup_path(*path).or_else(|| {
+                let namespace = path.parent_path()?;
+                self.env.lookup_qualified(namespace, path.last_segment())
+            })?
+        };
 
         match binding {
             Binding::Function { path, ty } => {
@@ -1658,10 +1486,8 @@ impl<'db> Resolver<'db> {
             }
             Binding::Constructor { ty, tag, .. } => {
                 let new_operation = if let Some(tag) = tag {
-                    // variant_new(db, location, fields, result_type, ty, tag)
                     adt::variant_new(self.db, location, vec![], *ty, *ty, *tag).as_operation()
                 } else {
-                    // struct_new(db, location, fields, result_type, ty)
                     adt::struct_new(self.db, location, vec![], *ty, *ty).as_operation()
                 };
 
@@ -1671,11 +1497,17 @@ impl<'db> Resolver<'db> {
 
                 Some(new_operation)
             }
-            Binding::Const { .. } => {
-                // Qualified const reference (e.g., Module::CONST)
-                // Not commonly used, but handle similarly to unqualified const
-                // For now, leave unresolved (could be implemented if needed)
-                None
+            Binding::Const { value, ty, .. } => {
+                // Const reference - directly lower to arith.const
+                let resolved_ty = self.resolve_type(*ty);
+                let new_op = arith::r#const(self.db, location, resolved_ty, value.clone());
+                let new_operation = new_op.as_operation();
+
+                let old_result = op.result(self.db, 0);
+                let new_result = new_operation.result(self.db, 0);
+                self.ctx.map_value(old_result, new_result);
+
+                Some(new_operation)
             }
             Binding::AbilityOp {
                 ability,
@@ -1683,8 +1515,6 @@ impl<'db> Resolver<'db> {
                 return_ty,
                 ..
             } => {
-                // Ability operation reference via path (e.g., State::get as a value)
-                // This creates an ability.perform with no arguments
                 let resolved_return_ty = self.resolve_type(*return_ty);
                 let new_op = ability::perform(
                     self.db,
@@ -1883,7 +1713,7 @@ impl<'db> Resolver<'db> {
             ty,
             tag,
             field_names,
-            ..
+            params,
         }) = binding
         else {
             return vec![];
@@ -1948,15 +1778,9 @@ impl<'db> Resolver<'db> {
             } else if has_spread {
                 // Get field from base using adt.struct_get
                 let base = base_value.unwrap();
-                let field_ty = ty; // TODO: Get actual field type from struct definition
-                let struct_get = adt::struct_get(
-                    self.db,
-                    location,
-                    base,
-                    field_ty,
-                    ty,
-                    Attribute::IntBits(field_idx as u64),
-                );
+                let field_ty = params.get(field_idx).copied().unwrap_or(ty);
+                let struct_get =
+                    adt::struct_get(self.db, location, base, field_ty, ty, field_idx as u64);
                 let field_val = struct_get.result(self.db);
 
                 all_ops.push(struct_get.as_operation());
@@ -1979,29 +1803,6 @@ impl<'db> Resolver<'db> {
     }
 
     // === Diagnostic Helpers ===
-
-    /// Emit diagnostic for unresolved `tribute.var`.
-    fn emit_unresolved_var_diagnostic(&self, op: &Operation<'db>) {
-        let name = op
-            .attributes(self.db)
-            .get(&ATTR_NAME())
-            .and_then(|a| {
-                if let Attribute::Symbol(s) = a {
-                    Some(s.to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "unknown".to_string());
-
-        Diagnostic {
-            message: format!("unresolved name: `{}`", name),
-            span: op.location(self.db).span,
-            severity: DiagnosticSeverity::Error,
-            phase: CompilationPhase::NameResolution,
-        }
-        .accumulate(self.db);
-    }
 
     /// Emit diagnostic for unresolved `tribute.path`.
     fn emit_unresolved_path_diagnostic(&self, op: &Operation<'db>) {
@@ -2065,6 +1866,24 @@ impl<'db> Resolver<'db> {
 
         Diagnostic {
             message: format!("unresolved constructor: `{}`", name),
+            span: op.location(self.db).span,
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::NameResolution,
+        }
+        .accumulate(self.db);
+    }
+
+    /// Emit diagnostic for unsupported destructuring in let bindings.
+    ///
+    /// This is triggered when a tribute.let operation has multiple results,
+    /// which would require per-result extraction that isn't yet implemented.
+    fn emit_unsupported_destructuring_diagnostic(&self, op: &Operation<'db>, result_count: usize) {
+        Diagnostic {
+            message: format!(
+                "destructuring let bindings with {} results not yet supported; \
+                 use simple patterns or separate bindings",
+                result_count
+            ),
             span: op.location(self.db).span,
             severity: DiagnosticSeverity::Error,
             phase: CompilationPhase::NameResolution,
@@ -2451,7 +2270,7 @@ pub mod tests {
             top.op(const_op);
 
             let func_op = func::Func::build(db, location, "test", idvec![], int_ty, |entry| {
-                let const_ref = entry.op(tribute::var(db, location, int_ty, max_size_sym));
+                let const_ref = entry.op(tribute::path(db, location, int_ty, max_size_sym));
                 entry.op(func::Return::value(db, location, const_ref.result(db)));
             });
             top.op(func_op);
@@ -2497,34 +2316,30 @@ pub mod tests {
         let mut ops = Vec::new();
         collect_ops(db, &resolved.body(db), &mut ops);
 
-        let max_size_sym = Symbol::new("MAX_SIZE");
-        let const_refs: Vec<_> = ops
+        // Const references are now directly lowered to arith.const
+        let const_ops: Vec<_> = ops
             .iter()
-            .filter(|op| {
-                op.dialect(db) == "tribute"
-                    && op.name(db) == "var"
-                    && matches!(
-                        op.attributes(db).get(&ATTR_NAME()),
-                        Some(Attribute::Symbol(sym)) if *sym == max_size_sym
-                    )
-            })
+            .filter(|op| op.dialect(db) == arith::DIALECT_NAME() && op.name(db) == arith::CONST())
             .collect();
 
-        assert!(!const_refs.is_empty(), "should find const reference");
+        assert!(
+            !const_ops.is_empty(),
+            "should find arith.const from const reference"
+        );
 
-        for const_ref in const_refs {
-            let attrs = const_ref.attributes(db);
-            assert_eq!(
-                attrs.get(&ATTR_RESOLVED_CONST()),
-                Some(&Attribute::Bool(true)),
-                "const reference should be marked with resolved_const"
-            );
-            assert_eq!(
-                attrs.get(&ATTR_VALUE()),
-                Some(&Attribute::IntBits(1024)),
-                "const reference should have value attribute for inlining pass"
-            );
-        }
+        // Find the one with value 1024 (our MAX_SIZE constant)
+        let value_sym = Symbol::new("value");
+        let max_size_const = const_ops.iter().find(|op| {
+            matches!(
+                op.attributes(db).get(&value_sym),
+                Some(Attribute::IntBits(1024))
+            )
+        });
+
+        assert!(
+            max_size_const.is_some(),
+            "should find arith.const with value 1024"
+        );
     }
 
     /// Create a module with a let binding: fn main() { let x = 42; x }
@@ -2549,19 +2364,18 @@ pub mod tests {
                 // %0 = arith.const 42
                 let const_val = entry.op(arith::Const::i64(db, location, 42));
 
-                // tribute.let(%0) { tribute_pat.bind("x") }
-                entry.op(tribute::r#let(
+                // tribute.let(%0) { tribute_pat.bind("x") } -> %result
+                // Result type is the inferred type (1 binding = 1 result)
+                let let_op = entry.op(tribute::r#let(
                     db,
                     location,
                     const_val.result(db),
+                    std::iter::once(infer_ty),
                     pattern_region,
                 ));
 
-                // %1 = tribute.var("x")
-                let var_ref = entry.op(tribute::var(db, location, infer_ty, Symbol::new("x")));
-
-                // return %1
-                entry.op(func::Return::value(db, location, var_ref.result(db)));
+                // return the let binding result directly
+                entry.op(func::Return::value(db, location, let_op.result(db, 0)));
             },
         );
 
@@ -2585,8 +2399,7 @@ pub mod tests {
 
         // After resolution:
         // 1. tribute.let should be erased
-        // 2. tribute.var("x") should be marked as resolved_local
-        // 3. The value mapping should connect the var to the const result
+        // 2. The let result value is used directly by func.return
 
         // Check that tribute.let is erased
         let let_ops: Vec<_> = ops
@@ -2598,30 +2411,15 @@ pub mod tests {
             "tribute.let should be erased after resolution"
         );
 
-        // Check that tribute.var("x") is resolved
-        let x_sym = Symbol::new("x");
-        let var_refs: Vec<_> = ops
+        // Check that func.return exists and uses the resolved value
+        let return_ops: Vec<_> = ops
             .iter()
-            .filter(|op| {
-                op.dialect(db) == "tribute"
-                    && op.name(db) == "var"
-                    && matches!(
-                        op.attributes(db).get(&ATTR_NAME()),
-                        Some(Attribute::Symbol(sym)) if *sym == x_sym
-                    )
-            })
+            .filter(|op| op.dialect(db) == "func" && op.name(db) == "return")
             .collect();
-
-        assert!(!var_refs.is_empty(), "should find tribute.var(x) reference");
-
-        for var_ref in var_refs {
-            let attrs = var_ref.attributes(db);
-            assert_eq!(
-                attrs.get(&ATTR_RESOLVED_LOCAL()),
-                Some(&Attribute::Bool(true)),
-                "let binding reference should be marked as resolved_local"
-            );
-        }
+        assert!(
+            !return_ops.is_empty(),
+            "should find func.return in resolved module"
+        );
     }
 
     /// Create a module with an ability declaration and a call to it.

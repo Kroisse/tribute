@@ -172,10 +172,25 @@ impl BlockId {
 // ============================================================================
 
 /// Where a value is defined: either an operation result or a block argument.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum ValueDef<'db> {
     OpResult(Operation<'db>),
     BlockArg(BlockId),
+}
+
+impl std::fmt::Debug for ValueDef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValueDef::OpResult(op) => {
+                // Print only the Operation ID to avoid cycle
+                use salsa::plumbing::AsId;
+                write!(f, "OpResult(Operation({:?}))", op.as_id())
+            }
+            ValueDef::BlockArg(block_id) => {
+                write!(f, "BlockArg({:?})", block_id)
+            }
+        }
+    }
 }
 
 /// SSA value: a definition point plus an index.
@@ -477,7 +492,10 @@ impl<'db> BlockBuilder<'db> {
     }
 
     /// Flush any pending argument to the args list.
-    fn flush_pending_arg(&mut self) {
+    ///
+    /// This is useful when you need to access block arguments via `block_arg()`
+    /// before the block is fully built.
+    pub fn flush_pending_arg(&mut self) {
         if let Some((ty, attrs)) = self.pending_arg.take() {
             self.args.push(BlockArg::new(self.db, ty, attrs));
         }

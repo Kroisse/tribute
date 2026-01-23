@@ -38,15 +38,13 @@ dialect! {
         #[attr(r#type: Type)]
         fn struct_new(#[rest] fields) -> result;
 
-        /// `adt.struct_get` operation: reads a field from a struct.
-        /// Field can be a name (String) or index (IntBits).
+        /// `adt.struct_get` operation: reads a field from a struct by index.
         /// Type attribute specifies the struct type (for WASM GC lowering).
-        #[attr(r#type: Type, field: any)]
+        #[attr(r#type: Type, field: u64)]
         fn struct_get(r#ref) -> result;
 
-        /// `adt.struct_set` operation: writes a field in a struct.
-        /// Field can be a name (String) or index (IntBits).
-        #[attr(field: any)]
+        /// `adt.struct_set` operation: writes a field in a struct by index.
+        #[attr(field: u64)]
         fn struct_set(r#ref, value);
 
         // === Variant (Sum Type) ===
@@ -54,10 +52,6 @@ dialect! {
         /// `adt.variant_new` operation: creates a variant instance.
         #[attr(r#type: Type, tag: Symbol)]
         fn variant_new(#[rest] fields) -> result;
-
-        /// `adt.variant_tag` operation: reads the tag from a variant.
-        /// DEPRECATED: Use `variant_is` for WasmGC subtyping approach.
-        fn variant_tag(r#ref) -> result;
 
         /// `adt.variant_is` operation: tests if a variant is of a specific tag.
         /// Returns true (i1) if the variant matches the given tag.
@@ -69,9 +63,8 @@ dialect! {
         #[attr(r#type: Type, tag: Symbol)]
         fn variant_cast(r#ref) -> result;
 
-        /// `adt.variant_get` operation: reads a field from a variant.
-        /// Field can be a name (String) or index (IntBits).
-        #[attr(field: any)]
+        /// `adt.variant_get` operation: reads a field from a variant by index.
+        #[attr(field: u64)]
         fn variant_get(r#ref) -> result;
 
         // === Array ===
@@ -117,7 +110,7 @@ dialect! {
 
 // === Pure operation registrations ===
 // Struct operations: new and get are pure (set modifies)
-// Variant operations: new, tag, and get are pure
+// Variant operations: new, is, cast, and get are pure
 // Array operations: new, get, and len are pure (set modifies)
 // Reference operations: all are pure
 // Literal operations: all are pure
@@ -126,7 +119,6 @@ crate::register_pure_op!(StructNew<'_>);
 crate::register_pure_op!(StructGet<'_>);
 
 crate::register_pure_op!(VariantNew<'_>);
-crate::register_pure_op!(VariantTag<'_>);
 crate::register_pure_op!(VariantIs<'_>);
 crate::register_pure_op!(VariantCast<'_>);
 crate::register_pure_op!(VariantGet<'_>);

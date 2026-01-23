@@ -48,15 +48,150 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         type_defs.len()
     );
 
+    // Resolve types inside type_defs themselves (for recursive types)
+    // This ensures that when we replace `tribute.type { name: "Expr" }` with the
+    // adt.enum type, the variants inside that enum also have resolved types.
+    let resolved_type_defs = resolve_type_defs(db, &type_defs);
+
     // Apply patterns to resolve type references
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(ResolveFuncTypePattern {
-            type_defs: type_defs.clone(),
+            type_defs: resolved_type_defs.clone(),
         })
-        .add_pattern(ResolveOperationTypesPattern { type_defs });
+        .add_pattern(ResolveEnumDefTypesPattern {
+            type_defs: resolved_type_defs.clone(),
+        })
+        .add_pattern(ResolveOperationTypesPattern {
+            type_defs: resolved_type_defs,
+        });
 
     let target = ConversionTarget::new();
     applicator.apply_partial(db, module, target).module
+}
+
+/// Resolve types inside type_defs themselves.
+///
+/// For recursive types like `enum Expr { Add(Expr, Expr) }`, the `type_defs`
+/// initially contains the enum type with `tribute.type { name: "Expr" }` in its
+/// variants. This function resolves those inner type references.
+fn resolve_type_defs<'db>(
+    db: &'db dyn salsa::Database,
+    type_defs: &TypeDefs<'db>,
+) -> TypeDefs<'db> {
+    let mut resolved = TypeDefs::new();
+
+    for (&name, &ty) in type_defs.iter() {
+        // For enum types, resolve the types inside the variants attribute
+        if trunk_ir::dialect::adt::is_enum_type(db, ty) {
+            let resolved_ty = resolve_enum_type_shallow(db, ty, type_defs);
+            resolved.insert(name, resolved_ty);
+        } else {
+            resolved.insert(name, ty);
+        }
+    }
+
+    resolved
+}
+
+/// Resolve types inside an enum type's variants, but only one level deep.
+///
+/// This resolves `tribute.type` references to their ADT types, but doesn't
+/// recurse into the resolved ADT types (to avoid infinite recursion with
+/// recursive types).
+fn resolve_enum_type_shallow<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    type_defs: &TypeDefs<'db>,
+) -> Type<'db> {
+    // Get the variants attribute
+    let Some(Attribute::List(variants)) = ty.get_attr(db, Symbol::new("variants")) else {
+        return ty;
+    };
+
+    let mut changed = false;
+    let new_variants: Vec<Attribute> = variants
+        .iter()
+        .map(|variant_attr| {
+            let Attribute::List(pair) = variant_attr else {
+                return variant_attr.clone();
+            };
+            if pair.len() < 2 {
+                return variant_attr.clone();
+            }
+
+            // pair[0] is the variant name (Symbol), pair[1] is the field types (List)
+            let Attribute::List(field_attrs) = &pair[1] else {
+                return variant_attr.clone();
+            };
+
+            // Resolve each field type (shallow - only tribute.type → type_defs/primitive lookup)
+            let new_field_attrs: Vec<Attribute> = field_attrs
+                .iter()
+                .map(|attr| {
+                    if let Attribute::Type(field_ty) = attr {
+                        // Only resolve tribute.type references, not recursively
+                        if tribute::is_unresolved_type(db, *field_ty)
+                            && let Some(Attribute::Symbol(name_sym)) =
+                                field_ty.get_attr(db, Symbol::new("name"))
+                        {
+                            // Check user-defined types first
+                            if let Some(&adt_ty) = type_defs.get(name_sym) {
+                                changed = true;
+                                return Attribute::Type(adt_ty);
+                            }
+                            // Check primitive types
+                            if let Some(primitive_ty) = resolve_primitive_type(db, name_sym) {
+                                changed = true;
+                                return Attribute::Type(primitive_ty);
+                            }
+                        }
+                        attr.clone()
+                    } else {
+                        attr.clone()
+                    }
+                })
+                .collect();
+
+            if new_field_attrs
+                .iter()
+                .zip(field_attrs.iter())
+                .any(|(a, b)| a != b)
+            {
+                Attribute::List(vec![pair[0].clone(), Attribute::List(new_field_attrs)])
+            } else {
+                variant_attr.clone()
+            }
+        })
+        .collect();
+
+    if !changed {
+        return ty;
+    }
+
+    // Rebuild the type with resolved variants
+    let mut new_attrs = ty.attrs(db).clone();
+    new_attrs.insert(Symbol::new("variants"), Attribute::List(new_variants));
+
+    let new_params: IdVec<Type<'db>> = ty.params(db).iter().copied().collect();
+    Type::new(db, ty.dialect(db), ty.name(db), new_params, new_attrs)
+}
+
+/// Resolve primitive type names to their runtime types.
+fn resolve_primitive_type<'db>(db: &'db dyn salsa::Database, name: &Symbol) -> Option<Type<'db>> {
+    use tribute_ir::dialect::tribute_rt;
+    use trunk_ir::dialect::core;
+
+    let name_str = name.to_string();
+    match &*name_str {
+        "Int" => Some(tribute_rt::int_type(db)),
+        "Bool" => Some(tribute_rt::bool_type(db)),
+        "Float" => Some(tribute_rt::float_type(db)),
+        "Nat" => Some(tribute_rt::nat_type(db)),
+        "String" => Some(*core::String::new(db)),
+        "Bytes" => Some(*core::Bytes::new(db)),
+        "Nil" => Some(*core::Nil::new(db)),
+        _ => None,
+    }
 }
 
 /// Collected type definitions: name -> ADT type
@@ -126,6 +261,15 @@ fn resolve_type<'db>(
         return *adt_type;
     }
 
+    // Check if this is an adt.enum type with unresolved variants
+    // Use shallow resolution to avoid infinite recursion with recursive types
+    if trunk_ir::dialect::adt::is_enum_type(db, ty) {
+        let resolved = resolve_enum_type_shallow(db, ty, type_defs);
+        if resolved != ty {
+            return resolved;
+        }
+    }
+
     // Recursively resolve type parameters
     let params = ty.params(db);
     if params.is_empty() {
@@ -184,6 +328,122 @@ impl<'db> RewritePattern<'db> for ResolveFuncTypePattern<'db> {
             .build();
         RewriteResult::Replace(new_op)
     }
+}
+
+/// Pattern to resolve types in enum definitions.
+///
+/// Enum definitions store field types in the `variants` attribute. This pattern
+/// walks through each variant's field types and resolves any `tribute.type` references
+/// to their actual ADT types.
+struct ResolveEnumDefTypesPattern<'db> {
+    type_defs: TypeDefs<'db>,
+}
+
+impl<'db> RewritePattern<'db> for ResolveEnumDefTypesPattern<'db> {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(enum_def) = tribute::EnumDef::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Get the enum's result type (which contains the variants attribute)
+        let Some(&enum_ty) = op.results(db).first() else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Resolve types in the enum type itself (including variants attribute)
+        let resolved_enum_ty = resolve_enum_type(db, enum_ty, &self.type_defs);
+
+        if resolved_enum_ty == enum_ty {
+            return RewriteResult::Unchanged;
+        }
+
+        debug!(
+            "resolve_type_references: resolved enum_def {} field types",
+            enum_def.sym_name(db)
+        );
+
+        // Rebuild the operation with the resolved enum type
+        let new_op = op
+            .modify(db)
+            .results(IdVec::from(vec![resolved_enum_ty]))
+            .build();
+        RewriteResult::Replace(new_op)
+    }
+}
+
+/// Resolve types inside an enum type, including variant field types.
+fn resolve_enum_type<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    type_defs: &TypeDefs<'db>,
+) -> Type<'db> {
+    // Get the variants attribute
+    let Some(Attribute::List(variants)) = ty.get_attr(db, Symbol::new("variants")) else {
+        return ty;
+    };
+
+    let mut changed = false;
+    let new_variants: Vec<Attribute> = variants
+        .iter()
+        .map(|variant_attr| {
+            let Attribute::List(pair) = variant_attr else {
+                return variant_attr.clone();
+            };
+            if pair.len() < 2 {
+                return variant_attr.clone();
+            }
+
+            // pair[0] is the variant name (Symbol), pair[1] is the field types (List)
+            let Attribute::List(field_attrs) = &pair[1] else {
+                return variant_attr.clone();
+            };
+
+            // Resolve each field type
+            let new_field_attrs: Vec<Attribute> = field_attrs
+                .iter()
+                .map(|attr| {
+                    if let Attribute::Type(field_ty) = attr {
+                        let resolved = resolve_type(db, *field_ty, type_defs);
+                        if resolved != *field_ty {
+                            changed = true;
+                            Attribute::Type(resolved)
+                        } else {
+                            attr.clone()
+                        }
+                    } else {
+                        attr.clone()
+                    }
+                })
+                .collect();
+
+            if new_field_attrs
+                .iter()
+                .zip(field_attrs.iter())
+                .any(|(a, b)| a != b)
+            {
+                Attribute::List(vec![pair[0].clone(), Attribute::List(new_field_attrs)])
+            } else {
+                variant_attr.clone()
+            }
+        })
+        .collect();
+
+    if !changed {
+        return ty;
+    }
+
+    // Rebuild the type with resolved variants
+    let mut new_attrs = ty.attrs(db).clone();
+    new_attrs.insert(Symbol::new("variants"), Attribute::List(new_variants));
+
+    // Collect params into IdVec
+    let new_params: IdVec<Type<'db>> = ty.params(db).iter().copied().collect();
+    Type::new(db, ty.dialect(db), ty.name(db), new_params, new_attrs)
 }
 
 /// Pattern to resolve types in operation results and regions.

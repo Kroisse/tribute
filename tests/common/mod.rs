@@ -5,8 +5,9 @@ use std::process::Command;
 use std::str::FromStr;
 use tempfile::NamedTempFile;
 
-/// Run WASM binary with wasmtime CLI and parse the result from main()
-pub fn run_wasm_main<T>(wasm_bytes: &[u8]) -> T
+/// Run WASM binary with wasmtime CLI and parse the result
+#[allow(dead_code)]
+pub fn run_wasm<T>(wasm_bytes: &[u8]) -> T
 where
     T: FromStr,
     T::Err: std::fmt::Debug,
@@ -17,7 +18,7 @@ where
         .expect("Failed to write WASM");
 
     let output = Command::new("wasmtime")
-        .args(["run", "--wasm", "gc", "--invoke", "main"])
+        .args(["run", "--wasm", "gc"])
         .arg(temp_file.path())
         .output()
         .expect("Failed to execute wasmtime");

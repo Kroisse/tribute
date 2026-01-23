@@ -26,11 +26,17 @@
 //!     ▼ resolve
 //! Module (resolved names)
 //!     │
-//!     ▼ inline_constants
-//! Module (const values inlined)
-//!     │
 //!     ▼ typecheck
 //! Typed Module
+//!     │
+//!     ▼ tdnr
+//! Module (UFCS resolved)
+//!     │
+//!     ▼ const_inline
+//! Module (const values inlined)
+//!     │
+//!     ▼ inline_refs
+//! Module (tribute.ref inlined)
 //!     │
 //!     ▼ boxing
 //! Module (boxing explicit)
@@ -45,20 +51,26 @@
 //!     ▼ closure_lower
 //! Module (closure.* lowered)
 //!     │
-//!     ▼ tdnr
-//! Module (UFCS resolved)
-//!     │
 //!     ▼ evidence_calls (Phase 2)
 //! Module (evidence passed through calls)
+//!     │
+//!     ├─────────────── Final Lowering ────────────────┤
+//!     ▼ tribute_to_cont
+//! Module (tribute → continuation ops)
+//!     │
+//!     ▼ tribute_to_scf
+//! Module (case → scf.if)
 //!     │
 //!     ▼ handler_lower
 //! Module (ability.* → cont.*)
 //!     │
-//!     ├─────────────── Final Lowering ────────────────┤
-//!     ▼ lower_case
-//! Module (case → scf.if)
+//!     ▼ cont_to_trampoline
+//! Module (cont.* → trampoline)
 //!     │
 //!     ▼ dce
+//! Module (dead code eliminated)
+//!     │
+//!     ▼ resolve_casts
 //! Core IR Module
 //!     │
 //!     └─► [target: wasm] ─► compile_to_wasm ─► WasmBinary
@@ -83,6 +95,7 @@ use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverit
 use tribute_passes::evidence::{add_evidence_params, insert_evidence, transform_evidence_calls};
 use tribute_passes::generic_type_converter;
 use tribute_passes::handler_lower::lower_handlers;
+use tribute_passes::inline_refs::inline_refs;
 use tribute_passes::lambda_lift::lift_lambdas;
 use tribute_passes::lower_cont_to_trampoline;
 use tribute_passes::lower_tribute_to_cont;
@@ -94,6 +107,7 @@ use tribute_wasm_backend::{WasmBinary, compile_to_wasm};
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::dialect::core::Module;
+use trunk_ir::rewrite::ConversionError;
 use trunk_ir::transforms::eliminate_dead_functions;
 use trunk_ir::{Block, BlockId, IdVec, Region, Symbol};
 
@@ -382,6 +396,21 @@ pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Mod
     resolve_tdnr(db, module)
 }
 
+/// Inline References.
+///
+/// This pass inlines `tribute.ref` operations by replacing their results
+/// with their operands. `tribute.ref` preserves source location for LSP hover.
+///
+/// Must run after TDNR (which preserves tribute.ref for LSP) and before
+/// code generation passes that don't understand tribute.ref.
+#[salsa::tracked]
+pub fn stage_inline_refs<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Result<Module<'db>, ConversionError> {
+    inline_refs(db, module)
+}
+
 /// Evidence Parameters (Phase 1).
 ///
 /// Adds evidence parameter as first argument to effectful functions.
@@ -440,7 +469,7 @@ pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, module: Module<'db>) ->
 pub fn stage_handler_lower<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
-) -> Result<Module<'db>, trunk_ir::rewrite::ConversionError> {
+) -> Result<Module<'db>, ConversionError> {
     lower_handlers(db, module)
 }
 
@@ -461,7 +490,7 @@ pub fn stage_handler_lower<'db>(
 pub fn stage_cont_to_trampoline<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
-) -> Result<Module<'db>, trunk_ir::rewrite::ConversionError> {
+) -> Result<Module<'db>, ConversionError> {
     lower_cont_to_trampoline(db, module)
 }
 
@@ -551,62 +580,43 @@ pub fn stage_lower_to_wasm<'db>(
 // Useful for testing individual stages or for tools that need intermediate results.
 
 /// Compile for LSP: minimal pipeline preserving source structure.
-///
-/// This entry point runs only the passes needed for LSP features:
-/// - Parse & Lower: CST to TrunkIR
-/// - Resolve: Name resolution (completion, go-to-definition)
-/// - Typecheck: Type inference (hover)
-/// - TDNR: Type-directed name resolution (method calls)
-///
-/// Excluded passes (preserve source structure):
-/// - const_inline: Keep const references for go-to-definition
-/// - lambda_lift/closure_lower: Keep closure structure
-/// - evidence/handler_lower: Keep ability structure
-/// - lower_case: Keep case/pattern structure
-/// - dce: Keep all functions
-#[salsa::tracked]
 pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    run_tdnr(db, source)
+}
+
+/// Run pipeline up to TDNR stage.
+///
+/// Includes: parse → resolve → typecheck → tdnr
+#[salsa::tracked]
+pub fn run_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let module = parse_and_lower(db, source);
     let module = stage_resolve(db, module);
     let module = stage_typecheck(db, module);
     stage_tdnr(db, module)
 }
 
-/// Run pipeline up to resolve stage.
-#[salsa::tracked]
-pub fn run_resolve<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = parse_and_lower(db, source);
-    stage_resolve(db, module)
-}
-
-/// Run pipeline up to typecheck stage.
-#[salsa::tracked]
-pub fn run_typecheck<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = parse_and_lower(db, source);
-    let module = stage_resolve(db, module);
-    let module = stage_const_inline(db, module);
-    stage_typecheck(db, module)
-}
-
 /// Run pipeline up to lambda lift stage.
 #[salsa::tracked]
-pub fn run_lambda_lift<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = parse_and_lower(db, source);
-    let module = stage_resolve(db, module);
+pub fn run_lambda_lift<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Module<'db>, ConversionError> {
+    let module = run_tdnr(db, source);
     let module = stage_const_inline(db, module);
-    let module = stage_typecheck(db, module);
-    stage_lambda_lift(db, module)
+    let module = stage_inline_refs(db, module)?;
+    let module = stage_boxing(db, module);
+    let module = stage_evidence_params(db, module);
+    Ok(stage_lambda_lift(db, module))
 }
 
 /// Run pipeline up to closure lower stage.
 #[salsa::tracked]
-pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = parse_and_lower(db, source);
-    let module = stage_resolve(db, module);
-    let module = stage_const_inline(db, module);
-    let module = stage_typecheck(db, module);
-    let module = stage_lambda_lift(db, module);
-    stage_closure_lower(db, module)
+pub fn run_closure_lower<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Module<'db>, ConversionError> {
+    let module = run_lambda_lift(db, source)?;
+    Ok(stage_closure_lower(db, module))
 }
 
 // =============================================================================
@@ -617,59 +627,24 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 ///
 /// This is the central orchestration function that sequences all stages.
 /// Each stage is a pure transformation that takes a Module and returns a Module.
-///
-/// Pipeline:
-/// 1. Parse & Lower - CST to TrunkIR with prelude merged
-/// 2. Resolve - Name resolution
-/// 3. Const Inline - Inline constant values
-/// 4. Typecheck - Type inference and checking
-/// 5. Boxing - Insert explicit boxing/unboxing for polymorphic calls
-/// 6. Evidence Params - Add evidence parameters to effectful functions (Phase 1)
-/// 7. Lambda Lift - Lift lambdas to top-level (captures evidence)
-/// 8. Closure Lower - Lower closure operations
-/// 9. TDNR - Type-directed name resolution
-/// 10. Evidence Calls - Transform calls to pass evidence (Phase 2)
-/// 11. Handler Lower - Lower ability ops to cont ops
-/// 12. Lower Case - Lower case to scf.if
-/// 13. DCE - Dead code elimination
-/// 14. Resolve Casts - Resolve unrealized_conversion_cast operations
-/// 15. Final resolve - Report unresolved references
 #[salsa::tracked]
 pub fn compile<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-) -> Result<Module<'db>, trunk_ir::rewrite::ConversionError> {
-    // Parse and lower to initial IR
-    let module = parse_and_lower(db, source);
-
-    // Frontend passes
-    let module = stage_resolve(db, module);
-    let module = stage_const_inline(db, module);
-    let module = stage_typecheck(db, module);
-    let module = stage_boxing(db, module);
-
-    // Evidence parameters (Phase 1) - BEFORE lambda lifting
-    // so that lambdas can capture evidence from enclosing functions
-    let module = stage_evidence_params(db, module);
-
-    // Closure processing
-    let module = stage_lambda_lift(db, module);
-    let module = stage_closure_lower(db, module);
-    let module = stage_tdnr(db, module);
+) -> Result<Module<'db>, ConversionError> {
+    // Frontend + closure processing (up to inline_refs)
+    let module = run_closure_lower(db, source)?;
 
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
-    // so that closure calls can also receive evidence
     let module = stage_evidence_calls(db, module);
-    let module = stage_tribute_to_cont(db, module); // tribute.handle → cont.push_prompt + cont.handler_dispatch
-    let module = stage_tribute_to_scf(db, module); // tribute.case → scf.if
-    let module = stage_handler_lower(db, module)?; // ability.perform → cont.shift, etc.
+    let module = stage_tribute_to_cont(db, module);
+    let module = stage_tribute_to_scf(db, module);
+    let module = stage_handler_lower(db, module)?;
 
     // Continuation lowering (backend-agnostic trampoline implementation)
-    let module = stage_cont_to_trampoline(db, module)?; // cont.shift → trampoline ops
+    let module = stage_cont_to_trampoline(db, module)?;
 
     let module = stage_dce(db, module);
-
-    // Resolve any unrealized_conversion_cast operations from earlier passes
     let module = stage_resolve_casts(db, module);
 
     // Final pass: resolve any remaining unresolved references and emit diagnostics
@@ -681,33 +656,22 @@ pub fn compile<'db>(
 /// Compile to WebAssembly binary.
 ///
 /// Runs the full pipeline and then lowers to WebAssembly.
-///
-/// Note: This duplicates the `compile` pipeline stages explicitly rather than
-/// calling `compile` because:
-/// 1. Each `stage_*` is `#[salsa::tracked]`, so stages are individually cached
-///    and reused if `compile` was already called on the same source
-/// 2. The wasm path skips the final resolver pass (diagnostic reporting) since
-///    we only need the lowered module, not error messages
-/// 3. Allows the wasm pipeline to diverge from `compile` in the future if needed
 #[salsa::tracked]
 pub fn compile_to_wasm_binary<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<WasmBinary<'db>> {
-    // Run pipeline up to DCE (stages are cached and reused from compile if already run)
-    let module = parse_and_lower(db, source);
-    let module = stage_resolve(db, module);
-    let module = stage_const_inline(db, module);
-    let module = stage_typecheck(db, module);
-    let module = stage_boxing(db, module);
-    // Evidence parameters (Phase 1) - BEFORE lambda lifting
-    let module = stage_evidence_params(db, module);
-    let module = stage_lambda_lift(db, module);
-    let module = stage_closure_lower(db, module);
-    let module = stage_tdnr(db, module);
+    // Frontend + closure processing (up to inline_refs)
+    let module = run_closure_lower(db, source).ok()?;
+
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
     let module = stage_evidence_calls(db, module);
     let module = stage_tribute_to_cont(db, module);
+
+    // Resolve tribute.type references to ADT types (must run before tribute_to_scf
+    // so that enum field types are properly resolved for pattern matching)
+    let module = tribute_passes::resolve_type_references::lower(db, module);
+
     let module = stage_tribute_to_scf(db, module);
     let module = stage_handler_lower(db, module).ok()?;
 
@@ -715,12 +679,7 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_cont_to_trampoline(db, module).ok()?;
 
     let module = stage_dce(db, module);
-
-    // Resolve any unrealized_conversion_cast operations from earlier passes
     let module = stage_resolve_casts(db, module);
-
-    // Resolve tribute.type references to ADT types (backend-agnostic)
-    let module = tribute_passes::resolve_type_references::lower(db, module);
 
     // Lower to WebAssembly
     stage_lower_to_wasm(db, module)

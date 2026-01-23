@@ -578,7 +578,7 @@ mod tests {
     use crate::dialect::{arith, core};
     use crate::rewrite::TypeConverter;
     use crate::types::DialectType;
-    use crate::{Attribute, BlockId, DialectOp, Location, PathId, Span, Symbol, idvec};
+    use crate::{Attribute, BlockId, DialectOp, Location, PathId, Span, Symbol, ValueDef, idvec};
     use salsa_test_macros::salsa_test;
 
     /// A simple test pattern that rewrites `arith.const(42)` → `arith.mul(42, 2)`.
@@ -839,6 +839,466 @@ mod tests {
                     "unrealized_conversion_cast should produce i64 type"
                 );
             }
+        }
+    }
+
+    // === Block Argument Reference Tests ===
+
+    /// Create a module where an operation uses a block argument as operand.
+    /// This tests that block argument references are preserved after rewriting.
+    #[salsa::tracked]
+    fn make_module_with_block_arg_usage(db: &dyn salsa::Database) -> Module<'_> {
+        use crate::BlockArg;
+
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create a block with one argument
+        let block_id = BlockId::fresh();
+        let block_arg = BlockArg::of_type(db, i32_ty);
+        let block_arg_value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        // Create an operation that uses the block argument
+        // mul(block_arg, 42) - using block_arg as first operand
+        let const42 = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
+        let mul = arith::mul(db, location, block_arg_value, const42.result(db), i32_ty);
+
+        let block = Block::new(
+            db,
+            block_id,
+            location,
+            idvec![block_arg],
+            idvec![const42.as_operation(), mul.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, Symbol::new("test"), region)
+    }
+
+    /// Apply patterns to module with block arg usage.
+    #[salsa::tracked]
+    fn apply_to_block_arg_module<'db>(
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+    ) -> (bool, Module<'db>) {
+        use super::ConversionTarget;
+
+        // Pattern that rewrites const(42) -> const(100)
+        struct ConstRewritePattern;
+
+        impl<'db> RewritePattern<'db> for ConstRewritePattern {
+            fn match_and_rewrite(
+                &self,
+                db: &'db dyn salsa::Database,
+                op: &Operation<'db>,
+                _adaptor: &OpAdaptor<'db, '_>,
+            ) -> RewriteResult<'db> {
+                let Ok(const_op) = arith::Const::from_operation(db, *op) else {
+                    return RewriteResult::Unchanged;
+                };
+                if const_op.value(db) != Attribute::IntBits(42) {
+                    return RewriteResult::Unchanged;
+                }
+                let location = op.location(db);
+                let result_ty = op.results(db)[0];
+                let new_op = arith::r#const(db, location, result_ty, Attribute::IntBits(100));
+                RewriteResult::Replace(new_op.as_operation())
+            }
+        }
+
+        let target = ConversionTarget::new();
+        let applicator =
+            PatternApplicator::new(TypeConverter::new()).add_pattern(ConstRewritePattern);
+        let result = applicator.apply_partial(db, module, target);
+        (result.reached_fixpoint, result.module)
+    }
+
+    #[salsa_test]
+    fn test_block_arg_reference_preserved_after_rewrite(db: &salsa::DatabaseImpl) {
+        use crate::ValueDef;
+
+        let module = make_module_with_block_arg_usage(db);
+
+        // Get original block ID and verify structure
+        let original_block = &module.body(db).blocks(db)[0];
+        let original_block_id = original_block.id(db);
+
+        // Verify the mul operation uses block arg as first operand
+        let ops = original_block.operations(db);
+        assert_eq!(ops.len(), 2, "Should have const and mul operations");
+        let mul_op = &ops[1];
+        let mul_operands = mul_op.operands(db);
+        assert_eq!(mul_operands.len(), 2);
+
+        // First operand should be block arg
+        let first_operand = mul_operands[0];
+        match first_operand.def(db) {
+            ValueDef::BlockArg(block_id) => {
+                assert_eq!(block_id, original_block_id);
+            }
+            _ => panic!("First operand should be a block argument"),
+        }
+
+        // Apply the pattern (rewrites const(42) -> const(100))
+        let (reached_fixpoint, result_module) = apply_to_block_arg_module(db, module);
+        assert!(reached_fixpoint);
+
+        // Verify the block ID is preserved
+        let result_block = &result_module.body(db).blocks(db)[0];
+        let result_block_id = result_block.id(db);
+        assert_eq!(
+            result_block_id, original_block_id,
+            "Block ID should be preserved after rewrite"
+        );
+
+        // Verify the mul operation still references the correct block arg
+        let result_ops = result_block.operations(db);
+        assert_eq!(result_ops.len(), 2);
+        let result_mul_op = &result_ops[1];
+        let result_mul_operands = result_mul_op.operands(db);
+
+        // First operand should still be block arg with same block ID
+        let result_first_operand = result_mul_operands[0];
+        match result_first_operand.def(db) {
+            ValueDef::BlockArg(block_id) => {
+                assert_eq!(
+                    block_id, original_block_id,
+                    "Block arg should still reference the original block"
+                );
+            }
+            _ => panic!("First operand should still be a block argument"),
+        }
+
+        // Verify the const was actually rewritten
+        let const_op = arith::Const::from_operation(db, result_ops[0]).unwrap();
+        assert_eq!(
+            const_op.value(db),
+            Attribute::IntBits(100),
+            "Const should have been rewritten"
+        );
+    }
+
+    /// Test that block arguments in nested regions are handled correctly.
+    #[salsa::tracked]
+    fn make_module_with_nested_block_args(db: &dyn salsa::Database) -> Module<'_> {
+        use crate::BlockArg;
+        use crate::dialect::scf;
+
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create outer block with an argument
+        let outer_block_id = BlockId::fresh();
+        let outer_block_arg = BlockArg::of_type(db, i32_ty);
+        let outer_arg_value = Value::new(db, ValueDef::BlockArg(outer_block_id), 0);
+
+        // Create a condition for scf.if
+        let const1 = arith::r#const(
+            db,
+            location,
+            core::I1::new(db).as_type(),
+            Attribute::Bool(true),
+        );
+
+        // Create then block that uses the outer block argument
+        let then_block_id = BlockId::fresh();
+        // Use the outer block argument inside the then region
+        let const42 = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
+        let then_add = arith::add(db, location, outer_arg_value, const42.result(db), i32_ty);
+        let then_yield = scf::r#yield(db, location, [then_add.result(db)]);
+        let then_block = Block::new(
+            db,
+            then_block_id,
+            location,
+            idvec![],
+            idvec![
+                const42.as_operation(),
+                then_add.as_operation(),
+                then_yield.as_operation(),
+            ],
+        );
+        let then_region = Region::new(db, location, idvec![then_block]);
+
+        // Create else block
+        let else_block_id = BlockId::fresh();
+        let const0 = arith::r#const(db, location, i32_ty, Attribute::IntBits(0));
+        let else_yield = scf::r#yield(db, location, [const0.result(db)]);
+        let else_block = Block::new(
+            db,
+            else_block_id,
+            location,
+            idvec![],
+            idvec![const0.as_operation(), else_yield.as_operation()],
+        );
+        let else_region = Region::new(db, location, idvec![else_block]);
+
+        // Create scf.if operation
+        let if_op = scf::r#if(
+            db,
+            location,
+            const1.result(db),
+            i32_ty,
+            then_region,
+            else_region,
+        );
+
+        let outer_block = Block::new(
+            db,
+            outer_block_id,
+            location,
+            idvec![outer_block_arg],
+            idvec![const1.as_operation(), if_op.as_operation()],
+        );
+        let outer_region = Region::new(db, location, idvec![outer_block]);
+        Module::create(db, location, Symbol::new("test"), outer_region)
+    }
+
+    /// Apply patterns to module with nested regions.
+    #[salsa::tracked]
+    fn apply_to_nested_block_arg_module<'db>(
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+    ) -> (bool, Module<'db>) {
+        use super::ConversionTarget;
+
+        // Pattern that rewrites const(42) -> const(100)
+        struct ConstRewritePattern;
+
+        impl<'db> RewritePattern<'db> for ConstRewritePattern {
+            fn match_and_rewrite(
+                &self,
+                db: &'db dyn salsa::Database,
+                op: &Operation<'db>,
+                _adaptor: &OpAdaptor<'db, '_>,
+            ) -> RewriteResult<'db> {
+                let Ok(const_op) = arith::Const::from_operation(db, *op) else {
+                    return RewriteResult::Unchanged;
+                };
+                if const_op.value(db) != Attribute::IntBits(42) {
+                    return RewriteResult::Unchanged;
+                }
+                let location = op.location(db);
+                let result_ty = op.results(db)[0];
+                let new_op = arith::r#const(db, location, result_ty, Attribute::IntBits(100));
+                RewriteResult::Replace(new_op.as_operation())
+            }
+        }
+
+        let target = ConversionTarget::new();
+        let applicator =
+            PatternApplicator::new(TypeConverter::new()).add_pattern(ConstRewritePattern);
+        let result = applicator.apply_partial(db, module, target);
+        (result.reached_fixpoint, result.module)
+    }
+
+    #[salsa_test]
+    fn test_outer_block_arg_referenced_in_nested_region(db: &salsa::DatabaseImpl) {
+        use crate::ValueDef;
+
+        let module = make_module_with_nested_block_args(db);
+
+        // Get original outer block ID
+        let original_outer_block = &module.body(db).blocks(db)[0];
+        let original_outer_block_id = original_outer_block.id(db);
+
+        // Verify the if operation's then region uses the outer block arg
+        let if_op = &original_outer_block.operations(db)[1]; // const1, if_op
+        let then_region = &if_op.regions(db)[0]; // then region
+        let then_ops = then_region.blocks(db)[0].operations(db);
+        // then_ops: const42, add, yield
+        let add_op = &then_ops[1];
+        let add_operands = add_op.operands(db);
+
+        // First operand of add should be outer block arg
+        let first_operand = add_operands[0];
+        match first_operand.def(db) {
+            ValueDef::BlockArg(block_id) => {
+                assert_eq!(
+                    block_id, original_outer_block_id,
+                    "Add should reference outer block arg"
+                );
+            }
+            _ => panic!("First operand should be outer block argument"),
+        }
+
+        // Apply pattern (rewrites const(42) -> const(100))
+        let (reached_fixpoint, result_module) = apply_to_nested_block_arg_module(db, module);
+        assert!(reached_fixpoint);
+
+        // Verify outer block ID is preserved
+        let result_outer_block = &result_module.body(db).blocks(db)[0];
+        let result_outer_block_id = result_outer_block.id(db);
+        assert_eq!(
+            result_outer_block_id, original_outer_block_id,
+            "Outer block ID should be preserved"
+        );
+
+        // Verify the add operation in nested region still references outer block arg
+        let result_if_op = &result_outer_block.operations(db)[1];
+        let result_then_region = &result_if_op.regions(db)[0];
+        let result_then_ops = result_then_region.blocks(db)[0].operations(db);
+        let result_add_op = &result_then_ops[1];
+        let result_add_operands = result_add_op.operands(db);
+
+        let result_first_operand = result_add_operands[0];
+        match result_first_operand.def(db) {
+            ValueDef::BlockArg(block_id) => {
+                assert_eq!(
+                    block_id, original_outer_block_id,
+                    "Add in nested region should still reference outer block arg"
+                );
+            }
+            _ => panic!("First operand should still be outer block argument"),
+        }
+
+        // Verify the const was actually rewritten
+        let const_op = arith::Const::from_operation(db, result_then_ops[0]).unwrap();
+        assert_eq!(
+            const_op.value(db),
+            Attribute::IntBits(100),
+            "Const in then region should have been rewritten"
+        );
+    }
+
+    // === Region Reconstruction Test ===
+    // This tests the actual problem: when a pattern reconstructs a region with
+    // fresh BlockIds, operations inside that region that reference the old
+    // block arguments become stale.
+
+    /// Pattern that reconstructs a region with fresh BlockIds.
+    /// This simulates what can happen in lowering passes.
+    /// Uses a marker attribute to avoid infinite loops.
+    struct RegionReconstructPattern;
+
+    impl<'db> RewritePattern<'db> for RegionReconstructPattern {
+        fn match_and_rewrite(
+            &self,
+            db: &'db dyn salsa::Database,
+            op: &Operation<'db>,
+            _adaptor: &OpAdaptor<'db, '_>,
+        ) -> RewriteResult<'db> {
+            use crate::dialect::scf;
+
+            // Match scf.if operations
+            let Ok(if_op) = scf::If::from_operation(db, *op) else {
+                return RewriteResult::Unchanged;
+            };
+
+            // Check if already transformed (marker attribute)
+            let marker = Symbol::new("_reconstructed");
+            if op.attributes(db).contains_key(&marker) {
+                return RewriteResult::Unchanged;
+            }
+
+            // Get the then region
+            let then_region = if_op.then(db);
+            let then_blocks = then_region.blocks(db);
+            if then_blocks.is_empty() {
+                return RewriteResult::Unchanged;
+            }
+
+            let then_block = &then_blocks[0];
+
+            // Reconstruct the then block with a FRESH BlockId
+            // This is the problematic pattern!
+            let fresh_block_id = BlockId::fresh();
+            let new_then_block = Block::new(
+                db,
+                fresh_block_id, // ← Fresh ID instead of preserving original
+                then_block.location(db),
+                then_block.args(db).clone(),
+                then_block.operations(db).clone(),
+            );
+            let new_then_region = Region::new(db, then_region.location(db), idvec![new_then_block]);
+
+            // Keep else region unchanged
+            let else_region = if_op.r#else(db);
+
+            // Rebuild the if operation with a marker attribute
+            let new_if = scf::r#if(
+                db,
+                op.location(db),
+                if_op.cond(db),
+                op.results(db)[0], // result type
+                new_then_region,
+                else_region,
+            );
+
+            // Add marker attribute to prevent infinite loop
+            let new_if_op = new_if
+                .as_operation()
+                .modify(db)
+                .attr(marker, Attribute::Bool(true))
+                .build();
+
+            RewriteResult::Replace(new_if_op)
+        }
+    }
+
+    /// Apply the region reconstruction pattern.
+    #[salsa::tracked]
+    fn apply_region_reconstruct_pattern<'db>(
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+    ) -> (bool, Module<'db>) {
+        use super::ConversionTarget;
+
+        let target = ConversionTarget::new();
+        let applicator =
+            PatternApplicator::new(TypeConverter::new()).add_pattern(RegionReconstructPattern);
+        let result = applicator.apply_partial(db, module, target);
+        (result.reached_fixpoint, result.module)
+    }
+
+    /// This test demonstrates the problem: when a region is reconstructed
+    /// with a fresh BlockId, operations inside that reference the outer
+    /// block argument become stale (pointing to an old BlockId).
+    #[salsa_test]
+    fn test_region_reconstruction_stale_block_arg_reference(db: &salsa::DatabaseImpl) {
+        let module = make_module_with_nested_block_args(db);
+
+        // Get original outer block ID
+        let original_outer_block = &module.body(db).blocks(db)[0];
+        let original_outer_block_id = original_outer_block.id(db);
+
+        // Apply the pattern that reconstructs regions with fresh BlockIds
+        let (reached_fixpoint, result_module) = apply_region_reconstruct_pattern(db, module);
+        assert!(reached_fixpoint);
+
+        // The outer block ID should still be preserved (we didn't touch it)
+        let result_outer_block = &result_module.body(db).blocks(db)[0];
+        let result_outer_block_id = result_outer_block.id(db);
+        assert_eq!(
+            result_outer_block_id, original_outer_block_id,
+            "Outer block ID should be preserved"
+        );
+
+        // Now check the add operation in the then region
+        let result_if_op = &result_outer_block.operations(db)[1];
+        let result_then_region = &result_if_op.regions(db)[0];
+        let result_then_ops = result_then_region.blocks(db)[0].operations(db);
+
+        // The add operation (index 1) uses outer block arg as first operand
+        let result_add_op = &result_then_ops[1];
+        let result_add_operands = result_add_op.operands(db);
+
+        // Check if the block arg reference is still valid
+        let result_first_operand = result_add_operands[0];
+        match result_first_operand.def(db) {
+            ValueDef::BlockArg(block_id) => {
+                // This is the key test: the add operation should still reference
+                // the outer block's argument, which has the original block ID.
+                // If the pattern incorrectly reconstructed the region, this might
+                // be pointing to a stale BlockId.
+                assert_eq!(
+                    block_id, original_outer_block_id,
+                    "Add operation should still reference the outer block arg. \
+                     This test documents the issue: when a region is reconstructed \
+                     with fresh BlockIds, inner operations may have stale references."
+                );
+            }
+            _ => panic!("First operand should still be a block argument"),
         }
     }
 }

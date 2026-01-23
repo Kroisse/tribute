@@ -2,7 +2,7 @@
 use super::core;
 use crate::{
     Attribute, DialectOp, DialectType, IdVec, Location, Operation, Region, Span, Symbol, Type,
-    dialect, idvec, ir::BlockBuilder,
+    Value, dialect, idvec, ir::BlockBuilder,
 };
 
 dialect! {
@@ -118,6 +118,9 @@ impl<'db> Func<'db> {
     /// Each parameter can optionally have a name that will be attached to the
     /// block argument as a `bind_name` attribute. This is useful for debugging
     /// and error messages.
+    ///
+    /// The closure receives the block builder and a vector of Values representing
+    /// the block arguments (one per parameter).
     #[allow(clippy::too_many_arguments)]
     pub fn build_with_named_params(
         db: &'db dyn salsa::Database,
@@ -127,10 +130,11 @@ impl<'db> Func<'db> {
         params: impl IntoIterator<Item = (Type<'db>, Option<Symbol>)>,
         result: Type<'db>,
         effect: Option<Type<'db>>,
-        f: impl FnOnce(&mut BlockBuilder<'db>),
+        f: impl FnOnce(&mut BlockBuilder<'db>, IdVec<Value<'db>>),
     ) -> Self {
         let mut entry = BlockBuilder::new(db, location);
         let mut param_types = IdVec::new();
+        let mut param_count = 0usize;
 
         for (ty, param_name) in params {
             param_types.push(ty);
@@ -138,9 +142,15 @@ impl<'db> Func<'db> {
             if let Some(name) = param_name {
                 entry = entry.attr(Symbol::new("bind_name"), name);
             }
+            param_count += 1;
         }
 
-        f(&mut entry);
+        // Flush pending arg and collect block argument values
+        entry.flush_pending_arg();
+        let arg_values: IdVec<Value<'db>> =
+            (0..param_count).map(|i| entry.block_arg(db, i)).collect();
+
+        f(&mut entry, arg_values);
         let region = Region::new(db, location, idvec![entry.build()]);
 
         let mut builder = Operation::of(db, location, DIALECT_NAME(), FUNC())

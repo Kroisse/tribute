@@ -6,7 +6,7 @@
 //! ## Dialect Organization
 //!
 //! **Unresolved operations** (eliminated after resolve/TDNR):
-//! - `tribute.var`, `tribute.call`, `tribute.path`, `tribute.binop`
+//! - `tribute.call`, `tribute.path`, `tribute.binop`
 //! - `tribute.type` (unresolved type reference)
 //!
 //! **Type definitions** (metadata):
@@ -37,11 +37,27 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-use trunk_ir::type_interface::Printable;
+use trunk_ir::type_interface::{PrintContext, Printable};
 use trunk_ir::{Attribute, Attrs, IdVec, Location, Symbol, dialect};
 
 trunk_ir::symbols! {
     VAR_ID_ATTR => "id",
+}
+
+/// Block argument attribute symbols for pattern bindings.
+///
+/// These attributes are used on block arguments to associate binding names
+/// and source locations with SSA values.
+pub mod block_arg_attrs {
+    trunk_ir::symbols! {
+        /// Attribute key for the binding name associated with a block argument.
+        /// Used in case arm body blocks to name pattern-bound values.
+        BIND_NAME => "bind_name",
+
+        /// Attribute key for the source location of a binding.
+        /// Used for LSP features like Go to Definition.
+        BIND_LOCATION => "bind_location",
+    }
 }
 
 dialect! {
@@ -88,15 +104,17 @@ dialect! {
         #[attr(name: Symbol)]
         fn field_arg(value);
 
-        /// `tribute.var` operation: unresolved variable reference (single name).
-        /// May resolve to local binding or module-level definition.
-        #[attr(name: Symbol)]
-        fn var() -> result;
-
         /// `tribute.path` operation: explicitly qualified path reference.
         /// Always refers to a module-level or type-level definition, never local.
         #[attr(path: Symbol)]
         fn path() -> result;
+
+        /// `tribute.ref` operation: local variable reference.
+        /// Wraps a local binding (block argument) to preserve source location for hover.
+        /// This is a pass-through operation - it simply returns its input value.
+        /// The `name` attribute holds the variable name for debugging purposes.
+        #[attr(name: Symbol)]
+        fn r#ref(value) -> result;
 
         /// `tribute.binop` operation: unresolved binary operation.
         /// Used for operators that need type-directed resolution (e.g., `<>` concat).
@@ -118,9 +136,23 @@ dialect! {
         fn r#yield(value);
 
         /// `tribute.let` operation: let binding with pattern matching.
-        /// Binds the value operand to names defined in the pattern region.
+        ///
+        /// Returns one result for each binding in the pattern.
         /// The pattern region uses `tribute_pat.*` operations.
-        fn r#let(value) {
+        /// The downstream pass (tribute_to_scf) extracts values from `value`
+        /// and returns them as the operation's results.
+        ///
+        /// Example:
+        /// ```text
+        /// %x, %y = tribute.let %pair {
+        ///     tribute_pat.variant("Pair") {
+        ///         tribute_pat.bind("x")
+        ///         tribute_pat.bind("y")
+        ///     }
+        /// }
+        /// arith.add %x, %y
+        /// ```
+        fn r#let(value) -> #[rest] results {
             #[region(pattern)] {}
         };
 
@@ -389,8 +421,6 @@ impl<'db> Arm<'db> {
 
 // === Printable interface registrations ===
 
-use std::fmt::Formatter;
-
 // tribute.type -> "Name" or "Name(params...)"
 inventory::submit! {
     Printable::implement("tribute", "type", |db, ty, f| {
@@ -445,7 +475,7 @@ inventory::submit! { Printable::implement("tribute", "tuple_type", print_tuple_t
 fn print_tuple_type(
     db: &dyn salsa::Database,
     ty: trunk_ir::Type<'_>,
-    f: &mut Formatter<'_>,
+    f: &mut PrintContext<'_, '_>,
 ) -> std::fmt::Result {
     let params = ty.params(db);
     if params.is_empty() {
@@ -492,7 +522,7 @@ fn print_tuple_type(
 // NOTE: tribute.int and tribute.nat Printable implementations moved to tribute_rt dialect
 
 /// Convert a variable ID to a readable name (a, b, c, ..., t0, t1, ...).
-fn fmt_var_id(f: &mut Formatter<'_>, id: u64) -> std::fmt::Result {
+fn fmt_var_id(f: &mut PrintContext<'_, '_>, id: u64) -> std::fmt::Result {
     if id < 26 {
         f.write_char((b'a' + id as u8) as char)
     } else {
