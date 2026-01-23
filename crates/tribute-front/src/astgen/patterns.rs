@@ -268,10 +268,10 @@ fn parse_int_literal(text: &str) -> Option<i64> {
         return None;
     }
 
-    let (sign, rest) = if text.starts_with('+') {
-        (1i64, &text[1..])
-    } else if text.starts_with('-') {
-        (-1i64, &text[1..])
+    let (sign, rest) = if let Some(rest) = text.strip_prefix('+') {
+        (1i64, rest)
+    } else if let Some(rest) = text.strip_prefix('-') {
+        (-1i64, rest)
     } else {
         (1i64, text)
     };

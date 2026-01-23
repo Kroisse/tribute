@@ -410,10 +410,10 @@ fn lower_case_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedN
     // case_arm children are direct children of case_expression
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        if child.kind() == "case_arm" {
-            if let Some(arm) = lower_case_arm(ctx, child) {
-                arms.push(arm);
-            }
+        if child.kind() == "case_arm"
+            && let Some(arm) = lower_case_arm(ctx, child)
+        {
+            arms.push(arm);
         }
     }
 
@@ -528,10 +528,10 @@ fn lower_handle_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
     if let Some(handlers_node) = handlers_node {
         let mut cursor = handlers_node.walk();
         for child in handlers_node.named_children(&mut cursor) {
-            if child.kind() == "handler_arm" {
-                if let Some(handler) = lower_handler_arm(ctx, child) {
-                    handlers.push(handler);
-                }
+            if child.kind() == "handler_arm"
+                && let Some(handler) = lower_handler_arm(ctx, child)
+            {
+                handlers.push(handler);
             }
         }
     }
@@ -637,10 +637,10 @@ fn parse_int_literal(text: &str) -> Option<i64> {
         return None;
     }
 
-    let (sign, rest) = if text.starts_with('+') {
-        (1i64, &text[1..])
-    } else if text.starts_with('-') {
-        (-1i64, &text[1..])
+    let (sign, rest) = if let Some(rest) = text.strip_prefix('+') {
+        (1i64, rest)
+    } else if let Some(rest) = text.strip_prefix('-') {
+        (-1i64, rest)
     } else {
         (1i64, text)
     };

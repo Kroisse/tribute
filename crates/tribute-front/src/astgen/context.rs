@@ -35,10 +35,8 @@ impl AstLoweringCtx {
         let slice = self.source.byte_slice(start..end);
         // Convert to contiguous string (may allocate if spans multiple chunks)
         // For short identifiers this is usually a single chunk
-        slice.as_str().unwrap_or_else(|| {
-            // Fallback: shouldn't happen for well-formed source
-            ""
-        })
+        // Fallback: shouldn't happen for well-formed source
+        slice.as_str().unwrap_or("")
     }
 
     /// Get the text content of a node as an owned String.

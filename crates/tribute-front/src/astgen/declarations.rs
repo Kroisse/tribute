@@ -132,15 +132,15 @@ fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<ParamDecl> {
     let mut cursor = node.walk();
 
     for child in node.named_children(&mut cursor) {
-        if child.kind() == "parameter" {
-            if let Some(name_node) = child.child_by_field_name("name") {
-                let id = ctx.fresh_id();
-                let name = ctx.node_symbol(&name_node);
-                let ty = child
-                    .child_by_field_name("type")
-                    .and_then(|n| lower_type_annotation(ctx, n));
-                params.push(ParamDecl { id, name, ty });
-            }
+        if child.kind() == "parameter"
+            && let Some(name_node) = child.child_by_field_name("name")
+        {
+            let id = ctx.fresh_id();
+            let name = ctx.node_symbol(&name_node);
+            let ty = child
+                .child_by_field_name("type")
+                .and_then(|n| lower_type_annotation(ctx, n));
+            params.push(ParamDecl { id, name, ty });
         }
     }
 
@@ -214,19 +214,19 @@ fn lower_struct_fields(ctx: &mut AstLoweringCtx, node: Node) -> Vec<FieldDecl> {
         if child.kind() == "struct_fields" {
             let mut inner_cursor = child.walk();
             for field_child in child.named_children(&mut inner_cursor) {
-                if field_child.kind() == "struct_field" {
-                    if let Some(field) = lower_struct_field(ctx, field_child) {
-                        fields.push(field);
-                    }
+                if field_child.kind() == "struct_field"
+                    && let Some(field) = lower_struct_field(ctx, field_child)
+                {
+                    fields.push(field);
                 }
             }
             continue;
         }
 
-        if child.kind() == "struct_field" {
-            if let Some(field) = lower_struct_field(ctx, child) {
-                fields.push(field);
-            }
+        if child.kind() == "struct_field"
+            && let Some(field) = lower_struct_field(ctx, child)
+        {
+            fields.push(field);
         }
     }
 
@@ -281,10 +281,10 @@ fn lower_enum_variants(ctx: &mut AstLoweringCtx, node: Node) -> Vec<VariantDecl>
         if child.kind() == "enum_variants" {
             let mut variant_cursor = child.walk();
             for variant_node in child.named_children(&mut variant_cursor) {
-                if variant_node.kind() == "enum_variant" {
-                    if let Some(variant) = lower_enum_variant(ctx, variant_node) {
-                        variants.push(variant);
-                    }
+                if variant_node.kind() == "enum_variant"
+                    && let Some(variant) = lower_enum_variant(ctx, variant_node)
+                {
+                    variants.push(variant);
                 }
             }
         }
@@ -337,20 +337,20 @@ fn lower_ability_operations(ctx: &mut AstLoweringCtx, node: Node) -> Vec<OpDecl>
         if child.kind() == "ability_operations" {
             let mut inner_cursor = child.walk();
             for op_node in child.named_children(&mut inner_cursor) {
-                if op_node.kind() == "ability_operation" {
-                    if let Some(op) = lower_ability_operation(ctx, op_node) {
-                        operations.push(op);
-                    }
+                if op_node.kind() == "ability_operation"
+                    && let Some(op) = lower_ability_operation(ctx, op_node)
+                {
+                    operations.push(op);
                 }
             }
             continue;
         }
 
         // Also handle direct ability_operation children (for compatibility)
-        if child.kind() == "ability_operation" {
-            if let Some(op) = lower_ability_operation(ctx, child) {
-                operations.push(op);
-            }
+        if child.kind() == "ability_operation"
+            && let Some(op) = lower_ability_operation(ctx, child)
+        {
+            operations.push(op);
         }
     }
 

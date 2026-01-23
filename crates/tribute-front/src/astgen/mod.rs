@@ -51,7 +51,7 @@ pub fn lower_source_to_ast(
 
     let cst = parse_cst(db, source)?;
     let text = source.text(db);
-    Some(lower_cst_to_ast(&text, &cst))
+    Some(lower_cst_to_ast(text, &cst))
 }
 
 // =============================================================================
@@ -173,13 +173,13 @@ mod tests {
         assert!(
             struct_decl.fields[0]
                 .name
-                .map(|s| s.to_string() == "x")
+                .map(|s| s == "x")
                 .unwrap_or(false)
         );
         assert!(
             struct_decl.fields[1]
                 .name
-                .map(|s| s.to_string() == "y")
+                .map(|s| s == "y")
                 .unwrap_or(false)
         );
     }
