@@ -1231,23 +1231,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tribute-wasm-backend"
-version = "0.1.0"
-dependencies = [
- "derive_more",
- "insta",
- "salsa",
- "salsa-test-macros",
- "tempfile",
- "tracing",
- "tribute-ir",
- "tribute-passes",
- "trunk-ir",
- "trunk-ir-wasm-backend",
- "wasm-encoder",
-]
-
-[[package]]
 name = "trunk-ir"
 version = "0.1.0"
 dependencies = [

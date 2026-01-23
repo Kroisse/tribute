@@ -39,7 +39,6 @@ tribute-core = { path = "crates/tribute-core" }
 tribute-front = { path = "crates/tribute-front" }
 tribute-ir = { path = "crates/tribute-ir" }
 tribute-passes = { path = "crates/tribute-passes" }
-tribute-wasm-backend = { path = "crates/tribute-wasm-backend" }
 trunk-ir = { path = "crates/trunk-ir" }
 trunk-ir-wasm-backend = { path = "crates/trunk-ir-wasm-backend" }
 unsynn = "0.3.0"
