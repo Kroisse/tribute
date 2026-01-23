@@ -4,9 +4,6 @@
 //! wasm dialect operations. Phase 1 handles basic arithmetic and function calls.
 
 use tracing::{error, warn};
-
-use super::plan::{MainExports, MemoryPlan};
-
 use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::tribute;
 use trunk_ir::DialectOp;
@@ -21,6 +18,7 @@ use trunk_ir::{
     Attribute, Block, DialectType, IdVec, Location, Operation, Region, Symbol, Type, Value, idvec,
 };
 use trunk_ir_wasm_backend::gc_types::{STEP_IDX, STEP_TAG_DONE, step_marker_type};
+use trunk_ir_wasm_backend::{MainExports, MemoryPlan};
 
 use super::type_converter::wasm_type_converter;
 
