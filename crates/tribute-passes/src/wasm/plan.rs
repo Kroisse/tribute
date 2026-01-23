@@ -12,23 +12,23 @@ use trunk_ir::Type;
 ///
 /// Tracks memory initialization and export decisions.
 #[derive(Default)]
-pub(crate) struct MemoryPlan {
+pub struct MemoryPlan {
     /// Whether a memory section has been defined in the module.
-    pub(crate) has_memory: bool,
+    pub has_memory: bool,
     /// Whether memory has been exported.
-    pub(crate) has_exported_memory: bool,
+    pub has_exported_memory: bool,
     /// Whether any memory is needed by the module.
-    pub(crate) needs_memory: bool,
+    pub needs_memory: bool,
 }
 
 impl MemoryPlan {
     /// Create a new memory plan.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
     /// Calculate required pages for the given end offset.
-    pub(crate) fn required_pages(&self, end_offset: u32) -> u32 {
+    pub fn required_pages(&self, end_offset: u32) -> u32 {
         std::cmp::max(1, end_offset.div_ceil(0x10000))
     }
 }
@@ -37,22 +37,22 @@ impl MemoryPlan {
 ///
 /// Tracks whether the main function was encountered and what type it returns.
 #[derive(Default)]
-pub(crate) struct MainExports<'db> {
+pub struct MainExports<'db> {
     /// Whether the main function was encountered during lowering.
-    pub(crate) saw_main: bool,
+    pub saw_main: bool,
     /// The return type of the main function, if any.
     /// When main is effectful, this will be the Step type.
-    pub(crate) main_result_type: Option<Type<'db>>,
+    pub main_result_type: Option<Type<'db>>,
     /// The original return type of main before Step conversion.
     /// This is used by the trampoline to properly unbox the result.
-    pub(crate) original_result_type: Option<Type<'db>>,
+    pub original_result_type: Option<Type<'db>>,
     /// Whether main has been exported.
-    pub(crate) main_exported: bool,
+    pub main_exported: bool,
 }
 
 impl<'db> MainExports<'db> {
     /// Create a new main exports tracker.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 }
