@@ -14,7 +14,9 @@
 //! - `emit`: Emits WebAssembly binaries from `wasm.*` TrunkIR operations
 //! - `gc_types`: GC type registry for WebAssembly GC types
 //! - `translate`: Language-agnostic module translation (validate + emit)
+//! - `data_registry`: Registry for WASM data section entries
 
+mod data_registry;
 mod emit;
 mod errors;
 pub mod gc_types;
@@ -23,6 +25,7 @@ mod translate;
 mod validation;
 mod wasm_binary;
 
+pub use data_registry::{DataEntry, DataRegistry};
 pub use emit::emit_wasm;
 pub use errors::{CompilationError, CompilationErrorKind, CompilationResult};
 pub use translate::emit_module_to_wasm;
