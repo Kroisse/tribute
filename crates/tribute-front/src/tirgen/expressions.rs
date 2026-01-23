@@ -675,7 +675,6 @@ fn lower_case_arm<'db>(
 ) -> Option<tribute::Arm<'db>> {
     let mut cursor = node.walk();
     let location = ctx.location(&node);
-    let infer_ty = ctx.fresh_type_var();
 
     let mut pattern_node = None;
     let mut body_node = None;
@@ -698,10 +697,12 @@ fn lower_case_arm<'db>(
     let bindings = collect_pattern_bindings(ctx, pattern_node);
 
     // 2. Create body block with block arguments for each binding
+    // Each binding gets its own fresh type variable since bindings can have different types
     let mut body_block = BlockBuilder::new(ctx.db, location);
     for binding in &bindings {
+        let binding_ty = ctx.fresh_type_var();
         body_block = body_block
-            .arg(infer_ty)
+            .arg(binding_ty)
             .attr(BIND_NAME(), binding.name)
             .attr(BIND_LOCATION(), Attribute::Location(binding.location));
     }
