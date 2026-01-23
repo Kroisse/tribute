@@ -30,9 +30,16 @@ pub struct CompletionIndex {
 }
 
 impl CompletionIndex {
-    /// Build a completion index from a compiled module.
-    pub fn build(db: &dyn salsa::Database, module: &Module<'_>) -> Self {
-        let def_index = DefinitionIndex::build(db, module);
+    /// Build a completion index from pre-resolve and post-resolve modules.
+    ///
+    /// - `pre_resolve`: Module before name resolution (from `parse_and_lower`).
+    /// - `post_resolve`: Module after full compilation (from `compile_for_lsp`).
+    pub fn build(
+        db: &dyn salsa::Database,
+        pre_resolve: &Module<'_>,
+        post_resolve: &Module<'_>,
+    ) -> Self {
+        let def_index = DefinitionIndex::build(db, pre_resolve, post_resolve);
         let mut entries = Vec::new();
 
         // Add all definitions as completion candidates
@@ -82,7 +89,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use tree_sitter::Parser;
     use tribute::SourceCst;
-    use tribute::compile_for_lsp;
+    use tribute::{compile_for_lsp, parse_and_lower};
 
     fn make_source(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| {
@@ -101,8 +108,9 @@ mod tests {
         let source_text = "fn foo() { }\nfn bar() { }\nfn baz() { }";
         let source = make_source("test.trb", source_text);
 
-        let module = compile_for_lsp(db, source);
-        let index = CompletionIndex::build(db, &module);
+        let pre_resolve = parse_and_lower(db, source);
+        let post_resolve = compile_for_lsp(db, source);
+        let index = CompletionIndex::build(db, &pre_resolve, &post_resolve);
 
         // Complete with "ba" prefix
         let completions = index.complete_expression("ba");

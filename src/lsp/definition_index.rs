@@ -54,12 +54,32 @@ pub struct DefinitionIndex {
 }
 
 impl DefinitionIndex {
-    /// Build a definition index from a compiled module.
-    pub fn build(db: &dyn salsa::Database, module: &Module<'_>) -> Self {
+    /// Build a definition index from pre-resolve and post-resolve modules.
+    ///
+    /// - `pre_resolve`: Module before name resolution (from `parse_and_lower`).
+    ///   Used to collect variable definitions (`tribute_pat.bind`) which are
+    ///   removed during the resolve pass.
+    /// - `post_resolve`: Module after full compilation (from `compile_for_lsp`).
+    ///   Used to collect other definitions (functions, types, abilities) and references.
+    pub fn build(
+        db: &dyn salsa::Database,
+        pre_resolve: &Module<'_>,
+        post_resolve: &Module<'_>,
+    ) -> Self {
         let mut definitions = Vec::new();
         let mut references = Vec::new();
 
-        Self::collect_from_region(db, &module.body(db), &mut definitions, &mut references);
+        // Collect variable definitions from pre-resolve IR
+        // (tribute_pat.bind ops are removed during resolve pass)
+        Self::collect_variable_definitions(db, &pre_resolve.body(db), &mut definitions);
+
+        // Collect other definitions and references from post-resolve IR
+        Self::collect_from_region(
+            db,
+            &post_resolve.body(db),
+            &mut definitions,
+            &mut references,
+        );
 
         // Sort for deterministic iteration order (by span position)
         definitions.sort_by_key(|e| (e.span.start, e.span.end));
@@ -68,6 +88,46 @@ impl DefinitionIndex {
         Self {
             definitions,
             references,
+        }
+    }
+
+    /// Collect only variable definitions (tribute_pat.bind) from a region.
+    fn collect_variable_definitions(
+        db: &dyn salsa::Database,
+        region: &Region<'_>,
+        definitions: &mut Vec<DefinitionEntry>,
+    ) {
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                Self::collect_variable_def_from_op(db, op, definitions);
+            }
+        }
+    }
+
+    /// Collect variable definition from a single operation.
+    fn collect_variable_def_from_op(
+        db: &dyn salsa::Database,
+        op: &Operation<'_>,
+        definitions: &mut Vec<DefinitionEntry>,
+    ) {
+        use tribute_ir::dialect::tribute_pat;
+        use trunk_ir::DialectOp;
+
+        let op_span = op.location(db).span;
+
+        // Collect tribute_pat.bind - pattern binding (variable definition)
+        if let Ok(bind_op) = tribute_pat::Bind::from_operation(db, *op) {
+            let name = bind_op.name(db);
+            definitions.push(DefinitionEntry {
+                name,
+                span: op_span,
+                kind: DefinitionKind::Variable,
+            });
+        }
+
+        // Recurse into nested regions
+        for region in op.regions(db).iter() {
+            Self::collect_variable_definitions(db, region, definitions);
         }
     }
 
@@ -99,7 +159,7 @@ impl DefinitionIndex {
         definitions: &mut Vec<DefinitionEntry>,
         references: &mut Vec<ReferenceEntry>,
     ) {
-        use tribute_ir::dialect::{tribute, tribute_pat};
+        use tribute_ir::dialect::tribute;
         use trunk_ir::DialectOp;
         use trunk_ir::dialect::func;
 
@@ -153,15 +213,8 @@ impl DefinitionIndex {
                 span,
                 kind: DefinitionKind::Ability,
             });
-        } else if let Ok(bind_op) = tribute_pat::Bind::from_operation(db, *op) {
-            // tribute_pat.bind - pattern binding (variable definition)
-            let name = bind_op.name(db);
-            definitions.push(DefinitionEntry {
-                name,
-                span: op_span,
-                kind: DefinitionKind::Variable,
-            });
         }
+        // Note: tribute_pat.bind is collected from pre-resolve IR in collect_variable_definitions
 
         // Collect references using typed wrappers
         if let Ok(call_op) = func::Call::from_operation(db, *op) {
@@ -373,7 +426,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use tree_sitter::Parser;
     use tribute::SourceCst;
-    use tribute::compile_for_lsp;
+    use tribute::{compile_for_lsp, parse_and_lower};
 
     fn make_source(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| {
@@ -394,8 +447,9 @@ mod tests {
         let source_text = "fn add(x: Int, y: Int) -> Int { x + y }";
         let source = make_source("test.trb", source_text);
 
-        let module = compile_for_lsp(db, source);
-        let index = DefinitionIndex::build(db, &module);
+        let pre_resolve = parse_and_lower(db, source);
+        let post_resolve = compile_for_lsp(db, source);
+        let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
 
         // Should find the function definition "add"
         let def = index.definition_of(Symbol::new("add"));
@@ -410,8 +464,9 @@ mod tests {
         let source_text = "fn foo(x: Int) -> Int { x }\nfn bar() -> Int { foo(1) }";
         let source = make_source("test.trb", source_text);
 
-        let module = compile_for_lsp(db, source);
-        let index = DefinitionIndex::build(db, &module);
+        let pre_resolve = parse_and_lower(db, source);
+        let post_resolve = compile_for_lsp(db, source);
+        let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
 
         // Find position of "foo" call in bar (around position 46)
         let foo_call_pos = source_text.rfind("foo").unwrap();
@@ -436,8 +491,9 @@ mod tests {
         let source_text = "fn foo(x: Int) -> Int { x }\nfn bar() -> Int { foo(1) + foo(2) }";
         let source = make_source("test.trb", source_text);
 
-        let module = compile_for_lsp(db, source);
-        let index = DefinitionIndex::build(db, &module);
+        let pre_resolve = parse_and_lower(db, source);
+        let post_resolve = compile_for_lsp(db, source);
+        let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
 
         // Find position of "foo" definition
         let foo_def_pos = source_text.find("foo").unwrap();
@@ -458,8 +514,9 @@ mod tests {
         let source_text = "fn foo(x: Int) -> Int { x }\nfn bar() -> Int { foo(1) + foo(2) }";
         let source = make_source("test.trb", source_text);
 
-        let module = compile_for_lsp(db, source);
-        let index = DefinitionIndex::build(db, &module);
+        let pre_resolve = parse_and_lower(db, source);
+        let post_resolve = compile_for_lsp(db, source);
+        let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
 
         // Find position of second "foo" call
         let foo_call_pos = source_text.rfind("foo").unwrap();
@@ -478,8 +535,9 @@ mod tests {
         let source_text = "fn foo() -> Int { 42 }";
         let source = make_source("test.trb", source_text);
 
-        let module = compile_for_lsp(db, source);
-        let index = DefinitionIndex::build(db, &module);
+        let pre_resolve = parse_and_lower(db, source);
+        let post_resolve = compile_for_lsp(db, source);
+        let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
 
         let foo_pos = source_text.find("foo").unwrap();
         let result = index.can_rename(foo_pos);
@@ -495,8 +553,9 @@ mod tests {
         let source_text = "fn foo() -> Int { 1 }\nfn bar() -> Int { foo() }";
         let source = make_source("test.trb", source_text);
 
-        let module = compile_for_lsp(db, source);
-        let index = DefinitionIndex::build(db, &module);
+        let pre_resolve = parse_and_lower(db, source);
+        let post_resolve = compile_for_lsp(db, source);
+        let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
 
         // Position of "foo" call in bar
         let foo_call_pos = source_text.rfind("foo").unwrap();
@@ -508,42 +567,15 @@ mod tests {
     }
 
     #[salsa_test]
-    #[ignore = "tribute.let is removed during resolve pass, see #273"]
     fn test_let_binding_definition(db: &salsa::DatabaseImpl) {
         //                    0         1         2         3
         //                    0123456789012345678901234567890123456789
         let source_text = "fn main() { let foo = 1; foo }";
         let source = make_source("test.trb", source_text);
 
-        let module = compile_for_lsp(db, source);
-
-        // Debug: print IR structure
-        eprintln!("IR structure:");
-        fn print_region(db: &dyn salsa::Database, region: &trunk_ir::Region, indent: usize) {
-            let prefix = "  ".repeat(indent);
-            for block in region.blocks(db) {
-                eprintln!("{}Block:", prefix);
-                for op in block.operations(db) {
-                    let dialect = op.dialect(db);
-                    let name = op.name(db);
-                    let span = op.location(db).span;
-                    eprintln!("{}  {}.{} at {:?}", prefix, dialect, name, span);
-                    for (i, region) in op.regions(db).iter().enumerate() {
-                        eprintln!("{}    Region {}:", prefix, i);
-                        print_region(db, region, indent + 3);
-                    }
-                }
-            }
-        }
-        print_region(db, &module.body(db), 0);
-
-        let index = DefinitionIndex::build(db, &module);
-
-        // Debug: print all definitions
-        eprintln!("\nDefinitions:");
-        for def in index.definitions() {
-            eprintln!("  {:?} '{}' at {:?}", def.kind, def.name, def.span);
-        }
+        let pre_resolve = parse_and_lower(db, source);
+        let post_resolve = compile_for_lsp(db, source);
+        let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
 
         // Should find the variable definition "foo"
         let def = index.definition_of(Symbol::new("foo"));
