@@ -1181,8 +1181,8 @@ dependencies = [
  "tribute-front",
  "tribute-ir",
  "tribute-passes",
- "tribute-wasm-backend",
  "trunk-ir",
+ "trunk-ir-wasm-backend",
 ]
 
 [[package]]
