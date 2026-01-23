@@ -1185,9 +1185,14 @@ impl<'db> TypeChecker<'db> {
     // === adt dialect checking ===
 
     fn check_string_const(&mut self, op: &Operation<'db>) {
-        let string_type = core::String::new(self.db);
+        // Look up String type from type_defs (defined in prelude as enum)
+        let string_type = self
+            .type_defs
+            .get(&Symbol::new("String"))
+            .copied()
+            .expect("String type should be defined in prelude");
         let value = op.result(self.db, 0);
-        self.record_type(value, *string_type);
+        self.record_type(value, string_type);
     }
 
     fn check_bytes_const(&mut self, op: &Operation<'db>) {
@@ -1503,7 +1508,6 @@ impl<'db> TypeChecker<'db> {
             "Bool" => tribute_rt::bool_type(self.db),
             "Float" => tribute_rt::float_type(self.db),
             "Nat" => tribute_rt::nat_type(self.db),
-            "String" => *core::String::new(self.db),
             "Bytes" => *core::Bytes::new(self.db),
             "Nil" => *core::Nil::new(self.db),
             // User-defined types - look up in type definitions

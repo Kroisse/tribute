@@ -117,7 +117,8 @@ pub fn lower_expr<'db>(
         // === String literals ===
         "string" | "raw_string" | "multiline_string" => {
             let s = parse_string_literal(node, &ctx.source);
-            let string_ty = core::String::new(ctx.db).as_type();
+            // String is defined as an enum in prelude, use typeref for late resolution
+            let string_ty = adt::typeref(ctx.db, Symbol::new("String"));
             let op = block.op(adt::string_const(ctx.db, location, string_ty, s));
             Some(op.result(ctx.db))
         }
@@ -1807,7 +1808,8 @@ fn lower_string_interpolation<'db>(
     node: Node,
 ) -> Option<Value<'db>> {
     let location = ctx.location(&node);
-    let string_ty = core::String::new(ctx.db).as_type();
+    // String is defined as an enum in prelude, use typeref for late resolution
+    let string_ty = adt::typeref(ctx.db, Symbol::new("String"));
     let infer_ty = ctx.fresh_type_var();
 
     let mut cursor = node.walk();

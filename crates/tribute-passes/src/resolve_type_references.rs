@@ -187,7 +187,6 @@ fn resolve_primitive_type<'db>(db: &'db dyn salsa::Database, name: &Symbol) -> O
         "Bool" => Some(tribute_rt::bool_type(db)),
         "Float" => Some(tribute_rt::float_type(db)),
         "Nat" => Some(tribute_rt::nat_type(db)),
-        "String" => Some(*core::String::new(db)),
         "Bytes" => Some(*core::Bytes::new(db)),
         "Nil" => Some(*core::Nil::new(db)),
         _ => None,

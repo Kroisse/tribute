@@ -73,7 +73,6 @@ impl<'db> ConstAnalysis<'db> {
 struct ConstCollector {
     string_allocations: Vec<(Vec<u8>, u32, u32)>,
     bytes_allocations: Vec<(Vec<u8>, u32, u32)>,
-    string_seen: HashMap<Vec<u8>, usize>,
     bytes_seen: HashMap<Vec<u8>, usize>,
     next_string_offset: u32,
     next_bytes_idx: u32,
@@ -84,18 +83,10 @@ impl ConstCollector {
         Self {
             string_allocations: Vec::new(),
             bytes_allocations: Vec::new(),
-            string_seen: HashMap::new(),
             bytes_seen: HashMap::new(),
             next_string_offset: 0,
             next_bytes_idx: 0,
         }
-    }
-
-    fn align_to(value: u32, align: u32) -> u32 {
-        if align == 0 {
-            return value;
-        }
-        value.div_ceil(align) * align
     }
 
     fn visit_op<'db>(&mut self, db: &'db dyn salsa::Database, op: &Operation<'db>) {
@@ -108,14 +99,16 @@ impl ConstCollector {
             if name == adt::STRING_CONST()
                 && let Some(Attribute::String(s)) = attrs.get(&Symbol::new("value"))
             {
+                // String literals are now compiled as String::Leaf(Bytes)
+                // Allocate in bytes_allocations (passive data segments) instead of string_allocations
                 let bytes = s.clone().into_bytes();
-                if !self.string_seen.contains_key(&bytes) {
-                    let offset = Self::align_to(self.next_string_offset, 4);
+                if !self.bytes_seen.contains_key(&bytes) {
+                    let data_idx = self.next_bytes_idx;
                     let len = bytes.len() as u32;
-                    self.string_seen
-                        .insert(bytes.clone(), self.string_allocations.len());
-                    self.string_allocations.push((bytes, offset, len));
-                    self.next_string_offset = offset + len;
+                    self.bytes_seen
+                        .insert(bytes.clone(), self.bytes_allocations.len());
+                    self.bytes_allocations.push((bytes, data_idx, len));
+                    self.next_bytes_idx += 1;
                 }
             } else if name == adt::BYTES_CONST()
                 && let Some(Attribute::Bytes(b)) = attrs.get(&Symbol::new("value"))
@@ -174,37 +167,25 @@ pub fn lower<'db>(
     analysis: ConstAnalysis<'db>,
 ) -> Module<'db> {
     // Extract allocations data from salsa-tracked struct for use in 'static patterns
-    let string_allocations = analysis.string_allocations(db).clone();
     let bytes_allocations = analysis.bytes_allocations(db).clone();
 
     // No specific conversion target - const lowering is a dialect transformation
     let target = ConversionTarget::new();
     PatternApplicator::new(wasm_type_converter())
-        .add_pattern(StringConstPattern::new(string_allocations))
+        .add_pattern(StringConstPattern::new(bytes_allocations.clone()))
         .add_pattern(BytesConstPattern::new(bytes_allocations))
         .apply_partial(db, module, target)
         .module
 }
 
-/// Allocation data: (content, offset, length).
-type Allocations = Vec<(Vec<u8>, u32, u32)>;
-
-/// Look up offset and length for given content.
-fn lookup_offset(allocations: &Allocations, content: &[u8]) -> Option<(u32, u32)> {
-    allocations
-        .iter()
-        .find(|(data, _, _)| data.as_slice() == content)
-        .map(|(_, offset, len)| (*offset, *len))
-}
-
-/// Pattern for `adt.string_const` -> `wasm.i32_const`
+/// Pattern for `adt.string_const` -> `wasm.bytes_from_data` + `adt.variant_new` (String::Leaf)
 struct StringConstPattern {
-    allocations: Allocations,
+    bytes_allocations: BytesAllocations,
 }
 
 impl StringConstPattern {
-    fn new(allocations: Allocations) -> Self {
-        Self { allocations }
+    fn new(bytes_allocations: BytesAllocations) -> Self {
+        Self { bytes_allocations }
     }
 }
 
@@ -221,18 +202,42 @@ impl<'db> RewritePattern<'db> for StringConstPattern {
 
         let content = string_const.value(db).clone().into_bytes();
 
-        let Some((offset, _len)) = lookup_offset(&self.allocations, &content) else {
+        let Some((data_idx, len)) = lookup_bytes_info(&self.bytes_allocations, &content) else {
             return RewriteResult::Unchanged;
         };
 
         let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
+        let bytes_ty = core::Bytes::new(db).as_type();
 
-        // Use typed helper to create wasm.i32_const with just the offset.
-        // Length information is available in ConstAnalysis and will be used by emit.rs.
-        let new_op = wasm::i32_const(db, location, i32_ty, offset as i32).as_operation();
+        // Create wasm.bytes_from_data to get Bytes value
+        let bytes_op = wasm::bytes_from_data(db, location, bytes_ty, data_idx, 0, len);
 
-        RewriteResult::Replace(new_op)
+        // Create String enum type for variant_new
+        let i64_ty = core::I64::new(db).as_type();
+        let string_typeref = adt::typeref(db, Symbol::new("String"));
+        let string_ty = adt::enum_type(
+            db,
+            Symbol::new("String"),
+            vec![
+                (Symbol::new("Leaf"), vec![bytes_ty]),
+                (
+                    Symbol::new("Branch"),
+                    vec![string_typeref, string_typeref, i64_ty, i64_ty],
+                ),
+            ],
+        );
+
+        // Create adt.variant_new to wrap Bytes in String::Leaf
+        let variant_op = adt::variant_new(
+            db,
+            location,
+            vec![bytes_op.result(db)],
+            string_ty,
+            string_ty,
+            Symbol::new("Leaf"),
+        );
+
+        RewriteResult::Expand(vec![bytes_op.as_operation(), variant_op.as_operation()])
     }
 }
 
@@ -324,9 +329,10 @@ mod tests {
         let module = make_string_const_module(db);
         let analysis = analyze_consts(db, module);
 
-        assert_eq!(analysis.allocations(db).len(), 1);
-        assert_eq!(analysis.allocations(db)[0].0, b"hello".to_vec());
-        assert_eq!(analysis.allocations(db)[0].2, 5); // length
+        // String literals are now stored in bytes_allocations (for String::Leaf(Bytes))
+        assert_eq!(analysis.bytes_allocations(db).len(), 1);
+        assert_eq!(analysis.bytes_allocations(db)[0].0, b"hello".to_vec());
+        assert_eq!(analysis.bytes_allocations(db)[0].2, 5); // length
     }
 
     #[salsa::tracked]
@@ -343,7 +349,9 @@ mod tests {
         let module = make_string_const_module(db);
         let op_names = lower_and_check(db, module);
 
-        assert_eq!(op_names.len(), 1);
-        assert_eq!(op_names[0], "wasm.i32_const");
+        // String literals are now converted to wasm.bytes_from_data + adt.variant_new (String::Leaf)
+        assert_eq!(op_names.len(), 2);
+        assert_eq!(op_names[0], "wasm.bytes_from_data");
+        assert_eq!(op_names[1], "adt.variant_new");
     }
 }

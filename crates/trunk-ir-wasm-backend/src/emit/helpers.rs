@@ -91,10 +91,8 @@ pub(crate) fn type_to_valtype<'db>(
             nullable: true,
             heap_type: HeapType::Concrete(BYTES_STRUCT_IDX),
         }))
-    } else if core::String::from_type(db, ty).is_some()
-        || (ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == Symbol::new("ptr"))
-    {
-        // String and ptr still use linear memory (i32 pointer)
+    } else if ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == Symbol::new("ptr") {
+        // ptr still uses linear memory (i32 pointer)
         Ok(ValType::I32)
     } else if ty.dialect(db) == wasm::DIALECT_NAME() {
         // WASM dialect types (e.g., wasm.structref for continuation frames)

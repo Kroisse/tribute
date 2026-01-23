@@ -541,18 +541,18 @@ mod tests {
     #[salsa_test]
     fn test_find_by_name_with_multiple_parameterizations(db: &salsa::DatabaseImpl) {
         // When effect row contains multiple parameterizations of the same ability
-        // (e.g., both State(Int) and State(String)), find_by_name returns all.
+        // (e.g., both State(Int) and State(Float)), find_by_name returns all.
         //
         // Note: In the current implementation, a handler pattern without explicit
         // type parameters (e.g., `State::get()`) will handle ALL matching abilities.
         // Future work may add type inference from handler bodies to disambiguate.
         let state_name = Symbol::new("State");
         let int_ty = *core::I64::new(db);
-        let string_ty = *core::String::new(db);
+        let float_ty = *core::F64::new(db);
 
         let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
-        let state_string = AbilityRef::new(state_name, IdVec::from(vec![string_ty]));
-        let row = EffectRow::concrete([state_int.clone(), state_string.clone()]);
+        let state_float = AbilityRef::new(state_name, IdVec::from(vec![float_ty]));
+        let row = EffectRow::concrete([state_int.clone(), state_float.clone()]);
 
         // Handler pattern just says "State" (no params)
         let matching = row.find_by_name(state_name);
@@ -560,7 +560,7 @@ mod tests {
         // Both parameterizations are returned
         assert_eq!(matching.len(), 2);
         assert!(matching.contains(&state_int));
-        assert!(matching.contains(&state_string));
+        assert!(matching.contains(&state_float));
     }
 
     #[salsa_test]
@@ -569,11 +569,11 @@ mod tests {
         // appears with different type parameters
         let state_name = Symbol::new("State");
         let int_ty = *core::I64::new(db);
-        let string_ty = *core::String::new(db);
+        let float_ty = *core::F64::new(db);
 
         let state_int = AbilityRef::new(state_name, IdVec::from(vec![int_ty]));
-        let state_string = AbilityRef::new(state_name, IdVec::from(vec![string_ty]));
-        let row = EffectRow::concrete([state_int.clone(), state_string.clone()]);
+        let state_float = AbilityRef::new(state_name, IdVec::from(vec![float_ty]));
+        let row = EffectRow::concrete([state_int.clone(), state_float.clone()]);
 
         // Should detect the conflict
         let conflict = row.find_conflicting_abilities();

@@ -253,7 +253,8 @@ pub fn lower<'db>(
         .add_pattern(BytesLenPattern)
         .add_pattern(BytesGetOrPanicPattern)
         .add_pattern(BytesSliceOrPanicPattern)
-        .add_pattern(BytesConcatPattern);
+        .add_pattern(BytesConcatPattern)
+        .add_pattern(BytesEmptyPattern);
 
     // No specific conversion target - intrinsic lowering is a dialect transformation
     let target = ConversionTarget::new();
@@ -609,6 +610,49 @@ impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
             end_i32.operation(),
             new_offset.operation(),
             new_len.operation(),
+            struct_new.operation(),
+        ])
+    }
+}
+
+/// Pattern for `Bytes::empty()` -> create empty Bytes struct
+struct BytesEmptyPattern;
+
+impl<'db> RewritePattern<'db> for BytesEmptyPattern {
+    fn match_and_rewrite<'a>(
+        &self,
+        db: &'a dyn salsa::Database,
+        op: &Operation<'a>,
+        _adaptor: &OpAdaptor<'a, '_>,
+    ) -> RewriteResult<'a> {
+        if !is_bytes_intrinsic_call(db, op, "__bytes_empty") {
+            return RewriteResult::Unchanged;
+        }
+
+        let location = op.location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let i8_ty = core::I8::new(db).as_type();
+        let bytes_ty = core::Bytes::new(db).as_type();
+        let array_ref_ty =
+            core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
+
+        // Create empty array: array_new_default(0)
+        let zero = wasm::i32_const(db, location, i32_ty, 0);
+        let empty_array =
+            wasm::array_new_default(db, location, zero.result(db), array_ref_ty, BYTES_ARRAY_IDX);
+
+        // Create Bytes struct: struct_new(empty_arr, 0, 0)
+        let struct_new = wasm::struct_new(
+            db,
+            location,
+            vec![empty_array.result(db), zero.result(db), zero.result(db)],
+            bytes_ty,
+            BYTES_STRUCT_IDX,
+        );
+
+        RewriteResult::Expand(vec![
+            zero.operation(),
+            empty_array.operation(),
             struct_new.operation(),
         ])
     }
