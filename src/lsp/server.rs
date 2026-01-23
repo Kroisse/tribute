@@ -32,8 +32,8 @@ use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
 use super::call_index::{CallIndex, get_param_names};
-use super::completion_index::{CompletionIndex, CompletionKind};
-use super::definition_index::{DefinitionIndex, validate_identifier};
+use super::completion_index::{self, CompletionKind};
+use super::definition_index::{self, validate_identifier};
 use super::pretty::{format_signature, print_type};
 use super::type_index::TypeIndex;
 use tribute::{TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local};
@@ -243,8 +243,8 @@ impl LspServer {
 
         // Run Salsa compilation and build definition index
         let definition = self.db.attach(|db| {
-            let index = DefinitionIndex::build(db, source_cst);
-            index.definition_at(offset).cloned()
+            let index = definition_index::build(db, source_cst);
+            index.definition_at(db, offset).cloned()
         })?;
 
         tracing::debug!(
@@ -279,14 +279,14 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let locations = self.db.attach(|db| {
-            let index = DefinitionIndex::build(db, source_cst);
+            let index = definition_index::build(db, source_cst);
 
-            let (symbol, refs) = index.references_at(offset)?;
+            let (symbol, refs) = index.references_at(db, offset)?;
 
             let mut locations = Vec::new();
 
             // Optionally include the definition itself
-            if include_declaration && let Some(def) = index.definition_of(symbol) {
+            if include_declaration && let Some(def) = index.definition_of(db, symbol) {
                 locations.push(Location {
                     uri: uri.clone(),
                     range: span_to_range(&rope, def.span),
@@ -324,10 +324,10 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let result = self.db.attach(|db| {
-            let index = DefinitionIndex::build(db, source_cst);
+            let index = definition_index::build(db, source_cst);
 
             // Check if rename is possible at this position
-            let (def, span) = index.can_rename(offset)?;
+            let (def, span) = index.can_rename(db, offset)?;
 
             let range = span_to_range(&rope, span);
             let placeholder = def.name.to_string();
@@ -358,10 +358,10 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let text_edits = self.db.attach(|db| {
-            let index = DefinitionIndex::build(db, source_cst);
+            let index = definition_index::build(db, source_cst);
 
             // Get definition and validate
-            let (def, _) = index.can_rename(offset)?;
+            let (def, _) = index.can_rename(db, offset)?;
 
             // Validate new name
             if validate_identifier(new_name, def.kind).is_err() {
@@ -379,7 +379,7 @@ impl LspServer {
             });
 
             // Add all references
-            for reference in index.references_of(def.name) {
+            for reference in index.references_of(db, def.name) {
                 edits.push(TextEdit {
                     range: span_to_range(&rope, reference.span),
                     new_text: new_name.clone(),
@@ -420,17 +420,17 @@ impl LspServer {
         let prefix = extract_completion_prefix(&rope, offset);
 
         let items = self.db.attach(|db| {
-            let index = CompletionIndex::build(db, source_cst);
+            let index = completion_index::build(db, source_cst);
 
             // Get expression completions filtered by prefix
             let mut completions: Vec<_> = index
-                .complete_expression(&prefix)
+                .complete_expression(db, &prefix)
                 .into_iter()
                 .cloned()
                 .collect();
 
             // Add keyword completions
-            completions.extend(CompletionIndex::complete_keywords(&prefix));
+            completions.extend(completion_index::complete_keywords(&prefix));
 
             Some(completions)
         })?;
@@ -439,7 +439,7 @@ impl LspServer {
         let completion_items: Vec<CompletionItem> = items
             .into_iter()
             .map(|entry| CompletionItem {
-                label: entry.name,
+                label: entry.name.to_string(),
                 kind: Some(match entry.kind {
                     CompletionKind::Function => CompletionItemKind::FUNCTION,
                     CompletionKind::Constructor => CompletionItemKind::CONSTRUCTOR,

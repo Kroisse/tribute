@@ -10,7 +10,7 @@ use trunk_ir::Span;
 use trunk_ir::{Attribute, Block, Operation, Region, Symbol};
 
 /// Entry representing a definition location.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, salsa::Update)]
 pub struct DefinitionEntry {
     /// Name of the defined symbol.
     pub name: Symbol,
@@ -21,7 +21,7 @@ pub struct DefinitionEntry {
 }
 
 /// Kind of definition.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DefinitionKind {
     /// A function definition.
     Function,
@@ -37,7 +37,7 @@ pub enum DefinitionKind {
 }
 
 /// Entry representing a reference (usage) location.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, salsa::Update)]
 pub struct ReferenceEntry {
     /// Span of the reference in source.
     pub span: Span,
@@ -46,50 +46,51 @@ pub struct ReferenceEntry {
 }
 
 /// Index for Go to Definition lookups.
-pub struct DefinitionIndex {
+#[salsa::tracked]
+pub struct DefinitionIndex<'db> {
     /// All definitions in the module.
-    definitions: Vec<DefinitionEntry>,
+    #[returns(deref)]
+    pub definitions: Vec<DefinitionEntry>,
     /// All references (usages) that can be jumped from.
+    #[returns(deref)]
     references: Vec<ReferenceEntry>,
 }
 
-impl DefinitionIndex {
-    /// Build a definition index from a source file.
-    ///
-    /// Internally uses both pre-resolve and post-resolve IR:
-    /// - Pre-resolve IR: Collects variable definitions (`tribute_pat.bind`)
-    ///   which are removed during the resolve pass.
-    /// - Post-resolve IR: Collects other definitions (functions, types, abilities)
-    ///   and references.
-    pub fn build(db: &dyn salsa::Database, source_cst: SourceCst) -> Self {
-        let pre_resolve = parse_and_lower(db, source_cst);
-        let post_resolve = compile_for_lsp(db, source_cst);
+/// Build a definition index from a source file.
+///
+/// Internally uses both pre-resolve and post-resolve IR:
+/// - Pre-resolve IR: Collects variable definitions (`tribute_pat.bind`)
+///   which are removed during the resolve pass.
+/// - Post-resolve IR: Collects other definitions (functions, types, abilities)
+///   and references.
+#[salsa::tracked]
+pub fn build<'db>(db: &'db dyn salsa::Database, source_cst: SourceCst) -> DefinitionIndex<'db> {
+    let pre_resolve = parse_and_lower(db, source_cst);
+    let post_resolve = compile_for_lsp(db, source_cst);
 
-        let mut definitions = Vec::new();
-        let mut references = Vec::new();
+    let mut definitions = Vec::new();
+    let mut references = Vec::new();
 
-        // Collect variable definitions from pre-resolve IR
-        // (tribute_pat.bind ops are removed during resolve pass)
-        Self::collect_variable_definitions(db, &pre_resolve.body(db), &mut definitions);
+    // Collect variable definitions from pre-resolve IR
+    // (tribute_pat.bind ops are removed during resolve pass)
+    DefinitionIndex::collect_variable_definitions(db, &pre_resolve.body(db), &mut definitions);
 
-        // Collect other definitions and references from post-resolve IR
-        Self::collect_from_region(
-            db,
-            &post_resolve.body(db),
-            &mut definitions,
-            &mut references,
-        );
+    // Collect other definitions and references from post-resolve IR
+    DefinitionIndex::collect_from_region(
+        db,
+        &post_resolve.body(db),
+        &mut definitions,
+        &mut references,
+    );
 
-        // Sort for deterministic iteration order (by span position)
-        definitions.sort_by_key(|e| (e.span.start, e.span.end));
-        references.sort_by_key(|e| (e.span.start, e.span.end));
+    // Sort for deterministic iteration order (by span position)
+    definitions.sort_by_key(|e| (e.span.start, e.span.end));
+    references.sort_by_key(|e| (e.span.start, e.span.end));
 
-        Self {
-            definitions,
-            references,
-        }
-    }
+    DefinitionIndex::new(db, definitions, references)
+}
 
+impl<'db> DefinitionIndex<'db> {
     /// Collect only variable definitions (tribute_pat.bind) from a region.
     fn collect_variable_definitions(
         db: &dyn salsa::Database,
@@ -246,35 +247,55 @@ impl DefinitionIndex {
     }
 
     /// Find a reference at the given byte offset.
-    pub fn reference_at(&self, offset: usize) -> Option<&ReferenceEntry> {
-        self.references
+    pub fn reference_at(
+        &self,
+        db: &'db dyn salsa::Database,
+        offset: usize,
+    ) -> Option<&'db ReferenceEntry> {
+        self.references(db)
             .iter()
             .filter(|e| e.span.start <= offset && offset < e.span.end)
             .min_by_key(|e| e.span.end - e.span.start)
     }
 
     /// Find the definition of a symbol by name.
-    pub fn definition_of(&self, name: Symbol) -> Option<&DefinitionEntry> {
-        self.definitions.iter().find(|e| e.name == name)
+    pub fn definition_of(
+        &self,
+        db: &'db dyn salsa::Database,
+        name: Symbol,
+    ) -> Option<&DefinitionEntry> {
+        self.definitions(db).iter().find(|e| e.name == name)
     }
 
     /// Get the definition location for a reference at the given offset.
-    pub fn definition_at(&self, offset: usize) -> Option<&DefinitionEntry> {
-        let reference = self.reference_at(offset)?;
-        self.definition_of(reference.target)
+    pub fn definition_at(
+        &self,
+        db: &'db dyn salsa::Database,
+        offset: usize,
+    ) -> Option<&DefinitionEntry> {
+        let reference = self.reference_at(db, offset)?;
+        self.definition_of(db, reference.target)
     }
 
     /// Find a definition at the given byte offset.
-    pub fn definition_at_position(&self, offset: usize) -> Option<&DefinitionEntry> {
-        self.definitions
+    pub fn definition_at_position(
+        &self,
+        db: &'db dyn salsa::Database,
+        offset: usize,
+    ) -> Option<&DefinitionEntry> {
+        self.definitions(db)
             .iter()
             .filter(|e| e.span.start <= offset && offset < e.span.end)
             .min_by_key(|e| e.span.end - e.span.start)
     }
 
     /// Find all references to a given symbol.
-    pub fn references_of(&self, name: Symbol) -> Vec<&ReferenceEntry> {
-        self.references
+    pub fn references_of(
+        &self,
+        db: &'db dyn salsa::Database,
+        name: Symbol,
+    ) -> Vec<&ReferenceEntry> {
+        self.references(db)
             .iter()
             .filter(|e| e.target == name)
             .collect()
@@ -286,16 +307,20 @@ impl DefinitionIndex {
     /// If the position is on a reference, finds the target symbol and returns all references to it.
     ///
     /// Returns the symbol name and a list of all references to it.
-    pub fn references_at(&self, offset: usize) -> Option<(Symbol, Vec<&ReferenceEntry>)> {
+    pub fn references_at(
+        &self,
+        db: &'db dyn salsa::Database,
+        offset: usize,
+    ) -> Option<(Symbol, Vec<&ReferenceEntry>)> {
         // First check if we're on a definition
-        if let Some(def) = self.definition_at_position(offset) {
-            let refs = self.references_of(def.name);
+        if let Some(def) = self.definition_at_position(db, offset) {
+            let refs = self.references_of(db, def.name);
             return Some((def.name, refs));
         }
 
         // Otherwise check if we're on a reference
-        if let Some(reference) = self.reference_at(offset) {
-            let refs = self.references_of(reference.target);
+        if let Some(reference) = self.reference_at(db, offset) {
+            let refs = self.references_of(db, reference.target);
             return Some((reference.target, refs));
         }
 
@@ -304,25 +329,24 @@ impl DefinitionIndex {
 
     /// Check if the symbol at the given offset can be renamed.
     /// Returns the definition entry and the span to highlight if renameable.
-    pub fn can_rename(&self, offset: usize) -> Option<(&DefinitionEntry, Span)> {
+    pub fn can_rename(
+        &self,
+        db: &'db dyn salsa::Database,
+        offset: usize,
+    ) -> Option<(&DefinitionEntry, Span)> {
         // First check if we're on a definition
-        if let Some(def) = self.definition_at_position(offset) {
+        if let Some(def) = self.definition_at_position(db, offset) {
             return Some((def, def.span));
         }
 
         // Otherwise check if we're on a reference
-        if let Some(reference) = self.reference_at(offset)
-            && let Some(def) = self.definition_of(reference.target)
+        if let Some(reference) = self.reference_at(db, offset)
+            && let Some(def) = self.definition_of(db, reference.target)
         {
             return Some((def, reference.span));
         }
 
         None
-    }
-
-    /// Get all definitions in the module.
-    pub fn definitions(&self) -> &[DefinitionEntry] {
-        &self.definitions
     }
 }
 
@@ -445,10 +469,10 @@ mod tests {
         let source_text = "fn add(x: Int, y: Int) -> Int { x + y }";
         let source = make_source("test.trb", source_text);
 
-        let index = DefinitionIndex::build(db, source);
+        let index = build(db, source);
 
         // Should find the function definition "add"
-        let def = index.definition_of(Symbol::new("add"));
+        let def = index.definition_of(db, Symbol::new("add"));
         assert!(def.is_some(), "Should find function 'add'");
         assert_eq!(def.unwrap().kind, DefinitionKind::Function);
     }
@@ -460,13 +484,13 @@ mod tests {
         let source_text = "fn foo(x: Int) -> Int { x }\nfn bar() -> Int { foo(1) }";
         let source = make_source("test.trb", source_text);
 
-        let index = DefinitionIndex::build(db, source);
+        let index = build(db, source);
 
         // Find position of "foo" call in bar (around position 46)
         let foo_call_pos = source_text.rfind("foo").unwrap();
 
         // Should be able to go from the call to the definition
-        let def = index.definition_at(foo_call_pos);
+        let def = index.definition_at(db, foo_call_pos);
         assert!(
             def.is_some(),
             "Should find definition from 'foo' call at position {}",
@@ -485,13 +509,13 @@ mod tests {
         let source_text = "fn foo(x: Int) -> Int { x }\nfn bar() -> Int { foo(1) + foo(2) }";
         let source = make_source("test.trb", source_text);
 
-        let index = DefinitionIndex::build(db, source);
+        let index = build(db, source);
 
         // Find position of "foo" definition
         let foo_def_pos = source_text.find("foo").unwrap();
 
         // Should find all references from the definition
-        let result = index.references_at(foo_def_pos);
+        let result = index.references_at(db, foo_def_pos);
         assert!(result.is_some(), "Should find references from definition");
 
         let (symbol, refs) = result.unwrap();
@@ -506,13 +530,13 @@ mod tests {
         let source_text = "fn foo(x: Int) -> Int { x }\nfn bar() -> Int { foo(1) + foo(2) }";
         let source = make_source("test.trb", source_text);
 
-        let index = DefinitionIndex::build(db, source);
+        let index = build(db, source);
 
         // Find position of second "foo" call
         let foo_call_pos = source_text.rfind("foo").unwrap();
 
         // Should find all references from the call site too
-        let result = index.references_at(foo_call_pos);
+        let result = index.references_at(db, foo_call_pos);
         assert!(result.is_some(), "Should find references from call site");
 
         let (symbol, refs) = result.unwrap();
@@ -525,10 +549,10 @@ mod tests {
         let source_text = "fn foo() -> Int { 42 }";
         let source = make_source("test.trb", source_text);
 
-        let index = DefinitionIndex::build(db, source);
+        let index = build(db, source);
 
         let foo_pos = source_text.find("foo").unwrap();
-        let result = index.can_rename(foo_pos);
+        let result = index.can_rename(db, foo_pos);
 
         assert!(result.is_some(), "Function should be renameable");
         let (def, _) = result.unwrap();
@@ -541,11 +565,11 @@ mod tests {
         let source_text = "fn foo() -> Int { 1 }\nfn bar() -> Int { foo() }";
         let source = make_source("test.trb", source_text);
 
-        let index = DefinitionIndex::build(db, source);
+        let index = build(db, source);
 
         // Position of "foo" call in bar
         let foo_call_pos = source_text.rfind("foo").unwrap();
-        let result = index.can_rename(foo_call_pos);
+        let result = index.can_rename(db, foo_call_pos);
 
         assert!(result.is_some(), "Should be able to rename from reference");
         let (def, _) = result.unwrap();
@@ -559,10 +583,10 @@ mod tests {
         let source_text = "fn main() { let foo = 1; foo }";
         let source = make_source("test.trb", source_text);
 
-        let index = DefinitionIndex::build(db, source);
+        let index = build(db, source);
 
         // Should find the variable definition "foo"
-        let def = index.definition_of(Symbol::new("foo"));
+        let def = index.definition_of(db, Symbol::new("foo"));
         assert!(def.is_some(), "Should find variable 'foo'");
         assert_eq!(def.unwrap().kind, DefinitionKind::Variable);
     }
