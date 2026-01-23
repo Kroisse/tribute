@@ -6,10 +6,12 @@
 //! ## Modules
 //!
 //! - [`ast`]: Salsa-tracked AST types with phase-parameterized name resolution
+//! - [`astgen`]: CST to AST lowering (new)
 //! - [`source_file`]: Source file management and URI handling
 //! - [`tirgen`]: CST to TrunkIR lowering (legacy, to be replaced by astgen)
 
 pub mod ast;
+pub mod astgen;
 pub mod source_file;
 pub mod tirgen;
 
