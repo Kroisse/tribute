@@ -13,15 +13,18 @@
 //!
 //! - `emit`: Emits WebAssembly binaries from `wasm.*` TrunkIR operations
 //! - `gc_types`: GC type registry for WebAssembly GC types
+//! - `translate`: Language-agnostic module translation (validate + emit)
 
 mod emit;
 mod errors;
 pub mod gc_types;
 pub mod passes;
+mod translate;
 mod validation;
 mod wasm_binary;
 
 pub use emit::emit_wasm;
 pub use errors::{CompilationError, CompilationErrorKind, CompilationResult};
+pub use translate::emit_module_to_wasm;
 pub use validation::{ValidationError, validate_wasm_ir};
 pub use wasm_binary::WasmBinary;

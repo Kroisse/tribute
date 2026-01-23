@@ -16,10 +16,3 @@ pub use translate::{WasmBinary, compile_to_wasm};
 pub use trunk_ir_wasm_backend::emit_wasm;
 pub use trunk_ir_wasm_backend::gc_types;
 pub use trunk_ir_wasm_backend::{CompilationError, CompilationErrorKind, CompilationResult};
-
-// Shared attribute symbols used across modules
-trunk_ir::symbols! {
-    ATTR_SYM_NAME => "sym_name",
-    ATTR_MODULE => "module",
-    ATTR_NAME => "name",
-}
