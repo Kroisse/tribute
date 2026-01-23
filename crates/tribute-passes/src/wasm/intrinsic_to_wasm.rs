@@ -1,14 +1,13 @@
 //! Lower intrinsic calls to WASM operations.
 //!
 //! This pass transforms high-level intrinsic calls to low-level WASM instructions:
-//! - `__print_line` -> WASI `fd_write` call
+//! - `__print_bytes` -> copy to linear memory + WASI `fd_write` call
+//! - `__print_newline` -> WASI `fd_write` call with newline
 //! - `__bytes_len`, `__bytes_get_or_panic`, etc. -> WasmGC struct/array operations
 //!
 //! Two-phase approach for WASI intrinsics:
 //! 1. Analysis: Collect all intrinsic calls and allocate runtime data segments
 //! 2. Transform: Replace intrinsic calls with WASM instruction sequences
-
-use std::collections::HashMap;
 
 use tribute_ir::ModulePathExt;
 use trunk_ir::dialect::core::{self, Module};
@@ -16,7 +15,7 @@ use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
 };
-use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
+use trunk_ir::{DialectOp, DialectType, Operation, Symbol};
 
 use super::type_converter::wasm_type_converter;
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
@@ -98,6 +97,12 @@ pub struct IntrinsicAnalysis<'db> {
     pub iovec_allocations: Vec<(u32, u32, u32)>,
     /// Offset of nwritten buffer (if any intrinsics need it).
     pub nwritten_offset: Option<u32>,
+    /// Offset of the print buffer for __print_bytes (4096 bytes).
+    pub print_buffer_offset: Option<u32>,
+    /// Offset of the iovec for print operations (8 bytes).
+    pub print_iovec_offset: Option<u32>,
+    /// Offset of the newline character (1 byte).
+    pub newline_offset: Option<u32>,
     /// Total size of runtime data segments.
     pub total_size: u32,
 }
@@ -112,6 +117,9 @@ impl<'db> IntrinsicAnalysis<'db> {
     }
 }
 
+/// Size of the print buffer for __print_bytes.
+const PRINT_BUFFER_SIZE: u32 = 4096;
+
 /// Analyze a module to collect intrinsic calls and allocate runtime data segments.
 /// Note: This is not a salsa::tracked function because base_offset is a runtime value.
 pub fn analyze_intrinsics<'db>(
@@ -119,9 +127,9 @@ pub fn analyze_intrinsics<'db>(
     module: Module<'db>,
     base_offset: u32,
 ) -> IntrinsicAnalysis<'db> {
-    let mut needs_fd_write = false;
-    let mut iovec_map: HashMap<(u32, u32), u32> = HashMap::new();
-    let mut iovec_allocations: Vec<(u32, u32, u32)> = Vec::new();
+    let mut needs_print_bytes = false;
+    let mut needs_print_newline = false;
+    let iovec_allocations: Vec<(u32, u32, u32)> = Vec::new();
     let mut next_offset = base_offset;
 
     // Align to 4-byte boundary
@@ -132,44 +140,28 @@ pub fn analyze_intrinsics<'db>(
         value.div_ceil(align) * align
     }
 
-    // Visit operations to find __print_line calls with literal args
+    // Visit operations to find __print_bytes and __print_newline calls
     fn visit_op<'db>(
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        needs_fd_write: &mut bool,
-        iovec_map: &mut HashMap<(u32, u32), u32>,
-        iovec_allocations: &mut Vec<(u32, u32, u32)>,
-        next_offset: &mut u32,
+        needs_print_bytes: &mut bool,
+        needs_print_newline: &mut bool,
     ) {
-        // Check for wasm.call to __print_line
-        if let Ok(call) = wasm::Call::from_operation(db, *op)
-            && call.callee(db).last_segment() == Symbol::new("__print_line")
-            && let Some(arg) = op.operands(db).first()
-            && let Some((ptr, len)) = get_literal_info(db, *arg)
-        {
-            *needs_fd_write = true;
-
-            // Allocate iovec if not already done
-            iovec_map.entry((ptr, len)).or_insert_with(|| {
-                let offset = align_to(*next_offset, 4);
-                iovec_allocations.push((ptr, len, offset));
-                *next_offset = offset + 8; // iovec is 8 bytes (ptr + len)
-                offset
-            });
+        // Check for wasm.call to print intrinsics
+        if let Ok(call) = wasm::Call::from_operation(db, *op) {
+            let callee_name = call.callee(db).last_segment();
+            if callee_name == Symbol::new("__print_bytes") {
+                *needs_print_bytes = true;
+            } else if callee_name == Symbol::new("__print_newline") {
+                *needs_print_newline = true;
+            }
         }
 
         // Recurse into regions
         for region in op.regions(db).iter() {
             for block in region.blocks(db).iter() {
                 for nested_op in block.operations(db).iter() {
-                    visit_op(
-                        db,
-                        nested_op,
-                        needs_fd_write,
-                        iovec_map,
-                        iovec_allocations,
-                        next_offset,
-                    );
+                    visit_op(db, nested_op, needs_print_bytes, needs_print_newline);
                 }
             }
         }
@@ -179,16 +171,38 @@ pub fn analyze_intrinsics<'db>(
     let body = module.body(db);
     for block in body.blocks(db).iter() {
         for op in block.operations(db).iter() {
-            visit_op(
-                db,
-                op,
-                &mut needs_fd_write,
-                &mut iovec_map,
-                &mut iovec_allocations,
-                &mut next_offset,
-            );
+            visit_op(db, op, &mut needs_print_bytes, &mut needs_print_newline);
         }
     }
+
+    let needs_fd_write = needs_print_bytes || needs_print_newline;
+
+    // Allocate print buffer if __print_bytes is used
+    let print_buffer_offset = if needs_print_bytes {
+        let offset = align_to(next_offset, 4);
+        next_offset = offset + PRINT_BUFFER_SIZE;
+        Some(offset)
+    } else {
+        None
+    };
+
+    // Allocate print iovec if any print intrinsic is used
+    let print_iovec_offset = if needs_fd_write {
+        let offset = align_to(next_offset, 4);
+        next_offset = offset + 8; // iovec is 8 bytes (ptr + len)
+        Some(offset)
+    } else {
+        None
+    };
+
+    // Allocate newline character if __print_newline is used
+    let newline_offset = if needs_print_newline {
+        let offset = next_offset;
+        next_offset = offset + 1; // '\n' is 1 byte
+        Some(offset)
+    } else {
+        None
+    };
 
     // Allocate nwritten buffer if needed
     let nwritten_offset = if needs_fd_write {
@@ -204,32 +218,11 @@ pub fn analyze_intrinsics<'db>(
         needs_fd_write,
         iovec_allocations,
         nwritten_offset,
+        print_buffer_offset,
+        print_iovec_offset,
+        newline_offset,
         next_offset - base_offset,
     )
-}
-
-/// Get literal pointer and length from a value's defining operation.
-fn get_literal_info(db: &dyn salsa::Database, value: trunk_ir::Value<'_>) -> Option<(u32, u32)> {
-    let def = value.def(db);
-    let trunk_ir::ValueDef::OpResult(op) = def else {
-        return None;
-    };
-    if op.dialect(db) != wasm::DIALECT_NAME() {
-        return None;
-    }
-    if op.name(db) != Symbol::new("i32_const") {
-        return None;
-    }
-    let attrs = op.attributes(db);
-    let Attribute::IntBits(ptr) = attrs.get(&Symbol::new("value"))? else {
-        return None;
-    };
-    let Attribute::IntBits(len) = attrs.get(&Symbol::new("literal_len"))? else {
-        return None;
-    };
-    let ptr_u32 = u32::try_from(*ptr).ok()?;
-    let len_u32 = u32::try_from(*len).ok()?;
-    Some((ptr_u32, len_u32))
 }
 
 /// Lower intrinsic calls using pre-computed analysis.
@@ -240,12 +233,29 @@ pub fn lower<'db>(
 ) -> Module<'db> {
     let mut applicator = PatternApplicator::new(wasm_type_converter());
 
-    // Add __print_line pattern if needed
-    if analysis.needs_fd_write(db) {
-        let iovec_allocations = analysis.iovec_allocations(db).clone();
-        let nwritten_offset = analysis.nwritten_offset(db);
-        applicator =
-            applicator.add_pattern(PrintLinePattern::new(iovec_allocations, nwritten_offset));
+    // Add print intrinsic patterns if needed
+    if let (Some(print_buffer_offset), Some(print_iovec_offset), Some(nwritten_offset)) = (
+        analysis.print_buffer_offset(db),
+        analysis.print_iovec_offset(db),
+        analysis.nwritten_offset(db),
+    ) {
+        applicator = applicator.add_pattern(PrintBytesPattern::new(
+            print_buffer_offset,
+            print_iovec_offset,
+            nwritten_offset,
+        ));
+    }
+
+    if let (Some(newline_offset), Some(print_iovec_offset), Some(nwritten_offset)) = (
+        analysis.newline_offset(db),
+        analysis.print_iovec_offset(db),
+        analysis.nwritten_offset(db),
+    ) {
+        applicator = applicator.add_pattern(PrintNewlinePattern::new(
+            newline_offset,
+            print_iovec_offset,
+            nwritten_offset,
+        ));
     }
 
     // Always add Bytes intrinsic patterns
@@ -261,118 +271,398 @@ pub fn lower<'db>(
     applicator.apply_partial(db, module, target).module
 }
 
-/// Pattern for `wasm.call(__print_line)` -> `fd_write` sequence
-struct PrintLinePattern {
-    iovec_allocations: Vec<(u32, u32, u32)>,
-    nwritten_offset: Option<u32>,
+/// Pattern for `wasm.call(__print_bytes)` -> copy to linear memory + `fd_write` sequence
+struct PrintBytesPattern {
+    print_buffer_offset: u32,
+    print_iovec_offset: u32,
+    nwritten_offset: u32,
 }
 
-impl PrintLinePattern {
-    fn new(iovec_allocations: Vec<(u32, u32, u32)>, nwritten_offset: Option<u32>) -> Self {
+impl PrintBytesPattern {
+    fn new(print_buffer_offset: u32, print_iovec_offset: u32, nwritten_offset: u32) -> Self {
         Self {
-            iovec_allocations,
+            print_buffer_offset,
+            print_iovec_offset,
             nwritten_offset,
         }
     }
-
-    fn lookup_iovec(&self, ptr: u32, len: u32) -> Option<u32> {
-        self.iovec_allocations
-            .iter()
-            .find(|(p, l, _)| *p == ptr && *l == len)
-            .map(|(_, _, offset)| *offset)
-    }
 }
 
-impl<'db> RewritePattern<'db> for PrintLinePattern {
+impl<'db> RewritePattern<'db> for PrintBytesPattern {
     fn match_and_rewrite<'a>(
         &self,
         db: &'a dyn salsa::Database,
         op: &Operation<'a>,
         _adaptor: &OpAdaptor<'a, '_>,
     ) -> RewriteResult<'a> {
-        // Check if this is wasm.call to __print_line
+        // Check if this is wasm.call to __print_bytes
         let Ok(call_op) = wasm::Call::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
-        if call_op.callee(db).last_segment() != Symbol::new("__print_line") {
+        if call_op.callee(db).last_segment() != Symbol::new("__print_bytes") {
             return RewriteResult::Unchanged;
         }
 
-        // Get the string literal argument
+        // Get the Bytes argument
         let operands = op.operands(db);
-        let Some(arg) = operands.first().copied() else {
-            return RewriteResult::Unchanged;
-        };
-        let Some((ptr, len)) = get_literal_info(db, arg) else {
-            return RewriteResult::Unchanged;
-        };
-
-        // Look up allocated offsets
-        let Some(iovec_offset) = self.lookup_iovec(ptr, len) else {
-            return RewriteResult::Unchanged;
-        };
-        let Some(nwritten_offset) = self.nwritten_offset else {
+        let Some(bytes_value) = operands.first().copied() else {
             return RewriteResult::Unchanged;
         };
 
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // Generate fd_write call sequence:
-        // fd_const = wasm.i32_const(1)  // stdout
-        // iovec_const = wasm.i32_const(iovec_offset)
-        // iovec_len_const = wasm.i32_const(1)  // one iovec entry
-        // nwritten_const = wasm.i32_const(nwritten_offset)
-        // result = wasm.call(fd_write, fd_const, iovec_const, iovec_len_const, nwritten_const)
-        // wasm.drop(result)
+        // Extract (data, offset, len) from Bytes struct
+        let (fields, mut ops) = extract_bytes_fields(db, location, bytes_value);
 
+        // Clamp len to buffer size using scf.if (select equivalent)
+        let buffer_size_const = wasm::i32_const(db, location, i32_ty, PRINT_BUFFER_SIZE as i32);
+        ops.push(buffer_size_const.operation());
+
+        // cond = len < buffer_size
+        let cmp_op = wasm::i32_lt_u(
+            db,
+            location,
+            fields.len,
+            buffer_size_const.result(db),
+            i32_ty,
+        );
+        ops.push(cmp_op.operation());
+
+        // len_to_copy = if cond { len } else { buffer_size }
+        use trunk_ir::{BlockBuilder, Region};
+        let then_region = {
+            let mut b = BlockBuilder::new(db, location);
+            b.op(trunk_ir::dialect::scf::r#yield(
+                db,
+                location,
+                vec![fields.len],
+            ));
+            Region::new(db, location, trunk_ir::idvec![b.build()])
+        };
+        let else_region = {
+            let mut b = BlockBuilder::new(db, location);
+            b.op(trunk_ir::dialect::scf::r#yield(
+                db,
+                location,
+                vec![buffer_size_const.result(db)],
+            ));
+            Region::new(db, location, trunk_ir::idvec![b.build()])
+        };
+        let select_if = trunk_ir::dialect::scf::r#if(
+            db,
+            location,
+            cmp_op.result(db),
+            i32_ty,
+            then_region,
+            else_region,
+        );
+        ops.push(select_if.as_operation());
+        let len_to_copy = select_if.result(db);
+
+        // Generate copy loop: for i in 0..len_to_copy { buffer[i] = data[offset + i] }
+        let zero_const = wasm::i32_const(db, location, i32_ty, 0);
+        ops.push(zero_const.operation());
+
+        let buffer_ptr_const =
+            wasm::i32_const(db, location, i32_ty, self.print_buffer_offset as i32);
+        ops.push(buffer_ptr_const.operation());
+
+        // Build loop body with block argument 'i'
+        let loop_body = {
+            let mut builder = BlockBuilder::new(db, location).arg(i32_ty);
+            let i = builder.block_arg(db, 0);
+
+            // Check: i < len_to_copy
+            let cond = builder.op(wasm::i32_lt_u(db, location, i, len_to_copy, i32_ty));
+
+            // Then block: copy one byte and continue
+            let then_body = {
+                let mut then_builder = BlockBuilder::new(db, location);
+
+                // src_idx = offset + i
+                let src_idx =
+                    then_builder.op(wasm::i32_add(db, location, fields.offset, i, i32_ty));
+
+                // byte = array.get_u(data, src_idx)
+                let byte = then_builder.op(wasm::array_get_u(
+                    db,
+                    location,
+                    fields.data,
+                    src_idx.result(db),
+                    i32_ty,
+                    BYTES_ARRAY_IDX,
+                ));
+
+                // dst_ptr = buffer_ptr + i
+                let dst_ptr = then_builder.op(wasm::i32_add(
+                    db,
+                    location,
+                    buffer_ptr_const.result(db),
+                    i,
+                    i32_ty,
+                ));
+
+                // memory.store8(dst_ptr, byte) - offset=0, align=0, memory=0
+                then_builder.op(wasm::i32_store8(
+                    db,
+                    location,
+                    dst_ptr.result(db),
+                    byte.result(db),
+                    0,
+                    0,
+                    0,
+                ));
+
+                // i_next = i + 1
+                let one_const = then_builder.op(wasm::i32_const(db, location, i32_ty, 1));
+                let i_next =
+                    then_builder.op(wasm::i32_add(db, location, i, one_const.result(db), i32_ty));
+
+                // continue with i_next
+                then_builder.op(trunk_ir::dialect::scf::r#continue(
+                    db,
+                    location,
+                    vec![i_next.result(db)],
+                ));
+
+                Region::new(db, location, trunk_ir::idvec![then_builder.build()])
+            };
+
+            // Else block: break with current i (loop exits)
+            let else_body = {
+                let mut else_builder = BlockBuilder::new(db, location);
+                else_builder.op(trunk_ir::dialect::scf::r#break(db, location, i));
+                Region::new(db, location, trunk_ir::idvec![else_builder.build()])
+            };
+
+            // if cond then copy else break
+            builder.op(trunk_ir::dialect::scf::r#if(
+                db,
+                location,
+                cond.result(db),
+                i32_ty,
+                then_body,
+                else_body,
+            ));
+
+            Region::new(db, location, trunk_ir::idvec![builder.build()])
+        };
+
+        // Create loop operation
+        let loop_op = trunk_ir::dialect::scf::r#loop(
+            db,
+            location,
+            vec![zero_const.result(db)],
+            i32_ty,
+            loop_body,
+        );
+        ops.push(loop_op.as_operation());
+
+        // Write iovec: (buffer_ptr, len_to_copy)
+        let iovec_ptr_const = wasm::i32_const(db, location, i32_ty, self.print_iovec_offset as i32);
+        ops.push(iovec_ptr_const.operation());
+
+        // Store buffer pointer to iovec[0] - offset=0, align=2, memory=0
+        let store_ptr = wasm::i32_store(
+            db,
+            location,
+            iovec_ptr_const.result(db),
+            buffer_ptr_const.result(db),
+            0,
+            2,
+            0,
+        );
+        ops.push(store_ptr.operation());
+
+        // Store length to iovec[4]
+        let iovec_len_ptr_const =
+            wasm::i32_const(db, location, i32_ty, (self.print_iovec_offset + 4) as i32);
+        ops.push(iovec_len_ptr_const.operation());
+
+        let store_len = wasm::i32_store(
+            db,
+            location,
+            iovec_len_ptr_const.result(db),
+            len_to_copy,
+            0,
+            2,
+            0,
+        );
+        ops.push(store_len.operation());
+
+        // Call fd_write(1, iovec_ptr, 1, nwritten_ptr)
         let fd_const = wasm::i32_const(db, location, i32_ty, 1); // stdout
-        let iovec_const = wasm::i32_const(db, location, i32_ty, iovec_offset as i32);
-        let iovec_len_const = wasm::i32_const(db, location, i32_ty, 1); // one iovec entry
-        let nwritten_const = wasm::i32_const(db, location, i32_ty, nwritten_offset as i32);
+        ops.push(fd_const.operation());
 
-        let call = wasm::call(
+        let iovec_count_const = wasm::i32_const(db, location, i32_ty, 1);
+        ops.push(iovec_count_const.operation());
+
+        let nwritten_ptr_const = wasm::i32_const(db, location, i32_ty, self.nwritten_offset as i32);
+        ops.push(nwritten_ptr_const.operation());
+
+        let fd_write_call = wasm::call(
             db,
             location,
             vec![
                 fd_const.result(db),
-                iovec_const.result(db),
-                iovec_len_const.result(db),
-                nwritten_const.result(db),
+                iovec_ptr_const.result(db),
+                iovec_count_const.result(db),
+                nwritten_ptr_const.result(db),
             ],
             vec![i32_ty],
             Symbol::new("fd_write"),
         );
+        ops.push(fd_write_call.operation());
 
-        let drop_op = wasm::drop(db, location, call.result(db, 0));
+        // Drop fd_write result
+        let drop_op = wasm::drop(db, location, fd_write_call.result(db, 0));
+        ops.push(drop_op.operation());
 
-        // Use Expand to emit all operations
-        let results = op.results(db);
-        if results.is_empty()
-            || (results.len() == 1
-                && results[0].dialect(db) == core::DIALECT_NAME()
-                && results[0].name(db) == Symbol::new("nil"))
-        {
-            // Void: emit operations and drop the fd_write result
-            RewriteResult::Expand(vec![
-                fd_const.operation(),
-                iovec_const.operation(),
-                iovec_len_const.operation(),
-                nwritten_const.operation(),
-                call.operation(),
-                drop_op.operation(),
-            ])
-        } else {
-            // Non-void: emit operations, call result becomes the replacement value
-            RewriteResult::Expand(vec![
-                fd_const.operation(),
-                iovec_const.operation(),
-                iovec_len_const.operation(),
-                nwritten_const.operation(),
-                call.operation(),
-            ])
+        // If the original call has results (nil type), we need to provide a replacement.
+        // wasm.nop produces a nil result to preserve SSA form.
+        let original_results = op.results(db);
+        if !original_results.is_empty() {
+            let nil_ty = core::Nil::new(db).as_type();
+            let nop_op = wasm::nop(db, location, nil_ty);
+            ops.push(nop_op.as_operation());
         }
+
+        RewriteResult::Expand(ops)
+    }
+}
+
+/// Pattern for `wasm.call(__print_newline)` -> `fd_write` with newline character
+struct PrintNewlinePattern {
+    newline_offset: u32,
+    print_iovec_offset: u32,
+    nwritten_offset: u32,
+}
+
+impl PrintNewlinePattern {
+    fn new(newline_offset: u32, print_iovec_offset: u32, nwritten_offset: u32) -> Self {
+        Self {
+            newline_offset,
+            print_iovec_offset,
+            nwritten_offset,
+        }
+    }
+}
+
+impl<'db> RewritePattern<'db> for PrintNewlinePattern {
+    fn match_and_rewrite<'a>(
+        &self,
+        db: &'a dyn salsa::Database,
+        op: &Operation<'a>,
+        _adaptor: &OpAdaptor<'a, '_>,
+    ) -> RewriteResult<'a> {
+        // Check if this is wasm.call to __print_newline
+        let Ok(call_op) = wasm::Call::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        if call_op.callee(db).last_segment() != Symbol::new("__print_newline") {
+            return RewriteResult::Unchanged;
+        }
+
+        let location = op.location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let mut ops = Vec::new();
+
+        // Store '\n' (0x0A) to newline_offset
+        let newline_ptr_const = wasm::i32_const(db, location, i32_ty, self.newline_offset as i32);
+        ops.push(newline_ptr_const.operation());
+
+        let newline_char_const = wasm::i32_const(db, location, i32_ty, 0x0A); // '\n'
+        ops.push(newline_char_const.operation());
+
+        // offset=0, align=0, memory=0
+        let store_newline = wasm::i32_store8(
+            db,
+            location,
+            newline_ptr_const.result(db),
+            newline_char_const.result(db),
+            0,
+            0,
+            0,
+        );
+        ops.push(store_newline.operation());
+
+        // Write iovec: (newline_ptr, 1)
+        let iovec_ptr_const = wasm::i32_const(db, location, i32_ty, self.print_iovec_offset as i32);
+        ops.push(iovec_ptr_const.operation());
+
+        // Store newline pointer to iovec[0] - offset=0, align=2, memory=0
+        let store_ptr = wasm::i32_store(
+            db,
+            location,
+            iovec_ptr_const.result(db),
+            newline_ptr_const.result(db),
+            0,
+            2,
+            0,
+        );
+        ops.push(store_ptr.operation());
+
+        // Store length (1) to iovec[4]
+        let iovec_len_ptr_const =
+            wasm::i32_const(db, location, i32_ty, (self.print_iovec_offset + 4) as i32);
+        ops.push(iovec_len_ptr_const.operation());
+
+        let one_const = wasm::i32_const(db, location, i32_ty, 1);
+        ops.push(one_const.operation());
+
+        // offset=0, align=2, memory=0
+        let store_len = wasm::i32_store(
+            db,
+            location,
+            iovec_len_ptr_const.result(db),
+            one_const.result(db),
+            0,
+            2,
+            0,
+        );
+        ops.push(store_len.operation());
+
+        // Call fd_write(1, iovec_ptr, 1, nwritten_ptr)
+        let fd_const = wasm::i32_const(db, location, i32_ty, 1); // stdout
+        ops.push(fd_const.operation());
+
+        let iovec_count_const = wasm::i32_const(db, location, i32_ty, 1);
+        ops.push(iovec_count_const.operation());
+
+        let nwritten_ptr_const = wasm::i32_const(db, location, i32_ty, self.nwritten_offset as i32);
+        ops.push(nwritten_ptr_const.operation());
+
+        let fd_write_call = wasm::call(
+            db,
+            location,
+            vec![
+                fd_const.result(db),
+                iovec_ptr_const.result(db),
+                iovec_count_const.result(db),
+                nwritten_ptr_const.result(db),
+            ],
+            vec![i32_ty],
+            Symbol::new("fd_write"),
+        );
+        ops.push(fd_write_call.operation());
+
+        // Drop fd_write result
+        let drop_op = wasm::drop(db, location, fd_write_call.result(db, 0));
+        ops.push(drop_op.operation());
+
+        // If the original call has results (nil type), we need to provide a replacement.
+        // wasm.nop produces a nil result to preserve SSA form.
+        let original_results = op.results(db);
+        if !original_results.is_empty() {
+            let nil_ty = core::Nil::new(db).as_type();
+            let nop_op = wasm::nop(db, location, nil_ty);
+            ops.push(nop_op.as_operation());
+        }
+
+        RewriteResult::Expand(ops)
     }
 }
 

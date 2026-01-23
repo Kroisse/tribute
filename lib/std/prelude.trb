@@ -185,7 +185,8 @@ extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Int) -> Int
 extern "intrinsic" fn __bytes_slice_or_panic(bytes: Bytes, start: Int, end: Int) -> Bytes
 extern "intrinsic" fn __bytes_concat(left: Bytes, right: Bytes) -> Bytes
 extern "intrinsic" fn __bytes_empty() -> Bytes
-extern "intrinsic" fn __print_line(message: String) -> Nil
+extern "intrinsic" fn __print_bytes(bytes: Bytes) -> Nil
+extern "intrinsic" fn __print_newline() -> Nil
 
 // =============================================================================
 // Bytes module
@@ -249,7 +250,16 @@ pub mod Bytes {
 // I/O functions
 // =============================================================================
 
-/// Print a line to standard output.
-fn print_line(message: String) -> Nil {
-    __print_line(message)
+/// Print bytes to standard output (without newline).
+pub fn print_bytes(bytes: Bytes) -> Nil {
+    __print_bytes(bytes)
+}
+
+/// Print a line to standard output (with newline).
+/// NOTE: Currently simplified - only prints newline.
+/// Full String printing requires case expression support.
+pub fn print_line(message: String) -> Nil {
+    // TODO: Implement full String printing when case expressions work
+    // For now, just print a newline
+    __print_newline()
 }
