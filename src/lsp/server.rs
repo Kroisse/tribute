@@ -36,7 +36,9 @@ use super::completion_index::{CompletionIndex, CompletionKind};
 use super::definition_index::{DefinitionIndex, validate_identifier};
 use super::pretty::{format_signature, print_type};
 use super::type_index::TypeIndex;
-use tribute::{TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local};
+use tribute::{
+    TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local, parse_and_lower,
+};
 
 /// Main LSP server state.
 struct LspServer {
@@ -243,8 +245,9 @@ impl LspServer {
 
         // Run Salsa compilation and build definition index
         let definition = self.db.attach(|db| {
-            let module = compile_for_lsp(db, source_cst);
-            let index = DefinitionIndex::build(db, &module);
+            let pre_resolve = parse_and_lower(db, source_cst);
+            let post_resolve = compile_for_lsp(db, source_cst);
+            let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
             index.definition_at(offset).cloned()
         })?;
 
@@ -280,8 +283,9 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let locations = self.db.attach(|db| {
-            let module = compile_for_lsp(db, source_cst);
-            let index = DefinitionIndex::build(db, &module);
+            let pre_resolve = parse_and_lower(db, source_cst);
+            let post_resolve = compile_for_lsp(db, source_cst);
+            let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
 
             let (symbol, refs) = index.references_at(offset)?;
 
@@ -326,8 +330,9 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let result = self.db.attach(|db| {
-            let module = compile_for_lsp(db, source_cst);
-            let index = DefinitionIndex::build(db, &module);
+            let pre_resolve = parse_and_lower(db, source_cst);
+            let post_resolve = compile_for_lsp(db, source_cst);
+            let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
 
             // Check if rename is possible at this position
             let (def, span) = index.can_rename(offset)?;
@@ -361,8 +366,9 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let text_edits = self.db.attach(|db| {
-            let module = compile_for_lsp(db, source_cst);
-            let index = DefinitionIndex::build(db, &module);
+            let pre_resolve = parse_and_lower(db, source_cst);
+            let post_resolve = compile_for_lsp(db, source_cst);
+            let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
 
             // Get definition and validate
             let (def, _) = index.can_rename(offset)?;
@@ -424,8 +430,9 @@ impl LspServer {
         let prefix = extract_completion_prefix(&rope, offset);
 
         let items = self.db.attach(|db| {
-            let module = compile_for_lsp(db, source_cst);
-            let index = CompletionIndex::build(db, &module);
+            let pre_resolve = parse_and_lower(db, source_cst);
+            let post_resolve = compile_for_lsp(db, source_cst);
+            let index = CompletionIndex::build(db, &pre_resolve, &post_resolve);
 
             // Get expression completions filtered by prefix
             let mut completions: Vec<_> = index
@@ -1796,7 +1803,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "local variable rename not supported yet, see #273"]
     fn test_prepare_rename_via_message() {
         let mut harness = TestHarness::new();
         let uri = test_uri("prepare_rename_msg");
@@ -1822,7 +1828,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "local variable rename not supported yet, see #273"]
     #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
     fn test_rename_via_message() {
         let mut harness = TestHarness::new();
