@@ -962,7 +962,7 @@ macro_rules! define_op {
     ) => {
         $crate::paste::paste! {
             #[doc = concat!($($doc, "\n",)*)]
-            #[derive(Clone, Copy, PartialEq, Eq, salsa::Update)]
+            #[derive(Clone, Copy, Eq, Hash, PartialEq, salsa::Update)]
             pub struct [<$op:camel>]<'db> {
                 op: $crate::Operation<'db>,
             }
