@@ -36,9 +36,7 @@ use super::completion_index::{CompletionIndex, CompletionKind};
 use super::definition_index::{DefinitionIndex, validate_identifier};
 use super::pretty::{format_signature, print_type};
 use super::type_index::TypeIndex;
-use tribute::{
-    TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local, parse_and_lower,
-};
+use tribute::{TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local};
 
 /// Main LSP server state.
 struct LspServer {
@@ -245,9 +243,7 @@ impl LspServer {
 
         // Run Salsa compilation and build definition index
         let definition = self.db.attach(|db| {
-            let pre_resolve = parse_and_lower(db, source_cst);
-            let post_resolve = compile_for_lsp(db, source_cst);
-            let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
+            let index = DefinitionIndex::build(db, source_cst);
             index.definition_at(offset).cloned()
         })?;
 
@@ -283,9 +279,7 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let locations = self.db.attach(|db| {
-            let pre_resolve = parse_and_lower(db, source_cst);
-            let post_resolve = compile_for_lsp(db, source_cst);
-            let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
+            let index = DefinitionIndex::build(db, source_cst);
 
             let (symbol, refs) = index.references_at(offset)?;
 
@@ -330,9 +324,7 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let result = self.db.attach(|db| {
-            let pre_resolve = parse_and_lower(db, source_cst);
-            let post_resolve = compile_for_lsp(db, source_cst);
-            let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
+            let index = DefinitionIndex::build(db, source_cst);
 
             // Check if rename is possible at this position
             let (def, span) = index.can_rename(offset)?;
@@ -366,9 +358,7 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let text_edits = self.db.attach(|db| {
-            let pre_resolve = parse_and_lower(db, source_cst);
-            let post_resolve = compile_for_lsp(db, source_cst);
-            let index = DefinitionIndex::build(db, &pre_resolve, &post_resolve);
+            let index = DefinitionIndex::build(db, source_cst);
 
             // Get definition and validate
             let (def, _) = index.can_rename(offset)?;
@@ -430,9 +420,7 @@ impl LspServer {
         let prefix = extract_completion_prefix(&rope, offset);
 
         let items = self.db.attach(|db| {
-            let pre_resolve = parse_and_lower(db, source_cst);
-            let post_resolve = compile_for_lsp(db, source_cst);
-            let index = CompletionIndex::build(db, &pre_resolve, &post_resolve);
+            let index = CompletionIndex::build(db, source_cst);
 
             // Get expression completions filtered by prefix
             let mut completions: Vec<_> = index
