@@ -28,7 +28,6 @@ pub mod tribute_to_scf;
 pub mod type_converter;
 pub mod typeck;
 pub mod wasm;
-pub mod wasm_type_converter;
 
 // Re-exports
 pub use boxing::insert_boxing;
@@ -52,4 +51,4 @@ pub use trunk_ir::rewrite::{
 };
 pub use type_converter::generic_type_converter;
 pub use typeck::{Constraint, EffectRow, TypeChecker, TypeSolver, typecheck_module};
-pub use wasm_type_converter::{closure_adt_type, wasm_type_converter};
+pub use wasm::type_converter::{closure_adt_type, wasm_type_converter};

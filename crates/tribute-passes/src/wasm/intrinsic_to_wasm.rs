@@ -18,7 +18,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
-use crate::wasm_type_converter::wasm_type_converter;
+use super::type_converter::wasm_type_converter;
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
 // Bytes struct field indices (must match gc_types layout)

@@ -13,6 +13,7 @@
 //! - `wasm_gc_type_assign`: Assign unique type indices to GC struct types
 //! - `lower`: Main orchestrator for lowering mid-level IR to WASM
 //! - `plan`: Module-level planning for memory and exports
+//! - `type_converter`: WASM type converter for IR-level type transformations
 
 pub mod const_to_wasm;
 pub mod intrinsic_to_wasm;
@@ -20,5 +21,6 @@ pub mod lower;
 pub mod normalize_primitive_types;
 pub mod plan;
 pub mod tribute_rt_to_wasm;
+pub mod type_converter;
 pub mod wasm_gc_type_assign;
 pub mod wasm_type_concrete;

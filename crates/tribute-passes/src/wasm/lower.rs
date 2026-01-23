@@ -22,7 +22,7 @@ use trunk_ir::{
 };
 use trunk_ir_wasm_backend::gc_types::{STEP_IDX, STEP_TAG_DONE, step_marker_type};
 
-use crate::wasm_type_converter::wasm_type_converter;
+use super::type_converter::wasm_type_converter;
 
 /// Entry point for lowering mid-level IR to wasm dialect.
 #[salsa::tracked]

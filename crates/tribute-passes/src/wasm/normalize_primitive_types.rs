@@ -39,7 +39,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::{Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Type};
 
-use crate::wasm_type_converter::wasm_type_converter;
+use super::type_converter::wasm_type_converter;
 
 /// Normalize tribute_rt primitive types to core types.
 ///

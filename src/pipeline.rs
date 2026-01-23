@@ -104,7 +104,7 @@ use tribute_passes::resolve::{Resolver, build_env};
 use tribute_passes::tdnr::resolve_tdnr;
 use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 use tribute_passes::wasm::lower::lower_to_wasm;
-use tribute_passes::wasm_type_converter::wasm_type_converter;
+use tribute_passes::wasm::type_converter::wasm_type_converter;
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::dialect::core::Module;
