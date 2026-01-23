@@ -50,23 +50,27 @@ fn extract_metadata<'db>(
     let mut exports = Vec::new();
     let mut imports = Vec::new();
 
-    let func_dialect = Symbol::new("func");
-    let func_name = Symbol::new("func");
     let wasm_dialect = Symbol::new("wasm");
+    let export_func_name = Symbol::new("export_func");
     let import_func_name = Symbol::new("import_func");
 
     let body = module.body(db);
     for block in body.blocks(db).iter() {
         for op in block.operations(db).iter() {
-            // Collect exported functions
-            if op.dialect(db) == func_dialect && op.name(db) == func_name {
-                if let Some(name) = get_sym_name(db, op) {
+            if op.dialect(db) != wasm_dialect {
+                continue;
+            }
+
+            let op_name = op.name(db);
+
+            // Collect exported functions from wasm.export_func
+            if op_name == export_func_name {
+                if let Some(name) = get_export_name(db, op) {
                     exports.push(name);
                 }
             }
-            // Collect imported functions
-            else if op.dialect(db) == wasm_dialect
-                && op.name(db) == import_func_name
+            // Collect imported functions from wasm.import_func
+            else if op_name == import_func_name
                 && let Some((module_name, func_name)) = get_import_names(db, op)
             {
                 imports.push((module_name, func_name));
@@ -77,13 +81,15 @@ fn extract_metadata<'db>(
     (exports, imports)
 }
 
-/// Extract sym_name attribute from an operation.
-fn get_sym_name<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> Option<Symbol> {
+/// Extract export name from a wasm.export_func operation.
+fn get_export_name<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> Option<Symbol> {
     let attrs = op.attributes(db);
-    if let Some(Attribute::Symbol(sym)) = attrs.get(&ATTR_SYM_NAME()) {
-        return Some(*sym);
+    // wasm.export_func has `name` attribute (String or Symbol)
+    match attrs.get(&ATTR_NAME()) {
+        Some(Attribute::String(name)) => Some(Symbol::from_dynamic(name)),
+        Some(Attribute::Symbol(sym)) => Some(*sym),
+        _ => None,
     }
-    None
 }
 
 /// Extract module and function names from an import_func operation.
