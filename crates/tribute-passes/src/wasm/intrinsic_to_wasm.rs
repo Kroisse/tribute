@@ -18,11 +18,10 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
-use crate::type_converter::wasm_type_converter;
+use super::type_converter::wasm_type_converter;
+use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
-// Constants for Bytes struct layout (must match emit.rs)
-const BYTES_ARRAY_IDX: u32 = 1;
-const BYTES_STRUCT_IDX: u32 = 2;
+// Bytes struct field indices (must match gc_types layout)
 const BYTES_DATA_FIELD: u32 = 0; // ref (array i8)
 const BYTES_OFFSET_FIELD: u32 = 1; // i32
 const BYTES_LEN_FIELD: u32 = 2; // i32

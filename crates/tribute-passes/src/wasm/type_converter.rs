@@ -93,7 +93,7 @@ fn unbox_via_i31<'db>(
 /// # use tribute_ir::dialect::tribute_rt;
 /// # use trunk_ir::dialect::core;
 /// # use trunk_ir::DialectType;
-/// use tribute_wasm_backend::type_converter::wasm_type_converter;
+/// use tribute_passes::wasm_type_converter::wasm_type_converter;
 ///
 /// # let db = salsa::DatabaseImpl::default();
 /// let converter = wasm_type_converter();

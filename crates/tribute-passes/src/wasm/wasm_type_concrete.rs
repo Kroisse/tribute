@@ -36,7 +36,7 @@ use trunk_ir::{
     ValueDef,
 };
 
-use crate::type_converter::wasm_type_converter;
+use super::type_converter::wasm_type_converter;
 
 /// Concretize types in wasm operations.
 ///

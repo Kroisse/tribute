@@ -4,9 +4,6 @@
 //! wasm dialect operations. Phase 1 handles basic arithmetic and function calls.
 
 use tracing::{error, warn};
-
-use crate::plan::{MainExports, MemoryPlan};
-
 use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::tribute;
 use trunk_ir::DialectOp;
@@ -14,19 +11,20 @@ use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::RewriteContext;
 
-use crate::gc_types::{STEP_IDX, STEP_TAG_DONE, step_marker_type};
-use crate::passes::const_to_wasm::ConstAnalysis;
-use crate::passes::intrinsic_to_wasm::IntrinsicAnalysis;
+use super::const_to_wasm::ConstAnalysis;
+use super::intrinsic_to_wasm::IntrinsicAnalysis;
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::{
     Attribute, Block, DialectType, IdVec, Location, Operation, Region, Symbol, Type, Value, idvec,
 };
+use trunk_ir_wasm_backend::gc_types::{STEP_IDX, STEP_TAG_DONE, step_marker_type};
+use trunk_ir_wasm_backend::{MainExports, MemoryPlan};
+
+use super::type_converter::wasm_type_converter;
 
 /// Entry point for lowering mid-level IR to wasm dialect.
 #[salsa::tracked]
 pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    use crate::type_converter::wasm_type_converter;
-
     // Phase 1: Pattern-based lowering passes (using trunk-ir-wasm-backend)
     tracing::debug!("=== BEFORE arith_to_wasm ===\n{:?}", module);
     let module =
@@ -37,7 +35,7 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
 
     // Normalize tribute_rt primitive types (int, nat, bool, float) to core types
     // BEFORE trampoline_to_wasm so downstream passes don't need to handle tribute_rt
-    let module = crate::passes::normalize_primitive_types::lower(db, module);
+    let module = super::normalize_primitive_types::lower(db, module);
     tracing::debug!("=== AFTER normalize_primitive_types ===\n{:?}", module);
 
     // NOTE: resolve_type_references is called in pipeline.rs before compile_to_wasm
@@ -58,24 +56,21 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     debug_func_params(db, &module, "after adt_to_wasm");
 
     // Lower tribute_rt operations (box_int, unbox_int) to wasm operations
-    let module = crate::passes::tribute_rt_to_wasm::lower(db, module);
+    let module = super::tribute_rt_to_wasm::lower(db, module);
     debug_func_params(db, &module, "after tribute_rt_to_wasm");
 
     // Concretize type variables in wasm operations (resolve tribute.type_var)
-    let module = crate::passes::wasm_type_concrete::lower(db, module);
+    let module = super::wasm_type_concrete::lower(db, module);
     debug_func_params(db, &module, "after wasm_type_concrete");
 
     // Const analysis and lowering (string/bytes constants to data segments)
-    let const_analysis = crate::passes::const_to_wasm::analyze_consts(db, module);
-    let module = crate::passes::const_to_wasm::lower(db, module, const_analysis);
+    let const_analysis = super::const_to_wasm::analyze_consts(db, module);
+    let module = super::const_to_wasm::lower(db, module, const_analysis);
 
     // Intrinsic analysis and lowering (print_line -> fd_write)
-    let intrinsic_analysis = crate::passes::intrinsic_to_wasm::analyze_intrinsics(
-        db,
-        module,
-        const_analysis.total_size(db),
-    );
-    let module = crate::passes::intrinsic_to_wasm::lower(db, module, intrinsic_analysis);
+    let intrinsic_analysis =
+        super::intrinsic_to_wasm::analyze_intrinsics(db, module, const_analysis.total_size(db));
+    let module = super::intrinsic_to_wasm::lower(db, module, intrinsic_analysis);
 
     // Phase 2: Remaining lowering via WasmLowerer
     let mut lowerer = WasmLowerer::new(db, const_analysis, intrinsic_analysis);
@@ -87,7 +82,7 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     }
 
     // Phase 3: Assign unique type_idx to GC struct operations before emit
-    crate::passes::wasm_gc_type_assign::assign_gc_type_indices(db, lowered)
+    super::wasm_gc_type_assign::assign_gc_type_indices(db, lowered)
 }
 
 /// Debug helper to check if all operations in function bodies are in wasm dialect

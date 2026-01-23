@@ -39,7 +39,6 @@ tribute-core = { path = "crates/tribute-core" }
 tribute-front = { path = "crates/tribute-front" }
 tribute-ir = { path = "crates/tribute-ir" }
 tribute-passes = { path = "crates/tribute-passes" }
-tribute-wasm-backend = { path = "crates/tribute-wasm-backend" }
 trunk-ir = { path = "crates/trunk-ir" }
 trunk-ir-wasm-backend = { path = "crates/trunk-ir-wasm-backend" }
 unsynn = "0.3.0"
@@ -70,8 +69,8 @@ tree-sitter-tribute.workspace = true
 tribute-front.workspace = true
 tribute-ir.workspace = true
 tribute-passes.workspace = true
-tribute-wasm-backend.workspace = true
 trunk-ir.workspace = true
+trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

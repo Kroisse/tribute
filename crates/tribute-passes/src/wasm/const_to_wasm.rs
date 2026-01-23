@@ -16,7 +16,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
-use crate::type_converter::wasm_type_converter;
+use super::type_converter::wasm_type_converter;
 
 /// Result of const analysis - maps content to allocated offset.
 #[salsa::tracked]

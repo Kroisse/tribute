@@ -11,6 +11,7 @@ salsa.workspace = true
 tracing.workspace = true
 tribute-ir.workspace = true
 trunk-ir.workspace = true
+trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
 salsa-test-macros = { path = "../salsa-test-macros" }

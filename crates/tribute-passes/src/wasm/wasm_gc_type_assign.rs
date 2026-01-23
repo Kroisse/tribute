@@ -19,8 +19,8 @@ use trunk_ir::{
     ValueDef,
 };
 
-use crate::gc_types::FIRST_USER_TYPE_IDX;
-use crate::type_converter::wasm_type_converter;
+use super::type_converter::wasm_type_converter;
+use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
 
 trunk_ir::symbols! {
     ATTR_TYPE_IDX => "type_idx",

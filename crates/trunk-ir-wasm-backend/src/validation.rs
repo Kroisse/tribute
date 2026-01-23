@@ -2,13 +2,11 @@
 //!
 //! This module validates that IR is ready for emission:
 //! - All operations must be in the `wasm` dialect (error)
-//! - All types should be resolved (warning only - emit has fallbacks)
 //!
 //! Dialect validation errors prevent emission from proceeding.
 
-use tracing::warn;
 use trunk_ir::dialect::core::Module;
-use trunk_ir::{DialectOp, Operation, Region, Symbol, Type};
+use trunk_ir::{DialectOp, Operation, Region, Symbol};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -26,9 +24,8 @@ impl std::fmt::Display for ValidationError {
 
 /// Validate that a module's IR is ready for wasm emission.
 ///
-/// This function checks:
-/// 1. All operations are in the `wasm` dialect (except allowed exceptions)
-/// 2. All result types are concrete wasm types (no type variables)
+/// This function checks that all operations are in the `wasm` dialect
+/// (except allowed exceptions like `core.module`).
 ///
 /// Returns an error if validation fails, preventing emission.
 pub fn validate_wasm_ir<'db>(
@@ -79,20 +76,6 @@ fn validate_operation<'db>(
         errors.push(format!("Non-wasm operation found: {}.{}", dialect, name));
     }
 
-    // Check result types - warn about type variables but don't fail
-    // TODO: Make this an error once typeck properly resolves all types (see type inference issues)
-    for (idx, result_ty) in op.results(db).iter().enumerate() {
-        if is_type_variable(db, *result_ty) {
-            warn!(
-                "Unresolved type variable in result {} of {}.{}: {} (emit will use fallback)",
-                idx,
-                dialect,
-                name,
-                format_type(db, *result_ty)
-            );
-        }
-    }
-
     // Recursively validate nested regions
     for region in op.regions(db).iter() {
         validate_region(db, *region, errors);
@@ -114,15 +97,4 @@ fn is_allowed_dialect<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) ->
     }
 
     false
-}
-
-/// Check if a type is an unresolved type variable.
-fn is_type_variable<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    tribute_ir::dialect::tribute::is_type_var(db, ty)
-}
-
-/// Format a type for diagnostic output.
-fn format_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> String {
-    ty.dialect(db)
-        .with_str(|d| ty.name(db).with_str(|n| format!("{}.{}", d, n)))
 }
