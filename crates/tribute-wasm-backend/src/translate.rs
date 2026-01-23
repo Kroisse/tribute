@@ -13,24 +13,8 @@ use trunk_ir::dialect::core::Module;
 // Re-export for convenience
 pub use crate::CompilationResult;
 
-/// A compiled WebAssembly module with metadata.
-///
-/// This is a Salsa tracked struct that represents a fully compiled WebAssembly
-/// artifact with binary code and metadata for tooling integration.
-#[salsa::tracked]
-pub struct WasmBinary<'db> {
-    /// The compiled WebAssembly binary (bytes that can be written to .wasm file).
-    #[returns(ref)]
-    pub bytes: Vec<u8>,
-
-    /// Exported function names from this module.
-    #[returns(ref)]
-    pub exports: Vec<Symbol>,
-
-    /// Imported functions: (module_name, function_name).
-    #[returns(ref)]
-    pub imports: Vec<(Symbol, Symbol)>,
-}
+// Re-export WasmBinary from trunk-ir-wasm-backend
+pub use trunk_ir_wasm_backend::WasmBinary;
 
 /// Compile a TrunkIR module to WebAssembly binary.
 ///

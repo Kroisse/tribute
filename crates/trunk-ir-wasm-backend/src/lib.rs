@@ -18,6 +18,10 @@ mod emit;
 mod errors;
 pub mod gc_types;
 pub mod passes;
+mod validation;
+mod wasm_binary;
 
 pub use emit::emit_wasm;
 pub use errors::{CompilationError, CompilationErrorKind, CompilationResult};
+pub use validation::{ValidationError, validate_wasm_ir};
+pub use wasm_binary::WasmBinary;

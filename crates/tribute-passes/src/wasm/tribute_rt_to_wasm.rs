@@ -27,8 +27,8 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::{DialectOp, DialectType, Operation};
 
-use crate::gc_types::BOXED_F64_IDX;
-use crate::type_converter::wasm_type_converter;
+use crate::wasm_type_converter::wasm_type_converter;
+use trunk_ir_wasm_backend::gc_types::BOXED_F64_IDX;
 
 /// Create i31 unbox operations (ref_cast + i31_get_s/u).
 ///
