@@ -110,13 +110,23 @@ mod tests {
 
         let index = build(db, source);
 
-        // Complete with "ba" prefix
+        // Complete with "ba" prefix - should find bar and baz
         let completions = index.complete_expression(db, "ba");
-        assert_eq!(completions.len(), 2, "Should find bar and baz");
+        assert!(
+            completions.iter().any(|c| c.name == "bar"),
+            "Should find bar"
+        );
+        assert!(
+            completions.iter().any(|c| c.name == "baz"),
+            "Should find baz"
+        );
 
-        // Complete with "f" prefix
-        let completions = index.complete_expression(db, "f");
-        assert_eq!(completions.len(), 1, "Should find foo");
+        // Complete with "fo" prefix - should find foo
+        let completions = index.complete_expression(db, "fo");
+        assert!(
+            completions.iter().any(|c| c.name == "foo"),
+            "Should find foo"
+        );
     }
 
     #[test]

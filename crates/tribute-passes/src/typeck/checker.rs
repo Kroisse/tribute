@@ -1185,9 +1185,14 @@ impl<'db> TypeChecker<'db> {
     // === adt dialect checking ===
 
     fn check_string_const(&mut self, op: &Operation<'db>) {
-        let string_type = core::String::new(self.db);
+        // Look up String type from type_defs (defined in prelude as enum)
+        let string_type = self
+            .type_defs
+            .get(&Symbol::new("String"))
+            .copied()
+            .expect("String type should be defined in prelude");
         let value = op.result(self.db, 0);
-        self.record_type(value, *string_type);
+        self.record_type(value, string_type);
     }
 
     fn check_bytes_const(&mut self, op: &Operation<'db>) {
@@ -1503,7 +1508,6 @@ impl<'db> TypeChecker<'db> {
             "Bool" => tribute_rt::bool_type(self.db),
             "Float" => tribute_rt::float_type(self.db),
             "Nat" => tribute_rt::nat_type(self.db),
-            "String" => *core::String::new(self.db),
             "Bytes" => *core::Bytes::new(self.db),
             "Nil" => *core::Nil::new(self.db),
             // User-defined types - look up in type definitions
@@ -2404,7 +2408,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::arith;
     use trunk_ir::idvec;
-    use trunk_ir::{PathId, Span};
+    use trunk_ir::{Attrs, BlockArg, PathId, Span, ValueDef};
 
     #[salsa::tracked]
     fn build_simple_module(db: &dyn salsa::Database) -> core::Module<'_> {
@@ -2754,5 +2758,192 @@ mod tests {
         assert_eq!(*err_name, Symbol::new("Err"));
         assert_eq!(err_fields.len(), 1);
         assert_eq!(err_fields[0], f64_ty);
+    }
+
+    // =========================================================================
+    // Case Expression Type Inference Tests
+    // =========================================================================
+
+    /// Build a module with a case expression that pattern matches on an enum variant.
+    ///
+    /// This tests that pattern bindings in case arms get the correct types.
+    /// For example, in `case opt { Some(x) -> x, None -> 0 }`, the binding `x`
+    /// should have type `i64` (the field type of `Some`), not a type variable.
+    #[salsa::tracked]
+    fn build_case_with_variant_pattern(db: &dyn salsa::Database) -> core::Module<'_> {
+        use tribute_ir::dialect::{tribute, tribute_pat};
+
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = trunk_ir::Location::new(path, Span::new(0, 0));
+        let i64_ty = *core::I64::new(db);
+
+        // Create enum type: enum Option { Some(i64), None }
+        let option_ty = adt::enum_type(
+            db,
+            Symbol::new("Option"),
+            vec![
+                (Symbol::new("Some"), vec![i64_ty]),
+                (Symbol::new("None"), vec![]),
+            ],
+        );
+
+        // Create a fresh type variable for the pattern binding's block argument
+        let binding_type_var = tribute::type_var_with_id(db, 999);
+
+        // Build the case expression:
+        //   case opt {
+        //       Some(x) -> x     // x should be inferred as i64
+        //       None -> 0
+        //   }
+
+        // Pattern for Some(x): tribute_pat.variant("Some") { tribute_pat.bind("x") }
+        let bind_op = tribute_pat::bind(db, location, Symbol::new("x")).as_operation();
+        let bind_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![bind_op]);
+        let fields_region = Region::new(db, location, idvec![bind_block]);
+        let some_pattern =
+            tribute_pat::variant(db, location, Symbol::new("Some"), fields_region).as_operation();
+        let some_pattern_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![some_pattern],
+        );
+        let some_pattern_region = Region::new(db, location, idvec![some_pattern_block]);
+
+        // Body for Some(x) -> x: yields the bound value
+        // The block has an argument with type variable (should be resolved to i64)
+        let some_body_block_id = BlockId::fresh();
+        let binding_block_arg = BlockArg::new(db, binding_type_var, Attrs::default());
+        let binding_value = Value::new(db, ValueDef::BlockArg(some_body_block_id), 0);
+        let some_yield = tribute::r#yield(db, location, binding_value).as_operation();
+        let some_body_block = Block::new(
+            db,
+            some_body_block_id,
+            location,
+            idvec![binding_block_arg],
+            idvec![some_yield],
+        );
+        let some_body_region = Region::new(db, location, idvec![some_body_block]);
+
+        // tribute.arm for Some(x) -> x
+        let some_arm =
+            tribute::arm(db, location, some_pattern_region, some_body_region).as_operation();
+
+        // Pattern for None: tribute_pat.variant("None") {}
+        let empty_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![]);
+        let empty_region = Region::new(db, location, idvec![empty_block]);
+        let none_pattern =
+            tribute_pat::variant(db, location, Symbol::new("None"), empty_region).as_operation();
+        let none_pattern_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![none_pattern],
+        );
+        let none_pattern_region = Region::new(db, location, idvec![none_pattern_block]);
+
+        // Body for None -> 0: yields constant 0
+        let zero_const = arith::Const::i64(db, location, 0).as_operation();
+        let none_yield = tribute::r#yield(db, location, zero_const.result(db, 0)).as_operation();
+        let none_body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![zero_const, none_yield],
+        );
+        let none_body_region = Region::new(db, location, idvec![none_body_block]);
+
+        // tribute.arm for None -> 0
+        let none_arm =
+            tribute::arm(db, location, none_pattern_region, none_body_region).as_operation();
+
+        // Case body region containing the arms
+        let case_body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![some_arm, none_arm],
+        );
+        let case_body_region = Region::new(db, location, idvec![case_body_block]);
+
+        // Build the function
+        let func = func::Func::build(
+            db,
+            location,
+            "test_case",
+            idvec![option_ty],
+            i64_ty,
+            |entry| {
+                // Get the function argument (the Option value)
+                let opt_arg = entry.block_arg(db, 0);
+
+                // Create tribute.case expression - must add to block via entry.op()
+                let case_op = entry.op(tribute::case(
+                    db,
+                    location,
+                    opt_arg,
+                    i64_ty,
+                    case_body_region,
+                ));
+                entry.op(func::Return::value(db, location, case_op.result(db)));
+            },
+        );
+
+        core::Module::build(db, location, Symbol::new("main"), |top| {
+            top.op(func);
+        })
+    }
+
+    /// Tracked wrapper for typecheck_module that returns the resolved type for
+    /// a specific type variable ID. This is needed because typecheck_module may
+    /// internally create tracked structs (e.g., Block::new in wrap_op_in_region).
+    #[salsa::tracked]
+    fn typecheck_and_resolve_var<'db>(
+        db: &'db dyn salsa::Database,
+        module: core::Module<'db>,
+        var_id: u64,
+    ) -> Option<Type<'db>> {
+        match typecheck_module(db, &module) {
+            Ok(solver) => {
+                let var_ty = tribute_ir::dialect::tribute::type_var_with_id(db, var_id);
+                Some(solver.type_subst().apply(db, var_ty))
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// Test that case expression pattern bindings get correctly typed.
+    ///
+    /// This is a regression test for the issue where pattern bindings
+    /// (like `x` in `Some(x)`) keep their type variables instead of
+    /// being resolved to the enum field types (like `i64`).
+    #[salsa_test]
+    fn test_case_pattern_binding_type_inference(db: &salsa::DatabaseImpl) {
+        let module = build_case_with_variant_pattern(db);
+
+        // Type check the module and get the resolved type for var_id=999
+        // (the type variable we used for the pattern binding)
+        let resolved_ty = typecheck_and_resolve_var(db, module, 999);
+        assert!(
+            resolved_ty.is_some(),
+            "Case expression should typecheck successfully"
+        );
+        let resolved_ty = resolved_ty.unwrap();
+
+        // The binding type should be i64, not a type variable
+        let i64_ty = *core::I64::new(db);
+        assert!(
+            !has_type_vars(db, resolved_ty),
+            "Pattern binding type should be resolved, not a type variable. Got: {:?}",
+            resolved_ty
+        );
+        assert_eq!(
+            resolved_ty, i64_ty,
+            "Pattern binding should have type i64 (the Some field type)"
+        );
     }
 }

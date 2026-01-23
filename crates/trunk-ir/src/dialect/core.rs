@@ -44,9 +44,6 @@ dialect! {
         /// `core.never` type: bottom type with no values.
         type never;
 
-        /// `core.string` type: string type.
-        type string;
-
         /// `core.bytes` type: byte sequence type.
         type bytes;
 

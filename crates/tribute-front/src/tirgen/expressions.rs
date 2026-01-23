@@ -117,7 +117,8 @@ pub fn lower_expr<'db>(
         // === String literals ===
         "string" | "raw_string" | "multiline_string" => {
             let s = parse_string_literal(node, &ctx.source);
-            let string_ty = core::String::new(ctx.db).as_type();
+            // String is defined as an enum in prelude, use typeref for late resolution
+            let string_ty = adt::typeref(ctx.db, Symbol::new("String"));
             let op = block.op(adt::string_const(ctx.db, location, string_ty, s));
             Some(op.result(ctx.db))
         }
@@ -674,7 +675,6 @@ fn lower_case_arm<'db>(
 ) -> Option<tribute::Arm<'db>> {
     let mut cursor = node.walk();
     let location = ctx.location(&node);
-    let infer_ty = ctx.fresh_type_var();
 
     let mut pattern_node = None;
     let mut body_node = None;
@@ -697,10 +697,12 @@ fn lower_case_arm<'db>(
     let bindings = collect_pattern_bindings(ctx, pattern_node);
 
     // 2. Create body block with block arguments for each binding
+    // Each binding gets its own fresh type variable since bindings can have different types
     let mut body_block = BlockBuilder::new(ctx.db, location);
     for binding in &bindings {
+        let binding_ty = ctx.fresh_type_var();
         body_block = body_block
-            .arg(infer_ty)
+            .arg(binding_ty)
             .attr(BIND_NAME(), binding.name)
             .attr(BIND_LOCATION(), Attribute::Location(binding.location));
     }
@@ -1807,7 +1809,8 @@ fn lower_string_interpolation<'db>(
     node: Node,
 ) -> Option<Value<'db>> {
     let location = ctx.location(&node);
-    let string_ty = core::String::new(ctx.db).as_type();
+    // String is defined as an enum in prelude, use typeref for late resolution
+    let string_ty = adt::typeref(ctx.db, Symbol::new("String"));
     let infer_ty = ctx.fresh_type_var();
 
     let mut cursor = node.walk();

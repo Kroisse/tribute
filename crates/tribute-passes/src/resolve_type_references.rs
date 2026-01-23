@@ -187,7 +187,6 @@ fn resolve_primitive_type<'db>(db: &'db dyn salsa::Database, name: &Symbol) -> O
         "Bool" => Some(tribute_rt::bool_type(db)),
         "Float" => Some(tribute_rt::float_type(db)),
         "Nat" => Some(tribute_rt::nat_type(db)),
-        "String" => Some(*core::String::new(db)),
         "Bytes" => Some(*core::Bytes::new(db)),
         "Nil" => Some(*core::Nil::new(db)),
         _ => None,
@@ -545,8 +544,9 @@ impl<'db> RewritePattern<'db> for ResolveOperationTypesPattern<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tribute_ir::dialect::tribute;
     use trunk_ir::DialectType;
-    use trunk_ir::dialect::core;
+    use trunk_ir::dialect::{adt, core};
 
     #[test]
     fn test_resolve_type_preserves_non_tribute_types() {
@@ -556,5 +556,125 @@ mod tests {
         let i32_ty = core::I32::new(&db).as_type();
         let resolved = resolve_type(&db, i32_ty, &type_defs);
         assert_eq!(resolved, i32_ty);
+    }
+
+    #[test]
+    fn test_resolve_enum_variant_field_types() {
+        let db = salsa::DatabaseImpl::new();
+
+        // Create a tribute.type reference for "Bytes"
+        let bytes_typeref =
+            tribute::unresolved_type(&db, Symbol::new("Bytes"), trunk_ir::IdVec::new());
+
+        // Create an enum with a variant that has a tribute.type field
+        // enum String { Leaf(Bytes) }
+        let string_enum_ty = adt::enum_type(
+            &db,
+            Symbol::new("String"),
+            vec![(Symbol::new("Leaf"), vec![bytes_typeref])],
+        );
+
+        // Build type_defs with Bytes -> core.bytes
+        let mut type_defs = HashMap::new();
+        let bytes_ty = *core::Bytes::new(&db);
+        type_defs.insert(Symbol::new("Bytes"), bytes_ty);
+
+        // Resolve the enum type
+        let resolved = resolve_enum_type(&db, string_enum_ty, &type_defs);
+
+        // Check that the Leaf variant's field type is now core.bytes
+        let Some(Attribute::List(variants)) = resolved.get_attr(&db, Symbol::new("variants"))
+        else {
+            panic!("Expected variants attribute");
+        };
+
+        let Attribute::List(leaf_pair) = &variants[0] else {
+            panic!("Expected variant pair");
+        };
+
+        let Attribute::List(leaf_fields) = &leaf_pair[1] else {
+            panic!("Expected field list");
+        };
+
+        let Attribute::Type(field_ty) = &leaf_fields[0] else {
+            panic!("Expected field type");
+        };
+
+        assert_eq!(
+            *field_ty, bytes_ty,
+            "Enum variant field type should be resolved from tribute.type to core.bytes"
+        );
+    }
+
+    #[test]
+    fn test_resolve_enum_variant_with_primitive_types() {
+        let db = salsa::DatabaseImpl::new();
+
+        // Create tribute.type references for primitive types
+        let int_typeref = tribute::unresolved_type(&db, Symbol::new("Int"), trunk_ir::IdVec::new());
+        let bytes_typeref =
+            tribute::unresolved_type(&db, Symbol::new("Bytes"), trunk_ir::IdVec::new());
+
+        // Create an enum: enum String { Leaf(Bytes), Branch(String, String, Int, Int) }
+        let string_typeref =
+            tribute::unresolved_type(&db, Symbol::new("String"), trunk_ir::IdVec::new());
+        let string_enum_ty = adt::enum_type(
+            &db,
+            Symbol::new("String"),
+            vec![
+                (Symbol::new("Leaf"), vec![bytes_typeref]),
+                (
+                    Symbol::new("Branch"),
+                    vec![string_typeref, string_typeref, int_typeref, int_typeref],
+                ),
+            ],
+        );
+
+        // Build type_defs - note: String maps to itself (recursive type)
+        let mut type_defs = HashMap::new();
+        type_defs.insert(Symbol::new("String"), string_enum_ty);
+
+        // Resolve the enum type (shallow to avoid infinite recursion)
+        let resolved = resolve_enum_type_shallow(&db, string_enum_ty, &type_defs);
+
+        // Check Leaf variant
+        let Some(Attribute::List(variants)) = resolved.get_attr(&db, Symbol::new("variants"))
+        else {
+            panic!("Expected variants attribute");
+        };
+
+        // Check Leaf(Bytes) - Bytes should be resolved to core.bytes
+        let Attribute::List(leaf_pair) = &variants[0] else {
+            panic!("Expected variant pair");
+        };
+        let Attribute::List(leaf_fields) = &leaf_pair[1] else {
+            panic!("Expected field list");
+        };
+        let Attribute::Type(leaf_field_ty) = &leaf_fields[0] else {
+            panic!("Expected field type");
+        };
+        let bytes_ty = *core::Bytes::new(&db);
+        assert_eq!(
+            *leaf_field_ty, bytes_ty,
+            "Leaf variant field should be resolved to core.bytes"
+        );
+
+        // Check Branch variant - String references should remain (shallow resolution)
+        let Attribute::List(branch_pair) = &variants[1] else {
+            panic!("Expected variant pair");
+        };
+        let Attribute::List(branch_fields) = &branch_pair[1] else {
+            panic!("Expected field list");
+        };
+
+        // Int fields should be resolved to tribute_rt.int
+        let Attribute::Type(int_field_ty) = &branch_fields[2] else {
+            panic!("Expected field type");
+        };
+        let int_ty = tribute_ir::dialect::tribute_rt::int_type(&db);
+        assert_eq!(
+            *int_field_ty, int_ty,
+            "Int fields should be resolved to tribute_rt.int"
+        );
     }
 }

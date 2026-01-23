@@ -122,7 +122,6 @@ pub fn wasm_type_converter() -> TypeConverter {
                 "Nat" => Some(core::I32::new(db).as_type()),
                 "Bool" => Some(core::I32::new(db).as_type()),
                 "Float" => Some(core::F64::new(db).as_type()),
-                "String" => Some(core::String::new(db).as_type()),
                 _ => None, // Unknown type - leave as is
             })
         })

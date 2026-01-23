@@ -50,7 +50,14 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     tracing::debug!("=== AFTER func_to_wasm ===\n{:?}", module);
     debug_func_params(db, &module, "after func_to_wasm");
 
-    // Convert ALL adt ops to wasm (including those from trampoline_to_adt)
+    // Const analysis and lowering (string/bytes constants to data segments)
+    // NOTE: Must run BEFORE adt_to_wasm because string literals generate adt.variant_new
+    // for String::Leaf(Bytes) which needs to be converted to wasm.struct_new
+    let const_analysis = super::const_to_wasm::analyze_consts(db, module);
+    let module = super::const_to_wasm::lower(db, module, const_analysis);
+    debug_func_params(db, &module, "after const_to_wasm");
+
+    // Convert ALL adt ops to wasm (including those from trampoline_to_adt and const_to_wasm)
     let module =
         trunk_ir_wasm_backend::passes::adt_to_wasm::lower(db, module, wasm_type_converter());
     debug_func_params(db, &module, "after adt_to_wasm");
@@ -62,10 +69,6 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     // Concretize type variables in wasm operations (resolve tribute.type_var)
     let module = super::wasm_type_concrete::lower(db, module);
     debug_func_params(db, &module, "after wasm_type_concrete");
-
-    // Const analysis and lowering (string/bytes constants to data segments)
-    let const_analysis = super::const_to_wasm::analyze_consts(db, module);
-    let module = super::const_to_wasm::lower(db, module, const_analysis);
 
     // Intrinsic analysis and lowering (print_line -> fd_write)
     let intrinsic_analysis =

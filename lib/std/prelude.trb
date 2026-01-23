@@ -59,6 +59,68 @@ enum Result(a, e) {
     Error(e),
 }
 
+/// UTF-8 rope structure for efficient string operations.
+/// Strings are represented as a tree of byte sequences for efficient
+/// concatenation and substring operations.
+enum String {
+    /// Leaf node containing UTF-8 bytes
+    Leaf(Bytes),
+    /// Branch node with left subtree, right subtree, cached byte length, and depth
+    Branch(String, String, Int, Int),
+}
+
+pub mod String {
+    /// Create an empty string
+    pub fn empty() -> String {
+        Leaf(Bytes::empty())
+    }
+
+    /// Create a string from bytes (assumes valid UTF-8)
+    pub fn from_bytes(bytes: Bytes) -> String {
+        Leaf(bytes)
+    }
+
+    /// Get the byte length of a string
+    pub fn len(s: String) -> Int {
+        case s {
+            Leaf(bytes) -> Bytes::len(bytes)
+            Branch(_, _, cached_len, _) -> cached_len
+        }
+    }
+
+    /// Get the depth of the string tree
+    pub fn depth(s: String) -> Int {
+        case s {
+            Leaf(_) -> 0
+            Branch(_, _, _, d) -> d
+        }
+    }
+
+    /// Concatenate two strings
+    pub fn concat(left: String, right: String) -> String {
+        let left_len = String::len(left)
+        let right_len = String::len(right)
+        let left_depth = String::depth(left)
+        let right_depth = String::depth(right)
+        let max_depth = if left_depth > right_depth { left_depth } else { right_depth }
+        Branch(left, right, left_len + right_len, max_depth + 1)
+    }
+
+    /// Concatenation operator for strings
+    pub fn (<>)(left: String, right: String) -> String {
+        String::concat(left, right)
+    }
+
+    /// Convert a string to a byte sequence (flattens the rope)
+    pub fn to_bytes(s: String) -> Bytes {
+        case s {
+            Leaf(bytes) -> bytes
+            Branch(left, right, _, _) ->
+                Bytes::concat(String::to_bytes(left), String::to_bytes(right))
+        }
+    }
+}
+
 pub mod Result {
     /// Transform the success value inside a Result using a function.
     /// If the Result is Error, returns the error unchanged.
@@ -122,7 +184,9 @@ extern "intrinsic" fn __bytes_len(bytes: Bytes) -> Int
 extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Int) -> Int
 extern "intrinsic" fn __bytes_slice_or_panic(bytes: Bytes, start: Int, end: Int) -> Bytes
 extern "intrinsic" fn __bytes_concat(left: Bytes, right: Bytes) -> Bytes
-extern "intrinsic" fn __print_line(message: String) -> Nil
+extern "intrinsic" fn __bytes_empty() -> Bytes
+extern "intrinsic" fn __print_bytes(bytes: Bytes) -> Nil
+extern "intrinsic" fn __print_newline() -> Nil
 
 // =============================================================================
 // Bytes module
@@ -130,6 +194,11 @@ extern "intrinsic" fn __print_line(message: String) -> Nil
 
 /// Bytes module with operations for byte sequences.
 pub mod Bytes {
+    /// Create an empty byte sequence.
+    pub fn empty() -> Bytes {
+        __bytes_empty()
+    }
+
     /// Get the length of a byte sequence.
     pub fn len(bytes: Bytes) -> Int {
         __bytes_len(bytes)
@@ -181,7 +250,16 @@ pub mod Bytes {
 // I/O functions
 // =============================================================================
 
-/// Print a line to standard output.
-fn print_line(message: String) -> Nil {
-    __print_line(message)
+/// Print bytes to standard output (without newline).
+pub fn print_bytes(bytes: Bytes) -> Nil {
+    __print_bytes(bytes)
+}
+
+/// Print a line to standard output (with newline).
+/// NOTE: Currently simplified - only prints newline.
+/// Full String printing requires case expression support.
+pub fn print_line(message: String) -> Nil {
+    // TODO: Implement full String printing when case expressions work
+    // For now, just print a newline
+    __print_newline()
 }

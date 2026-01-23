@@ -510,4 +510,84 @@ mod tests {
         // This assertion may fail - let's see what happens
         // assert!(!has_vars, "Module should not have type variables after compilation");
     }
+
+    /// Helper to create a module with a block that has a type variable in its argument.
+    #[salsa::tracked]
+    fn make_module_with_block_arg_type_var(db: &dyn salsa::Database) -> core::Module<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let type_var = tribute::type_var_with_id(db, 99);
+        let i64_ty = *core::I64::new(db);
+
+        // Build a function with a type variable as its parameter type.
+        // This creates a block argument with the type variable type.
+        let func_op = func::Func::build(
+            db,
+            location,
+            "test_func",
+            idvec![type_var], // param type is a type variable
+            i64_ty,
+            |entry| {
+                // Return the block argument (which has the type variable type)
+                let arg = entry.block_arg(db, 0);
+                entry.op(func::Return::value(db, location, arg));
+            },
+        );
+
+        core::Module::build(db, location, "test".into(), |top| {
+            top.op(func_op);
+        })
+    }
+
+    /// Apply substitution to a module with block argument type variable.
+    #[salsa::tracked]
+    fn apply_subst_to_block_arg(db: &dyn salsa::Database) -> core::Module<'_> {
+        let module = make_module_with_block_arg_type_var(db);
+
+        // Create substitution: var 99 -> I64
+        let mut subst = TypeSubst::new();
+        let i64_ty = *core::I64::new(db);
+        subst.insert(99, i64_ty);
+
+        apply_subst_to_module(db, module, &subst)
+    }
+
+    /// Test that substitution is applied to block argument types.
+    #[salsa_test]
+    fn test_apply_subst_to_block_args(db: &salsa::DatabaseImpl) {
+        // Create module with type variable in block argument
+        let original = make_module_with_block_arg_type_var(db);
+
+        // Verify original has type variable in block arg
+        let body = original.body(db);
+        let func_op = &body.blocks(db)[0].operations(db)[0];
+        let func_region = &func_op.regions(db)[0];
+        let block = &func_region.blocks(db)[0];
+        let block_arg = &block.args(db)[0];
+        assert!(
+            tribute::is_type_var(db, block_arg.ty(db)),
+            "Original block arg should have type variable"
+        );
+
+        // Apply substitution
+        let result = apply_subst_to_block_arg(db);
+
+        // Verify substitution was applied to block argument
+        let new_body = result.body(db);
+        let new_func_op = &new_body.blocks(db)[0].operations(db)[0];
+        let new_func_region = &new_func_op.regions(db)[0];
+        let new_block = &new_func_region.blocks(db)[0];
+        let new_block_arg = &new_block.args(db)[0];
+
+        let i64_ty = *core::I64::new(db);
+        assert_eq!(
+            new_block_arg.ty(db),
+            i64_ty,
+            "Block arg type should be resolved to i64 after substitution"
+        );
+        assert!(
+            !tribute::is_type_var(db, new_block_arg.ty(db)),
+            "Block arg should not be type variable after substitution"
+        );
+    }
 }

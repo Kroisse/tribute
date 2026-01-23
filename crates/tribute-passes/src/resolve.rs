@@ -449,7 +449,6 @@ fn resolve_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> T
         "Bool" => tribute_rt::bool_type(db),
         "Float" => tribute_rt::float_type(db),
         "Nat" => tribute_rt::nat_type(db),
-        "String" => *core::String::new(db),
         "Bytes" => *core::Bytes::new(db),
         "Nil" => *core::Nil::new(db),
         // User-defined types are left unresolved - will be handled during full resolve pass
@@ -776,7 +775,6 @@ impl<'db> Resolver<'db> {
             "Bool" => tribute_rt::bool_type(self.db),
             "Float" => tribute_rt::float_type(self.db),
             "Nat" => tribute_rt::nat_type(self.db),
-            "String" => *core::String::new(self.db),
             "Bytes" => *core::Bytes::new(self.db),
             "Nil" => *core::Nil::new(self.db),
             _ => {
@@ -2430,14 +2428,14 @@ pub mod tests {
         let location = test_location(db);
         let infer_ty = tribute::new_type_var(db, std::collections::BTreeMap::new());
 
-        // Create ability declaration: ability Console { fn print(msg: String) -> Nil }
+        // Create ability declaration: ability Console { fn print(msg: Bytes) -> Nil }
         // Use actual Type attributes for param and return types
-        let string_ty = *core::String::new(db);
+        let bytes_ty = *core::Bytes::new(db);
         let nil_ty = *core::Nil::new(db);
 
         // Build operations region with tribute.op_def
         let mut ops_block = BlockBuilder::new(db, location);
-        let print_type = core::Func::new(db, idvec![string_ty], nil_ty).as_type();
+        let print_type = core::Func::new(db, idvec![bytes_ty], nil_ty).as_type();
         ops_block.op(tribute::op_def(
             db,
             location,
@@ -2539,8 +2537,8 @@ pub mod tests {
             assert_eq!(params.len(), 1, "print should have 1 parameter");
             let param_ty = params[0];
             assert!(
-                param_ty.is_dialect(db, core::DIALECT_NAME(), core::STRING()),
-                "print parameter should be String type, got {:?}",
+                param_ty.is_dialect(db, core::DIALECT_NAME(), core::BYTES()),
+                "print parameter should be Bytes type, got {:?}",
                 param_ty
             );
 

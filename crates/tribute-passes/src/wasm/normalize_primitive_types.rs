@@ -117,8 +117,7 @@ fn is_illegal_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -
         && let Some(trunk_ir::Attribute::Symbol(name_sym)) =
             ty.get_attr(db, trunk_ir::Symbol::new("name"))
     {
-        return name_sym
-            .with_str(|name_str| matches!(name_str, "Int" | "Nat" | "Bool" | "Float" | "String"));
+        return name_sym.with_str(|name_str| matches!(name_str, "Int" | "Nat" | "Bool" | "Float"));
     }
 
     false
@@ -173,7 +172,6 @@ fn convert_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> O
         return name_sym.with_str(|name_str| match name_str {
             "Int" | "Nat" | "Bool" => Some(core::I32::new(db).as_type()),
             "Float" => Some(core::F64::new(db).as_type()),
-            "String" => Some(core::String::new(db).as_type()),
             _ => None, // User-defined type - don't convert
         });
     }
