@@ -213,7 +213,7 @@ pub struct EffectVar {
 ///
 /// This represents a type before resolution and checking.
 /// It may contain unresolved names that need to be looked up.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct TypeAnnotation {
     /// The node ID for span lookup.
     pub id: NodeId,
@@ -222,7 +222,7 @@ pub struct TypeAnnotation {
 }
 
 /// Kinds of type annotations in source code.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum TypeAnnotationKind {
     /// A simple type name: `Int`, `Bool`, `MyType`
     Named(Symbol),

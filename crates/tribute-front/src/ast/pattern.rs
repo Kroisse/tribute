@@ -13,15 +13,21 @@ use super::expr::FloatBits;
 use super::node_id::NodeId;
 
 /// A pattern in the AST, parameterized by phase type `V`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Pattern<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct Pattern<V>
+where
+    V: salsa::Update,
+{
     /// Unique identifier for span lookup.
     pub id: NodeId,
     /// The kind of pattern.
     pub kind: Box<PatternKind<V>>,
 }
 
-impl<V> Pattern<V> {
+impl<V> Pattern<V>
+where
+    V: salsa::Update,
+{
     /// Create a new pattern with the given ID and kind.
     pub fn new(id: NodeId, kind: PatternKind<V>) -> Self {
         Self {
@@ -32,8 +38,11 @@ impl<V> Pattern<V> {
 }
 
 /// The different kinds of patterns.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum PatternKind<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub enum PatternKind<V>
+where
+    V: salsa::Update,
+{
     /// Wildcard pattern: `_`
     ///
     /// Matches anything without binding.
@@ -90,8 +99,11 @@ pub enum PatternKind<V> {
 }
 
 /// A field in a record pattern.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FieldPattern<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct FieldPattern<V>
+where
+    V: salsa::Update,
+{
     /// The field name.
     pub name: Symbol,
     /// The pattern to match the field value.
@@ -100,7 +112,7 @@ pub struct FieldPattern<V> {
 }
 
 /// Literal values in patterns.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum LiteralPattern {
     /// Integer literal: `42`, `-1`
     Int(i64),

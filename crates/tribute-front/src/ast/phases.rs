@@ -21,7 +21,7 @@ use super::types::Type;
 ///
 /// At this stage, we don't know whether `foo` refers to a local variable,
 /// a function, a constructor, or something else.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct UnresolvedName {
     /// The name as written in source.
     pub name: Symbol,
@@ -77,7 +77,7 @@ pub struct CtorId<'db> {
 }
 
 /// Reference to a builtin operation or value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum BuiltinRef {
     // Arithmetic operations
     Add,
@@ -123,7 +123,7 @@ pub struct ModulePath<'db> {
 /// A resolved reference to a definition.
 ///
 /// After name resolution, we know exactly what each name refers to.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum ResolvedRef<'db> {
     /// Reference to a local variable (function parameter or let binding).
     Local {
@@ -180,7 +180,7 @@ impl<'db> ResolvedRef<'db> {
 /// A resolved reference with type information.
 ///
 /// After type checking, every reference has a known type.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct TypedRef<'db> {
     /// The resolved reference.
     pub resolved: ResolvedRef<'db>,

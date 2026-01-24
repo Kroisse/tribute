@@ -17,8 +17,11 @@ use super::types::TypeAnnotation;
 /// A module containing declarations.
 ///
 /// This is the top-level AST node for a source file.
-#[derive(Clone, Debug)]
-pub struct Module<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct Module<V>
+where
+    V: salsa::Update,
+{
     /// Node ID for span lookup.
     pub id: NodeId,
     /// The module name (derived from file path or explicit module declaration).
@@ -27,7 +30,10 @@ pub struct Module<V> {
     pub decls: Vec<Decl<V>>,
 }
 
-impl<V> Module<V> {
+impl<V> Module<V>
+where
+    V: salsa::Update,
+{
     /// Create a new module.
     pub fn new(id: NodeId, name: Option<Symbol>, decls: Vec<Decl<V>>) -> Self {
         Self { id, name, decls }
@@ -35,8 +41,11 @@ impl<V> Module<V> {
 }
 
 /// A declaration in a module.
-#[derive(Clone, Debug)]
-pub enum Decl<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub enum Decl<V>
+where
+    V: salsa::Update,
+{
     /// Function declaration.
     Function(FuncDecl<V>),
     /// Struct declaration.
@@ -52,8 +61,11 @@ pub enum Decl<V> {
 }
 
 /// Function declaration: `fn name(params) -> ReturnType { body }`
-#[derive(Clone, Debug)]
-pub struct FuncDecl<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct FuncDecl<V>
+where
+    V: salsa::Update,
+{
     /// Node ID for span lookup.
     pub id: NodeId,
     /// Whether this function is public.
@@ -73,7 +85,7 @@ pub struct FuncDecl<V> {
 }
 
 /// Type parameter declaration: `a`, `T: Eq`
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct TypeParamDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -84,7 +96,7 @@ pub struct TypeParamDecl {
 }
 
 /// Parameter declaration in a function.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct ParamDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -95,7 +107,7 @@ pub struct ParamDecl {
 }
 
 /// Struct declaration: `struct Name { fields }`
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct StructDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -110,7 +122,7 @@ pub struct StructDecl {
 }
 
 /// Field declaration in a struct or enum variant.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct FieldDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -123,7 +135,7 @@ pub struct FieldDecl {
 }
 
 /// Enum declaration: `enum Name { Variants }`
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct EnumDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -138,7 +150,7 @@ pub struct EnumDecl {
 }
 
 /// Variant declaration in an enum.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct VariantDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -149,7 +161,7 @@ pub struct VariantDecl {
 }
 
 /// Ability declaration: `ability Name { operations }`
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AbilityDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -164,7 +176,7 @@ pub struct AbilityDecl {
 }
 
 /// Operation declaration in an ability.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct OpDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -177,8 +189,11 @@ pub struct OpDecl {
 }
 
 /// Constant declaration: `const NAME = value`
-#[derive(Clone, Debug)]
-pub struct ConstDecl<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct ConstDecl<V>
+where
+    V: salsa::Update,
+{
     /// Node ID for span lookup.
     pub id: NodeId,
     /// Whether this constant is public.
@@ -192,7 +207,7 @@ pub struct ConstDecl<V> {
 }
 
 /// Import declaration: `use path::to::item` or `use path::to::item as alias`
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct UseDecl {
     /// Node ID for span lookup.
     pub id: NodeId,

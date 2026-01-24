@@ -19,15 +19,21 @@ use super::types::TypeAnnotation;
 /// - During parsing: `Expr<UnresolvedName>`
 /// - After resolve: `Expr<ResolvedRef<'db>>`
 /// - After typecheck: `Expr<TypedRef<'db>>`
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Expr<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct Expr<V>
+where
+    V: salsa::Update,
+{
     /// Unique identifier for span lookup.
     pub id: NodeId,
     /// The kind of expression.
     pub kind: Box<ExprKind<V>>,
 }
 
-impl<V> Expr<V> {
+impl<V> Expr<V>
+where
+    V: salsa::Update,
+{
     /// Create a new expression with the given ID and kind.
     pub fn new(id: NodeId, kind: ExprKind<V>) -> Self {
         Self {
@@ -38,8 +44,11 @@ impl<V> Expr<V> {
 }
 
 /// The different kinds of expressions.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ExprKind<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub enum ExprKind<V>
+where
+    V: salsa::Update,
+{
     // === References ===
     /// Variable or function reference.
     /// The type `V` determines what we know about the reference.
@@ -140,8 +149,11 @@ pub enum ExprKind<V> {
 }
 
 /// A statement in a block.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Stmt<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub enum Stmt<V>
+where
+    V: salsa::Update,
+{
     /// Let binding: `let pattern = expr`
     Let {
         id: NodeId,
@@ -158,8 +170,11 @@ pub enum Stmt<V> {
 }
 
 /// A case arm in pattern matching.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Arm<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct Arm<V>
+where
+    V: salsa::Update,
+{
     /// Node ID for span lookup.
     pub id: NodeId,
     /// The pattern to match.
@@ -171,8 +186,11 @@ pub struct Arm<V> {
 }
 
 /// A handler arm in a handle expression.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct HandlerArm<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct HandlerArm<V>
+where
+    V: salsa::Update,
+{
     /// Node ID for span lookup.
     pub id: NodeId,
     /// The kind of handler (result or effect).
@@ -182,8 +200,11 @@ pub struct HandlerArm<V> {
 }
 
 /// The kind of handler arm.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum HandlerKind<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub enum HandlerKind<V>
+where
+    V: salsa::Update,
+{
     /// Result handler: `{ result }`
     Result { binding: Pattern<V> },
 
