@@ -75,6 +75,19 @@ pub fn typed_module<'db>(
     Some(crate::typeck::typecheck_module(db, module))
 }
 
+/// Type-directed name resolution (TDNR) on a module.
+///
+/// This resolves UFCS method calls that couldn't be resolved during
+/// initial name resolution because they required type information.
+#[salsa::tracked]
+pub fn tdnr_module<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<Module<TypedRef<'db>>> {
+    let module = typed_module(db, source)?;
+    Some(crate::tdnr::resolve_tdnr(db, module))
+}
+
 // =============================================================================
 // Function-level queries
 // =============================================================================

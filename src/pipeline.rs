@@ -114,9 +114,8 @@ use trunk_ir::{Block, BlockId, IdVec, Region, Symbol};
 
 // AST-based pipeline imports
 use tribute_front::ast::{Module as AstModule, TypedRef};
-use tribute_front::{
-    ast_to_ir, astgen, resolve as ast_resolve, tdnr as ast_tdnr, typeck as ast_typeck,
-};
+use tribute_front::ast_to_ir;
+use tribute_front::query as ast_query;
 use trunk_ir_wasm_backend::{
     CompilationError, CompilationResult as WasmCompilationResult, WasmBinary,
 };
@@ -731,25 +730,18 @@ pub fn compile_to_wasm_binary<'db>(
 /// Parse and lower source to typed AST.
 ///
 /// This function runs the AST pipeline through TDNR, producing a fully typed AST.
-/// Note: This function is not Salsa-tracked because AST types don't implement
-/// the required traits. Use `parse_and_lower_ast` for a tracked alternative.
+/// Uses Salsa-tracked query functions for incremental caching at each stage.
 fn parse_and_typecheck_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<AstModule<TypedRef<'db>>> {
-    // Phase 1: CST → AST (unresolved names)
-    let ast = astgen::lower_source_to_ast(db, source)?;
-
-    // Phase 2: Name resolution
-    let resolved = ast_resolve::resolve_module(db, ast);
-
-    // Phase 3: Type checking
-    let typed = ast_typeck::typecheck_module(db, resolved);
-
-    // Phase 4: TDNR (method call resolution)
-    let tdnr_resolved = ast_tdnr::resolve_tdnr(db, typed);
-
-    Some(tdnr_resolved)
+    // Use tracked query functions for incremental caching
+    // Each stage is cached independently by Salsa:
+    // - parsed_module: CST → AST
+    // - resolved_module: name resolution
+    // - typed_module: type checking
+    // - tdnr_module: type-directed name resolution
+    ast_query::tdnr_module(db, source)
 }
 
 /// Parse and lower source to TrunkIR using the AST pipeline.
