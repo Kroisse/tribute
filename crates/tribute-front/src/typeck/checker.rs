@@ -267,10 +267,12 @@ impl<'db> TypeChecker<'db> {
     /// Type check an expression.
     fn check_expr(&mut self, expr: Expr<ResolvedRef<'db>>, mode: Mode<'db>) -> Expr<TypedRef<'db>> {
         let ty = match &*expr.kind {
+            ExprKind::NatLit(_) => self.ctx.nat_type(),
             ExprKind::IntLit(_) => self.ctx.int_type(),
             ExprKind::FloatLit(_) => self.ctx.float_type(),
             ExprKind::BoolLit(_) => self.ctx.bool_type(),
             ExprKind::StringLit(_) => self.ctx.string_type(),
+            ExprKind::BytesLit(_) => self.ctx.bytes_type(),
             ExprKind::Nil => self.ctx.nil_type(),
 
             ExprKind::Var(resolved) => self.infer_var(resolved),
@@ -312,24 +314,10 @@ impl<'db> TypeChecker<'db> {
                 let _ = (op, lhs, rhs);
                 self.ctx.fresh_type_var() // TODO: Proper binop typing
             }
-            ExprKind::UnaryOp { op, expr } => {
-                // Unary operation
-                let _ = (op, expr);
-                self.ctx.fresh_type_var() // TODO: Proper unaryop typing
-            }
-            ExprKind::Block(stmts) => {
-                // Block returns type of last expression
+            ExprKind::Block { stmts, value } => {
+                // Block returns type of value expression
                 let _ = stmts;
-                self.ctx.fresh_type_var() // TODO: Check statements
-            }
-            ExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                // If expression
-                let _ = (cond, then_branch, else_branch);
-                self.ctx.fresh_type_var() // TODO: Proper if typing
+                self.infer_expr_type(value)
             }
             ExprKind::Case { scrutinee, arms } => {
                 // Case expression
@@ -376,10 +364,12 @@ impl<'db> TypeChecker<'db> {
     fn infer_expr_type(&mut self, expr: &Expr<ResolvedRef<'db>>) -> Type<'db> {
         match &*expr.kind {
             ExprKind::Var(resolved) => self.infer_var(resolved),
+            ExprKind::NatLit(_) => self.ctx.nat_type(),
             ExprKind::IntLit(_) => self.ctx.int_type(),
             ExprKind::FloatLit(_) => self.ctx.float_type(),
             ExprKind::BoolLit(_) => self.ctx.bool_type(),
             ExprKind::StringLit(_) => self.ctx.string_type(),
+            ExprKind::BytesLit(_) => self.ctx.bytes_type(),
             ExprKind::Nil => self.ctx.nil_type(),
             _ => self.ctx.fresh_type_var(),
         }
@@ -505,10 +495,12 @@ impl<'db> TypeChecker<'db> {
     /// Convert expression kind from ResolvedRef to TypedRef.
     fn convert_expr_kind(&mut self, kind: ExprKind<ResolvedRef<'db>>) -> ExprKind<TypedRef<'db>> {
         match kind {
+            ExprKind::NatLit(n) => ExprKind::NatLit(n),
             ExprKind::IntLit(n) => ExprKind::IntLit(n),
             ExprKind::FloatLit(f) => ExprKind::FloatLit(f),
             ExprKind::BoolLit(b) => ExprKind::BoolLit(b),
             ExprKind::StringLit(s) => ExprKind::StringLit(s),
+            ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
             ExprKind::Nil => ExprKind::Nil,
             ExprKind::Var(resolved) => ExprKind::Var(self.convert_ref(resolved)),
             ExprKind::Call { callee, args } => ExprKind::Call {
@@ -558,21 +550,9 @@ impl<'db> TypeChecker<'db> {
                 lhs: self.check_expr(lhs, Mode::Infer),
                 rhs: self.check_expr(rhs, Mode::Infer),
             },
-            ExprKind::UnaryOp { op, expr } => ExprKind::UnaryOp {
-                op,
-                expr: self.check_expr(expr, Mode::Infer),
-            },
-            ExprKind::Block(stmts) => {
-                ExprKind::Block(stmts.into_iter().map(|s| self.convert_stmt(s)).collect())
-            }
-            ExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => ExprKind::If {
-                cond: self.check_expr(cond, Mode::Infer),
-                then_branch: self.check_expr(then_branch, Mode::Infer),
-                else_branch: else_branch.map(|e| self.check_expr(e, Mode::Infer)),
+            ExprKind::Block { stmts, value } => ExprKind::Block {
+                stmts: stmts.into_iter().map(|s| self.convert_stmt(s)).collect(),
+                value: self.check_expr(value, Mode::Infer),
             },
             ExprKind::Case { scrutinee, arms } => ExprKind::Case {
                 scrutinee: self.check_expr(scrutinee, Mode::Infer),
@@ -632,10 +612,6 @@ impl<'db> TypeChecker<'db> {
             Stmt::Expr { id, expr } => {
                 let expr = self.check_expr(expr, Mode::Infer);
                 Stmt::Expr { id, expr }
-            }
-            Stmt::Return { id, expr } => {
-                let expr = self.check_expr(expr, Mode::Infer);
-                Stmt::Return { id, expr }
             }
         }
     }

@@ -4,8 +4,7 @@ use tree_sitter::Node;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, BinOpKind, Expr, ExprKind, FloatBits, HandlerArm, HandlerKind, Param, Stmt, UnaryOpKind,
-    UnresolvedName,
+    Arm, BinOpKind, Expr, ExprKind, FloatBits, HandlerArm, HandlerKind, Param, Stmt, UnresolvedName,
 };
 
 use super::context::AstLoweringCtx;
@@ -20,8 +19,8 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
         // === Literals ===
         "nat_literal" => {
             let text = ctx.node_text(&node);
-            let value = parse_nat_literal(text).unwrap_or(0) as i64;
-            ExprKind::IntLit(value)
+            let value = parse_nat_literal(text).unwrap_or(0);
+            ExprKind::NatLit(value)
         }
         "int_literal" => {
             let text = ctx.node_text(&node);
@@ -38,6 +37,11 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
             let content = parse_string_literal(&text);
             ExprKind::StringLit(content)
         }
+        "bytes_string" | "raw_bytes" | "raw_interpolated_bytes" | "multiline_bytes" => {
+            let text = ctx.node_text_owned(&node);
+            let content = parse_bytes_literal(&text);
+            ExprKind::BytesLit(content)
+        }
         "bool_literal" => {
             let text = ctx.node_text(&node);
             ExprKind::BoolLit(text == "true")
@@ -53,9 +57,6 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
 
         // === Binary expressions ===
         "binary_expression" => lower_binary_expr(ctx, node),
-
-        // === Unary expressions ===
-        "unary_expression" => lower_unary_expr(ctx, node),
 
         // === Call expressions ===
         "call_expression" => lower_call_expr(ctx, node),
@@ -74,9 +75,6 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
 
         // === Block ===
         "block" => lower_block(ctx, node),
-
-        // === If expression (in case it exists) ===
-        "if_expression" => lower_if_expr(ctx, node),
 
         // === Case expression ===
         "case_expression" => lower_case_expr(ctx, node),
@@ -153,26 +151,6 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
     };
 
     ExprKind::BinOp { op, lhs, rhs }
-}
-
-fn lower_unary_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
-    let op_node = node.child_by_field_name("operator");
-    let operand_node = node.child_by_field_name("operand");
-
-    let (Some(op_node), Some(operand_node)) = (op_node, operand_node) else {
-        return ExprKind::Error;
-    };
-
-    let expr = lower_expr(ctx, operand_node);
-    let op_text = ctx.node_text(&op_node);
-
-    let op = match op_text {
-        "-" => UnaryOpKind::Neg,
-        "!" => UnaryOpKind::Not,
-        _ => return ExprKind::Error,
-    };
-
-    ExprKind::UnaryOp { op, expr }
 }
 
 fn lower_call_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
@@ -310,52 +288,80 @@ fn lower_block(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName>
         .filter(|c| !is_comment(c.kind()) && c.kind() != "ERROR")
         .collect();
 
-    for (i, child) in children.iter().enumerate() {
-        let is_last = i == children.len() - 1;
-
-        match child.kind() {
-            "let_statement" => {
-                if let Some(stmt) = lower_let_statement(ctx, *child) {
-                    stmts.push(stmt);
-                }
-            }
-            "expression_statement" | "statement" => {
-                // expression_statement contains the actual expression
-                let mut inner_cursor = child.walk();
-                let inner = child
-                    .named_children(&mut inner_cursor)
-                    .find(|n| !is_comment(n.kind()));
-
-                if let Some(inner) = inner {
-                    if inner.kind() == "let_statement" {
-                        if let Some(stmt) = lower_let_statement(ctx, inner) {
-                            stmts.push(stmt);
-                        }
-                    } else {
-                        let expr = lower_expr(ctx, inner);
-                        let stmt_id = ctx.fresh_id_with_span(&inner);
-                        if is_last {
-                            stmts.push(Stmt::Return { id: stmt_id, expr });
-                        } else {
-                            stmts.push(Stmt::Expr { id: stmt_id, expr });
-                        }
-                    }
-                }
-            }
-            _ => {
-                // Try to lower as expression directly
-                let expr = lower_expr(ctx, *child);
-                let stmt_id = ctx.fresh_id_with_span(child);
-                if is_last {
-                    stmts.push(Stmt::Return { id: stmt_id, expr });
-                } else {
-                    stmts.push(Stmt::Expr { id: stmt_id, expr });
-                }
-            }
+    // Process all but the last child as statements
+    for child in children.iter().take(children.len().saturating_sub(1)) {
+        if let Some(stmt) = lower_block_item_as_stmt(ctx, child) {
+            stmts.push(stmt);
         }
     }
 
-    ExprKind::Block(stmts)
+    // The last child is the block's value
+    let value = if let Some(last) = children.last() {
+        lower_block_item_as_expr(ctx, last)
+    } else {
+        // Empty block returns Nil
+        let nil_id = ctx.fresh_id_with_span(&node);
+        Expr::new(nil_id, ExprKind::Nil)
+    };
+
+    ExprKind::Block { stmts, value }
+}
+
+fn lower_block_item_as_stmt(
+    ctx: &mut AstLoweringCtx,
+    child: &Node,
+) -> Option<Stmt<UnresolvedName>> {
+    match child.kind() {
+        "let_statement" => lower_let_statement(ctx, *child),
+        "expression_statement" | "statement" => {
+            let mut inner_cursor = child.walk();
+            let inner = child
+                .named_children(&mut inner_cursor)
+                .find(|n| !is_comment(n.kind()))?;
+
+            if inner.kind() == "let_statement" {
+                lower_let_statement(ctx, inner)
+            } else {
+                let expr = lower_expr(ctx, inner);
+                let stmt_id = ctx.fresh_id_with_span(&inner);
+                Some(Stmt::Expr { id: stmt_id, expr })
+            }
+        }
+        _ => {
+            let expr = lower_expr(ctx, *child);
+            let stmt_id = ctx.fresh_id_with_span(child);
+            Some(Stmt::Expr { id: stmt_id, expr })
+        }
+    }
+}
+
+fn lower_block_item_as_expr(ctx: &mut AstLoweringCtx, child: &Node) -> Expr<UnresolvedName> {
+    match child.kind() {
+        "let_statement" => {
+            // A let as the last item - block value is Nil, but we need to add the let as a stmt
+            // This shouldn't normally happen with well-formed code
+            let nil_id = ctx.fresh_id_with_span(child);
+            Expr::new(nil_id, ExprKind::Nil)
+        }
+        "expression_statement" | "statement" => {
+            let mut inner_cursor = child.walk();
+            if let Some(inner) = child
+                .named_children(&mut inner_cursor)
+                .find(|n| !is_comment(n.kind()))
+            {
+                if inner.kind() == "let_statement" {
+                    let nil_id = ctx.fresh_id_with_span(child);
+                    Expr::new(nil_id, ExprKind::Nil)
+                } else {
+                    lower_expr(ctx, inner)
+                }
+            } else {
+                let nil_id = ctx.fresh_id_with_span(child);
+                Expr::new(nil_id, ExprKind::Nil)
+            }
+        }
+        _ => lower_expr(ctx, *child),
+    }
 }
 
 fn lower_let_statement(ctx: &mut AstLoweringCtx, node: Node) -> Option<Stmt<UnresolvedName>> {
@@ -375,26 +381,6 @@ fn lower_let_statement(ctx: &mut AstLoweringCtx, node: Node) -> Option<Stmt<Unre
         ty,
         value,
     })
-}
-
-fn lower_if_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
-    let cond_node = node.child_by_field_name("condition");
-    let then_node = node.child_by_field_name("consequence");
-    let else_node = node.child_by_field_name("alternative");
-
-    let (Some(cond_node), Some(then_node)) = (cond_node, then_node) else {
-        return ExprKind::Error;
-    };
-
-    let cond = lower_expr(ctx, cond_node);
-    let then_branch = lower_expr(ctx, then_node);
-    let else_branch = else_node.map(|n| lower_expr(ctx, n));
-
-    ExprKind::If {
-        cond,
-        then_branch,
-        else_branch,
-    }
 }
 
 fn lower_case_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
@@ -666,4 +652,26 @@ fn parse_string_literal(text: &str) -> String {
 
     // TODO: proper escape handling
     content.to_string()
+}
+
+fn parse_bytes_literal(text: &str) -> Vec<u8> {
+    // Simple implementation: strip quotes and handle basic escapes
+    let text = text.trim();
+
+    // Handle different bytes prefixes: b", rb", br", b#"
+    let content = if text.starts_with("rb\"") || text.starts_with("br\"") {
+        &text[3..text.len() - 1]
+    } else if text.starts_with("b\"") {
+        &text[2..text.len() - 1]
+    } else if text.starts_with("b#\"") {
+        // Find matching closing "#
+        let start = 3;
+        let end = text.len() - 2; // Remove "# at end
+        &text[start..end]
+    } else {
+        text
+    };
+
+    // TODO: proper escape handling
+    content.as_bytes().to_vec()
 }

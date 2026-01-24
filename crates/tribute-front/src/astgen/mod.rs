@@ -135,15 +135,12 @@ mod tests {
         assert!(func.params.is_empty());
 
         // Check body - FuncDecl.body is Expr<V>, not Option<Expr<V>>
-        let ExprKind::Block(stmts) = func.body.kind.as_ref() else {
+        let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
-        assert_eq!(stmts.len(), 1);
-        let Stmt::Return { expr, .. } = &stmts[0] else {
-            panic!("Expected return statement");
-        };
-        let ExprKind::IntLit(42) = expr.kind.as_ref() else {
-            panic!("Expected int literal 42");
+        assert!(stmts.is_empty());
+        let ExprKind::NatLit(42) = value.kind.as_ref() else {
+            panic!("Expected nat literal 42");
         };
     }
 
@@ -170,20 +167,29 @@ mod tests {
         let Decl::Function(func) = &module.decls[0] else {
             panic!("Expected function");
         };
-        let ExprKind::Block(stmts) = func.body.kind.as_ref() else {
+        let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
 
-        assert_eq!(stmts.len(), 2);
-        let Stmt::Let { pattern, value, .. } = &stmts[0] else {
+        assert_eq!(stmts.len(), 1);
+        let Stmt::Let {
+            pattern,
+            value: let_value,
+            ..
+        } = &stmts[0]
+        else {
             panic!("Expected let binding");
         };
         let PatternKind::Bind { name } = pattern.kind.as_ref() else {
             panic!("Expected bind pattern");
         };
         assert_eq!(name.to_string(), "x");
-        let ExprKind::IntLit(10) = value.kind.as_ref() else {
-            panic!("Expected int literal 10");
+        let ExprKind::NatLit(10) = let_value.kind.as_ref() else {
+            panic!("Expected nat literal 10");
+        };
+        // The block's value should be the variable x
+        let ExprKind::Var(_) = value.kind.as_ref() else {
+            panic!("Expected var expression");
         };
     }
 
@@ -196,7 +202,7 @@ mod tests {
             panic!("Expected function");
         };
         // Just verify it parsed successfully
-        let ExprKind::Block(_) = func.body.kind.as_ref() else {
+        let ExprKind::Block { .. } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
     }
@@ -267,13 +273,10 @@ mod tests {
         let Decl::Function(func) = &module.decls[0] else {
             panic!("Expected function");
         };
-        let ExprKind::Block(stmts) = func.body.kind.as_ref() else {
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
-        let Stmt::Return { expr, .. } = &stmts[0] else {
-            panic!("Expected return");
-        };
-        let ExprKind::Case { arms, .. } = expr.kind.as_ref() else {
+        let ExprKind::Case { arms, .. } = value.kind.as_ref() else {
             panic!("Expected case expression");
         };
         assert_eq!(arms.len(), 3);
@@ -287,13 +290,10 @@ mod tests {
         let Decl::Function(func) = &module.decls[0] else {
             panic!("Expected function");
         };
-        let ExprKind::Block(stmts) = func.body.kind.as_ref() else {
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
-        let Stmt::Return { expr, .. } = &stmts[0] else {
-            panic!("Expected return");
-        };
-        let ExprKind::Lambda { params, .. } = expr.kind.as_ref() else {
+        let ExprKind::Lambda { params, .. } = value.kind.as_ref() else {
             panic!("Expected lambda expression");
         };
         assert_eq!(params.len(), 1);
@@ -322,9 +322,10 @@ mod tests {
         let Decl::Function(func) = &module.decls[0] else {
             panic!("Expected function");
         };
-        let ExprKind::Block(stmts) = func.body.kind.as_ref() else {
+        let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
+        assert_eq!(stmts.len(), 1);
         let Stmt::Let { pattern, .. } = &stmts[0] else {
             panic!("Expected let binding");
         };
@@ -332,6 +333,10 @@ mod tests {
             panic!("Expected tuple pattern");
         };
         assert_eq!(elements.len(), 2);
+        // Block value should be variable 'a'
+        let ExprKind::Var(_) = value.kind.as_ref() else {
+            panic!("Expected var expression");
+        };
     }
 
     #[test]
@@ -342,13 +347,10 @@ mod tests {
         let Decl::Function(func) = &module.decls[0] else {
             panic!("Expected function");
         };
-        let ExprKind::Block(stmts) = func.body.kind.as_ref() else {
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
-        let Stmt::Return { expr, .. } = &stmts[0] else {
-            panic!("Expected return");
-        };
-        let ExprKind::List(elements) = expr.kind.as_ref() else {
+        let ExprKind::List(elements) = value.kind.as_ref() else {
             panic!("Expected list expression");
         };
         assert_eq!(elements.len(), 3);

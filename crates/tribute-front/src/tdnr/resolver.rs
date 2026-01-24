@@ -141,10 +141,12 @@ impl<'db> TdnrResolver<'db> {
             } => self.resolve_method_call(expr.id, receiver, method, args),
 
             // Recursively process other expressions
+            ExprKind::NatLit(n) => ExprKind::NatLit(n),
             ExprKind::IntLit(n) => ExprKind::IntLit(n),
             ExprKind::FloatLit(f) => ExprKind::FloatLit(f),
             ExprKind::BoolLit(b) => ExprKind::BoolLit(b),
             ExprKind::StringLit(s) => ExprKind::StringLit(s),
+            ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
             ExprKind::Nil => ExprKind::Nil,
             ExprKind::Var(v) => ExprKind::Var(v),
 
@@ -182,23 +184,9 @@ impl<'db> TdnrResolver<'db> {
                 rhs: self.resolve_expr(rhs),
             },
 
-            ExprKind::UnaryOp { op, expr } => ExprKind::UnaryOp {
-                op,
-                expr: self.resolve_expr(expr),
-            },
-
-            ExprKind::Block(stmts) => {
-                ExprKind::Block(stmts.into_iter().map(|s| self.resolve_stmt(s)).collect())
-            }
-
-            ExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => ExprKind::If {
-                cond: self.resolve_expr(cond),
-                then_branch: self.resolve_expr(then_branch),
-                else_branch: else_branch.map(|e| self.resolve_expr(e)),
+            ExprKind::Block { stmts, value } => ExprKind::Block {
+                stmts: stmts.into_iter().map(|s| self.resolve_stmt(s)).collect(),
+                value: self.resolve_expr(value),
             },
 
             ExprKind::Case { scrutinee, arms } => ExprKind::Case {
@@ -334,10 +322,6 @@ impl<'db> TdnrResolver<'db> {
                 value: self.resolve_expr(value),
             },
             Stmt::Expr { id, expr } => Stmt::Expr {
-                id,
-                expr: self.resolve_expr(expr),
-            },
-            Stmt::Return { id, expr } => Stmt::Return {
                 id,
                 expr: self.resolve_expr(expr),
             },

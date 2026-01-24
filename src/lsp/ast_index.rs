@@ -269,6 +269,11 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
             ExprKind::Var(typed_ref) => {
                 self.add_entry(expr.id, typed_ref.ty);
             }
+            ExprKind::NatLit(_) => {
+                // Natural literals have Nat type
+                let nat_ty = Type::new(self.db, TypeKind::Nat);
+                self.add_entry(expr.id, nat_ty);
+            }
             ExprKind::IntLit(_) => {
                 // Integer literals have Int type
                 let int_ty = Type::new(self.db, TypeKind::Int);
@@ -281,6 +286,10 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
             ExprKind::StringLit(_) => {
                 let string_ty = Type::new(self.db, TypeKind::String);
                 self.add_entry(expr.id, string_ty);
+            }
+            ExprKind::BytesLit(_) => {
+                let bytes_ty = Type::new(self.db, TypeKind::Bytes);
+                self.add_entry(expr.id, bytes_ty);
             }
             ExprKind::BoolLit(_) => {
                 let bool_ty = Type::new(self.db, TypeKind::Bool);
@@ -330,21 +339,11 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
                     self.collect_expr(arg);
                 }
             }
-            ExprKind::Block(stmts) => {
+            ExprKind::Block { stmts, value } => {
                 for stmt in stmts {
                     self.collect_stmt(stmt);
                 }
-            }
-            ExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                self.collect_expr(cond);
-                self.collect_expr(then_branch);
-                if let Some(else_br) = else_branch {
-                    self.collect_expr(else_br);
-                }
+                self.collect_expr(value);
             }
             ExprKind::Case { scrutinee, arms } => {
                 self.collect_expr(scrutinee);
@@ -375,9 +374,6 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
                 self.collect_expr(lhs);
                 self.collect_expr(rhs);
             }
-            ExprKind::UnaryOp { expr: inner, .. } => {
-                self.collect_expr(inner);
-            }
             ExprKind::Error => {}
         }
     }
@@ -388,7 +384,7 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
                 self.collect_pattern(pattern);
                 self.collect_expr(value);
             }
-            Stmt::Expr { expr, .. } | Stmt::Return { expr, .. } => {
+            Stmt::Expr { expr, .. } => {
                 self.collect_expr(expr);
             }
         }
@@ -862,21 +858,11 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                     self.collect_expr(arg);
                 }
             }
-            ExprKind::Block(stmts) => {
+            ExprKind::Block { stmts, value } => {
                 for stmt in stmts {
                     self.collect_stmt(stmt);
                 }
-            }
-            ExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                self.collect_expr(cond);
-                self.collect_expr(then_branch);
-                if let Some(else_br) = else_branch {
-                    self.collect_expr(else_br);
-                }
+                self.collect_expr(value);
             }
             ExprKind::Case { scrutinee, arms } => {
                 self.collect_expr(scrutinee);
@@ -906,12 +892,11 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                 self.collect_expr(lhs);
                 self.collect_expr(rhs);
             }
-            ExprKind::UnaryOp { expr: inner, .. } => {
-                self.collect_expr(inner);
-            }
-            ExprKind::IntLit(_)
+            ExprKind::NatLit(_)
+            | ExprKind::IntLit(_)
             | ExprKind::FloatLit(_)
             | ExprKind::StringLit(_)
+            | ExprKind::BytesLit(_)
             | ExprKind::BoolLit(_)
             | ExprKind::Nil
             | ExprKind::Error => {}
@@ -924,7 +909,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                 self.collect_pattern(pattern);
                 self.collect_expr(value);
             }
-            Stmt::Expr { expr, .. } | Stmt::Return { expr, .. } => {
+            Stmt::Expr { expr, .. } => {
                 self.collect_expr(expr);
             }
         }

@@ -224,9 +224,11 @@ impl<'db> Resolver<'db> {
         let kind = match *expr.kind {
             ExprKind::Var(name) => ExprKind::Var(self.resolve_name(&name)),
 
+            ExprKind::NatLit(n) => ExprKind::NatLit(n),
             ExprKind::IntLit(n) => ExprKind::IntLit(n),
             ExprKind::FloatLit(f) => ExprKind::FloatLit(f),
             ExprKind::StringLit(s) => ExprKind::StringLit(s),
+            ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
             ExprKind::BoolLit(b) => ExprKind::BoolLit(b),
             ExprKind::Nil => ExprKind::Nil,
 
@@ -282,26 +284,12 @@ impl<'db> Resolver<'db> {
                 }
             }
 
-            ExprKind::Block(stmts) => {
+            ExprKind::Block { stmts, value } => {
                 self.push_scope();
                 let stmts = stmts.into_iter().map(|s| self.resolve_stmt(s)).collect();
+                let value = self.resolve_expr(value);
                 self.pop_scope();
-                ExprKind::Block(stmts)
-            }
-
-            ExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                let cond = self.resolve_expr(cond);
-                let then_branch = self.resolve_expr(then_branch);
-                let else_branch = else_branch.map(|e| self.resolve_expr(e));
-                ExprKind::If {
-                    cond,
-                    then_branch,
-                    else_branch,
-                }
+                ExprKind::Block { stmts, value }
             }
 
             ExprKind::Case { scrutinee, arms } => {
@@ -348,11 +336,6 @@ impl<'db> Resolver<'db> {
                 ExprKind::BinOp { op, lhs, rhs }
             }
 
-            ExprKind::UnaryOp { op, expr } => {
-                let expr = self.resolve_expr(expr);
-                ExprKind::UnaryOp { op, expr }
-            }
-
             ExprKind::Error => ExprKind::Error,
         };
 
@@ -380,10 +363,6 @@ impl<'db> Resolver<'db> {
             Stmt::Expr { id, expr } => {
                 let expr = self.resolve_expr(expr);
                 Stmt::Expr { id, expr }
-            }
-            Stmt::Return { id, expr } => {
-                let expr = self.resolve_expr(expr);
-                Stmt::Return { id, expr }
             }
         }
     }

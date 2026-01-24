@@ -55,7 +55,10 @@ where
     Var(V),
 
     // === Literals ===
-    /// Integer literal: `42`, `-1`
+    /// Natural number literal: `42`
+    NatLit(u64),
+
+    /// Signed integer literal: `+42`, `-1`
     IntLit(i64),
 
     /// Floating point literal: `3.14`, `-0.5`
@@ -63,6 +66,9 @@ where
 
     /// String literal: `"hello"`
     StringLit(String),
+
+    /// Bytes literal: `b"hello"`
+    BytesLit(Vec<u8>),
 
     /// Boolean literal: `True`, `False`
     BoolLit(bool),
@@ -103,14 +109,7 @@ where
 
     // === Control Flow ===
     /// Block expression: `{ stmt1; stmt2; expr }`
-    Block(Vec<Stmt<V>>),
-
-    /// Conditional expression: `if cond { then } else { else }`
-    If {
-        cond: Expr<V>,
-        then_branch: Expr<V>,
-        else_branch: Option<Expr<V>>,
-    },
+    Block { stmts: Vec<Stmt<V>>, value: Expr<V> },
 
     /// Pattern matching: `case expr { arms }`
     Case {
@@ -141,9 +140,6 @@ where
         rhs: Expr<V>,
     },
 
-    /// Unary operation: `-a`, `!b`
-    UnaryOp { op: UnaryOpKind, expr: Expr<V> },
-
     /// Error expression (for error recovery in parsing).
     Error,
 }
@@ -164,9 +160,6 @@ where
 
     /// Expression statement: `expr;`
     Expr { id: NodeId, expr: Expr<V> },
-
-    /// Return from a block: the final expression without semicolon.
-    Return { id: NodeId, expr: Expr<V> },
 }
 
 /// A case arm in pattern matching.
@@ -252,15 +245,6 @@ pub enum BinOpKind {
 
     // String
     Concat, // `<>`
-}
-
-/// Unary operators.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum UnaryOpKind {
-    /// Arithmetic negation: `-x`
-    Neg,
-    /// Boolean negation: `!x`
-    Not,
 }
 
 /// Wrapper for f64 that implements Eq and Hash.

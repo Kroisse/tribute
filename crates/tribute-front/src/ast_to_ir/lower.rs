@@ -112,6 +112,11 @@ fn lower_expr<'db>(
     let location = ctx.location(expr.id);
 
     match *expr.kind {
+        ExprKind::NatLit(n) => {
+            let op = block.op(arith::Const::i64(ctx.db, location, n as i64));
+            Some(op.result(ctx.db))
+        }
+
         ExprKind::IntLit(n) => {
             let op = block.op(arith::Const::i64(ctx.db, location, n));
             Some(op.result(ctx.db))
@@ -132,6 +137,11 @@ fn lower_expr<'db>(
             let ty = core::String::new(ctx.db).as_type();
             let op = block.op(adt::string_const(ctx.db, location, ty, s.clone()));
             Some(op.result(ctx.db))
+        }
+
+        ExprKind::BytesLit(ref _bytes) => {
+            // TODO: implement bytes constant lowering
+            None
         }
 
         ExprKind::Nil => {
@@ -162,7 +172,7 @@ fn lower_expr<'db>(
             lower_binop(ctx, block, op, lhs_val, rhs_val, location)
         }
 
-        ExprKind::Block(stmts) => lower_block(ctx, block, stmts),
+        ExprKind::Block { stmts, value } => lower_block(ctx, block, stmts, value),
 
         // For other expressions, return unit as placeholder
         _ => {
@@ -245,9 +255,9 @@ fn lower_block<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     block: &mut trunk_ir::BlockBuilder<'db>,
     stmts: Vec<Stmt<TypedRef<'db>>>,
+    value: Expr<TypedRef<'db>>,
 ) -> Option<trunk_ir::Value<'db>> {
     ctx.enter_scope();
-    let mut last_value = None;
 
     for stmt in stmts {
         match stmt {
@@ -262,22 +272,16 @@ fn lower_block<'db>(
                     if let crate::ast::PatternKind::Bind { name: _ } = &*pattern.kind {
                         // TODO: Properly track bindings
                     }
-                    last_value = Some(val);
+                    let _ = val;
                 }
             }
             Stmt::Expr { id: _, expr } => {
-                last_value = lower_expr(ctx, block, expr);
-            }
-            Stmt::Return { id, expr } => {
-                if let Some(val) = lower_expr(ctx, block, expr) {
-                    let location = ctx.location(id);
-                    block.op(func::Return::value(ctx.db, location, val));
-                }
-                break;
+                let _ = lower_expr(ctx, block, expr);
             }
         }
     }
 
+    let result = lower_expr(ctx, block, value);
     ctx.exit_scope();
-    last_value
+    result
 }
