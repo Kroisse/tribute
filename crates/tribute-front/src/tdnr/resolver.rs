@@ -348,8 +348,41 @@ impl<'db> TdnrResolver<'db> {
             ExprKind::BytesLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Bytes)),
             ExprKind::Nil => Some(Type::new(self.db, crate::ast::TypeKind::Nil)),
 
+            // Binary operations: comparison ops return Bool, arithmetic returns operand type
+            ExprKind::BinOp { op, lhs, .. } => {
+                use crate::ast::BinOpKind;
+                match op {
+                    BinOpKind::Eq
+                    | BinOpKind::Ne
+                    | BinOpKind::Lt
+                    | BinOpKind::Le
+                    | BinOpKind::Gt
+                    | BinOpKind::Ge
+                    | BinOpKind::And
+                    | BinOpKind::Or => Some(Type::new(self.db, crate::ast::TypeKind::Bool)),
+                    // Arithmetic operations return the same type as their operands
+                    _ => self.get_expr_type(lhs),
+                }
+            }
+
+            // Tuple: the type is a tuple of element types
+            ExprKind::Tuple(elements) => {
+                let elem_types: Vec<_> = elements
+                    .iter()
+                    .filter_map(|e| self.get_expr_type(e))
+                    .collect();
+                if elem_types.len() == elements.len() {
+                    Some(Type::new(self.db, crate::ast::TypeKind::Tuple(elem_types)))
+                } else {
+                    None
+                }
+            }
+
+            // Block: type is the type of the value expression
+            ExprKind::Block { value, .. } => self.get_expr_type(value),
+
+            // Lambda: we can't easily determine the type without full analysis
             // For other expressions, we'd need a type map from typechecking
-            // TODO: Pass a type map from the typechecker to handle these cases
             _ => None,
         }
     }

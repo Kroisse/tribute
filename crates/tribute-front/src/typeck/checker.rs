@@ -5,8 +5,8 @@
 
 use crate::ast::{
     Arm, BuiltinRef, ConstDecl, Decl, EffectRow, EnumDecl, Expr, ExprKind, FieldPattern, FuncDecl,
-    HandlerArm, HandlerKind, Module, Pattern, PatternKind, ResolvedRef, Stmt, StructDecl, Type,
-    TypeKind, TypeParam, TypeScheme, TypedRef,
+    FuncDefId, HandlerArm, HandlerKind, Module, Pattern, PatternKind, ResolvedRef, Stmt,
+    StructDecl, Type, TypeKind, TypeParam, TypeScheme, TypedRef,
 };
 
 use super::context::TypeContext;
@@ -108,19 +108,22 @@ impl<'db> TypeChecker<'db> {
             .map(|tp| TypeParam::named(tp.name))
             .collect();
 
-        // Build parameter types
-        // TODO: Convert TypeAnnotation to Type<'db> instead of using fresh vars.
-        // This requires implementing annotation_to_type() that walks TypeAnnotationKind
-        // and produces the corresponding Type. For now, type inference will infer types.
+        // Build parameter types from annotations when available
         let param_types: Vec<Type<'db>> = func
             .params
             .iter()
-            .map(|_p| self.ctx.fresh_type_var())
+            .map(|p| match &p.ty {
+                Some(ann) => self.annotation_to_type(ann),
+                None => self.ctx.fresh_type_var(),
+            })
             .collect();
 
-        // Build return type
-        // TODO: Convert return type annotation when present
-        let return_ty = self.ctx.fresh_type_var();
+        // Build return type from annotation when present
+        let return_ty = func
+            .return_ty
+            .as_ref()
+            .map(|ann| self.annotation_to_type(ann))
+            .unwrap_or_else(|| self.ctx.fresh_type_var());
 
         // Build effect row
         // TODO: Convert effect annotations when present
@@ -136,9 +139,75 @@ impl<'db> TypeChecker<'db> {
         // Create type scheme
         let scheme = TypeScheme::new(self.db(), type_params, func_ty);
 
-        // Register the function (we need the FuncDefId from ResolvedRef)
-        // For now, skip registration since we'd need to look up the ID
-        let _ = scheme;
+        // Register the function with its FuncDefId
+        let func_id = FuncDefId::new(self.db(), func.name);
+        self.ctx.register_function(func_id, scheme);
+    }
+
+    /// Convert a type annotation to a Type.
+    fn annotation_to_type(&mut self, ann: &crate::ast::TypeAnnotation) -> Type<'db> {
+        use crate::ast::TypeAnnotationKind;
+
+        match &ann.kind {
+            TypeAnnotationKind::Named(name) => {
+                // Map well-known type names
+                if *name == "Int" {
+                    self.ctx.int_type()
+                } else if *name == "Nat" {
+                    self.ctx.nat_type()
+                } else if *name == "Float" {
+                    self.ctx.float_type()
+                } else if *name == "Bool" {
+                    self.ctx.bool_type()
+                } else if *name == "String" {
+                    self.ctx.string_type()
+                } else if *name == "Bytes" {
+                    self.ctx.bytes_type()
+                } else if *name == "()" {
+                    self.ctx.nil_type()
+                } else {
+                    // Named type with no args
+                    self.ctx.named_type(*name, vec![])
+                }
+            }
+            TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
+                // Use the last part as the type name
+                if let Some(&name) = parts.last() {
+                    self.ctx.named_type(name, vec![])
+                } else {
+                    self.ctx.error_type()
+                }
+            }
+            TypeAnnotationKind::App { ctor, args } => {
+                let ctor_ty = self.annotation_to_type(ctor);
+                // For now, extract the name from the constructor type
+                if let TypeKind::Named { name, .. } = ctor_ty.kind(self.db()) {
+                    let arg_types: Vec<Type<'db>> =
+                        args.iter().map(|a| self.annotation_to_type(a)).collect();
+                    self.ctx.named_type(*name, arg_types)
+                } else {
+                    self.ctx.error_type()
+                }
+            }
+            TypeAnnotationKind::Func { params, result } => {
+                let param_types: Vec<Type<'db>> =
+                    params.iter().map(|p| self.annotation_to_type(p)).collect();
+                let result_ty = self.annotation_to_type(result);
+                let effect = EffectRow::pure(self.db());
+                self.ctx.func_type(param_types, result_ty, effect)
+            }
+            TypeAnnotationKind::Tuple(elems) => {
+                let elem_types: Vec<Type<'db>> =
+                    elems.iter().map(|e| self.annotation_to_type(e)).collect();
+                self.ctx.tuple_type(elem_types)
+            }
+            TypeAnnotationKind::WithEffects { inner, effects: _ } => {
+                // TODO: Proper effect handling
+                self.annotation_to_type(inner)
+            }
+            TypeAnnotationKind::Infer => self.ctx.fresh_type_var(),
+            TypeAnnotationKind::Path(_) | TypeAnnotationKind::Error => self.ctx.error_type(),
+        }
     }
 
     /// Collect a struct definition.
@@ -329,9 +398,23 @@ impl<'db> TypeChecker<'db> {
                 self.ctx.fresh_type_var() // TODO: Proper case typing
             }
             ExprKind::Lambda { params, body } => {
-                // Lambda expression
-                let _ = (params, body);
-                self.ctx.fresh_type_var() // TODO: Proper lambda typing
+                // Lambda expression: infer param types and body type
+                let param_types: Vec<Type<'db>> = params
+                    .iter()
+                    .map(|p| {
+                        let ty = match &p.ty {
+                            Some(ann) => self.annotation_to_type(ann),
+                            None => self.ctx.fresh_type_var(),
+                        };
+                        // Bind by name since Param doesn't have LocalId
+                        self.ctx.bind_local_by_name(p.name, ty);
+                        ty
+                    })
+                    .collect();
+
+                let body_ty = self.infer_expr_type(body);
+                let effect = self.ctx.fresh_effect_row();
+                self.ctx.func_type(param_types, body_ty, effect)
             }
             ExprKind::Handle { body, handlers } => {
                 // Handle expression
@@ -605,6 +688,15 @@ impl<'db> TypeChecker<'db> {
                 ty,
             } => {
                 let value = self.check_expr(value, Mode::Infer);
+                // Get the type of the value expression
+                let value_ty = self
+                    .ctx
+                    .get_node_type(value.id)
+                    .unwrap_or_else(|| self.ctx.fresh_type_var());
+
+                // Bind pattern variables with the value type
+                self.bind_pattern_vars(&pattern, value_ty);
+
                 let pattern = self.convert_pattern(pattern);
                 Stmt::Let {
                     id,
@@ -617,6 +709,73 @@ impl<'db> TypeChecker<'db> {
                 let expr = self.check_expr(expr, Mode::Infer);
                 Stmt::Expr { id, expr }
             }
+        }
+    }
+
+    /// Bind pattern variables to the given type.
+    fn bind_pattern_vars(&mut self, pattern: &Pattern<ResolvedRef<'db>>, ty: Type<'db>) {
+        match &*pattern.kind {
+            PatternKind::Bind { name, local_id } => {
+                if let Some(id) = local_id {
+                    self.ctx.bind_local(*id, ty);
+                }
+                self.ctx.bind_local_by_name(*name, ty);
+            }
+            PatternKind::Tuple(pats) => {
+                // Destructure tuple type
+                if let TypeKind::Tuple(elem_tys) = ty.kind(self.db()) {
+                    for (pat, elem_ty) in pats.iter().zip(elem_tys.iter()) {
+                        self.bind_pattern_vars(pat, *elem_ty);
+                    }
+                } else {
+                    // Type mismatch - bind with fresh vars
+                    let fresh_vars: Vec<_> =
+                        pats.iter().map(|_| self.ctx.fresh_type_var()).collect();
+                    for (pat, fresh_ty) in pats.iter().zip(fresh_vars) {
+                        self.bind_pattern_vars(pat, fresh_ty);
+                    }
+                }
+            }
+            PatternKind::Variant { fields, .. } => {
+                // For variants, bind each field with a fresh type var
+                let fresh_vars: Vec<_> = fields.iter().map(|_| self.ctx.fresh_type_var()).collect();
+                for (field, fresh_ty) in fields.iter().zip(fresh_vars) {
+                    self.bind_pattern_vars(field, fresh_ty);
+                }
+            }
+            PatternKind::Record { fields, .. } => {
+                // For records, bind each field with a fresh type var
+                for field in fields {
+                    if let Some(pat) = &field.pattern {
+                        let fresh_ty = self.ctx.fresh_type_var();
+                        self.bind_pattern_vars(pat, fresh_ty);
+                    }
+                }
+            }
+            PatternKind::List(pats) => {
+                // For lists, bind each element with a fresh type var
+                let fresh_vars: Vec<_> = pats.iter().map(|_| self.ctx.fresh_type_var()).collect();
+                for (pat, fresh_ty) in pats.iter().zip(fresh_vars) {
+                    self.bind_pattern_vars(pat, fresh_ty);
+                }
+            }
+            PatternKind::ListRest { head, .. } => {
+                let fresh_vars: Vec<_> = head.iter().map(|_| self.ctx.fresh_type_var()).collect();
+                for (pat, fresh_ty) in head.iter().zip(fresh_vars) {
+                    self.bind_pattern_vars(pat, fresh_ty);
+                }
+            }
+            PatternKind::As { pattern, name } => {
+                self.ctx.bind_local_by_name(*name, ty);
+                self.bind_pattern_vars(pattern, ty);
+            }
+            PatternKind::Or(pats) => {
+                // All alternatives should bind the same names, so just process the first
+                if let Some(first) = pats.first() {
+                    self.bind_pattern_vars(first, ty);
+                }
+            }
+            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {}
         }
     }
 

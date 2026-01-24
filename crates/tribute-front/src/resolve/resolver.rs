@@ -3,7 +3,7 @@
 //! This module transforms `Expr<UnresolvedName>` into `Expr<ResolvedRef<'db>>`
 //! by looking up names in the module environment and local scopes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
 
@@ -434,6 +434,68 @@ impl<'db> Resolver<'db> {
         }
     }
 
+    /// Collect all binding names from a pattern (for Or-pattern validation).
+    fn collect_pattern_bindings(&self, pattern: &Pattern<UnresolvedName>) -> HashSet<Symbol> {
+        let mut bindings = HashSet::new();
+        self.collect_bindings_recursive(pattern, &mut bindings);
+        bindings
+    }
+
+    /// Recursively collect binding names from a pattern.
+    fn collect_bindings_recursive(
+        &self,
+        pattern: &Pattern<UnresolvedName>,
+        set: &mut HashSet<Symbol>,
+    ) {
+        match &*pattern.kind {
+            PatternKind::Bind { name, .. } => {
+                set.insert(*name);
+            }
+            PatternKind::Tuple(pats) | PatternKind::List(pats) => {
+                for p in pats {
+                    self.collect_bindings_recursive(p, set);
+                }
+            }
+            PatternKind::Variant { fields, .. } => {
+                for p in fields {
+                    self.collect_bindings_recursive(p, set);
+                }
+            }
+            PatternKind::Record { fields, .. } => {
+                for f in fields {
+                    if let Some(p) = &f.pattern {
+                        self.collect_bindings_recursive(p, set);
+                    } else {
+                        // Shorthand pattern: { name } binds 'name'
+                        set.insert(f.name);
+                    }
+                }
+            }
+            PatternKind::ListRest { head, rest } => {
+                for p in head {
+                    self.collect_bindings_recursive(p, set);
+                }
+                if let Some(name) = rest
+                    && *name != "_"
+                {
+                    set.insert(*name);
+                }
+            }
+            PatternKind::As { pattern, name } => {
+                set.insert(*name);
+                self.collect_bindings_recursive(pattern, set);
+            }
+            PatternKind::Or(pats) => {
+                // For Or patterns, collect from first alternative only
+                // (others should have same bindings)
+                if let Some(first) = pats.first() {
+                    self.collect_bindings_recursive(first, set);
+                }
+            }
+            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {}
+        }
+    }
+
     /// Resolve a pattern, binding any names it introduces.
     fn resolve_pattern_with_bindings(
         &mut self,
@@ -516,8 +578,22 @@ impl<'db> Resolver<'db> {
 
             PatternKind::Or(patterns) => {
                 // For Or patterns, each alternative should bind the same names.
-                // TODO: Validate that all alternatives bind exactly the same set of names.
-                // Currently we process left-to-right without validation.
+                // Validate that all alternatives bind exactly the same set of names.
+                if patterns.len() > 1 {
+                    let first_bindings = self.collect_pattern_bindings(&patterns[0]);
+                    for (i, pat) in patterns.iter().enumerate().skip(1) {
+                        let bindings = self.collect_pattern_bindings(pat);
+                        if bindings != first_bindings {
+                            tracing::warn!(
+                                "Or-pattern alternative {} binds different names: {:?} vs {:?}",
+                                i + 1,
+                                bindings,
+                                first_bindings
+                            );
+                        }
+                    }
+                }
+
                 let patterns = patterns
                     .into_iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
