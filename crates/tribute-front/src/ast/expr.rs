@@ -64,10 +64,10 @@ where
     /// String literal: `"hello"`
     StringLit(String),
 
-    /// Boolean literal: `true`, `false`
+    /// Boolean literal: `True`, `False`
     BoolLit(bool),
 
-    /// Unit literal: `()`
+    /// Nil literal: `Nil`
     Nil,
 
     // === Calls and Construction ===
