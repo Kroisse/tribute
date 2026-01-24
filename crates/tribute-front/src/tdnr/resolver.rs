@@ -493,14 +493,175 @@ impl<'db> TdnrResolver<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::{BinOpKind, NodeId, TypeKind};
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
+    }
+
+    fn fresh_node_id() -> NodeId {
+        NodeId::from_raw(1)
     }
 
     #[test]
     fn test_tdnr_resolver_creation() {
         let db = test_db();
         let _resolver = TdnrResolver::new(&db);
+    }
+
+    #[test]
+    fn test_get_expr_type_int_literal() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        let expr = Expr::new(fresh_node_id(), ExprKind::IntLit(42));
+        let ty = resolver.get_expr_type(&expr);
+
+        assert!(ty.is_some());
+        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Int));
+    }
+
+    #[test]
+    fn test_get_expr_type_nat_literal() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        let expr = Expr::new(fresh_node_id(), ExprKind::NatLit(42));
+        let ty = resolver.get_expr_type(&expr);
+
+        assert!(ty.is_some());
+        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Nat));
+    }
+
+    #[test]
+    fn test_get_expr_type_bool_literal() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        let expr = Expr::new(fresh_node_id(), ExprKind::BoolLit(true));
+        let ty = resolver.get_expr_type(&expr);
+
+        assert!(ty.is_some());
+        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Bool));
+    }
+
+    #[test]
+    fn test_get_expr_type_binop_comparison_returns_bool() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        // Create: 1 < 2
+        let lhs = Expr::new(fresh_node_id(), ExprKind::IntLit(1));
+        let rhs = Expr::new(fresh_node_id(), ExprKind::IntLit(2));
+        let expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::BinOp {
+                op: BinOpKind::Lt,
+                lhs,
+                rhs,
+            },
+        );
+
+        let ty = resolver.get_expr_type(&expr);
+        assert!(ty.is_some());
+        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Bool));
+    }
+
+    #[test]
+    fn test_get_expr_type_binop_eq_returns_bool() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        // Create: 1 == 2
+        let lhs = Expr::new(fresh_node_id(), ExprKind::IntLit(1));
+        let rhs = Expr::new(fresh_node_id(), ExprKind::IntLit(2));
+        let expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::BinOp {
+                op: BinOpKind::Eq,
+                lhs,
+                rhs,
+            },
+        );
+
+        let ty = resolver.get_expr_type(&expr);
+        assert!(ty.is_some());
+        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Bool));
+    }
+
+    #[test]
+    fn test_get_expr_type_binop_add_returns_operand_type() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        // Create: 1 + 2
+        let lhs = Expr::new(fresh_node_id(), ExprKind::IntLit(1));
+        let rhs = Expr::new(fresh_node_id(), ExprKind::IntLit(2));
+        let expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::BinOp {
+                op: BinOpKind::Add,
+                lhs,
+                rhs,
+            },
+        );
+
+        let ty = resolver.get_expr_type(&expr);
+        assert!(ty.is_some());
+        // Add returns the type of the lhs (Int)
+        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Int));
+    }
+
+    #[test]
+    fn test_get_expr_type_tuple() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        // Create: (1, true)
+        let elements = vec![
+            Expr::new(fresh_node_id(), ExprKind::IntLit(1)),
+            Expr::new(fresh_node_id(), ExprKind::BoolLit(true)),
+        ];
+        let expr = Expr::new(fresh_node_id(), ExprKind::Tuple(elements));
+
+        let ty = resolver.get_expr_type(&expr);
+        assert!(ty.is_some());
+        if let TypeKind::Tuple(elems) = ty.unwrap().kind(&db) {
+            assert_eq!(elems.len(), 2);
+        } else {
+            panic!("Expected Tuple type");
+        }
+    }
+
+    #[test]
+    fn test_get_expr_type_block() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        // Create: { 42 }
+        let value = Expr::new(fresh_node_id(), ExprKind::IntLit(42));
+        let expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::Block {
+                stmts: vec![],
+                value,
+            },
+        );
+
+        let ty = resolver.get_expr_type(&expr);
+        assert!(ty.is_some());
+        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Int));
+    }
+
+    #[test]
+    fn test_get_expr_type_nil() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        let expr = Expr::new(fresh_node_id(), ExprKind::Nil);
+        let ty = resolver.get_expr_type(&expr);
+
+        assert!(ty.is_some());
+        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Nil));
     }
 }

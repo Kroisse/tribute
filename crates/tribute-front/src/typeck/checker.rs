@@ -1156,4 +1156,181 @@ mod tests {
         let typed = checker.check_expr(expr, Mode::Infer);
         assert!(matches!(*typed.kind, ExprKind::Lambda { .. }));
     }
+
+    #[test]
+    fn test_annotation_to_type_int() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let ann = crate::ast::TypeAnnotation {
+            id: fresh_node_id(),
+            kind: crate::ast::TypeAnnotationKind::Named(Symbol::new("Int")),
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        assert!(matches!(*ty.kind(&db), TypeKind::Int));
+    }
+
+    #[test]
+    fn test_annotation_to_type_bool() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let ann = crate::ast::TypeAnnotation {
+            id: fresh_node_id(),
+            kind: crate::ast::TypeAnnotationKind::Named(Symbol::new("Bool")),
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        assert!(matches!(*ty.kind(&db), TypeKind::Bool));
+    }
+
+    #[test]
+    fn test_annotation_to_type_string() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let ann = crate::ast::TypeAnnotation {
+            id: fresh_node_id(),
+            kind: crate::ast::TypeAnnotationKind::Named(Symbol::new("String")),
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        assert!(matches!(*ty.kind(&db), TypeKind::String));
+    }
+
+    #[test]
+    fn test_annotation_to_type_named() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let ann = crate::ast::TypeAnnotation {
+            id: fresh_node_id(),
+            kind: crate::ast::TypeAnnotationKind::Named(Symbol::new("Option")),
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        if let TypeKind::Named { name, args } = ty.kind(&db) {
+            assert_eq!(*name, Symbol::new("Option"));
+            assert!(args.is_empty());
+        } else {
+            panic!("Expected Named type");
+        }
+    }
+
+    #[test]
+    fn test_annotation_to_type_tuple() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // (Int, Bool)
+        let ann = crate::ast::TypeAnnotation {
+            id: fresh_node_id(),
+            kind: crate::ast::TypeAnnotationKind::Tuple(vec![
+                crate::ast::TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: crate::ast::TypeAnnotationKind::Named(Symbol::new("Int")),
+                },
+                crate::ast::TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: crate::ast::TypeAnnotationKind::Named(Symbol::new("Bool")),
+                },
+            ]),
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        if let TypeKind::Tuple(elems) = ty.kind(&db) {
+            assert_eq!(elems.len(), 2);
+        } else {
+            panic!("Expected Tuple type");
+        }
+    }
+
+    #[test]
+    fn test_annotation_to_type_infer() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let ann = crate::ast::TypeAnnotation {
+            id: fresh_node_id(),
+            kind: crate::ast::TypeAnnotationKind::Infer,
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        // Should be a fresh UniVar
+        assert!(matches!(*ty.kind(&db), TypeKind::UniVar { .. }));
+    }
+
+    #[test]
+    fn test_bind_pattern_vars_simple() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let local_id = LocalId::new(0);
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let pattern = Pattern::new(
+            fresh_node_id(),
+            PatternKind::Bind {
+                name: Symbol::new("x"),
+                local_id: Some(local_id),
+            },
+        );
+
+        checker.bind_pattern_vars(&pattern, int_ty);
+
+        // The local should be bound
+        assert!(checker.ctx.lookup_local(local_id).is_some());
+        assert_eq!(
+            *checker.ctx.lookup_local(local_id).unwrap().kind(&db),
+            TypeKind::Int
+        );
+    }
+
+    #[test]
+    fn test_bind_pattern_vars_wildcard() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let pattern = Pattern::new(fresh_node_id(), PatternKind::Wildcard);
+
+        // Should not panic
+        checker.bind_pattern_vars(&pattern, int_ty);
+    }
+
+    #[test]
+    fn test_lambda_binds_params() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create: |x: Int| x
+        let param = crate::ast::Param {
+            id: fresh_node_id(),
+            name: Symbol::new("x"),
+            ty: Some(crate::ast::TypeAnnotation {
+                id: fresh_node_id(),
+                kind: crate::ast::TypeAnnotationKind::Named(Symbol::new("Int")),
+            }),
+        };
+        let body = Expr::new(fresh_node_id(), ExprKind::NatLit(42));
+        let expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::Lambda {
+                params: vec![param],
+                body,
+            },
+        );
+
+        let typed = checker.check_expr(expr, Mode::Infer);
+
+        // Should produce a function type
+        if let ExprKind::Lambda { .. } = &*typed.kind {
+            // After lambda type check, x should be bound by name
+            let x_ty = checker.ctx.lookup_local_by_name(Symbol::new("x"));
+            assert!(x_ty.is_some());
+        } else {
+            panic!("Expected Lambda");
+        }
+    }
 }

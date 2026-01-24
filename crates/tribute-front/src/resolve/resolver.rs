@@ -794,4 +794,97 @@ mod tests {
             _ => panic!("Expected unresolved y after pop"),
         }
     }
+
+    #[test]
+    fn test_collect_pattern_bindings_simple() {
+        let db = test_db();
+        let env = ModuleEnv::new();
+        let resolver = Resolver::new(&db, env);
+
+        // Create a simple bind pattern: x
+        let pattern = Pattern::new(
+            NodeId::from_raw(1),
+            PatternKind::Bind {
+                name: Symbol::new("x"),
+                local_id: None,
+            },
+        );
+
+        let bindings = resolver.collect_pattern_bindings(&pattern);
+        assert_eq!(bindings.len(), 1);
+        assert!(bindings.contains(&Symbol::new("x")));
+    }
+
+    #[test]
+    fn test_collect_pattern_bindings_tuple() {
+        let db = test_db();
+        let env = ModuleEnv::new();
+        let resolver = Resolver::new(&db, env);
+
+        // Create tuple pattern: (x, y)
+        let pattern = Pattern::new(
+            NodeId::from_raw(1),
+            PatternKind::Tuple(vec![
+                Pattern::new(
+                    NodeId::from_raw(2),
+                    PatternKind::Bind {
+                        name: Symbol::new("x"),
+                        local_id: None,
+                    },
+                ),
+                Pattern::new(
+                    NodeId::from_raw(3),
+                    PatternKind::Bind {
+                        name: Symbol::new("y"),
+                        local_id: None,
+                    },
+                ),
+            ]),
+        );
+
+        let bindings = resolver.collect_pattern_bindings(&pattern);
+        assert_eq!(bindings.len(), 2);
+        assert!(bindings.contains(&Symbol::new("x")));
+        assert!(bindings.contains(&Symbol::new("y")));
+    }
+
+    #[test]
+    fn test_collect_pattern_bindings_as() {
+        let db = test_db();
+        let env = ModuleEnv::new();
+        let resolver = Resolver::new(&db, env);
+
+        // Create as pattern: x as y
+        let pattern = Pattern::new(
+            NodeId::from_raw(1),
+            PatternKind::As {
+                pattern: Pattern::new(
+                    NodeId::from_raw(2),
+                    PatternKind::Bind {
+                        name: Symbol::new("x"),
+                        local_id: None,
+                    },
+                ),
+                name: Symbol::new("y"),
+            },
+        );
+
+        let bindings = resolver.collect_pattern_bindings(&pattern);
+        assert_eq!(bindings.len(), 2);
+        assert!(bindings.contains(&Symbol::new("x")));
+        assert!(bindings.contains(&Symbol::new("y")));
+    }
+
+    #[test]
+    fn test_collect_pattern_bindings_wildcard() {
+        let db = test_db();
+        let env = ModuleEnv::new();
+        let resolver = Resolver::new(&db, env);
+
+        // Wildcard binds nothing
+        let pattern = Pattern::new(NodeId::from_raw(1), PatternKind::Wildcard);
+
+        let bindings = resolver.collect_pattern_bindings(&pattern);
+        assert!(bindings.is_empty());
+    }
 }
