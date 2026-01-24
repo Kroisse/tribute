@@ -37,6 +37,7 @@ use super::definition_index::{self, validate_identifier};
 use super::pretty::{format_signature, print_type};
 use super::type_index::TypeIndex;
 use tribute::{TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local};
+use tribute_front::lsp_index::{print_ast_type, type_index as ast_type_index};
 
 /// Main LSP server state.
 struct LspServer {
@@ -202,7 +203,59 @@ impl LspServer {
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
 
-        // Run Salsa compilation
+        // Try AST-based hover first
+        if let Some(result) = self.hover_ast(source_cst, &rope, offset) {
+            return Some(result);
+        }
+
+        // Fallback to TrunkIR-based hover
+        self.hover_legacy(source_cst, &rope, offset)
+    }
+
+    /// AST-based hover implementation.
+    ///
+    /// Uses the new typed AST (`Module<TypedRef>`) and `AstTypeIndex` for type lookup.
+    fn hover_ast(
+        &self,
+        source_cst: tribute::SourceCst,
+        rope: &Rope,
+        offset: usize,
+    ) -> Option<Hover> {
+        let (type_str, span) = self.db.attach(|db| {
+            // Get the AST type index
+            let index_data = ast_type_index(db, source_cst)?;
+            let index = index_data.as_index(db);
+
+            // Find type at offset
+            index.type_at(offset).map(|entry| {
+                let type_str = print_ast_type(db, entry.ty);
+                (type_str, entry.span)
+            })
+        })?;
+
+        tracing::debug!(type_str = %type_str, "Found type (AST-based)");
+
+        let contents = HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: format!("```tribute\n{}\n```", type_str),
+        });
+        let range = span_to_range(rope, span);
+
+        Some(Hover {
+            contents,
+            range: Some(range),
+        })
+    }
+
+    /// Legacy TrunkIR-based hover implementation.
+    ///
+    /// Used as fallback when AST-based hover doesn't find a result.
+    fn hover_legacy(
+        &self,
+        source_cst: tribute::SourceCst,
+        rope: &Rope,
+        offset: usize,
+    ) -> Option<Hover> {
         let (type_str, span) = self.db.attach(|db| {
             let module = compile_for_lsp(db, source_cst);
             let type_index = TypeIndex::build(db, &module);
@@ -213,13 +266,13 @@ impl LspServer {
             })
         })?;
 
-        tracing::debug!(type_str = %type_str, "Found type information");
+        tracing::debug!(type_str = %type_str, "Found type (legacy)");
 
         let contents = HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
             value: format!("```tribute\n{}\n```", type_str),
         });
-        let range = span_to_range(&rope, span);
+        let range = span_to_range(rope, span);
 
         Some(Hover {
             contents,
