@@ -34,8 +34,7 @@ use crate::lsp::ast_index::print_ast_type;
 
 use super::ast_index::{self, type_index as ast_type_index};
 use super::call_index::{CallIndex, get_param_names};
-use super::pretty::{format_signature, print_type};
-use super::type_index::TypeIndex;
+use super::pretty::format_signature;
 use tribute::{TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local};
 
 /// Main LSP server state.
@@ -202,75 +201,21 @@ impl LspServer {
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
 
-        // Try AST-based hover first
-        if let Some(result) = self.hover_ast(source_cst, &rope, offset) {
-            return Some(result);
-        }
-
-        // Fallback to TrunkIR-based hover
-        self.hover_legacy(source_cst, &rope, offset)
-    }
-
-    /// AST-based hover implementation.
-    ///
-    /// Uses the new typed AST (`Module<TypedRef>`) and `AstTypeIndex` for type lookup.
-    fn hover_ast(
-        &self,
-        source_cst: tribute::SourceCst,
-        rope: &Rope,
-        offset: usize,
-    ) -> Option<Hover> {
         let (type_str, span) = self.db.attach(|db| {
-            // Get the AST type index
             let index = ast_type_index(db, source_cst)?;
-
-            // Find type at offset
             index.type_at(db, offset).map(|entry| {
                 let type_str = print_ast_type(db, entry.ty);
                 (type_str, entry.span)
             })
         })?;
 
-        tracing::debug!(type_str = %type_str, "Found type (AST-based)");
+        tracing::debug!(type_str = %type_str, "Found type");
 
         let contents = HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
             value: format!("```tribute\n{}\n```", type_str),
         });
-        let range = span_to_range(rope, span);
-
-        Some(Hover {
-            contents,
-            range: Some(range),
-        })
-    }
-
-    /// Legacy TrunkIR-based hover implementation.
-    ///
-    /// Used as fallback when AST-based hover doesn't find a result.
-    fn hover_legacy(
-        &self,
-        source_cst: tribute::SourceCst,
-        rope: &Rope,
-        offset: usize,
-    ) -> Option<Hover> {
-        let (type_str, span) = self.db.attach(|db| {
-            let module = compile_for_lsp(db, source_cst);
-            let type_index = TypeIndex::build(db, &module);
-
-            type_index.type_at(offset).map(|entry| {
-                let type_str = print_type(db, entry.ty);
-                (type_str, entry.span)
-            })
-        })?;
-
-        tracing::debug!(type_str = %type_str, "Found type (legacy)");
-
-        let contents = HoverContents::Markup(MarkupContent {
-            kind: MarkupKind::Markdown,
-            value: format!("```tribute\n{}\n```", type_str),
-        });
-        let range = span_to_range(rope, span);
+        let range = span_to_range(&rope, span);
 
         Some(Hover {
             contents,
@@ -523,8 +468,7 @@ impl LspServer {
         // Collect diagnostics and type information for code action generation
         let actions = self.db.attach(|db| {
             let result = tribute::compile_with_diagnostics(db, source_cst);
-            let module = &result.module;
-            let type_index = TypeIndex::build(db, module);
+            let type_index = ast_type_index(db, source_cst);
 
             let mut actions = Vec::new();
 
@@ -536,7 +480,8 @@ impl LspServer {
                 }
 
                 // Generate code actions based on diagnostic type
-                if let Some(action) = self.action_for_diagnostic(db, diag, &rope, uri, &type_index)
+                if let Some(action) =
+                    self.action_for_diagnostic(db, diag, &rope, uri, type_index.as_ref())
                 {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
@@ -562,18 +507,17 @@ impl LspServer {
         diag: &tribute_passes::Diagnostic,
         rope: &Rope,
         uri: &Uri,
-        type_index: &TypeIndex,
+        type_index: Option<&ast_index::AstTypeIndex<'_>>,
     ) -> Option<CodeAction> {
-        use super::pretty::print_type;
-
         // Pattern: "top-level function `{name}` must have an explicit return type annotation"
         if diag
             .message
             .contains("must have an explicit return type annotation")
         {
             // Try to find the inferred type at the diagnostic location
-            if let Some(entry) = type_index.type_at(diag.span.start) {
-                let type_str = print_type(db, entry.ty);
+            let type_index = type_index?;
+            if let Some(entry) = type_index.type_at(db, diag.span.start) {
+                let type_str = print_ast_type(db, entry.ty);
 
                 // Find the position after the closing parenthesis of parameters
                 // We need to insert ": Type" before the function body
@@ -1621,16 +1565,19 @@ mod tests {
     fn test_hover_via_message() {
         let mut harness = TestHarness::new();
         let uri = test_uri("hover_msg");
+        //                    0         1         2         3
+        //                    0123456789012345678901234567890123456
         let source = "fn add(x: Int, y: Int): Int { x + y }";
 
         harness.open_document(&uri, source);
 
+        // Hover on 'x' in the body (position 30)
         let params = HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: lsp_types::TextDocumentIdentifier { uri },
                 position: lsp_types::Position {
                     line: 0,
-                    character: 3,
+                    character: 30,
                 },
             },
             work_done_progress_params: Default::default(),

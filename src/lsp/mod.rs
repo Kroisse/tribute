@@ -7,10 +7,7 @@
 
 mod ast_index;
 mod call_index;
-mod completion_index;
-mod definition_index;
 mod pretty;
 mod server;
-mod type_index;
 
 pub use server::serve;
