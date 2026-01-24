@@ -9,12 +9,14 @@
 //! - [`astgen`]: CST to AST lowering
 //! - [`resolve`]: Name resolution (AST → AST)
 //! - [`typeck`]: Type checking (AST → AST)
+//! - [`query`]: Salsa-tracked query functions for incremental compilation
 //! - [`source_file`]: Source file management and URI handling
 //! - [`tirgen`]: CST to TrunkIR lowering (legacy, to be replaced by astgen)
 
 pub mod ast;
 pub mod ast_to_ir;
 pub mod astgen;
+pub mod query;
 pub mod resolve;
 pub mod source_file;
 pub mod tdnr;
