@@ -4,13 +4,11 @@ use ropey::Rope;
 use tree_sitter::Node;
 use trunk_ir::{Span, Symbol};
 
-use crate::ast::{NodeId, NodeIdGen, SpanMapBuilder};
+use crate::ast::{NodeId, SpanMapBuilder};
 
 /// Context for lowering CST to AST.
 pub struct AstLoweringCtx {
     pub source: Rope,
-    /// Generator for unique node IDs.
-    node_id_gen: NodeIdGen,
     /// Builder for span map.
     span_builder: SpanMapBuilder,
 }
@@ -20,19 +18,17 @@ impl AstLoweringCtx {
     pub fn new(source: Rope) -> Self {
         Self {
             source,
-            node_id_gen: NodeIdGen::new(),
             span_builder: SpanMapBuilder::new(),
         }
     }
 
-    /// Generate a fresh NodeId.
-    pub fn fresh_id(&mut self) -> NodeId {
-        self.node_id_gen.fresh()
-    }
-
-    /// Generate a fresh NodeId and record its span from the given CST node.
+    /// Generate a NodeId from a CST node and record its span.
+    ///
+    /// Uses the CST node's `id()` directly, enabling reverse lookup:
+    /// given a byte offset, Tree-sitter can find the CST node, and if
+    /// that node's ID is in the SpanMap, it corresponds to an AST node.
     pub fn fresh_id_with_span(&mut self, node: &Node) -> NodeId {
-        let id = self.node_id_gen.fresh();
+        let id = NodeId::from_cst(node);
         let span = Span::new(node.start_byte(), node.end_byte());
         self.span_builder.insert(id, span);
         id

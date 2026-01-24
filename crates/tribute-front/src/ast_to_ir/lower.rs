@@ -268,9 +268,9 @@ fn lower_block<'db>(
             Stmt::Expr { id: _, expr } => {
                 last_value = lower_expr(ctx, block, expr);
             }
-            Stmt::Return { id: _, expr } => {
+            Stmt::Return { id, expr } => {
                 if let Some(val) = lower_expr(ctx, block, expr) {
-                    let location = ctx.location(crate::ast::NodeId::new(0));
+                    let location = ctx.location(id);
                     block.op(func::Return::value(ctx.db, location, val));
                 }
                 break;

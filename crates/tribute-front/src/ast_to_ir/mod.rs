@@ -108,7 +108,7 @@ mod tests {
         let ctx = IrLoweringCtx::new(&db, path, span_map);
 
         // Verify location creation doesn't panic
-        let node_id = crate::ast::NodeId::new(42);
+        let node_id = crate::ast::NodeId::from_raw(42);
         let location = ctx.location(node_id);
 
         // Location should have the correct path

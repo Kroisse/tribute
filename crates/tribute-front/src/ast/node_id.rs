@@ -4,25 +4,33 @@
 //! additional information (spans, types, etc.) in separate tables.
 //! This follows the rust-analyzer pattern of separating structure from metadata.
 
+use tree_sitter::Node;
+
 /// Unique identifier for an AST node within a module.
+///
+/// This is the CST node's `id()` value from tree-sitter, ensuring a direct
+/// correspondence between CST nodes and AST nodes. This enables reverse lookup:
+/// given a byte offset, Tree-sitter can find the CST node, and the SpanMap
+/// can confirm if it corresponds to an AST node.
 ///
 /// NodeIds are local to a compilation unit and should not be used
 /// for cross-module references.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
-pub struct NodeId(u32);
+pub struct NodeId(usize);
 
 impl NodeId {
-    /// Create a new NodeId from a raw value.
+    /// Create a NodeId from a CST node.
     ///
-    /// This should only be used by `NodeIdGen`.
+    /// This ensures the NodeId corresponds to an actual CST node,
+    /// enabling reverse lookup from byte offsets.
     #[inline]
-    pub const fn new(id: u32) -> Self {
-        Self(id)
+    pub fn from_cst(node: &Node) -> Self {
+        Self(node.id())
     }
 
     /// Get the raw value of this NodeId.
     #[inline]
-    pub const fn raw(self) -> u32 {
+    pub const fn raw(self) -> usize {
         self.0
     }
 }
@@ -33,26 +41,11 @@ impl std::fmt::Display for NodeId {
     }
 }
 
-/// Generator for unique NodeIds within a compilation unit.
-#[derive(Debug, Default)]
-pub struct NodeIdGen(u32);
-
-impl NodeIdGen {
-    /// Create a new generator starting at 0.
-    pub fn new() -> Self {
-        Self(0)
-    }
-
-    /// Generate a fresh unique NodeId.
-    pub fn fresh(&mut self) -> NodeId {
-        let id = NodeId(self.0);
-        self.0 += 1;
-        id
-    }
-
-    /// Get the number of IDs generated so far.
-    pub fn count(&self) -> u32 {
-        self.0
+#[cfg(test)]
+impl NodeId {
+    /// Create a NodeId from a raw value (for testing only).
+    pub const fn from_raw(id: usize) -> Self {
+        Self(id)
     }
 }
 
@@ -61,11 +54,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn node_id_gen_produces_sequential_ids() {
-        let mut id_gen = NodeIdGen::new();
-        assert_eq!(id_gen.fresh(), NodeId::new(0));
-        assert_eq!(id_gen.fresh(), NodeId::new(1));
-        assert_eq!(id_gen.fresh(), NodeId::new(2));
-        assert_eq!(id_gen.count(), 3);
+    fn test_node_id_from_raw() {
+        let id = NodeId::from_raw(12345);
+        assert_eq!(id.raw(), 12345);
+    }
+
+    #[test]
+    fn test_node_id_equality() {
+        let id1 = NodeId::from_raw(42);
+        let id2 = NodeId::from_raw(42);
+        let id3 = NodeId::from_raw(99);
+
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+    }
+
+    #[test]
+    fn test_node_id_display() {
+        let id = NodeId::from_raw(123);
+        assert_eq!(format!("{}", id), "#123");
     }
 }

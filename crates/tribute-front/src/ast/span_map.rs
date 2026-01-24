@@ -83,6 +83,14 @@ impl SpanMap {
     pub fn get_or_default(&self, id: NodeId) -> Span {
         self.0.get(&id).copied().unwrap_or(Span::new(0, 0))
     }
+
+    /// Check if this NodeId has a recorded span.
+    ///
+    /// This is useful for reverse lookup: given a CST node, check if it
+    /// corresponds to an AST node by checking if its ID is in the SpanMap.
+    pub fn contains(&self, id: NodeId) -> bool {
+        self.0.contains_key(&id)
+    }
 }
 
 impl Default for SpanMap {
@@ -98,8 +106,8 @@ mod tests {
     #[test]
     fn test_span_map_builder() {
         let mut builder = SpanMapBuilder::new();
-        let id1 = NodeId::new(0);
-        let id2 = NodeId::new(1);
+        let id1 = NodeId::from_raw(0);
+        let id2 = NodeId::from_raw(1);
 
         builder.insert(id1, Span::new(10, 20));
         builder.insert(id2, Span::new(30, 40));
@@ -108,30 +116,48 @@ mod tests {
 
         assert_eq!(span_map.get(id1), Some(Span::new(10, 20)));
         assert_eq!(span_map.get(id2), Some(Span::new(30, 40)));
-        assert_eq!(span_map.get(NodeId::new(999)), None);
+        assert_eq!(span_map.get(NodeId::from_raw(999)), None);
     }
 
     #[test]
     fn test_span_map_get_or_default() {
         let mut builder = SpanMapBuilder::new();
-        let id1 = NodeId::new(0);
+        let id1 = NodeId::from_raw(0);
         builder.insert(id1, Span::new(10, 20));
 
         let span_map = builder.finish();
 
         assert_eq!(span_map.get_or_default(id1), Span::new(10, 20));
-        assert_eq!(span_map.get_or_default(NodeId::new(999)), Span::new(0, 0));
+        assert_eq!(
+            span_map.get_or_default(NodeId::from_raw(999)),
+            Span::new(0, 0)
+        );
     }
 
     #[test]
     fn test_span_map_clone() {
         let mut builder = SpanMapBuilder::new();
-        builder.insert(NodeId::new(0), Span::new(10, 20));
+        builder.insert(NodeId::from_raw(0), Span::new(10, 20));
 
         let span_map1 = builder.finish();
         let span_map2 = span_map1.clone();
 
         // Both should refer to the same data (Arc)
-        assert_eq!(span_map1.get(NodeId::new(0)), span_map2.get(NodeId::new(0)));
+        assert_eq!(
+            span_map1.get(NodeId::from_raw(0)),
+            span_map2.get(NodeId::from_raw(0))
+        );
+    }
+
+    #[test]
+    fn test_span_map_contains() {
+        let mut builder = SpanMapBuilder::new();
+        let id = NodeId::from_raw(100);
+        builder.insert(id, Span::new(0, 50));
+
+        let span_map = builder.finish();
+
+        assert!(span_map.contains(id));
+        assert!(!span_map.contains(NodeId::from_raw(999)));
     }
 }

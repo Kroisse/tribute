@@ -579,7 +579,7 @@ mod tests {
         // Create unresolved reference to the parameter
         let body_var = UnresolvedName {
             name: param_name,
-            id: NodeId::new(2),
+            id: NodeId::from_raw(2),
         };
 
         // Resolve the variable reference
@@ -603,7 +603,7 @@ mod tests {
         // Create unresolved reference to print
         let unresolved = UnresolvedName {
             name: Symbol::new("print"),
-            id: NodeId::new(1),
+            id: NodeId::from_raw(1),
         };
 
         // Resolve the builtin
@@ -630,7 +630,7 @@ mod tests {
         // Create unresolved reference
         let unresolved = UnresolvedName {
             name,
-            id: NodeId::new(1),
+            id: NodeId::from_raw(1),
         };
 
         // Resolve - should get local, not builtin
@@ -660,7 +660,7 @@ mod tests {
         // Create unresolved reference
         let unresolved = UnresolvedName {
             name,
-            id: NodeId::new(1),
+            id: NodeId::from_raw(1),
         };
 
         // Resolve - should NOT find the local (it was in popped scope)
@@ -697,11 +697,11 @@ mod tests {
         // Both x and y should be visible
         let x_ref = UnresolvedName {
             name: x,
-            id: NodeId::new(1),
+            id: NodeId::from_raw(1),
         };
         let y_ref = UnresolvedName {
             name: y,
-            id: NodeId::new(2),
+            id: NodeId::from_raw(2),
         };
 
         let resolved_x = resolver.resolve_name(&x_ref);
