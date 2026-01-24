@@ -40,7 +40,10 @@ fn lower_decl(ctx: &mut AstLoweringCtx, node: Node) -> Option<Decl<UnresolvedNam
         "enum_declaration" => lower_enum(ctx, node).map(Decl::Enum),
         "ability_declaration" => lower_ability(ctx, node).map(Decl::Ability),
         "mod_declaration" => {
-            lower_mod(ctx, node).map(|m| Decl::Function(dummy_func_for_module(ctx, m)))
+            // TODO: Add proper Decl::Module variant
+            // For now, skip nested modules instead of panicking
+            tracing::debug!("Skipping nested module declaration (not yet supported)");
+            None
         }
         "use_declaration" => lower_use(ctx, node).map(Decl::Use),
         "const_declaration" => {
@@ -49,17 +52,6 @@ fn lower_decl(ctx: &mut AstLoweringCtx, node: Node) -> Option<Decl<UnresolvedNam
         }
         _ => None,
     }
-}
-
-/// Create a dummy function to represent a nested module (temporary workaround).
-/// TODO: Add proper Module variant to Decl<V>
-fn dummy_func_for_module(
-    _ctx: &mut AstLoweringCtx,
-    _module: Module<UnresolvedName>,
-) -> FuncDecl<UnresolvedName> {
-    // For now, we skip nested modules - they need proper Decl::Module support
-    // This is a placeholder that should be replaced when Decl<V> is updated
-    unreachable!("Nested modules not yet supported in AST")
 }
 
 /// Lower a function definition.
@@ -119,7 +111,7 @@ fn extract_function_name(ctx: &AstLoweringCtx, name_node: Node) -> Symbol {
         let stripped = text
             .strip_prefix('(')
             .and_then(|s| s.strip_suffix(')'))
-            .unwrap_or(text);
+            .unwrap_or(&text);
         Symbol::from_dynamic(stripped)
     } else {
         ctx.node_symbol(&name_node)
@@ -384,31 +376,6 @@ fn lower_ability_operation(ctx: &mut AstLoweringCtx, node: Node) -> Option<OpDec
         params,
         return_ty,
     })
-}
-
-/// Lower a mod declaration.
-fn lower_mod(ctx: &mut AstLoweringCtx, node: Node) -> Option<Module<UnresolvedName>> {
-    let name_node = node.child_by_field_name("name")?;
-    let body_node = node.child_by_field_name("body");
-
-    let id = ctx.fresh_id_with_span(&node);
-    let name = Some(ctx.node_symbol(&name_node));
-
-    let mut decls = Vec::new();
-
-    if let Some(body) = body_node {
-        let mut cursor = body.walk();
-        for child in body.named_children(&mut cursor) {
-            if is_comment(child.kind()) {
-                continue;
-            }
-            if let Some(decl) = lower_decl(ctx, child) {
-                decls.push(decl);
-            }
-        }
-    }
-
-    Some(Module { id, name, decls })
 }
 
 /// Lower a use declaration.

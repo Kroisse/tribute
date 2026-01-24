@@ -644,6 +644,10 @@ impl<'db> AstDefinitionIndex<'db> {
     }
 
     /// Find a definition by name.
+    ///
+    /// TODO: For locals with shadowing, this may return the wrong definition.
+    /// Consider using `definition_of_target` with a `ResolvedTarget` that includes
+    /// `LocalId` for precise matching.
     pub fn definition_of(
         &self,
         db: &'db dyn salsa::Database,
@@ -654,7 +658,11 @@ impl<'db> AstDefinitionIndex<'db> {
             .and_then(|indices| indices.first())
             .map(|&i| &self.definitions(db)[i])
     }
+
     /// Find all references to a symbol.
+    ///
+    /// TODO: For locals with shadowing, this may include references to different
+    /// bindings with the same name. Consider matching by `LocalId` for precise results.
     pub fn references_of(
         &self,
         db: &'db dyn salsa::Database,

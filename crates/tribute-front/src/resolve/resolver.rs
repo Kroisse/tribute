@@ -512,8 +512,9 @@ impl<'db> Resolver<'db> {
             }
 
             PatternKind::Or(patterns) => {
-                // For Or patterns, each alternative binds the same names
-                // We just process them left to right
+                // For Or patterns, each alternative should bind the same names.
+                // TODO: Validate that all alternatives bind exactly the same set of names.
+                // Currently we process left-to-right without validation.
                 let patterns = patterns
                     .into_iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))

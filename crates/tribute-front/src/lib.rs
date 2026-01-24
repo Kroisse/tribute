@@ -9,6 +9,8 @@
 //! - [`astgen`]: CST to AST lowering
 //! - [`resolve`]: Name resolution (AST → AST)
 //! - [`typeck`]: Type checking (AST → AST)
+//! - [`tdnr`]: Type-directed name resolution (AST → AST)
+//! - [`ast_to_ir`]: AST to TrunkIR lowering
 //! - [`query`]: Salsa-tracked query functions for incremental compilation
 //! - [`source_file`]: Source file management and URI handling
 //! - [`tirgen`]: CST to TrunkIR lowering (legacy, to be replaced by astgen)

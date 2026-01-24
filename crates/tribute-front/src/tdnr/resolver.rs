@@ -76,11 +76,50 @@ impl<'db> TdnrResolver<'db> {
                 // TODO: Build actual function type from parameters and return type
                 let func_ty = Type::new(self.db, crate::ast::TypeKind::Error);
 
-                // Register with a placeholder type name
-                // In a full implementation, we'd extract the actual type from annotations
+                // Try to extract the type name from the first parameter's type annotation
+                let first_param = &func.params[0];
+                if let Some(type_name) = self.extract_type_name(&first_param.ty) {
+                    // Register with the actual type name for precise UFCS lookup
+                    self.method_index
+                        .insert((type_name, func_name), (func_id, func_ty));
+                }
+
+                // Also register with "_any" as a fallback for when type is unknown
                 self.method_index
                     .insert((Symbol::new("_any"), func_name), (func_id, func_ty));
             }
+        }
+    }
+
+    /// Extract the type name from a type annotation.
+    fn extract_type_name(&self, annotation: &Option<crate::ast::TypeAnnotation>) -> Option<Symbol> {
+        use crate::ast::TypeAnnotationKind;
+        let ann = annotation.as_ref()?;
+        match &ann.kind {
+            TypeAnnotationKind::Named(name) => Some(*name),
+            TypeAnnotationKind::Path(path) if !path.is_empty() => {
+                // Use the last segment of the path as the type name
+                path.last().copied()
+            }
+            TypeAnnotationKind::App { ctor, .. } => {
+                // Recursively extract from the constructor
+                self.extract_type_name_from_annotation(ctor)
+            }
+            _ => None,
+        }
+    }
+
+    /// Extract the type name from a TypeAnnotation (not Option).
+    fn extract_type_name_from_annotation(
+        &self,
+        annotation: &crate::ast::TypeAnnotation,
+    ) -> Option<Symbol> {
+        use crate::ast::TypeAnnotationKind;
+        match &annotation.kind {
+            TypeAnnotationKind::Named(name) => Some(*name),
+            TypeAnnotationKind::Path(path) if !path.is_empty() => path.last().copied(),
+            TypeAnnotationKind::App { ctor, .. } => self.extract_type_name_from_annotation(ctor),
+            _ => None,
         }
     }
 
@@ -270,14 +309,46 @@ impl<'db> TdnrResolver<'db> {
     }
 
     /// Get the type of an expression.
+    ///
+    /// Currently this handles expressions that directly contain TypedRef (Var, Cons).
+    /// For other expressions, a type map would be needed to look up inferred types.
     fn get_expr_type(&self, expr: &Expr<TypedRef<'db>>) -> Option<Type<'db>> {
-        // For Var expressions, we can get the type from the TypedRef
-        if let ExprKind::Var(typed_ref) = &*expr.kind {
-            return Some(typed_ref.ty);
+        match &*expr.kind {
+            // For Var expressions, we can get the type from the TypedRef
+            ExprKind::Var(typed_ref) => Some(typed_ref.ty),
+
+            // Constructor expressions also have a TypedRef with type info
+            ExprKind::Cons { ctor, .. } => Some(ctor.ty),
+
+            // For field access, the type would be the field's type (not available here)
+            // We'd need a type map to look this up
+            ExprKind::FieldAccess { .. } => None,
+
+            // For Call expressions, the return type of the callee would be needed
+            // This requires looking at the callee's function type
+            ExprKind::Call { callee, .. } => {
+                // Try to get the return type from the callee's type
+                if let Some(callee_ty) = self.get_expr_type(callee)
+                    && let crate::ast::TypeKind::Func { result, .. } = callee_ty.kind(self.db)
+                {
+                    return Some(*result);
+                }
+                None
+            }
+
+            // Literals have known types
+            ExprKind::NatLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Nat)),
+            ExprKind::IntLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Int)),
+            ExprKind::FloatLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Float)),
+            ExprKind::BoolLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Bool)),
+            ExprKind::StringLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::String)),
+            ExprKind::BytesLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Bytes)),
+            ExprKind::Nil => Some(Type::new(self.db, crate::ast::TypeKind::Nil)),
+
+            // For other expressions, we'd need a type map from typechecking
+            // TODO: Pass a type map from the typechecker to handle these cases
+            _ => None,
         }
-        // For other expressions, we'd need to look up in a type map
-        // TODO: Implement proper expression type lookup
-        None
     }
 
     /// Look up a method for a given receiver type.

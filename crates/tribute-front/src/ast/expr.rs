@@ -211,7 +211,7 @@ where
 }
 
 /// A function parameter.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct Param {
     /// Node ID for span lookup.
     pub id: NodeId,

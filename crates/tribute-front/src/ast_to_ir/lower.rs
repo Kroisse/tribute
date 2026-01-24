@@ -5,7 +5,10 @@
 use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::{Attribute, DialectType, IdVec, Location, PathId, Symbol};
 
-use crate::ast::{Decl, Expr, ExprKind, FuncDecl, Module, ResolvedRef, SpanMap, Stmt, TypedRef};
+use crate::ast::{
+    Decl, Expr, ExprKind, FuncDecl, Module, ResolvedRef, SpanMap, Stmt, TypeAnnotation,
+    TypeAnnotationKind, TypedRef,
+};
 
 use super::context::IrLoweringCtx;
 
@@ -65,12 +68,19 @@ fn lower_function<'db>(
     let location = ctx.location(func.id);
     let func_name = func.name;
 
-    // Build parameter types
-    let param_types: IdVec<trunk_ir::Type<'db>> =
-        func.params.iter().map(|_| ctx.int_type()).collect();
+    // Build parameter types from annotations, defaulting to int for untyped params
+    let param_types: IdVec<trunk_ir::Type<'db>> = func
+        .params
+        .iter()
+        .map(|p| convert_annotation_to_ir_type(ctx, p.ty.as_ref()))
+        .collect();
 
-    // Build return type
-    let return_ty = ctx.unit_type();
+    // Build return type from annotation, defaulting to unit
+    let return_ty = func
+        .return_ty
+        .as_ref()
+        .map(|ann| convert_annotation_to_ir_type(ctx, Some(ann)))
+        .unwrap_or_else(|| ctx.unit_type());
 
     // Create function operation
     let func_op = func::Func::build(
@@ -184,6 +194,12 @@ fn lower_expr<'db>(
 }
 
 /// Lower a binary operation.
+///
+/// Note: Currently uses i64 for all arithmetic operations regardless of operand types.
+/// TODO: To support float operations properly, we need to:
+/// 1. Pass the expression's inferred type (from TypedRef) to this function
+/// 2. Check if operands are float and use fadd/fsub/fmul/fdiv accordingly
+/// 3. This requires threading type information from the AST to IR lowering
 fn lower_binop<'db>(
     ctx: &IrLoweringCtx<'db>,
     block: &mut trunk_ir::BlockBuilder<'db>,
@@ -195,6 +211,7 @@ fn lower_binop<'db>(
     use crate::ast::BinOpKind;
 
     // Get the result type - for arithmetic ops, use i64; for comparisons, use bool
+    // TODO: Determine actual type from operands (int vs float)
     let int_ty = ctx.int_type();
     let bool_ty = ctx.bool_type();
 
@@ -270,7 +287,12 @@ fn lower_block<'db>(
                 if let Some(val) = lower_expr(ctx, block, value) {
                     // Simple case: bind pattern is just a name
                     if let crate::ast::PatternKind::Bind { name: _ } = &*pattern.kind {
-                        // TODO: Properly track bindings
+                        // TODO (Critical): Register binding with ctx.bind(local_id, val)
+                        // Currently, PatternKind::Bind only contains name: Symbol, not LocalId.
+                        // To fix this properly, either:
+                        // 1. Add LocalId to PatternKind::Bind during resolve phase
+                        // 2. Or maintain a name->LocalId map passed from resolve
+                        // Without this, local variable lookups in Var expressions will fail.
                     }
                     let _ = val;
                 }
@@ -284,4 +306,49 @@ fn lower_block<'db>(
     let result = lower_expr(ctx, block, value);
     ctx.exit_scope();
     result
+}
+
+/// Convert a type annotation to a TrunkIR type.
+///
+/// Falls back to int_type() for unannotated parameters.
+fn convert_annotation_to_ir_type<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    annotation: Option<&TypeAnnotation>,
+) -> trunk_ir::Type<'db> {
+    let Some(ann) = annotation else {
+        // No annotation - default to int
+        return ctx.int_type();
+    };
+
+    match &ann.kind {
+        TypeAnnotationKind::Named(name) => {
+            // Map well-known type names using Symbol's PartialEq<&str>
+            // Note: Both Int and Nat map to i64 in IR
+            if *name == "Int" || *name == "Nat" {
+                ctx.int_type()
+            } else if *name == "Float" {
+                core::F64::new(ctx.db).as_type()
+            } else if *name == "Bool" {
+                ctx.bool_type()
+            } else if *name == "String" {
+                core::String::new(ctx.db).as_type()
+            } else if *name == "Bytes" {
+                core::Bytes::new(ctx.db).as_type()
+            } else if *name == "()" {
+                ctx.unit_type()
+            } else {
+                // Unknown named type - use placeholder
+                ctx.unit_type()
+            }
+        }
+        TypeAnnotationKind::Path(_) => {
+            // Qualified path - use placeholder for now
+            ctx.unit_type()
+        }
+        TypeAnnotationKind::App { ctor, .. } => {
+            // Parameterized type - convert the constructor
+            convert_annotation_to_ir_type(ctx, Some(ctor))
+        }
+        _ => ctx.unit_type(),
+    }
 }

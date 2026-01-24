@@ -782,15 +782,21 @@ pub fn run_tdnr_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Mod
 ///
 /// This is the AST-based alternative to `compile`.
 /// The AST pipeline provides better type safety and separation of concerns.
+///
+/// Note: The AST pipeline (`parse_and_lower_ast`) performs its own resolve/typecheck/TDNR
+/// on the AST. The subsequent TrunkIR stages below operate on different representations
+/// and are not duplicates:
+/// - AST stages: Work on AST nodes for type inference and name binding
+/// - TrunkIR stages: Transform `tribute.*` ops and handle remaining unresolved references
 #[salsa::tracked]
 pub fn compile_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Module<'db>, ConversionError> {
-    // Frontend via AST pipeline
+    // Frontend via AST pipeline (includes AST-level resolve, typecheck, TDNR)
     let module = parse_and_lower_ast(db, source);
 
-    // Continue with existing lowering passes (same as legacy pipeline)
+    // TrunkIR lowering passes (these work on TrunkIR ops, not AST)
     let module = stage_resolve(db, module);
     let module = stage_typecheck(db, module);
     let module = stage_tdnr(db, module);

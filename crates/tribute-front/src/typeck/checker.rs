@@ -56,8 +56,11 @@ impl<'db> TypeChecker<'db> {
         let constraints = self.ctx.take_constraints();
         let mut solver = TypeSolver::new(self.db());
 
-        // TODO: Handle solve errors properly
-        let _ = solver.solve(constraints);
+        // Solve constraints and log any errors
+        // TODO: Collect errors into diagnostics instead of just logging
+        if let Err(error) = solver.solve(constraints) {
+            tracing::warn!("Type constraint solving failed: {:?}", error);
+        }
 
         // Phase 4: Apply substitution to produce final types
         // TODO: Apply substitution to node types
@@ -105,29 +108,26 @@ impl<'db> TypeChecker<'db> {
             .map(|tp| TypeParam::named(tp.name))
             .collect();
 
-        // Build parameter types (use fresh variables for untyped params)
+        // Build parameter types
+        // TODO: Convert TypeAnnotation to Type<'db> instead of using fresh vars.
+        // This requires implementing annotation_to_type() that walks TypeAnnotationKind
+        // and produces the corresponding Type. For now, type inference will infer types.
         let param_types: Vec<Type<'db>> = func
             .params
             .iter()
-            .map(|p| {
-                p.ty.as_ref()
-                    .map(|_| self.ctx.fresh_type_var()) // TODO: Convert annotation
-                    .unwrap_or_else(|| self.ctx.fresh_type_var())
-            })
+            .map(|_p| self.ctx.fresh_type_var())
             .collect();
 
         // Build return type
-        let return_ty = func
-            .return_ty
-            .as_ref()
-            .map(|_| self.ctx.fresh_type_var()) // TODO: Convert annotation
-            .unwrap_or_else(|| self.ctx.fresh_type_var());
+        // TODO: Convert return type annotation when present
+        let return_ty = self.ctx.fresh_type_var();
 
         // Build effect row
+        // TODO: Convert effect annotations when present
         let effect = func
             .effects
             .as_ref()
-            .map(|_| self.ctx.fresh_effect_row()) // TODO: Convert annotation
+            .map(|_| self.ctx.fresh_effect_row())
             .unwrap_or_else(|| EffectRow::pure(self.db()));
 
         // Create function type
@@ -205,11 +205,15 @@ impl<'db> TypeChecker<'db> {
 
     /// Type check a function declaration.
     fn check_func_decl(&mut self, func: FuncDecl<ResolvedRef<'db>>) -> FuncDecl<TypedRef<'db>> {
-        // Bind parameter types
-        for _param in &func.params {
-            let _ty = self.ctx.fresh_type_var();
-            // We need LocalId from somewhere - for now use a placeholder
-            // In reality, we'd need to track the binding from resolve phase
+        // Bind parameter types to the context
+        // TODO: ParamDecl currently lacks LocalId. To properly bind parameters:
+        // 1. Add LocalId field to ParamDecl during resolve phase
+        // 2. Call self.ctx.bind_local(param.local_id, ty) here
+        // For now, parameter lookups rely on name-based matching.
+        for param in &func.params {
+            let ty = self.ctx.fresh_type_var();
+            // Bind by name as a workaround until LocalId is available
+            self.ctx.bind_local_by_name(param.name, ty);
         }
 
         // Check body

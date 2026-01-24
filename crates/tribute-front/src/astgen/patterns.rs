@@ -25,12 +25,12 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
         // === Literal patterns ===
         "nat_literal" => {
             let text = ctx.node_text(&node);
-            let value = parse_nat_literal(text).unwrap_or(0) as i64;
+            let value = parse_nat_literal(&text).unwrap_or(0) as i64;
             PatternKind::Literal(LiteralPattern::Int(value))
         }
         "int_literal" => {
             let text = ctx.node_text(&node);
-            let value = parse_int_literal(text).unwrap_or(0);
+            let value = parse_int_literal(&text).unwrap_or(0);
             PatternKind::Literal(LiteralPattern::Int(value))
         }
         "float_literal" => {
@@ -45,7 +45,7 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
         }
         "bool_literal" => {
             let text = ctx.node_text(&node);
-            PatternKind::Literal(LiteralPattern::Bool(text == "true"))
+            PatternKind::Literal(LiteralPattern::Bool(&*text == "true"))
         }
         "unit_literal" => PatternKind::Literal(LiteralPattern::Unit),
 

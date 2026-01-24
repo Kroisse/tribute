@@ -19,12 +19,12 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
         // === Literals ===
         "nat_literal" => {
             let text = ctx.node_text(&node);
-            let value = parse_nat_literal(text).unwrap_or(0);
+            let value = parse_nat_literal(&text).unwrap_or(0);
             ExprKind::NatLit(value)
         }
         "int_literal" => {
             let text = ctx.node_text(&node);
-            let value = parse_int_literal(text).unwrap_or(0);
+            let value = parse_int_literal(&text).unwrap_or(0);
             ExprKind::IntLit(value)
         }
         "float_literal" => {
@@ -44,7 +44,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
         }
         "bool_literal" => {
             let text = ctx.node_text(&node);
-            ExprKind::BoolLit(text == "true")
+            ExprKind::BoolLit(&*text == "true")
         }
         "unit_literal" => ExprKind::Nil,
 
@@ -132,7 +132,7 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
     let rhs = lower_expr(ctx, rhs_node);
     let op_text = ctx.node_text(&op_node);
 
-    let op = match op_text {
+    let op = match &*op_text {
         "+" => BinOpKind::Add,
         "-" => BinOpKind::Sub,
         "*" => BinOpKind::Mul,
@@ -639,13 +639,13 @@ fn parse_string_literal(text: &str) -> String {
     // Simple implementation: strip quotes and handle basic escapes
     let text = text.trim();
 
-    // Handle different string prefixes
+    // Handle different string prefixes with bounds checking
     let content = if text.starts_with("s\"") || text.starts_with("r\"") {
-        &text[2..text.len() - 1]
+        text.get(2..text.len().saturating_sub(1)).unwrap_or("")
     } else if text.starts_with("rs\"") || text.starts_with("sr\"") {
-        &text[3..text.len() - 1]
+        text.get(3..text.len().saturating_sub(1)).unwrap_or("")
     } else if text.starts_with('"') {
-        &text[1..text.len() - 1]
+        text.get(1..text.len().saturating_sub(1)).unwrap_or("")
     } else {
         text
     };
@@ -658,16 +658,14 @@ fn parse_bytes_literal(text: &str) -> Vec<u8> {
     // Simple implementation: strip quotes and handle basic escapes
     let text = text.trim();
 
-    // Handle different bytes prefixes: b", rb", br", b#"
+    // Handle different bytes prefixes with bounds checking
     let content = if text.starts_with("rb\"") || text.starts_with("br\"") {
-        &text[3..text.len() - 1]
+        text.get(3..text.len().saturating_sub(1)).unwrap_or("")
     } else if text.starts_with("b\"") {
-        &text[2..text.len() - 1]
+        text.get(2..text.len().saturating_sub(1)).unwrap_or("")
     } else if text.starts_with("b#\"") {
         // Find matching closing "#
-        let start = 3;
-        let end = text.len() - 2; // Remove "# at end
-        &text[start..end]
+        text.get(3..text.len().saturating_sub(2)).unwrap_or("")
     } else {
         text
     };

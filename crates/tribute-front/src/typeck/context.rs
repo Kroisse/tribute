@@ -26,6 +26,9 @@ pub struct TypeContext<'db> {
     /// Types of local variables.
     local_types: HashMap<LocalId, Type<'db>>,
 
+    /// Types of local variables by name (temporary workaround until ParamDecl has LocalId).
+    local_types_by_name: HashMap<Symbol, Type<'db>>,
+
     /// Types of AST nodes (for TypedRef construction).
     node_types: HashMap<NodeId, Type<'db>>,
 
@@ -57,6 +60,7 @@ impl<'db> TypeContext<'db> {
         Self {
             db,
             local_types: HashMap::new(),
+            local_types_by_name: HashMap::new(),
             node_types: HashMap::new(),
             function_types: HashMap::new(),
             constructor_types: HashMap::new(),
@@ -109,6 +113,21 @@ impl<'db> TypeContext<'db> {
     /// Look up the type of a local variable.
     pub fn lookup_local(&self, local: LocalId) -> Option<Type<'db>> {
         self.local_types.get(&local).copied()
+    }
+
+    /// Bind a local variable by name (temporary workaround until ParamDecl has LocalId).
+    ///
+    /// This is used for function parameters where we only have the name available.
+    /// Once ParamDecl includes LocalId, this method should be removed in favor of `bind_local`.
+    pub fn bind_local_by_name(&mut self, name: Symbol, ty: Type<'db>) {
+        self.local_types_by_name.insert(name, ty);
+    }
+
+    /// Look up a local variable by name.
+    ///
+    /// This is used for function parameters where we only have the name available.
+    pub fn lookup_local_by_name(&self, name: Symbol) -> Option<Type<'db>> {
+        self.local_types_by_name.get(&name).copied()
     }
 
     // =========================================================================

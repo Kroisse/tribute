@@ -1,5 +1,7 @@
 //! Lowering context for CST to AST conversion.
 
+use std::borrow::Cow;
+
 use ropey::Rope;
 use tree_sitter::Node;
 use trunk_ir::{Span, Symbol};
@@ -40,15 +42,17 @@ impl AstLoweringCtx {
     }
 
     /// Get the text content of a node.
-    pub fn node_text(&self, node: &Node) -> &str {
+    ///
+    /// Returns a `Cow<str>` that borrows if the text is in a single chunk,
+    /// or allocates if it spans multiple chunks.
+    pub fn node_text(&self, node: &Node) -> Cow<'_, str> {
         let start = node.start_byte();
         let end = node.end_byte();
-        // Get the slice from the rope
         let slice = self.source.byte_slice(start..end);
-        // Convert to contiguous string (may allocate if spans multiple chunks)
-        // For short identifiers this is usually a single chunk
-        // Fallback: shouldn't happen for well-formed source
-        slice.as_str().unwrap_or("")
+        slice
+            .as_str()
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned(slice.to_string()))
     }
 
     /// Get the text content of a node as an owned String.
@@ -60,6 +64,6 @@ impl AstLoweringCtx {
 
     /// Get a Symbol from a node's text.
     pub fn node_symbol(&self, node: &Node) -> Symbol {
-        Symbol::from_dynamic(self.node_text(node))
+        Symbol::from_dynamic(&self.node_text(node))
     }
 }
