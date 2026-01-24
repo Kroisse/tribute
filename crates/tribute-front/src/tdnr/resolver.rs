@@ -145,7 +145,7 @@ impl<'db> TdnrResolver<'db> {
             ExprKind::FloatLit(f) => ExprKind::FloatLit(f),
             ExprKind::BoolLit(b) => ExprKind::BoolLit(b),
             ExprKind::StringLit(s) => ExprKind::StringLit(s),
-            ExprKind::UnitLit => ExprKind::UnitLit,
+            ExprKind::Nil => ExprKind::Nil,
             ExprKind::Var(v) => ExprKind::Var(v),
 
             ExprKind::Call { callee, args } => ExprKind::Call {

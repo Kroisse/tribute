@@ -286,7 +286,7 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
                 let bool_ty = Type::new(self.db, TypeKind::Bool);
                 self.add_entry(expr.id, bool_ty);
             }
-            ExprKind::UnitLit => {
+            ExprKind::Nil => {
                 let nil_ty = Type::new(self.db, TypeKind::Nil);
                 self.add_entry(expr.id, nil_ty);
             }
@@ -913,7 +913,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             | ExprKind::FloatLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::BoolLit(_)
-            | ExprKind::UnitLit
+            | ExprKind::Nil
             | ExprKind::Error => {}
         }
     }

@@ -228,7 +228,7 @@ impl<'db> Resolver<'db> {
             ExprKind::FloatLit(f) => ExprKind::FloatLit(f),
             ExprKind::StringLit(s) => ExprKind::StringLit(s),
             ExprKind::BoolLit(b) => ExprKind::BoolLit(b),
-            ExprKind::UnitLit => ExprKind::UnitLit,
+            ExprKind::Nil => ExprKind::Nil,
 
             ExprKind::Call { callee, args } => {
                 let callee = self.resolve_expr(callee);

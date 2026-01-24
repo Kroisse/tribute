@@ -91,10 +91,10 @@ fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Option<FuncDecl<Unres
         .child_by_field_name("return_type")
         .and_then(|n| lower_type_annotation(ctx, n));
 
-    // For extern functions, create a unit expression as placeholder
+    // For extern functions, create a nil expression as placeholder
     let body = if is_extern {
-        let unit_id = ctx.fresh_id_with_span(&func_node);
-        crate::ast::Expr::new(unit_id, crate::ast::ExprKind::UnitLit)
+        let nil_id = ctx.fresh_id_with_span(&func_node);
+        crate::ast::Expr::new(nil_id, crate::ast::ExprKind::Nil)
     } else {
         lower_expr(ctx, body_node?)
     };

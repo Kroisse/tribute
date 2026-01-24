@@ -68,7 +68,7 @@ where
     BoolLit(bool),
 
     /// Unit literal: `()`
-    UnitLit,
+    Nil,
 
     // === Calls and Construction ===
     /// Function call: `foo(a, b)`

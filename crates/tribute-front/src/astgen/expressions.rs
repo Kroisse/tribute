@@ -42,7 +42,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
             let text = ctx.node_text(&node);
             ExprKind::BoolLit(text == "true")
         }
-        "unit_literal" => ExprKind::UnitLit,
+        "unit_literal" => ExprKind::Nil,
 
         // === Identifiers ===
         "identifier" => {

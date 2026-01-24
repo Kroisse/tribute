@@ -134,7 +134,7 @@ fn lower_expr<'db>(
             Some(op.result(ctx.db))
         }
 
-        ExprKind::UnitLit => {
+        ExprKind::Nil => {
             let ty = ctx.unit_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))

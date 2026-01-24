@@ -271,7 +271,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::FloatLit(_) => self.ctx.float_type(),
             ExprKind::BoolLit(_) => self.ctx.bool_type(),
             ExprKind::StringLit(_) => self.ctx.string_type(),
-            ExprKind::UnitLit => self.ctx.nil_type(),
+            ExprKind::Nil => self.ctx.nil_type(),
 
             ExprKind::Var(resolved) => self.infer_var(resolved),
             ExprKind::Call { callee, args } => {
@@ -380,7 +380,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::FloatLit(_) => self.ctx.float_type(),
             ExprKind::BoolLit(_) => self.ctx.bool_type(),
             ExprKind::StringLit(_) => self.ctx.string_type(),
-            ExprKind::UnitLit => self.ctx.nil_type(),
+            ExprKind::Nil => self.ctx.nil_type(),
             _ => self.ctx.fresh_type_var(),
         }
     }
@@ -509,7 +509,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::FloatLit(f) => ExprKind::FloatLit(f),
             ExprKind::BoolLit(b) => ExprKind::BoolLit(b),
             ExprKind::StringLit(s) => ExprKind::StringLit(s),
-            ExprKind::UnitLit => ExprKind::UnitLit,
+            ExprKind::Nil => ExprKind::Nil,
             ExprKind::Var(resolved) => ExprKind::Var(self.convert_ref(resolved)),
             ExprKind::Call { callee, args } => ExprKind::Call {
                 callee: self.check_expr(callee, Mode::Infer),
