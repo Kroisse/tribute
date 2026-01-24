@@ -14,7 +14,7 @@
 
 use trunk_ir::Symbol;
 
-use crate::ast::{Decl, FuncDecl, Module, ResolvedRef, TypedRef, UnresolvedName};
+use crate::ast::{Decl, FuncDecl, Module, ResolvedRef, SpanMap, TypedRef, UnresolvedName};
 use crate::source_file::SourceCst;
 
 // =============================================================================
@@ -24,12 +24,22 @@ use crate::source_file::SourceCst;
 /// Parse a source file to an AST module.
 ///
 /// This is the entry point for parsing. The result is cached by Salsa.
+/// Use `span_map` to get the corresponding span information.
 #[salsa::tracked]
 pub fn parsed_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Module<UnresolvedName>> {
-    crate::astgen::lower_source_to_ast(db, source)
+    crate::astgen::lower_source_to_parsed_ast(db, source).map(|parsed| parsed.module(db))
+}
+
+/// Get the span map for a parsed source file.
+///
+/// The SpanMap maps NodeId → Span for looking up source locations.
+/// Use together with `parsed_module` - both are derived from the same parse.
+#[salsa::tracked]
+pub fn span_map<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Option<SpanMap> {
+    crate::astgen::lower_source_to_parsed_ast(db, source).map(|parsed| parsed.span_map(db))
 }
 
 /// Get the list of function names in a module.

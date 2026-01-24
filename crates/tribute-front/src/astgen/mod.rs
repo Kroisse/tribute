@@ -16,7 +16,7 @@ mod expressions;
 mod helpers;
 mod patterns;
 
-use crate::ast::{Module, UnresolvedName};
+use crate::ast::{Module, SpanMap, SpanMapBuilder, UnresolvedName};
 use crate::source_file::SourceCst;
 use crate::tirgen::ParsedCst;
 use ropey::Rope;
@@ -31,27 +31,74 @@ pub use patterns::lower_pattern;
 // Entry Points
 // =============================================================================
 
+/// Internal result from CST → AST lowering (non-Salsa).
+struct LoweringResult {
+    module: Module<UnresolvedName>,
+    span_builder: SpanMapBuilder,
+}
+
+/// Lower a parsed CST to an AST Module (internal, non-Salsa).
+///
+/// Returns both the module and the span builder for creating a SpanMap.
+fn lower_cst_to_ast_internal(source: &Rope, cst: &ParsedCst) -> LoweringResult {
+    let mut ctx = AstLoweringCtx::new(source.clone());
+    let root = cst.root_node();
+    let module = lower_module(&mut ctx, root);
+    let span_builder = ctx.into_span_builder();
+    LoweringResult {
+        module,
+        span_builder,
+    }
+}
+
 /// Lower a parsed CST to an AST Module.
 ///
 /// This is the entry point for CST → AST conversion.
+/// Note: This function does not preserve span information.
+/// Use `lower_source_to_parsed_ast` for span-preserving lowering.
 pub fn lower_cst_to_ast(source: &Rope, cst: &ParsedCst) -> Module<UnresolvedName> {
-    let mut ctx = AstLoweringCtx::new(source.clone());
-    let root = cst.root_node();
-    lower_module(&mut ctx, root)
+    lower_cst_to_ast_internal(source, cst).module
+}
+
+/// Salsa-tracked parsing result containing both Module and SpanMap.
+///
+/// This allows both to be computed together and cached efficiently.
+#[salsa::tracked]
+pub struct ParsedAst<'db> {
+    /// The parsed AST module with unresolved names.
+    pub module: Module<UnresolvedName>,
+    /// The span map for looking up source locations.
+    pub span_map: SpanMap,
+}
+
+/// Parse and lower a source file to AST with span information (Salsa-tracked).
+///
+/// This is the primary entry point for CST → AST conversion.
+/// Returns `ParsedAst` containing both the module and span map.
+#[salsa::tracked]
+pub fn lower_source_to_parsed_ast<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<ParsedAst<'db>> {
+    use crate::tirgen::parse_cst;
+
+    let cst = parse_cst(db, source)?;
+    let text = source.text(db);
+    let result = lower_cst_to_ast_internal(text, &cst);
+    let span_map = result.span_builder.finish();
+    Some(ParsedAst::new(db, result.module, span_map))
 }
 
 /// Lower a source file to an AST Module.
 ///
 /// Convenience function that extracts the CST from the source file.
+/// Note: This function does not preserve span information.
+/// Use `lower_source_to_parsed_ast` for span-preserving lowering.
 pub fn lower_source_to_ast(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Module<UnresolvedName>> {
-    use crate::tirgen::parse_cst;
-
-    let cst = parse_cst(db, source)?;
-    let text = source.text(db);
-    Some(lower_cst_to_ast(text, &cst))
+    lower_source_to_parsed_ast(db, source).map(|parsed| parsed.module(db))
 }
 
 // =============================================================================

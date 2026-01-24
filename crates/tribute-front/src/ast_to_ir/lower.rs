@@ -3,9 +3,9 @@
 //! Transforms AST declarations and expressions to TrunkIR operations.
 
 use trunk_ir::dialect::{adt, arith, core, func};
-use trunk_ir::{Attribute, DialectType, IdVec, Location, PathId, Span, Symbol};
+use trunk_ir::{Attribute, DialectType, IdVec, Location, PathId, Symbol};
 
-use crate::ast::{Decl, Expr, ExprKind, FuncDecl, Module, ResolvedRef, Stmt, TypedRef};
+use crate::ast::{Decl, Expr, ExprKind, FuncDecl, Module, ResolvedRef, SpanMap, Stmt, TypedRef};
 
 use super::context::IrLoweringCtx;
 
@@ -13,13 +13,16 @@ use super::context::IrLoweringCtx;
 pub fn lower_module<'db>(
     db: &'db dyn salsa::Database,
     path: PathId<'db>,
+    span_map: SpanMap,
     module: Module<TypedRef<'db>>,
 ) -> core::Module<'db> {
-    let location = Location::new(path, Span::new(0, 0));
+    // Use module's NodeId to get location
+    let module_location = span_map.get_or_default(module.id);
+    let location = Location::new(path, module_location);
     let module_name = module.name.unwrap_or_else(|| Symbol::new("main"));
 
     core::Module::build(db, location, module_name, |top| {
-        let mut ctx = IrLoweringCtx::new(db, path);
+        let mut ctx = IrLoweringCtx::new(db, path, span_map.clone());
 
         for decl in module.decls {
             lower_decl(&mut ctx, top, decl);

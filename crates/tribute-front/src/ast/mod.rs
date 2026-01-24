@@ -53,6 +53,7 @@ mod expr;
 mod node_id;
 mod pattern;
 mod phases;
+mod span_map;
 mod types;
 
 // Re-export core types
@@ -61,4 +62,5 @@ pub use expr::*;
 pub use node_id::*;
 pub use pattern::*;
 pub use phases::*;
+pub use span_map::*;
 pub use types::*;

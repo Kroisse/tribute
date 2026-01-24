@@ -10,7 +10,7 @@ use super::helpers::is_comment;
 
 /// Lower a CST pattern node to an AST Pattern.
 pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<UnresolvedName> {
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
 
     let kind = match node.kind() {
         // === Wildcard ===
@@ -70,7 +70,7 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
         // === Type identifier (could be unit variant) ===
         "type_identifier" => {
             let name = ctx.node_symbol(&node);
-            let ctor_id = ctx.fresh_id();
+            let ctor_id = ctx.fresh_id_with_span(&node);
             let ctor = UnresolvedName::new(name, ctor_id);
             PatternKind::Variant {
                 ctor,
@@ -99,7 +99,7 @@ fn lower_constructor_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKin
     };
 
     let name = ctx.node_symbol(&name_node);
-    let ctor_id = ctx.fresh_id();
+    let ctor_id = ctx.fresh_id_with_span(&name_node);
     let ctor = UnresolvedName::new(name, ctor_id);
 
     let fields = args_node
@@ -113,11 +113,13 @@ fn lower_record_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unr
     let type_node = node.child_by_field_name("type");
     let fields_node = node.child_by_field_name("fields");
 
-    let type_name = type_node.map(|n| {
+    let type_name = if let Some(n) = type_node {
         let name = ctx.node_symbol(&n);
-        let id = ctx.fresh_id();
-        UnresolvedName::new(name, id)
-    });
+        let id = ctx.fresh_id_with_span(&n);
+        Some(UnresolvedName::new(name, id))
+    } else {
+        None
+    };
 
     let mut fields = Vec::new();
     let mut rest = false;

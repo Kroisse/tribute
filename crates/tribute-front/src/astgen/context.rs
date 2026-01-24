@@ -2,15 +2,17 @@
 
 use ropey::Rope;
 use tree_sitter::Node;
-use trunk_ir::Symbol;
+use trunk_ir::{Span, Symbol};
 
-use crate::ast::{NodeId, NodeIdGen};
+use crate::ast::{NodeId, NodeIdGen, SpanMapBuilder};
 
 /// Context for lowering CST to AST.
 pub struct AstLoweringCtx {
     pub source: Rope,
     /// Generator for unique node IDs.
     node_id_gen: NodeIdGen,
+    /// Builder for span map.
+    span_builder: SpanMapBuilder,
 }
 
 impl AstLoweringCtx {
@@ -19,12 +21,26 @@ impl AstLoweringCtx {
         Self {
             source,
             node_id_gen: NodeIdGen::new(),
+            span_builder: SpanMapBuilder::new(),
         }
     }
 
     /// Generate a fresh NodeId.
     pub fn fresh_id(&mut self) -> NodeId {
         self.node_id_gen.fresh()
+    }
+
+    /// Generate a fresh NodeId and record its span from the given CST node.
+    pub fn fresh_id_with_span(&mut self, node: &Node) -> NodeId {
+        let id = self.node_id_gen.fresh();
+        let span = Span::new(node.start_byte(), node.end_byte());
+        self.span_builder.insert(id, span);
+        id
+    }
+
+    /// Consume the context and return the span builder.
+    pub fn into_span_builder(self) -> SpanMapBuilder {
+        self.span_builder
     }
 
     /// Get the text content of a node.

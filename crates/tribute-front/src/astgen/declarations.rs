@@ -14,7 +14,7 @@ use super::helpers::is_comment;
 
 /// Lower a CST source file to an AST Module.
 pub fn lower_module(ctx: &mut AstLoweringCtx, root: Node) -> Module<UnresolvedName> {
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&root);
     let name = Some(Symbol::new("main"));
     let mut decls = Vec::new();
 
@@ -69,7 +69,7 @@ fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Option<FuncDecl<Unres
         .named_child(0)
         .filter(|c| c.kind() == "regular_function" || c.kind() == "extern_function")?;
 
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&func_node);
 
     let is_extern = func_node.kind() == "extern_function";
 
@@ -93,7 +93,7 @@ fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Option<FuncDecl<Unres
 
     // For extern functions, create a unit expression as placeholder
     let body = if is_extern {
-        let unit_id = ctx.fresh_id();
+        let unit_id = ctx.fresh_id_with_span(&func_node);
         crate::ast::Expr::new(unit_id, crate::ast::ExprKind::UnitLit)
     } else {
         lower_expr(ctx, body_node?)
@@ -135,7 +135,7 @@ fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<ParamDecl> {
         if child.kind() == "parameter"
             && let Some(name_node) = child.child_by_field_name("name")
         {
-            let id = ctx.fresh_id();
+            let id = ctx.fresh_id_with_span(&child);
             let name = ctx.node_symbol(&name_node);
             let ty = child
                 .child_by_field_name("type")
@@ -155,7 +155,7 @@ fn lower_type_annotation(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnn
         match child.kind() {
             "type_identifier" | "type_variable" | "generic_type" | "function_type"
             | "tuple_type" => {
-                let id = ctx.fresh_id();
+                let id = ctx.fresh_id_with_span(&child);
                 let name = ctx.node_symbol(&child);
                 return Some(TypeAnnotation {
                     id,
@@ -171,7 +171,7 @@ fn lower_type_annotation(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnn
         node.kind(),
         "type_identifier" | "type_variable" | "generic_type"
     ) {
-        let id = ctx.fresh_id();
+        let id = ctx.fresh_id_with_span(&node);
         let name = ctx.node_symbol(&node);
         return Some(TypeAnnotation {
             id,
@@ -187,7 +187,7 @@ fn lower_struct(ctx: &mut AstLoweringCtx, node: Node) -> Option<StructDecl> {
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
     let fields = lower_struct_fields(ctx, body_node);
 
@@ -238,7 +238,7 @@ fn lower_struct_field(ctx: &mut AstLoweringCtx, node: Node) -> Option<FieldDecl>
     let name_node = node.child_by_field_name("name")?;
     let type_node = node.child_by_field_name("type")?;
 
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
     let name = Some(ctx.node_symbol(&name_node));
     let ty = lower_type_annotation(ctx, type_node)?;
 
@@ -255,7 +255,7 @@ fn lower_enum(ctx: &mut AstLoweringCtx, node: Node) -> Option<EnumDecl> {
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
     let variants = lower_enum_variants(ctx, body_node);
 
@@ -296,7 +296,7 @@ fn lower_enum_variants(ctx: &mut AstLoweringCtx, node: Node) -> Vec<VariantDecl>
 /// Lower a single enum variant.
 fn lower_enum_variant(ctx: &mut AstLoweringCtx, node: Node) -> Option<VariantDecl> {
     let name_node = node.child_by_field_name("name")?;
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
 
     // TODO: parse variant fields (tuple or record style)
@@ -310,7 +310,7 @@ fn lower_ability(ctx: &mut AstLoweringCtx, node: Node) -> Option<AbilityDecl> {
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
     let operations = lower_ability_operations(ctx, body_node);
 
@@ -360,7 +360,7 @@ fn lower_ability_operations(ctx: &mut AstLoweringCtx, node: Node) -> Vec<OpDecl>
 /// Lower a single ability operation.
 fn lower_ability_operation(ctx: &mut AstLoweringCtx, node: Node) -> Option<OpDecl> {
     let name_node = node.child_by_field_name("name")?;
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
 
     let params = find_child_by_kind(node, "parameter_list")
@@ -371,7 +371,7 @@ fn lower_ability_operation(ctx: &mut AstLoweringCtx, node: Node) -> Option<OpDec
         .child_by_field_name("return_type")
         .and_then(|n| lower_type_annotation(ctx, n))
         .unwrap_or_else(|| {
-            let id = ctx.fresh_id();
+            let id = ctx.fresh_id_with_span(&node);
             TypeAnnotation {
                 id,
                 kind: TypeAnnotationKind::Named(Symbol::new("()")),
@@ -391,7 +391,7 @@ fn lower_mod(ctx: &mut AstLoweringCtx, node: Node) -> Option<Module<UnresolvedNa
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body");
 
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
     let name = Some(ctx.node_symbol(&name_node));
 
     let mut decls = Vec::new();
@@ -415,7 +415,7 @@ fn lower_mod(ctx: &mut AstLoweringCtx, node: Node) -> Option<Module<UnresolvedNa
 fn lower_use(ctx: &mut AstLoweringCtx, node: Node) -> Option<UseDecl> {
     let tree_node = node.child_by_field_name("tree")?;
 
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
     let is_pub = node
         .named_children(&mut node.walk())
         .any(|child| child.kind() == "visibility_marker");

@@ -5,32 +5,35 @@
 use std::collections::HashMap;
 
 use trunk_ir::dialect::core;
-use trunk_ir::{DialectType, Location, PathId, Span, Type, Value};
+use trunk_ir::{DialectType, Location, PathId, Type, Value};
 
-use crate::ast::{LocalId, NodeId, TypeKind};
+use crate::ast::{LocalId, NodeId, SpanMap, TypeKind};
 
 /// Context for lowering AST to TrunkIR.
 pub struct IrLoweringCtx<'db> {
     pub db: &'db dyn salsa::Database,
     pub path: PathId<'db>,
+    /// Span map for looking up source locations.
+    span_map: SpanMap,
     /// Stack of scopes, each mapping LocalId to SSA value.
     scopes: Vec<HashMap<LocalId, Value<'db>>>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
     /// Create a new IR lowering context.
-    pub fn new(db: &'db dyn salsa::Database, path: PathId<'db>) -> Self {
+    pub fn new(db: &'db dyn salsa::Database, path: PathId<'db>, span_map: SpanMap) -> Self {
         Self {
             db,
             path,
+            span_map,
             scopes: vec![HashMap::new()],
         }
     }
 
     /// Create a location for a node.
-    pub fn location(&self, _node_id: NodeId) -> Location<'db> {
-        // TODO: Look up actual span from SpanMap
-        Location::new(self.path, Span::new(0, 0))
+    pub fn location(&self, node_id: NodeId) -> Location<'db> {
+        let span = self.span_map.get_or_default(node_id);
+        Location::new(self.path, span)
     }
 
     /// Enter a new scope.

@@ -31,7 +31,7 @@ mod lower;
 use trunk_ir::PathId;
 use trunk_ir::dialect::core;
 
-use crate::ast::{Module, TypedRef};
+use crate::ast::{Module, SpanMap, TypedRef};
 
 pub use context::IrLoweringCtx;
 pub use lower::lower_module;
@@ -39,13 +39,20 @@ pub use lower::lower_module;
 /// Lower a typed AST module to TrunkIR.
 ///
 /// This is the main entry point for AST-to-IR transformation.
+///
+/// # Parameters
+/// - `db`: Salsa database
+/// - `module`: Type-checked AST module
+/// - `span_map`: SpanMap for looking up source locations
+/// - `source_uri`: URI of the source file
 pub fn lower_ast_to_ir<'db>(
     db: &'db dyn salsa::Database,
     module: Module<TypedRef<'db>>,
+    span_map: SpanMap,
     source_uri: &str,
 ) -> core::Module<'db> {
     let path = PathId::new(db, source_uri.to_owned());
-    lower_module(db, path, module)
+    lower_module(db, path, span_map, module)
 }
 
 #[cfg(test)]
@@ -61,7 +68,8 @@ mod tests {
     fn test_context_creation() {
         let db = test_db();
         let path = PathId::new(&db, "test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(&db, path);
+        let span_map = SpanMap::default();
+        let ctx = IrLoweringCtx::new(&db, path, span_map);
 
         // Verify context provides expected types
         let int_ty = ctx.int_type();
@@ -78,7 +86,8 @@ mod tests {
     fn test_context_scopes() {
         let db = test_db();
         let path = PathId::new(&db, "test.trb".to_owned());
-        let mut ctx = IrLoweringCtx::new(&db, path);
+        let span_map = SpanMap::default();
+        let mut ctx = IrLoweringCtx::new(&db, path, span_map);
 
         // Initially no binding
         let local_id = crate::ast::LocalId::new(0);
@@ -95,7 +104,8 @@ mod tests {
     fn test_context_location() {
         let db = test_db();
         let path = PathId::new(&db, "test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(&db, path);
+        let span_map = SpanMap::default();
+        let ctx = IrLoweringCtx::new(&db, path, span_map);
 
         // Verify location creation doesn't panic
         let node_id = crate::ast::NodeId::new(42);

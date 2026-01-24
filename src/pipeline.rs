@@ -758,9 +758,12 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
         return Module::build(db, location, Symbol::new("main"), |_| {});
     };
 
+    // Get span map for source location information
+    let span_map = ast_query::span_map(db, source).unwrap_or_default();
+
     // Phase 5: AST → TrunkIR
     let source_uri = source.uri(db).as_str();
-    let user_module = ast_to_ir::lower_ast_to_ir(db, typed_ast, source_uri);
+    let user_module = ast_to_ir::lower_ast_to_ir(db, typed_ast, span_map, source_uri);
 
     // Merge prelude definitions into the user module
     merge_with_prelude(db, user_module)

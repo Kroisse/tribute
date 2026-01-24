@@ -14,7 +14,7 @@ use super::patterns::lower_pattern;
 
 /// Lower a CST expression node to an AST Expr.
 pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> {
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
 
     let kind = match node.kind() {
         // === Literals ===
@@ -47,7 +47,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
         // === Identifiers ===
         "identifier" => {
             let name = ctx.node_symbol(&node);
-            let name_id = ctx.fresh_id();
+            let name_id = ctx.fresh_id_with_span(&node);
             ExprKind::Var(UnresolvedName::new(name, name_id))
         }
 
@@ -105,7 +105,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
         // === Path expression ===
         "path_expression" | "qualified_identifier" => {
             let name = ctx.node_symbol(&node);
-            let name_id = ctx.fresh_id();
+            let name_id = ctx.fresh_id_with_span(&node);
             ExprKind::Var(UnresolvedName::new(name, name_id))
         }
 
@@ -222,7 +222,7 @@ fn lower_constructor_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unre
     };
 
     let name = ctx.node_symbol(&name_node);
-    let name_id = ctx.fresh_id();
+    let name_id = ctx.fresh_id_with_span(&name_node);
     let ctor = UnresolvedName::new(name, name_id);
 
     let args = args_node
@@ -241,7 +241,7 @@ fn lower_record_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
     };
 
     let type_name_sym = ctx.node_symbol(&type_node);
-    let type_name_id = ctx.fresh_id();
+    let type_name_id = ctx.fresh_id_with_span(&type_node);
     let type_name = UnresolvedName::new(type_name_sym, type_name_id);
 
     let mut fields = Vec::new();
@@ -333,7 +333,7 @@ fn lower_block(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName>
                         }
                     } else {
                         let expr = lower_expr(ctx, inner);
-                        let stmt_id = ctx.fresh_id();
+                        let stmt_id = ctx.fresh_id_with_span(&inner);
                         if is_last {
                             stmts.push(Stmt::Return { id: stmt_id, expr });
                         } else {
@@ -345,7 +345,7 @@ fn lower_block(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName>
             _ => {
                 // Try to lower as expression directly
                 let expr = lower_expr(ctx, *child);
-                let stmt_id = ctx.fresh_id();
+                let stmt_id = ctx.fresh_id_with_span(child);
                 if is_last {
                     stmts.push(Stmt::Return { id: stmt_id, expr });
                 } else {
@@ -362,7 +362,7 @@ fn lower_let_statement(ctx: &mut AstLoweringCtx, node: Node) -> Option<Stmt<Unre
     let pattern_node = node.child_by_field_name("pattern")?;
     let value_node = node.child_by_field_name("value")?;
 
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
     let pattern = lower_pattern(ctx, pattern_node);
     let value = lower_expr(ctx, value_node);
 
@@ -441,7 +441,7 @@ fn lower_case_arm(ctx: &mut AstLoweringCtx, node: Node) -> Option<Arm<Unresolved
     let pattern_node = pattern_node?;
     let body_node = body_node?;
 
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
     let pattern = lower_pattern(ctx, pattern_node);
     let body = lower_expr(ctx, body_node);
 
@@ -478,7 +478,7 @@ fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Param> {
 
     for child in node.named_children(&mut cursor) {
         if child.kind() == "parameter" || child.kind() == "identifier" {
-            let id = ctx.fresh_id();
+            let id = ctx.fresh_id_with_span(&child);
             let name = ctx.node_symbol(&child);
             // TODO: type annotation
             params.push(Param { id, name, ty: None });
@@ -543,7 +543,7 @@ fn lower_handler_arm(ctx: &mut AstLoweringCtx, node: Node) -> Option<HandlerArm<
     let pattern_node = node.child_by_field_name("pattern")?;
     let body_node = node.child_by_field_name("body")?;
 
-    let id = ctx.fresh_id();
+    let id = ctx.fresh_id_with_span(&node);
     let body = lower_expr(ctx, body_node);
 
     // Determine handler kind from pattern
@@ -571,7 +571,7 @@ fn lower_handler_pattern(
             let cont_node = node.child_by_field_name("continuation");
 
             let ability_name = ctx.node_symbol(&ability_node);
-            let ability_id = ctx.fresh_id();
+            let ability_id = ctx.fresh_id_with_span(&ability_node);
             let ability = UnresolvedName::new(ability_name, ability_id);
 
             let op = ctx.node_symbol(&op_node);
