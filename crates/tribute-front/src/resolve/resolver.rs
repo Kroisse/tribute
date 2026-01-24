@@ -442,9 +442,12 @@ impl<'db> Resolver<'db> {
         let kind = match *pattern.kind {
             PatternKind::Wildcard => PatternKind::Wildcard,
 
-            PatternKind::Bind { name } => {
-                self.bind_local(name);
-                PatternKind::Bind { name }
+            PatternKind::Bind { name, .. } => {
+                let local_id = self.bind_local(name);
+                PatternKind::Bind {
+                    name,
+                    local_id: Some(local_id),
+                }
             }
 
             PatternKind::Literal(lit) => PatternKind::Literal(lit),

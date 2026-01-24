@@ -51,7 +51,13 @@ where
     /// Identifier pattern: `x`
     ///
     /// Matches anything and binds it to the name.
-    Bind { name: Symbol },
+    /// After name resolution, `local_id` is assigned for IR lowering.
+    Bind {
+        name: Symbol,
+        /// Unique identifier assigned during name resolution.
+        /// None before resolution, Some after.
+        local_id: Option<super::phases::LocalId>,
+    },
 
     /// Literal pattern: `42`, `"hello"`, `true`
     Literal(LiteralPattern),

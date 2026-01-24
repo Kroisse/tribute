@@ -624,7 +624,7 @@ impl<'db> TypeChecker<'db> {
     fn convert_pattern(&mut self, pattern: Pattern<ResolvedRef<'db>>) -> Pattern<TypedRef<'db>> {
         let kind = match *pattern.kind {
             PatternKind::Wildcard => PatternKind::Wildcard,
-            PatternKind::Bind { name } => PatternKind::Bind { name },
+            PatternKind::Bind { name, local_id } => PatternKind::Bind { name, local_id },
             PatternKind::Literal(lit) => PatternKind::Literal(lit),
             PatternKind::Variant { ctor, fields } => PatternKind::Variant {
                 ctor: self.convert_ref(ctor),

@@ -286,15 +286,15 @@ fn lower_block<'db>(
             } => {
                 if let Some(val) = lower_expr(ctx, block, value) {
                     // Simple case: bind pattern is just a name
-                    if let crate::ast::PatternKind::Bind { name: _ } = &*pattern.kind {
-                        // TODO (Critical): Register binding with ctx.bind(local_id, val)
-                        // Currently, PatternKind::Bind only contains name: Symbol, not LocalId.
-                        // To fix this properly, either:
-                        // 1. Add LocalId to PatternKind::Bind during resolve phase
-                        // 2. Or maintain a name->LocalId map passed from resolve
-                        // Without this, local variable lookups in Var expressions will fail.
+                    if let crate::ast::PatternKind::Bind {
+                        local_id: Some(local_id),
+                        ..
+                    } = &*pattern.kind
+                    {
+                        // Register the binding so Var expressions can find it
+                        ctx.bind(*local_id, val);
                     }
-                    let _ = val;
+                    // TODO: Handle other pattern kinds (tuple, record, etc.)
                 }
             }
             Stmt::Expr { id: _, expr } => {

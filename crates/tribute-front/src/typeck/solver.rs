@@ -71,7 +71,7 @@ impl<'db> TypeSubst<'db> {
             } => {
                 let params = params.iter().map(|p| self.apply(db, *p)).collect();
                 let result = self.apply(db, *result);
-                // TODO: Apply to effect row
+                // Note: Effect row substitution requires RowSubst, use apply_with_rows for full substitution
                 Type::new(
                     db,
                     TypeKind::Func {
@@ -91,6 +91,67 @@ impl<'db> TypeSubst<'db> {
                 Type::new(db, TypeKind::App { ctor, args })
             }
             // Primitive types and bound variables are unchanged
+            _ => ty,
+        }
+    }
+
+    /// Apply substitution to a type, including effect row substitution.
+    pub fn apply_with_rows(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+    ) -> Type<'db> {
+        match ty.kind(db) {
+            TypeKind::UniVar { id } => {
+                if let Some(subst_ty) = self.get(*id) {
+                    self.apply_with_rows(db, subst_ty, row_subst)
+                } else {
+                    ty
+                }
+            }
+            TypeKind::Named { name, args } => {
+                let args = args
+                    .iter()
+                    .map(|a| self.apply_with_rows(db, *a, row_subst))
+                    .collect();
+                Type::new(db, TypeKind::Named { name: *name, args })
+            }
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
+                let params = params
+                    .iter()
+                    .map(|p| self.apply_with_rows(db, *p, row_subst))
+                    .collect();
+                let result = self.apply_with_rows(db, *result, row_subst);
+                let effect = row_subst.apply(db, *effect);
+                Type::new(
+                    db,
+                    TypeKind::Func {
+                        params,
+                        result,
+                        effect,
+                    },
+                )
+            }
+            TypeKind::Tuple(elements) => {
+                let elements = elements
+                    .iter()
+                    .map(|e| self.apply_with_rows(db, *e, row_subst))
+                    .collect();
+                Type::new(db, TypeKind::Tuple(elements))
+            }
+            TypeKind::App { ctor, args } => {
+                let ctor = self.apply_with_rows(db, *ctor, row_subst);
+                let args = args
+                    .iter()
+                    .map(|a| self.apply_with_rows(db, *a, row_subst))
+                    .collect();
+                Type::new(db, TypeKind::App { ctor, args })
+            }
             _ => ty,
         }
     }
@@ -118,6 +179,26 @@ impl<'db> RowSubst<'db> {
     /// Look up a row variable.
     pub fn get(&self, var: u64) -> Option<EffectRow<'db>> {
         self.map.get(&var).copied()
+    }
+
+    /// Apply substitution to an effect row.
+    pub fn apply(&self, db: &'db dyn salsa::Database, row: EffectRow<'db>) -> EffectRow<'db> {
+        // Check if the row has a rest variable that needs substitution
+        if let Some(var) = row.rest(db)
+            && let Some(subst_row) = self.get(var.id)
+        {
+            // Combine the concrete effects with the substituted row
+            let mut effects = row.effects(db).clone();
+            for effect in subst_row.effects(db) {
+                if !effects.contains(effect) {
+                    effects.push(effect.clone());
+                }
+            }
+            // Use the substituted row's rest
+            let rest = subst_row.rest(db);
+            return EffectRow::new(db, effects, rest);
+        }
+        row
     }
 }
 

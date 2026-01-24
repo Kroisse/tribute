@@ -925,7 +925,9 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
 
     fn collect_pattern(&mut self, pattern: &Pattern<TypedRef<'db>>) {
         match pattern.kind.as_ref() {
-            PatternKind::Bind { name } => {
+            PatternKind::Bind { name, local_id } => {
+                // Use LocalId for more precise scoping when available
+                let _ = local_id; // TODO: Use for scope-aware definition tracking
                 self.add_definition(pattern.id, *name, DefinitionKind::Local);
             }
             PatternKind::Variant { ctor, fields } => {

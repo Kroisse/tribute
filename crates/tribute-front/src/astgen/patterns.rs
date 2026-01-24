@@ -19,7 +19,10 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
         // === Identifier (binding) ===
         "identifier" | "identifier_pattern" => {
             let name = ctx.node_symbol(&node);
-            PatternKind::Bind { name }
+            PatternKind::Bind {
+                name,
+                local_id: None,
+            }
         }
 
         // === Literal patterns ===

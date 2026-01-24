@@ -70,23 +70,26 @@ impl<'db> TdnrResolver<'db> {
                 let func_name = func.name;
 
                 // Create FuncDefId for this function
+                // Note: Salsa interns FuncDefId by name, so this returns the canonical ID
                 let func_id = FuncDefId::new(self.db, func_name);
-
-                // Create a placeholder function type
-                // TODO: Build actual function type from parameters and return type
-                let func_ty = Type::new(self.db, crate::ast::TypeKind::Error);
 
                 // Try to extract the type name from the first parameter's type annotation
                 let first_param = &func.params[0];
                 if let Some(type_name) = self.extract_type_name(&first_param.ty) {
+                    // Build actual function type from the body expression's type if available
+                    // For now, use a placeholder since we don't have full type info here
+                    let func_ty = Type::new(self.db, crate::ast::TypeKind::Error);
+
                     // Register with the actual type name for precise UFCS lookup
                     self.method_index
                         .insert((type_name, func_name), (func_id, func_ty));
+                } else {
+                    // Only register with "_any" when we cannot determine the receiver type
+                    // This fallback is used when type annotations are missing
+                    let func_ty = Type::new(self.db, crate::ast::TypeKind::Error);
+                    self.method_index
+                        .insert((Symbol::new("_any"), func_name), (func_id, func_ty));
                 }
-
-                // Also register with "_any" as a fallback for when type is unknown
-                self.method_index
-                    .insert((Symbol::new("_any"), func_name), (func_id, func_ty));
             }
         }
     }

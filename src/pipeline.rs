@@ -783,20 +783,30 @@ pub fn run_tdnr_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Mod
 /// This is the AST-based alternative to `compile`.
 /// The AST pipeline provides better type safety and separation of concerns.
 ///
-/// Note: The AST pipeline (`parse_and_lower_ast`) performs its own resolve/typecheck/TDNR
-/// on the AST. The subsequent TrunkIR stages below operate on different representations
-/// and are not duplicates:
-/// - AST stages: Work on AST nodes for type inference and name binding
-/// - TrunkIR stages: Transform `tribute.*` ops and handle remaining unresolved references
+/// # Two-Phase Name Resolution and Type Checking
+///
+/// This pipeline has two distinct phases that may appear similar but operate on different representations:
+///
+/// 1. **AST Phase** (in `parse_and_lower_ast`):
+///    - Operates on typed AST nodes (`Module<UnresolvedName>` → `Module<TypedRef>`)
+///    - Performs Hindley-Milner type inference with bidirectional checking
+///    - Assigns LocalIds to pattern bindings for variable tracking
+///    - Resolves UFCS method calls based on inferred receiver types
+///
+/// 2. **TrunkIR Phase** (stages below):
+///    - Operates on TrunkIR operations like `tribute.var`, `tribute.call`
+///    - Transforms high-level ops to lower-level representations
+///    - Handles cross-module references and builtin operations
+///    - These are NOT duplicates of AST phases - they work on IR ops, not AST nodes
 #[salsa::tracked]
 pub fn compile_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Module<'db>, ConversionError> {
-    // Frontend via AST pipeline (includes AST-level resolve, typecheck, TDNR)
+    // Phase 1: AST pipeline (resolve, typecheck, TDNR on AST nodes)
     let module = parse_and_lower_ast(db, source);
 
-    // TrunkIR lowering passes (these work on TrunkIR ops, not AST)
+    // Phase 2: TrunkIR transformation passes (work on IR ops, not AST)
     let module = stage_resolve(db, module);
     let module = stage_typecheck(db, module);
     let module = stage_tdnr(db, module);

@@ -180,7 +180,7 @@ mod tests {
         else {
             panic!("Expected let binding");
         };
-        let PatternKind::Bind { name } = pattern.kind.as_ref() else {
+        let PatternKind::Bind { name, .. } = pattern.kind.as_ref() else {
             panic!("Expected bind pattern");
         };
         assert_eq!(name.to_string(), "x");

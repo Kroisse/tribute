@@ -174,6 +174,48 @@ fn lower_type_annotation(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnn
     None
 }
 
+/// Lower a type node directly (for variant tuple fields).
+fn lower_type_node(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotation> {
+    // Handle various type node kinds
+    match node.kind() {
+        "type_identifier" | "type_variable" => {
+            let id = ctx.fresh_id_with_span(&node);
+            let name = ctx.node_symbol(&node);
+            Some(TypeAnnotation {
+                id,
+                kind: TypeAnnotationKind::Named(name),
+            })
+        }
+        "generic_type" => {
+            // Generic type like List(a) or Map(k, v)
+            // For now, use the type name
+            let id = ctx.fresh_id_with_span(&node);
+            if let Some(name_node) = node.child_by_field_name("name") {
+                let name = ctx.node_symbol(&name_node);
+                Some(TypeAnnotation {
+                    id,
+                    kind: TypeAnnotationKind::Named(name),
+                })
+            } else {
+                None
+            }
+        }
+        "function_type" | "tuple_type" => {
+            // Function or tuple types - use the text as the name for now
+            let id = ctx.fresh_id_with_span(&node);
+            let name = ctx.node_symbol(&node);
+            Some(TypeAnnotation {
+                id,
+                kind: TypeAnnotationKind::Named(name),
+            })
+        }
+        _ => {
+            // Try to find type within the node
+            lower_type_annotation(ctx, node)
+        }
+    }
+}
+
 /// Lower a struct declaration.
 fn lower_struct(ctx: &mut AstLoweringCtx, node: Node) -> Option<StructDecl> {
     let name_node = node.child_by_field_name("name")?;
@@ -291,10 +333,50 @@ fn lower_enum_variant(ctx: &mut AstLoweringCtx, node: Node) -> Option<VariantDec
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
 
-    // TODO: parse variant fields (tuple or record style)
-    let fields = Vec::new();
+    // Parse variant fields (tuple or record style)
+    let fields = if let Some(fields_node) = node.child_by_field_name("fields") {
+        lower_variant_fields(ctx, fields_node)
+    } else {
+        Vec::new()
+    };
 
     Some(VariantDecl { id, name, fields })
+}
+
+/// Lower variant fields (tuple or struct style).
+fn lower_variant_fields(ctx: &mut AstLoweringCtx, node: Node) -> Vec<FieldDecl> {
+    let mut fields = Vec::new();
+
+    match node.kind() {
+        // Tuple fields: (Type1, Type2, ...)
+        "tuple_fields" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if is_comment(child.kind()) {
+                    continue;
+                }
+                // Each child is a type - create anonymous field
+                if let Some(ty) = lower_type_node(ctx, child) {
+                    let id = ctx.fresh_id_with_span(&child);
+                    fields.push(FieldDecl {
+                        id,
+                        is_pub: false,
+                        name: None, // Tuple fields are anonymous
+                        ty,
+                    });
+                }
+            }
+        }
+        // Struct fields: { name: Type, ... }
+        "struct_fields_block" => {
+            fields = lower_struct_fields(ctx, node);
+        }
+        _ => {
+            // Unknown variant field type - skip
+        }
+    }
+
+    fields
 }
 
 /// Lower an ability declaration.
