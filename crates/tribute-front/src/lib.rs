@@ -16,7 +16,6 @@
 pub mod ast;
 pub mod ast_to_ir;
 pub mod astgen;
-pub mod lsp_index;
 pub mod query;
 pub mod resolve;
 pub mod source_file;

@@ -8,14 +8,13 @@ use std::io;
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
-    CodeActionProviderCapability, CompletionItem, CompletionItemKind, CompletionList,
-    CompletionOptions, CompletionParams, Diagnostic, DiagnosticSeverity,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, Location, MarkupContent, MarkupKind, PrepareRenameResponse,
-    PublishDiagnosticsParams, ReferenceParams, RenameOptions, RenameParams, ServerCapabilities,
-    SignatureHelp, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
+    CodeActionProviderCapability, CompletionItem, CompletionList, CompletionOptions,
+    CompletionParams, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
+    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+    HoverParams, HoverProviderCapability, InitializeParams, Location, MarkupContent, MarkupKind,
+    PrepareRenameResponse, PublishDiagnosticsParams, ReferenceParams, RenameOptions, RenameParams,
+    ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
     TextDocumentContentChangeEvent, TextDocumentPositionParams, TextDocumentSyncCapability,
     TextDocumentSyncKind, TextDocumentSyncOptions, TextEdit, Uri, WorkspaceEdit,
     notification::{
@@ -31,13 +30,13 @@ use ropey::Rope;
 use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
+use crate::lsp::ast_index::print_ast_type;
+
+use super::ast_index::{self, type_index as ast_type_index};
 use super::call_index::{CallIndex, get_param_names};
-use super::completion_index::{self, CompletionKind};
-use super::definition_index::{self, validate_identifier};
 use super::pretty::{format_signature, print_type};
 use super::type_index::TypeIndex;
 use tribute::{TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local};
-use tribute_front::lsp_index::{print_ast_type, type_index as ast_type_index};
 
 /// Main LSP server state.
 struct LspServer {
@@ -223,11 +222,10 @@ impl LspServer {
     ) -> Option<Hover> {
         let (type_str, span) = self.db.attach(|db| {
             // Get the AST type index
-            let index_data = ast_type_index(db, source_cst)?;
-            let index = index_data.as_index(db);
+            let index = ast_type_index(db, source_cst)?;
 
             // Find type at offset
-            index.type_at(offset).map(|entry| {
+            index.type_at(db, offset).map(|entry| {
                 let type_str = print_ast_type(db, entry.ty);
                 (type_str, entry.span)
             })
@@ -296,7 +294,7 @@ impl LspServer {
 
         // Run Salsa compilation and build definition index
         let definition = self.db.attach(|db| {
-            let index = definition_index::build(db, source_cst);
+            let index = ast_index::definition_index(db, source_cst)?;
             index.definition_at(db, offset).cloned()
         })?;
 
@@ -332,7 +330,7 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let locations = self.db.attach(|db| {
-            let index = definition_index::build(db, source_cst);
+            let index = ast_index::definition_index(db, source_cst)?;
 
             let (symbol, refs) = index.references_at(db, offset)?;
 
@@ -377,7 +375,7 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let result = self.db.attach(|db| {
-            let index = definition_index::build(db, source_cst);
+            let index = ast_index::definition_index(db, source_cst)?;
 
             // Check if rename is possible at this position
             let (def, span) = index.can_rename(db, offset)?;
@@ -411,13 +409,13 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let text_edits = self.db.attach(|db| {
-            let index = definition_index::build(db, source_cst);
+            let index = ast_index::definition_index(db, source_cst)?;
 
             // Get definition and validate
             let (def, _) = index.can_rename(db, offset)?;
 
             // Validate new name
-            if validate_identifier(new_name, def.kind).is_err() {
+            if ast_index::validate_identifier(new_name, def.kind).is_err() {
                 tracing::warn!(new_name = %new_name, "Invalid identifier for rename");
                 return None;
             }
@@ -473,17 +471,15 @@ impl LspServer {
         let prefix = extract_completion_prefix(&rope, offset);
 
         let items = self.db.attach(|db| {
-            let index = completion_index::build(db, source_cst);
+            let all_items = ast_index::completion_items(db, source_cst);
 
-            // Get expression completions filtered by prefix
-            let mut completions: Vec<_> = index
-                .complete_expression(db, &prefix)
-                .into_iter()
+            // Filter by prefix
+            let mut completions: Vec<_> = ast_index::filter_completions(all_items, &prefix)
                 .cloned()
                 .collect();
 
             // Add keyword completions
-            completions.extend(completion_index::complete_keywords(&prefix));
+            completions.extend(ast_index::complete_keywords(&prefix));
 
             Some(completions)
         })?;
@@ -493,12 +489,7 @@ impl LspServer {
             .into_iter()
             .map(|entry| CompletionItem {
                 label: entry.name.to_string(),
-                kind: Some(match entry.kind {
-                    CompletionKind::Function => CompletionItemKind::FUNCTION,
-                    CompletionKind::Constructor => CompletionItemKind::CONSTRUCTOR,
-                    CompletionKind::Keyword => CompletionItemKind::KEYWORD,
-                    CompletionKind::Ability => CompletionItemKind::INTERFACE,
-                }),
+                kind: Some(entry.kind.into()),
                 detail: entry.detail,
                 ..Default::default()
             })
@@ -1736,7 +1727,10 @@ mod tests {
     fn test_find_references_via_message() {
         let mut harness = TestHarness::new();
         let uri = test_uri("references_msg");
-        let source = "fn main() { let x = 1; x + x }";
+        let source = r#"fn main() {
+    let x = 1
+    x + x
+}"#;
 
         harness.open_document(&uri, source);
 
@@ -1744,8 +1738,8 @@ mod tests {
             text_document_position: TextDocumentPositionParams {
                 text_document: lsp_types::TextDocumentIdentifier { uri },
                 position: lsp_types::Position {
-                    line: 0,
-                    character: 16,
+                    line: 1,
+                    character: 8, // On 'x' in 'let x = 1'
                 },
             },
             work_done_progress_params: Default::default(),
@@ -1757,6 +1751,7 @@ mod tests {
 
         let result: Option<Vec<Location>> = harness.request::<References>(params);
         if let Some(refs) = result {
+            // Should find: definition (let x) + 2 references (x + x)
             assert!(refs.len() >= 2, "Should find multiple references");
         }
     }
@@ -1847,7 +1842,10 @@ mod tests {
     fn test_prepare_rename_via_message() {
         let mut harness = TestHarness::new();
         let uri = test_uri("prepare_rename_msg");
-        let source = "fn main() { let foo = 1; foo }";
+        let source = r#"fn main() {
+    let foo = 1
+    foo
+}"#;
 
         harness.open_document(&uri, source);
 
@@ -1855,8 +1853,8 @@ mod tests {
         let params = TextDocumentPositionParams {
             text_document: lsp_types::TextDocumentIdentifier { uri },
             position: lsp_types::Position {
-                line: 0,
-                character: 25, // On 'foo' at the end (reference)
+                line: 2,
+                character: 4, // On 'foo' reference
             },
         };
 
@@ -1873,7 +1871,10 @@ mod tests {
     fn test_rename_via_message() {
         let mut harness = TestHarness::new();
         let uri = test_uri("rename_msg");
-        let source = "fn main() { let foo = 1; foo + foo }";
+        let source = r#"fn main() {
+    let foo = 1
+    foo + foo
+}"#;
 
         harness.open_document(&uri, source);
 
@@ -1882,8 +1883,8 @@ mod tests {
             text_document_position: TextDocumentPositionParams {
                 text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
                 position: lsp_types::Position {
-                    line: 0,
-                    character: 25, // On first 'foo' reference
+                    line: 2,
+                    character: 4, // On first 'foo' reference in 'foo + foo'
                 },
             },
             new_name: "bar".to_string(),

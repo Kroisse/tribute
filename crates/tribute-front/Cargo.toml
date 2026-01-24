@@ -16,3 +16,6 @@ tree-sitter.workspace = true
 tree-sitter-tribute.workspace = true
 tribute-ir.workspace = true
 trunk-ir.workspace = true
+
+[dev-dependencies]
+salsa-test-macros = { workspace = true }

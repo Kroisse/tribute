@@ -1,3 +1,6 @@
+// TODO: Remove this file once AST-based indexes are complete
+#![allow(dead_code)]
+
 //! Completion index for auto-completion functionality.
 //!
 //! Builds completion candidates from the compiled module.

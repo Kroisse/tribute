@@ -1,3 +1,6 @@
+// TODO: Remove this file once AST-based indexes are complete
+#![allow(dead_code)]
+
 //! Definition index for Go to Definition functionality.
 //!
 //! Builds a mapping from:
