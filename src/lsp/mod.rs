@@ -6,7 +6,6 @@
 //! - Go to Definition: Navigate to symbol definitions
 
 mod ast_index;
-mod call_index;
 mod pretty;
 mod server;
 

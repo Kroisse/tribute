@@ -33,8 +33,6 @@ use tree_sitter::{InputEdit, Point};
 use crate::lsp::ast_index::print_ast_type;
 
 use super::ast_index::{self, type_index as ast_type_index};
-use super::call_index::{CallIndex, get_param_names};
-use super::pretty::format_signature;
 use tribute::{TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local};
 
 /// Main LSP server state.
@@ -671,27 +669,17 @@ impl LspServer {
         // Extract doc comment from CST (before entering Salsa context)
         let doc_comment = find_doc_comment(tree, &rope, &call_info.callee_name);
 
-        // Compile and look up the function type
+        // Look up the function signature using AST-based index
         let callee_name = call_info.callee_name.clone();
         let active_param = call_info.active_param;
 
         let result = self.db.attach(|db| {
-            let module = compile_for_lsp(db, source_cst);
-
-            // Find the function definition by name
+            let signatures = ast_index::function_signatures(db, source_cst);
             let callee_sym = trunk_ir::Symbol::from_dynamic(&callee_name);
-            let callee_qname = callee_sym;
-            let func_ty = CallIndex::find_function_type(db, &module, callee_qname)?;
+            let sig = ast_index::find_signature(&signatures, callee_sym)?;
 
-            // Get parameter names from the function definition
-            let param_names = get_param_names(db, &module, callee_qname);
-
-            // Format the signature
-            Some(format_signature(
-                db,
-                func_ty,
-                &callee_name,
-                &param_names,
+            Some(super::pretty::format_ast_signature(
+                sig,
                 doc_comment.as_deref(),
                 active_param,
             ))

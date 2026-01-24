@@ -24,7 +24,7 @@ use tribute_front::SourceCst;
 use tribute_front::ast::{
     AbilityDecl, Arm, ConstDecl, Decl, EnumDecl, Expr, ExprKind, FuncDecl, HandlerArm, HandlerKind,
     LocalId, Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt,
-    StructDecl, Type, TypeKind, TypedRef,
+    StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef,
 };
 use tribute_front::query as ast_query;
 
@@ -1063,24 +1063,53 @@ pub fn definition_index<'db>(
 // =============================================================================
 
 /// Function signature information for signature help.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
-pub struct FunctionSignature<'db> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FunctionSignature {
     /// Function name.
     pub name: Symbol,
-    /// Parameter names and types.
-    pub params: Vec<(Symbol, Option<Type<'db>>)>,
-    /// Return type (if specified or inferred).
-    pub return_ty: Option<Type<'db>>,
+    /// Parameter names and type strings.
+    pub params: Vec<(Symbol, Option<String>)>,
+    /// Return type string (if specified).
+    pub return_ty: Option<String>,
     /// Span of the function definition.
     pub span: Span,
 }
 
+/// Pretty-print a type annotation to a string.
+fn print_type_annotation(ty: &TypeAnnotation) -> String {
+    match &ty.kind {
+        TypeAnnotationKind::Named(name) => name.to_string(),
+        TypeAnnotationKind::Path(parts) => parts
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join("::"),
+        TypeAnnotationKind::App { ctor, args } => {
+            let ctor_str = print_type_annotation(ctor);
+            let args_str: Vec<_> = args.iter().map(print_type_annotation).collect();
+            format!("{}({})", ctor_str, args_str.join(", "))
+        }
+        TypeAnnotationKind::Func { params, result } => {
+            let params_str: Vec<_> = params.iter().map(print_type_annotation).collect();
+            let result_str = print_type_annotation(result);
+            format!("({}) -> {}", params_str.join(", "), result_str)
+        }
+        TypeAnnotationKind::Tuple(elems) => {
+            let elems_str: Vec<_> = elems.iter().map(print_type_annotation).collect();
+            format!("({})", elems_str.join(", "))
+        }
+        TypeAnnotationKind::WithEffects { inner, effects } => {
+            let inner_str = print_type_annotation(inner);
+            let effects_str: Vec<_> = effects.iter().map(print_type_annotation).collect();
+            format!("{} ->{{{}}}", inner_str, effects_str.join(", "))
+        }
+        TypeAnnotationKind::Infer => "_".to_string(),
+        TypeAnnotationKind::Error => "?".to_string(),
+    }
+}
+
 /// Build function signatures from a typed module.
-#[salsa::tracked]
-pub fn function_signatures<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Vec<FunctionSignature<'db>> {
+pub fn function_signatures(db: &dyn salsa::Database, source: SourceCst) -> Vec<FunctionSignature> {
     let Some(module) = ast_query::tdnr_module(db, source) else {
         return Vec::new();
     };
@@ -1096,16 +1125,17 @@ pub fn function_signatures<'db>(
                 .params
                 .iter()
                 .map(|p| {
-                    // Try to get type from annotation or inferred type
-                    // For now, we just use the name
-                    (p.name, None)
+                    let ty_str = p.ty.as_ref().map(print_type_annotation);
+                    (p.name, ty_str)
                 })
                 .collect();
+
+            let return_ty = func.return_ty.as_ref().map(print_type_annotation);
 
             signatures.push(FunctionSignature {
                 name: func.name,
                 params,
-                return_ty: None, // Could be extracted from typed AST
+                return_ty,
                 span: span_map.get_or_default(func.id),
             });
         }
@@ -1115,10 +1145,10 @@ pub fn function_signatures<'db>(
 }
 
 /// Find a function signature by name.
-pub fn find_signature<'a, 'db>(
-    signatures: &'a [FunctionSignature<'db>],
+pub fn find_signature(
+    signatures: &[FunctionSignature],
     name: Symbol,
-) -> Option<&'a FunctionSignature<'db>> {
+) -> Option<&FunctionSignature> {
     signatures.iter().find(|s| s.name == name)
 }
 
