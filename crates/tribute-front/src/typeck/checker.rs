@@ -732,14 +732,269 @@ impl<'db> TypeChecker<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::{BinOpKind, LocalId, NodeId};
+    use trunk_ir::Symbol;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
+    }
+
+    fn fresh_node_id() -> NodeId {
+        NodeId::from_raw(1)
     }
 
     #[test]
     fn test_type_checker_creation() {
         let db = test_db();
         let _checker = TypeChecker::new(&db);
+    }
+
+    #[test]
+    fn test_infer_nat_literal() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create a NatLit expression
+        let expr = Expr::new(fresh_node_id(), ExprKind::NatLit(42));
+
+        // Check the expression
+        let typed_expr = checker.check_expr(expr, Mode::Infer);
+
+        // Should produce a typed expression
+        assert!(matches!(*typed_expr.kind, ExprKind::NatLit(42)));
+    }
+
+    #[test]
+    fn test_infer_int_literal() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create an IntLit expression
+        let expr = Expr::new(fresh_node_id(), ExprKind::IntLit(-10));
+
+        let typed_expr = checker.check_expr(expr, Mode::Infer);
+        assert!(matches!(*typed_expr.kind, ExprKind::IntLit(-10)));
+    }
+
+    #[test]
+    fn test_infer_float_literal() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create a FloatLit expression
+        let f = crate::ast::FloatBits::new(1.5);
+        let expr = Expr::new(fresh_node_id(), ExprKind::FloatLit(f));
+
+        let typed_expr = checker.check_expr(expr, Mode::Infer);
+        if let ExprKind::FloatLit(result_f) = &*typed_expr.kind {
+            assert!((result_f.value() - 1.5).abs() < 0.001);
+        } else {
+            panic!("Expected FloatLit");
+        }
+    }
+
+    #[test]
+    fn test_infer_bool_literal() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let expr_true = Expr::new(fresh_node_id(), ExprKind::BoolLit(true));
+        let typed = checker.check_expr(expr_true, Mode::Infer);
+        assert!(matches!(*typed.kind, ExprKind::BoolLit(true)));
+    }
+
+    #[test]
+    fn test_infer_string_literal() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let expr = Expr::new(fresh_node_id(), ExprKind::StringLit("hello".to_string()));
+        let typed = checker.check_expr(expr, Mode::Infer);
+        if let ExprKind::StringLit(s) = &*typed.kind {
+            assert_eq!(s, "hello");
+        } else {
+            panic!("Expected StringLit");
+        }
+    }
+
+    #[test]
+    fn test_infer_nil() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let expr = Expr::new(fresh_node_id(), ExprKind::Nil);
+        let typed = checker.check_expr(expr, Mode::Infer);
+        assert!(matches!(*typed.kind, ExprKind::Nil));
+    }
+
+    #[test]
+    fn test_infer_binop_add() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create: 1 + 2
+        let lhs = Expr::new(fresh_node_id(), ExprKind::NatLit(1));
+        let rhs = Expr::new(fresh_node_id(), ExprKind::NatLit(2));
+        let expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::BinOp {
+                op: BinOpKind::Add,
+                lhs,
+                rhs,
+            },
+        );
+
+        let typed = checker.check_expr(expr, Mode::Infer);
+        if let ExprKind::BinOp { op, .. } = &*typed.kind {
+            assert_eq!(*op, BinOpKind::Add);
+        } else {
+            panic!("Expected BinOp");
+        }
+    }
+
+    #[test]
+    fn test_infer_binop_comparison() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create: 1 < 2
+        let lhs = Expr::new(fresh_node_id(), ExprKind::NatLit(1));
+        let rhs = Expr::new(fresh_node_id(), ExprKind::NatLit(2));
+        let expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::BinOp {
+                op: BinOpKind::Lt,
+                lhs,
+                rhs,
+            },
+        );
+
+        let typed = checker.check_expr(expr, Mode::Infer);
+        if let ExprKind::BinOp { op, .. } = &*typed.kind {
+            assert_eq!(*op, BinOpKind::Lt);
+        } else {
+            panic!("Expected BinOp");
+        }
+    }
+
+    #[test]
+    fn test_infer_tuple() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create: (1, true, "hi")
+        let elements = vec![
+            Expr::new(fresh_node_id(), ExprKind::NatLit(1)),
+            Expr::new(fresh_node_id(), ExprKind::BoolLit(true)),
+            Expr::new(fresh_node_id(), ExprKind::StringLit("hi".to_string())),
+        ];
+        let expr = Expr::new(fresh_node_id(), ExprKind::Tuple(elements));
+
+        let typed = checker.check_expr(expr, Mode::Infer);
+        if let ExprKind::Tuple(elems) = &*typed.kind {
+            assert_eq!(elems.len(), 3);
+        } else {
+            panic!("Expected Tuple");
+        }
+    }
+
+    #[test]
+    fn test_infer_list() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create: [1, 2, 3]
+        let elements = vec![
+            Expr::new(fresh_node_id(), ExprKind::NatLit(1)),
+            Expr::new(fresh_node_id(), ExprKind::NatLit(2)),
+            Expr::new(fresh_node_id(), ExprKind::NatLit(3)),
+        ];
+        let expr = Expr::new(fresh_node_id(), ExprKind::List(elements));
+
+        let typed = checker.check_expr(expr, Mode::Infer);
+        if let ExprKind::List(elems) = &*typed.kind {
+            assert_eq!(elems.len(), 3);
+        } else {
+            panic!("Expected List");
+        }
+    }
+
+    #[test]
+    fn test_infer_local_var() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Bind a local variable with a type
+        let local_id = LocalId::new(0);
+        let int_ty = Type::new(&db, TypeKind::Int);
+        checker.ctx.bind_local(local_id, int_ty);
+
+        // Create a Var expression referencing the local
+        let resolved_ref = ResolvedRef::Local {
+            id: local_id,
+            name: Symbol::new("x"),
+        };
+        let expr = Expr::new(fresh_node_id(), ExprKind::Var(resolved_ref));
+
+        let typed = checker.check_expr(expr, Mode::Infer);
+        if let ExprKind::Var(typed_ref) = &*typed.kind {
+            // The type should be Int
+            assert_eq!(*typed_ref.ty.kind(&db), TypeKind::Int);
+        } else {
+            panic!("Expected Var");
+        }
+    }
+
+    #[test]
+    fn test_infer_block() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create: { 42 }
+        let value = Expr::new(fresh_node_id(), ExprKind::NatLit(42));
+        let expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::Block {
+                stmts: vec![],
+                value,
+            },
+        );
+
+        let typed = checker.check_expr(expr, Mode::Infer);
+        if let ExprKind::Block { value, .. } = &*typed.kind {
+            assert!(matches!(*value.kind, ExprKind::NatLit(42)));
+        } else {
+            panic!("Expected Block");
+        }
+    }
+
+    #[test]
+    fn test_infer_lambda() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create: |x| x (identity function)
+        let param = crate::ast::Param {
+            id: fresh_node_id(),
+            name: Symbol::new("x"),
+            ty: None,
+        };
+        let body = Expr::new(
+            fresh_node_id(),
+            ExprKind::Var(ResolvedRef::Local {
+                id: LocalId::new(0),
+                name: Symbol::new("x"),
+            }),
+        );
+        let expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::Lambda {
+                params: vec![param],
+                body,
+            },
+        );
+
+        let typed = checker.check_expr(expr, Mode::Infer);
+        assert!(matches!(*typed.kind, ExprKind::Lambda { .. }));
     }
 }

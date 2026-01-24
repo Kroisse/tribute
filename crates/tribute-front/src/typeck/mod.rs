@@ -21,6 +21,7 @@
 mod checker;
 mod constraint;
 mod context;
+pub mod effect_row;
 mod solver;
 
 pub use checker::TypeChecker;
