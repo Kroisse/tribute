@@ -1609,4 +1609,482 @@ mod tests {
         let foo_refs = index.references_of(&db, foo_sym);
         assert_eq!(foo_refs.len(), 2, "Should have 2 references to 'foo'");
     }
+
+    // =========================================================================
+    // Additional print_ast_type tests
+    // =========================================================================
+
+    #[test]
+    fn test_print_ast_type_bound_var() {
+        let db = salsa::DatabaseImpl::default();
+
+        let ty = Type::new(&db, TypeKind::BoundVar { index: 0 });
+        assert_eq!(print_ast_type(&db, ty), "a");
+
+        let ty = Type::new(&db, TypeKind::BoundVar { index: 1 });
+        assert_eq!(print_ast_type(&db, ty), "b");
+
+        let ty = Type::new(&db, TypeKind::BoundVar { index: 25 });
+        assert_eq!(print_ast_type(&db, ty), "z");
+
+        // Large index should fallback to t{index}
+        let ty = Type::new(&db, TypeKind::BoundVar { index: 26 });
+        assert_eq!(print_ast_type(&db, ty), "t26");
+    }
+
+    #[test]
+    fn test_print_ast_type_uni_var() {
+        let db = salsa::DatabaseImpl::default();
+
+        let ty = Type::new(&db, TypeKind::UniVar { id: 0 });
+        assert_eq!(print_ast_type(&db, ty), "a");
+
+        let ty = Type::new(&db, TypeKind::UniVar { id: 25 });
+        assert_eq!(print_ast_type(&db, ty), "z");
+
+        // Large id should fallback to ?{id}
+        let ty = Type::new(&db, TypeKind::UniVar { id: 100 });
+        assert_eq!(print_ast_type(&db, ty), "?100");
+    }
+
+    #[test]
+    fn test_print_ast_type_tuple() {
+        let db = salsa::DatabaseImpl::default();
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let tuple_ty = Type::new(&db, TypeKind::Tuple(vec![int_ty, bool_ty]));
+        assert_eq!(print_ast_type(&db, tuple_ty), "(Int, Bool)");
+    }
+
+    #[test]
+    fn test_print_ast_type_app() {
+        let db = salsa::DatabaseImpl::default();
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let ctor_ty = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("List"),
+                args: vec![],
+            },
+        );
+        let app_ty = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: ctor_ty,
+                args: vec![int_ty],
+            },
+        );
+        assert_eq!(print_ast_type(&db, app_ty), "List(Int)");
+    }
+
+    #[test]
+    fn test_print_ast_type_error() {
+        let db = salsa::DatabaseImpl::default();
+
+        let ty = Type::new(&db, TypeKind::Error);
+        assert_eq!(print_ast_type(&db, ty), "<error>");
+    }
+
+    #[test]
+    fn test_print_ast_type_function_with_effects() {
+        use tribute_front::ast::{Effect, EffectRow};
+
+        let db = salsa::DatabaseImpl::default();
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let effect = Effect {
+            name: trunk_ir::Symbol::new("IO"),
+            args: vec![],
+        };
+        let effect_row = EffectRow::new(&db, vec![effect], None);
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect: effect_row,
+            },
+        );
+        assert_eq!(print_ast_type(&db, func_ty), "fn(Int) ->{IO} Int");
+    }
+
+    // =========================================================================
+    // Completion tests
+    // =========================================================================
+
+    #[test]
+    fn test_complete_keywords_fn() {
+        let completions = complete_keywords("fn");
+        assert_eq!(completions.len(), 1);
+        assert!(completions[0].name == trunk_ir::Symbol::new("fn"));
+        assert_eq!(completions[0].kind, CompletionKind::Keyword);
+    }
+
+    #[test]
+    fn test_complete_keywords_empty_prefix() {
+        let completions = complete_keywords("");
+        assert_eq!(completions.len(), KEYWORDS.len());
+    }
+
+    #[test]
+    fn test_complete_keywords_no_match() {
+        let completions = complete_keywords("xyz");
+        assert!(completions.is_empty());
+    }
+
+    #[test]
+    fn test_complete_keywords_partial() {
+        let completions = complete_keywords("st");
+        assert_eq!(completions.len(), 1);
+        assert!(completions[0].name == trunk_ir::Symbol::new("struct"));
+    }
+
+    #[test]
+    fn test_filter_completions() {
+        let items = vec![
+            AstCompletionItem {
+                name: trunk_ir::Symbol::new("foo"),
+                kind: CompletionKind::Function,
+                detail: None,
+            },
+            AstCompletionItem {
+                name: trunk_ir::Symbol::new("bar"),
+                kind: CompletionKind::Function,
+                detail: None,
+            },
+            AstCompletionItem {
+                name: trunk_ir::Symbol::new("foobar"),
+                kind: CompletionKind::Function,
+                detail: None,
+            },
+        ];
+
+        let filtered: Vec<_> = filter_completions(&items, "foo").collect();
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_completion_items_function() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn hello() { 1 }");
+
+        let items = completion_items(&db, source);
+        assert!(!items.is_empty());
+
+        let hello_item = items
+            .iter()
+            .find(|i| i.name == trunk_ir::Symbol::new("hello"));
+        assert!(hello_item.is_some());
+        assert_eq!(hello_item.unwrap().kind, CompletionKind::Function);
+    }
+
+    #[test]
+    fn test_completion_items_struct() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "struct Point { x: Int, y: Int }");
+
+        let items = completion_items(&db, source);
+        let point_item = items
+            .iter()
+            .find(|i| i.name == trunk_ir::Symbol::new("Point"));
+        assert!(point_item.is_some());
+        assert_eq!(point_item.unwrap().kind, CompletionKind::Struct);
+    }
+
+    #[test]
+    fn test_completion_items_enum_with_variants() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "enum Color { Red, Green, Blue }");
+
+        let items = completion_items(&db, source);
+
+        // Should have the enum
+        let color_item = items
+            .iter()
+            .find(|i| i.name == trunk_ir::Symbol::new("Color"));
+        assert!(color_item.is_some());
+        assert_eq!(color_item.unwrap().kind, CompletionKind::Enum);
+
+        // Should have the variants
+        let red_item = items
+            .iter()
+            .find(|i| i.name == trunk_ir::Symbol::new("Red"));
+        assert!(red_item.is_some());
+        assert_eq!(red_item.unwrap().kind, CompletionKind::Constructor);
+    }
+
+    // =========================================================================
+    // Document symbols tests
+    // =========================================================================
+
+    #[test]
+    fn test_document_symbols_function() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn main() { 1 }");
+
+        let symbols = document_symbols(&db, source);
+        assert!(!symbols.is_empty());
+
+        let main_sym = symbols
+            .iter()
+            .find(|s| s.name == trunk_ir::Symbol::new("main"));
+        assert!(main_sym.is_some());
+        assert_eq!(main_sym.unwrap().kind, SymbolKind::Function);
+    }
+
+    #[test]
+    fn test_document_symbols_struct_with_fields() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "struct Point { x: Int, y: Int }");
+
+        let symbols = document_symbols(&db, source);
+
+        let point_sym = symbols
+            .iter()
+            .find(|s| s.name == trunk_ir::Symbol::new("Point"));
+        assert!(point_sym.is_some());
+        assert_eq!(point_sym.unwrap().kind, SymbolKind::Struct);
+
+        // Should have field children
+        let point = point_sym.unwrap();
+        assert_eq!(point.children.len(), 2);
+        assert!(
+            point
+                .children
+                .iter()
+                .any(|c| c.name == trunk_ir::Symbol::new("x"))
+        );
+        assert!(
+            point
+                .children
+                .iter()
+                .any(|c| c.name == trunk_ir::Symbol::new("y"))
+        );
+    }
+
+    #[test]
+    fn test_document_symbols_enum_with_variants() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "enum Option { Some(a), None }");
+
+        let symbols = document_symbols(&db, source);
+
+        let option_sym = symbols
+            .iter()
+            .find(|s| s.name == trunk_ir::Symbol::new("Option"));
+        assert!(option_sym.is_some());
+        assert_eq!(option_sym.unwrap().kind, SymbolKind::Enum);
+
+        // Should have variant children
+        let option = option_sym.unwrap();
+        assert_eq!(option.children.len(), 2);
+    }
+
+    // =========================================================================
+    // Validate identifier tests
+    // =========================================================================
+
+    #[test]
+    fn test_validate_identifier_valid() {
+        assert!(validate_identifier("foo", DefinitionKind::Local).is_ok());
+        assert!(validate_identifier("_private", DefinitionKind::Function).is_ok());
+        assert!(validate_identifier("foo_bar", DefinitionKind::Parameter).is_ok());
+    }
+
+    #[test]
+    fn test_validate_identifier_type_must_be_uppercase() {
+        assert!(validate_identifier("point", DefinitionKind::Struct).is_err());
+        assert!(validate_identifier("Point", DefinitionKind::Struct).is_ok());
+        assert!(validate_identifier("option", DefinitionKind::Enum).is_err());
+        assert!(validate_identifier("Option", DefinitionKind::Enum).is_ok());
+    }
+
+    #[test]
+    fn test_validate_identifier_empty() {
+        let result = validate_identifier("", DefinitionKind::Local);
+        assert!(matches!(result, Err(RenameError::EmptyName)));
+    }
+
+    #[test]
+    fn test_validate_identifier_reserved_keyword() {
+        let result = validate_identifier("fn", DefinitionKind::Local);
+        assert!(matches!(result, Err(RenameError::ReservedKeyword)));
+    }
+
+    #[test]
+    fn test_validate_identifier_invalid_chars() {
+        let result = validate_identifier("foo-bar", DefinitionKind::Local);
+        assert!(matches!(result, Err(RenameError::InvalidCharacter)));
+    }
+
+    #[test]
+    fn test_is_keyword() {
+        assert!(is_keyword("fn"));
+        assert!(is_keyword("let"));
+        assert!(is_keyword("struct"));
+        assert!(!is_keyword("foo"));
+        assert!(!is_keyword("main"));
+    }
+
+    // =========================================================================
+    // Function signatures tests
+    // =========================================================================
+
+    #[test]
+    fn test_function_signatures_simple() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn add(a: Int, b: Int) -> Int { a + b }");
+
+        let signatures = function_signatures(&db, source);
+        assert_eq!(signatures.len(), 1);
+
+        let sig = &signatures[0];
+        assert!(sig.name == trunk_ir::Symbol::new("add"));
+        assert_eq!(sig.params.len(), 2);
+        assert_eq!(sig.params[0].1, Some("Int".to_string()));
+        assert_eq!(sig.params[1].1, Some("Int".to_string()));
+        assert_eq!(sig.return_ty, Some("Int".to_string()));
+    }
+
+    #[test]
+    fn test_function_signatures_no_annotations() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn identity(x) { x }");
+
+        let signatures = function_signatures(&db, source);
+        assert_eq!(signatures.len(), 1);
+
+        let sig = &signatures[0];
+        assert!(sig.params[0].1.is_none());
+        assert!(sig.return_ty.is_none());
+    }
+
+    #[test]
+    fn test_find_signature() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn foo() { 1 }\nfn bar() { 2 }");
+
+        let signatures = function_signatures(&db, source);
+        assert_eq!(signatures.len(), 2);
+
+        let foo = find_signature(&signatures, trunk_ir::Symbol::new("foo"));
+        assert!(foo.is_some());
+
+        let baz = find_signature(&signatures, trunk_ir::Symbol::new("baz"));
+        assert!(baz.is_none());
+    }
+
+    // =========================================================================
+    // Definition index additional tests
+    // =========================================================================
+
+    #[test]
+    fn test_definition_index_function() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn hello() { 1 }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+        let hello_sym = trunk_ir::Symbol::new("hello");
+        let def = index.definition_of(&db, hello_sym);
+        assert!(def.is_some());
+        assert_eq!(def.unwrap().kind, DefinitionKind::Function);
+    }
+
+    #[test]
+    fn test_definition_index_struct() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "struct Point { x: Int }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Check struct definition
+        let point_def = index.definition_of(&db, trunk_ir::Symbol::new("Point"));
+        assert!(point_def.is_some());
+        assert_eq!(point_def.unwrap().kind, DefinitionKind::Struct);
+
+        // Check field definition
+        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        assert!(x_def.is_some());
+        assert_eq!(x_def.unwrap().kind, DefinitionKind::Field);
+    }
+
+    #[test]
+    fn test_definition_index_parameter() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn foo(x: Int) { x }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        assert!(x_def.is_some());
+        assert_eq!(x_def.unwrap().kind, DefinitionKind::Parameter);
+    }
+
+    #[test]
+    fn test_definition_at_position() {
+        let db = salsa::DatabaseImpl::default();
+        //       0         1
+        //       0123456789012345
+        let source = make_source(&db, "fn foo() { 1 }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Position 3-6 is "foo"
+        let def = index.definition_at_position(&db, 4);
+        assert!(def.is_some());
+        assert!(def.unwrap().name == trunk_ir::Symbol::new("foo"));
+    }
+
+    #[test]
+    fn test_references_at() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn main() {
+    let x = 1
+    x + x
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+        let x_sym = trunk_ir::Symbol::new("x");
+
+        // Find all references
+        let refs = index.references_of(&db, x_sym);
+        assert_eq!(refs.len(), 2);
+    }
+
+    #[test]
+    fn test_can_rename() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn foo() { 1 }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Position 4 is in "foo"
+        let result = index.can_rename(&db, 4);
+        assert!(result.is_some());
+
+        let (def, _span) = result.unwrap();
+        assert!(def.name == trunk_ir::Symbol::new("foo"));
+    }
 }
