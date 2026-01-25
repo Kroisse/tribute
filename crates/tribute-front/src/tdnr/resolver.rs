@@ -444,6 +444,7 @@ impl<'db> TdnrResolver<'db> {
             ExprKind::BoolLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Bool)),
             ExprKind::StringLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::String)),
             ExprKind::BytesLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Bytes)),
+            ExprKind::RuneLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Int)), // Rune = i32
             ExprKind::Nil => Some(Type::new(self.db, crate::ast::TypeKind::Nil)),
 
             // Binary operations: comparison ops return Bool, arithmetic returns operand type
