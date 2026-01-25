@@ -1191,6 +1191,7 @@ version = "0.1.0"
 dependencies = [
  "salsa",
  "target-lexicon",
+ "trunk-ir",
 ]
 
 [[package]]
@@ -1205,6 +1206,7 @@ dependencies = [
  "tracing",
  "tree-sitter",
  "tree-sitter-tribute",
+ "tribute-core",
  "tribute-ir",
  "trunk-ir",
 ]
@@ -1227,6 +1229,7 @@ dependencies = [
  "salsa",
  "salsa-test-macros",
  "tracing",
+ "tribute-core",
  "tribute-ir",
  "trunk-ir",
  "trunk-ir-wasm-backend",

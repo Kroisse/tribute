@@ -3,6 +3,10 @@
 //! Performs bidirectional type checking on the AST, transforming
 //! `Module<ResolvedRef<'db>>` into `Module<TypedRef<'db>>`.
 
+use salsa::Accumulator;
+use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use trunk_ir::Span;
+
 use crate::ast::{
     Arm, BuiltinRef, ConstDecl, Decl, EffectRow, EnumDecl, Expr, ExprKind, FieldPattern, FuncDecl,
     FuncDefId, HandlerArm, HandlerKind, Module, Pattern, PatternKind, ResolvedRef, Stmt,
@@ -56,10 +60,17 @@ impl<'db> TypeChecker<'db> {
         let constraints = self.ctx.take_constraints();
         let mut solver = TypeSolver::new(self.db());
 
-        // Solve constraints and log any errors
-        // TODO: Collect errors into diagnostics instead of just logging
+        // Solve constraints and emit diagnostics for errors
         if let Err(error) = solver.solve(constraints) {
-            tracing::warn!("Type constraint solving failed: {:?}", error);
+            // TODO: Extract proper span from the types involved in the error
+            let span = Span::new(0, 0);
+            Diagnostic {
+                message: format!("Type error: {:?}", error),
+                span,
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::TypeChecking,
+            }
+            .accumulate(self.db());
         }
 
         // Phase 4: Apply substitution to produce final types
@@ -274,14 +285,26 @@ impl<'db> TypeChecker<'db> {
 
     /// Type check a function declaration.
     fn check_func_decl(&mut self, func: FuncDecl<ResolvedRef<'db>>) -> FuncDecl<TypedRef<'db>> {
-        // Bind parameter types to the context
-        // TODO: ParamDecl currently lacks LocalId. To properly bind parameters:
-        // 1. Add LocalId field to ParamDecl during resolve phase
-        // 2. Call self.ctx.bind_local(param.local_id, ty) here
-        // For now, parameter lookups rely on name-based matching.
-        for param in &func.params {
-            let ty = self.ctx.fresh_type_var();
-            // Bind by name as a workaround until LocalId is available
+        // Bind parameter types to the context using the registered type scheme
+        // This ensures annotated parameter types are used instead of fresh variables
+        let func_id = FuncDefId::new(self.db(), func.name);
+        let param_types_from_scheme: Option<Vec<Type<'db>>> =
+            self.ctx.lookup_function(func_id).and_then(|scheme| {
+                let func_ty = self.ctx.instantiate_scheme(scheme);
+                if let TypeKind::Func { params, .. } = func_ty.kind(self.db()) {
+                    Some(params.clone())
+                } else {
+                    None
+                }
+            });
+
+        // Bind parameters: use scheme types if available, otherwise fresh vars
+        // TODO: ParamDecl currently lacks LocalId; use name-based binding as workaround
+        for (i, param) in func.params.iter().enumerate() {
+            let ty = param_types_from_scheme
+                .as_ref()
+                .and_then(|types| types.get(i).copied())
+                .unwrap_or_else(|| self.ctx.fresh_type_var());
             self.ctx.bind_local_by_name(param.name, ty);
         }
 

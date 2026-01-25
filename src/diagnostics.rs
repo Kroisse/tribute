@@ -8,6 +8,7 @@ use tribute_passes::diagnostic::{CompilationPhase, Diagnostic};
 pub fn phase_color(phase: &CompilationPhase) -> Color {
     match phase {
         CompilationPhase::Parsing => Color::Red,
+        CompilationPhase::AstGeneration => Color::Red,
         CompilationPhase::TirGeneration => Color::Yellow,
         CompilationPhase::NameResolution => Color::Yellow,
         CompilationPhase::TypeChecking => Color::Magenta,
