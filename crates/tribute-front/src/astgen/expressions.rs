@@ -281,6 +281,14 @@ fn lower_field_access(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolv
     ExprKind::FieldAccess { expr, field }
 }
 
+/// Returns true if the node is a statement-like construct that should be
+/// executed for side effects rather than used as a value.
+/// Note: `expression_statement` is just a wrapper for expressions in the grammar,
+/// so only `let_statement` is a true statement that yields Nil.
+fn is_statement_node(node: &Node) -> bool {
+    node.kind() == "let_statement"
+}
+
 fn lower_block(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
     let mut stmts = Vec::new();
     let mut cursor = node.walk();
@@ -298,9 +306,20 @@ fn lower_block(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName>
         }
     }
 
-    // The last child is the block's value
+    // For the last child: if it's a statement node, execute it for side effects
+    // and return Nil. Otherwise, use it as the block's value expression.
     let value = if let Some(last) = children.last() {
-        lower_block_item_as_expr(ctx, last)
+        if is_statement_node(last) {
+            // This is a statement - execute for side effects, block returns Nil
+            if let Some(stmt) = lower_block_item_as_stmt(ctx, last) {
+                stmts.push(stmt);
+            }
+            let nil_id = ctx.fresh_id_with_span(last);
+            Expr::new(nil_id, ExprKind::Nil)
+        } else {
+            // This is an expression - use as block value
+            lower_block_item_as_expr(ctx, last)
+        }
     } else {
         // Empty block returns Nil
         let nil_id = ctx.fresh_id_with_span(&node);

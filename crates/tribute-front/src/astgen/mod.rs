@@ -1016,6 +1016,62 @@ mod tests {
         assert_eq!(*inner_op, crate::ast::BinOpKind::Add);
     }
 
+    #[test]
+    fn test_block_trailing_let_statement() {
+        // A trailing let statement should be executed for side effects,
+        // and the block should return Nil
+        let source = "fn main() { let x = 42 }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+
+        // The let statement should be in stmts
+        assert_eq!(stmts.len(), 1);
+        let Stmt::Let { pattern, .. } = &stmts[0] else {
+            panic!("Expected let statement");
+        };
+        let PatternKind::Bind { name, .. } = pattern.kind.as_ref() else {
+            panic!("Expected bind pattern");
+        };
+        assert_eq!(name.to_string(), "x");
+
+        // The block value should be Nil
+        let ExprKind::Nil = value.kind.as_ref() else {
+            panic!("Expected Nil as block value, got {:?}", value.kind);
+        };
+    }
+
+    #[test]
+    fn test_block_trailing_expression() {
+        // A trailing expression should be the block's value
+        let source = r#"fn main() {
+    let x = 1
+    x + 1
+}"#;
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { stmts, value } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+
+        // The let statement should be in stmts
+        assert_eq!(stmts.len(), 1);
+
+        // The block value should be the binary expression
+        let ExprKind::BinOp { op, .. } = value.kind.as_ref() else {
+            panic!("Expected binary op as block value, got {:?}", value.kind);
+        };
+        assert_eq!(*op, crate::ast::BinOpKind::Add);
+    }
+
     // =============================================================================
     // Expression Tests - Path/Qualified Identifier
     // =============================================================================
