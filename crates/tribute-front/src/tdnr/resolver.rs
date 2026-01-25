@@ -93,7 +93,7 @@ impl<'db> TdnrResolver<'db> {
 
     /// Build a function type from parameter and return type annotations.
     fn build_func_type(&self, func: &FuncDecl<TypedRef<'db>>) -> Type<'db> {
-        use crate::ast::{EffectRow, TypeKind};
+        use crate::ast::TypeKind;
 
         // Convert parameter types from annotations
         let params: Vec<Type<'db>> = func
@@ -113,8 +113,8 @@ impl<'db> TdnrResolver<'db> {
                     .unwrap_or_else(|| Type::new(self.db, TypeKind::Nil))
             });
 
-        // Use pure effect for simplicity (effect annotations could be added later)
-        let effect = EffectRow::pure(self.db);
+        // Convert effect annotations to EffectRow
+        let effect = self.annotations_to_effect_row(&func.effects);
 
         Type::new(
             self.db,
@@ -124,6 +124,66 @@ impl<'db> TdnrResolver<'db> {
                 effect,
             },
         )
+    }
+
+    /// Convert effect annotations to an EffectRow.
+    fn annotations_to_effect_row(
+        &self,
+        annotations: &Option<Vec<crate::ast::TypeAnnotation>>,
+    ) -> crate::ast::EffectRow<'db> {
+        use crate::ast::{Effect, EffectRow};
+
+        let Some(anns) = annotations else {
+            return EffectRow::pure(self.db);
+        };
+
+        if anns.is_empty() {
+            return EffectRow::pure(self.db);
+        }
+
+        let effects: Vec<Effect<'db>> = anns
+            .iter()
+            .filter_map(|ann| self.annotation_to_effect(ann))
+            .collect();
+
+        EffectRow::new(self.db, effects, None)
+    }
+
+    /// Convert a single type annotation to an Effect.
+    fn annotation_to_effect(
+        &self,
+        annotation: &crate::ast::TypeAnnotation,
+    ) -> Option<crate::ast::Effect<'db>> {
+        use crate::ast::{Effect, TypeAnnotationKind};
+
+        match &annotation.kind {
+            TypeAnnotationKind::Named(name) => Some(Effect {
+                name: *name,
+                args: vec![],
+            }),
+            TypeAnnotationKind::Path(path) if !path.is_empty() => {
+                let name = *path.last()?;
+                Some(Effect { name, args: vec![] })
+            }
+            TypeAnnotationKind::App { ctor, args } => {
+                // Get the ability name from the constructor
+                let name = match &ctor.kind {
+                    TypeAnnotationKind::Named(n) => *n,
+                    TypeAnnotationKind::Path(path) => *path.last()?,
+                    _ => return None,
+                };
+                // Convert type arguments
+                let type_args: Vec<_> = args
+                    .iter()
+                    .map(|a| self.annotation_to_type(&Some(a.clone())))
+                    .collect();
+                Some(Effect {
+                    name,
+                    args: type_args,
+                })
+            }
+            _ => None,
+        }
     }
 
     /// Convert a type annotation to a Type.
