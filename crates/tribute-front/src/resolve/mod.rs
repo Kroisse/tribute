@@ -116,12 +116,5 @@ fn collect_definition<'db>(
                 env.add_import(import_name, binding);
             }
         }
-
-        Decl::Const(c) => {
-            // Constants are treated like functions for name resolution purposes.
-            // They can be referenced by name and resolved to a FuncDefId.
-            let id = FuncDefId::new(db, c.name);
-            env.add_function(c.name, id);
-        }
     }
 }

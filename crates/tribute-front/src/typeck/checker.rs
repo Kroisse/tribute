@@ -8,9 +8,9 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Span;
 
 use crate::ast::{
-    Arm, BuiltinRef, ConstDecl, Decl, EffectRow, EnumDecl, Expr, ExprKind, FieldPattern, FuncDecl,
-    FuncDefId, HandlerArm, HandlerKind, Module, Pattern, PatternKind, ResolvedRef, Stmt,
-    StructDecl, Type, TypeKind, TypeParam, TypeScheme, TypedRef,
+    Arm, BuiltinRef, Decl, EffectRow, EnumDecl, Expr, ExprKind, FieldPattern, FuncDecl, FuncDefId,
+    HandlerArm, HandlerKind, Module, Pattern, PatternKind, ResolvedRef, Stmt, StructDecl, Type,
+    TypeKind, TypeParam, TypeScheme, TypedRef,
 };
 
 use super::context::TypeContext;
@@ -99,9 +99,6 @@ impl<'db> TypeChecker<'db> {
                 }
                 Decl::Enum(e) => {
                     self.collect_enum_def(e);
-                }
-                Decl::Const(c) => {
-                    self.collect_const_def(c);
                 }
                 Decl::Ability(_) | Decl::Use(_) => {
                     // Abilities and imports don't define types directly
@@ -261,12 +258,6 @@ impl<'db> TypeChecker<'db> {
         // TODO: Register constructors for each variant
     }
 
-    /// Collect a constant definition.
-    fn collect_const_def(&mut self, c: &ConstDecl<ResolvedRef<'db>>) {
-        // Constants will be type-checked with the expression
-        let _ = c;
-    }
-
     // =========================================================================
     // Declaration checking (Phase 2)
     // =========================================================================
@@ -278,7 +269,6 @@ impl<'db> TypeChecker<'db> {
             Decl::Struct(s) => Decl::Struct(self.check_struct_decl(s)),
             Decl::Enum(e) => Decl::Enum(self.check_enum_decl(e)),
             Decl::Ability(a) => Decl::Ability(self.check_ability_decl(a)),
-            Decl::Const(c) => Decl::Const(self.check_const_decl(c)),
             Decl::Use(u) => Decl::Use(self.check_use_decl(u)),
         }
     }
@@ -336,19 +326,6 @@ impl<'db> TypeChecker<'db> {
     /// Type check an ability declaration (no body to check).
     fn check_ability_decl(&mut self, a: crate::ast::AbilityDecl) -> crate::ast::AbilityDecl {
         a // Ability declarations don't contain expressions
-    }
-
-    /// Type check a constant declaration.
-    fn check_const_decl(&mut self, c: ConstDecl<ResolvedRef<'db>>) -> ConstDecl<TypedRef<'db>> {
-        let value = self.check_expr(c.value, Mode::Infer);
-
-        ConstDecl {
-            id: c.id,
-            is_pub: c.is_pub,
-            name: c.name,
-            ty: c.ty,
-            value,
-        }
     }
 
     /// Type check a use declaration (nothing to check).

@@ -49,9 +49,6 @@ fn lower_decl<'db>(
         Decl::Enum(_) => {
             // TODO: Lower enum declarations
         }
-        Decl::Const(_) => {
-            // TODO: Lower const declarations
-        }
         Decl::Ability(_) => {
             // TODO: Lower ability declarations
         }

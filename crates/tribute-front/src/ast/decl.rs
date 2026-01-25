@@ -54,8 +54,6 @@ where
     Enum(EnumDecl),
     /// Ability declaration.
     Ability(AbilityDecl),
-    /// Constant declaration.
-    Const(ConstDecl<V>),
     /// Import declaration.
     Use(UseDecl),
 }
@@ -186,24 +184,6 @@ pub struct OpDecl {
     pub params: Vec<ParamDecl>,
     /// Return type.
     pub return_ty: TypeAnnotation,
-}
-
-/// Constant declaration: `const NAME = value`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
-pub struct ConstDecl<V>
-where
-    V: salsa::Update,
-{
-    /// Node ID for span lookup.
-    pub id: NodeId,
-    /// Whether this constant is public.
-    pub is_pub: bool,
-    /// Constant name.
-    pub name: Symbol,
-    /// Type annotation (optional).
-    pub ty: Option<TypeAnnotation>,
-    /// Constant value.
-    pub value: Expr<V>,
 }
 
 /// Import declaration: `use path::to::item` or `use path::to::item as alias`

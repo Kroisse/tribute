@@ -22,9 +22,9 @@ use trunk_ir::{Span, Symbol};
 
 use tribute_front::SourceCst;
 use tribute_front::ast::{
-    AbilityDecl, Arm, ConstDecl, Decl, EnumDecl, Expr, ExprKind, FuncDecl, HandlerArm, HandlerKind,
-    LocalId, Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt,
-    StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef, UniVarSource,
+    AbilityDecl, Arm, Decl, EnumDecl, Expr, ExprKind, FuncDecl, HandlerArm, HandlerKind, LocalId,
+    Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl, Type,
+    TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef, UniVarSource,
 };
 use tribute_front::query as ast_query;
 
@@ -257,7 +257,6 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
     fn collect_decl(&mut self, decl: &Decl<TypedRef<'db>>) {
         match decl {
             Decl::Function(func) => self.collect_func(func),
-            Decl::Const(c) => self.collect_expr(&c.value),
             // Struct, Enum, Ability, Use don't have expression types
             Decl::Struct(_) | Decl::Enum(_) | Decl::Ability(_) | Decl::Use(_) => {}
         }
@@ -844,7 +843,6 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             Decl::Struct(s) => self.collect_struct(s),
             Decl::Enum(e) => self.collect_enum(e),
             Decl::Ability(a) => self.collect_ability(a),
-            Decl::Const(c) => self.collect_const(c),
             Decl::Use(_) => {}
         }
     }
@@ -893,11 +891,6 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         for op in &a.operations {
             self.add_definition(op.id, op.name, DefinitionKind::Function, None);
         }
-    }
-
-    fn collect_const(&mut self, c: &ConstDecl<TypedRef<'db>>) {
-        self.add_definition(c.id, c.name, DefinitionKind::Const, None);
-        self.collect_expr(&c.value);
     }
 
     fn collect_expr(&mut self, expr: &Expr<TypedRef<'db>>) {
@@ -1329,13 +1322,6 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
                     detail: None,
                 });
             }
-            Decl::Const(c) => {
-                items.push(AstCompletionItem {
-                    name: c.name,
-                    kind: CompletionKind::Const,
-                    detail: None,
-                });
-            }
             Decl::Use(_) => {}
         }
     }
@@ -1463,14 +1449,6 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     kind: SymbolKind::Ability,
                     span: span_map.get_or_default(a.id),
                     children,
-                });
-            }
-            Decl::Const(c) => {
-                symbols.push(DocumentSymbolInfo {
-                    name: c.name,
-                    kind: SymbolKind::Const,
-                    span: span_map.get_or_default(c.id),
-                    children: vec![],
                 });
             }
             Decl::Use(_) => {}

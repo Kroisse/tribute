@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityDecl, Arm, BuiltinRef, ConstDecl, Decl, EnumDecl, Expr, ExprKind, FieldPattern,
-    FuncDecl, HandlerArm, HandlerKind, LocalId, LocalIdGen, Module, ModulePath, Param, Pattern,
-    PatternKind, ResolvedRef, Stmt, StructDecl, UnresolvedName, UseDecl,
+    AbilityDecl, Arm, BuiltinRef, Decl, EnumDecl, Expr, ExprKind, FieldPattern, FuncDecl,
+    HandlerArm, HandlerKind, LocalId, LocalIdGen, Module, ModulePath, Param, Pattern, PatternKind,
+    ResolvedRef, Stmt, StructDecl, UnresolvedName, UseDecl,
 };
 
 use super::env::{Binding, ModuleEnv};
@@ -147,7 +147,6 @@ impl<'db> Resolver<'db> {
             Decl::Struct(s) => Decl::Struct(self.resolve_struct_decl(s)),
             Decl::Enum(e) => Decl::Enum(self.resolve_enum_decl(e)),
             Decl::Ability(a) => Decl::Ability(self.resolve_ability_decl(a)),
-            Decl::Const(c) => Decl::Const(self.resolve_const_decl(c)),
             Decl::Use(u) => Decl::Use(self.resolve_use_decl(u)),
         }
     }
@@ -199,18 +198,6 @@ impl<'db> Resolver<'db> {
     fn resolve_ability_decl(&self, a: AbilityDecl) -> AbilityDecl {
         // Ability declarations don't contain expressions to resolve
         a
-    }
-
-    /// Resolve a constant declaration.
-    fn resolve_const_decl(&mut self, c: ConstDecl<UnresolvedName>) -> ConstDecl<ResolvedRef<'db>> {
-        let value = self.resolve_expr(c.value);
-        ConstDecl {
-            id: c.id,
-            is_pub: c.is_pub,
-            name: c.name,
-            ty: c.ty,
-            value,
-        }
     }
 
     /// Resolve a use declaration.

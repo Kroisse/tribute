@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, ConstDecl, Decl, Expr, ExprKind, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Module,
-    Pattern, ResolvedRef, Stmt, Type, TypedRef,
+    Arm, Decl, Expr, ExprKind, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Module, Pattern,
+    ResolvedRef, Stmt, Type, TypedRef,
 };
 
 /// TDNR resolver for AST expressions.
@@ -225,7 +225,6 @@ impl<'db> TdnrResolver<'db> {
     fn resolve_decl(&mut self, decl: Decl<TypedRef<'db>>) -> Decl<TypedRef<'db>> {
         match decl {
             Decl::Function(func) => Decl::Function(self.resolve_func_decl(func)),
-            Decl::Const(c) => Decl::Const(self.resolve_const_decl(c)),
             // Other declarations don't contain expressions
             Decl::Struct(s) => Decl::Struct(s),
             Decl::Enum(e) => Decl::Enum(e),
@@ -245,17 +244,6 @@ impl<'db> TdnrResolver<'db> {
             return_ty: func.return_ty,
             effects: func.effects,
             body: self.resolve_expr(func.body),
-        }
-    }
-
-    /// Resolve method calls in a constant declaration.
-    fn resolve_const_decl(&mut self, c: ConstDecl<TypedRef<'db>>) -> ConstDecl<TypedRef<'db>> {
-        ConstDecl {
-            id: c.id,
-            is_pub: c.is_pub,
-            name: c.name,
-            ty: c.ty,
-            value: self.resolve_expr(c.value),
         }
     }
 

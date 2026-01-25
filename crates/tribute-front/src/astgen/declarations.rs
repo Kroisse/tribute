@@ -46,10 +46,6 @@ fn lower_decl(ctx: &mut AstLoweringCtx, node: Node) -> Option<Decl<UnresolvedNam
             None
         }
         "use_declaration" => lower_use(ctx, node).map(Decl::Use),
-        "const_declaration" => {
-            // TODO: implement const declarations
-            None
-        }
         _ => None,
     }
 }
