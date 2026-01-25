@@ -40,10 +40,15 @@ struct LoweringResult {
 /// Lower a parsed CST to an AST Module (internal, non-Salsa).
 ///
 /// Returns both the module and the span builder for creating a SpanMap.
-fn lower_cst_to_ast_internal(source: &Rope, cst: &ParsedCst) -> LoweringResult {
+/// The `module_name` is derived from the source file path and passed through.
+fn lower_cst_to_ast_internal(
+    source: &Rope,
+    cst: &ParsedCst,
+    module_name: Option<trunk_ir::Symbol>,
+) -> LoweringResult {
     let mut ctx = AstLoweringCtx::new(source.clone());
     let root = cst.root_node();
-    let module = lower_module(&mut ctx, root);
+    let module = lower_module(&mut ctx, root, module_name);
     let span_builder = ctx.into_span_builder();
     LoweringResult {
         module,
@@ -56,8 +61,9 @@ fn lower_cst_to_ast_internal(source: &Rope, cst: &ParsedCst) -> LoweringResult {
 /// This is the entry point for CST → AST conversion.
 /// Note: This function does not preserve span information.
 /// Use `lower_source_to_parsed_ast` for span-preserving lowering.
+/// The module name will be `None` and can be set by a later phase.
 pub fn lower_cst_to_ast(source: &Rope, cst: &ParsedCst) -> Module<UnresolvedName> {
-    lower_cst_to_ast_internal(source, cst).module
+    lower_cst_to_ast_internal(source, cst, None).module
 }
 
 /// Salsa-tracked parsing result containing both Module and SpanMap.
@@ -84,9 +90,25 @@ pub fn lower_source_to_parsed_ast<'db>(
 
     let cst = parse_cst(db, source)?;
     let text = source.text(db);
-    let result = lower_cst_to_ast_internal(text, &cst);
+    let module_name = derive_module_name_from_uri(source.uri(db));
+    let result = lower_cst_to_ast_internal(text, &cst, module_name);
     let span_map = result.span_builder.finish();
     Some(ParsedAst::new(db, result.module, span_map))
+}
+
+/// Derive a module name from a source file URI.
+///
+/// Extracts the file stem (filename without extension) and converts it to a Symbol.
+/// Returns `None` if the URI doesn't have a recognizable file path.
+fn derive_module_name_from_uri(uri: &fluent_uri::Uri<String>) -> Option<trunk_ir::Symbol> {
+    // Get the path component from the URI
+    let path_str = uri.path().as_str();
+
+    // Extract the file stem (filename without extension)
+    std::path::Path::new(path_str)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(trunk_ir::Symbol::from_dynamic)
 }
 
 /// Lower a source file to an AST Module.

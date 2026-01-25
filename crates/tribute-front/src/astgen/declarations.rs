@@ -13,9 +13,16 @@ use super::expressions::lower_expr;
 use super::helpers::is_comment;
 
 /// Lower a CST source file to an AST Module.
-pub fn lower_module(ctx: &mut AstLoweringCtx, root: Node) -> Module<UnresolvedName> {
+///
+/// The `module_name` parameter is the name derived from the source file path.
+/// If `None`, a later phase (or the IR lowering) can assign a default.
+pub fn lower_module(
+    ctx: &mut AstLoweringCtx,
+    root: Node,
+    module_name: Option<Symbol>,
+) -> Module<UnresolvedName> {
     let id = ctx.fresh_id_with_span(&root);
-    let name = Some(Symbol::new("main"));
+    let name = module_name;
     let mut decls = Vec::new();
 
     let mut cursor = root.walk();

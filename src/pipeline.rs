@@ -87,7 +87,7 @@ use ropey::Rope;
 use salsa::Accumulator;
 use tree_sitter::Parser;
 use tribute_front::source_file::parse_with_rope;
-use tribute_front::{lower_cst, parse_cst};
+use tribute_front::{derive_module_name_from_path, lower_cst, parse_cst};
 use tribute_passes::boxing::insert_boxing;
 use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::const_inline::inline_module;
@@ -110,7 +110,7 @@ use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::ConversionError;
 use trunk_ir::transforms::eliminate_dead_functions;
-use trunk_ir::{Block, BlockId, IdVec, Region, Symbol};
+use trunk_ir::{Block, BlockId, IdVec, Region};
 
 // AST-based pipeline imports
 use tribute_front::ast::{Module as AstModule, TypedRef};
@@ -239,7 +239,8 @@ pub fn parse_and_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
     let Some(cst) = parse_cst(db, source) else {
         let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
         let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
-        return Module::build(db, location, Symbol::new("main"), |_| {});
+        let module_name = derive_module_name_from_path(db, path);
+        return Module::build(db, location, module_name, |_| {});
     };
     emit_parse_errors(db, &cst);
     let user_module = lower_cst(db, source, cst);
@@ -755,7 +756,8 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
         // Return empty module on parse error
         let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
         let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
-        return Module::build(db, location, Symbol::new("main"), |_| {});
+        let module_name = derive_module_name_from_path(db, path);
+        return Module::build(db, location, module_name, |_| {});
     };
 
     // Get span map for source location information
@@ -927,7 +929,7 @@ mod tests {
         let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
 
         let module = test_compile(db, source);
-        assert_eq!(module.name(db), "main");
+        assert_eq!(module.name(db), "test");
     }
 
     #[salsa_test]
@@ -1140,7 +1142,7 @@ mod tests {
         let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
 
         let module = parse_and_lower_ast(db, source);
-        assert_eq!(module.name(db), "main");
+        assert_eq!(module.name(db), "test");
     }
 
     #[salsa_test]
@@ -1149,7 +1151,7 @@ mod tests {
         let source = source_from_str("test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
 
         let module = parse_and_lower_ast(db, source);
-        assert_eq!(module.name(db), "main");
+        assert_eq!(module.name(db), "test");
     }
 
     #[salsa_test]
@@ -1167,7 +1169,7 @@ mod tests {
         );
 
         let module = parse_and_lower_ast(db, source);
-        assert_eq!(module.name(db), "main");
+        assert_eq!(module.name(db), "test");
     }
 
     #[salsa_test]
@@ -1186,7 +1188,7 @@ mod tests {
         );
 
         let module = parse_and_lower_ast(db, source);
-        assert_eq!(module.name(db), "main");
+        assert_eq!(module.name(db), "test");
     }
 
     #[salsa_test]
@@ -1195,6 +1197,6 @@ mod tests {
         let source = source_from_str("test.trb", "fn identity(x: Int) -> Int { x }");
 
         let module = run_tdnr_ast(db, source);
-        assert_eq!(module.name(db), "main");
+        assert_eq!(module.name(db), "test");
     }
 }

@@ -27,4 +27,4 @@ pub mod typeck;
 
 pub use fluent_uri::Uri;
 pub use source_file::{SourceCst, path_to_uri};
-pub use tirgen::{ParsedCst, lower_cst, lower_source_cst, parse_cst};
+pub use tirgen::{ParsedCst, derive_module_name_from_path, lower_cst, lower_source_cst, parse_cst};
