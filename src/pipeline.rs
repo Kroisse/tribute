@@ -792,21 +792,28 @@ pub fn run_tdnr_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Mod
 ///    - Performs Hindley-Milner type inference with bidirectional checking
 ///    - Assigns LocalIds to pattern bindings for variable tracking
 ///    - Resolves UFCS method calls based on inferred receiver types
+///    - Produces resolved TrunkIR ops (e.g., `func.constant`, `func.call`)
 ///
 /// 2. **TrunkIR Phase** (stages below):
 ///    - Operates on TrunkIR operations like `tribute.var`, `tribute.call`
-///    - Transforms high-level ops to lower-level representations
+///    - **Required for prelude**: The prelude module is generated via `lower_cst` (tirgen),
+///      NOT `ast_to_ir`, so it produces unresolved `tribute.*` ops that need processing
 ///    - Handles cross-module references and builtin operations
-///    - These are NOT duplicates of AST phases - they work on IR ops, not AST nodes
+///    - These are NOT duplicates - AST phases work on AST nodes; IR phases work on IR ops
 #[salsa::tracked]
 pub fn compile_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Module<'db>, ConversionError> {
     // Phase 1: AST pipeline (resolve, typecheck, TDNR on AST nodes)
+    // This produces resolved IR for user code, but prelude uses tirgen (lower_cst)
     let module = parse_and_lower_ast(db, source);
 
-    // Phase 2: TrunkIR transformation passes (work on IR ops, not AST)
+    // Phase 2: TrunkIR transformation passes
+    // These are required because:
+    // - Prelude module (merged in parse_and_lower_ast) uses tirgen, producing tribute.* ops
+    // - User code from ast_to_ir is already resolved, so these passes are mostly no-ops for it
+    // - Cross-module references may need resolution
     let module = stage_resolve(db, module);
     let module = stage_typecheck(db, module);
     let module = stage_tdnr(db, module);
