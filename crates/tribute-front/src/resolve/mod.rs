@@ -116,5 +116,14 @@ fn collect_definition<'db>(
                 env.add_import(import_name, binding);
             }
         }
+
+        Decl::Module(m) => {
+            // For inline modules, recursively collect bindings from nested declarations
+            if let Some(body) = &m.body {
+                for inner_decl in body {
+                    collect_definition(db, env, inner_decl);
+                }
+            }
+        }
     }
 }

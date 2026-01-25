@@ -148,6 +148,25 @@ impl<'db> Resolver<'db> {
             Decl::Enum(e) => Decl::Enum(self.resolve_enum_decl(e)),
             Decl::Ability(a) => Decl::Ability(self.resolve_ability_decl(a)),
             Decl::Use(u) => Decl::Use(self.resolve_use_decl(u)),
+            Decl::Module(m) => Decl::Module(self.resolve_module_decl(m)),
+        }
+    }
+
+    /// Resolve a module declaration.
+    fn resolve_module_decl(
+        &mut self,
+        module: crate::ast::ModuleDecl<UnresolvedName>,
+    ) -> crate::ast::ModuleDecl<ResolvedRef<'db>> {
+        // For inline modules, recursively resolve nested declarations
+        let body = module
+            .body
+            .map(|decls| decls.into_iter().map(|d| self.resolve_decl(d)).collect());
+
+        crate::ast::ModuleDecl {
+            id: module.id,
+            name: module.name,
+            is_pub: module.is_pub,
+            body,
         }
     }
 
@@ -218,6 +237,7 @@ impl<'db> Resolver<'db> {
             ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
             ExprKind::BoolLit(b) => ExprKind::BoolLit(b),
             ExprKind::Nil => ExprKind::Nil,
+            ExprKind::RuneLit(c) => ExprKind::RuneLit(c),
 
             ExprKind::Call { callee, args } => {
                 let callee = self.resolve_expr(callee);

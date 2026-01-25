@@ -259,6 +259,14 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
             Decl::Function(func) => self.collect_func(func),
             // Struct, Enum, Ability, Use don't have expression types
             Decl::Struct(_) | Decl::Enum(_) | Decl::Ability(_) | Decl::Use(_) => {}
+            Decl::Module(m) => {
+                // Recursively collect from nested declarations
+                if let Some(body) = &m.body {
+                    for inner_decl in body {
+                        self.collect_decl(inner_decl);
+                    }
+                }
+            }
         }
     }
 
@@ -377,6 +385,11 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
             ExprKind::BinOp { lhs, rhs, .. } => {
                 self.collect_expr(lhs);
                 self.collect_expr(rhs);
+            }
+            ExprKind::RuneLit(_) => {
+                // Rune literals have Int type (Unicode code point)
+                let int_ty = Type::new(self.db, TypeKind::Int);
+                self.add_entry(expr.id, int_ty);
             }
             ExprKind::Error => {}
         }
@@ -844,6 +857,14 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             Decl::Enum(e) => self.collect_enum(e),
             Decl::Ability(a) => self.collect_ability(a),
             Decl::Use(_) => {}
+            Decl::Module(m) => {
+                // Recursively collect from nested declarations
+                if let Some(body) = &m.body {
+                    for inner_decl in body {
+                        self.collect_decl(inner_decl);
+                    }
+                }
+            }
         }
     }
 
@@ -975,6 +996,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             | ExprKind::StringLit(_)
             | ExprKind::BytesLit(_)
             | ExprKind::BoolLit(_)
+            | ExprKind::RuneLit(_)
             | ExprKind::Nil
             | ExprKind::Error => {}
         }
@@ -1322,7 +1344,7 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
                     detail: None,
                 });
             }
-            Decl::Use(_) => {}
+            Decl::Use(_) | Decl::Module(_) => {}
         }
     }
 
@@ -1451,7 +1473,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     children,
                 });
             }
-            Decl::Use(_) => {}
+            Decl::Use(_) | Decl::Module(_) => {}
         }
     }
 

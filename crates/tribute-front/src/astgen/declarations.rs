@@ -4,8 +4,8 @@ use tree_sitter::Node;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityDecl, Decl, EnumDecl, FieldDecl, FuncDecl, Module, OpDecl, ParamDecl, StructDecl,
-    TypeAnnotation, TypeAnnotationKind, UnresolvedName, UseDecl, VariantDecl,
+    AbilityDecl, Decl, EnumDecl, FieldDecl, FuncDecl, Module, ModuleDecl, OpDecl, ParamDecl,
+    StructDecl, TypeAnnotation, TypeAnnotationKind, UnresolvedName, UseDecl, VariantDecl,
 };
 
 use super::context::AstLoweringCtx;
@@ -39,12 +39,7 @@ fn lower_decl(ctx: &mut AstLoweringCtx, node: Node) -> Option<Decl<UnresolvedNam
         "struct_declaration" => lower_struct(ctx, node).map(Decl::Struct),
         "enum_declaration" => lower_enum(ctx, node).map(Decl::Enum),
         "ability_declaration" => lower_ability(ctx, node).map(Decl::Ability),
-        "mod_declaration" => {
-            // TODO: Add proper Decl::Module variant
-            // For now, skip nested modules instead of panicking
-            tracing::debug!("Skipping nested module declaration (not yet supported)");
-            None
-        }
+        "mod_declaration" => lower_mod(ctx, node).map(Decl::Module),
         "use_declaration" => lower_use(ctx, node).map(Decl::Use),
         _ => None,
     }
@@ -472,6 +467,42 @@ fn lower_use(ctx: &mut AstLoweringCtx, node: Node) -> Option<UseDecl> {
         is_pub,
         path,
         alias,
+    })
+}
+
+/// Lower a module declaration.
+fn lower_mod(ctx: &mut AstLoweringCtx, node: Node) -> Option<ModuleDecl<UnresolvedName>> {
+    let name_node = node.child_by_field_name("name")?;
+
+    let id = ctx.fresh_id_with_span(&node);
+    let name = ctx.node_symbol(&name_node);
+    let is_pub = node
+        .named_children(&mut node.walk())
+        .any(|child| child.kind() == "visibility_marker");
+
+    // Check for inline module body
+    let body = if let Some(body_node) = node.child_by_field_name("body") {
+        let mut decls = Vec::new();
+        let mut cursor = body_node.walk();
+        for child in body_node.named_children(&mut cursor) {
+            if is_comment(child.kind()) {
+                continue;
+            }
+            if let Some(decl) = lower_decl(ctx, child) {
+                decls.push(decl);
+            }
+        }
+        Some(decls)
+    } else {
+        // External module (file-based) - no inline body
+        None
+    };
+
+    Some(ModuleDecl {
+        id,
+        name,
+        is_pub,
+        body,
     })
 }
 

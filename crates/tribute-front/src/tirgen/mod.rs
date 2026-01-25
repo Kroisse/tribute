@@ -26,6 +26,7 @@ use trunk_ir::dialect::core;
 use trunk_ir::{Location, PathId, Span, Symbol};
 
 pub use helpers::ParsedCst;
+pub use literals::parse_rune_literal;
 
 use context::CstLoweringCtx;
 use declarations::{

@@ -56,6 +56,8 @@ where
     Ability(AbilityDecl),
     /// Import declaration.
     Use(UseDecl),
+    /// Inline module declaration.
+    Module(ModuleDecl<V>),
 }
 
 /// Function declaration: `fn name(params) -> ReturnType { body }`
@@ -197,6 +199,22 @@ pub struct UseDecl {
     pub path: Vec<Symbol>,
     /// Optional alias.
     pub alias: Option<Symbol>,
+}
+
+/// Inline module declaration: `mod name { ... }`
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct ModuleDecl<V>
+where
+    V: salsa::Update,
+{
+    /// Node ID for span lookup.
+    pub id: NodeId,
+    /// Module name.
+    pub name: Symbol,
+    /// Whether this module is public.
+    pub is_pub: bool,
+    /// Module body (declarations). None for external modules (file-based).
+    pub body: Option<Vec<Decl<V>>>,
 }
 
 // ============================================================================

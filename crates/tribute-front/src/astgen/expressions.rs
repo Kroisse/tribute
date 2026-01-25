@@ -11,6 +11,7 @@ use crate::ast::{
 use super::context::AstLoweringCtx;
 use super::helpers::is_comment;
 use super::patterns::lower_pattern;
+use crate::tirgen::parse_rune_literal;
 
 /// Lower a CST expression node to an AST Expr.
 pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> {
@@ -50,6 +51,42 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
         "keyword_false" => ExprKind::BoolLit(false),
         // Unit/Nil literal: Nil or ()
         "keyword_nil" => ExprKind::Nil,
+
+        // Rune (character) literal: ?a, ?\n, etc.
+        "rune" => {
+            let text = ctx.node_text(&node);
+            let c = parse_rune_literal(&text).unwrap_or('\0');
+            ExprKind::RuneLit(c)
+        }
+
+        // Operator as function: (+), (<>), (Int::+), etc.
+        "operator_fn" => match node.child_by_field_name("operator") {
+            Some(op_node) => match op_node.kind() {
+                "qualified_operator" => {
+                    // Int::+ → "Int::+"
+                    if let (Some(type_node), Some(operator_node)) = (
+                        op_node.child_by_field_name("type"),
+                        op_node.child_by_field_name("operator"),
+                    ) {
+                        let type_name = ctx.node_text(&type_node);
+                        let operator = ctx.node_text(&operator_node);
+                        let text = format!("{}::{}", type_name, operator);
+                        let name = Symbol::from_dynamic(&text);
+                        let name_id = ctx.fresh_id_with_span(&op_node);
+                        ExprKind::Var(UnresolvedName::new(name, name_id))
+                    } else {
+                        ExprKind::Error
+                    }
+                }
+                _ => {
+                    // Simple operator: +, -, <>, ==, etc.
+                    let name = ctx.node_symbol(&op_node);
+                    let name_id = ctx.fresh_id_with_span(&op_node);
+                    ExprKind::Var(UnresolvedName::new(name, name_id))
+                }
+            },
+            None => ExprKind::Error,
+        },
 
         // === Identifiers ===
         "identifier" => {

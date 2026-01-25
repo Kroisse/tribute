@@ -230,6 +230,24 @@ impl<'db> TdnrResolver<'db> {
             Decl::Enum(e) => Decl::Enum(e),
             Decl::Ability(a) => Decl::Ability(a),
             Decl::Use(u) => Decl::Use(u),
+            Decl::Module(m) => Decl::Module(self.resolve_module_decl(m)),
+        }
+    }
+
+    /// Resolve method calls in a module declaration.
+    fn resolve_module_decl(
+        &mut self,
+        module: crate::ast::ModuleDecl<TypedRef<'db>>,
+    ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
+        let body = module
+            .body
+            .map(|decls| decls.into_iter().map(|d| self.resolve_decl(d)).collect());
+
+        crate::ast::ModuleDecl {
+            id: module.id,
+            name: module.name,
+            is_pub: module.is_pub,
+            body,
         }
     }
 
@@ -269,6 +287,7 @@ impl<'db> TdnrResolver<'db> {
             ExprKind::StringLit(s) => ExprKind::StringLit(s),
             ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
             ExprKind::Nil => ExprKind::Nil,
+            ExprKind::RuneLit(c) => ExprKind::RuneLit(c),
             ExprKind::Var(v) => ExprKind::Var(v),
 
             ExprKind::Call { callee, args } => ExprKind::Call {

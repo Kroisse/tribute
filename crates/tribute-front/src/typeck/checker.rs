@@ -103,6 +103,18 @@ impl<'db> TypeChecker<'db> {
                 Decl::Ability(_) | Decl::Use(_) => {
                     // Abilities and imports don't define types directly
                 }
+                Decl::Module(m) => {
+                    // For inline modules, recursively collect from nested declarations
+                    if let Some(body) = &m.body {
+                        // Create a temporary module to reuse collect_declarations
+                        let inner_module = Module {
+                            id: m.id,
+                            name: Some(m.name),
+                            decls: body.clone(),
+                        };
+                        self.collect_declarations(&inner_module);
+                    }
+                }
             }
         }
     }
@@ -270,6 +282,24 @@ impl<'db> TypeChecker<'db> {
             Decl::Enum(e) => Decl::Enum(self.check_enum_decl(e)),
             Decl::Ability(a) => Decl::Ability(self.check_ability_decl(a)),
             Decl::Use(u) => Decl::Use(self.check_use_decl(u)),
+            Decl::Module(m) => Decl::Module(self.check_module_decl(m)),
+        }
+    }
+
+    /// Type check a module declaration.
+    fn check_module_decl(
+        &mut self,
+        module: crate::ast::ModuleDecl<ResolvedRef<'db>>,
+    ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
+        let body = module
+            .body
+            .map(|decls| decls.into_iter().map(|d| self.check_decl(d)).collect());
+
+        crate::ast::ModuleDecl {
+            id: module.id,
+            name: module.name,
+            is_pub: module.is_pub,
+            body,
         }
     }
 
@@ -347,6 +377,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::StringLit(_) => self.ctx.string_type(),
             ExprKind::BytesLit(_) => self.ctx.bytes_type(),
             ExprKind::Nil => self.ctx.nil_type(),
+            ExprKind::RuneLit(_) => self.ctx.int_type(), // Rune = i32 (Unicode code point)
 
             ExprKind::Var(resolved) => self.infer_var(resolved),
             ExprKind::Call { callee, args } => {
@@ -473,6 +504,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::StringLit(_) => self.ctx.string_type(),
             ExprKind::BytesLit(_) => self.ctx.bytes_type(),
             ExprKind::Nil => self.ctx.nil_type(),
+            ExprKind::RuneLit(_) => self.ctx.int_type(),
             _ => self.ctx.fresh_type_var(),
         }
     }
@@ -608,6 +640,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::StringLit(s) => ExprKind::StringLit(s),
             ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
             ExprKind::Nil => ExprKind::Nil,
+            ExprKind::RuneLit(c) => ExprKind::RuneLit(c),
             ExprKind::Var(resolved) => ExprKind::Var(self.convert_ref(resolved)),
             ExprKind::Call { callee, args } => ExprKind::Call {
                 callee: self.check_expr(callee, Mode::Infer),

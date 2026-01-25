@@ -55,6 +55,14 @@ fn lower_decl<'db>(
         Decl::Use(_) => {
             // Use declarations don't generate IR
         }
+        Decl::Module(m) => {
+            // Inline module: recursively lower nested declarations
+            if let Some(body) = m.body {
+                for inner_decl in body {
+                    lower_decl(ctx, top, inner_decl);
+                }
+            }
+        }
     }
 }
 
@@ -128,6 +136,12 @@ fn lower_expr<'db>(
 
         ExprKind::IntLit(n) => {
             let op = block.op(arith::Const::i64(ctx.db, location, n));
+            Some(op.result(ctx.db))
+        }
+
+        ExprKind::RuneLit(c) => {
+            // Rune is lowered as i32 (Unicode code point)
+            let op = block.op(arith::Const::i64(ctx.db, location, c as i64));
             Some(op.result(ctx.db))
         }
 

@@ -76,6 +76,9 @@ where
     /// Nil literal: `Nil`
     Nil,
 
+    /// Rune (character) literal: `?a`, `?\n`
+    RuneLit(char),
+
     // === Calls and Construction ===
     /// Function call: `foo(a, b)`
     ///
