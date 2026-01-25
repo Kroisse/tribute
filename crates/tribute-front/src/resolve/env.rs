@@ -10,7 +10,7 @@ use trunk_ir::Symbol;
 use crate::ast::{CtorId, FuncDefId};
 
 /// Information about a resolved name binding.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Binding<'db> {
     /// A function defined in this module or imported.
     Function { id: FuncDefId<'db> },
@@ -43,7 +43,7 @@ pub enum Binding<'db> {
 /// Module environment for name resolution.
 ///
 /// Tracks all names visible in the current module.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ModuleEnv<'db> {
     /// Names defined in this module (simple name → binding).
     definitions: HashMap<Symbol, Binding<'db>>,
@@ -113,5 +113,19 @@ impl<'db> ModuleEnv<'db> {
     /// Check whether a namespace exists.
     pub fn has_namespace(&self, namespace: Symbol) -> bool {
         self.namespaces.contains_key(&namespace)
+    }
+
+    /// Iterate over all definitions in this environment.
+    pub fn iter_definitions(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
+        self.definitions.iter().map(|(k, v)| (*k, v))
+    }
+
+    /// Iterate over all namespaces in this environment.
+    pub fn iter_namespaces(
+        &self,
+    ) -> impl Iterator<Item = (Symbol, impl Iterator<Item = (Symbol, &Binding<'db>)>)> {
+        self.namespaces
+            .iter()
+            .map(|(ns, bindings)| (*ns, bindings.iter().map(|(k, v)| (*k, v))))
     }
 }

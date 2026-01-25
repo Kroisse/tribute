@@ -222,8 +222,141 @@ fn lower_expr<'db>(
 
         ExprKind::Block { stmts, value } => lower_block(ctx, block, stmts, value),
 
-        // For other expressions, return unit as placeholder
-        _ => {
+        // === Expressions not yet implemented ===
+        // Each of these emits a diagnostic and returns a unit placeholder.
+        // This makes it clear which expressions are missing lowering support.
+        ExprKind::Call { .. } => {
+            Diagnostic {
+                message: "function call not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
+            let ty = ctx.unit_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
+        }
+
+        ExprKind::Cons { .. } => {
+            Diagnostic {
+                message: "constructor application not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
+            let ty = ctx.unit_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
+        }
+
+        ExprKind::Record { .. } => {
+            Diagnostic {
+                message: "record construction not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
+            let ty = ctx.unit_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
+        }
+
+        ExprKind::FieldAccess { .. } => {
+            Diagnostic {
+                message: "field access not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
+            let ty = ctx.unit_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
+        }
+
+        ExprKind::MethodCall { .. } => {
+            Diagnostic {
+                message: "method call not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
+            let ty = ctx.unit_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
+        }
+
+        ExprKind::Case { .. } => {
+            Diagnostic {
+                message: "case expression not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
+            let ty = ctx.unit_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
+        }
+
+        ExprKind::Lambda { .. } => {
+            Diagnostic {
+                message: "lambda expression not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
+            let ty = ctx.unit_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
+        }
+
+        ExprKind::Handle { .. } => {
+            Diagnostic {
+                message: "handle expression not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
+            let ty = ctx.unit_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
+        }
+
+        ExprKind::Tuple(_) => {
+            Diagnostic {
+                message: "tuple expression not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
+            let ty = ctx.unit_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
+        }
+
+        ExprKind::List(_) => {
+            Diagnostic {
+                message: "list expression not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
+            let ty = ctx.unit_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
+        }
+
+        ExprKind::Error => {
+            // Error expression from parsing - just return unit placeholder
             let ty = ctx.unit_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
