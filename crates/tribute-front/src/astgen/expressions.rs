@@ -1,6 +1,7 @@
 //! CST to AST lowering for expressions.
 
 use tree_sitter::Node;
+use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 
 use crate::ast::{
@@ -32,21 +33,23 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
             let value: f64 = text.parse().unwrap_or(0.0);
             ExprKind::FloatLit(FloatBits::new(value))
         }
-        "string_literal" | "interpolated_string" => {
+        // String literals: "...", s"...", raw strings, multiline strings
+        "string" | "raw_string" | "raw_interpolated_string" | "multiline_string" => {
             let text = ctx.node_text_owned(&node);
             let content = parse_string_literal(&text);
             ExprKind::StringLit(content)
         }
+        // Bytes literals: b"...", raw bytes, multiline bytes
         "bytes_string" | "raw_bytes" | "raw_interpolated_bytes" | "multiline_bytes" => {
             let text = ctx.node_text_owned(&node);
             let content = parse_bytes_literal(&text);
             ExprKind::BytesLit(content)
         }
-        "bool_literal" => {
-            let text = ctx.node_text(&node);
-            ExprKind::BoolLit(&*text == "true")
-        }
-        "unit_literal" => ExprKind::Nil,
+        // Boolean literals: True, False (capitalized keywords)
+        "keyword_true" => ExprKind::BoolLit(true),
+        "keyword_false" => ExprKind::BoolLit(false),
+        // Unit/Nil literal: Nil or ()
+        "keyword_nil" => ExprKind::Nil,
 
         // === Identifiers ===
         "identifier" => {
@@ -501,24 +504,23 @@ fn lower_list_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedN
 }
 
 fn lower_handle_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
-    let body_node = node.child_by_field_name("body");
-    let handlers_node = node.child_by_field_name("handlers");
+    // grammar.js: field("expr", $._expression) for the body
+    let expr_node = node.child_by_field_name("expr");
 
-    let Some(body_node) = body_node else {
+    let Some(expr_node) = expr_node else {
         return ExprKind::Error;
     };
 
-    let body = lower_expr(ctx, body_node);
+    let body = lower_expr(ctx, expr_node);
     let mut handlers = Vec::new();
 
-    if let Some(handlers_node) = handlers_node {
-        let mut cursor = handlers_node.walk();
-        for child in handlers_node.named_children(&mut cursor) {
-            if child.kind() == "handler_arm"
-                && let Some(handler) = lower_handler_arm(ctx, child)
-            {
-                handlers.push(handler);
-            }
+    // Handler arms are direct children of handle_expression (no "handlers" field)
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "handler_arm"
+            && let Some(handler) = lower_handler_arm(ctx, child)
+        {
+            handlers.push(handler);
         }
     }
 
@@ -527,10 +529,11 @@ fn lower_handle_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
 
 fn lower_handler_arm(ctx: &mut AstLoweringCtx, node: Node) -> Option<HandlerArm<UnresolvedName>> {
     let pattern_node = node.child_by_field_name("pattern")?;
-    let body_node = node.child_by_field_name("body")?;
+    // grammar.js: field("value", $._expression) for the handler body
+    let value_node = node.child_by_field_name("value")?;
 
     let id = ctx.fresh_id_with_span(&node);
-    let body = lower_expr(ctx, body_node);
+    let body = lower_expr(ctx, value_node);
 
     // Determine handler kind from pattern
     let kind = lower_handler_pattern(ctx, pattern_node)?;
@@ -542,52 +545,65 @@ fn lower_handler_pattern(
     ctx: &mut AstLoweringCtx,
     node: Node,
 ) -> Option<HandlerKind<UnresolvedName>> {
-    match node.kind() {
-        "handler_done_pattern" => {
-            // { result }
-            let binding_node = node.child_by_field_name("binding")?;
-            let binding = lower_pattern(ctx, binding_node);
-            Some(HandlerKind::Result { binding })
-        }
-        "handler_suspend_pattern" => {
-            // { Ability.op(args) -> k }
-            let ability_node = node.child_by_field_name("ability")?;
-            let op_node = node.child_by_field_name("operation")?;
-            let args_node = node.child_by_field_name("arguments");
-            let cont_node = node.child_by_field_name("continuation");
+    // grammar.js handler_pattern structure:
+    // - { result }              -> field("result", $.identifier)
+    // - { op(args) -> k }       -> field("operation", ...), field("args", ...), field("continuation", ...)
 
-            let ability_name = ctx.node_symbol(&ability_node);
-            let ability_id = ctx.fresh_id_with_span(&ability_node);
+    // Check for result pattern: { result }
+    if let Some(result_node) = node.child_by_field_name("result") {
+        let binding = lower_pattern(ctx, result_node);
+        return Some(HandlerKind::Result { binding });
+    }
+
+    // Check for effect/suspend pattern: { Path::op(args) -> k }
+    if let Some(op_node) = node.child_by_field_name("operation") {
+        let args_node = node.child_by_field_name("args");
+        let cont_node = node.child_by_field_name("continuation");
+
+        // Parse operation path using ModulePathExt (e.g., State::get or just get)
+        let op_text = ctx.node_text(&op_node).to_string();
+        let op_symbol = Symbol::from_dynamic(&op_text);
+        let (ability, op) = if op_symbol.is_simple() {
+            // Unqualified: just op name, ability will be inferred
+            let ability_name = Symbol::from_dynamic("_");
+            let ability_id = ctx.fresh_id_with_span(&op_node);
             let ability = UnresolvedName::new(ability_name, ability_id);
+            (ability, op_symbol)
+        } else {
+            // Qualified path: State::get -> ability=State, op=get
+            let ability_name = op_symbol.parent_path().unwrap();
+            let ability_id = ctx.fresh_id_with_span(&op_node);
+            let ability = UnresolvedName::new(ability_name, ability_id);
+            let op = op_symbol.last_segment();
+            (ability, op)
+        };
 
-            let op = ctx.node_symbol(&op_node);
-
-            let params = args_node
-                .map(|n| {
-                    let mut patterns = Vec::new();
-                    let mut cursor = n.walk();
-                    for child in n.named_children(&mut cursor) {
+        let params = args_node
+            .map(|n| {
+                let mut patterns = Vec::new();
+                let mut cursor = n.walk();
+                for child in n.named_children(&mut cursor) {
+                    if !is_comment(child.kind()) {
                         patterns.push(lower_pattern(ctx, child));
                     }
-                    patterns
-                })
-                .unwrap_or_default();
-
-            let continuation = cont_node.map(|n| ctx.node_symbol(&n));
-
-            Some(HandlerKind::Effect {
-                ability,
-                op,
-                params,
-                continuation,
+                }
+                patterns
             })
-        }
-        _ => {
-            // Default: treat as result pattern
-            let binding = lower_pattern(ctx, node);
-            Some(HandlerKind::Result { binding })
-        }
+            .unwrap_or_default();
+
+        let continuation = cont_node.map(|n| ctx.node_symbol(&n));
+
+        return Some(HandlerKind::Effect {
+            ability,
+            op,
+            params,
+            continuation,
+        });
     }
+
+    // Fallback: treat node itself as result pattern
+    let binding = lower_pattern(ctx, node);
+    Some(HandlerKind::Result { binding })
 }
 
 fn lower_argument_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Expr<UnresolvedName>> {
