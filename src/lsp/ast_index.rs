@@ -2165,4 +2165,407 @@ mod tests {
         let (def, _span) = result.unwrap();
         assert!(def.name == trunk_ir::Symbol::new("foo"));
     }
+
+    // =========================================================================
+    // Pattern Collection Tests
+    // =========================================================================
+
+    #[test]
+    fn test_pattern_bind_simple() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn main() -> Int {
+    let x = 42
+    x
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        assert!(x_def.is_some());
+        assert_eq!(x_def.unwrap().kind, DefinitionKind::Local);
+    }
+
+    #[test]
+    fn test_pattern_tuple() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn main() -> Int {
+    let #(a, b) = #(1, 2)
+    a + b
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Both a and b should be defined as locals
+        let a_def = index.definition_of(&db, trunk_ir::Symbol::new("a"));
+        assert!(a_def.is_some());
+        assert_eq!(a_def.unwrap().kind, DefinitionKind::Local);
+
+        let b_def = index.definition_of(&db, trunk_ir::Symbol::new("b"));
+        assert!(b_def.is_some());
+        assert_eq!(b_def.unwrap().kind, DefinitionKind::Local);
+    }
+
+    #[test]
+    fn test_pattern_nested_tuple() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn main() -> Int {
+    let #(#(a, b), c) = #(#(1, 2), 3)
+    a + b + c
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // All three variables should be defined
+        for name in ["a", "b", "c"] {
+            let def = index.definition_of(&db, trunk_ir::Symbol::new(name));
+            assert!(def.is_some(), "Expected definition for '{}'", name);
+            assert_eq!(def.unwrap().kind, DefinitionKind::Local);
+        }
+    }
+
+    #[test]
+    fn test_pattern_wildcard() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn main() -> Int {
+    let _ = 42
+    0
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        // Wildcard should not create a definition
+        let index = index.unwrap();
+        let underscore_def = index.definition_of(&db, trunk_ir::Symbol::new("_"));
+        assert!(underscore_def.is_none());
+    }
+
+    #[test]
+    fn test_pattern_case_variant() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"enum Option { Some(Int), None }
+
+fn unwrap(opt: Option) -> Int {
+    case opt {
+        Some(v) -> v
+        None -> 0
+    }
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // 'v' should be defined in the Some pattern
+        let v_def = index.definition_of(&db, trunk_ir::Symbol::new("v"));
+        assert!(v_def.is_some());
+        assert_eq!(v_def.unwrap().kind, DefinitionKind::Local);
+
+        // 'opt' should be a parameter
+        let opt_def = index.definition_of(&db, trunk_ir::Symbol::new("opt"));
+        assert!(opt_def.is_some());
+        assert_eq!(opt_def.unwrap().kind, DefinitionKind::Parameter);
+
+        // Enum variants should be defined
+        let some_def = index.definition_of(&db, trunk_ir::Symbol::new("Some"));
+        assert!(some_def.is_some());
+        assert_eq!(some_def.unwrap().kind, DefinitionKind::Field);
+
+        let none_def = index.definition_of(&db, trunk_ir::Symbol::new("None"));
+        assert!(none_def.is_some());
+        assert_eq!(none_def.unwrap().kind, DefinitionKind::Field);
+    }
+
+    #[test]
+    fn test_pattern_shadowing_with_local_id() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn main() -> Int {
+    let x = 1
+    let y = {
+        let x = 2
+        x
+    }
+    x + y
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+        let x_sym = trunk_ir::Symbol::new("x");
+
+        // There should be two definitions of 'x'
+        let x_defs: Vec<_> = index
+            .definitions(&db)
+            .iter()
+            .filter(|d| d.name == x_sym)
+            .collect();
+        assert_eq!(x_defs.len(), 2, "Expected 2 definitions of 'x'");
+
+        // Both should have LocalId set (for disambiguation)
+        for def in &x_defs {
+            assert!(
+                def.local_id.is_some(),
+                "LocalId should be set for local binding"
+            );
+        }
+
+        // The LocalIds should be different
+        assert_ne!(
+            x_defs[0].local_id, x_defs[1].local_id,
+            "Shadowed variables should have different LocalIds"
+        );
+    }
+
+    #[test]
+    fn test_pattern_references_with_shadowing() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn main() -> Int {
+    let x = 1
+    let y = {
+        let x = 2
+        x
+    }
+    x + y
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+        let x_sym = trunk_ir::Symbol::new("x");
+
+        // Get all references to 'x'
+        let all_refs = index.references_of(&db, x_sym);
+        assert_eq!(all_refs.len(), 2, "Expected 2 references to 'x'");
+
+        // Get the two different definitions
+        let x_defs: Vec<_> = index
+            .definitions(&db)
+            .iter()
+            .filter(|d| d.name == x_sym)
+            .collect();
+        assert_eq!(x_defs.len(), 2);
+
+        // Each definition should have exactly one reference when using precise matching
+        for def in &x_defs {
+            if let Some(local_id) = def.local_id {
+                let target = ResolvedTarget::Local {
+                    id: local_id,
+                    name: x_sym,
+                };
+                let refs = index.references_of_target(&db, &target);
+                assert_eq!(
+                    refs.len(),
+                    1,
+                    "Each shadowed variable should have exactly 1 reference"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_pattern_list() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn main() -> Int {
+    let [a, b, c] = [1, 2, 3]
+    a + b + c
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // All list elements should be defined
+        for name in ["a", "b", "c"] {
+            let def = index.definition_of(&db, trunk_ir::Symbol::new(name));
+            assert!(def.is_some(), "Expected definition for '{}'", name);
+            assert_eq!(def.unwrap().kind, DefinitionKind::Local);
+        }
+    }
+
+    #[test]
+    fn test_pattern_multiple_case_arms() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn classify(n: Int) -> Int {
+    case n {
+        0 -> 0
+        1 -> 1
+        x -> x * 2
+    }
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // 'x' should be defined from the third arm
+        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        assert!(x_def.is_some());
+        assert_eq!(x_def.unwrap().kind, DefinitionKind::Local);
+
+        // 'n' should be a parameter
+        let n_def = index.definition_of(&db, trunk_ir::Symbol::new("n"));
+        assert!(n_def.is_some());
+        assert_eq!(n_def.unwrap().kind, DefinitionKind::Parameter);
+    }
+
+    // =========================================================================
+    // Type Collection Tests
+    // =========================================================================
+
+    #[test]
+    fn test_type_index_let_binding() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn main() -> Int {
+    let x: Int = 42
+    x
+}"#,
+        );
+
+        let index = type_index(&db, source);
+        assert!(index.is_some());
+    }
+
+    #[test]
+    fn test_type_index_case_expression() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"enum Option { Some(Int), None }
+
+fn test(opt: Option) -> Int {
+    case opt {
+        Some(v) -> v
+        None -> 0
+    }
+}"#,
+        );
+
+        let index = type_index(&db, source);
+        assert!(index.is_some());
+    }
+
+    #[test]
+    fn test_type_index_function_params() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn add(a: Int, b: Int) -> Int {
+    a + b
+}"#,
+        );
+
+        let index = type_index(&db, source);
+        assert!(index.is_some());
+    }
+
+    #[test]
+    fn test_type_index_tuple_pattern() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn main() -> Int {
+    let pair: #(Int, Int) = #(1, 2)
+    let #(a, b) = pair
+    a + b
+}"#,
+        );
+
+        let index = type_index(&db, source);
+        assert!(index.is_some());
+    }
+
+    #[test]
+    fn test_definition_of_target_local() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn main() -> Int {
+    let x = 1
+    x
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Get a reference to x
+        let refs = index.references_of(&db, trunk_ir::Symbol::new("x"));
+        assert!(!refs.is_empty());
+
+        // Use definition_of_target with the reference target
+        let def = index.definition_of_target(&db, &refs[0].target);
+        assert!(def.is_some());
+        assert_eq!(def.unwrap().kind, DefinitionKind::Local);
+    }
+
+    #[test]
+    fn test_definition_of_target_function() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"fn helper() -> Int { 42 }
+
+fn main() -> Int {
+    helper()
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Get reference to helper function
+        let refs = index.references_of(&db, trunk_ir::Symbol::new("helper"));
+        assert!(!refs.is_empty());
+
+        // Use definition_of_target
+        let def = index.definition_of_target(&db, &refs[0].target);
+        assert!(def.is_some());
+        assert_eq!(def.unwrap().kind, DefinitionKind::Function);
+    }
 }
