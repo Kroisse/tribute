@@ -95,9 +95,6 @@ fn collect_definition<'db>(
         }
 
         Decl::Ability(a) => {
-            // Register the ability as a top-level type
-            env.add_type(a.name, None);
-
             // Ability operations are added to the ability's namespace
             for op in &a.operations {
                 let func_id = FuncDefId::new(
