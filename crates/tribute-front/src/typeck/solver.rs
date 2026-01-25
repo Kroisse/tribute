@@ -489,4 +489,302 @@ mod tests {
         assert_eq!(solver.type_subst.apply(&db, var1), int_ty);
         assert_eq!(solver.type_subst.apply(&db, var2), bool_ty);
     }
+
+    // =========================================================================
+    // Row unification tests (adapted from tribute-passes)
+    // =========================================================================
+
+    #[test]
+    fn test_empty_row_unification() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let r1 = EffectRow::new(&db, vec![], None);
+        let r2 = EffectRow::new(&db, vec![], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_row_var_unification() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        // Create an open row with a variable
+        let row_var = EffectVar { id: 42 };
+        let r1 = EffectRow::new(&db, vec![], Some(row_var));
+        let r2 = EffectRow::new(&db, vec![], None); // empty/pure row
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(result.is_ok());
+
+        // The row variable should now be bound to the empty row
+        let resolved = solver.row_subst.get(row_var.id);
+        assert!(resolved.is_some());
+        assert!(resolved.unwrap().is_pure(&db));
+    }
+
+    #[test]
+    fn test_function_effect_unification() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        // Create two function types with the same (empty) effect row
+        let empty_effect = EffectRow::new(&db, vec![], None);
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let func1 = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect: empty_effect,
+            },
+        );
+        let func2 = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect: empty_effect,
+            },
+        );
+
+        let result = solver.unify_types(func1, func2);
+        assert!(result.is_ok(), "Same function types should unify");
+    }
+
+    #[test]
+    fn test_function_effect_unification_with_row_var() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // Create a function with empty effect (pure)
+        let empty_effect = EffectRow::new(&db, vec![], None);
+        let func_pure = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect: empty_effect,
+            },
+        );
+
+        // Create a function with a row variable effect (polymorphic)
+        let row_var = EffectVar { id: 99 };
+        let poly_effect = EffectRow::new(&db, vec![], Some(row_var));
+        let func_poly = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect: poly_effect,
+            },
+        );
+
+        // Unifying should bind the row variable to empty
+        let result = solver.unify_types(func_pure, func_poly);
+        assert!(
+            result.is_ok(),
+            "Pure function should unify with polymorphic function"
+        );
+
+        // Check that the row variable was bound to empty
+        let resolved = solver.row_subst.get(row_var.id);
+        assert!(resolved.is_some(), "Row variable should be bound");
+        assert!(
+            resolved.unwrap().is_pure(&db),
+            "Row variable should be bound to empty"
+        );
+    }
+
+    #[test]
+    fn test_unify_named_types_with_args() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_ty = Type::new(&db, TypeKind::UniVar { id: 0 });
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // List(var) and List(Int)
+        let list_var = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("List"),
+                args: vec![var_ty],
+            },
+        );
+        let list_int = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("List"),
+                args: vec![int_ty],
+            },
+        );
+
+        solver.unify_types(list_var, list_int).unwrap();
+
+        // var should be bound to Int
+        assert_eq!(solver.type_subst.apply(&db, var_ty), int_ty);
+    }
+
+    #[test]
+    fn test_unify_named_types_mismatch() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // List(Int) and Option(Int) should not unify
+        let list_int = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("List"),
+                args: vec![int_ty],
+            },
+        );
+        let option_int = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("Option"),
+                args: vec![int_ty],
+            },
+        );
+
+        let result = solver.unify_types(list_int, option_int);
+        assert!(matches!(result, Err(SolveError::TypeMismatch { .. })));
+    }
+
+    #[test]
+    fn test_unify_app_types() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_ty = Type::new(&db, TypeKind::UniVar { id: 0 });
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let ctor_ty = Type::new(&db, TypeKind::UniVar { id: 1 });
+        let list_ctor = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("List"),
+                args: vec![],
+            },
+        );
+
+        // App(ctor, [var]) and App(List, [Int])
+        let app1 = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: ctor_ty,
+                args: vec![var_ty],
+            },
+        );
+        let app2 = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: list_ctor,
+                args: vec![int_ty],
+            },
+        );
+
+        solver.unify_types(app1, app2).unwrap();
+
+        assert_eq!(solver.type_subst.apply(&db, var_ty), int_ty);
+        assert_eq!(solver.type_subst.apply(&db, ctor_ty), list_ctor);
+    }
+
+    #[test]
+    fn test_error_type_unifies_with_anything() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let error_ty = Type::new(&db, TypeKind::Error);
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+
+        // Error should unify with any type
+        assert!(solver.unify_types(error_ty, int_ty).is_ok());
+        assert!(solver.unify_types(bool_ty, error_ty).is_ok());
+    }
+
+    #[test]
+    fn test_transitive_unification() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var1 = Type::new(&db, TypeKind::UniVar { id: 0 });
+        let var2 = Type::new(&db, TypeKind::UniVar { id: 1 });
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // var1 = var2, var2 = Int => var1 = Int
+        solver.unify_types(var1, var2).unwrap();
+        solver.unify_types(var2, int_ty).unwrap();
+
+        assert_eq!(solver.type_subst.apply(&db, var1), int_ty);
+        assert_eq!(solver.type_subst.apply(&db, var2), int_ty);
+    }
+
+    #[test]
+    fn test_row_subst_apply() {
+        let db = test_db();
+        let mut row_subst = RowSubst::new();
+
+        // Create a row variable and bind it to an empty row
+        let row_var = EffectVar { id: 10 };
+        let empty_row = EffectRow::new(&db, vec![], None);
+        row_subst.insert(row_var.id, empty_row);
+
+        // Apply substitution to an open row
+        let open_row = EffectRow::new(&db, vec![], Some(row_var));
+        let result = row_subst.apply(&db, open_row);
+
+        assert!(result.is_pure(&db));
+    }
+
+    #[test]
+    fn test_type_subst_apply_with_rows() {
+        let db = test_db();
+        let mut type_subst = TypeSubst::new();
+        let mut row_subst = RowSubst::new();
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let var_ty = Type::new(&db, TypeKind::UniVar { id: 0 });
+        type_subst.insert(0, int_ty);
+
+        // Create a function type with a row variable
+        let row_var = EffectVar { id: 20 };
+        let empty_row = EffectRow::new(&db, vec![], None);
+        row_subst.insert(row_var.id, empty_row);
+
+        let poly_effect = EffectRow::new(&db, vec![], Some(row_var));
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![var_ty],
+                result: var_ty,
+                effect: poly_effect,
+            },
+        );
+
+        // Apply both substitutions
+        let result = type_subst.apply_with_rows(&db, func_ty, &row_subst);
+
+        // Check params and result are substituted
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+        } = result.kind(&db)
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0], int_ty);
+            assert_eq!(*result, int_ty);
+            assert!(effect.is_pure(&db));
+        } else {
+            panic!("Expected Func type");
+        }
+    }
 }
