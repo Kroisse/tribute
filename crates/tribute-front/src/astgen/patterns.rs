@@ -235,6 +235,7 @@ fn lower_tuple_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unre
 
 fn lower_list_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<UnresolvedName> {
     let mut head = Vec::new();
+    let mut has_rest = false;
     let mut rest: Option<Symbol> = None;
     let mut cursor = node.walk();
 
@@ -247,11 +248,11 @@ fn lower_list_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unres
             "rest_pattern" => {
                 // [a, b, ..tail] or [a, b, ..]
                 // grammar.js uses "name" field for the rest binding
+                has_rest = true;
                 if let Some(name_node) = child.child_by_field_name("name") {
                     rest = Some(ctx.node_symbol(&name_node));
-                } else {
-                    rest = Some(Symbol::new("_")); // Anonymous rest
                 }
+                // rest stays None for anonymous ".."
             }
             _ => {
                 head.push(lower_pattern(ctx, child));
@@ -259,7 +260,7 @@ fn lower_list_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unres
         }
     }
 
-    if rest.is_some() {
+    if has_rest {
         PatternKind::ListRest { head, rest }
     } else {
         PatternKind::List(head)
@@ -691,8 +692,8 @@ mod tests {
             panic!("Expected list rest pattern, got {:?}", pattern);
         };
         assert_eq!(head.len(), 1);
-        assert!(rest.is_some());
-        assert_eq!(rest.unwrap().to_string(), "_");
+        // Anonymous rest ".." has no binding (None), distinct from explicit ".._ "
+        assert!(rest.is_none());
     }
 
     // === As Pattern ===
