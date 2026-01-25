@@ -41,6 +41,18 @@ pub struct TypeContext<'db> {
     /// Type definitions (struct/enum names to their types).
     type_defs: HashMap<Symbol, TypeScheme<'db>>,
 
+    /// Cache for instantiated function types.
+    ///
+    /// This prevents re-instantiation of the same function type scheme, which would
+    /// create different fresh type variables each time.
+    instantiated_functions: HashMap<FuncDefId<'db>, Type<'db>>,
+
+    /// Cache for instantiated constructor types.
+    ///
+    /// This prevents re-instantiation of the same constructor type scheme, which would
+    /// create different fresh type variables each time.
+    instantiated_constructors: HashMap<CtorId<'db>, Type<'db>>,
+
     /// Generated constraints.
     constraints: ConstraintSet<'db>,
 
@@ -65,6 +77,8 @@ impl<'db> TypeContext<'db> {
             function_types: HashMap::new(),
             constructor_types: HashMap::new(),
             type_defs: HashMap::new(),
+            instantiated_functions: HashMap::new(),
+            instantiated_constructors: HashMap::new(),
             constraints: ConstraintSet::new(),
             next_type_var: 0,
             next_row_var: 0,
@@ -159,9 +173,19 @@ impl<'db> TypeContext<'db> {
     }
 
     /// Instantiate a function's type scheme with fresh type variables.
+    ///
+    /// Caches the result so repeated calls for the same function return the
+    /// same instantiated type (avoiding creation of different type variables).
     pub fn instantiate_function(&mut self, id: FuncDefId<'db>) -> Option<Type<'db>> {
+        // Return cached instantiation if available
+        if let Some(ty) = self.instantiated_functions.get(&id) {
+            return Some(*ty);
+        }
+
         let scheme = self.lookup_function(id)?;
-        Some(self.instantiate_scheme(scheme))
+        let ty = self.instantiate_scheme(scheme);
+        self.instantiated_functions.insert(id, ty);
+        Some(ty)
     }
 
     // =========================================================================
@@ -179,9 +203,19 @@ impl<'db> TypeContext<'db> {
     }
 
     /// Instantiate a constructor's type scheme with fresh type variables.
+    ///
+    /// Caches the result so repeated calls for the same constructor return the
+    /// same instantiated type (avoiding creation of different type variables).
     pub fn instantiate_constructor(&mut self, id: CtorId<'db>) -> Option<Type<'db>> {
+        // Return cached instantiation if available
+        if let Some(ty) = self.instantiated_constructors.get(&id) {
+            return Some(*ty);
+        }
+
         let scheme = self.lookup_constructor(id)?;
-        Some(self.instantiate_scheme(scheme))
+        let ty = self.instantiate_scheme(scheme);
+        self.instantiated_constructors.insert(id, ty);
+        Some(ty)
     }
 
     // =========================================================================
@@ -379,5 +413,226 @@ impl<'db> TypeContext<'db> {
     /// Create a named type.
     pub fn named_type(&self, name: Symbol, args: Vec<Type<'db>>) -> Type<'db> {
         Type::new(self.db, TypeKind::Named { name, args })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{TypeParam, TypeScheme};
+    use salsa_test_macros::salsa_test;
+
+    /// Create a type parameter with just a name.
+    fn type_param(name: Symbol) -> TypeParam {
+        TypeParam {
+            name: Some(name),
+            kind: None,
+        }
+    }
+
+    /// Tracked helper for function caching test.
+    #[salsa::tracked]
+    fn test_function_caching_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+        let mut ctx = TypeContext::new(db);
+
+        // Create a polymorphic function type: forall a. a -> a
+        let name = Symbol::new("identity");
+        let func_id = FuncDefId::new(db, name);
+
+        // BoundVar(0) -> BoundVar(0)
+        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let effect = EffectRow::pure(db);
+        let func_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![bound_var],
+                result: bound_var,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
+        ctx.register_function(func_id, scheme);
+
+        // First instantiation
+        let ty1 = ctx.instantiate_function(func_id).unwrap();
+
+        // Second instantiation should return the same type (cached)
+        let ty2 = ctx.instantiate_function(func_id).unwrap();
+
+        // Both should be the same type
+        if ty1 != ty2 {
+            return false;
+        }
+
+        // Verify it's a function type with UniVar
+        if let TypeKind::Func { params, result, .. } = ty1.kind(db) {
+            params.len() == 1
+                && params[0] == *result
+                && matches!(params[0].kind(db), TypeKind::UniVar { .. })
+        } else {
+            false
+        }
+    }
+
+    #[salsa_test]
+    fn test_instantiate_function_caching(db: &dyn salsa::Database) {
+        assert!(
+            test_function_caching_inner(db),
+            "Function instantiation should return cached type on second call"
+        );
+    }
+
+    /// Tracked helper for constructor caching test.
+    #[salsa::tracked]
+    fn test_constructor_caching_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+        let mut ctx = TypeContext::new(db);
+
+        // Create a polymorphic constructor type: forall a. a -> Option a
+        let type_name = Symbol::new("Option");
+        let ctor_id = CtorId::new(db, type_name);
+
+        // a -> Option(a)
+        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let result_ty = Type::new(
+            db,
+            TypeKind::Named {
+                name: type_name,
+                args: vec![bound_var],
+            },
+        );
+        let effect = EffectRow::pure(db);
+        let func_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![bound_var],
+                result: result_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
+        ctx.register_constructor(ctor_id, scheme);
+
+        // First instantiation
+        let ty1 = ctx.instantiate_constructor(ctor_id).unwrap();
+
+        // Second instantiation should return the same type (cached)
+        let ty2 = ctx.instantiate_constructor(ctor_id).unwrap();
+
+        // Both should be the same type
+        if ty1 != ty2 {
+            return false;
+        }
+
+        // Verify it's a function type
+        if let TypeKind::Func { params, result, .. } = ty1.kind(db) {
+            if params.len() != 1 {
+                return false;
+            }
+            // Result should be Named type with the same UniVar as param
+            if let TypeKind::Named { name, args } = result.kind(db) {
+                *name == type_name && args.len() == 1 && args[0] == params[0]
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    #[salsa_test]
+    fn test_instantiate_constructor_caching(db: &dyn salsa::Database) {
+        assert!(
+            test_constructor_caching_inner(db),
+            "Constructor instantiation should return cached type on second call"
+        );
+    }
+
+    /// Tracked helper for different functions test.
+    #[salsa::tracked]
+    fn test_different_functions_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+        let mut ctx = TypeContext::new(db);
+
+        // Create two different functions with the same scheme
+        let name1 = Symbol::new("f1");
+        let name2 = Symbol::new("f2");
+        let func_id1 = FuncDefId::new(db, name1);
+        let func_id2 = FuncDefId::new(db, name2);
+
+        // forall a. a -> a
+        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let effect = EffectRow::pure(db);
+        let func_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![bound_var],
+                result: bound_var,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
+        ctx.register_function(func_id1, scheme);
+        ctx.register_function(func_id2, scheme);
+
+        // Instantiate both
+        let ty1 = ctx.instantiate_function(func_id1).unwrap();
+        let ty2 = ctx.instantiate_function(func_id2).unwrap();
+
+        // They should have different UniVars
+        if let (
+            TypeKind::Func {
+                params: params1, ..
+            },
+            TypeKind::Func {
+                params: params2, ..
+            },
+        ) = (ty1.kind(db), ty2.kind(db))
+        {
+            // The UniVar IDs should be different
+            params1[0] != params2[0]
+        } else {
+            false
+        }
+    }
+
+    #[salsa_test]
+    fn test_different_functions_get_different_types(db: &dyn salsa::Database) {
+        assert!(
+            test_different_functions_inner(db),
+            "Different functions should get different type variable instantiations"
+        );
+    }
+
+    #[salsa_test]
+    fn test_lookup_local_fallback_to_name(db: &dyn salsa::Database) {
+        let mut ctx = TypeContext::new(db);
+
+        // Bind a local by name only
+        let name = Symbol::new("x");
+        let ty = ctx.int_type();
+        ctx.bind_local_by_name(name, ty);
+
+        // Lookup by LocalId should fail, but by name should succeed
+        let local_id = LocalId::new(1);
+        assert!(ctx.lookup_local(local_id).is_none());
+        assert_eq!(ctx.lookup_local_by_name(name), Some(ty));
+    }
+
+    #[salsa_test]
+    fn test_lookup_local_prefers_local_id(db: &dyn salsa::Database) {
+        let mut ctx = TypeContext::new(db);
+
+        // Bind both by LocalId and by name with different types
+        let name = Symbol::new("x");
+        let local_id = LocalId::new(1);
+        let ty_by_id = ctx.int_type();
+        let ty_by_name = ctx.string_type();
+
+        ctx.bind_local(local_id, ty_by_id);
+        ctx.bind_local_by_name(name, ty_by_name);
+
+        // lookup_local should return the type bound by LocalId
+        assert_eq!(ctx.lookup_local(local_id), Some(ty_by_id));
+        // lookup_local_by_name should return the type bound by name
+        assert_eq!(ctx.lookup_local_by_name(name), Some(ty_by_name));
     }
 }
