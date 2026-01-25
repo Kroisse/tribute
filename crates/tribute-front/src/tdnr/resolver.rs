@@ -69,28 +69,119 @@ impl<'db> TdnrResolver<'db> {
 
                 let func_name = func.name;
 
-                // Create FuncDefId for this function
-                // Note: Salsa interns FuncDefId by name, so this returns the canonical ID
+                // Create FuncDefId (Salsa interns by name, so this returns the canonical ID)
                 let func_id = FuncDefId::new(self.db, func_name);
 
                 // Try to extract the type name from the first parameter's type annotation
                 let first_param = &func.params[0];
-                if let Some(type_name) = self.extract_type_name(&first_param.ty) {
-                    // Build actual function type from the body expression's type if available
-                    // For now, use a placeholder since we don't have full type info here
-                    let func_ty = Type::new(self.db, crate::ast::TypeKind::Error);
+                let type_name = self.extract_type_name(&first_param.ty);
 
-                    // Register with the actual type name for precise UFCS lookup
-                    self.method_index
-                        .insert((type_name, func_name), (func_id, func_ty));
+                // Skip if we can't determine the receiver type - no "_any" fallback
+                let Some(type_name) = type_name else {
+                    continue;
+                };
+
+                // Build function type from parameter and return type annotations
+                let func_ty = self.build_func_type(func);
+
+                // Register with the actual type name for precise UFCS lookup
+                self.method_index
+                    .insert((type_name, func_name), (func_id, func_ty));
+            }
+        }
+    }
+
+    /// Build a function type from parameter and return type annotations.
+    fn build_func_type(&self, func: &FuncDecl<TypedRef<'db>>) -> Type<'db> {
+        use crate::ast::{EffectRow, TypeKind};
+
+        // Convert parameter types from annotations
+        let params: Vec<Type<'db>> = func
+            .params
+            .iter()
+            .map(|p| self.annotation_to_type(&p.ty))
+            .collect();
+
+        // Get return type from annotation or infer from body
+        let result = func
+            .return_ty
+            .as_ref()
+            .map(|ann| self.annotation_to_type(&Some(ann.clone())))
+            .unwrap_or_else(|| {
+                // Try to get return type from body expression
+                self.get_expr_type(&func.body)
+                    .unwrap_or_else(|| Type::new(self.db, TypeKind::Nil))
+            });
+
+        // Use pure effect for simplicity (effect annotations could be added later)
+        let effect = EffectRow::pure(self.db);
+
+        Type::new(
+            self.db,
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            },
+        )
+    }
+
+    /// Convert a type annotation to a Type.
+    fn annotation_to_type(&self, annotation: &Option<crate::ast::TypeAnnotation>) -> Type<'db> {
+        use crate::ast::{TypeAnnotationKind, TypeKind};
+
+        let Some(ann) = annotation else {
+            // No annotation - use a fresh type variable placeholder
+            return Type::new(self.db, TypeKind::Error);
+        };
+
+        match &ann.kind {
+            TypeAnnotationKind::Named(name) => {
+                // Map primitive type names
+                if *name == "Int" {
+                    Type::new(self.db, TypeKind::Int)
+                } else if *name == "Nat" {
+                    Type::new(self.db, TypeKind::Nat)
+                } else if *name == "Float" {
+                    Type::new(self.db, TypeKind::Float)
+                } else if *name == "Bool" {
+                    Type::new(self.db, TypeKind::Bool)
+                } else if *name == "String" {
+                    Type::new(self.db, TypeKind::String)
+                } else if *name == "Bytes" {
+                    Type::new(self.db, TypeKind::Bytes)
+                } else if *name == "()" || *name == "Nil" {
+                    Type::new(self.db, TypeKind::Nil)
                 } else {
-                    // Only register with "_any" when we cannot determine the receiver type
-                    // This fallback is used when type annotations are missing
-                    let func_ty = Type::new(self.db, crate::ast::TypeKind::Error);
-                    self.method_index
-                        .insert((Symbol::new("_any"), func_name), (func_id, func_ty));
+                    // User-defined type
+                    Type::new(
+                        self.db,
+                        TypeKind::Named {
+                            name: *name,
+                            args: vec![],
+                        },
+                    )
                 }
             }
+            TypeAnnotationKind::Path(path) if !path.is_empty() => {
+                let name = path.last().copied().unwrap();
+                Type::new(self.db, TypeKind::Named { name, args: vec![] })
+            }
+            TypeAnnotationKind::App { ctor, args } => {
+                let ctor_ty = self.annotation_to_type(&Some((**ctor).clone()));
+                let arg_tys: Vec<Type<'db>> = args
+                    .iter()
+                    .map(|a| self.annotation_to_type(&Some(a.clone())))
+                    .collect();
+                Type::new(
+                    self.db,
+                    TypeKind::App {
+                        ctor: ctor_ty,
+                        args: arg_tys,
+                    },
+                )
+            }
+            _ => Type::new(self.db, TypeKind::Error),
         }
     }
 
@@ -394,20 +485,26 @@ impl<'db> TdnrResolver<'db> {
         receiver_ty: Option<Type<'db>>,
         method: Symbol,
     ) -> Option<(FuncDefId<'db>, Type<'db>)> {
-        // Try to get the type name from the receiver type
-        if let Some(ty) = receiver_ty
-            && let crate::ast::TypeKind::Named { name, .. } = ty.kind(self.db)
-        {
-            // Look up in method index
-            if let Some((func_id, func_ty)) = self.method_index.get(&(*name, method)) {
-                return Some((*func_id, *func_ty));
-            }
-        }
+        use crate::ast::TypeKind;
 
-        // Fall back to looking up with any type
-        self.method_index
-            .get(&(Symbol::new("_any"), method))
-            .copied()
+        let ty = receiver_ty?;
+
+        // Extract type name based on the type kind
+        let type_name = match ty.kind(self.db) {
+            TypeKind::Named { name, .. } => *name,
+            TypeKind::Int => Symbol::new("Int"),
+            TypeKind::Nat => Symbol::new("Nat"),
+            TypeKind::Float => Symbol::new("Float"),
+            TypeKind::Bool => Symbol::new("Bool"),
+            TypeKind::String => Symbol::new("String"),
+            TypeKind::Bytes => Symbol::new("Bytes"),
+            TypeKind::Nil => Symbol::new("Nil"),
+            // For other types, we can't look up methods
+            _ => return None,
+        };
+
+        // Look up in method index - no "_any" fallback
+        self.method_index.get(&(type_name, method)).copied()
     }
 
     // =========================================================================

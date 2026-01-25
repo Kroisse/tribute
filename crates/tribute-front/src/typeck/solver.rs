@@ -50,49 +50,12 @@ impl<'db> TypeSubst<'db> {
     }
 
     /// Apply the substitution to a type.
+    ///
+    /// Note: This delegates to `apply_with_rows` with an empty row substitution.
+    /// If you need to substitute effect row variables, use `apply_with_rows` directly
+    /// with the appropriate `RowSubst`.
     pub fn apply(&self, db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
-        match ty.kind(db) {
-            TypeKind::UniVar { id } => {
-                if let Some(subst_ty) = self.get(*id) {
-                    // Recursively apply to handle chains
-                    self.apply(db, subst_ty)
-                } else {
-                    ty
-                }
-            }
-            TypeKind::Named { name, args } => {
-                let args = args.iter().map(|a| self.apply(db, *a)).collect();
-                Type::new(db, TypeKind::Named { name: *name, args })
-            }
-            TypeKind::Func {
-                params,
-                result,
-                effect,
-            } => {
-                let params = params.iter().map(|p| self.apply(db, *p)).collect();
-                let result = self.apply(db, *result);
-                // Note: Effect row substitution requires RowSubst, use apply_with_rows for full substitution
-                Type::new(
-                    db,
-                    TypeKind::Func {
-                        params,
-                        result,
-                        effect: *effect,
-                    },
-                )
-            }
-            TypeKind::Tuple(elements) => {
-                let elements = elements.iter().map(|e| self.apply(db, *e)).collect();
-                Type::new(db, TypeKind::Tuple(elements))
-            }
-            TypeKind::App { ctor, args } => {
-                let ctor = self.apply(db, *ctor);
-                let args = args.iter().map(|a| self.apply(db, *a)).collect();
-                Type::new(db, TypeKind::App { ctor, args })
-            }
-            // Primitive types and bound variables are unchanged
-            _ => ty,
-        }
+        self.apply_with_rows(db, ty, &RowSubst::new())
     }
 
     /// Apply substitution to a type, including effect row substitution.
