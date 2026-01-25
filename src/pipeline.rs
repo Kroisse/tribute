@@ -759,7 +759,21 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
     };
 
     // Get span map for source location information
-    let span_map = ast_query::span_map(db, source).unwrap_or_default();
+    let span_map = match ast_query::span_map(db, source) {
+        Some(map) => map,
+        None => {
+            // Missing span map - emit warning and use default
+            // This may cause LSP features to have degraded source locations
+            Diagnostic {
+                message: "span map unavailable; source locations may be inaccurate".to_string(),
+                span: Span::default(),
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::AstGeneration,
+            }
+            .accumulate(db);
+            Default::default()
+        }
+    };
 
     // Phase 5: AST → TrunkIR
     let source_uri = source.uri(db).as_str();

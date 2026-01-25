@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 /// A span of source code, represented as byte offsets.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct Span {
     pub start: usize,
     pub end: usize,

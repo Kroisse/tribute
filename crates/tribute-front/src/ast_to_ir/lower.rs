@@ -2,6 +2,8 @@
 //!
 //! Transforms AST declarations and expressions to TrunkIR operations.
 
+use salsa::Accumulator;
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::{Attribute, DialectType, IdVec, Location, PathId, Symbol};
 
@@ -150,8 +152,18 @@ fn lower_expr<'db>(
         }
 
         ExprKind::BytesLit(ref _bytes) => {
-            // TODO: implement bytes constant lowering
-            None
+            // Bytes literal lowering not yet supported - emit diagnostic
+            Diagnostic {
+                message: "bytes literal not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
+            // Return unit as placeholder
+            let ty = ctx.unit_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
         }
 
         ExprKind::Nil => {
@@ -281,7 +293,14 @@ fn lower_binop<'db>(
             .op(arith::or(ctx.db, location, lhs, rhs, bool_ty))
             .result(ctx.db),
         BinOpKind::Concat => {
-            // String concatenation not yet supported in trunk-ir
+            // String concatenation not yet supported in trunk-ir - emit diagnostic
+            Diagnostic {
+                message: "string concatenation not yet supported in IR lowering".to_string(),
+                span: location.span,
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(ctx.db);
             // Return unit as placeholder
             let ty = ctx.unit_type();
             block
