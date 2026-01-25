@@ -28,7 +28,10 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
         // === Literal patterns ===
         "nat_literal" => {
             let text = ctx.node_text(&node);
-            let value = parse_nat_literal(&text).unwrap_or(0) as i64;
+            // Safe conversion: if u64 > i64::MAX, fall back to 0 (consistent with parse error handling)
+            let value = parse_nat_literal(&text)
+                .and_then(|v| i64::try_from(v).ok())
+                .unwrap_or(0);
             PatternKind::Literal(LiteralPattern::Int(value))
         }
         "int_literal" => {
@@ -315,16 +318,33 @@ fn parse_int_literal(text: &str) -> Option<i64> {
         return None;
     }
 
-    let (sign, rest) = if let Some(rest) = text.strip_prefix('+') {
-        (1i64, rest)
+    let (is_negative, rest) = if let Some(rest) = text.strip_prefix('+') {
+        (false, rest)
     } else if let Some(rest) = text.strip_prefix('-') {
-        (-1i64, rest)
+        (true, rest)
     } else {
-        (1i64, text)
+        (false, text)
     };
 
-    let value = parse_nat_literal(rest)? as i64;
-    Some(sign * value)
+    let value = parse_nat_literal(rest)?;
+
+    if is_negative {
+        // For negative numbers, the maximum magnitude is |i64::MIN| = 2^63
+        // i64::MAX = 2^63 - 1, so i64::MIN's magnitude is (i64::MAX as u64) + 1
+        if value <= i64::MAX as u64 {
+            // Safe to convert and negate
+            Some(-(value as i64))
+        } else if value == (i64::MAX as u64) + 1 {
+            // Special case: -9223372036854775808 (i64::MIN)
+            Some(i64::MIN)
+        } else {
+            // Overflow: magnitude too large for i64
+            None
+        }
+    } else {
+        // For positive numbers, must fit in i64::MAX
+        i64::try_from(value).ok()
+    }
 }
 
 fn parse_string_literal(text: &str) -> String {
@@ -782,6 +802,18 @@ mod tests {
     fn test_parse_int_literal_negative() {
         assert_eq!(parse_int_literal("-42"), Some(-42));
         assert_eq!(parse_int_literal("-0xFF"), Some(-255));
+    }
+
+    #[test]
+    fn test_parse_int_literal_bounds() {
+        // i64::MAX
+        assert_eq!(parse_int_literal("9223372036854775807"), Some(i64::MAX));
+        // i64::MIN (special case: magnitude exceeds i64::MAX)
+        assert_eq!(parse_int_literal("-9223372036854775808"), Some(i64::MIN));
+        // Overflow: positive value exceeds i64::MAX
+        assert_eq!(parse_int_literal("9223372036854775808"), None);
+        // Overflow: negative magnitude exceeds |i64::MIN|
+        assert_eq!(parse_int_literal("-9223372036854775809"), None);
     }
 
     #[test]
