@@ -94,12 +94,6 @@ where
     /// Matches the inner pattern and also binds the whole value.
     As { pattern: Pattern<V>, name: Symbol },
 
-    /// Or pattern: `None | Some(0)`
-    ///
-    /// Matches if any of the alternatives match.
-    /// All alternatives must bind the same names.
-    Or(Vec<Pattern<V>>),
-
     /// Error pattern (for error recovery).
     Error,
 }

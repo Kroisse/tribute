@@ -3,7 +3,7 @@
 //! This module transforms `Expr<UnresolvedName>` into `Expr<ResolvedRef<'db>>`
 //! by looking up names in the module environment and local scopes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 
@@ -434,68 +434,6 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Collect all binding names from a pattern (for Or-pattern validation).
-    fn collect_pattern_bindings(&self, pattern: &Pattern<UnresolvedName>) -> HashSet<Symbol> {
-        let mut bindings = HashSet::new();
-        self.collect_bindings_recursive(pattern, &mut bindings);
-        bindings
-    }
-
-    /// Recursively collect binding names from a pattern.
-    fn collect_bindings_recursive(
-        &self,
-        pattern: &Pattern<UnresolvedName>,
-        set: &mut HashSet<Symbol>,
-    ) {
-        match &*pattern.kind {
-            PatternKind::Bind { name, .. } => {
-                set.insert(*name);
-            }
-            PatternKind::Tuple(pats) | PatternKind::List(pats) => {
-                for p in pats {
-                    self.collect_bindings_recursive(p, set);
-                }
-            }
-            PatternKind::Variant { fields, .. } => {
-                for p in fields {
-                    self.collect_bindings_recursive(p, set);
-                }
-            }
-            PatternKind::Record { fields, .. } => {
-                for f in fields {
-                    if let Some(p) = &f.pattern {
-                        self.collect_bindings_recursive(p, set);
-                    } else {
-                        // Shorthand pattern: { name } binds 'name'
-                        set.insert(f.name);
-                    }
-                }
-            }
-            PatternKind::ListRest { head, rest } => {
-                for p in head {
-                    self.collect_bindings_recursive(p, set);
-                }
-                if let Some(name) = rest
-                    && *name != "_"
-                {
-                    set.insert(*name);
-                }
-            }
-            PatternKind::As { pattern, name } => {
-                set.insert(*name);
-                self.collect_bindings_recursive(pattern, set);
-            }
-            PatternKind::Or(pats) => {
-                // For Or patterns, collect from first alternative only
-                // (others should have same bindings)
-                if let Some(first) = pats.first() {
-                    self.collect_bindings_recursive(first, set);
-                }
-            }
-            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {}
-        }
-    }
-
     /// Resolve a pattern, binding any names it introduces.
     fn resolve_pattern_with_bindings(
         &mut self,
@@ -574,31 +512,6 @@ impl<'db> Resolver<'db> {
                     self.bind_local(rest_name);
                 }
                 PatternKind::ListRest { head, rest }
-            }
-
-            PatternKind::Or(patterns) => {
-                // For Or patterns, each alternative should bind the same names.
-                // Validate that all alternatives bind exactly the same set of names.
-                if patterns.len() > 1 {
-                    let first_bindings = self.collect_pattern_bindings(&patterns[0]);
-                    for (i, pat) in patterns.iter().enumerate().skip(1) {
-                        let bindings = self.collect_pattern_bindings(pat);
-                        if bindings != first_bindings {
-                            tracing::warn!(
-                                "Or-pattern alternative {} binds different names: {:?} vs {:?}",
-                                i + 1,
-                                bindings,
-                                first_bindings
-                            );
-                        }
-                    }
-                }
-
-                let patterns = patterns
-                    .into_iter()
-                    .map(|p| self.resolve_pattern_with_bindings(p))
-                    .collect();
-                PatternKind::Or(patterns)
             }
 
             PatternKind::As { pattern, name } => {
@@ -793,98 +706,5 @@ mod tests {
             }
             _ => panic!("Expected unresolved y after pop"),
         }
-    }
-
-    #[test]
-    fn test_collect_pattern_bindings_simple() {
-        let db = test_db();
-        let env = ModuleEnv::new();
-        let resolver = Resolver::new(&db, env);
-
-        // Create a simple bind pattern: x
-        let pattern = Pattern::new(
-            NodeId::from_raw(1),
-            PatternKind::Bind {
-                name: Symbol::new("x"),
-                local_id: None,
-            },
-        );
-
-        let bindings = resolver.collect_pattern_bindings(&pattern);
-        assert_eq!(bindings.len(), 1);
-        assert!(bindings.contains(&Symbol::new("x")));
-    }
-
-    #[test]
-    fn test_collect_pattern_bindings_tuple() {
-        let db = test_db();
-        let env = ModuleEnv::new();
-        let resolver = Resolver::new(&db, env);
-
-        // Create tuple pattern: (x, y)
-        let pattern = Pattern::new(
-            NodeId::from_raw(1),
-            PatternKind::Tuple(vec![
-                Pattern::new(
-                    NodeId::from_raw(2),
-                    PatternKind::Bind {
-                        name: Symbol::new("x"),
-                        local_id: None,
-                    },
-                ),
-                Pattern::new(
-                    NodeId::from_raw(3),
-                    PatternKind::Bind {
-                        name: Symbol::new("y"),
-                        local_id: None,
-                    },
-                ),
-            ]),
-        );
-
-        let bindings = resolver.collect_pattern_bindings(&pattern);
-        assert_eq!(bindings.len(), 2);
-        assert!(bindings.contains(&Symbol::new("x")));
-        assert!(bindings.contains(&Symbol::new("y")));
-    }
-
-    #[test]
-    fn test_collect_pattern_bindings_as() {
-        let db = test_db();
-        let env = ModuleEnv::new();
-        let resolver = Resolver::new(&db, env);
-
-        // Create as pattern: x as y
-        let pattern = Pattern::new(
-            NodeId::from_raw(1),
-            PatternKind::As {
-                pattern: Pattern::new(
-                    NodeId::from_raw(2),
-                    PatternKind::Bind {
-                        name: Symbol::new("x"),
-                        local_id: None,
-                    },
-                ),
-                name: Symbol::new("y"),
-            },
-        );
-
-        let bindings = resolver.collect_pattern_bindings(&pattern);
-        assert_eq!(bindings.len(), 2);
-        assert!(bindings.contains(&Symbol::new("x")));
-        assert!(bindings.contains(&Symbol::new("y")));
-    }
-
-    #[test]
-    fn test_collect_pattern_bindings_wildcard() {
-        let db = test_db();
-        let env = ModuleEnv::new();
-        let resolver = Resolver::new(&db, env);
-
-        // Wildcard binds nothing
-        let pattern = Pattern::new(NodeId::from_raw(1), PatternKind::Wildcard);
-
-        let bindings = resolver.collect_pattern_bindings(&pattern);
-        assert!(bindings.is_empty());
     }
 }

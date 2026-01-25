@@ -819,12 +819,6 @@ impl<'db> TypeChecker<'db> {
                 self.ctx.bind_local_by_name(*name, ty);
                 self.bind_pattern_vars(pattern, ty);
             }
-            PatternKind::Or(pats) => {
-                // All alternatives should bind the same names, so just process the first
-                if let Some(first) = pats.first() {
-                    self.bind_pattern_vars(first, ty);
-                }
-            }
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {}
         }
     }
@@ -870,12 +864,6 @@ impl<'db> TypeChecker<'db> {
                 head: head.into_iter().map(|p| self.convert_pattern(p)).collect(),
                 rest,
             },
-            PatternKind::Or(patterns) => PatternKind::Or(
-                patterns
-                    .into_iter()
-                    .map(|p| self.convert_pattern(p))
-                    .collect(),
-            ),
             PatternKind::As { pattern, name } => PatternKind::As {
                 pattern: self.convert_pattern(pattern),
                 name,

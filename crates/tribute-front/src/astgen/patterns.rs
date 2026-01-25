@@ -68,9 +68,6 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
         // === As pattern ===
         "as_pattern" => lower_as_pattern(ctx, node),
 
-        // === Or pattern ===
-        "or_pattern" => lower_or_pattern(ctx, node),
-
         // === Type identifier (could be unit variant) ===
         "type_identifier" => {
             let name = ctx.node_symbol(&node);
@@ -282,19 +279,6 @@ fn lower_as_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unresol
     let name = ctx.node_symbol(&name_node);
 
     PatternKind::As { pattern, name }
-}
-
-fn lower_or_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<UnresolvedName> {
-    let mut alternatives = Vec::new();
-    let mut cursor = node.walk();
-
-    for child in node.named_children(&mut cursor) {
-        if !is_comment(child.kind()) {
-            alternatives.push(lower_pattern(ctx, child));
-        }
-    }
-
-    PatternKind::Or(alternatives)
 }
 
 fn lower_pattern_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Pattern<UnresolvedName>> {

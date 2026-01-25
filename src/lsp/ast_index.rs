@@ -434,11 +434,6 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
             PatternKind::As { pattern: inner, .. } => {
                 self.collect_pattern(inner);
             }
-            PatternKind::Or(alts) => {
-                for alt in alts {
-                    self.collect_pattern(alt);
-                }
-            }
             PatternKind::Error => {}
         }
     }
@@ -1054,11 +1049,6 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                 self.collect_pattern(inner);
                 // As binding doesn't have LocalId
                 self.add_definition(pattern.id, *name, DefinitionKind::Local, None);
-            }
-            PatternKind::Or(alts) => {
-                for alt in alts {
-                    self.collect_pattern(alt);
-                }
             }
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {}
         }
