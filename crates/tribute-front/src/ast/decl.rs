@@ -5,8 +5,8 @@
 //! - Structs: `struct Point { x: Int, y: Int }`
 //! - Enums: `enum Option(a) { Some(a), None }`
 //! - Abilities: `ability State(s) { get() -> s, put(s) -> () }`
-//! - Constants: `const PI = 3.14159`
 //! - Imports: `use std::collections::List`
+//! - Modules: `mod math { ... }`
 
 use trunk_ir::Symbol;
 
@@ -104,6 +104,8 @@ pub struct ParamDecl {
     pub name: Symbol,
     /// Type annotation (optional).
     pub ty: Option<TypeAnnotation>,
+    /// Local ID assigned during name resolution (None before resolution).
+    pub local_id: Option<super::phases::LocalId>,
 }
 
 /// Struct declaration: `struct Name { fields }`

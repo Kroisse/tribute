@@ -123,7 +123,12 @@ fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<ParamDecl> {
             let ty = child
                 .child_by_field_name("type")
                 .and_then(|n| lower_type_annotation(ctx, n));
-            params.push(ParamDecl { id, name, ty });
+            params.push(ParamDecl {
+                id,
+                name,
+                ty,
+                local_id: None,
+            });
         }
     }
 

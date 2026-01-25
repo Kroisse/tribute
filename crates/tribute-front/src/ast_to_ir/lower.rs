@@ -5,7 +5,7 @@
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::dialect::{adt, arith, core, func};
-use trunk_ir::{Attribute, DialectType, IdVec, Location, PathId, Symbol};
+use trunk_ir::{Attribute, DialectType, Location, PathId, Symbol};
 
 use crate::ast::{
     Decl, Expr, ExprKind, FuncDecl, Module, ResolvedRef, SpanMap, Stmt, TypeAnnotation,
@@ -75,11 +75,14 @@ fn lower_function<'db>(
     let location = ctx.location(func.id);
     let func_name = func.name;
 
-    // Build parameter types from annotations, defaulting to int for untyped params
-    let param_types: IdVec<trunk_ir::Type<'db>> = func
+    // Build parameter types with optional names
+    let params: Vec<(trunk_ir::Type<'db>, Option<Symbol>)> = func
         .params
         .iter()
-        .map(|p| convert_annotation_to_ir_type(ctx, p.ty.as_ref()))
+        .map(|p| {
+            let ty = convert_annotation_to_ir_type(ctx, p.ty.as_ref());
+            (ty, Some(p.name))
+        })
         .collect();
 
     // Build return type from annotation, defaulting to unit
@@ -89,15 +92,25 @@ fn lower_function<'db>(
         .map(|ann| convert_annotation_to_ir_type(ctx, Some(ann)))
         .unwrap_or_else(|| ctx.unit_type());
 
-    // Create function operation
-    let func_op = func::Func::build(
+    // Collect parameter LocalIds for binding
+    let param_local_ids: Vec<_> = func.params.iter().filter_map(|p| p.local_id).collect();
+
+    // Create function operation with named params
+    let func_op = func::Func::build_with_named_params(
         ctx.db,
         location,
         func_name,
-        param_types,
+        None,
+        params,
         return_ty,
-        |body| {
+        None,
+        |body, arg_values| {
             ctx.enter_scope();
+
+            // Bind parameters to their block argument values
+            for (local_id, arg_value) in param_local_ids.iter().zip(arg_values.iter()) {
+                ctx.bind(*local_id, *arg_value);
+            }
 
             // Lower function body
             if let Some(result) = lower_expr(ctx, body, func.body) {
@@ -921,11 +934,13 @@ mod tests {
                     id: fresh_node_id(),
                     name: a_name,
                     ty: None,
+                    local_id: Some(LocalId::new(0)),
                 },
                 ParamDecl {
                     id: fresh_node_id(),
                     name: b_name,
                     ty: None,
+                    local_id: Some(LocalId::new(1)),
                 },
             ],
             return_ty: None,

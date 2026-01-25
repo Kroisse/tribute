@@ -175,12 +175,14 @@ impl<'db> Resolver<'db> {
         // Enter a new scope for function body
         self.push_scope();
 
-        // Bind parameters
+        // Bind parameters and assign local IDs
         let params = func
             .params
             .into_iter()
-            .inspect(|p| {
-                self.bind_local(p.name);
+            .map(|mut p| {
+                let local_id = self.bind_local(p.name);
+                p.local_id = Some(local_id);
+                p
             })
             .collect();
 
