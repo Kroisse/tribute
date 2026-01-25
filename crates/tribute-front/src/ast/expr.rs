@@ -222,6 +222,8 @@ pub struct Param {
     pub name: Symbol,
     /// Optional type annotation.
     pub ty: Option<TypeAnnotation>,
+    /// Local ID assigned during name resolution (None before resolution).
+    pub local_id: Option<super::phases::LocalId>,
 }
 
 /// Binary operators.

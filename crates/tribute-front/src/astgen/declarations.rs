@@ -31,24 +31,32 @@ pub fn lower_module(
             continue;
         }
 
-        if let Some(decl) = lower_decl(ctx, child) {
-            decls.push(decl);
-        }
+        decls.extend(lower_decl(ctx, child));
     }
 
     Module { id, name, decls }
 }
 
 /// Lower a CST declaration node to an AST Decl.
-fn lower_decl(ctx: &mut AstLoweringCtx, node: Node) -> Option<Decl<UnresolvedName>> {
+/// Returns a Vec because use declarations can expand to multiple items.
+fn lower_decl(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Decl<UnresolvedName>> {
     match node.kind() {
-        "function_definition" => lower_function(ctx, node).map(Decl::Function),
-        "struct_declaration" => lower_struct(ctx, node).map(Decl::Struct),
-        "enum_declaration" => lower_enum(ctx, node).map(Decl::Enum),
-        "ability_declaration" => lower_ability(ctx, node).map(Decl::Ability),
-        "mod_declaration" => lower_mod(ctx, node).map(Decl::Module),
-        "use_declaration" => lower_use(ctx, node).map(Decl::Use),
-        _ => None,
+        "function_definition" => lower_function(ctx, node)
+            .map(Decl::Function)
+            .into_iter()
+            .collect(),
+        "struct_declaration" => lower_struct(ctx, node)
+            .map(Decl::Struct)
+            .into_iter()
+            .collect(),
+        "enum_declaration" => lower_enum(ctx, node).map(Decl::Enum).into_iter().collect(),
+        "ability_declaration" => lower_ability(ctx, node)
+            .map(Decl::Ability)
+            .into_iter()
+            .collect(),
+        "mod_declaration" => lower_mod(ctx, node).map(Decl::Module).into_iter().collect(),
+        "use_declaration" => lower_use(ctx, node).into_iter().map(Decl::Use).collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -148,30 +156,20 @@ fn lower_type_annotation(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnn
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            "type_identifier" | "type_variable" | "generic_type" | "function_type"
-            | "tuple_type" => {
-                let id = ctx.fresh_id_with_span(&child);
-                let name = ctx.node_symbol(&child);
-                return Some(TypeAnnotation {
-                    id,
-                    kind: TypeAnnotationKind::Named(name),
-                });
+            "type_identifier" | "type_variable" | "generic_type" | "function_type" => {
+                // Delegate to lower_type_node to preserve structure
+                return lower_type_node(ctx, child);
             }
             _ => {}
         }
     }
 
-    // Fallback: use the node itself if it's a type
+    // Fallback: try to lower the node itself as a type
     if matches!(
         node.kind(),
-        "type_identifier" | "type_variable" | "generic_type"
+        "type_identifier" | "type_variable" | "generic_type" | "function_type"
     ) {
-        let id = ctx.fresh_id_with_span(&node);
-        let name = ctx.node_symbol(&node);
-        return Some(TypeAnnotation {
-            id,
-            kind: TypeAnnotationKind::Named(name),
-        });
+        return lower_type_node(ctx, node);
     }
 
     None
@@ -191,25 +189,57 @@ fn lower_type_node(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotatio
         }
         "generic_type" => {
             // Generic type like List(a) or Map(k, v)
-            // For now, use the type name
             let id = ctx.fresh_id_with_span(&node);
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = ctx.node_symbol(&name_node);
-                Some(TypeAnnotation {
+
+            // Get the constructor type (first child is the type identifier)
+            let mut cursor = node.walk();
+            let children: Vec<_> = node.named_children(&mut cursor).collect();
+
+            if let Some(name_node) = children.first().filter(|n| n.kind() == "type_identifier") {
+                let ctor = Box::new(TypeAnnotation {
+                    id: ctx.fresh_id_with_span(name_node),
+                    kind: TypeAnnotationKind::Named(ctx.node_symbol(name_node)),
+                });
+
+                // Collect type arguments (remaining children)
+                let args: Vec<TypeAnnotation> = children
+                    .iter()
+                    .skip(1)
+                    .filter_map(|child| lower_type_node(ctx, *child))
+                    .collect();
+
+                return Some(TypeAnnotation {
                     id,
-                    kind: TypeAnnotationKind::Named(name),
-                })
-            } else {
-                None
+                    kind: TypeAnnotationKind::App { ctor, args },
+                });
             }
+            None
         }
-        "function_type" | "tuple_type" => {
-            // Function or tuple types - use the text as the name for now
+        "function_type" => {
+            // Function type: fn(Int, Int) -> Int
             let id = ctx.fresh_id_with_span(&node);
-            let name = ctx.node_symbol(&node);
-            Some(TypeAnnotation {
+
+            // Get parameter types from "params" field (type_list)
+            let params: Vec<TypeAnnotation> = node
+                .child_by_field_name("params")
+                .map(|params_node| {
+                    let mut cursor = params_node.walk();
+                    params_node
+                        .named_children(&mut cursor)
+                        .filter_map(|child| lower_type_node(ctx, child))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Get return type from "return_type" field
+            let result = node
+                .child_by_field_name("return_type")
+                .and_then(|rt| lower_type_node(ctx, rt))
+                .map(Box::new);
+
+            result.map(|result| TypeAnnotation {
                 id,
-                kind: TypeAnnotationKind::Named(name),
+                kind: TypeAnnotationKind::Func { params, result },
             })
         }
         _ => {
@@ -464,22 +494,91 @@ fn lower_ability_operation(ctx: &mut AstLoweringCtx, node: Node) -> Option<OpDec
 }
 
 /// Lower a use declaration.
-fn lower_use(ctx: &mut AstLoweringCtx, node: Node) -> Option<UseDecl> {
-    let tree_node = node.child_by_field_name("tree")?;
+/// Returns a Vec because `use std::{io, fmt}` expands to multiple UseDecls.
+fn lower_use(ctx: &mut AstLoweringCtx, node: Node) -> Vec<UseDecl> {
+    let Some(tree_node) = node.child_by_field_name("tree") else {
+        return Vec::new();
+    };
 
-    let id = ctx.fresh_id_with_span(&node);
     let is_pub = node
         .named_children(&mut node.walk())
         .any(|child| child.kind() == "visibility_marker");
 
-    let (path, alias) = collect_use_path(ctx, tree_node);
+    // Expand the use tree into multiple (path, alias) pairs
+    let expanded = expand_use_tree(ctx, tree_node, &[]);
 
-    Some(UseDecl {
-        id,
-        is_pub,
-        path,
-        alias,
-    })
+    expanded
+        .into_iter()
+        .map(|(path, alias)| UseDecl {
+            id: ctx.fresh_id_with_span(&node),
+            is_pub,
+            path,
+            alias,
+        })
+        .collect()
+}
+
+/// Expand a use tree into a list of (path, alias) pairs.
+/// Handles nested groups like `use std::{io, fmt, collections::{List, Map}}`.
+fn expand_use_tree(
+    ctx: &AstLoweringCtx,
+    node: Node,
+    prefix: &[Symbol],
+) -> Vec<(Vec<Symbol>, Option<Symbol>)> {
+    let mut results = Vec::new();
+
+    match node.kind() {
+        "use_tree" => {
+            // Check for alias
+            let alias = node
+                .child_by_field_name("alias")
+                .map(|n| ctx.node_symbol(&n));
+
+            // Collect path segments and look for continuation
+            let mut path: Vec<Symbol> = prefix.to_vec();
+            let mut cursor = node.walk();
+
+            for child in node.named_children(&mut cursor) {
+                // Skip alias node
+                if node.child_by_field_name("alias").map(|n| n.id()) == Some(child.id()) {
+                    continue;
+                }
+
+                match child.kind() {
+                    "identifier" | "type_identifier" | "path_keyword" => {
+                        path.push(ctx.node_symbol(&child));
+                    }
+                    "use_tree" => {
+                        // Nested use_tree: recurse with current path as prefix
+                        results.extend(expand_use_tree(ctx, child, &path));
+                    }
+                    "use_group" => {
+                        // Group: {A, B, C} - expand each child with current prefix
+                        let mut group_cursor = child.walk();
+                        for group_child in child.named_children(&mut group_cursor) {
+                            if group_child.kind() == "use_tree" {
+                                results.extend(expand_use_tree(ctx, group_child, &path));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // If we didn't recurse into a group/nested tree, this is a terminal path
+            if results.is_empty() && !path.is_empty() {
+                results.push((path, alias));
+            }
+        }
+        "identifier" | "type_identifier" | "path_keyword" => {
+            let mut path = prefix.to_vec();
+            path.push(ctx.node_symbol(&node));
+            results.push((path, None));
+        }
+        _ => {}
+    }
+
+    results
 }
 
 /// Lower a module declaration.
@@ -500,9 +599,7 @@ fn lower_mod(ctx: &mut AstLoweringCtx, node: Node) -> Option<ModuleDecl<Unresolv
             if is_comment(child.kind()) {
                 continue;
             }
-            if let Some(decl) = lower_decl(ctx, child) {
-                decls.push(decl);
-            }
+            decls.extend(lower_decl(ctx, child));
         }
         Some(decls)
     } else {
@@ -516,49 +613,6 @@ fn lower_mod(ctx: &mut AstLoweringCtx, node: Node) -> Option<ModuleDecl<Unresolv
         is_pub,
         body,
     })
-}
-
-/// Collect use path from a use tree node.
-fn collect_use_path(ctx: &AstLoweringCtx, node: Node) -> (Vec<Symbol>, Option<Symbol>) {
-    let mut path = Vec::new();
-    let mut alias = None;
-    collect_use_path_impl(ctx, node, &mut path, &mut alias);
-    (path, alias)
-}
-
-fn collect_use_path_impl(
-    ctx: &AstLoweringCtx,
-    node: Node,
-    path: &mut Vec<Symbol>,
-    alias: &mut Option<Symbol>,
-) {
-    match node.kind() {
-        "use_tree" => {
-            if let Some(alias_node) = node.child_by_field_name("alias") {
-                *alias = Some(ctx.node_symbol(&alias_node));
-            }
-
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                if node.child_by_field_name("alias").map(|n| n.id()) == Some(child.id()) {
-                    continue;
-                }
-                match child.kind() {
-                    "identifier" | "type_identifier" | "path_keyword" => {
-                        path.push(ctx.node_symbol(&child));
-                    }
-                    "use_tree" => {
-                        collect_use_path_impl(ctx, child, path, alias);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        "identifier" | "type_identifier" | "path_keyword" => {
-            path.push(ctx.node_symbol(&node));
-        }
-        _ => {}
-    }
 }
 
 /// Find a child node by kind.

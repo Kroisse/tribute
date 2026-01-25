@@ -526,7 +526,12 @@ fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Param> {
             let id = ctx.fresh_id_with_span(&child);
             let name = ctx.node_symbol(&child);
             // TODO: type annotation
-            params.push(Param { id, name, ty: None });
+            params.push(Param {
+                id,
+                name,
+                ty: None,
+                local_id: None,
+            });
         }
     }
 

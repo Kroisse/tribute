@@ -486,16 +486,30 @@ fn lower_block<'db>(
                 value,
             } => {
                 if let Some(val) = lower_expr(ctx, block, value) {
-                    // Simple case: bind pattern is just a name
-                    if let crate::ast::PatternKind::Bind {
-                        local_id: Some(local_id),
-                        ..
-                    } = &*pattern.kind
-                    {
-                        // Register the binding so Var expressions can find it
-                        ctx.bind(*local_id, val);
+                    match &*pattern.kind {
+                        crate::ast::PatternKind::Bind {
+                            local_id: Some(local_id),
+                            ..
+                        } => {
+                            // Register the binding so Var expressions can find it
+                            ctx.bind(*local_id, val);
+                        }
+                        crate::ast::PatternKind::Wildcard => {
+                            // Wildcard binds nothing, value is computed for side effects
+                        }
+                        _ => {
+                            // Pattern destructuring not yet supported in IR lowering
+                            let location = ctx.location(pattern.id);
+                            Diagnostic {
+                                message: "pattern destructuring not yet supported in IR lowering"
+                                    .to_string(),
+                                span: location.span,
+                                severity: DiagnosticSeverity::Warning,
+                                phase: CompilationPhase::Lowering,
+                            }
+                            .accumulate(ctx.db);
+                        }
                     }
-                    // TODO: Handle other pattern kinds (tuple, record, etc.)
                 }
             }
             Stmt::Expr { id: _, expr } => {
@@ -535,6 +549,9 @@ fn convert_annotation_to_ir_type<'db>(
                 core::String::new(ctx.db).as_type()
             } else if *name == "Bytes" {
                 core::Bytes::new(ctx.db).as_type()
+            } else if *name == "Rune" {
+                // Rune is a Unicode code point, represented as i32
+                core::I32::new(ctx.db).as_type()
             } else if *name == "()" {
                 ctx.unit_type()
             } else {

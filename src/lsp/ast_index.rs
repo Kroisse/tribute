@@ -388,9 +388,9 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
                 self.collect_expr(rhs);
             }
             ExprKind::RuneLit(_) => {
-                // Rune literals have Int type (Unicode code point)
-                let int_ty = Type::new(self.db, TypeKind::Int);
-                self.add_entry(expr.id, int_ty);
+                // Rune literals have Rune type (Unicode code point)
+                let rune_ty = Type::new(self.db, TypeKind::Rune);
+                self.add_entry(expr.id, rune_ty);
             }
             ExprKind::Error => {}
         }

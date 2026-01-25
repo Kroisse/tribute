@@ -311,8 +311,10 @@ impl<'db> Resolver<'db> {
                 self.push_scope();
                 let params: Vec<Param> = params
                     .into_iter()
-                    .inspect(|p| {
-                        self.bind_local(p.name);
+                    .map(|mut p| {
+                        let local_id = self.bind_local(p.name);
+                        p.local_id = Some(local_id);
+                        p
                     })
                     .collect();
                 let body = self.resolve_expr(body);

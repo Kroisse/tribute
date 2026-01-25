@@ -308,15 +308,19 @@ impl<'db> TypeChecker<'db> {
         // Bind parameter types to the context using the registered type scheme
         // This ensures annotated parameter types are used instead of fresh variables
         let func_id = FuncDefId::new(self.db(), func.name);
-        let param_types_from_scheme: Option<Vec<Type<'db>>> =
+
+        // Get function type info from scheme
+        let func_type_info: Option<(Vec<Type<'db>>, Type<'db>)> =
             self.ctx.lookup_function(func_id).and_then(|scheme| {
                 let func_ty = self.ctx.instantiate_scheme(scheme);
-                if let TypeKind::Func { params, .. } = func_ty.kind(self.db()) {
-                    Some(params.clone())
+                if let TypeKind::Func { params, result, .. } = func_ty.kind(self.db()) {
+                    Some((params.clone(), *result))
                 } else {
                     None
                 }
             });
+
+        let param_types_from_scheme = func_type_info.as_ref().map(|(params, _)| params.clone());
 
         // Bind parameters: use scheme types if available, otherwise fresh vars
         // TODO: ParamDecl currently lacks LocalId; use name-based binding as workaround
@@ -328,8 +332,21 @@ impl<'db> TypeChecker<'db> {
             self.ctx.bind_local_by_name(param.name, ty);
         }
 
-        // Check body
-        let body = self.check_expr(func.body, Mode::Infer);
+        // Determine expected return type:
+        // 1. From type scheme (if available)
+        // 2. From return type annotation (if available)
+        // 3. Fresh type variable (otherwise)
+        let expected_return = func_type_info
+            .map(|(_, result)| result)
+            .or_else(|| {
+                func.return_ty
+                    .as_ref()
+                    .map(|ann| self.annotation_to_type(ann))
+            })
+            .unwrap_or_else(|| self.ctx.fresh_type_var());
+
+        // Check body against expected return type
+        let body = self.check_expr(func.body, Mode::Check(expected_return));
 
         FuncDecl {
             id: func.id,
@@ -1185,6 +1202,7 @@ mod tests {
             id: fresh_node_id(),
             name: Symbol::new("x"),
             ty: None,
+            local_id: Some(LocalId::new(0)),
         };
         let body = Expr::new(
             fresh_node_id(),
@@ -1360,6 +1378,7 @@ mod tests {
                 id: fresh_node_id(),
                 kind: crate::ast::TypeAnnotationKind::Named(Symbol::new("Int")),
             }),
+            local_id: Some(LocalId::new(0)),
         };
         let body = Expr::new(fresh_node_id(), ExprKind::NatLit(42));
         let expr = Expr::new(
