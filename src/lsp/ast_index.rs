@@ -41,6 +41,7 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
         TypeKind::Bool => "Bool".to_string(),
         TypeKind::String => "String".to_string(),
         TypeKind::Bytes => "Bytes".to_string(),
+        TypeKind::Rune => "Rune".to_string(),
         TypeKind::Nil => "()".to_string(),
 
         TypeKind::BoundVar { index } => {

@@ -386,6 +386,11 @@ impl<'db> TypeContext<'db> {
         Type::new(self.db, TypeKind::Bytes)
     }
 
+    /// Create the Rune type (Unicode code point).
+    pub fn rune_type(&self) -> Type<'db> {
+        Type::new(self.db, TypeKind::Rune)
+    }
+
     /// Create the Nil (unit) type.
     pub fn nil_type(&self) -> Type<'db> {
         Type::new(self.db, TypeKind::Nil)

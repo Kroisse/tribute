@@ -377,7 +377,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::StringLit(_) => self.ctx.string_type(),
             ExprKind::BytesLit(_) => self.ctx.bytes_type(),
             ExprKind::Nil => self.ctx.nil_type(),
-            ExprKind::RuneLit(_) => self.ctx.int_type(), // Rune = i32 (Unicode code point)
+            ExprKind::RuneLit(_) => self.ctx.rune_type(),
 
             ExprKind::Var(resolved) => self.infer_var(resolved),
             ExprKind::Call { callee, args } => {
@@ -504,7 +504,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::StringLit(_) => self.ctx.string_type(),
             ExprKind::BytesLit(_) => self.ctx.bytes_type(),
             ExprKind::Nil => self.ctx.nil_type(),
-            ExprKind::RuneLit(_) => self.ctx.int_type(),
+            ExprKind::RuneLit(_) => self.ctx.rune_type(),
             _ => self.ctx.fresh_type_var(),
         }
     }

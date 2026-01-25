@@ -69,6 +69,8 @@ pub enum TypeKind<'db> {
     String,
     /// Byte sequence type
     Bytes,
+    /// Unicode code point (i32)
+    Rune,
     /// Unit type (empty tuple)
     Nil,
 

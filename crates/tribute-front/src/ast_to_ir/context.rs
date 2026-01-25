@@ -72,6 +72,7 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Bool => core::I1::new(self.db).as_type(),
             TypeKind::String => core::String::new(self.db).as_type(),
             TypeKind::Bytes => core::Bytes::new(self.db).as_type(),
+            TypeKind::Rune => core::I32::new(self.db).as_type(),
             TypeKind::Nil | TypeKind::Error => core::Nil::new(self.db).as_type(),
             TypeKind::UniVar { .. } | TypeKind::BoundVar { .. } => {
                 // Unresolved type variables - use placeholder
