@@ -520,6 +520,8 @@ pub struct AstDefinitionEntry {
     pub name: Symbol,
     /// The kind of definition.
     pub kind: DefinitionKind,
+    /// The LocalId for local bindings (enables shadowed variable disambiguation).
+    pub local_id: Option<LocalId>,
 }
 
 /// Entry representing a reference to a definition.
@@ -564,6 +566,14 @@ impl ResolvedTarget {
             ResolvedTarget::Ability { name } => *name,
             ResolvedTarget::Unresolved { name } => *name,
             ResolvedTarget::Other { name } => *name,
+        }
+    }
+
+    /// Get the LocalId if this is a local reference.
+    pub fn local_id(&self) -> Option<LocalId> {
+        match self {
+            ResolvedTarget::Local { id, .. } => Some(*id),
+            _ => None,
         }
     }
 }
@@ -633,21 +643,21 @@ impl<'db> AstDefinitionIndex<'db> {
     }
 
     /// Get the definition for a reference at the given offset.
+    ///
+    /// Uses LocalId-based matching for precise shadowed variable disambiguation.
     pub fn definition_at(
         &self,
         db: &'db dyn salsa::Database,
         offset: usize,
     ) -> Option<&AstDefinitionEntry> {
         let reference = self.reference_at(db, offset)?;
-        let name = reference.target.name();
-        self.definition_of(db, name)
+        self.definition_of_target(db, &reference.target)
     }
 
     /// Find a definition by name.
     ///
-    /// TODO: For locals with shadowing, this may return the wrong definition.
-    /// Consider using `definition_of_target` with a `ResolvedTarget` that includes
-    /// `LocalId` for precise matching.
+    /// Note: For locals with shadowing, this may return the wrong definition.
+    /// Use `definition_of_target` with a `ResolvedTarget` for precise matching.
     pub fn definition_of(
         &self,
         db: &'db dyn salsa::Database,
@@ -659,10 +669,33 @@ impl<'db> AstDefinitionIndex<'db> {
             .map(|&i| &self.definitions(db)[i])
     }
 
+    /// Find a definition by resolved target.
+    ///
+    /// For local references, this uses LocalId to precisely match the definition,
+    /// enabling correct shadowed variable disambiguation.
+    pub fn definition_of_target(
+        &self,
+        db: &'db dyn salsa::Database,
+        target: &ResolvedTarget,
+    ) -> Option<&AstDefinitionEntry> {
+        match target {
+            ResolvedTarget::Local { id, name } => {
+                // For locals, match by LocalId for precise scoping
+                self.definitions(db)
+                    .iter()
+                    .find(|d| d.name == *name && d.local_id == Some(*id))
+            }
+            _ => {
+                // For non-locals, fall back to name-based lookup
+                self.definition_of(db, target.name())
+            }
+        }
+    }
+
     /// Find all references to a symbol.
     ///
-    /// TODO: For locals with shadowing, this may include references to different
-    /// bindings with the same name. Consider matching by `LocalId` for precise results.
+    /// Note: For locals with shadowing, this may include references to different
+    /// bindings with the same name. Use `references_of_target` for precise results.
     pub fn references_of(
         &self,
         db: &'db dyn salsa::Database,
@@ -674,7 +707,33 @@ impl<'db> AstDefinitionIndex<'db> {
             .collect()
     }
 
+    /// Find all references to a resolved target.
+    ///
+    /// For local references, this uses LocalId to precisely match only references
+    /// to the same binding, excluding references to shadowed variables with the same name.
+    pub fn references_of_target(
+        &self,
+        db: &'db dyn salsa::Database,
+        target: &ResolvedTarget,
+    ) -> Vec<&AstReferenceEntry> {
+        match target {
+            ResolvedTarget::Local { id, name } => {
+                // For locals, match by LocalId for precise scoping
+                self.references(db)
+                    .iter()
+                    .filter(|r| r.target.name() == *name && r.target.local_id() == Some(*id))
+                    .collect()
+            }
+            _ => {
+                // For non-locals, fall back to name-based lookup
+                self.references_of(db, target.name())
+            }
+        }
+    }
+
     /// Find references from a position (works for both definitions and references).
+    ///
+    /// Uses LocalId-based matching for precise shadowed variable disambiguation.
     pub fn references_at(
         &self,
         db: &'db dyn salsa::Database,
@@ -683,13 +742,22 @@ impl<'db> AstDefinitionIndex<'db> {
         // Try reference first (more specific than definitions which may span large areas)
         if let Some(reference) = self.reference_at(db, offset) {
             let name = reference.target.name();
-            let refs = self.references_of(db, name);
+            let refs = self.references_of_target(db, &reference.target);
             return Some((name, refs));
         }
 
         // Fall back to definition
         if let Some(def) = self.definition_at_position(db, offset) {
-            let refs = self.references_of(db, def.name);
+            let refs = if let Some(local_id) = def.local_id {
+                // For locals with LocalId, use precise matching
+                let target = ResolvedTarget::Local {
+                    id: local_id,
+                    name: def.name,
+                };
+                self.references_of_target(db, &target)
+            } else {
+                self.references_of(db, def.name)
+            };
             return Some((def.name, refs));
         }
 
@@ -697,17 +765,18 @@ impl<'db> AstDefinitionIndex<'db> {
     }
 
     /// Check if renaming is possible at the given position.
+    ///
+    /// Uses LocalId-based matching for precise shadowed variable disambiguation.
     pub fn can_rename(
         &self,
         db: &'db dyn salsa::Database,
         offset: usize,
     ) -> Option<(&AstDefinitionEntry, Span)> {
         // Try reference first (more specific than definitions which may span large areas)
-        if let Some(reference) = self.reference_at(db, offset) {
-            let name = reference.target.name();
-            if let Some(def) = self.definition_of(db, name) {
-                return Some((def, reference.span));
-            }
+        if let Some(reference) = self.reference_at(db, offset)
+            && let Some(def) = self.definition_of_target(db, &reference.target)
+        {
+            return Some((def, reference.span));
         }
 
         // Fall back to definition
@@ -737,13 +806,20 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         }
     }
 
-    fn add_definition(&mut self, node_id: NodeId, name: Symbol, kind: DefinitionKind) {
+    fn add_definition(
+        &mut self,
+        node_id: NodeId,
+        name: Symbol,
+        kind: DefinitionKind,
+        local_id: Option<LocalId>,
+    ) {
         let span = self.span_map.get_or_default(node_id);
         self.definitions.push(AstDefinitionEntry {
             node_id,
             span,
             name,
             kind,
+            local_id,
         });
     }
 
@@ -775,7 +851,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
 
     fn collect_func(&mut self, func: &FuncDecl<TypedRef<'db>>) {
         // Add function definition
-        self.add_definition(func.id, func.name, DefinitionKind::Function);
+        self.add_definition(func.id, func.name, DefinitionKind::Function, None);
 
         // Add parameter definitions
         for param in &func.params {
@@ -787,40 +863,40 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     }
 
     fn collect_param(&mut self, param: &ParamDecl) {
-        self.add_definition(param.id, param.name, DefinitionKind::Parameter);
+        self.add_definition(param.id, param.name, DefinitionKind::Parameter, None);
     }
 
     fn collect_struct(&mut self, s: &StructDecl) {
-        self.add_definition(s.id, s.name, DefinitionKind::Struct);
+        self.add_definition(s.id, s.name, DefinitionKind::Struct, None);
 
         // Add field definitions
         for field in &s.fields {
             if let Some(name) = field.name {
-                self.add_definition(field.id, name, DefinitionKind::Field);
+                self.add_definition(field.id, name, DefinitionKind::Field, None);
             }
         }
     }
 
     fn collect_enum(&mut self, e: &EnumDecl) {
-        self.add_definition(e.id, e.name, DefinitionKind::Enum);
+        self.add_definition(e.id, e.name, DefinitionKind::Enum, None);
 
         // Add variant definitions
         for variant in &e.variants {
-            self.add_definition(variant.id, variant.name, DefinitionKind::Field);
+            self.add_definition(variant.id, variant.name, DefinitionKind::Field, None);
         }
     }
 
     fn collect_ability(&mut self, a: &AbilityDecl) {
-        self.add_definition(a.id, a.name, DefinitionKind::Ability);
+        self.add_definition(a.id, a.name, DefinitionKind::Ability, None);
 
         // Add operation definitions
         for op in &a.operations {
-            self.add_definition(op.id, op.name, DefinitionKind::Function);
+            self.add_definition(op.id, op.name, DefinitionKind::Function, None);
         }
     }
 
     fn collect_const(&mut self, c: &ConstDecl<TypedRef<'db>>) {
-        self.add_definition(c.id, c.name, DefinitionKind::Const);
+        self.add_definition(c.id, c.name, DefinitionKind::Const, None);
         self.collect_expr(&c.value);
     }
 
@@ -881,7 +957,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             ExprKind::Lambda { params, body } => {
                 // Lambda params don't have ParamDecl, just Param
                 for param in params {
-                    self.add_definition(param.id, param.name, DefinitionKind::Parameter);
+                    self.add_definition(param.id, param.name, DefinitionKind::Parameter, None);
                 }
                 self.collect_expr(body);
             }
@@ -926,9 +1002,8 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     fn collect_pattern(&mut self, pattern: &Pattern<TypedRef<'db>>) {
         match pattern.kind.as_ref() {
             PatternKind::Bind { name, local_id } => {
-                // Use LocalId for more precise scoping when available
-                let _ = local_id; // TODO: Use for scope-aware definition tracking
-                self.add_definition(pattern.id, *name, DefinitionKind::Local);
+                // Use LocalId for scope-aware definition tracking (shadowed variable disambiguation)
+                self.add_definition(pattern.id, *name, DefinitionKind::Local, *local_id);
             }
             PatternKind::Variant { ctor, fields } => {
                 let target = self.resolve_typed_ref(ctor);
@@ -948,8 +1023,8 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                     if let Some(p) = &field.pattern {
                         self.collect_pattern(p);
                     } else {
-                        // Shorthand: `{ name }` binds `name`
-                        self.add_definition(pattern.id, field.name, DefinitionKind::Local);
+                        // Shorthand: `{ name }` binds `name` (no LocalId available)
+                        self.add_definition(pattern.id, field.name, DefinitionKind::Local, None);
                     }
                 }
             }
@@ -963,7 +1038,8 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                     self.collect_pattern(h);
                 }
                 if let Some(name) = rest {
-                    self.add_definition(pattern.id, *name, DefinitionKind::Local);
+                    // Rest binding doesn't have LocalId
+                    self.add_definition(pattern.id, *name, DefinitionKind::Local, None);
                 }
             }
             PatternKind::As {
@@ -971,7 +1047,8 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                 name,
             } => {
                 self.collect_pattern(inner);
-                self.add_definition(pattern.id, *name, DefinitionKind::Local);
+                // As binding doesn't have LocalId
+                self.add_definition(pattern.id, *name, DefinitionKind::Local, None);
             }
             PatternKind::Or(alts) => {
                 for alt in alts {
@@ -1007,7 +1084,8 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                     self.collect_pattern(param);
                 }
                 if let Some(k) = continuation {
-                    self.add_definition(handler.id, *k, DefinitionKind::Local);
+                    // Continuation binding doesn't have LocalId
+                    self.add_definition(handler.id, *k, DefinitionKind::Local, None);
                 }
             }
         }
