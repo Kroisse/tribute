@@ -658,16 +658,32 @@ fn parse_int_literal(text: &str) -> Option<i64> {
         return None;
     }
 
-    let (sign, rest) = if let Some(rest) = text.strip_prefix('+') {
-        (1i64, rest)
+    let (is_negative, rest) = if let Some(rest) = text.strip_prefix('+') {
+        (false, rest)
     } else if let Some(rest) = text.strip_prefix('-') {
-        (-1i64, rest)
+        (true, rest)
     } else {
-        (1i64, text)
+        (false, text)
     };
 
-    let value = parse_nat_literal(rest)? as i64;
-    Some(sign * value)
+    let value_u = parse_nat_literal(rest)?;
+
+    if is_negative {
+        // Allow values up to i64::MAX + 1 for i64::MIN (-9223372036854775808)
+        const MIN_ABS: u64 = (i64::MAX as u64) + 1;
+        if value_u > MIN_ABS {
+            return None; // Overflow
+        }
+        if value_u == MIN_ABS {
+            Some(i64::MIN)
+        } else {
+            // Safe: value_u <= i64::MAX, so it fits in i64
+            Some(-(value_u as i64))
+        }
+    } else {
+        // Positive: must fit in i64
+        i64::try_from(value_u).ok()
+    }
 }
 
 fn parse_string_literal(text: &str) -> String {

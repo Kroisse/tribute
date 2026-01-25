@@ -465,8 +465,23 @@ impl<'db> TypeChecker<'db> {
         // Record the type for this node
         self.ctx.record_node_type(expr.id, ty);
 
-        // Convert to TypedRef
-        let kind = self.convert_expr_kind(*expr.kind);
+        // Convert to TypedRef, using precomputed type for Var/Cons to avoid
+        // re-instantiation of type schemes (which would create new type variables)
+        let kind = match *expr.kind {
+            ExprKind::Var(resolved) => ExprKind::Var(self.convert_ref_with_type(resolved, ty)),
+            ExprKind::Cons { ctor, args } => {
+                // For Cons, we need to get the constructor type, not the result type
+                let ctor_ty = self.infer_var(&ctor);
+                ExprKind::Cons {
+                    ctor: self.convert_ref_with_type(ctor, ctor_ty),
+                    args: args
+                        .into_iter()
+                        .map(|a| self.check_expr(a, Mode::Infer))
+                        .collect(),
+                }
+            }
+            other => self.convert_expr_kind(other),
+        };
         Expr::new(expr.id, kind)
     }
 
@@ -488,10 +503,14 @@ impl<'db> TypeChecker<'db> {
     /// Infer the type of a variable reference.
     fn infer_var(&mut self, resolved: &ResolvedRef<'db>) -> Type<'db> {
         match resolved {
-            ResolvedRef::Local { id, .. } => self
-                .ctx
-                .lookup_local(*id)
-                .unwrap_or_else(|| self.ctx.fresh_type_var()),
+            ResolvedRef::Local { id, name } => {
+                // Try LocalId first, then fall back to name-based lookup
+                // (needed for function parameters which may not have LocalId in TypeContext)
+                self.ctx
+                    .lookup_local(*id)
+                    .or_else(|| self.ctx.lookup_local_by_name(*name))
+                    .unwrap_or_else(|| self.ctx.fresh_type_var())
+            }
             ResolvedRef::Function { id } => self
                 .ctx
                 .instantiate_function(*id)
@@ -698,6 +717,14 @@ impl<'db> TypeChecker<'db> {
     /// Convert a ResolvedRef to a TypedRef.
     fn convert_ref(&mut self, resolved: ResolvedRef<'db>) -> TypedRef<'db> {
         let ty = self.infer_var(&resolved);
+        TypedRef { resolved, ty }
+    }
+
+    /// Convert a ResolvedRef to a TypedRef with a precomputed type.
+    ///
+    /// Use this when the type has already been computed to avoid re-instantiation
+    /// of type schemes which would create fresh type variables.
+    fn convert_ref_with_type(&self, resolved: ResolvedRef<'db>, ty: Type<'db>) -> TypedRef<'db> {
         TypedRef { resolved, ty }
     }
 

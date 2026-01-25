@@ -208,8 +208,8 @@ fn is_float_expr<'db>(db: &'db dyn salsa::Database, expr: &Expr<TypedRef<'db>>) 
         // For variables, check the TypedRef's type
         ExprKind::Var(typed_ref) => matches!(typed_ref.ty.kind(db), TypeKind::Float),
 
-        // For binary operations, check lhs recursively
-        ExprKind::BinOp { lhs, .. } => is_float_expr(db, lhs),
+        // For binary operations, check both lhs and rhs
+        ExprKind::BinOp { lhs, rhs, .. } => is_float_expr(db, lhs) || is_float_expr(db, rhs),
 
         // For blocks, check the value expression
         ExprKind::Block { value, .. } => is_float_expr(db, value),
