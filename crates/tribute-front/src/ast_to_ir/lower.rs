@@ -7,7 +7,7 @@ use trunk_ir::{Attribute, DialectType, IdVec, Location, PathId, Symbol};
 
 use crate::ast::{
     Decl, Expr, ExprKind, FuncDecl, Module, ResolvedRef, SpanMap, Stmt, TypeAnnotation,
-    TypeAnnotationKind, TypedRef,
+    TypeAnnotationKind, TypeKind, TypedRef,
 };
 
 use super::context::IrLoweringCtx;
@@ -177,9 +177,11 @@ fn lower_expr<'db>(
         },
 
         ExprKind::BinOp { op, lhs, rhs } => {
+            // Determine operand type for selecting int vs float operations
+            let is_float = is_float_expr(ctx.db, &lhs);
             let lhs_val = lower_expr(ctx, block, lhs)?;
             let rhs_val = lower_expr(ctx, block, rhs)?;
-            lower_binop(ctx, block, op, lhs_val, rhs_val, location)
+            lower_binop(ctx, block, op, lhs_val, rhs_val, is_float, location)
         }
 
         ExprKind::Block { stmts, value } => lower_block(ctx, block, stmts, value),
@@ -193,43 +195,66 @@ fn lower_expr<'db>(
     }
 }
 
+/// Check if an expression evaluates to a float type.
+///
+/// This examines the expression structure and TypedRef to determine
+/// whether to use floating-point operations.
+fn is_float_expr<'db>(db: &'db dyn salsa::Database, expr: &Expr<TypedRef<'db>>) -> bool {
+    match &*expr.kind {
+        // Literal types
+        ExprKind::FloatLit(_) => true,
+        ExprKind::NatLit(_) | ExprKind::IntLit(_) => false,
+
+        // For variables, check the TypedRef's type
+        ExprKind::Var(typed_ref) => matches!(typed_ref.ty.kind(db), TypeKind::Float),
+
+        // For binary operations, check lhs recursively
+        ExprKind::BinOp { lhs, .. } => is_float_expr(db, lhs),
+
+        // For blocks, check the value expression
+        ExprKind::Block { value, .. } => is_float_expr(db, value),
+
+        // Default to non-float
+        _ => false,
+    }
+}
+
 /// Lower a binary operation.
 ///
-/// Note: Currently uses i64 for all arithmetic operations regardless of operand types.
-/// TODO: To support float operations properly, we need to:
-/// 1. Pass the expression's inferred type (from TypedRef) to this function
-/// 2. Check if operands are float and use fadd/fsub/fmul/fdiv accordingly
-/// 3. This requires threading type information from the AST to IR lowering
+/// Uses the `is_float` flag to select between integer and floating-point operations.
 fn lower_binop<'db>(
     ctx: &IrLoweringCtx<'db>,
     block: &mut trunk_ir::BlockBuilder<'db>,
     op: crate::ast::BinOpKind,
     lhs: trunk_ir::Value<'db>,
     rhs: trunk_ir::Value<'db>,
+    is_float: bool,
     location: Location<'db>,
 ) -> Option<trunk_ir::Value<'db>> {
     use crate::ast::BinOpKind;
 
-    // Get the result type - for arithmetic ops, use i64; for comparisons, use bool
-    // TODO: Determine actual type from operands (int vs float)
-    let int_ty = ctx.int_type();
     let bool_ty = ctx.bool_type();
+    let result_ty = if is_float {
+        core::F64::new(ctx.db).as_type()
+    } else {
+        ctx.int_type()
+    };
 
     let result = match op {
         BinOpKind::Add => block
-            .op(arith::add(ctx.db, location, lhs, rhs, int_ty))
+            .op(arith::add(ctx.db, location, lhs, rhs, result_ty))
             .result(ctx.db),
         BinOpKind::Sub => block
-            .op(arith::sub(ctx.db, location, lhs, rhs, int_ty))
+            .op(arith::sub(ctx.db, location, lhs, rhs, result_ty))
             .result(ctx.db),
         BinOpKind::Mul => block
-            .op(arith::mul(ctx.db, location, lhs, rhs, int_ty))
+            .op(arith::mul(ctx.db, location, lhs, rhs, result_ty))
             .result(ctx.db),
         BinOpKind::Div => block
-            .op(arith::div(ctx.db, location, lhs, rhs, int_ty))
+            .op(arith::div(ctx.db, location, lhs, rhs, result_ty))
             .result(ctx.db),
         BinOpKind::Mod => block
-            .op(arith::rem(ctx.db, location, lhs, rhs, int_ty))
+            .op(arith::rem(ctx.db, location, lhs, rhs, result_ty))
             .result(ctx.db),
         BinOpKind::Eq => block
             .op(arith::cmp_eq(ctx.db, location, lhs, rhs, bool_ty))
