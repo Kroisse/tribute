@@ -472,7 +472,7 @@ mod tests {
         let source = r#"
             fn main() {
                 case x {
-                    3.14 -> 1
+                    2.5 -> 1
                     _ -> 0
                 }
             }
@@ -481,7 +481,7 @@ mod tests {
         let PatternKind::Literal(LiteralPattern::Float(f)) = pattern else {
             panic!("Expected float literal pattern, got {:?}", pattern);
         };
-        assert!((f.value() - 3.14_f64).abs() < 0.001);
+        assert!((f.value() - 2.5_f64).abs() < 0.001);
     }
 
     #[test]
