@@ -94,8 +94,9 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
 }
 
 fn lower_constructor_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<UnresolvedName> {
-    let name_node = node.child_by_field_name("constructor");
-    let args_node = node.child_by_field_name("arguments");
+    // grammar.js: field("name", $.type_identifier), field("args", $.pattern_list)
+    let name_node = node.child_by_field_name("name");
+    let args_node = node.child_by_field_name("args");
 
     let Some(name_node) = name_node else {
         return PatternKind::Error;
