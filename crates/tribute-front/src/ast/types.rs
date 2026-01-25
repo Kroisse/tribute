@@ -10,7 +10,7 @@
 
 use trunk_ir::Symbol;
 
-use super::NodeId;
+use super::{CtorId, FuncDefId, NodeId};
 
 /// A monomorphic type.
 ///
@@ -21,6 +21,36 @@ use super::NodeId;
 pub struct Type<'db> {
     #[returns(ref)]
     pub kind: TypeKind<'db>,
+}
+
+/// Source of a unification variable.
+///
+/// This identifies where a type variable came from, enabling deterministic
+/// ID generation for Salsa memoization of polymorphic instantiation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub enum UniVarSource<'db> {
+    /// Type variable from instantiating a polymorphic function.
+    Function(FuncDefId<'db>),
+    /// Type variable from instantiating a polymorphic constructor.
+    Constructor(CtorId<'db>),
+    /// Anonymous type variable (for lambdas, local bindings, etc.).
+    ///
+    /// These don't need caching since they're only created once during type checking.
+    /// The u64 is a unique counter value.
+    Anonymous(u64),
+}
+
+/// A unification variable ID for polymorphic instantiation.
+///
+/// These are created when instantiating polymorphic type schemes (functions
+/// and constructors). The combination of source and index ensures deterministic
+/// IDs, enabling Salsa to cache instantiation results.
+#[salsa::interned(debug)]
+pub struct UniVarId<'db> {
+    /// The source of this type variable (function or constructor being instantiated).
+    pub source: UniVarSource<'db>,
+    /// Index within the type scheme's parameters (0, 1, 2, ...).
+    pub index: u32,
 }
 
 /// The different kinds of types.
@@ -50,8 +80,10 @@ pub enum TypeKind<'db> {
 
     /// Unification variable (unknown during inference).
     ///
-    /// These are created fresh during type checking and resolved by unification.
-    UniVar { id: u64 },
+    /// These are created during type checking and resolved by unification.
+    /// For polymorphic instantiation (functions/constructors), the ID is
+    /// deterministic based on the source, enabling Salsa caching.
+    UniVar { id: UniVarId<'db> },
 
     // === Compound types ===
     /// Named type (struct, enum, or type alias) with optional type arguments.

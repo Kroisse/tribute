@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    CtorId, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme,
+    CtorId, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme, UniVarId,
+    UniVarSource,
 };
 
 use super::constraint::ConstraintSet;
@@ -41,18 +42,6 @@ pub struct TypeContext<'db> {
     /// Type definitions (struct/enum names to their types).
     type_defs: HashMap<Symbol, TypeScheme<'db>>,
 
-    /// Cache for instantiated function types.
-    ///
-    /// This prevents re-instantiation of the same function type scheme, which would
-    /// create different fresh type variables each time.
-    instantiated_functions: HashMap<FuncDefId<'db>, Type<'db>>,
-
-    /// Cache for instantiated constructor types.
-    ///
-    /// This prevents re-instantiation of the same constructor type scheme, which would
-    /// create different fresh type variables each time.
-    instantiated_constructors: HashMap<CtorId<'db>, Type<'db>>,
-
     /// Generated constraints.
     constraints: ConstraintSet<'db>,
 
@@ -77,8 +66,6 @@ impl<'db> TypeContext<'db> {
             function_types: HashMap::new(),
             constructor_types: HashMap::new(),
             type_defs: HashMap::new(),
-            instantiated_functions: HashMap::new(),
-            instantiated_constructors: HashMap::new(),
             constraints: ConstraintSet::new(),
             next_type_var: 0,
             next_row_var: 0,
@@ -96,9 +83,14 @@ impl<'db> TypeContext<'db> {
     // =========================================================================
 
     /// Generate a fresh type variable.
+    ///
+    /// This creates an anonymous type variable for local inference (lambdas, let bindings, etc.).
+    /// For polymorphic instantiation, use `instantiate_function` or `instantiate_constructor`.
     pub fn fresh_type_var(&mut self) -> Type<'db> {
-        let id = self.next_type_var;
+        let counter = self.next_type_var;
         self.next_type_var += 1;
+        let source = UniVarSource::Anonymous(counter);
+        let id = UniVarId::new(self.db, source, 0);
         Type::new(self.db, TypeKind::UniVar { id })
     }
 
@@ -174,17 +166,11 @@ impl<'db> TypeContext<'db> {
 
     /// Instantiate a function's type scheme with fresh type variables.
     ///
-    /// Caches the result so repeated calls for the same function return the
-    /// same instantiated type (avoiding creation of different type variables).
-    pub fn instantiate_function(&mut self, id: FuncDefId<'db>) -> Option<Type<'db>> {
-        // Return cached instantiation if available
-        if let Some(ty) = self.instantiated_functions.get(&id) {
-            return Some(*ty);
-        }
-
+    /// Uses deterministic UniVar IDs based on the function ID, so repeated calls
+    /// for the same function return the same instantiated type.
+    pub fn instantiate_function(&self, id: FuncDefId<'db>) -> Option<Type<'db>> {
         let scheme = self.lookup_function(id)?;
-        let ty = self.instantiate_scheme(scheme);
-        self.instantiated_functions.insert(id, ty);
+        let ty = self.instantiate_scheme_with_source(scheme, UniVarSource::Function(id));
         Some(ty)
     }
 
@@ -204,17 +190,11 @@ impl<'db> TypeContext<'db> {
 
     /// Instantiate a constructor's type scheme with fresh type variables.
     ///
-    /// Caches the result so repeated calls for the same constructor return the
-    /// same instantiated type (avoiding creation of different type variables).
-    pub fn instantiate_constructor(&mut self, id: CtorId<'db>) -> Option<Type<'db>> {
-        // Return cached instantiation if available
-        if let Some(ty) = self.instantiated_constructors.get(&id) {
-            return Some(*ty);
-        }
-
+    /// Uses deterministic UniVar IDs based on the constructor ID, so repeated calls
+    /// for the same constructor return the same instantiated type.
+    pub fn instantiate_constructor(&self, id: CtorId<'db>) -> Option<Type<'db>> {
         let scheme = self.lookup_constructor(id)?;
-        let ty = self.instantiate_scheme(scheme);
-        self.instantiated_constructors.insert(id, ty);
+        let ty = self.instantiate_scheme_with_source(scheme, UniVarSource::Constructor(id));
         Some(ty)
     }
 
@@ -239,6 +219,8 @@ impl<'db> TypeContext<'db> {
     /// Instantiate a type scheme with fresh type variables.
     ///
     /// Replaces each `BoundVar { index: i }` with a fresh `UniVar`.
+    /// Uses anonymous UniVar source - for caching, use `instantiate_function` or
+    /// `instantiate_constructor` instead.
     pub fn instantiate_scheme(&mut self, scheme: TypeScheme<'db>) -> Type<'db> {
         let params = scheme.type_params(self.db);
         if params.is_empty() {
@@ -247,6 +229,32 @@ impl<'db> TypeContext<'db> {
 
         // Generate fresh variables for each parameter
         let fresh_vars: Vec<Type<'db>> = (0..params.len()).map(|_| self.fresh_type_var()).collect();
+
+        // Substitute bound variables with fresh variables
+        self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
+    }
+
+    /// Instantiate a type scheme with deterministic type variables.
+    ///
+    /// Creates UniVars with the given source, ensuring repeated calls with the same
+    /// source produce identical types (enabling Salsa caching via interning).
+    fn instantiate_scheme_with_source(
+        &self,
+        scheme: TypeScheme<'db>,
+        source: UniVarSource<'db>,
+    ) -> Type<'db> {
+        let params = scheme.type_params(self.db);
+        if params.is_empty() {
+            return scheme.body(self.db);
+        }
+
+        // Generate deterministic UniVars based on source and index
+        let fresh_vars: Vec<Type<'db>> = (0..params.len())
+            .map(|i| {
+                let id = UniVarId::new(self.db, source, i as u32);
+                Type::new(self.db, TypeKind::UniVar { id })
+            })
+            .collect();
 
         // Substitute bound variables with fresh variables
         self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)

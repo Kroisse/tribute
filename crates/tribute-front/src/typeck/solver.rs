@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{EffectRow, EffectVar, Type, TypeKind};
+use crate::ast::{EffectRow, EffectVar, Type, TypeKind, UniVarId};
 
 use super::constraint::{Constraint, ConstraintSet};
 
@@ -17,7 +17,7 @@ pub enum SolveError<'db> {
         actual: Type<'db>,
     },
     /// Occurs check failed (infinite type).
-    OccursCheck { var: u64, ty: Type<'db> },
+    OccursCheck { var: UniVarId<'db>, ty: Type<'db> },
     /// Effect row mismatch.
     RowMismatch {
         expected: EffectRow<'db>,
@@ -28,7 +28,7 @@ pub enum SolveError<'db> {
 /// Type substitution: maps type variable IDs to types.
 #[derive(Clone, Debug, Default)]
 pub struct TypeSubst<'db> {
-    map: HashMap<u64, Type<'db>>,
+    map: HashMap<UniVarId<'db>, Type<'db>>,
 }
 
 impl<'db> TypeSubst<'db> {
@@ -40,12 +40,12 @@ impl<'db> TypeSubst<'db> {
     }
 
     /// Insert a mapping.
-    pub fn insert(&mut self, var: u64, ty: Type<'db>) {
+    pub fn insert(&mut self, var: UniVarId<'db>, ty: Type<'db>) {
         self.map.insert(var, ty);
     }
 
     /// Look up a type variable.
-    pub fn get(&self, var: u64) -> Option<Type<'db>> {
+    pub fn get(&self, var: UniVarId<'db>) -> Option<Type<'db>> {
         self.map.get(&var).copied()
     }
 
@@ -347,7 +347,7 @@ impl<'db> TypeSolver<'db> {
     }
 
     /// Bind a type variable to a type.
-    fn bind_type_var(&mut self, var: u64, ty: Type<'db>) -> Result<(), SolveError<'db>> {
+    fn bind_type_var(&mut self, var: UniVarId<'db>, ty: Type<'db>) -> Result<(), SolveError<'db>> {
         // Occurs check: prevent infinite types
         if self.occurs_in(var, ty) {
             return Err(SolveError::OccursCheck { var, ty });
@@ -357,7 +357,7 @@ impl<'db> TypeSolver<'db> {
     }
 
     /// Check if a type variable occurs in a type (for occurs check).
-    fn occurs_in(&self, var: u64, ty: Type<'db>) -> bool {
+    fn occurs_in(&self, var: UniVarId<'db>, ty: Type<'db>) -> bool {
         match ty.kind(self.db) {
             TypeKind::UniVar { id } => *id == var,
             TypeKind::Named { args, .. } => args.iter().any(|a| self.occurs_in(var, *a)),
@@ -411,9 +411,17 @@ impl<'db> TypeSolver<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::UniVarSource;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
+    }
+
+    /// Create a fresh type variable for testing.
+    fn fresh_var(db: &dyn salsa::Database, n: u64) -> Type<'_> {
+        let source = UniVarSource::Anonymous(n);
+        let id = UniVarId::new(db, source, 0);
+        Type::new(db, TypeKind::UniVar { id })
     }
 
     #[test]
@@ -430,7 +438,7 @@ mod tests {
         let db = test_db();
         let mut solver = TypeSolver::new(&db);
 
-        let var_ty = Type::new(&db, TypeKind::UniVar { id: 0 });
+        let var_ty = fresh_var(&db, 0);
         let int_ty = Type::new(&db, TypeKind::Int);
 
         solver.unify_types(var_ty, int_ty).unwrap();
@@ -457,7 +465,7 @@ mod tests {
         let db = test_db();
         let mut solver = TypeSolver::new(&db);
 
-        let var_ty = Type::new(&db, TypeKind::UniVar { id: 0 });
+        let var_ty = fresh_var(&db, 0);
         // Try to unify x with List(x) - should fail occurs check
         let list_ty = Type::new(
             &db,
@@ -476,8 +484,8 @@ mod tests {
         let db = test_db();
         let mut solver = TypeSolver::new(&db);
 
-        let var1 = Type::new(&db, TypeKind::UniVar { id: 0 });
-        let var2 = Type::new(&db, TypeKind::UniVar { id: 1 });
+        let var1 = fresh_var(&db, 0);
+        let var2 = fresh_var(&db, 1);
         let int_ty = Type::new(&db, TypeKind::Int);
         let bool_ty = Type::new(&db, TypeKind::Bool);
 
@@ -606,7 +614,7 @@ mod tests {
         let db = test_db();
         let mut solver = TypeSolver::new(&db);
 
-        let var_ty = Type::new(&db, TypeKind::UniVar { id: 0 });
+        let var_ty = fresh_var(&db, 0);
         let int_ty = Type::new(&db, TypeKind::Int);
 
         // List(var) and List(Int)
@@ -663,9 +671,9 @@ mod tests {
         let db = test_db();
         let mut solver = TypeSolver::new(&db);
 
-        let var_ty = Type::new(&db, TypeKind::UniVar { id: 0 });
+        let var_ty = fresh_var(&db, 0);
         let int_ty = Type::new(&db, TypeKind::Int);
-        let ctor_ty = Type::new(&db, TypeKind::UniVar { id: 1 });
+        let ctor_ty = fresh_var(&db, 1);
         let list_ctor = Type::new(
             &db,
             TypeKind::Named {
@@ -715,8 +723,8 @@ mod tests {
         let db = test_db();
         let mut solver = TypeSolver::new(&db);
 
-        let var1 = Type::new(&db, TypeKind::UniVar { id: 0 });
-        let var2 = Type::new(&db, TypeKind::UniVar { id: 1 });
+        let var1 = fresh_var(&db, 0);
+        let var2 = fresh_var(&db, 1);
         let int_ty = Type::new(&db, TypeKind::Int);
 
         // var1 = var2, var2 = Int => var1 = Int
@@ -751,8 +759,12 @@ mod tests {
         let mut row_subst = RowSubst::new();
 
         let int_ty = Type::new(&db, TypeKind::Int);
-        let var_ty = Type::new(&db, TypeKind::UniVar { id: 0 });
-        type_subst.insert(0, int_ty);
+        let var_ty = fresh_var(&db, 0);
+        let var_id = match var_ty.kind(&db) {
+            TypeKind::UniVar { id } => *id,
+            _ => unreachable!(),
+        };
+        type_subst.insert(var_id, int_ty);
 
         // Create a function type with a row variable
         let row_var = EffectVar { id: 20 };

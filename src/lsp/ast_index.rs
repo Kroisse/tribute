@@ -24,7 +24,7 @@ use tribute_front::SourceCst;
 use tribute_front::ast::{
     AbilityDecl, Arm, ConstDecl, Decl, EnumDecl, Expr, ExprKind, FuncDecl, HandlerArm, HandlerKind,
     LocalId, Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt,
-    StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef,
+    StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef, UniVarSource,
 };
 use tribute_front::query as ast_query;
 
@@ -55,12 +55,17 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
 
         TypeKind::UniVar { id } => {
             // Unification variables are displayed as lowercase letters
-            let name = if *id < 26 {
-                char::from_u32('a' as u32 + *id as u32).map(|c| c.to_string())
+            // Use the index for polymorphic sources, or the counter for anonymous sources
+            let display_index = match id.source(db) {
+                UniVarSource::Anonymous(counter) => counter as u32 + id.index(db),
+                _ => id.index(db),
+            };
+            let name = if display_index < 26 {
+                char::from_u32('a' as u32 + display_index).map(|c| c.to_string())
             } else {
                 None
             };
-            name.unwrap_or_else(|| format!("?{}", id))
+            name.unwrap_or_else(|| format!("?{}", display_index))
         }
 
         TypeKind::Named { name, args } => {
@@ -1562,6 +1567,7 @@ mod tests {
     use super::*;
     use ropey::Rope;
     use tree_sitter::Parser;
+    use tribute_front::ast::UniVarId;
     use tribute_front::path_to_uri;
 
     fn make_source(db: &dyn salsa::Database, text: &str) -> SourceCst {
@@ -1714,14 +1720,35 @@ mod tests {
     fn test_print_ast_type_uni_var() {
         let db = salsa::DatabaseImpl::default();
 
-        let ty = Type::new(&db, TypeKind::UniVar { id: 0 });
+        // Helper to create UniVarId with Anonymous source
+        let make_uni_var = |counter: u64| {
+            let source = UniVarSource::Anonymous(counter);
+            UniVarId::new(&db, source, 0)
+        };
+
+        let ty = Type::new(
+            &db,
+            TypeKind::UniVar {
+                id: make_uni_var(0),
+            },
+        );
         assert_eq!(print_ast_type(&db, ty), "a");
 
-        let ty = Type::new(&db, TypeKind::UniVar { id: 25 });
+        let ty = Type::new(
+            &db,
+            TypeKind::UniVar {
+                id: make_uni_var(25),
+            },
+        );
         assert_eq!(print_ast_type(&db, ty), "z");
 
         // Large id should fallback to ?{id}
-        let ty = Type::new(&db, TypeKind::UniVar { id: 100 });
+        let ty = Type::new(
+            &db,
+            TypeKind::UniVar {
+                id: make_uni_var(100),
+            },
+        );
         assert_eq!(print_ast_type(&db, ty), "?100");
     }
 
