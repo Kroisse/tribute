@@ -1477,4 +1477,165 @@ mod tests {
             _ => panic!("Expected App type annotation, got {:?}", return_ty.kind),
         }
     }
+
+    // =============================================================================
+    // Bytes Literal Parsing Tests
+    // =============================================================================
+
+    #[test]
+    fn test_bytes_literal_simple() {
+        let source = r#"fn main() { b"hello" }"#;
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+
+        if let ExprKind::BytesLit(bytes) = value.kind.as_ref() {
+            assert_eq!(bytes, b"hello");
+        } else {
+            panic!("Expected BytesLit, got {:?}", value.kind);
+        }
+    }
+
+    #[test]
+    fn test_bytes_literal_raw() {
+        let source = r#"fn main() { rb"hello\n" }"#;
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+
+        if let ExprKind::BytesLit(bytes) = value.kind.as_ref() {
+            // Raw string should preserve the backslash
+            assert_eq!(bytes, br"hello\n");
+        } else {
+            panic!("Expected BytesLit, got {:?}", value.kind);
+        }
+    }
+
+    #[test]
+    fn test_bytes_literal_with_single_hash() {
+        let source = r###"fn main() { b#"test"# }"###;
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+
+        if let ExprKind::BytesLit(bytes) = value.kind.as_ref() {
+            assert_eq!(bytes, b"test");
+        } else {
+            panic!("Expected BytesLit, got {:?}", value.kind);
+        }
+    }
+
+    #[test]
+    fn test_bytes_literal_with_multiple_hashes() {
+        let source = r####"fn main() { b##"hello"## }"####;
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+
+        if let ExprKind::BytesLit(bytes) = value.kind.as_ref() {
+            assert_eq!(bytes, b"hello");
+        } else {
+            panic!("Expected BytesLit, got {:?}", value.kind);
+        }
+    }
+
+    #[test]
+    fn test_bytes_literal_with_embedded_quote() {
+        let source = r###"fn main() { b#"say "hello""# }"###;
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+
+        if let ExprKind::BytesLit(bytes) = value.kind.as_ref() {
+            assert_eq!(bytes, br#"say "hello""#);
+        } else {
+            panic!("Expected BytesLit, got {:?}", value.kind);
+        }
+    }
+
+    // =============================================================================
+    // Rune Literal Tests
+    // =============================================================================
+
+    #[test]
+    fn test_rune_literal_simple() {
+        let source = "fn main() { ?a }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+
+        if let ExprKind::RuneLit(c) = value.kind.as_ref() {
+            assert_eq!(*c, 'a');
+        } else {
+            panic!("Expected RuneLit, got {:?}", value.kind);
+        }
+    }
+
+    #[test]
+    fn test_rune_literal_unicode() {
+        let source = "fn main() { ?😀 }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+
+        if let ExprKind::RuneLit(c) = value.kind.as_ref() {
+            assert_eq!(*c, '😀');
+        } else {
+            panic!("Expected RuneLit, got {:?}", value.kind);
+        }
+    }
+
+    #[test]
+    fn test_rune_literal_escape_newline() {
+        let source = r"fn main() { ?\n }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+
+        if let ExprKind::RuneLit(c) = value.kind.as_ref() {
+            assert_eq!(*c, '\n');
+        } else {
+            panic!("Expected RuneLit, got {:?}", value.kind);
+        }
+    }
 }

@@ -1402,4 +1402,53 @@ mod tests {
             panic!("Expected Lambda");
         }
     }
+
+    // =========================================================================
+    // Rune Type Tests
+    // =========================================================================
+
+    #[test]
+    fn test_infer_rune_literal() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create a RuneLit expression
+        let expr = Expr::new(fresh_node_id(), ExprKind::RuneLit('a'));
+
+        let typed_expr = checker.check_expr(expr, Mode::Infer);
+        assert!(matches!(*typed_expr.kind, ExprKind::RuneLit('a')));
+    }
+
+    #[test]
+    fn test_annotation_to_type_rune() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let ann = crate::ast::TypeAnnotation {
+            id: fresh_node_id(),
+            kind: crate::ast::TypeAnnotationKind::Named(Symbol::new("Rune")),
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        assert!(
+            matches!(*ty.kind(&db), TypeKind::Rune),
+            "Rune annotation should produce Rune type, got {:?}",
+            ty.kind(&db)
+        );
+    }
+
+    #[test]
+    fn test_rune_literal_unifies_with_rune_annotation() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create a RuneLit expression and check against Rune type annotation
+        let expr = Expr::new(fresh_node_id(), ExprKind::RuneLit('x'));
+        let expected_ty = checker.ctx.rune_type();
+
+        let typed_expr = checker.check_expr(expr, Mode::Check(expected_ty));
+
+        // Should succeed without type error (no panic during unification)
+        assert!(matches!(*typed_expr.kind, ExprKind::RuneLit('x')));
+    }
 }
