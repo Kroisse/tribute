@@ -1040,7 +1040,8 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                         self.collect_pattern(p);
                     } else {
                         // Shorthand: `{ name }` binds `name` (no LocalId available)
-                        self.add_definition(pattern.id, field.name, DefinitionKind::Local, None);
+                        // Use field.id for per-field span tracking
+                        self.add_definition(field.id, field.name, DefinitionKind::Local, None);
                     }
                 }
             }

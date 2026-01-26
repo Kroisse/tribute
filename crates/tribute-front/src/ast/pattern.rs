@@ -104,6 +104,8 @@ pub struct FieldPattern<V>
 where
     V: salsa::Update,
 {
+    /// Unique identifier for span lookup.
+    pub id: NodeId,
     /// The field name.
     pub name: Symbol,
     /// The pattern to match the field value.

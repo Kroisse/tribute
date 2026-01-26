@@ -196,8 +196,10 @@ fn lower_record_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unr
                 }
                 "shorthand_field_pattern" => {
                     // { name } is shorthand for { name: name }
+                    let id = ctx.fresh_id_with_span(&child);
                     let name = ctx.node_symbol(&child);
                     fields.push(FieldPattern {
+                        id,
                         name,
                         pattern: None,
                     });
@@ -224,10 +226,11 @@ fn lower_field_pattern(
     let name_node = node.child_by_field_name("name")?;
     let pattern_node = node.child_by_field_name("pattern");
 
+    let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
     let pattern = pattern_node.map(|n| lower_pattern(ctx, n));
 
-    Some(FieldPattern { name, pattern })
+    Some(FieldPattern { id, name, pattern })
 }
 
 fn lower_tuple_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<UnresolvedName> {

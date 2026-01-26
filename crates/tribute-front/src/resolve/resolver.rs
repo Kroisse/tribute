@@ -484,6 +484,7 @@ impl<'db> Resolver<'db> {
                 let fields = fields
                     .into_iter()
                     .map(|f| FieldPattern {
+                        id: f.id,
                         name: f.name,
                         pattern: f.pattern.map(|p| self.resolve_pattern_with_bindings(p)),
                     })

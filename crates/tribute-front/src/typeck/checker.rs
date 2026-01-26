@@ -908,6 +908,7 @@ impl<'db> TypeChecker<'db> {
         fp: FieldPattern<ResolvedRef<'db>>,
     ) -> FieldPattern<TypedRef<'db>> {
         FieldPattern {
+            id: fp.id,
             name: fp.name,
             pattern: fp.pattern.map(|p| self.convert_pattern(p)),
         }
