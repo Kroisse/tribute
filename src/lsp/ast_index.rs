@@ -2611,4 +2611,88 @@ fn main() -> Int {
             "Type index should be available for valid source"
         );
     }
+
+    // =========================================================================
+    // Shorthand Record Pattern Field Tracking Tests
+    // =========================================================================
+
+    #[test]
+    fn test_pattern_record_shorthand_fields_have_definitions() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"struct Point { x: Int, y: Int }
+
+fn use_point(p: Point) -> Int {
+    let Point { x, y } = p
+    x + y
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Both x and y should be defined as locals from the shorthand pattern
+        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        assert!(x_def.is_some(), "Expected definition for 'x'");
+        // x appears as both a field and a local binding; check we have at least one
+        let x_defs: Vec<_> = index
+            .definitions(&db)
+            .iter()
+            .filter(|d| d.name == trunk_ir::Symbol::new("x"))
+            .collect();
+        assert!(
+            x_defs.len() >= 2,
+            "Expected at least 2 definitions for 'x' (field + local), got {}",
+            x_defs.len()
+        );
+
+        let y_def = index.definition_of(&db, trunk_ir::Symbol::new("y"));
+        assert!(y_def.is_some(), "Expected definition for 'y'");
+    }
+
+    #[test]
+    fn test_pattern_record_shorthand_fields_have_distinct_spans() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"struct Point { x: Int, y: Int }
+
+fn f(p: Point) -> Int {
+    let Point { x, y } = p
+    x + y
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Find the local definitions for x and y (from the shorthand pattern)
+        let x_locals: Vec<_> = index
+            .definitions(&db)
+            .iter()
+            .filter(|d| d.name == trunk_ir::Symbol::new("x") && d.kind == DefinitionKind::Local)
+            .collect();
+        let y_locals: Vec<_> = index
+            .definitions(&db)
+            .iter()
+            .filter(|d| d.name == trunk_ir::Symbol::new("y") && d.kind == DefinitionKind::Local)
+            .collect();
+
+        assert!(!x_locals.is_empty(), "Expected local definition for 'x'");
+        assert!(!y_locals.is_empty(), "Expected local definition for 'y'");
+
+        // The key test: x and y should have different spans (not sharing parent pattern's span)
+        let x_span = x_locals[0].span;
+        let y_span = y_locals[0].span;
+        assert_ne!(
+            x_span, y_span,
+            "Shorthand fields x and y should have different spans, but both have {:?}",
+            x_span
+        );
+    }
 }
