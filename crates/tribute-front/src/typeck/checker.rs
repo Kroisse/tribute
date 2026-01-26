@@ -183,6 +183,8 @@ impl<'db> TypeChecker<'db> {
                     self.ctx.string_type()
                 } else if *name == "Bytes" {
                     self.ctx.bytes_type()
+                } else if *name == "Rune" {
+                    self.ctx.rune_type()
                 } else if *name == "()" {
                     self.ctx.nil_type()
                 } else {

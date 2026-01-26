@@ -748,21 +748,70 @@ fn parse_string_literal(text: &str) -> String {
 }
 
 fn parse_bytes_literal(text: &str) -> Vec<u8> {
-    // Simple implementation: strip quotes and handle basic escapes
+    // Strip quotes and handle basic escapes for byte string literals
     let text = text.trim();
 
-    // Handle different bytes prefixes with bounds checking
-    let content = if text.starts_with("rb\"") || text.starts_with("br\"") {
-        text.get(3..text.len().saturating_sub(1)).unwrap_or("")
-    } else if text.starts_with("b\"") {
-        text.get(2..text.len().saturating_sub(1)).unwrap_or("")
-    } else if text.starts_with("b#\"") {
-        // Find matching closing "#
-        text.get(3..text.len().saturating_sub(2)).unwrap_or("")
+    // Determine prefix and whether it's raw
+    let (prefix_len, is_raw) = if text.starts_with("rb") || text.starts_with("br") {
+        (2, true)
+    } else if text.starts_with('b') {
+        (1, false)
     } else {
-        text
+        return text.as_bytes().to_vec();
     };
 
-    // TODO: proper escape handling
-    content.as_bytes().to_vec()
+    let after_prefix = &text[prefix_len..];
+
+    // Count consecutive '#' characters before the opening quote
+    let hash_count = after_prefix.chars().take_while(|&c| c == '#').count();
+
+    // For raw strings with hashes: rb#"..."# or br##"..."##
+    // For regular raw strings: rb"..." or br"..."
+    // For regular byte strings: b"..."
+    if hash_count > 0 {
+        // Raw byte string with hashes: b#"..."# or rb##"..."##
+        let quote_start = prefix_len + hash_count;
+        let expected_end_pattern_len = 1 + hash_count; // closing quote + hashes
+
+        // Validate we have opening quote after hashes
+        if text.get(quote_start..quote_start + 1) != Some("\"") {
+            return Vec::new();
+        }
+
+        // Content starts after the opening quote
+        let content_start = quote_start + 1;
+
+        // Find content end: must have closing quote followed by same number of hashes
+        let content_end = text.len().saturating_sub(expected_end_pattern_len);
+        if content_end <= content_start {
+            return Vec::new();
+        }
+
+        // Validate closing pattern: " followed by hash_count #'s
+        let closing = text.get(content_end..);
+        let expected_closing: String = std::iter::once('"')
+            .chain(std::iter::repeat_n('#', hash_count))
+            .collect();
+        if closing != Some(&expected_closing) {
+            return Vec::new();
+        }
+
+        text.get(content_start..content_end)
+            .unwrap_or("")
+            .as_bytes()
+            .to_vec()
+    } else if is_raw {
+        // Raw byte string without hashes: rb"..." or br"..."
+        text.get(prefix_len + 1..text.len().saturating_sub(1))
+            .unwrap_or("")
+            .as_bytes()
+            .to_vec()
+    } else {
+        // Regular byte string: b"..."
+        // TODO: proper escape handling for non-raw byte strings
+        text.get(prefix_len + 1..text.len().saturating_sub(1))
+            .unwrap_or("")
+            .as_bytes()
+            .to_vec()
+    }
 }

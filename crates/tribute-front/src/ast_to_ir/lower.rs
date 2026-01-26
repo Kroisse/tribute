@@ -153,8 +153,8 @@ fn lower_expr<'db>(
         }
 
         ExprKind::RuneLit(c) => {
-            // Rune is lowered as i32 (Unicode code point)
-            let op = block.op(arith::Const::i64(ctx.db, location, c as i64));
+            // Rune is lowered as i32 (Unicode code point, matching core::I32)
+            let op = block.op(arith::Const::i32(ctx.db, location, c as i32));
             Some(op.result(ctx.db))
         }
 
