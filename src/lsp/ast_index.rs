@@ -510,6 +510,8 @@ pub enum DefinitionKind {
     Struct,
     /// An enum definition.
     Enum,
+    /// An enum variant (constructor).
+    EnumVariant,
     /// An ability definition.
     Ability,
     /// A local variable binding.
@@ -518,7 +520,7 @@ pub enum DefinitionKind {
     Parameter,
     /// A constant definition.
     Const,
-    /// A struct/enum field.
+    /// A struct field.
     Field,
 }
 
@@ -902,7 +904,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
 
         // Add variant definitions
         for variant in &e.variants {
-            self.add_definition(variant.id, variant.name, DefinitionKind::Field, None);
+            self.add_definition(variant.id, variant.name, DefinitionKind::EnumVariant, None);
         }
     }
 
@@ -1531,7 +1533,10 @@ pub fn validate_identifier(name: &str, kind: DefinitionKind) -> Result<(), Renam
     let first = name.chars().next().unwrap();
 
     match kind {
-        DefinitionKind::Struct | DefinitionKind::Enum | DefinitionKind::Ability => {
+        DefinitionKind::Struct
+        | DefinitionKind::Enum
+        | DefinitionKind::EnumVariant
+        | DefinitionKind::Ability => {
             if !first.is_ascii_uppercase() {
                 return Err(RenameError::InvalidTypeIdentifier);
             }
@@ -2312,11 +2317,11 @@ fn unwrap(opt: Option) -> Int {
         // Enum variants should be defined
         let some_def = index.definition_of(&db, trunk_ir::Symbol::new("Some"));
         assert!(some_def.is_some());
-        assert_eq!(some_def.unwrap().kind, DefinitionKind::Field);
+        assert_eq!(some_def.unwrap().kind, DefinitionKind::EnumVariant);
 
         let none_def = index.definition_of(&db, trunk_ir::Symbol::new("None"));
         assert!(none_def.is_some());
-        assert_eq!(none_def.unwrap().kind, DefinitionKind::Field);
+        assert_eq!(none_def.unwrap().kind, DefinitionKind::EnumVariant);
     }
 
     #[test]
@@ -2694,5 +2699,80 @@ fn f(p: Point) -> Int {
             "Shorthand fields x and y should have different spans, but both have {:?}",
             x_span
         );
+    }
+
+    // =========================================================================
+    // EnumVariant DefinitionKind Tests
+    // =========================================================================
+
+    #[test]
+    fn test_enum_variants_have_enum_variant_kind() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "enum Color { Red, Green, Blue }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // The enum itself should have Enum kind
+        let color_def = index.definition_of(&db, trunk_ir::Symbol::new("Color"));
+        assert!(color_def.is_some());
+        assert_eq!(color_def.unwrap().kind, DefinitionKind::Enum);
+
+        // Variants should have EnumVariant kind, not Field
+        let red_def = index.definition_of(&db, trunk_ir::Symbol::new("Red"));
+        assert!(red_def.is_some());
+        assert_eq!(red_def.unwrap().kind, DefinitionKind::EnumVariant);
+
+        let green_def = index.definition_of(&db, trunk_ir::Symbol::new("Green"));
+        assert!(green_def.is_some());
+        assert_eq!(green_def.unwrap().kind, DefinitionKind::EnumVariant);
+
+        let blue_def = index.definition_of(&db, trunk_ir::Symbol::new("Blue"));
+        assert!(blue_def.is_some());
+        assert_eq!(blue_def.unwrap().kind, DefinitionKind::EnumVariant);
+    }
+
+    #[test]
+    fn test_struct_fields_have_field_kind() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "struct Point { x: Int, y: Int }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Struct fields should still have Field kind
+        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        assert!(x_def.is_some());
+        assert_eq!(x_def.unwrap().kind, DefinitionKind::Field);
+
+        let y_def = index.definition_of(&db, trunk_ir::Symbol::new("y"));
+        assert!(y_def.is_some());
+        assert_eq!(y_def.unwrap().kind, DefinitionKind::Field);
+    }
+
+    #[test]
+    fn test_validate_identifier_enum_variant_uppercase() {
+        // EnumVariant should require uppercase (like Struct, Enum, Ability)
+        assert!(validate_identifier("Red", DefinitionKind::EnumVariant).is_ok());
+        assert!(validate_identifier("SomeValue", DefinitionKind::EnumVariant).is_ok());
+
+        // Lowercase should be rejected for EnumVariant
+        let result = validate_identifier("red", DefinitionKind::EnumVariant);
+        assert!(matches!(result, Err(RenameError::InvalidTypeIdentifier)));
+    }
+
+    #[test]
+    fn test_validate_identifier_field_lowercase() {
+        // Field (struct field) should require lowercase
+        assert!(validate_identifier("x", DefinitionKind::Field).is_ok());
+        assert!(validate_identifier("my_field", DefinitionKind::Field).is_ok());
+
+        // Uppercase should be rejected for Field
+        let result = validate_identifier("X", DefinitionKind::Field);
+        assert!(matches!(result, Err(RenameError::InvalidIdentifier)));
     }
 }
