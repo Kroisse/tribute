@@ -28,21 +28,24 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
         // === Literal patterns ===
         "nat_literal" => {
             let text = ctx.node_text(&node);
-            // Safe conversion: if u64 > i64::MAX, fall back to 0 (consistent with parse error handling)
-            let value = parse_nat_literal(&text)
-                .and_then(|v| i64::try_from(v).ok())
-                .unwrap_or(0);
-            PatternKind::Literal(LiteralPattern::Int(value))
+            match parse_nat_literal(&text).and_then(|v| i64::try_from(v).ok()) {
+                Some(value) => PatternKind::Literal(LiteralPattern::Int(value)),
+                None => PatternKind::Error,
+            }
         }
         "int_literal" => {
             let text = ctx.node_text(&node);
-            let value = parse_int_literal(&text).unwrap_or(0);
-            PatternKind::Literal(LiteralPattern::Int(value))
+            match parse_int_literal(&text) {
+                Some(value) => PatternKind::Literal(LiteralPattern::Int(value)),
+                None => PatternKind::Error,
+            }
         }
         "float_literal" => {
             let text = ctx.node_text(&node);
-            let value: f64 = text.parse().unwrap_or(0.0);
-            PatternKind::Literal(LiteralPattern::Float(FloatBits::new(value)))
+            match text.parse::<f64>() {
+                Ok(value) => PatternKind::Literal(LiteralPattern::Float(FloatBits::new(value))),
+                Err(_) => PatternKind::Error,
+            }
         }
         // grammar.js uses "string" for string patterns, not "string_literal"
         "string_literal" | "string" => {
