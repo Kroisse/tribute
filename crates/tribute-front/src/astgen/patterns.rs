@@ -896,4 +896,110 @@ mod tests {
         // Edge case: if quotes are missing, return as-is
         assert_eq!(parse_string_literal("hello"), "hello");
     }
+
+    // === String Escape Sequence Tests ===
+
+    #[test]
+    fn test_string_escape_newline() {
+        let source = r#"fn test() { case x { "hello\nworld" -> 1, _ -> 0 } }"#;
+        let pattern = get_case_pattern(source, 0);
+
+        match pattern {
+            PatternKind::Literal(LiteralPattern::String(s)) => {
+                assert_eq!(s, "hello\nworld");
+            }
+            _ => panic!("Expected string literal pattern, got {:?}", pattern),
+        }
+    }
+
+    #[test]
+    fn test_string_escape_tab() {
+        let source = r#"fn test() { case x { "a\tb" -> 1, _ -> 0 } }"#;
+        let pattern = get_case_pattern(source, 0);
+
+        match pattern {
+            PatternKind::Literal(LiteralPattern::String(s)) => {
+                assert_eq!(s, "a\tb");
+            }
+            _ => panic!("Expected string literal pattern, got {:?}", pattern),
+        }
+    }
+
+    #[test]
+    fn test_string_escape_backslash() {
+        let source = r#"fn test() { case x { "a\\b" -> 1, _ -> 0 } }"#;
+        let pattern = get_case_pattern(source, 0);
+
+        match pattern {
+            PatternKind::Literal(LiteralPattern::String(s)) => {
+                assert_eq!(s, "a\\b");
+            }
+            _ => panic!("Expected string literal pattern, got {:?}", pattern),
+        }
+    }
+
+    #[test]
+    fn test_string_escape_unicode() {
+        let source = r#"fn test() { case x { "\u{1F600}" -> 1, _ -> 0 } }"#;
+        let pattern = get_case_pattern(source, 0);
+
+        match pattern {
+            PatternKind::Literal(LiteralPattern::String(s)) => {
+                assert_eq!(s, "😀");
+            }
+            _ => panic!("Expected string literal pattern, got {:?}", pattern),
+        }
+    }
+
+    #[test]
+    fn test_string_escape_hex() {
+        let source = r#"fn test() { case x { "\x41\x42" -> 1, _ -> 0 } }"#;
+        let pattern = get_case_pattern(source, 0);
+
+        match pattern {
+            PatternKind::Literal(LiteralPattern::String(s)) => {
+                assert_eq!(s, "AB");
+            }
+            _ => panic!("Expected string literal pattern, got {:?}", pattern),
+        }
+    }
+
+    #[test]
+    fn test_string_escape_carriage_return() {
+        let source = r#"fn test() { case x { "a\rb" -> 1, _ -> 0 } }"#;
+        let pattern = get_case_pattern(source, 0);
+
+        match pattern {
+            PatternKind::Literal(LiteralPattern::String(s)) => {
+                assert_eq!(s, "a\rb");
+            }
+            _ => panic!("Expected string literal pattern, got {:?}", pattern),
+        }
+    }
+
+    #[test]
+    fn test_string_escape_null() {
+        let source = r#"fn test() { case x { "a\0b" -> 1, _ -> 0 } }"#;
+        let pattern = get_case_pattern(source, 0);
+
+        match pattern {
+            PatternKind::Literal(LiteralPattern::String(s)) => {
+                assert_eq!(s, "a\0b");
+            }
+            _ => panic!("Expected string literal pattern, got {:?}", pattern),
+        }
+    }
+
+    #[test]
+    fn test_string_escape_quote() {
+        let source = r#"fn test() { case x { "say \"hello\"" -> 1, _ -> 0 } }"#;
+        let pattern = get_case_pattern(source, 0);
+
+        match pattern {
+            PatternKind::Literal(LiteralPattern::String(s)) => {
+                assert_eq!(s, "say \"hello\"");
+            }
+            _ => panic!("Expected string literal pattern, got {:?}", pattern),
+        }
+    }
 }

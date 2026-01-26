@@ -2586,4 +2586,28 @@ fn main() -> Int {
         assert!(def.is_some());
         assert_eq!(def.unwrap().kind, DefinitionKind::Function);
     }
+
+    // =========================================================================
+    // Rune Literal Type Tests
+    // =========================================================================
+
+    #[test]
+    fn test_rune_type_printed() {
+        let db = salsa::DatabaseImpl::default();
+        let rune_ty = Type::new(&db, TypeKind::Rune);
+        assert_eq!(print_ast_type(&db, rune_ty), "Rune");
+    }
+
+    #[test]
+    fn test_rune_literal_expression() {
+        let db = salsa::DatabaseImpl::default();
+        // Rune literal ?a in the source
+        let source = make_source(&db, "fn main() -> Rune { ?a }");
+
+        let index = type_index(&db, source);
+        assert!(
+            index.is_some(),
+            "Type index should be available for valid source"
+        );
+    }
 }
