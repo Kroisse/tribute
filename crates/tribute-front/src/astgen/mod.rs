@@ -1638,4 +1638,73 @@ mod tests {
             panic!("Expected RuneLit, got {:?}", value.kind);
         }
     }
+
+    // =============================================================================
+    // Lambda Parameter Tests
+    // =============================================================================
+
+    #[test]
+    fn test_lambda_param_name_with_type_annotation() {
+        // Ensure lambda parameter extracts just the name, not "x: Int"
+        let source = "fn main() { fn(x: Int) { x } }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Lambda { params, .. } = value.kind.as_ref() else {
+            panic!("Expected lambda expression");
+        };
+
+        assert_eq!(params.len(), 1);
+        // The parameter name should be just "x", not "x: Int"
+        assert_eq!(
+            params[0].name.to_string(),
+            "x",
+            "Lambda parameter name should be 'x', not the full parameter text"
+        );
+    }
+
+    #[test]
+    fn test_lambda_multiple_typed_params() {
+        let source = "fn main() { fn(a: Int, b: Float) { a } }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Lambda { params, .. } = value.kind.as_ref() else {
+            panic!("Expected lambda expression");
+        };
+
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name.to_string(), "a");
+        assert_eq!(params[1].name.to_string(), "b");
+    }
+
+    #[test]
+    fn test_lambda_untyped_params() {
+        // Untyped parameters should also work correctly
+        let source = "fn main() { fn(x) { x } }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Lambda { params, .. } = value.kind.as_ref() else {
+            panic!("Expected lambda expression");
+        };
+
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name.to_string(), "x");
+    }
 }

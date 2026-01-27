@@ -143,8 +143,26 @@ fn lower_expr<'db>(
 
     match *expr.kind {
         ExprKind::NatLit(n) => {
-            let op = block.op(arith::Const::i64(ctx.db, location, n as i64));
-            Some(op.result(ctx.db))
+            // i31ref range check for WASM target compatibility.
+            // i31 range: -2^30 to 2^30-1, NatLit (positive): 0 to 2^30-1
+            const I31_MAX: u64 = (1 << 30) - 1; // 1,073,741,823
+
+            if n > I31_MAX {
+                Diagnostic {
+                    message: format!(
+                        "natural number literal {} exceeds i31 range (max: {})",
+                        n, I31_MAX
+                    ),
+                    span: location.span,
+                    severity: DiagnosticSeverity::Error,
+                    phase: CompilationPhase::Lowering,
+                }
+                .accumulate(ctx.db);
+                None
+            } else {
+                let op = block.op(arith::Const::i64(ctx.db, location, n as i64));
+                Some(op.result(ctx.db))
+            }
         }
 
         ExprKind::IntLit(n) => {
@@ -153,7 +171,9 @@ fn lower_expr<'db>(
         }
 
         ExprKind::RuneLit(c) => {
-            // Rune is lowered as i32 (Unicode code point, matching core::I32)
+            // Rune is lowered as i32 (Unicode code point, matching core::I32).
+            // Unicode code points max out at 0x10FFFF (1,114,111), which is within
+            // i31 range (max 1,073,741,823), so no range check is needed.
             let op = block.op(arith::Const::i32(ctx.db, location, c as i32));
             Some(op.result(ctx.db))
         }
@@ -1210,5 +1230,63 @@ mod tests {
         // No annotation should default to int
         let ty = convert_annotation_to_ir_type(&ctx, None);
         assert_eq!(ty, ctx.int_type());
+    }
+
+    // ========================================================================
+    // NatLit Overflow Tests
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_nat_literal_within_i31_range(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // i31 max value: 2^30 - 1 = 1,073,741,823
+        let max_i31: u64 = (1 << 30) - 1;
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            nat_lit_expr(max_i31),
+        ))]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Should have const and return ops (no error)
+        let const_op = body_ops.iter().find(|op| op.name(db) == "const");
+        assert!(
+            const_op.is_some(),
+            "Should have a const operation for valid i31 value"
+        );
+    }
+
+    #[salsa_test]
+    fn test_nat_literal_exceeds_i31_range_returns_unit(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // Value exceeding i31 max: 2^30 = 1,073,741,824
+        let exceeds_i31: u64 = 1 << 30;
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            nat_lit_expr(exceeds_i31),
+        ))]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // When NatLit exceeds i31 range, lower_expr returns None,
+        // so the function body should only have unit const + return (no i64 const).
+        // The function body will have 2 ops: arith.const (unit) and func.return.
+        assert_eq!(
+            body_ops.len(),
+            2,
+            "Overflow NatLit should result in unit return only"
+        );
     }
 }

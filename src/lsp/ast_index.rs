@@ -888,7 +888,12 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     }
 
     fn collect_param(&mut self, param: &ParamDecl) {
-        self.add_definition(param.id, param.name, DefinitionKind::Parameter, None);
+        self.add_definition(
+            param.id,
+            param.name,
+            DefinitionKind::Parameter,
+            param.local_id,
+        );
     }
 
     fn collect_struct(&mut self, s: &StructDecl) {
@@ -2859,5 +2864,73 @@ enum Result(T, E) {
             &err_def.unwrap().kind,
             DefinitionKind::EnumVariant { owner } if *owner == "Result"
         ));
+    }
+
+    // =========================================================================
+    // Parameter LocalId tests
+    // =========================================================================
+
+    #[test]
+    fn test_parameter_has_local_id() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn add(x: Int, y: Int) -> Int { x + y }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Parameters should be registered as definitions with LocalIds
+        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        assert!(x_def.is_some(), "Parameter 'x' should be in definitions");
+        assert_eq!(x_def.unwrap().kind, DefinitionKind::Parameter);
+
+        let y_def = index.definition_of(&db, trunk_ir::Symbol::new("y"));
+        assert!(y_def.is_some(), "Parameter 'y' should be in definitions");
+        assert_eq!(y_def.unwrap().kind, DefinitionKind::Parameter);
+
+        // LocalIds should be set (not None)
+        assert!(
+            x_def.unwrap().local_id.is_some(),
+            "Parameter 'x' should have a LocalId"
+        );
+        assert!(
+            y_def.unwrap().local_id.is_some(),
+            "Parameter 'y' should have a LocalId"
+        );
+    }
+
+    #[test]
+    fn test_parameter_reference_matches_definition() {
+        let db = salsa::DatabaseImpl::default();
+        // Simple function that uses its parameter
+        let source = make_source(&db, "fn identity(x: Int) -> Int { x }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Get the parameter definition
+        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        assert!(x_def.is_some());
+        let x_local_id = x_def.unwrap().local_id;
+        assert!(x_local_id.is_some(), "Parameter should have LocalId");
+
+        // Get references to x (the one in the body)
+        let x_refs = index.references_of(&db, trunk_ir::Symbol::new("x"));
+        assert_eq!(x_refs.len(), 1, "Should have 1 reference to 'x' in body");
+
+        // The reference's target LocalId should match the definition's LocalId
+        let ref_target = &x_refs[0].target;
+        if let ResolvedTarget::Local { id: local_id, .. } = ref_target {
+            assert_eq!(
+                Some(*local_id),
+                x_local_id,
+                "Reference LocalId should match definition LocalId"
+            );
+        } else {
+            panic!("Expected local reference target");
+        }
     }
 }

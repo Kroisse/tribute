@@ -49,6 +49,13 @@ impl UnresolvedName {
 pub struct LocalId(u32);
 
 impl LocalId {
+    /// Sentinel value for unresolved names.
+    ///
+    /// Used when a name cannot be resolved during the name resolution phase.
+    /// Later passes should check for this value using [`is_unresolved()`](Self::is_unresolved)
+    /// and report appropriate errors.
+    pub const UNRESOLVED: LocalId = LocalId(u32::MAX);
+
     /// Create a new LocalId from a raw value.
     pub const fn new(id: u32) -> Self {
         Self(id)
@@ -57,6 +64,11 @@ impl LocalId {
     /// Get the raw value.
     pub const fn raw(self) -> u32 {
         self.0
+    }
+
+    /// Check if this is an unresolved sentinel value.
+    pub const fn is_unresolved(self) -> bool {
+        self.0 == u32::MAX
     }
 }
 
@@ -214,5 +226,35 @@ impl LocalIdGen {
         let id = LocalId(self.0);
         self.0 += 1;
         id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_local_id_unresolved_constant() {
+        assert_eq!(LocalId::UNRESOLVED.raw(), u32::MAX);
+    }
+
+    #[test]
+    fn test_local_id_is_unresolved() {
+        assert!(LocalId::UNRESOLVED.is_unresolved());
+        assert!(!LocalId::new(0).is_unresolved());
+        assert!(!LocalId::new(100).is_unresolved());
+    }
+
+    #[test]
+    fn test_local_id_gen_does_not_produce_unresolved() {
+        let mut id_gen = LocalIdGen::new();
+        // Generate many IDs and ensure none are UNRESOLVED
+        for _ in 0..1000 {
+            let id = id_gen.fresh();
+            assert!(
+                !id.is_unresolved(),
+                "LocalIdGen should not produce UNRESOLVED values"
+            );
+        }
     }
 }

@@ -522,10 +522,23 @@ fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Param> {
     let mut cursor = node.walk();
 
     for child in node.named_children(&mut cursor) {
-        if child.kind() == "parameter" || child.kind() == "identifier" {
+        if child.kind() == "parameter" {
+            // Extract name from the "name" field, not the full parameter text
+            if let Some(name_node) = child.child_by_field_name("name") {
+                let id = ctx.fresh_id_with_span(&child);
+                let name = ctx.node_symbol(&name_node);
+                // TODO: type annotation from "type" field
+                params.push(Param {
+                    id,
+                    name,
+                    ty: None,
+                    local_id: None,
+                });
+            }
+        } else if child.kind() == "identifier" {
+            // Simple identifier parameter (no type annotation)
             let id = ctx.fresh_id_with_span(&child);
             let name = ctx.node_symbol(&child);
-            // TODO: type annotation
             params.push(Param {
                 id,
                 name,

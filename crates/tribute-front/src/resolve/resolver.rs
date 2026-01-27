@@ -87,8 +87,7 @@ impl<'db> Resolver<'db> {
 
         // Not found - return as unresolved local (will be caught by later passes)
         // TODO: Emit diagnostic for unresolved name
-        let id = LocalId::new(u32::MAX); // Sentinel value for unresolved
-        ResolvedRef::local(id, sym)
+        ResolvedRef::local(LocalId::UNRESOLVED, sym)
     }
 
     /// Convert a binding to a resolved reference.
@@ -103,8 +102,7 @@ impl<'db> Resolver<'db> {
             } => ResolvedRef::constructor(*id, name),
             Binding::TypeDef { .. } => {
                 // Type used as value - error
-                let id = LocalId::new(u32::MAX);
-                ResolvedRef::local(id, name)
+                ResolvedRef::local(LocalId::UNRESOLVED, name)
             }
             Binding::Module { path } => {
                 let path_ref = ModulePath::new(self.db, path.clone());
@@ -663,8 +661,7 @@ mod tests {
         // Should be unresolved (sentinel LocalId)
         match resolved {
             ResolvedRef::Local { id, name: n } => {
-                // Unresolved names use u32::MAX as sentinel
-                assert_eq!(id.raw(), u32::MAX);
+                assert!(id.is_unresolved(), "Expected unresolved LocalId");
                 assert_eq!(n, name);
             }
             _ => panic!("Expected unresolved local, got {:?}", resolved),
@@ -724,7 +721,7 @@ mod tests {
         match resolved_y {
             ResolvedRef::Local { id, .. } => {
                 // y should be unresolved (sentinel)
-                assert_eq!(id.raw(), u32::MAX);
+                assert!(id.is_unresolved(), "Expected unresolved LocalId for y");
             }
             _ => panic!("Expected unresolved y after pop"),
         }
