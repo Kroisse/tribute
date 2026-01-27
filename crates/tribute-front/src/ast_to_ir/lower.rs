@@ -1239,6 +1239,147 @@ mod tests {
     }
 
     // ========================================================================
+    // TypeScheme-based Function Lowering Tests
+    // ========================================================================
+
+    /// Wrapper for lower_module with function_types that uses #[salsa::tracked]
+    /// to provide proper Salsa context for accumulator operations.
+    #[salsa::tracked]
+    fn test_lower_with_scheme<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+        span_map: SpanMap,
+        module: Module<TypedRef<'db>>,
+        scheme_entries: Vec<(Symbol, crate::ast::TypeScheme<'db>)>,
+    ) -> core::Module<'db> {
+        let function_types: HashMap<Symbol, crate::ast::TypeScheme<'db>> =
+            scheme_entries.into_iter().collect();
+        lower_module(db, path, span_map, module, function_types)
+    }
+
+    #[salsa_test]
+    fn test_lower_function_with_type_scheme(db: &salsa::DatabaseImpl) {
+        use crate::ast::{EffectRow, Type as AstType, TypeKind, TypeScheme};
+
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // Create function: fn identity(x) { x }
+        let x_name = Symbol::new("x");
+        let x_id = LocalId::new(0);
+        let x_ref = local_ref(db, x_id, x_name);
+        let body = var_expr(x_ref);
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("identity"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: x_name,
+                ty: None,
+                local_id: Some(x_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body,
+        };
+
+        let module = simple_module(vec![Decl::Function(func)]);
+
+        // Create TypeScheme: forall a. fn(a) -> a
+        // After convert_type, BoundVar → tribute_rt.any
+        let bound_var = AstType::new(db, TypeKind::BoundVar { index: 0 });
+        let effect = EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![bound_var],
+                result: bound_var,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(
+            db,
+            vec![crate::ast::TypeParam {
+                name: Some(Symbol::new("a")),
+                kind: None,
+            }],
+            func_ty,
+        );
+
+        let scheme_entries = vec![(Symbol::new("identity"), scheme)];
+
+        let ir_module = test_lower_with_scheme(db, path, span_map, module, scheme_entries);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+
+        // The function type should use tribute_rt.any for param/return (type erasure)
+        let func_ir_ty = func_typed.r#type(db);
+        let any_ty = tribute_ir::dialect::tribute_rt::any_type(db);
+        let expected_ty =
+            trunk_ir::dialect::core::Func::new(db, vec![any_ty].into(), any_ty).as_type();
+        assert_eq!(func_ir_ty, expected_ty);
+    }
+
+    #[salsa_test]
+    fn test_lower_function_fallback_without_scheme(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // fn add(a, b) { a + b } — no TypeScheme, no annotations → defaults to int
+        let a_name = Symbol::new("a");
+        let b_name = Symbol::new("b");
+        let a_id = LocalId::new(0);
+        let b_id = LocalId::new(1);
+        let a_ref = local_ref(db, a_id, a_name);
+        let b_ref = local_ref(db, b_id, b_name);
+        let body = binop_expr(BinOpKind::Add, var_expr(a_ref), var_expr(b_ref));
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("add"),
+            type_params: vec![],
+            params: vec![
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: a_name,
+                    ty: None,
+                    local_id: Some(a_id),
+                },
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: b_name,
+                    ty: None,
+                    local_id: Some(b_id),
+                },
+            ],
+            return_ty: None,
+            effects: None,
+            body,
+        };
+
+        let module = simple_module(vec![Decl::Function(func)]);
+
+        // No function_types → fallback to annotation conversion
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+
+        // Without annotations, params default to int (i64), return defaults to unit (nil)
+        let func_ir_ty = func_typed.r#type(db);
+        let i64_ty = trunk_ir::dialect::core::I64::new(db).as_type();
+        let nil_ty = trunk_ir::dialect::core::Nil::new(db).as_type();
+        let expected_ty =
+            trunk_ir::dialect::core::Func::new(db, vec![i64_ty, i64_ty].into(), nil_ty).as_type();
+        assert_eq!(func_ir_ty, expected_ty);
+    }
+
+    // ========================================================================
     // Type Annotation Conversion Tests
     // ========================================================================
 

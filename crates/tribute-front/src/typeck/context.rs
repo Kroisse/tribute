@@ -708,6 +708,59 @@ mod tests {
         }
     }
 
+    // =========================================================================
+    // export_function_types tests
+    // =========================================================================
+
+    #[salsa::tracked]
+    fn test_export_function_types_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+        let mut ctx = TypeContext::new(db);
+
+        let f1_name = Symbol::new("foo");
+        let f2_name = Symbol::new("bar");
+        let f1_id = FuncDefId::new(db, f1_name);
+        let f2_id = FuncDefId::new(db, f2_name);
+
+        let int_ty = ctx.int_type();
+        let scheme1 = TypeScheme::new(db, vec![], int_ty);
+        let scheme2 = TypeScheme::new(db, vec![], ctx.bool_type());
+
+        ctx.register_function(f1_id, scheme1);
+        ctx.register_function(f2_id, scheme2);
+
+        let exported = ctx.export_function_types();
+        if exported.len() != 2 {
+            return false;
+        }
+
+        let has_foo = exported
+            .iter()
+            .any(|(name, s)| *name == f1_name && *s == scheme1);
+        let has_bar = exported
+            .iter()
+            .any(|(name, s)| *name == f2_name && *s == scheme2);
+        has_foo && has_bar
+    }
+
+    #[salsa_test]
+    fn test_export_function_types(db: &dyn salsa::Database) {
+        assert!(
+            test_export_function_types_inner(db),
+            "export_function_types should return all registered functions"
+        );
+    }
+
+    #[salsa_test]
+    fn test_export_function_types_empty(db: &dyn salsa::Database) {
+        let ctx = TypeContext::new(db);
+        let exported = ctx.export_function_types();
+        assert!(exported.is_empty(), "Empty context should export empty Vec");
+    }
+
+    // =========================================================================
+    // Effect row substitution tests
+    // =========================================================================
+
     #[salsa_test]
     fn test_substitute_effect_row_no_bound_vars(db: &dyn salsa::Database) {
         // forall a. fn(a) ->{IO} a

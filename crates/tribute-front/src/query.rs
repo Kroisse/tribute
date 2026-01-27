@@ -336,6 +336,42 @@ mod tests {
     }
 
     #[test]
+    fn test_function_schemes_returns_entries() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn foo() { 42 }");
+
+        let schemes = function_schemes(&db, source);
+        assert!(schemes.is_some(), "function_schemes should return Some");
+
+        let schemes = schemes.unwrap();
+        assert!(
+            schemes.iter().any(|(name, _)| *name == Symbol::new("foo")),
+            "function_schemes should contain 'foo', got: {:?}",
+            schemes
+                .iter()
+                .map(|(n, _)| n.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_type_check_output_has_both_fields() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn main() { 42 }");
+
+        let output = type_check_output(&db, source);
+        assert!(output.is_some(), "type_check_output should return Some");
+
+        let output = output.unwrap();
+        // Module should have declarations
+        let module = output.module(&db);
+        assert!(!module.decls.is_empty(), "Module should have declarations");
+
+        // function_types should be a valid Vec (possibly empty for simple cases)
+        let _ft = output.function_types(&db);
+    }
+
+    #[test]
     fn test_unresolved_name_emits_diagnostic() {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn main() { undefined_var }");
