@@ -7,7 +7,7 @@ if ! cargo fmt --all --check; then
     echo ""
     echo "❌ Code formatting check failed."
     echo "   Run 'cargo fmt --all' to fix formatting issues."
-    exit 1
+    exit 2
 fi
 
 echo "Running clippy..."
@@ -15,7 +15,7 @@ if ! cargo clippy --workspace --all-targets --message-format=short -- -D warning
     echo ""
     echo "❌ Clippy failed with warnings/errors. Fix the issues above and try again."
     echo "   Run 'cargo clippy --workspace --all-targets' to see all issues."
-    exit 1
+    exit 2
 fi
 
 echo "✅ Lint checks passed!"
