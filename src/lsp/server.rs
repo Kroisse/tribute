@@ -870,7 +870,7 @@ fn initialize_server(connection: Connection) -> Result<LspServer, Box<dyn Error 
 }
 
 /// Start the LSP server.
-pub fn serve(_log_level: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+pub fn serve() -> Result<(), Box<dyn Error + Send + Sync>> {
     let (connection, io_threads) = Connection::stdio();
 
     let mut server = initialize_server(connection)?;
