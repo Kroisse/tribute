@@ -777,7 +777,12 @@ impl<'db> TypeChecker<'db> {
                 value,
                 ty,
             } => {
-                let value = self.check_expr(value, Mode::Infer);
+                let value = if let Some(ann) = &ty {
+                    let expected = self.annotation_to_type(ann);
+                    self.check_expr(value, Mode::Check(expected))
+                } else {
+                    self.check_expr(value, Mode::Infer)
+                };
                 // Get the type of the value expression
                 let value_ty = self
                     .ctx
@@ -1000,7 +1005,7 @@ impl<'db> TypeChecker<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BinOpKind, LocalId, NodeId};
+    use crate::ast::{BinOpKind, LocalId, NodeId, TypeAnnotation, TypeAnnotationKind};
     use trunk_ir::Symbol;
 
     fn test_db() -> salsa::DatabaseImpl {
@@ -1492,5 +1497,87 @@ mod tests {
 
         // Should succeed without type error (no panic during unification)
         assert!(matches!(*typed_expr.kind, ExprKind::RuneLit('x')));
+    }
+
+    // =========================================================================
+    // Let Statement Type Annotation Tests
+    // =========================================================================
+
+    #[test]
+    fn test_let_with_annotation_checks_value() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create: let x: Nat = 42
+        let pattern = Pattern::new(
+            fresh_node_id(),
+            PatternKind::Bind {
+                name: Symbol::new("x"),
+                local_id: Some(LocalId::new(0)),
+            },
+        );
+        let value = Expr::new(fresh_node_id(), ExprKind::NatLit(42));
+        let ann = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Named(Symbol::new("Nat")),
+        };
+        let stmt = Stmt::Let {
+            id: fresh_node_id(),
+            pattern,
+            ty: Some(ann),
+            value,
+        };
+
+        // Should succeed: NatLit matches Nat annotation
+        let typed_stmt = checker.convert_stmt(stmt);
+        if let Stmt::Let { value, .. } = &typed_stmt {
+            assert!(matches!(*value.kind, ExprKind::NatLit(42)));
+        } else {
+            panic!("Expected Let statement");
+        }
+    }
+
+    #[test]
+    fn test_let_with_mismatched_annotation_adds_constraint() {
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Create: let x: Bool = 42
+        // The annotation says Bool but the value is a Nat literal.
+        let pattern = Pattern::new(
+            fresh_node_id(),
+            PatternKind::Bind {
+                name: Symbol::new("x"),
+                local_id: Some(LocalId::new(0)),
+            },
+        );
+        let value = Expr::new(fresh_node_id(), ExprKind::NatLit(42));
+        let ann = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Named(Symbol::new("Bool")),
+        };
+        let stmt = Stmt::Let {
+            id: fresh_node_id(),
+            pattern,
+            ty: Some(ann),
+            value,
+        };
+
+        // This should add an equality constraint (Bool = Nat) that will fail when solved.
+        let _typed_stmt = checker.convert_stmt(stmt);
+
+        // Verify a constraint was emitted by solving — it should produce an error
+        let constraints = checker.ctx.take_constraints();
+        assert!(
+            !constraints.is_empty(),
+            "Expected at least one constraint from type mismatch"
+        );
+
+        let mut solver = TypeSolver::new(&db);
+        let result = solver.solve(constraints);
+        assert!(
+            result.is_err(),
+            "Expected type error from Bool vs Nat mismatch"
+        );
     }
 }
