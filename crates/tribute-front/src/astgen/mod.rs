@@ -130,7 +130,7 @@ pub fn lower_source_to_ast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Decl, ExprKind, PatternKind, Stmt};
+    use crate::ast::{Decl, ExprKind, PatternKind, Stmt, TypeAnnotationKind};
     use tree_sitter::Parser;
 
     fn parse_and_lower(source: &str) -> Module<UnresolvedName> {
@@ -1707,5 +1707,339 @@ mod tests {
 
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].name.to_string(), "x");
+    }
+
+    // =============================================================================
+    // Type Annotation Tests
+    // =============================================================================
+
+    #[test]
+    fn test_type_annotation_named() {
+        let source = "fn id(x: Int) -> Int { x }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        // Parameter type annotation
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::Named(name) = &ty.kind else {
+            panic!("Expected Named, got {:?}", ty.kind);
+        };
+        assert_eq!(name.to_string(), "Int");
+
+        // Return type annotation
+        let ret = func.return_ty.as_ref().expect("Expected return type");
+        let TypeAnnotationKind::Named(name) = &ret.kind else {
+            panic!("Expected Named return type, got {:?}", ret.kind);
+        };
+        assert_eq!(name.to_string(), "Int");
+    }
+
+    #[test]
+    fn test_type_annotation_generic() {
+        let source = "fn first(xs: List(a)) -> a { xs }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::App { ctor, args } = &ty.kind else {
+            panic!("Expected App, got {:?}", ty.kind);
+        };
+        let TypeAnnotationKind::Named(name) = &ctor.kind else {
+            panic!("Expected Named ctor, got {:?}", ctor.kind);
+        };
+        assert_eq!(name.to_string(), "List");
+        assert_eq!(args.len(), 1);
+        let TypeAnnotationKind::Named(arg_name) = &args[0].kind else {
+            panic!("Expected Named arg, got {:?}", args[0].kind);
+        };
+        assert_eq!(arg_name.to_string(), "a");
+    }
+
+    #[test]
+    fn test_type_annotation_generic_multi_arg() {
+        let source = "fn foo(m: Map(String, Int)) -> Int { 0 }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::App { ctor, args } = &ty.kind else {
+            panic!("Expected App, got {:?}", ty.kind);
+        };
+        let TypeAnnotationKind::Named(name) = &ctor.kind else {
+            panic!("Expected Named ctor");
+        };
+        assert_eq!(name.to_string(), "Map");
+        assert_eq!(args.len(), 2);
+    }
+
+    #[test]
+    fn test_type_annotation_function_type() {
+        let source = "fn apply(f: fn(Int) -> Bool, x: Int) -> Bool { f(x) }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::Func { params, result } = &ty.kind else {
+            panic!("Expected Func, got {:?}", ty.kind);
+        };
+        assert_eq!(params.len(), 1);
+        let TypeAnnotationKind::Named(param_name) = &params[0].kind else {
+            panic!("Expected Named param, got {:?}", params[0].kind);
+        };
+        assert_eq!(param_name.to_string(), "Int");
+        let TypeAnnotationKind::Named(result_name) = &result.kind else {
+            panic!("Expected Named result, got {:?}", result.kind);
+        };
+        assert_eq!(result_name.to_string(), "Bool");
+    }
+
+    #[test]
+    fn test_type_annotation_function_type_multi_params() {
+        let source = "fn apply2(f: fn(Int, String) -> Bool) -> Bool { f(1, 2) }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::Func { params, .. } = &ty.kind else {
+            panic!("Expected Func, got {:?}", ty.kind);
+        };
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn test_type_annotation_function_type_no_params() {
+        let source = "fn thunk(f: fn() -> Int) -> Int { f() }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::Func { params, result } = &ty.kind else {
+            panic!("Expected Func, got {:?}", ty.kind);
+        };
+        assert!(params.is_empty());
+        let TypeAnnotationKind::Named(name) = &result.kind else {
+            panic!("Expected Named result");
+        };
+        assert_eq!(name.to_string(), "Int");
+    }
+
+    #[test]
+    fn test_type_annotation_tuple_type() {
+        let source = "fn pair(x: #(Int, String)) -> Int { 0 }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::Tuple(elements) = &ty.kind else {
+            panic!("Expected Tuple, got {:?}", ty.kind);
+        };
+        assert_eq!(elements.len(), 2);
+        let TypeAnnotationKind::Named(first) = &elements[0].kind else {
+            panic!("Expected Named first element");
+        };
+        assert_eq!(first.to_string(), "Int");
+        let TypeAnnotationKind::Named(second) = &elements[1].kind else {
+            panic!("Expected Named second element");
+        };
+        assert_eq!(second.to_string(), "String");
+    }
+
+    #[test]
+    fn test_type_annotation_tuple_type_three_elements() {
+        let source = "fn triple(x: #(Int, Bool, String)) -> Int { 0 }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::Tuple(elements) = &ty.kind else {
+            panic!("Expected Tuple, got {:?}", ty.kind);
+        };
+        assert_eq!(elements.len(), 3);
+    }
+
+    #[test]
+    fn test_type_annotation_function_with_effects() {
+        let source = "fn run(f: fn(Int) ->{State} Bool) -> Bool { f(0) }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::WithEffects { inner, effects } = &ty.kind else {
+            panic!("Expected WithEffects, got {:?}", ty.kind);
+        };
+        // The inner type should be Func
+        let TypeAnnotationKind::Func { params, result } = &inner.kind else {
+            panic!("Expected Func inside WithEffects, got {:?}", inner.kind);
+        };
+        assert_eq!(params.len(), 1);
+        let TypeAnnotationKind::Named(result_name) = &result.kind else {
+            panic!("Expected Named result");
+        };
+        assert_eq!(result_name.to_string(), "Bool");
+
+        // Effects
+        assert_eq!(effects.len(), 1);
+        let TypeAnnotationKind::Named(effect_name) = &effects[0].kind else {
+            panic!("Expected Named effect, got {:?}", effects[0].kind);
+        };
+        assert_eq!(effect_name.to_string(), "State");
+    }
+
+    #[test]
+    fn test_type_annotation_function_with_parameterized_effect() {
+        let source = "fn run(f: fn() ->{State(Int)} Nil) -> Nil { f() }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::WithEffects { inner, effects } = &ty.kind else {
+            panic!("Expected WithEffects, got {:?}", ty.kind);
+        };
+        let TypeAnnotationKind::Func { .. } = &inner.kind else {
+            panic!("Expected Func inside WithEffects");
+        };
+
+        // Effect should be App { ctor: State, args: [Int] }
+        assert_eq!(effects.len(), 1);
+        let TypeAnnotationKind::App { ctor, args } = &effects[0].kind else {
+            panic!(
+                "Expected App for parameterized effect, got {:?}",
+                effects[0].kind
+            );
+        };
+        let TypeAnnotationKind::Named(name) = &ctor.kind else {
+            panic!("Expected Named ctor");
+        };
+        assert_eq!(name.to_string(), "State");
+        assert_eq!(args.len(), 1);
+        let TypeAnnotationKind::Named(arg_name) = &args[0].kind else {
+            panic!("Expected Named arg");
+        };
+        assert_eq!(arg_name.to_string(), "Int");
+    }
+
+    #[test]
+    fn test_type_annotation_function_with_multiple_effects() {
+        let source = "fn run(f: fn() ->{State, Console} Nil) -> Nil { f() }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::WithEffects { effects, .. } = &ty.kind else {
+            panic!("Expected WithEffects, got {:?}", ty.kind);
+        };
+        assert_eq!(effects.len(), 2);
+    }
+
+    #[test]
+    fn test_type_annotation_nested_generic_in_function() {
+        // fn foo(f: fn(List(a)) -> Option(a)) -> Int
+        let source = "fn foo(f: fn(List(a)) -> Option(a)) -> Int { 0 }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::Func { params, result } = &ty.kind else {
+            panic!("Expected Func, got {:?}", ty.kind);
+        };
+        // param should be App { ctor: List, args: [a] }
+        assert_eq!(params.len(), 1);
+        let TypeAnnotationKind::App { ctor, args } = &params[0].kind else {
+            panic!("Expected App param, got {:?}", params[0].kind);
+        };
+        let TypeAnnotationKind::Named(name) = &ctor.kind else {
+            panic!("Expected Named ctor");
+        };
+        assert_eq!(name.to_string(), "List");
+        assert_eq!(args.len(), 1);
+
+        // result should be App { ctor: Option, args: [a] }
+        let TypeAnnotationKind::App { ctor, args } = &result.kind else {
+            panic!("Expected App result, got {:?}", result.kind);
+        };
+        let TypeAnnotationKind::Named(name) = &ctor.kind else {
+            panic!("Expected Named ctor");
+        };
+        assert_eq!(name.to_string(), "Option");
+        assert_eq!(args.len(), 1);
+    }
+
+    #[test]
+    fn test_struct_field_tuple_type() {
+        let source = r#"
+            struct Pair {
+                value: #(Int, String),
+            }
+        "#;
+        let module = parse_and_lower(source);
+
+        let Decl::Struct(s) = &module.decls[0] else {
+            panic!("Expected struct");
+        };
+        let field_ty = &s.fields[0].ty;
+        let TypeAnnotationKind::Tuple(elements) = &field_ty.kind else {
+            panic!("Expected Tuple, got {:?}", field_ty.kind);
+        };
+        assert_eq!(elements.len(), 2);
     }
 }

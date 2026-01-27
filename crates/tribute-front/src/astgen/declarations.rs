@@ -152,24 +152,24 @@ fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<ParamDecl> {
 
 /// Lower a type annotation.
 fn lower_type_annotation(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotation> {
-    // Find the actual type node within the annotation
+    // Check if the node itself is already a type node
+    if matches!(
+        node.kind(),
+        "type_identifier" | "type_variable" | "generic_type" | "function_type" | "tuple_type"
+    ) {
+        return lower_type_node(ctx, node);
+    }
+
+    // Otherwise, search children for the actual type node
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            "type_identifier" | "type_variable" | "generic_type" | "function_type" => {
-                // Delegate to lower_type_node to preserve structure
+            "type_identifier" | "type_variable" | "generic_type" | "function_type"
+            | "tuple_type" => {
                 return lower_type_node(ctx, child);
             }
             _ => {}
         }
-    }
-
-    // Fallback: try to lower the node itself as a type
-    if matches!(
-        node.kind(),
-        "type_identifier" | "type_variable" | "generic_type" | "function_type"
-    ) {
-        return lower_type_node(ctx, node);
     }
 
     None
@@ -216,7 +216,7 @@ fn lower_type_node(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotatio
             None
         }
         "function_type" => {
-            // Function type: fn(Int, Int) -> Int
+            // Function type: fn(Int, Int) -> Int or fn(a) ->{State(s)} b
             let id = ctx.fresh_id_with_span(&node);
 
             // Get parameter types from "params" field (type_list)
@@ -235,17 +235,117 @@ fn lower_type_node(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotatio
             let result = node
                 .child_by_field_name("return_type")
                 .and_then(|rt| lower_type_node(ctx, rt))
-                .map(Box::new);
+                .map(Box::new)?;
 
-            result.map(|result| TypeAnnotation {
+            let func_ann = TypeAnnotation {
                 id,
                 kind: TypeAnnotationKind::Func { params, result },
+            };
+
+            // Wrap in WithEffects if abilities are present
+            if let Some(abilities_node) = node.child_by_field_name("abilities") {
+                let effects = lower_ability_row(ctx, abilities_node);
+                if !effects.is_empty() {
+                    return Some(TypeAnnotation {
+                        id: ctx.fresh_id_with_span(&node),
+                        kind: TypeAnnotationKind::WithEffects {
+                            inner: Box::new(func_ann),
+                            effects,
+                        },
+                    });
+                }
+            }
+
+            Some(func_ann)
+        }
+        "tuple_type" => {
+            // Tuple type: #(Int, String)
+            let id = ctx.fresh_id_with_span(&node);
+            let mut cursor = node.walk();
+            let elements: Vec<TypeAnnotation> = node
+                .named_children(&mut cursor)
+                .filter_map(|child| lower_type_node(ctx, child))
+                .collect();
+            Some(TypeAnnotation {
+                id,
+                kind: TypeAnnotationKind::Tuple(elements),
             })
         }
         _ => {
             // Try to find type within the node
             lower_type_annotation(ctx, node)
         }
+    }
+}
+
+/// Lower an ability_row CST node into a list of effect type annotations.
+///
+/// Grammar: `ability_row = "{" ability_list? "}"`
+/// where `ability_list` contains `ability_item` (e.g. `State(Int)`) and
+/// `ability_tail` (row variable, e.g. `e`).
+fn lower_ability_row(ctx: &mut AstLoweringCtx, node: Node) -> Vec<TypeAnnotation> {
+    let mut effects = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "ability_list" {
+            let mut inner_cursor = child.walk();
+            for item in child.named_children(&mut inner_cursor) {
+                match item.kind() {
+                    "ability_item" => {
+                        if let Some(ann) = lower_ability_item(ctx, item) {
+                            effects.push(ann);
+                        }
+                    }
+                    "ability_tail" => {
+                        // Row variable (e.g. `e`)
+                        let id = ctx.fresh_id_with_span(&item);
+                        let name = ctx.node_symbol(&item);
+                        effects.push(TypeAnnotation {
+                            id,
+                            kind: TypeAnnotationKind::Named(name),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    effects
+}
+
+/// Lower an ability_item into a TypeAnnotation.
+///
+/// Grammar: `ability_item = type_identifier optional(type_arguments)`
+/// e.g. `Console` or `State(Int)`
+fn lower_ability_item(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotation> {
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.named_children(&mut cursor).collect();
+
+    let name_node = children.first().filter(|n| n.kind() == "type_identifier")?;
+    let id = ctx.fresh_id_with_span(&node);
+    let name = ctx.node_symbol(name_node);
+
+    // Check for type_arguments (e.g. State(Int))
+    let type_args_node = children.iter().find(|n| n.kind() == "type_arguments");
+    if let Some(args_node) = type_args_node {
+        let ctor = Box::new(TypeAnnotation {
+            id: ctx.fresh_id_with_span(name_node),
+            kind: TypeAnnotationKind::Named(name),
+        });
+        let mut args_cursor = args_node.walk();
+        let args: Vec<TypeAnnotation> = args_node
+            .named_children(&mut args_cursor)
+            .filter_map(|child| lower_type_node(ctx, child))
+            .collect();
+        Some(TypeAnnotation {
+            id,
+            kind: TypeAnnotationKind::App { ctor, args },
+        })
+    } else {
+        Some(TypeAnnotation {
+            id,
+            kind: TypeAnnotationKind::Named(name),
+        })
     }
 }
 
