@@ -893,10 +893,10 @@ fn init_lsp_tracing(log_filter: &str, sender: crossbeam_channel::Sender<Message>
         EnvFilter::new("warn")
     });
 
-    tracing_subscriber::registry()
+    let _ = tracing_subscriber::registry()
         .with(env_filter)
         .with(LspLayer::new(sender))
-        .init();
+        .try_init();
 }
 
 fn point_after_text(start: Point, text: &str) -> Point {
