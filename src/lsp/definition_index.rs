@@ -233,6 +233,26 @@ impl<'db> AstDefinitionIndex<'db> {
                     .iter()
                     .find(|d| d.name == *name && d.local_id == Some(*id))
             }
+            ResolvedTarget::Constructor { type_name, variant } => {
+                // Match by variant name AND owner type for precise disambiguation
+                self.definitions(db).iter().find(|d| {
+                    d.name == *variant
+                        && matches!(
+                            &d.kind,
+                            DefinitionKind::EnumVariant { owner } if owner == type_name
+                        )
+                })
+            }
+            ResolvedTarget::Field { owner, name } => {
+                // Match by field name AND owner struct for precise disambiguation
+                self.definitions(db).iter().find(|d| {
+                    d.name == *name
+                        && matches!(
+                            &d.kind,
+                            DefinitionKind::Field { owner: o } if o == owner
+                        )
+                })
+            }
             _ => {
                 // For non-locals, fall back to name-based lookup
                 self.definition_of(db, target.name())
@@ -270,6 +290,32 @@ impl<'db> AstDefinitionIndex<'db> {
                 self.references(db)
                     .iter()
                     .filter(|r| r.target.name() == *name && r.target.local_id() == Some(*id))
+                    .collect()
+            }
+            ResolvedTarget::Constructor { type_name, variant } => {
+                // Match by variant name AND owner type for precise disambiguation
+                self.references(db)
+                    .iter()
+                    .filter(|r| {
+                        matches!(
+                            &r.target,
+                            ResolvedTarget::Constructor { type_name: t, variant: v }
+                            if t == type_name && v == variant
+                        )
+                    })
+                    .collect()
+            }
+            ResolvedTarget::Field { owner, name } => {
+                // Match by field name AND owner struct for precise disambiguation
+                self.references(db)
+                    .iter()
+                    .filter(|r| {
+                        matches!(
+                            &r.target,
+                            ResolvedTarget::Field { owner: o, name: n }
+                            if o == owner && n == name
+                        )
+                    })
                     .collect()
             }
             _ => {
@@ -1731,5 +1777,205 @@ enum Result(T, E) {
                 && variant == trunk_ir::Symbol::new("Some")),
             "EnumVariant definition should produce Constructor target"
         );
+    }
+
+    // =========================================================================
+    // Owner-aware definition/reference matching tests (수정 3)
+    // =========================================================================
+
+    #[test]
+    fn test_definition_of_target_field_owner_aware() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"struct Point { x: Int, y: Int }
+struct Rect { x: Int, width: Int }"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+        let index = index.unwrap();
+
+        // Look up field 'x' on Point
+        let target_point_x = ResolvedTarget::Field {
+            owner: trunk_ir::Symbol::new("Point"),
+            name: trunk_ir::Symbol::new("x"),
+        };
+        let def = index.definition_of_target(&db, &target_point_x);
+        assert!(def.is_some(), "Should find 'x' field on Point");
+        assert!(
+            matches!(
+                &def.unwrap().kind,
+                DefinitionKind::Field { owner } if *owner == "Point"
+            ),
+            "Should return Point's 'x' field, not Rect's"
+        );
+
+        // Look up field 'x' on Rect
+        let target_rect_x = ResolvedTarget::Field {
+            owner: trunk_ir::Symbol::new("Rect"),
+            name: trunk_ir::Symbol::new("x"),
+        };
+        let def = index.definition_of_target(&db, &target_rect_x);
+        assert!(def.is_some(), "Should find 'x' field on Rect");
+        assert!(
+            matches!(
+                &def.unwrap().kind,
+                DefinitionKind::Field { owner } if *owner == "Rect"
+            ),
+            "Should return Rect's 'x' field, not Point's"
+        );
+    }
+
+    #[test]
+    fn test_definition_of_target_constructor_owner_aware() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"enum Fruit { None, Apple }
+enum Option { Some(a), None }"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+        let index = index.unwrap();
+
+        // Look up 'None' on Fruit
+        let target_fruit_none = ResolvedTarget::Constructor {
+            type_name: trunk_ir::Symbol::new("Fruit"),
+            variant: trunk_ir::Symbol::new("None"),
+        };
+        let def = index.definition_of_target(&db, &target_fruit_none);
+        assert!(def.is_some(), "Should find 'None' on Fruit");
+        assert!(
+            matches!(
+                &def.unwrap().kind,
+                DefinitionKind::EnumVariant { owner } if *owner == "Fruit"
+            ),
+            "Should return Fruit's 'None', not Option's"
+        );
+
+        // Look up 'None' on Option
+        let target_option_none = ResolvedTarget::Constructor {
+            type_name: trunk_ir::Symbol::new("Option"),
+            variant: trunk_ir::Symbol::new("None"),
+        };
+        let def = index.definition_of_target(&db, &target_option_none);
+        assert!(def.is_some(), "Should find 'None' on Option");
+        assert!(
+            matches!(
+                &def.unwrap().kind,
+                DefinitionKind::EnumVariant { owner } if *owner == "Option"
+            ),
+            "Should return Option's 'None', not Fruit's"
+        );
+    }
+
+    #[test]
+    fn test_references_of_target_constructor_owner_aware() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"enum Fruit { None, Apple }
+enum Option { Some(a), None }
+
+fn test() -> Int {
+    case Fruit::None {
+        Fruit::None -> 0
+        _ -> 1
+    }
+}"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+        let index = index.unwrap();
+
+        // References to Fruit::None should only match Fruit's None
+        let target_fruit_none = ResolvedTarget::Constructor {
+            type_name: trunk_ir::Symbol::new("Fruit"),
+            variant: trunk_ir::Symbol::new("None"),
+        };
+        let refs = index.references_of_target(&db, &target_fruit_none);
+
+        // All returned references should be Constructor targets with Fruit owner
+        for r in &refs {
+            assert!(
+                matches!(
+                    &r.target,
+                    ResolvedTarget::Constructor { type_name, .. }
+                    if *type_name == trunk_ir::Symbol::new("Fruit")
+                ),
+                "All references should be to Fruit::None, got {:?}",
+                r.target
+            );
+        }
+
+        // References to Option::None should not include Fruit::None refs
+        let target_option_none = ResolvedTarget::Constructor {
+            type_name: trunk_ir::Symbol::new("Option"),
+            variant: trunk_ir::Symbol::new("None"),
+        };
+        let option_refs = index.references_of_target(&db, &target_option_none);
+        for r in &option_refs {
+            assert!(
+                matches!(
+                    &r.target,
+                    ResolvedTarget::Constructor { type_name, .. }
+                    if *type_name == trunk_ir::Symbol::new("Option")
+                ),
+                "All references should be to Option::None, got {:?}",
+                r.target
+            );
+        }
+    }
+
+    #[test]
+    fn test_references_of_target_field_owner_aware() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"struct Point { x: Int, y: Int }
+struct Rect { x: Int, width: Int }"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+        let index = index.unwrap();
+
+        // Field references for Point::x and Rect::x should be disjoint
+        let target_point_x = ResolvedTarget::Field {
+            owner: trunk_ir::Symbol::new("Point"),
+            name: trunk_ir::Symbol::new("x"),
+        };
+        let point_refs = index.references_of_target(&db, &target_point_x);
+        for r in &point_refs {
+            assert!(
+                matches!(
+                    &r.target,
+                    ResolvedTarget::Field { owner, .. }
+                    if *owner == trunk_ir::Symbol::new("Point")
+                ),
+                "All references should be to Point::x, got {:?}",
+                r.target
+            );
+        }
+
+        let target_rect_x = ResolvedTarget::Field {
+            owner: trunk_ir::Symbol::new("Rect"),
+            name: trunk_ir::Symbol::new("x"),
+        };
+        let rect_refs = index.references_of_target(&db, &target_rect_x);
+        for r in &rect_refs {
+            assert!(
+                matches!(
+                    &r.target,
+                    ResolvedTarget::Field { owner, .. }
+                    if *owner == trunk_ir::Symbol::new("Rect")
+                ),
+                "All references should be to Rect::x, got {:?}",
+                r.target
+            );
+        }
     }
 }

@@ -18,9 +18,10 @@ use crate::ast::{
 /// type matches the receiver's type.
 pub struct TdnrResolver<'db> {
     db: &'db dyn salsa::Database,
-    /// Map from (type_name, method_name) to (FuncDefId, function type).
-    /// This is built from the module's function declarations.
-    method_index: HashMap<(Symbol, Symbol), (FuncDefId<'db>, Type<'db>)>,
+    /// Map from (type_name, method_name) to candidate (FuncDefId, function type) pairs.
+    /// Multiple candidates arise when different modules define methods with the same name
+    /// on the same type. Ambiguity is checked at lookup time.
+    method_index: HashMap<(Symbol, Symbol), Vec<(FuncDefId<'db>, Type<'db>)>>,
 }
 
 impl<'db> TdnrResolver<'db> {
@@ -92,7 +93,9 @@ impl<'db> TdnrResolver<'db> {
 
                     // Register with the actual type name for precise UFCS lookup
                     self.method_index
-                        .insert((type_name, func_name), (func_id, func_ty));
+                        .entry((type_name, func_name))
+                        .or_default()
+                        .push((func_id, func_ty));
                 }
                 Decl::Module(m) => {
                     if let Some(body) = &m.body {
@@ -540,32 +543,45 @@ impl<'db> TdnrResolver<'db> {
 
     /// Look up a method for a given receiver type.
     /// Returns (FuncDefId, function_type) if found.
+    ///
+    /// Returns `None` when no candidates exist **or** when multiple candidates
+    /// are found (ambiguous). In the ambiguous case the `MethodCall` is kept
+    /// so that later passes can report an unresolved-method diagnostic.
     fn lookup_method(
         &self,
         receiver_ty: Option<Type<'db>>,
         method: Symbol,
     ) -> Option<(FuncDefId<'db>, Type<'db>)> {
-        use crate::ast::TypeKind;
-
         let ty = receiver_ty?;
+        let type_name = self.extract_type_name_from_type(ty)?;
 
-        // Extract type name based on the type kind
-        let type_name = match ty.kind(self.db) {
-            TypeKind::Named { name, .. } => *name,
-            TypeKind::Int => Symbol::new("Int"),
-            TypeKind::Nat => Symbol::new("Nat"),
-            TypeKind::Float => Symbol::new("Float"),
-            TypeKind::Bool => Symbol::new("Bool"),
-            TypeKind::String => Symbol::new("String"),
-            TypeKind::Bytes => Symbol::new("Bytes"),
-            TypeKind::Rune => Symbol::new("Rune"),
-            TypeKind::Nil => Symbol::new("Nil"),
-            // For other types, we can't look up methods
-            _ => return None,
-        };
+        let candidates = self.method_index.get(&(type_name, method))?;
+        match candidates.as_slice() {
+            [] => None,
+            [single] => Some(*single),
+            _multiple => None, // ambiguous — keep as MethodCall for error reporting
+        }
+    }
 
-        // Look up in method index - no "_any" fallback
-        self.method_index.get(&(type_name, method)).copied()
+    /// Extract the type name from a `Type` value.
+    ///
+    /// Handles `Named`, `App` (recursing into the constructor), and primitive
+    /// type kinds.
+    fn extract_type_name_from_type(&self, ty: Type<'db>) -> Option<Symbol> {
+        use crate::ast::TypeKind;
+        match ty.kind(self.db) {
+            TypeKind::Named { name, .. } => Some(*name),
+            TypeKind::App { ctor, .. } => self.extract_type_name_from_type(*ctor),
+            TypeKind::Int => Some(Symbol::new("Int")),
+            TypeKind::Nat => Some(Symbol::new("Nat")),
+            TypeKind::Float => Some(Symbol::new("Float")),
+            TypeKind::Bool => Some(Symbol::new("Bool")),
+            TypeKind::String => Some(Symbol::new("String")),
+            TypeKind::Bytes => Some(Symbol::new("Bytes")),
+            TypeKind::Rune => Some(Symbol::new("Rune")),
+            TypeKind::Nil => Some(Symbol::new("Nil")),
+            _ => None,
+        }
     }
 
     // =========================================================================
@@ -949,6 +965,283 @@ mod tests {
         assert!(
             test_cons_non_func_ctor_inner(db),
             "Cons with non-function ctor type should return the ctor type directly"
+        );
+    }
+
+    // =========================================================================
+    // extract_type_name_from_type tests (수정 2: App type support)
+    // =========================================================================
+
+    #[test]
+    fn test_extract_type_name_from_named_type() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        let ty = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Foo"),
+                args: vec![],
+            },
+        );
+        assert_eq!(
+            resolver.extract_type_name_from_type(ty),
+            Some(Symbol::new("Foo"))
+        );
+    }
+
+    #[test]
+    fn test_extract_type_name_from_app_type() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        // App { ctor: Named("List"), args: [Int] }
+        let list_named = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("List"),
+                args: vec![],
+            },
+        );
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let app_ty = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: list_named,
+                args: vec![int_ty],
+            },
+        );
+
+        assert_eq!(
+            resolver.extract_type_name_from_type(app_ty),
+            Some(Symbol::new("List"))
+        );
+    }
+
+    #[test]
+    fn test_extract_type_name_from_nested_app_type() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        // App { ctor: App { ctor: Named("Map"), args: [Int] }, args: [String] }
+        let map_named = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Map"),
+                args: vec![],
+            },
+        );
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let inner_app = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: map_named,
+                args: vec![int_ty],
+            },
+        );
+        let string_ty = Type::new(&db, TypeKind::String);
+        let outer_app = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: inner_app,
+                args: vec![string_ty],
+            },
+        );
+
+        assert_eq!(
+            resolver.extract_type_name_from_type(outer_app),
+            Some(Symbol::new("Map"))
+        );
+    }
+
+    #[test]
+    fn test_extract_type_name_from_primitive_types() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        let cases: Vec<(TypeKind, &str)> = vec![
+            (TypeKind::Int, "Int"),
+            (TypeKind::Nat, "Nat"),
+            (TypeKind::Float, "Float"),
+            (TypeKind::Bool, "Bool"),
+            (TypeKind::String, "String"),
+            (TypeKind::Bytes, "Bytes"),
+            (TypeKind::Rune, "Rune"),
+            (TypeKind::Nil, "Nil"),
+        ];
+
+        for (kind, expected_name) in cases {
+            let ty = Type::new(&db, kind);
+            assert_eq!(
+                resolver.extract_type_name_from_type(ty),
+                Some(Symbol::new(expected_name)),
+                "Expected type name '{}' for primitive type",
+                expected_name,
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_type_name_from_unsupported_type_returns_none() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        // Tuple type has no single type name
+        let ty = Type::new(
+            &db,
+            TypeKind::Tuple(vec![
+                Type::new(&db, TypeKind::Int),
+                Type::new(&db, TypeKind::Bool),
+            ]),
+        );
+        assert_eq!(resolver.extract_type_name_from_type(ty), None);
+    }
+
+    // =========================================================================
+    // lookup_method conflict detection tests (수정 1: ambiguity)
+    // =========================================================================
+
+    #[salsa::tracked]
+    fn test_lookup_single_candidate_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+        let mut resolver = TdnrResolver::new(db);
+
+        let type_name = Symbol::new("Foo");
+        let method_name = Symbol::new("bar");
+        let func_id = FuncDefId::new(db, method_name);
+        let func_ty = Type::new(db, TypeKind::Int);
+
+        resolver
+            .method_index
+            .entry((type_name, method_name))
+            .or_default()
+            .push((func_id, func_ty));
+
+        let receiver_ty = Some(Type::new(
+            db,
+            TypeKind::Named {
+                name: type_name,
+                args: vec![],
+            },
+        ));
+
+        let result = resolver.lookup_method(receiver_ty, method_name);
+        result.is_some()
+    }
+
+    #[salsa_test]
+    fn test_lookup_single_candidate_resolves(db: &dyn salsa::Database) {
+        assert!(
+            test_lookup_single_candidate_inner(db),
+            "Single candidate should resolve successfully"
+        );
+    }
+
+    #[salsa::tracked]
+    fn test_lookup_ambiguous_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+        let mut resolver = TdnrResolver::new(db);
+
+        let type_name = Symbol::new("Foo");
+        let method_name = Symbol::new("bar");
+
+        // Two different functions with the same (type_name, method_name) key
+        let func_id_1 = FuncDefId::new(db, Symbol::new("bar"));
+        let func_ty_1 = Type::new(db, TypeKind::Int);
+        let func_id_2 = FuncDefId::new(db, Symbol::new("bar"));
+        let func_ty_2 = Type::new(db, TypeKind::Float);
+
+        let candidates = resolver
+            .method_index
+            .entry((type_name, method_name))
+            .or_default();
+        candidates.push((func_id_1, func_ty_1));
+        candidates.push((func_id_2, func_ty_2));
+
+        let receiver_ty = Some(Type::new(
+            db,
+            TypeKind::Named {
+                name: type_name,
+                args: vec![],
+            },
+        ));
+
+        let result = resolver.lookup_method(receiver_ty, method_name);
+        // Should be None due to ambiguity
+        result.is_none()
+    }
+
+    #[salsa_test]
+    fn test_lookup_ambiguous_returns_none(db: &dyn salsa::Database) {
+        assert!(
+            test_lookup_ambiguous_inner(db),
+            "Ambiguous candidates should return None"
+        );
+    }
+
+    #[salsa::tracked]
+    fn test_lookup_no_candidates_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+        let resolver = TdnrResolver::new(db);
+
+        let receiver_ty = Some(Type::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::new("Foo"),
+                args: vec![],
+            },
+        ));
+
+        let result = resolver.lookup_method(receiver_ty, Symbol::new("nonexistent"));
+        result.is_none()
+    }
+
+    #[salsa_test]
+    fn test_lookup_no_candidates_returns_none(db: &dyn salsa::Database) {
+        assert!(
+            test_lookup_no_candidates_inner(db),
+            "No candidates should return None"
+        );
+    }
+
+    #[salsa::tracked]
+    fn test_lookup_app_receiver_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+        let mut resolver = TdnrResolver::new(db);
+
+        let type_name = Symbol::new("List");
+        let method_name = Symbol::new("map");
+        let func_id = FuncDefId::new(db, method_name);
+        let func_ty = Type::new(db, TypeKind::Int);
+
+        resolver
+            .method_index
+            .entry((type_name, method_name))
+            .or_default()
+            .push((func_id, func_ty));
+
+        // Receiver type is App { ctor: Named("List"), args: [Int] }
+        let list_named = Type::new(
+            db,
+            TypeKind::Named {
+                name: type_name,
+                args: vec![],
+            },
+        );
+        let int_ty = Type::new(db, TypeKind::Int);
+        let app_ty = Type::new(
+            db,
+            TypeKind::App {
+                ctor: list_named,
+                args: vec![int_ty],
+            },
+        );
+
+        let result = resolver.lookup_method(Some(app_ty), method_name);
+        result.is_some()
+    }
+
+    #[salsa_test]
+    fn test_lookup_app_receiver_resolves(db: &dyn salsa::Database) {
+        assert!(
+            test_lookup_app_receiver_inner(db),
+            "App type receiver should resolve method via constructor type name"
         );
     }
 }
