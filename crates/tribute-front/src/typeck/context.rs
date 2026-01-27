@@ -187,6 +187,11 @@ impl<'db> TypeContext<'db> {
         self.constructor_types.get(&id).copied()
     }
 
+    /// Return the number of registered constructors.
+    pub fn constructor_count(&self) -> usize {
+        self.constructor_types.len()
+    }
+
     /// Instantiate a constructor's type scheme with fresh type variables.
     ///
     /// Each call generates fresh UniVars so that different call sites of the

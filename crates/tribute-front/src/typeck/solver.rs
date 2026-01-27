@@ -271,6 +271,18 @@ impl<'db> TypeSolver<'db> {
                 Ok(())
             }
 
+            // BoundVar should never reach the solver — it must be instantiated first
+            (TypeKind::BoundVar { .. }, _) | (_, TypeKind::BoundVar { .. }) => {
+                debug_assert!(
+                    false,
+                    "BoundVar reached solver — should have been instantiated"
+                );
+                Err(SolveError::TypeMismatch {
+                    expected: t1,
+                    actual: t2,
+                })
+            }
+
             // Error types unify with anything
             (&TypeKind::Error, _) | (_, &TypeKind::Error) => Ok(()),
 
@@ -990,5 +1002,19 @@ mod tests {
         } else {
             panic!("Expected Func type");
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "BoundVar reached solver")]
+    fn test_bound_var_panics_in_debug() {
+        // BoundVar should never reach the solver — it must be instantiated first.
+        // In debug mode, this triggers a debug_assert panic.
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let bound_var = Type::new(&db, TypeKind::BoundVar { index: 0 });
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let _ = solver.unify_types(bound_var, int_ty);
     }
 }
