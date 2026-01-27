@@ -293,11 +293,6 @@ fn print_type_annotation(ty: &TypeAnnotation) -> String {
             let elems_str: Vec<_> = elems.iter().map(print_type_annotation).collect();
             format!("({})", elems_str.join(", "))
         }
-        TypeAnnotationKind::WithEffects { inner, effects } => {
-            let inner_str = print_type_annotation(inner);
-            let effects_str: Vec<_> = effects.iter().map(print_type_annotation).collect();
-            format!("{} ->{{{}}}", inner_str, effects_str.join(", "))
-        }
         TypeAnnotationKind::Infer => "_".to_string(),
         TypeAnnotationKind::Error => "?".to_string(),
     }

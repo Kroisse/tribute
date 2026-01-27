@@ -239,10 +239,6 @@ impl<'db> TypeChecker<'db> {
                     elems.iter().map(|e| self.annotation_to_type(e)).collect();
                 self.ctx.tuple_type(elem_types)
             }
-            TypeAnnotationKind::WithEffects { inner, effects: _ } => {
-                // TODO: Proper effect handling
-                self.annotation_to_type(inner)
-            }
             TypeAnnotationKind::Infer => self.ctx.fresh_type_var(),
             TypeAnnotationKind::Path(_) | TypeAnnotationKind::Error => self.ctx.error_type(),
         }
