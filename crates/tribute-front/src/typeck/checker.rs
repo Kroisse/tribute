@@ -2409,6 +2409,230 @@ mod tests {
         );
     }
 
+    #[salsa::tracked]
+    fn test_collect_polymorphic_enum_constructors_inner(db: &dyn salsa::Database) -> bool {
+        // enum Option(a) { None, Some(a) }
+        // None  → forall a. Option(BoundVar(0))
+        // Some  → forall a. fn(BoundVar(0)) -> Option(BoundVar(0))
+        let mut checker = TypeChecker::new(db);
+
+        let enum_decl = crate::ast::EnumDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("Option"),
+            type_params: vec![crate::ast::TypeParamDecl {
+                id: fresh_node_id(),
+                name: Symbol::new("a"),
+                bounds: vec![],
+            }],
+            variants: vec![
+                crate::ast::VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("None"),
+                    fields: vec![],
+                },
+                crate::ast::VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Some"),
+                    fields: vec![crate::ast::FieldDecl {
+                        id: fresh_node_id(),
+                        is_pub: false,
+                        name: None,
+                        ty: TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("a")),
+                        },
+                    }],
+                },
+            ],
+        };
+
+        checker.collect_enum_def(&enum_decl);
+
+        // Should have registered 2 constructors (None and Some)
+        assert_eq!(
+            checker.ctx.constructor_count(),
+            2,
+            "Expected 2 constructors for Option"
+        );
+
+        // Verify the type scheme for the enum type itself
+        let opt_scheme = checker.ctx.lookup_type_def(Symbol::new("Option")).unwrap();
+        assert_eq!(opt_scheme.arity(db), 1, "Option has 1 type param");
+        if let TypeKind::Named { name, args } = opt_scheme.body(db).kind(db) {
+            assert_eq!(*name, Symbol::new("Option"));
+            assert_eq!(args.len(), 1);
+            assert!(
+                matches!(*args[0].kind(db), TypeKind::BoundVar { index: 0 }),
+                "Expected BoundVar(0) in Option type, got {:?}",
+                args[0].kind(db)
+            );
+        } else {
+            panic!("Expected Named type for Option");
+        }
+
+        true
+    }
+
+    #[test]
+    fn test_collect_polymorphic_enum_constructors() {
+        let db = test_db();
+        assert!(test_collect_polymorphic_enum_constructors_inner(&db));
+    }
+
+    #[salsa::tracked]
+    fn test_collect_multi_field_variant_inner(db: &dyn salsa::Database) -> bool {
+        // enum Pair(a, b) { MkPair(a, b) }
+        // MkPair → forall a b. fn(BoundVar(0), BoundVar(1)) -> Pair(BoundVar(0), BoundVar(1))
+        let mut checker = TypeChecker::new(db);
+
+        let enum_decl = crate::ast::EnumDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("Pair"),
+            type_params: vec![
+                crate::ast::TypeParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("a"),
+                    bounds: vec![],
+                },
+                crate::ast::TypeParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("b"),
+                    bounds: vec![],
+                },
+            ],
+            variants: vec![crate::ast::VariantDecl {
+                id: fresh_node_id(),
+                name: Symbol::new("MkPair"),
+                fields: vec![
+                    crate::ast::FieldDecl {
+                        id: fresh_node_id(),
+                        is_pub: false,
+                        name: None,
+                        ty: TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("a")),
+                        },
+                    },
+                    crate::ast::FieldDecl {
+                        id: fresh_node_id(),
+                        is_pub: false,
+                        name: None,
+                        ty: TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("b")),
+                        },
+                    },
+                ],
+            }],
+        };
+
+        checker.collect_enum_def(&enum_decl);
+
+        assert_eq!(
+            checker.ctx.constructor_count(),
+            1,
+            "Expected 1 constructor (MkPair)"
+        );
+
+        // Verify Pair type scheme has 2 type params with BoundVar(0) and BoundVar(1)
+        let pair_scheme = checker.ctx.lookup_type_def(Symbol::new("Pair")).unwrap();
+        assert_eq!(pair_scheme.arity(db), 2, "Pair has 2 type params");
+        if let TypeKind::Named { name, args } = pair_scheme.body(db).kind(db) {
+            assert_eq!(*name, Symbol::new("Pair"));
+            assert_eq!(args.len(), 2);
+            assert!(matches!(*args[0].kind(db), TypeKind::BoundVar { index: 0 }));
+            assert!(matches!(*args[1].kind(db), TypeKind::BoundVar { index: 1 }));
+        } else {
+            panic!("Expected Named type for Pair");
+        }
+
+        true
+    }
+
+    #[test]
+    fn test_collect_multi_field_variant() {
+        let db = test_db();
+        assert!(test_collect_multi_field_variant_inner(&db));
+    }
+
+    #[test]
+    fn test_annotation_to_type_with_bound_vars_app() {
+        // List(a) with type_param_indices [(a, 0)] should become Named("List", [BoundVar(0)])
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let type_param_indices = vec![(Symbol::new("a"), 0u32)];
+
+        let ann = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::App {
+                ctor: Box::new(TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("List")),
+                }),
+                args: vec![TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("a")),
+                }],
+            },
+        };
+
+        let ty = checker.annotation_to_type_with_bound_vars(&ann, &type_param_indices);
+        if let TypeKind::Named { name, args } = ty.kind(&db) {
+            assert_eq!(*name, Symbol::new("List"));
+            assert_eq!(args.len(), 1);
+            assert!(
+                matches!(*args[0].kind(&db), TypeKind::BoundVar { index: 0 }),
+                "Expected BoundVar(0) for type arg 'a', got {:?}",
+                args[0].kind(&db)
+            );
+        } else {
+            panic!("Expected Named type for List(a), got {:?}", ty.kind(&db));
+        }
+    }
+
+    #[test]
+    fn test_annotation_to_type_with_bound_vars_tuple() {
+        // (a, Int) with type_param_indices [(a, 0)] → Tuple([BoundVar(0), Int])
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let type_param_indices = vec![(Symbol::new("a"), 0u32)];
+
+        let ann = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Tuple(vec![
+                TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("a")),
+                },
+                TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                },
+            ]),
+        };
+
+        let ty = checker.annotation_to_type_with_bound_vars(&ann, &type_param_indices);
+        if let TypeKind::Tuple(elems) = ty.kind(&db) {
+            assert_eq!(elems.len(), 2);
+            assert!(
+                matches!(*elems[0].kind(&db), TypeKind::BoundVar { index: 0 }),
+                "Expected BoundVar(0) for 'a', got {:?}",
+                elems[0].kind(&db)
+            );
+            assert!(
+                matches!(*elems[1].kind(&db), TypeKind::Int),
+                "Expected Int, got {:?}",
+                elems[1].kind(&db)
+            );
+        } else {
+            panic!("Expected Tuple type, got {:?}", ty.kind(&db));
+        }
+    }
+
     // =========================================================================
     // Substitution post-pass tests
     // =========================================================================
@@ -2525,5 +2749,118 @@ mod tests {
     fn test_subst_resolves_univar_to_concrete() {
         let db = test_db();
         assert!(test_subst_resolves_univar_inner(&db));
+    }
+
+    #[salsa::tracked]
+    fn test_subst_binop_inner(db: &dyn salsa::Database) -> bool {
+        // fn main() { let x = 1 + 2; x }
+        // After substitution, x should have concrete type (not UniVar).
+        let local_x = LocalId::new(0);
+
+        let binop = Expr::new(
+            fresh_node_id(),
+            ExprKind::BinOp {
+                op: BinOpKind::Add,
+                lhs: Expr::new(fresh_node_id(), ExprKind::NatLit(1)),
+                rhs: Expr::new(fresh_node_id(), ExprKind::NatLit(2)),
+            },
+        );
+
+        let let_x = Stmt::Let {
+            id: fresh_node_id(),
+            pattern: Pattern::new(
+                fresh_node_id(),
+                PatternKind::Bind {
+                    name: Symbol::new("x"),
+                    local_id: Some(local_x),
+                },
+            ),
+            ty: None,
+            value: binop,
+        };
+
+        let var_x = Expr::new(
+            fresh_node_id(),
+            ExprKind::Var(ResolvedRef::Local {
+                id: local_x,
+                name: Symbol::new("x"),
+            }),
+        );
+
+        let module = make_func_module(vec![let_x], var_x);
+
+        let checker = TypeChecker::new(db);
+        let typed_module = checker.check_module(module);
+
+        if let Decl::Function(f) = &typed_module.decls[0]
+            && let ExprKind::Block { value, .. } = &*f.body.kind
+            && let ExprKind::Var(typed_ref) = &*value.kind
+        {
+            assert!(
+                matches!(*typed_ref.ty.kind(db), TypeKind::Nat),
+                "Expected Nat after substitution for 1+2, got {:?}",
+                typed_ref.ty.kind(db)
+            );
+            return true;
+        }
+        panic!("Expected Function/Block/Var structure");
+    }
+
+    #[test]
+    fn test_subst_binop() {
+        let db = test_db();
+        assert!(test_subst_binop_inner(&db));
+    }
+
+    #[salsa::tracked]
+    fn test_subst_bool_literal_inner(db: &dyn salsa::Database) -> bool {
+        // fn main() { let b = true; b }
+        // After substitution, b should be Bool.
+        let local_b = LocalId::new(0);
+
+        let let_b = Stmt::Let {
+            id: fresh_node_id(),
+            pattern: Pattern::new(
+                fresh_node_id(),
+                PatternKind::Bind {
+                    name: Symbol::new("b"),
+                    local_id: Some(local_b),
+                },
+            ),
+            ty: None,
+            value: Expr::new(fresh_node_id(), ExprKind::BoolLit(true)),
+        };
+
+        let var_b = Expr::new(
+            fresh_node_id(),
+            ExprKind::Var(ResolvedRef::Local {
+                id: local_b,
+                name: Symbol::new("b"),
+            }),
+        );
+
+        let module = make_func_module(vec![let_b], var_b);
+
+        let checker = TypeChecker::new(db);
+        let typed_module = checker.check_module(module);
+
+        if let Decl::Function(f) = &typed_module.decls[0]
+            && let ExprKind::Block { value, .. } = &*f.body.kind
+            && let ExprKind::Var(typed_ref) = &*value.kind
+        {
+            assert!(
+                matches!(*typed_ref.ty.kind(db), TypeKind::Bool),
+                "Expected Bool after substitution, got {:?}",
+                typed_ref.ty.kind(db)
+            );
+            return true;
+        }
+        panic!("Expected Function/Block/Var structure");
+    }
+
+    #[test]
+    fn test_subst_bool_literal() {
+        let db = test_db();
+        assert!(test_subst_bool_literal_inner(&db));
     }
 }
