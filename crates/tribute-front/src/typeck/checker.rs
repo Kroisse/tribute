@@ -5,7 +5,7 @@
 
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use trunk_ir::Span;
+use trunk_ir::{Span, Symbol};
 
 use crate::ast::{
     Arm, BuiltinRef, Decl, EffectRow, EnumDecl, Expr, ExprKind, FieldPattern, FuncDecl, FuncDefId,
@@ -50,7 +50,7 @@ impl<'db> TypeChecker<'db> {
         self.collect_declarations(&module);
 
         // Phase 2: Type check all declarations and generate constraints
-        let decls = module
+        let decls: Vec<Decl<TypedRef<'db>>> = module
             .decls
             .into_iter()
             .map(|decl| self.check_decl(decl))
@@ -74,7 +74,13 @@ impl<'db> TypeChecker<'db> {
         }
 
         // Phase 4: Apply substitution to produce final types
-        // TODO: Apply substitution to node types
+        let type_subst = solver.type_subst();
+        let row_subst = solver.row_subst();
+
+        let decls = decls
+            .into_iter()
+            .map(|d| apply_subst_to_decl(self.db(), d, type_subst, row_subst))
+            .collect();
 
         Module {
             id: module.id,
@@ -244,6 +250,71 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// Convert a type annotation to a Type, resolving type parameter names
+    /// to `BoundVar` indices using the provided lookup table.
+    ///
+    /// This is used when building constructor types for enum variants, where
+    /// type parameters in field annotations must map to `BoundVar` rather than
+    /// fresh unification variables.
+    fn annotation_to_type_with_bound_vars(
+        &mut self,
+        ann: &crate::ast::TypeAnnotation,
+        type_param_indices: &[(trunk_ir::Symbol, u32)],
+    ) -> Type<'db> {
+        use crate::ast::TypeAnnotationKind;
+
+        match &ann.kind {
+            TypeAnnotationKind::Named(name) => {
+                // Check if this name is a type parameter
+                if let Some(&(_, index)) = type_param_indices.iter().find(|(n, _)| n == name) {
+                    return Type::new(self.db(), TypeKind::BoundVar { index });
+                }
+                // Otherwise delegate to normal annotation_to_type
+                self.annotation_to_type(ann)
+            }
+            TypeAnnotationKind::App { ctor, args } => {
+                let ctor_ty = self.annotation_to_type_with_bound_vars(ctor, type_param_indices);
+                if let TypeKind::Named { name, .. } = ctor_ty.kind(self.db()) {
+                    let arg_types: Vec<Type<'db>> = args
+                        .iter()
+                        .map(|a| self.annotation_to_type_with_bound_vars(a, type_param_indices))
+                        .collect();
+                    self.ctx.named_type(*name, arg_types)
+                } else {
+                    self.ctx.error_type()
+                }
+            }
+            TypeAnnotationKind::Func {
+                params,
+                result,
+                abilities,
+            } => {
+                let param_types: Vec<Type<'db>> = params
+                    .iter()
+                    .map(|p| self.annotation_to_type_with_bound_vars(p, type_param_indices))
+                    .collect();
+                let result_ty = self.annotation_to_type_with_bound_vars(result, type_param_indices);
+                let row_var = self.ctx.fresh_row_var();
+                let effect = crate::ast::abilities_to_effect_row(
+                    self.db(),
+                    abilities,
+                    &mut |a| self.annotation_to_type_with_bound_vars(a, type_param_indices),
+                    || row_var,
+                );
+                self.ctx.func_type(param_types, result_ty, effect)
+            }
+            TypeAnnotationKind::Tuple(elems) => {
+                let elem_types: Vec<Type<'db>> = elems
+                    .iter()
+                    .map(|e| self.annotation_to_type_with_bound_vars(e, type_param_indices))
+                    .collect();
+                self.ctx.tuple_type(elem_types)
+            }
+            // For other kinds, delegate to normal annotation_to_type
+            _ => self.annotation_to_type(ann),
+        }
+    }
+
     /// Collect a struct definition.
     fn collect_struct_def(&mut self, s: &StructDecl) {
         let name = s.name;
@@ -278,10 +349,37 @@ impl<'db> TypeChecker<'db> {
             .collect();
         let enum_ty = self.ctx.named_type(name, args);
 
-        let scheme = TypeScheme::new(self.db(), type_params, enum_ty);
+        let scheme = TypeScheme::new(self.db(), type_params.clone(), enum_ty);
         self.ctx.register_type_def(name, scheme);
 
-        // TODO: Register constructors for each variant
+        // Register constructors for each variant
+        // Build name → BoundVar index lookup for type parameter resolution
+        let type_param_indices: Vec<(Symbol, u32)> = e
+            .type_params
+            .iter()
+            .enumerate()
+            .map(|(i, tp)| (tp.name, i as u32))
+            .collect();
+
+        for variant in &e.variants {
+            let ctor_ty = if variant.fields.is_empty() {
+                // Unit variant: constructor type is just the enum type
+                enum_ty
+            } else {
+                // Field variant: constructor type is fn(field_types...) -> enum_ty
+                let field_types: Vec<Type<'db>> = variant
+                    .fields
+                    .iter()
+                    .map(|f| self.annotation_to_type_with_bound_vars(&f.ty, &type_param_indices))
+                    .collect();
+                let effect = EffectRow::pure(self.db());
+                self.ctx.func_type(field_types, enum_ty, effect)
+            };
+
+            let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), ctor_ty);
+            let ctor_id = crate::ast::CtorId::new(self.db(), variant.name);
+            self.ctx.register_constructor(ctor_id, ctor_scheme);
+        }
     }
 
     // =========================================================================
@@ -1025,6 +1123,327 @@ impl<'db> TypeChecker<'db> {
             kind,
             body: self.check_expr(arm.body, Mode::Infer),
         }
+    }
+}
+
+// =========================================================================
+// Substitution post-pass
+// =========================================================================
+
+use super::solver::{RowSubst, TypeSubst};
+
+/// Apply a type reference substitution to a `TypedRef`.
+fn apply_subst_to_ref<'db>(
+    db: &'db dyn salsa::Database,
+    r: TypedRef<'db>,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+) -> TypedRef<'db> {
+    TypedRef {
+        resolved: r.resolved,
+        ty: type_subst.apply_with_rows(db, r.ty, row_subst),
+    }
+}
+
+/// Apply substitution to a declaration.
+fn apply_subst_to_decl<'db>(
+    db: &'db dyn salsa::Database,
+    decl: Decl<TypedRef<'db>>,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+) -> Decl<TypedRef<'db>> {
+    match decl {
+        Decl::Function(f) => Decl::Function(apply_subst_to_func(db, f, type_subst, row_subst)),
+        Decl::Module(m) => {
+            let body = m.body.map(|ds| {
+                ds.into_iter()
+                    .map(|d| apply_subst_to_decl(db, d, type_subst, row_subst))
+                    .collect()
+            });
+            Decl::Module(crate::ast::ModuleDecl {
+                id: m.id,
+                name: m.name,
+                is_pub: m.is_pub,
+                body,
+            })
+        }
+        // Struct, Enum, Ability, Use don't contain TypedRefs
+        other => other,
+    }
+}
+
+/// Apply substitution to a function declaration.
+fn apply_subst_to_func<'db>(
+    db: &'db dyn salsa::Database,
+    f: FuncDecl<TypedRef<'db>>,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+) -> FuncDecl<TypedRef<'db>> {
+    FuncDecl {
+        id: f.id,
+        is_pub: f.is_pub,
+        name: f.name,
+        type_params: f.type_params,
+        params: f.params,
+        return_ty: f.return_ty,
+        effects: f.effects,
+        body: apply_subst_to_expr(db, f.body, type_subst, row_subst),
+    }
+}
+
+/// Apply substitution to an expression.
+fn apply_subst_to_expr<'db>(
+    db: &'db dyn salsa::Database,
+    expr: Expr<TypedRef<'db>>,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+) -> Expr<TypedRef<'db>> {
+    let kind = match *expr.kind {
+        ExprKind::Var(r) => ExprKind::Var(apply_subst_to_ref(db, r, type_subst, row_subst)),
+        ExprKind::Call { callee, args } => ExprKind::Call {
+            callee: apply_subst_to_expr(db, callee, type_subst, row_subst),
+            args: args
+                .into_iter()
+                .map(|a| apply_subst_to_expr(db, a, type_subst, row_subst))
+                .collect(),
+        },
+        ExprKind::Cons { ctor, args } => ExprKind::Cons {
+            ctor: apply_subst_to_ref(db, ctor, type_subst, row_subst),
+            args: args
+                .into_iter()
+                .map(|a| apply_subst_to_expr(db, a, type_subst, row_subst))
+                .collect(),
+        },
+        ExprKind::Record {
+            type_name,
+            fields,
+            spread,
+        } => ExprKind::Record {
+            type_name: apply_subst_to_ref(db, type_name, type_subst, row_subst),
+            fields: fields
+                .into_iter()
+                .map(|(name, e)| (name, apply_subst_to_expr(db, e, type_subst, row_subst)))
+                .collect(),
+            spread: spread.map(|e| apply_subst_to_expr(db, e, type_subst, row_subst)),
+        },
+        ExprKind::FieldAccess { expr: inner, field } => ExprKind::FieldAccess {
+            expr: apply_subst_to_expr(db, inner, type_subst, row_subst),
+            field,
+        },
+        ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => ExprKind::MethodCall {
+            receiver: apply_subst_to_expr(db, receiver, type_subst, row_subst),
+            method,
+            args: args
+                .into_iter()
+                .map(|a| apply_subst_to_expr(db, a, type_subst, row_subst))
+                .collect(),
+        },
+        ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
+            op,
+            lhs: apply_subst_to_expr(db, lhs, type_subst, row_subst),
+            rhs: apply_subst_to_expr(db, rhs, type_subst, row_subst),
+        },
+        ExprKind::Block { stmts, value } => ExprKind::Block {
+            stmts: stmts
+                .into_iter()
+                .map(|s| apply_subst_to_stmt(db, s, type_subst, row_subst))
+                .collect(),
+            value: apply_subst_to_expr(db, value, type_subst, row_subst),
+        },
+        ExprKind::Case { scrutinee, arms } => ExprKind::Case {
+            scrutinee: apply_subst_to_expr(db, scrutinee, type_subst, row_subst),
+            arms: arms
+                .into_iter()
+                .map(|a| apply_subst_to_arm(db, a, type_subst, row_subst))
+                .collect(),
+        },
+        ExprKind::Lambda { params, body } => ExprKind::Lambda {
+            params,
+            body: apply_subst_to_expr(db, body, type_subst, row_subst),
+        },
+        ExprKind::Handle { body, handlers } => ExprKind::Handle {
+            body: apply_subst_to_expr(db, body, type_subst, row_subst),
+            handlers: handlers
+                .into_iter()
+                .map(|h| apply_subst_to_handler_arm(db, h, type_subst, row_subst))
+                .collect(),
+        },
+        ExprKind::Tuple(elems) => ExprKind::Tuple(
+            elems
+                .into_iter()
+                .map(|e| apply_subst_to_expr(db, e, type_subst, row_subst))
+                .collect(),
+        ),
+        ExprKind::List(elems) => ExprKind::List(
+            elems
+                .into_iter()
+                .map(|e| apply_subst_to_expr(db, e, type_subst, row_subst))
+                .collect(),
+        ),
+        // Literals and Error don't contain TypedRefs
+        kind @ (ExprKind::NatLit(_)
+        | ExprKind::IntLit(_)
+        | ExprKind::FloatLit(_)
+        | ExprKind::BoolLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::BytesLit(_)
+        | ExprKind::Nil
+        | ExprKind::RuneLit(_)
+        | ExprKind::Error) => kind,
+    };
+    Expr::new(expr.id, kind)
+}
+
+/// Apply substitution to a statement.
+fn apply_subst_to_stmt<'db>(
+    db: &'db dyn salsa::Database,
+    stmt: Stmt<TypedRef<'db>>,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+) -> Stmt<TypedRef<'db>> {
+    match stmt {
+        Stmt::Let {
+            id,
+            pattern,
+            value,
+            ty,
+        } => Stmt::Let {
+            id,
+            pattern: apply_subst_to_pattern(db, pattern, type_subst, row_subst),
+            value: apply_subst_to_expr(db, value, type_subst, row_subst),
+            ty,
+        },
+        Stmt::Expr { id, expr } => Stmt::Expr {
+            id,
+            expr: apply_subst_to_expr(db, expr, type_subst, row_subst),
+        },
+    }
+}
+
+/// Apply substitution to a pattern.
+fn apply_subst_to_pattern<'db>(
+    db: &'db dyn salsa::Database,
+    pattern: Pattern<TypedRef<'db>>,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+) -> Pattern<TypedRef<'db>> {
+    let kind = match *pattern.kind {
+        PatternKind::Variant { ctor, fields } => PatternKind::Variant {
+            ctor: apply_subst_to_ref(db, ctor, type_subst, row_subst),
+            fields: fields
+                .into_iter()
+                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst))
+                .collect(),
+        },
+        PatternKind::Record {
+            type_name,
+            fields,
+            rest,
+        } => PatternKind::Record {
+            type_name: type_name.map(|t| apply_subst_to_ref(db, t, type_subst, row_subst)),
+            fields: fields
+                .into_iter()
+                .map(|f| FieldPattern {
+                    id: f.id,
+                    name: f.name,
+                    pattern: f
+                        .pattern
+                        .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst)),
+                })
+                .collect(),
+            rest,
+        },
+        PatternKind::Tuple(pats) => PatternKind::Tuple(
+            pats.into_iter()
+                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst))
+                .collect(),
+        ),
+        PatternKind::List(pats) => PatternKind::List(
+            pats.into_iter()
+                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst))
+                .collect(),
+        ),
+        PatternKind::ListRest {
+            head,
+            rest,
+            rest_local_id,
+        } => PatternKind::ListRest {
+            head: head
+                .into_iter()
+                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst))
+                .collect(),
+            rest,
+            rest_local_id,
+        },
+        PatternKind::As {
+            pattern: inner,
+            name,
+            local_id,
+        } => PatternKind::As {
+            pattern: apply_subst_to_pattern(db, inner, type_subst, row_subst),
+            name,
+            local_id,
+        },
+        // Wildcard, Bind, Literal, Error don't contain TypedRefs
+        kind @ (PatternKind::Wildcard
+        | PatternKind::Bind { .. }
+        | PatternKind::Literal(_)
+        | PatternKind::Error) => kind,
+    };
+    Pattern::new(pattern.id, kind)
+}
+
+/// Apply substitution to a case arm.
+fn apply_subst_to_arm<'db>(
+    db: &'db dyn salsa::Database,
+    arm: Arm<TypedRef<'db>>,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+) -> Arm<TypedRef<'db>> {
+    Arm {
+        id: arm.id,
+        pattern: apply_subst_to_pattern(db, arm.pattern, type_subst, row_subst),
+        guard: arm
+            .guard
+            .map(|g| apply_subst_to_expr(db, g, type_subst, row_subst)),
+        body: apply_subst_to_expr(db, arm.body, type_subst, row_subst),
+    }
+}
+
+/// Apply substitution to a handler arm.
+fn apply_subst_to_handler_arm<'db>(
+    db: &'db dyn salsa::Database,
+    arm: HandlerArm<TypedRef<'db>>,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+) -> HandlerArm<TypedRef<'db>> {
+    let kind = match arm.kind {
+        HandlerKind::Result { binding } => HandlerKind::Result {
+            binding: apply_subst_to_pattern(db, binding, type_subst, row_subst),
+        },
+        HandlerKind::Effect {
+            ability,
+            op,
+            params,
+            continuation,
+        } => HandlerKind::Effect {
+            ability: apply_subst_to_ref(db, ability, type_subst, row_subst),
+            op,
+            params: params
+                .into_iter()
+                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst))
+                .collect(),
+            continuation,
+        },
+    };
+    HandlerArm {
+        id: arm.id,
+        kind,
+        body: apply_subst_to_expr(db, arm.body, type_subst, row_subst),
     }
 }
 
@@ -1876,5 +2295,572 @@ mod tests {
         } else {
             panic!("Expected Func type, got {:?}", ty.kind(&db));
         }
+    }
+
+    // =========================================================================
+    // Enum variant constructor registration tests
+    // =========================================================================
+
+    #[salsa::tracked]
+    fn test_collect_enum_def_registers_constructors_inner(db: &dyn salsa::Database) -> bool {
+        let mut checker = TypeChecker::new(db);
+
+        let enum_decl = crate::ast::EnumDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("Color"),
+            type_params: vec![],
+            variants: vec![
+                crate::ast::VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Red"),
+                    fields: vec![],
+                },
+                crate::ast::VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Green"),
+                    fields: vec![],
+                },
+            ],
+        };
+
+        assert_eq!(
+            checker.ctx.constructor_count(),
+            0,
+            "No constructors before collect_enum_def"
+        );
+
+        checker.collect_enum_def(&enum_decl);
+
+        // The type_defs should have Color registered
+        let color_scheme = checker.ctx.lookup_type_def(Symbol::new("Color"));
+        assert!(color_scheme.is_some(), "Color type should be registered");
+        let color_scheme = color_scheme.unwrap();
+        assert_eq!(color_scheme.arity(db), 0, "Color has no type params");
+        if let TypeKind::Named { name, args } = color_scheme.body(db).kind(db) {
+            assert_eq!(*name, Symbol::new("Color"));
+            assert!(args.is_empty());
+        } else {
+            panic!(
+                "Expected Named type for Color, got {:?}",
+                color_scheme.body(db).kind(db)
+            );
+        }
+
+        // Verify that 2 variant constructors were registered (Red and Green)
+        assert_eq!(
+            checker.ctx.constructor_count(),
+            2,
+            "Expected 2 constructors (Red and Green)"
+        );
+
+        true
+    }
+
+    #[test]
+    fn test_collect_enum_def_registers_constructors() {
+        let db = test_db();
+        assert!(test_collect_enum_def_registers_constructors_inner(&db));
+    }
+
+    #[test]
+    fn test_annotation_to_type_with_bound_vars() {
+        // Test that annotation_to_type_with_bound_vars correctly maps type parameter
+        // names to BoundVar indices.
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let type_param_indices = vec![(Symbol::new("a"), 0u32), (Symbol::new("b"), 1u32)];
+
+        // "a" should become BoundVar { index: 0 }
+        let ann_a = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Named(Symbol::new("a")),
+        };
+        let ty_a = checker.annotation_to_type_with_bound_vars(&ann_a, &type_param_indices);
+        assert!(
+            matches!(*ty_a.kind(&db), TypeKind::BoundVar { index: 0 }),
+            "Expected BoundVar(0) for 'a', got {:?}",
+            ty_a.kind(&db)
+        );
+
+        // "b" should become BoundVar { index: 1 }
+        let ann_b = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Named(Symbol::new("b")),
+        };
+        let ty_b = checker.annotation_to_type_with_bound_vars(&ann_b, &type_param_indices);
+        assert!(
+            matches!(*ty_b.kind(&db), TypeKind::BoundVar { index: 1 }),
+            "Expected BoundVar(1) for 'b', got {:?}",
+            ty_b.kind(&db)
+        );
+
+        // "Int" should remain as Named { name: "Int", ... } (not a type param)
+        let ann_int = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+        };
+        let ty_int = checker.annotation_to_type_with_bound_vars(&ann_int, &type_param_indices);
+        assert!(
+            matches!(*ty_int.kind(&db), TypeKind::Int),
+            "Expected Int for 'Int', got {:?}",
+            ty_int.kind(&db)
+        );
+    }
+
+    #[salsa::tracked]
+    fn test_collect_polymorphic_enum_constructors_inner(db: &dyn salsa::Database) -> bool {
+        // enum Option(a) { None, Some(a) }
+        // None  → forall a. Option(BoundVar(0))
+        // Some  → forall a. fn(BoundVar(0)) -> Option(BoundVar(0))
+        let mut checker = TypeChecker::new(db);
+
+        let enum_decl = crate::ast::EnumDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("Option"),
+            type_params: vec![crate::ast::TypeParamDecl {
+                id: fresh_node_id(),
+                name: Symbol::new("a"),
+                bounds: vec![],
+            }],
+            variants: vec![
+                crate::ast::VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("None"),
+                    fields: vec![],
+                },
+                crate::ast::VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Some"),
+                    fields: vec![crate::ast::FieldDecl {
+                        id: fresh_node_id(),
+                        is_pub: false,
+                        name: None,
+                        ty: TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("a")),
+                        },
+                    }],
+                },
+            ],
+        };
+
+        checker.collect_enum_def(&enum_decl);
+
+        // Should have registered 2 constructors (None and Some)
+        assert_eq!(
+            checker.ctx.constructor_count(),
+            2,
+            "Expected 2 constructors for Option"
+        );
+
+        // Verify the type scheme for the enum type itself
+        let opt_scheme = checker.ctx.lookup_type_def(Symbol::new("Option")).unwrap();
+        assert_eq!(opt_scheme.arity(db), 1, "Option has 1 type param");
+        if let TypeKind::Named { name, args } = opt_scheme.body(db).kind(db) {
+            assert_eq!(*name, Symbol::new("Option"));
+            assert_eq!(args.len(), 1);
+            assert!(
+                matches!(*args[0].kind(db), TypeKind::BoundVar { index: 0 }),
+                "Expected BoundVar(0) in Option type, got {:?}",
+                args[0].kind(db)
+            );
+        } else {
+            panic!("Expected Named type for Option");
+        }
+
+        true
+    }
+
+    #[test]
+    fn test_collect_polymorphic_enum_constructors() {
+        let db = test_db();
+        assert!(test_collect_polymorphic_enum_constructors_inner(&db));
+    }
+
+    #[salsa::tracked]
+    fn test_collect_multi_field_variant_inner(db: &dyn salsa::Database) -> bool {
+        // enum Pair(a, b) { MkPair(a, b) }
+        // MkPair → forall a b. fn(BoundVar(0), BoundVar(1)) -> Pair(BoundVar(0), BoundVar(1))
+        let mut checker = TypeChecker::new(db);
+
+        let enum_decl = crate::ast::EnumDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("Pair"),
+            type_params: vec![
+                crate::ast::TypeParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("a"),
+                    bounds: vec![],
+                },
+                crate::ast::TypeParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("b"),
+                    bounds: vec![],
+                },
+            ],
+            variants: vec![crate::ast::VariantDecl {
+                id: fresh_node_id(),
+                name: Symbol::new("MkPair"),
+                fields: vec![
+                    crate::ast::FieldDecl {
+                        id: fresh_node_id(),
+                        is_pub: false,
+                        name: None,
+                        ty: TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("a")),
+                        },
+                    },
+                    crate::ast::FieldDecl {
+                        id: fresh_node_id(),
+                        is_pub: false,
+                        name: None,
+                        ty: TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("b")),
+                        },
+                    },
+                ],
+            }],
+        };
+
+        checker.collect_enum_def(&enum_decl);
+
+        assert_eq!(
+            checker.ctx.constructor_count(),
+            1,
+            "Expected 1 constructor (MkPair)"
+        );
+
+        // Verify Pair type scheme has 2 type params with BoundVar(0) and BoundVar(1)
+        let pair_scheme = checker.ctx.lookup_type_def(Symbol::new("Pair")).unwrap();
+        assert_eq!(pair_scheme.arity(db), 2, "Pair has 2 type params");
+        if let TypeKind::Named { name, args } = pair_scheme.body(db).kind(db) {
+            assert_eq!(*name, Symbol::new("Pair"));
+            assert_eq!(args.len(), 2);
+            assert!(matches!(*args[0].kind(db), TypeKind::BoundVar { index: 0 }));
+            assert!(matches!(*args[1].kind(db), TypeKind::BoundVar { index: 1 }));
+        } else {
+            panic!("Expected Named type for Pair");
+        }
+
+        true
+    }
+
+    #[test]
+    fn test_collect_multi_field_variant() {
+        let db = test_db();
+        assert!(test_collect_multi_field_variant_inner(&db));
+    }
+
+    #[test]
+    fn test_annotation_to_type_with_bound_vars_app() {
+        // List(a) with type_param_indices [(a, 0)] should become Named("List", [BoundVar(0)])
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let type_param_indices = vec![(Symbol::new("a"), 0u32)];
+
+        let ann = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::App {
+                ctor: Box::new(TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("List")),
+                }),
+                args: vec![TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("a")),
+                }],
+            },
+        };
+
+        let ty = checker.annotation_to_type_with_bound_vars(&ann, &type_param_indices);
+        if let TypeKind::Named { name, args } = ty.kind(&db) {
+            assert_eq!(*name, Symbol::new("List"));
+            assert_eq!(args.len(), 1);
+            assert!(
+                matches!(*args[0].kind(&db), TypeKind::BoundVar { index: 0 }),
+                "Expected BoundVar(0) for type arg 'a', got {:?}",
+                args[0].kind(&db)
+            );
+        } else {
+            panic!("Expected Named type for List(a), got {:?}", ty.kind(&db));
+        }
+    }
+
+    #[test]
+    fn test_annotation_to_type_with_bound_vars_tuple() {
+        // (a, Int) with type_param_indices [(a, 0)] → Tuple([BoundVar(0), Int])
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let type_param_indices = vec![(Symbol::new("a"), 0u32)];
+
+        let ann = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Tuple(vec![
+                TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("a")),
+                },
+                TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                },
+            ]),
+        };
+
+        let ty = checker.annotation_to_type_with_bound_vars(&ann, &type_param_indices);
+        if let TypeKind::Tuple(elems) = ty.kind(&db) {
+            assert_eq!(elems.len(), 2);
+            assert!(
+                matches!(*elems[0].kind(&db), TypeKind::BoundVar { index: 0 }),
+                "Expected BoundVar(0) for 'a', got {:?}",
+                elems[0].kind(&db)
+            );
+            assert!(
+                matches!(*elems[1].kind(&db), TypeKind::Int),
+                "Expected Int, got {:?}",
+                elems[1].kind(&db)
+            );
+        } else {
+            panic!("Expected Tuple type, got {:?}", ty.kind(&db));
+        }
+    }
+
+    // =========================================================================
+    // Substitution post-pass tests
+    // =========================================================================
+
+    /// Helper: build `fn main() { <stmts>; <value> }` module for testing check_module.
+    fn make_func_module<'db>(
+        stmts: Vec<Stmt<ResolvedRef<'db>>>,
+        value: Expr<ResolvedRef<'db>>,
+    ) -> Module<ResolvedRef<'db>> {
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("main"),
+            type_params: vec![],
+            params: vec![],
+            return_ty: None,
+            effects: None,
+            body: Expr::new(fresh_node_id(), ExprKind::Block { stmts, value }),
+        };
+        Module {
+            id: fresh_node_id(),
+            name: None,
+            decls: vec![Decl::Function(func)],
+        }
+    }
+
+    #[salsa::tracked]
+    fn test_subst_applied_inner(db: &dyn salsa::Database) -> bool {
+        let local_id = LocalId::new(0);
+        let pattern = Pattern::new(
+            fresh_node_id(),
+            PatternKind::Bind {
+                name: Symbol::new("x"),
+                local_id: Some(local_id),
+            },
+        );
+        let value = Expr::new(fresh_node_id(), ExprKind::NatLit(42));
+
+        let module = make_func_module(
+            vec![Stmt::Let {
+                id: fresh_node_id(),
+                pattern,
+                ty: None,
+                value,
+            }],
+            Expr::new(fresh_node_id(), ExprKind::NatLit(0)),
+        );
+
+        let checker = TypeChecker::new(db);
+        let typed_module = checker.check_module(module);
+
+        if let Decl::Function(f) = &typed_module.decls[0]
+            && let ExprKind::Block { stmts, .. } = &*f.body.kind
+            && let Stmt::Let { value, .. } = &stmts[0]
+        {
+            assert!(matches!(*value.kind, ExprKind::NatLit(42)));
+            return true;
+        }
+        panic!("Expected Function/Block/Let structure");
+    }
+
+    #[test]
+    fn test_subst_applied_to_let_value_type() {
+        let db = test_db();
+        assert!(test_subst_applied_inner(&db));
+    }
+
+    #[salsa::tracked]
+    fn test_subst_resolves_univar_inner(db: &dyn salsa::Database) -> bool {
+        let local_x = LocalId::new(0);
+
+        let let_pattern = Pattern::new(
+            fresh_node_id(),
+            PatternKind::Bind {
+                name: Symbol::new("x"),
+                local_id: Some(local_x),
+            },
+        );
+        let let_value = Expr::new(fresh_node_id(), ExprKind::NatLit(42));
+        let var_ref = ResolvedRef::Local {
+            id: local_x,
+            name: Symbol::new("x"),
+        };
+        let var_expr = Expr::new(fresh_node_id(), ExprKind::Var(var_ref));
+
+        let module = make_func_module(
+            vec![Stmt::Let {
+                id: fresh_node_id(),
+                pattern: let_pattern,
+                ty: None,
+                value: let_value,
+            }],
+            var_expr,
+        );
+
+        let checker = TypeChecker::new(db);
+        let typed_module = checker.check_module(module);
+
+        if let Decl::Function(f) = &typed_module.decls[0]
+            && let ExprKind::Block { value, .. } = &*f.body.kind
+            && let ExprKind::Var(typed_ref) = &*value.kind
+        {
+            assert!(
+                matches!(*typed_ref.ty.kind(db), TypeKind::Nat),
+                "Expected Nat type after substitution, got {:?}",
+                typed_ref.ty.kind(db)
+            );
+            return true;
+        }
+        panic!("Expected Function/Block/Var structure");
+    }
+
+    #[test]
+    fn test_subst_resolves_univar_to_concrete() {
+        let db = test_db();
+        assert!(test_subst_resolves_univar_inner(&db));
+    }
+
+    #[salsa::tracked]
+    fn test_subst_binop_inner(db: &dyn salsa::Database) -> bool {
+        // fn main() { let x = 1 + 2; x }
+        // After substitution, x should have concrete type (not UniVar).
+        let local_x = LocalId::new(0);
+
+        let binop = Expr::new(
+            fresh_node_id(),
+            ExprKind::BinOp {
+                op: BinOpKind::Add,
+                lhs: Expr::new(fresh_node_id(), ExprKind::NatLit(1)),
+                rhs: Expr::new(fresh_node_id(), ExprKind::NatLit(2)),
+            },
+        );
+
+        let let_x = Stmt::Let {
+            id: fresh_node_id(),
+            pattern: Pattern::new(
+                fresh_node_id(),
+                PatternKind::Bind {
+                    name: Symbol::new("x"),
+                    local_id: Some(local_x),
+                },
+            ),
+            ty: None,
+            value: binop,
+        };
+
+        let var_x = Expr::new(
+            fresh_node_id(),
+            ExprKind::Var(ResolvedRef::Local {
+                id: local_x,
+                name: Symbol::new("x"),
+            }),
+        );
+
+        let module = make_func_module(vec![let_x], var_x);
+
+        let checker = TypeChecker::new(db);
+        let typed_module = checker.check_module(module);
+
+        if let Decl::Function(f) = &typed_module.decls[0]
+            && let ExprKind::Block { value, .. } = &*f.body.kind
+            && let ExprKind::Var(typed_ref) = &*value.kind
+        {
+            assert!(
+                matches!(*typed_ref.ty.kind(db), TypeKind::Nat),
+                "Expected Nat after substitution for 1+2, got {:?}",
+                typed_ref.ty.kind(db)
+            );
+            return true;
+        }
+        panic!("Expected Function/Block/Var structure");
+    }
+
+    #[test]
+    fn test_subst_binop() {
+        let db = test_db();
+        assert!(test_subst_binop_inner(&db));
+    }
+
+    #[salsa::tracked]
+    fn test_subst_bool_literal_inner(db: &dyn salsa::Database) -> bool {
+        // fn main() { let b = true; b }
+        // After substitution, b should be Bool.
+        let local_b = LocalId::new(0);
+
+        let let_b = Stmt::Let {
+            id: fresh_node_id(),
+            pattern: Pattern::new(
+                fresh_node_id(),
+                PatternKind::Bind {
+                    name: Symbol::new("b"),
+                    local_id: Some(local_b),
+                },
+            ),
+            ty: None,
+            value: Expr::new(fresh_node_id(), ExprKind::BoolLit(true)),
+        };
+
+        let var_b = Expr::new(
+            fresh_node_id(),
+            ExprKind::Var(ResolvedRef::Local {
+                id: local_b,
+                name: Symbol::new("b"),
+            }),
+        );
+
+        let module = make_func_module(vec![let_b], var_b);
+
+        let checker = TypeChecker::new(db);
+        let typed_module = checker.check_module(module);
+
+        if let Decl::Function(f) = &typed_module.decls[0]
+            && let ExprKind::Block { value, .. } = &*f.body.kind
+            && let ExprKind::Var(typed_ref) = &*value.kind
+        {
+            assert!(
+                matches!(*typed_ref.ty.kind(db), TypeKind::Bool),
+                "Expected Bool after substitution, got {:?}",
+                typed_ref.ty.kind(db)
+            );
+            return true;
+        }
+        panic!("Expected Function/Block/Var structure");
+    }
+
+    #[test]
+    fn test_subst_bool_literal() {
+        let db = test_db();
+        assert!(test_subst_bool_literal_inner(&db));
     }
 }
