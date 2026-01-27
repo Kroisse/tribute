@@ -22,7 +22,7 @@ pub use resolver::Resolver;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{CtorId, Decl, FuncDefId, Module, ResolvedRef, UnresolvedName};
+use crate::ast::{CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, UnresolvedName};
 
 /// Resolve names in a module.
 ///
@@ -30,12 +30,13 @@ use crate::ast::{CtorId, Decl, FuncDefId, Module, ResolvedRef, UnresolvedName};
 pub fn resolve_module<'db>(
     db: &'db dyn salsa::Database,
     module: Module<UnresolvedName>,
+    span_map: SpanMap,
 ) -> Module<ResolvedRef<'db>> {
     // Build the module environment from declarations
     let env = build_env(db, &module);
 
     // Create resolver and process the module
-    let mut resolver = Resolver::new(db, env);
+    let mut resolver = Resolver::new(db, env, span_map);
     resolver.resolve_module(module)
 }
 

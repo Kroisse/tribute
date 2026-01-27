@@ -21,18 +21,24 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
         // === Literals ===
         "nat_literal" => {
             let text = ctx.node_text(&node);
-            let value = parse_nat_literal(&text).unwrap_or(0);
-            ExprKind::NatLit(value)
+            match parse_nat_literal(&text) {
+                Some(value) => ExprKind::NatLit(value),
+                None => ExprKind::Error,
+            }
         }
         "int_literal" => {
             let text = ctx.node_text(&node);
-            let value = parse_int_literal(&text).unwrap_or(0);
-            ExprKind::IntLit(value)
+            match parse_int_literal(&text) {
+                Some(value) => ExprKind::IntLit(value),
+                None => ExprKind::Error,
+            }
         }
         "float_literal" => {
             let text = ctx.node_text(&node);
-            let value: f64 = text.parse().unwrap_or(0.0);
-            ExprKind::FloatLit(FloatBits::new(value))
+            match text.parse::<f64>() {
+                Ok(value) if value.is_finite() => ExprKind::FloatLit(FloatBits::new(value)),
+                _ => ExprKind::Error,
+            }
         }
         // String literals: "...", s"...", raw strings, multiline strings
         "string" | "raw_string" | "raw_interpolated_string" | "multiline_string" => {
@@ -742,22 +748,83 @@ fn parse_int_literal(text: &str) -> Option<i64> {
 }
 
 fn parse_string_literal(text: &str) -> String {
-    // Simple implementation: strip quotes and handle basic escapes
+    // Strip quotes and handle basic escapes for string literals
     let text = text.trim();
 
-    // Handle different string prefixes with bounds checking
-    let content = if text.starts_with("s\"") || text.starts_with("r\"") {
-        text.get(2..text.len().saturating_sub(1)).unwrap_or("")
-    } else if text.starts_with("rs\"") || text.starts_with("sr\"") {
-        text.get(3..text.len().saturating_sub(1)).unwrap_or("")
-    } else if text.starts_with('"') {
-        text.get(1..text.len().saturating_sub(1)).unwrap_or("")
+    // Determine prefix and whether it's raw
+    // Supported prefixes: "", "s", "r", "rs", "sr"
+    let (prefix_len, is_raw) = if text.starts_with("rs") || text.starts_with("sr") {
+        (2, true)
+    } else if text.starts_with('r') {
+        (1, true)
+    } else if text.starts_with('s') {
+        (1, false)
     } else {
-        text
+        (0, false)
     };
 
-    // TODO: proper escape handling
-    content.to_string()
+    let after_prefix = &text[prefix_len..];
+
+    // Count consecutive '#' characters before the opening quote (for raw strings)
+    let hash_count = if is_raw {
+        after_prefix.chars().take_while(|&c| c == '#').count()
+    } else {
+        0
+    };
+
+    // For raw strings with hashes: r#"..."# or rs##"..."##
+    // For regular raw strings: r"..." or rs"..."
+    // For regular strings: "..." or s"..."
+    if hash_count > 0 {
+        // Raw string with hashes
+        let quote_start = prefix_len + hash_count;
+        let expected_end_pattern_len = 1 + hash_count; // closing quote + hashes
+
+        // Validate we have opening quote after hashes
+        if text.get(quote_start..quote_start + 1) != Some("\"") {
+            return String::new();
+        }
+
+        // Content starts after the opening quote
+        let content_start = quote_start + 1;
+
+        // Find content end: must have closing quote followed by same number of hashes
+        let content_end = text.len().saturating_sub(expected_end_pattern_len);
+        if content_end <= content_start {
+            return String::new();
+        }
+
+        // Validate closing pattern: " followed by hash_count #'s
+        let closing = text.get(content_end..);
+        let expected_closing: String = std::iter::once('"')
+            .chain(std::iter::repeat_n('#', hash_count))
+            .collect();
+        if closing != Some(&expected_closing) {
+            return String::new();
+        }
+
+        text.get(content_start..content_end)
+            .unwrap_or("")
+            .to_string()
+    } else if is_raw {
+        // Raw string without hashes: r"..." or rs"..."
+        let quote_start = prefix_len;
+        if text.get(quote_start..quote_start + 1) != Some("\"") {
+            return String::new();
+        }
+        text.get(quote_start + 1..text.len().saturating_sub(1))
+            .unwrap_or("")
+            .to_string()
+    } else if text.get(prefix_len..prefix_len + 1) == Some("\"") {
+        // Regular string: "..." or s"..."
+        text.get(prefix_len + 1..text.len().saturating_sub(1))
+            .unwrap_or("")
+            .to_string()
+    } else {
+        // Fallback
+        text.to_string()
+    }
+    // TODO: proper escape handling for non-raw strings
 }
 
 fn parse_bytes_literal(text: &str) -> Vec<u8> {

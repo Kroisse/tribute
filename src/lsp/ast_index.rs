@@ -1010,9 +1010,14 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                 }
             }
             ExprKind::Lambda { params, body } => {
-                // Lambda params don't have ParamDecl, just Param
+                // Lambda params have local_id assigned during name resolution
                 for param in params {
-                    self.add_definition(param.id, param.name, DefinitionKind::Parameter, None);
+                    self.add_definition(
+                        param.id,
+                        param.name,
+                        DefinitionKind::Parameter,
+                        param.local_id,
+                    );
                 }
                 self.collect_expr(body);
             }

@@ -70,7 +70,8 @@ pub fn resolved_module<'db>(
     source: SourceCst,
 ) -> Option<Module<ResolvedRef<'db>>> {
     let module = parsed_module(db, source)?;
-    Some(crate::resolve::resolve_module(db, module))
+    let sm = span_map(db, source)?;
+    Some(crate::resolve::resolve_module(db, module, sm))
 }
 
 /// Type check a module.

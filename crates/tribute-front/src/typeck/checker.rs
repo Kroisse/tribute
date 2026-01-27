@@ -842,14 +842,34 @@ impl<'db> TypeChecker<'db> {
                     self.bind_pattern_vars(pat, fresh_ty);
                 }
             }
-            PatternKind::ListRest { head, .. } => {
+            PatternKind::ListRest {
+                head,
+                rest_local_id,
+                ..
+            } => {
+                // Bind head elements
                 let fresh_vars: Vec<_> = head.iter().map(|_| self.ctx.fresh_type_var()).collect();
                 for (pat, fresh_ty) in head.iter().zip(fresh_vars) {
                     self.bind_pattern_vars(pat, fresh_ty);
                 }
+                // Bind rest element if it has a LocalId
+                if let Some(local_id) = rest_local_id {
+                    // Rest is a list of the same element type
+                    let rest_ty = self.ctx.fresh_type_var();
+                    self.ctx.bind_local(*local_id, rest_ty);
+                }
             }
-            PatternKind::As { pattern, name, .. } => {
+            PatternKind::As {
+                pattern,
+                name,
+                local_id,
+            } => {
+                // Bind by name for backwards compatibility
                 self.ctx.bind_local_by_name(*name, ty);
+                // Also bind by LocalId for precise lookups
+                if let Some(local_id) = local_id {
+                    self.ctx.bind_local(*local_id, ty);
+                }
                 self.bind_pattern_vars(pattern, ty);
             }
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {}

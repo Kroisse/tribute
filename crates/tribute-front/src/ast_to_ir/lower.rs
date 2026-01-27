@@ -233,8 +233,9 @@ fn lower_expr<'db>(
         },
 
         ExprKind::BinOp { op, lhs, rhs } => {
-            // Determine operand type for selecting int vs float operations
-            let is_float = is_float_expr(ctx.db, &lhs);
+            // Determine operand type for selecting int vs float operations.
+            // Check both operands: mixed int+float or float+int should use float operations.
+            let is_float = is_float_expr(ctx.db, &lhs) || is_float_expr(ctx.db, &rhs);
             let lhs_val = lower_expr(ctx, block, lhs)?;
             let rhs_val = lower_expr(ctx, block, rhs)?;
             lower_binop(ctx, block, op, lhs_val, rhs_val, is_float, location)
