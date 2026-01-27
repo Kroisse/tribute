@@ -60,33 +60,46 @@ impl<'db> TdnrResolver<'db> {
     /// This indexes functions by their first parameter's type name,
     /// enabling efficient UFCS resolution.
     fn build_method_index(&mut self, module: &Module<TypedRef<'db>>) {
-        for decl in &module.decls {
-            if let Decl::Function(func) = decl {
-                // Check if this function can be a method (has at least one parameter)
-                if func.params.is_empty() {
-                    continue;
+        self.index_decls(&module.decls);
+    }
+
+    /// Recursively index declarations, including nested modules.
+    fn index_decls(&mut self, decls: &[Decl<TypedRef<'db>>]) {
+        for decl in decls {
+            match decl {
+                Decl::Function(func) => {
+                    // Check if this function can be a method (has at least one parameter)
+                    if func.params.is_empty() {
+                        continue;
+                    }
+
+                    let func_name = func.name;
+
+                    // Create FuncDefId (Salsa interns by name, so this returns the canonical ID)
+                    let func_id = FuncDefId::new(self.db, func_name);
+
+                    // Try to extract the type name from the first parameter's type annotation
+                    let first_param = &func.params[0];
+                    let type_name = self.extract_type_name(&first_param.ty);
+
+                    // Skip if we can't determine the receiver type - no "_any" fallback
+                    let Some(type_name) = type_name else {
+                        continue;
+                    };
+
+                    // Build function type from parameter and return type annotations
+                    let func_ty = self.build_func_type(func);
+
+                    // Register with the actual type name for precise UFCS lookup
+                    self.method_index
+                        .insert((type_name, func_name), (func_id, func_ty));
                 }
-
-                let func_name = func.name;
-
-                // Create FuncDefId (Salsa interns by name, so this returns the canonical ID)
-                let func_id = FuncDefId::new(self.db, func_name);
-
-                // Try to extract the type name from the first parameter's type annotation
-                let first_param = &func.params[0];
-                let type_name = self.extract_type_name(&first_param.ty);
-
-                // Skip if we can't determine the receiver type - no "_any" fallback
-                let Some(type_name) = type_name else {
-                    continue;
-                };
-
-                // Build function type from parameter and return type annotations
-                let func_ty = self.build_func_type(func);
-
-                // Register with the actual type name for precise UFCS lookup
-                self.method_index
-                    .insert((type_name, func_name), (func_id, func_ty));
+                Decl::Module(m) => {
+                    if let Some(body) = &m.body {
+                        self.index_decls(body);
+                    }
+                }
+                _ => {}
             }
         }
     }

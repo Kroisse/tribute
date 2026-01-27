@@ -90,7 +90,28 @@ impl<'db> TypeSubst<'db> {
                     .map(|p| self.apply_with_rows(db, *p, row_subst))
                     .collect();
                 let result = self.apply_with_rows(db, *result, row_subst);
-                let effect = row_subst.apply(db, *effect);
+                let row_applied = row_subst.apply(db, *effect);
+                // Also apply type substitution to effect args (e.g., State(?a) → State(Int))
+                let effects = row_applied.effects(db);
+                let new_effects: Vec<_> = effects
+                    .iter()
+                    .map(|e| {
+                        let new_args: Vec<_> = e
+                            .args
+                            .iter()
+                            .map(|a| self.apply_with_rows(db, *a, row_subst))
+                            .collect();
+                        crate::ast::Effect {
+                            name: e.name,
+                            args: new_args,
+                        }
+                    })
+                    .collect();
+                let effect = if new_effects != *effects {
+                    EffectRow::new(db, new_effects, row_applied.rest(db))
+                } else {
+                    row_applied
+                };
                 Type::new(
                     db,
                     TypeKind::Func {
@@ -877,6 +898,95 @@ mod tests {
             assert_eq!(params[0], int_ty);
             assert_eq!(*result, int_ty);
             assert!(effect.is_pure(&db));
+        } else {
+            panic!("Expected Func type");
+        }
+    }
+
+    #[test]
+    fn test_type_subst_applies_to_effect_args() {
+        // State(?a) where ?a = Int should become State(Int)
+        let db = test_db();
+        let mut type_subst = TypeSubst::new();
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let var_ty = fresh_var(&db, 0);
+        let var_id = match var_ty.kind(&db) {
+            TypeKind::UniVar { id } => *id,
+            _ => unreachable!(),
+        };
+        type_subst.insert(var_id, int_ty);
+
+        // fn() ->{State(?a)} Int
+        let effect = EffectRow::new(
+            &db,
+            vec![Effect {
+                name: trunk_ir::Symbol::new("State"),
+                args: vec![var_ty],
+            }],
+            None,
+        );
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: int_ty,
+                effect,
+            },
+        );
+
+        let row_subst = RowSubst::new();
+        let result = type_subst.apply_with_rows(&db, func_ty, &row_subst);
+
+        if let TypeKind::Func { effect, .. } = result.kind(&db) {
+            let effects = effect.effects(&db);
+            assert_eq!(effects.len(), 1);
+            assert_eq!(effects[0].name, trunk_ir::Symbol::new("State"));
+            assert_eq!(effects[0].args.len(), 1);
+            assert_eq!(
+                effects[0].args[0], int_ty,
+                "Effect arg ?a should be substituted to Int"
+            );
+        } else {
+            panic!("Expected Func type");
+        }
+    }
+
+    #[test]
+    fn test_type_subst_preserves_unchanged_effect_args() {
+        // State(Int) with no relevant substitution should remain unchanged
+        let db = test_db();
+        let type_subst = TypeSubst::new();
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let effect = EffectRow::new(
+            &db,
+            vec![Effect {
+                name: trunk_ir::Symbol::new("State"),
+                args: vec![int_ty],
+            }],
+            None,
+        );
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: int_ty,
+                effect,
+            },
+        );
+
+        let row_subst = RowSubst::new();
+        let result = type_subst.apply_with_rows(&db, func_ty, &row_subst);
+
+        if let TypeKind::Func {
+            effect: result_effect,
+            ..
+        } = result.kind(&db)
+        {
+            let effects = result_effect.effects(&db);
+            assert_eq!(effects.len(), 1);
+            assert_eq!(effects[0].args[0], int_ty);
         } else {
             panic!("Expected Func type");
         }

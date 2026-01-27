@@ -42,7 +42,10 @@ pub enum DefinitionKind {
     /// A function parameter.
     Parameter,
     /// A struct field.
-    Field,
+    Field {
+        /// The owning struct type name.
+        owner: Symbol,
+    },
 }
 
 /// Entry representing a definition in the AST.
@@ -86,6 +89,8 @@ pub enum ResolvedTarget {
     Ability { name: Symbol },
     /// Unresolved reference (for error recovery).
     Unresolved { name: Symbol },
+    /// Reference to a struct field.
+    Field { owner: Symbol, name: Symbol },
     /// Reference to something else (builtin, module, etc.).
     #[allow(dead_code)]
     Other { name: Symbol },
@@ -101,6 +106,7 @@ impl ResolvedTarget {
             ResolvedTarget::Type { name } => *name,
             ResolvedTarget::Ability { name } => *name,
             ResolvedTarget::Unresolved { name } => *name,
+            ResolvedTarget::Field { name, .. } => *name,
             ResolvedTarget::Other { name } => *name,
         }
     }
@@ -109,7 +115,13 @@ impl ResolvedTarget {
     pub fn local_id(&self) -> Option<LocalId> {
         match self {
             ResolvedTarget::Local { id, .. } => Some(*id),
-            _ => None,
+            ResolvedTarget::Field { .. }
+            | ResolvedTarget::Function { .. }
+            | ResolvedTarget::Constructor { .. }
+            | ResolvedTarget::Type { .. }
+            | ResolvedTarget::Ability { .. }
+            | ResolvedTarget::Unresolved { .. }
+            | ResolvedTarget::Other { .. } => None,
         }
     }
 }
@@ -319,7 +331,10 @@ impl<'db> AstDefinitionIndex<'db> {
                 variant: def.name,
             },
             DefinitionKind::Ability => ResolvedTarget::Ability { name: def.name },
-            DefinitionKind::Field => ResolvedTarget::Other { name: def.name },
+            DefinitionKind::Field { owner } => ResolvedTarget::Field {
+                owner: *owner,
+                name: def.name,
+            },
         }
     }
 
@@ -443,7 +458,12 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         // Add field definitions
         for field in &s.fields {
             if let Some(name) = field.name {
-                self.add_definition(field.id, name, DefinitionKind::Field, None);
+                self.add_definition(
+                    field.id,
+                    name,
+                    DefinitionKind::Field { owner: s.name },
+                    None,
+                );
             }
         }
     }
@@ -766,7 +786,10 @@ pub fn validate_identifier(name: &str, kind: DefinitionKind) -> Result<(), Renam
                 return Err(RenameError::InvalidTypeIdentifier);
             }
         }
-        _ => {
+        DefinitionKind::Function
+        | DefinitionKind::Local
+        | DefinitionKind::Parameter
+        | DefinitionKind::Field { .. } => {
             if !first.is_ascii_lowercase() && first != '_' {
                 return Err(RenameError::InvalidIdentifier);
             }
@@ -864,7 +887,7 @@ mod tests {
         // Check field definition
         let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some());
-        assert_eq!(x_def.unwrap().kind, DefinitionKind::Field);
+        assert!(matches!(x_def.unwrap().kind, DefinitionKind::Field { .. }));
     }
 
     #[test]
@@ -1460,14 +1483,20 @@ fn f(p: Point) -> Int {
 
         let index = index.unwrap();
 
-        // Struct fields should still have Field kind
+        // Struct fields should still have Field kind with owner
         let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some());
-        assert_eq!(x_def.unwrap().kind, DefinitionKind::Field);
+        assert!(matches!(
+            &x_def.unwrap().kind,
+            DefinitionKind::Field { owner } if *owner == "Point"
+        ));
 
         let y_def = index.definition_of(&db, trunk_ir::Symbol::new("y"));
         assert!(y_def.is_some());
-        assert_eq!(y_def.unwrap().kind, DefinitionKind::Field);
+        assert!(matches!(
+            &y_def.unwrap().kind,
+            DefinitionKind::Field { owner } if *owner == "Point"
+        ));
     }
 
     #[test]
@@ -1487,11 +1516,14 @@ fn f(p: Point) -> Int {
     #[test]
     fn test_validate_identifier_field_lowercase() {
         // Field (struct field) should require lowercase
-        assert!(validate_identifier("x", DefinitionKind::Field).is_ok());
-        assert!(validate_identifier("my_field", DefinitionKind::Field).is_ok());
+        let field_kind = DefinitionKind::Field {
+            owner: trunk_ir::Symbol::new("TestStruct"),
+        };
+        assert!(validate_identifier("x", field_kind.clone()).is_ok());
+        assert!(validate_identifier("my_field", field_kind.clone()).is_ok());
 
         // Uppercase should be rejected for Field
-        let result = validate_identifier("X", DefinitionKind::Field);
+        let result = validate_identifier("X", field_kind);
         assert!(matches!(result, Err(RenameError::InvalidIdentifier)));
     }
 
