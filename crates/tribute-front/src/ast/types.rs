@@ -243,6 +243,98 @@ pub struct EffectVar {
     pub id: u64,
 }
 
+// =========================================================================
+// Shared annotation → EffectRow conversion
+// =========================================================================
+
+/// Check whether a symbol name looks like a type variable (starts with lowercase).
+fn is_type_variable(name: &Symbol) -> bool {
+    name.with_str(|s| s.starts_with(|c: char| c.is_lowercase()))
+}
+
+/// Convert a single type annotation to an `Effect`.
+///
+/// Returns `None` for annotations that represent row variables (lowercase names, `Infer`)
+/// rather than concrete abilities.
+pub fn annotation_to_effect<'db>(
+    db: &'db dyn salsa::Database,
+    annotation: &TypeAnnotation,
+    convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
+) -> Option<Effect<'db>> {
+    match &annotation.kind {
+        TypeAnnotationKind::Named(name) if !is_type_variable(name) => Some(Effect {
+            name: *name,
+            args: vec![],
+        }),
+        TypeAnnotationKind::Path(path) if !path.is_empty() => {
+            let name = *path.last()?;
+            if is_type_variable(&name) {
+                return None;
+            }
+            Some(Effect { name, args: vec![] })
+        }
+        TypeAnnotationKind::App { ctor, args } => {
+            let name = match &ctor.kind {
+                TypeAnnotationKind::Named(n) if !is_type_variable(n) => *n,
+                TypeAnnotationKind::Path(path) => {
+                    let n = *path.last()?;
+                    if is_type_variable(&n) {
+                        return None;
+                    }
+                    n
+                }
+                _ => return None,
+            };
+            let type_args: Vec<Type<'db>> = args.iter().map(&mut *convert_type).collect();
+            let _ = db; // used by callers via convert_type
+            Some(Effect {
+                name,
+                args: type_args,
+            })
+        }
+        // Named lowercase, Infer, Error, etc. → not a concrete effect
+        _ => None,
+    }
+}
+
+/// Convert a slice of ability annotations to an `EffectRow`.
+///
+/// - Uppercase names / `App` → concrete effects
+/// - Lowercase names / `Infer` → open row variable (via `fresh_row_var`)
+pub fn abilities_to_effect_row<'db>(
+    db: &'db dyn salsa::Database,
+    abilities: &[TypeAnnotation],
+    convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
+    fresh_row_var: impl FnOnce() -> EffectVar,
+) -> EffectRow<'db> {
+    let mut effects = Vec::new();
+    let mut has_row_var = false;
+
+    for ann in abilities {
+        match &ann.kind {
+            TypeAnnotationKind::Named(name) if is_type_variable(name) => {
+                has_row_var = true;
+            }
+            TypeAnnotationKind::Infer => {
+                has_row_var = true;
+            }
+            _ => {
+                if let Some(effect) = annotation_to_effect(db, ann, convert_type) {
+                    effects.push(effect);
+                }
+            }
+        }
+    }
+
+    let rest = if has_row_var {
+        Some(fresh_row_var())
+    } else {
+        None
+    };
+
+    EffectRow::new(db, effects, rest)
+}
+
 /// Type annotation as written in source code.
 ///
 /// This represents a type before resolution and checking.

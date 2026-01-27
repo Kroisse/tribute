@@ -145,13 +145,19 @@ impl<'db> TypeChecker<'db> {
             .map(|ann| self.annotation_to_type(ann))
             .unwrap_or_else(|| self.ctx.fresh_type_var());
 
-        // Build effect row
-        // TODO: Convert effect annotations when present
-        let effect = func
-            .effects
-            .as_ref()
-            .map(|_| self.ctx.fresh_effect_row())
-            .unwrap_or_else(|| EffectRow::pure(self.db()));
+        // Build effect row from annotations
+        let effect = match &func.effects {
+            Some(anns) => {
+                let row_var = self.ctx.fresh_row_var();
+                crate::ast::abilities_to_effect_row(
+                    self.db(),
+                    anns,
+                    &mut |ann| self.annotation_to_type(ann),
+                    || row_var,
+                )
+            }
+            None => EffectRow::pure(self.db()),
+        };
 
         // Create function type
         let func_ty = self.ctx.func_type(param_types, return_ty, effect);
@@ -214,13 +220,18 @@ impl<'db> TypeChecker<'db> {
             TypeAnnotationKind::Func {
                 params,
                 result,
-                abilities: _,
+                abilities,
             } => {
                 let param_types: Vec<Type<'db>> =
                     params.iter().map(|p| self.annotation_to_type(p)).collect();
                 let result_ty = self.annotation_to_type(result);
-                // TODO: convert ability annotations to EffectRow properly
-                let effect = EffectRow::pure(self.db());
+                let row_var = self.ctx.fresh_row_var();
+                let effect = crate::ast::abilities_to_effect_row(
+                    self.db(),
+                    abilities,
+                    &mut |ann| self.annotation_to_type(ann),
+                    || row_var,
+                );
                 self.ctx.func_type(param_types, result_ty, effect)
             }
             TypeAnnotationKind::Tuple(elems) => {
@@ -1584,5 +1595,212 @@ mod tests {
             result.is_err(),
             "Expected type error from Bool vs Nat mismatch"
         );
+    }
+
+    // =========================================================================
+    // Ability annotation → EffectRow tests
+    // =========================================================================
+
+    #[test]
+    fn test_func_annotation_pure() {
+        // fn(Int) ->{} Bool  →  EffectRow { effects: [], rest: None }
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let ann = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Func {
+                params: vec![TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                }],
+                result: Box::new(TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Bool")),
+                }),
+                abilities: vec![], // empty = pure
+            },
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+        } = ty.kind(&db)
+        {
+            assert_eq!(params.len(), 1);
+            assert!(matches!(*params[0].kind(&db), TypeKind::Int));
+            assert!(matches!(*result.kind(&db), TypeKind::Bool));
+            // Pure: no effects, closed row
+            assert!(effect.effects(&db).is_empty());
+            assert!(effect.rest(&db).is_none());
+        } else {
+            panic!("Expected Func type, got {:?}", ty.kind(&db));
+        }
+    }
+
+    #[test]
+    fn test_func_annotation_with_ability() {
+        // fn(Int) ->{State} Bool  →  EffectRow { effects: [State], rest: None }
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let ann = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Func {
+                params: vec![TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                }],
+                result: Box::new(TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Bool")),
+                }),
+                abilities: vec![TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("State")),
+                }],
+            },
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        if let TypeKind::Func { effect, .. } = ty.kind(&db) {
+            let effects = effect.effects(&db);
+            assert_eq!(effects.len(), 1);
+            assert_eq!(effects[0].name, Symbol::new("State"));
+            assert!(effects[0].args.is_empty());
+            // Closed row (no lowercase / Infer)
+            assert!(effect.rest(&db).is_none());
+        } else {
+            panic!("Expected Func type, got {:?}", ty.kind(&db));
+        }
+    }
+
+    #[test]
+    fn test_func_annotation_effect_polymorphic() {
+        // fn(Int) ->{State, e} Bool  →  EffectRow { effects: [State], rest: Some(_) }
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let ann = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Func {
+                params: vec![TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                }],
+                result: Box::new(TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Bool")),
+                }),
+                abilities: vec![
+                    TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("State")),
+                    },
+                    TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("e")), // lowercase = row variable
+                    },
+                ],
+            },
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        if let TypeKind::Func { effect, .. } = ty.kind(&db) {
+            let effects = effect.effects(&db);
+            assert_eq!(effects.len(), 1);
+            assert_eq!(effects[0].name, Symbol::new("State"));
+            // Open row: lowercase "e" triggers a row variable
+            assert!(
+                effect.rest(&db).is_some(),
+                "Expected open effect row for lowercase type variable"
+            );
+        } else {
+            panic!("Expected Func type, got {:?}", ty.kind(&db));
+        }
+    }
+
+    #[test]
+    fn test_func_annotation_infer_effect() {
+        // fn(Int) ->{_} Bool  →  EffectRow { effects: [], rest: Some(_) }
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let ann = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Func {
+                params: vec![TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                }],
+                result: Box::new(TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Bool")),
+                }),
+                abilities: vec![TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Infer,
+                }],
+            },
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        if let TypeKind::Func { effect, .. } = ty.kind(&db) {
+            assert!(effect.effects(&db).is_empty());
+            assert!(
+                effect.rest(&db).is_some(),
+                "Expected open effect row for Infer annotation"
+            );
+        } else {
+            panic!("Expected Func type, got {:?}", ty.kind(&db));
+        }
+    }
+
+    #[test]
+    fn test_func_annotation_parameterized_ability() {
+        // fn(Int) ->{State(Int)} Bool  →  EffectRow { effects: [State(Int)], rest: None }
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        let ann = TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Func {
+                params: vec![TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                }],
+                result: Box::new(TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Bool")),
+                }),
+                abilities: vec![TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::App {
+                        ctor: Box::new(TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("State")),
+                        }),
+                        args: vec![TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                        }],
+                    },
+                }],
+            },
+        };
+
+        let ty = checker.annotation_to_type(&ann);
+        if let TypeKind::Func { effect, .. } = ty.kind(&db) {
+            let effects = effect.effects(&db);
+            assert_eq!(effects.len(), 1);
+            assert_eq!(effects[0].name, Symbol::new("State"));
+            assert_eq!(effects[0].args.len(), 1);
+            assert!(matches!(*effects[0].args[0].kind(&db), TypeKind::Int));
+            assert!(effect.rest(&db).is_none());
+        } else {
+            panic!("Expected Func type, got {:?}", ty.kind(&db));
+        }
     }
 }
