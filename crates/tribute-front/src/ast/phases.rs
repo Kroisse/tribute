@@ -222,9 +222,13 @@ impl LocalIdGen {
     }
 
     /// Generate a fresh unique LocalId.
+    ///
+    /// # Panics
+    /// Panics if the counter would overflow and produce `LocalId::UNRESOLVED`.
     pub fn fresh(&mut self) -> LocalId {
         let id = LocalId(self.0);
-        self.0 += 1;
+        self.0 = self.0.checked_add(1).expect("LocalId overflow");
+        debug_assert!(!id.is_unresolved(), "LocalIdGen produced UNRESOLVED");
         id
     }
 }

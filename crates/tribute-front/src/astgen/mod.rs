@@ -555,11 +555,12 @@ mod tests {
 
     #[test]
     fn test_binary_logical() {
+        // Use identifiers instead of bool literals to avoid grammar churn
         for (op_str, expected_op) in [
             ("&&", crate::ast::BinOpKind::And),
             ("||", crate::ast::BinOpKind::Or),
         ] {
-            let source = format!("fn main() {{ true {} false }}", op_str);
+            let source = format!("fn main() {{ a {} b }}", op_str);
             let module = parse_and_lower(&source);
 
             let Decl::Function(func) = &module.decls[0] else {
