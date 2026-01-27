@@ -15,7 +15,7 @@ use tribute_front::ast::{
 };
 use tribute_front::query as ast_query;
 
-use super::completion::KEYWORDS;
+use super::completion_index::KEYWORDS;
 
 // =============================================================================
 // Definition Index

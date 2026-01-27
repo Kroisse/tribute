@@ -30,7 +30,7 @@ use ropey::Rope;
 use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
-use super::completion::{
+use super::completion_index::{
     complete_keywords, completion_items, filter_completions, find_signature, function_signatures,
 };
 use super::definition_index::{definition_index, validate_identifier};
