@@ -5,8 +5,10 @@
 //! - Diagnostics: Real-time error and warning reporting
 //! - Go to Definition: Navigate to symbol definitions
 
-mod ast_index;
+mod completion;
+mod definition_index;
 mod pretty;
 mod server;
+mod type_index;
 
 pub use server::serve;

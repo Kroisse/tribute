@@ -143,7 +143,7 @@ fn type_var_name(id: u64) -> String {
 
 /// Format a function signature for LSP signature help (AST-based).
 pub fn format_ast_signature(
-    sig: &super::ast_index::FunctionSignature,
+    sig: &super::completion::FunctionSignature,
     doc_comment: Option<&str>,
     active_param: u32,
 ) -> SignatureHelp {

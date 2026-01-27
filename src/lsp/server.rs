@@ -30,9 +30,11 @@ use ropey::Rope;
 use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
-use crate::lsp::ast_index::print_ast_type;
-
-use super::ast_index::{self, type_index as ast_type_index};
+use super::completion::{
+    complete_keywords, completion_items, filter_completions, find_signature, function_signatures,
+};
+use super::definition_index::{definition_index, validate_identifier};
+use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
 use tribute::{TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local};
 
 /// Main LSP server state.
@@ -237,7 +239,7 @@ impl LspServer {
 
         // Run Salsa compilation and build definition index
         let definition = self.db.attach(|db| {
-            let index = ast_index::definition_index(db, source_cst)?;
+            let index = definition_index(db, source_cst)?;
             index.definition_at(db, offset).cloned()
         })?;
 
@@ -273,7 +275,7 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let locations = self.db.attach(|db| {
-            let index = ast_index::definition_index(db, source_cst)?;
+            let index = definition_index(db, source_cst)?;
 
             let (target, refs) = index.references_at(db, offset)?;
 
@@ -318,7 +320,7 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let result = self.db.attach(|db| {
-            let index = ast_index::definition_index(db, source_cst)?;
+            let index = definition_index(db, source_cst)?;
 
             // Check if rename is possible at this position
             let (def, span) = index.can_rename(db, offset)?;
@@ -352,13 +354,13 @@ impl LspServer {
         let source_cst = self.db.source_cst(uri)?;
 
         let text_edits = self.db.attach(|db| {
-            let index = ast_index::definition_index(db, source_cst)?;
+            let index = definition_index(db, source_cst)?;
 
             // Get definition and validate
             let (def, _) = index.can_rename(db, offset)?;
 
             // Validate new name
-            if ast_index::validate_identifier(new_name, def.kind.clone()).is_err() {
+            if validate_identifier(new_name, def.kind.clone()).is_err() {
                 tracing::warn!(new_name = %new_name, "Invalid identifier for rename");
                 return None;
             }
@@ -415,15 +417,13 @@ impl LspServer {
         let prefix = extract_completion_prefix(&rope, offset);
 
         let items = self.db.attach(|db| {
-            let all_items = ast_index::completion_items(db, source_cst);
+            let all_items = completion_items(db, source_cst);
 
             // Filter by prefix
-            let mut completions: Vec<_> = ast_index::filter_completions(all_items, &prefix)
-                .cloned()
-                .collect();
+            let mut completions: Vec<_> = filter_completions(all_items, &prefix).cloned().collect();
 
             // Add keyword completions
-            completions.extend(ast_index::complete_keywords(&prefix));
+            completions.extend(complete_keywords(&prefix));
 
             Some(completions)
         })?;
@@ -506,7 +506,7 @@ impl LspServer {
         diag: &tribute_passes::Diagnostic,
         rope: &Rope,
         uri: &Uri,
-        type_index: Option<&ast_index::AstTypeIndex<'_>>,
+        type_index: Option<&AstTypeIndex<'_>>,
     ) -> Option<CodeAction> {
         // Pattern: "top-level function `{name}` must have an explicit return type annotation"
         if diag
@@ -675,9 +675,9 @@ impl LspServer {
         let active_param = call_info.active_param;
 
         let result = self.db.attach(|db| {
-            let signatures = ast_index::function_signatures(db, source_cst);
+            let signatures = function_signatures(db, source_cst);
             let callee_sym = trunk_ir::Symbol::from_dynamic(&callee_name);
-            let sig = ast_index::find_signature(&signatures, callee_sym)?;
+            let sig = find_signature(&signatures, callee_sym)?;
 
             Some(super::pretty::format_ast_signature(
                 sig,
