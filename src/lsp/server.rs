@@ -870,14 +870,33 @@ fn initialize_server(connection: Connection) -> Result<LspServer, Box<dyn Error 
 }
 
 /// Start the LSP server.
-pub fn serve() -> Result<(), Box<dyn Error + Send + Sync>> {
+pub fn serve(log_filter: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let (connection, io_threads) = Connection::stdio();
+
+    init_lsp_tracing(log_filter, connection.sender.clone());
 
     let mut server = initialize_server(connection)?;
     server.run()?;
 
     io_threads.join()?;
     Ok(())
+}
+
+fn init_lsp_tracing(log_filter: &str, sender: crossbeam_channel::Sender<Message>) {
+    use super::tracing_layer::LspLayer;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::EnvFilter;
+
+    let env_filter = EnvFilter::try_new(log_filter).unwrap_or_else(|e| {
+        eprintln!("Invalid log filter '{}': {}", log_filter, e);
+        EnvFilter::new("warn")
+    });
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(LspLayer::new(sender))
+        .init();
 }
 
 fn point_after_text(start: Point, text: &str) -> Point {

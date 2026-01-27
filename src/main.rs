@@ -22,11 +22,9 @@ use tribute_passes::resolve::build_env;
 fn main() {
     let cli = Cli::parse();
 
-    init_tracing(&cli.log);
-
     match cli.command {
         Command::Serve => {
-            if let Err(e) = lsp::serve() {
+            if let Err(e) = lsp::serve(&cli.log) {
                 eprintln!("LSP server error: {e}");
                 std::process::exit(1);
             }
@@ -36,9 +34,11 @@ fn main() {
             output,
             target,
         } => {
+            init_tracing(&cli.log);
             compile_file(file, output, &target);
         }
         Command::Debug { file, show_env } => {
+            init_tracing(&cli.log);
             debug_file(file, show_env);
         }
     }

@@ -10,6 +10,7 @@ mod completion_index;
 mod definition_index;
 mod pretty;
 mod server;
+mod tracing_layer;
 mod type_index;
 
 pub use server::serve;
